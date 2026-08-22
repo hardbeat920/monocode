@@ -686,9 +686,12 @@ fn resolve_cursor_agent() -> Option<PathBuf> {
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/cursor-agent"));
         candidates.push(home.join(".local/bin/agent"));
+        candidates.push(home.join(".cargo/bin/cursor-agent"));
     }
     candidates.push(PathBuf::from("/opt/homebrew/bin/cursor-agent"));
     candidates.push(PathBuf::from("/usr/local/bin/cursor-agent"));
+    candidates.push(PathBuf::from("/usr/bin/cursor-agent"));
+    candidates.push(PathBuf::from("/snap/bin/cursor-agent"));
     if let Some(from_shell) = which_via_login_shell("cursor-agent") {
         candidates.push(from_shell);
     }
@@ -703,10 +706,13 @@ fn resolve_codex() -> Option<PathBuf> {
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/codex"));
         candidates.push(home.join(".npm-global/bin/codex"));
+        candidates.push(home.join(".cargo/bin/codex"));
         candidates.push(home.join("n/bin/codex"));
     }
     candidates.push(PathBuf::from("/opt/homebrew/bin/codex"));
     candidates.push(PathBuf::from("/usr/local/bin/codex"));
+    candidates.push(PathBuf::from("/usr/bin/codex"));
+    candidates.push(PathBuf::from("/snap/bin/codex"));
     if let Some(from_shell) = which_via_login_shell("codex") {
         candidates.push(from_shell);
     }
@@ -722,10 +728,13 @@ fn resolve_opencode() -> Option<PathBuf> {
         candidates.push(home.join(".opencode/bin/opencode"));
         candidates.push(home.join(".local/bin/opencode"));
         candidates.push(home.join(".npm-global/bin/opencode"));
+        candidates.push(home.join(".cargo/bin/opencode"));
         candidates.push(home.join("n/bin/opencode"));
     }
     candidates.push(PathBuf::from("/opt/homebrew/bin/opencode"));
     candidates.push(PathBuf::from("/usr/local/bin/opencode"));
+    candidates.push(PathBuf::from("/usr/bin/opencode"));
+    candidates.push(PathBuf::from("/snap/bin/opencode"));
     if let Some(from_shell) = which_via_login_shell("opencode") {
         candidates.push(from_shell);
     }
@@ -742,10 +751,13 @@ fn resolve_claude() -> Option<PathBuf> {
         candidates.push(home.join(".claude/local/claude"));
         candidates.push(home.join(".local/share/claude/claude"));
         candidates.push(home.join(".npm-global/bin/claude"));
+        candidates.push(home.join(".cargo/bin/claude"));
         candidates.push(home.join("n/bin/claude"));
     }
     candidates.push(PathBuf::from("/opt/homebrew/bin/claude"));
     candidates.push(PathBuf::from("/usr/local/bin/claude"));
+    candidates.push(PathBuf::from("/usr/bin/claude"));
+    candidates.push(PathBuf::from("/snap/bin/claude"));
     if let Some(from_shell) = which_via_login_shell("claude") {
         candidates.push(from_shell);
     }
@@ -761,12 +773,16 @@ fn resolve_pi() -> Option<PathBuf> {
         for name in ["pi-coding-agent", "pi"] {
             candidates.push(home.join(".local/bin").join(name));
             candidates.push(home.join(".npm-global/bin").join(name));
+            candidates.push(home.join(".cargo/bin").join(name));
             candidates.push(home.join("n/bin").join(name));
         }
     }
     for name in ["pi-coding-agent", "pi"] {
+        #[cfg(target_os = "macos")]
         candidates.push(PathBuf::from("/opt/homebrew/bin").join(name));
         candidates.push(PathBuf::from("/usr/local/bin").join(name));
+        candidates.push(PathBuf::from("/usr/bin").join(name));
+        candidates.push(PathBuf::from("/snap/bin").join(name));
     }
     if let Some(from_shell) = which_via_login_shell("pi-coding-agent") {
         candidates.push(from_shell);
@@ -867,7 +883,14 @@ fn is_cursor_agent(path: &Path) -> bool {
 }
 
 fn which_via_login_shell(name: &str) -> Option<PathBuf> {
-    let output = Command::new("/bin/zsh")
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(target_os = "macos") {
+            "/bin/zsh".into()
+        } else {
+            "/bin/bash".into()
+        }
+    });
+    let output = Command::new(&shell)
         .args(["-lc", &format!("command -v {name}")])
         .output()
         .ok()?;
@@ -878,19 +901,29 @@ fn which_via_login_shell(name: &str) -> Option<PathBuf> {
     if path.is_empty() {
         return None;
     }
-    Some(PathBuf::from(path))
+    let p = PathBuf::from(path);
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
 }
 
 fn apply_gui_path(cmd: &mut Command) {
     let mut parts: Vec<String> = Vec::new();
     if let Some(home) = dirs_home() {
         parts.push(format!("{home}/.local/bin"));
+        parts.push(format!("{home}/.cargo/bin"));
         parts.push(format!("{home}/.claude/local"));
         parts.push(format!("{home}/.local/share/claude"));
         parts.push(format!("{home}/.opencode/bin"));
+        parts.push(format!("{home}/.npm-global/bin"));
     }
     parts.push("/opt/homebrew/bin".into());
     parts.push("/usr/local/bin".into());
+    parts.push("/usr/bin".into());
+    parts.push("/bin".into());
+    parts.push("/snap/bin".into());
     if let Ok(existing) = std::env::var("PATH") {
         parts.push(existing);
     }

@@ -358,11 +358,17 @@ fn apply_path(cmd: &mut std::process::Command) {
     let mut parts: Vec<String> = Vec::new();
     if let Some(home) = dirs_home() {
         parts.push(format!("{home}/.local/bin"));
+        parts.push(format!("{home}/.cargo/bin"));
         parts.push(format!("{home}/.claude/local"));
+        parts.push(format!("{home}/.local/share/claude"));
         parts.push(format!("{home}/.opencode/bin"));
+        parts.push(format!("{home}/.npm-global/bin"));
     }
     parts.push("/opt/homebrew/bin".into());
     parts.push("/usr/local/bin".into());
+    parts.push("/usr/bin".into());
+    parts.push("/bin".into());
+    parts.push("/snap/bin".into());
     if let Ok(existing) = std::env::var("PATH") {
         parts.push(existing);
     }
@@ -431,7 +437,8 @@ fn slave_name(master: i32) -> Result<std::ffi::CString, String> {
         if ret != 0 {
             return Err(os_err("Failed to resolve terminal name"));
         }
-        buf[buf.len() - 1] = 0;
+        let last = buf.len() - 1;
+        buf[last] = 0;
         Ok(unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_owned())
     }
 

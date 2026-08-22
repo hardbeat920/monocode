@@ -2314,6 +2314,7 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("{}: No such file or directory", path.display()));
     }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let path_str = path.to_str().ok_or_else(|| "Invalid path".to_string())?;
 
     #[cfg(target_os = "macos")]
