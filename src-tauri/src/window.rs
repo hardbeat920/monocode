@@ -28,6 +28,12 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     crate::macos::install(&window);
 
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_decorations(false);
+        let _ = window.set_shadow(true);
+    }
+
     window.set_focus().map_err(|err| err.to_string())?;
     Ok(())
 }
