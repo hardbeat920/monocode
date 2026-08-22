@@ -50,6 +50,7 @@ import {
 import { displayPath, parentPath, rebasePath } from "../lib/paths";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { IS_MAC, MOD } from "../lib/platform";
 
 type Props = {
   cwd: string;
@@ -66,11 +67,9 @@ type Clip = { mode: "copy" | "cut"; path: string; isDir: boolean };
 type MenuTarget = { path: string; isDir: boolean; isRoot: boolean };
 type MenuState = { x: number; y: number; target: MenuTarget };
 
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
-const MOD = IS_MAC ? "⌘" : "Ctrl+";
 const REVEAL_LABEL = IS_MAC
   ? "Reveal in Finder"
-  : /Win/.test(navigator.platform)
+  : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
     ? "Reveal in File Explorer"
     : "Open Containing Folder";
 

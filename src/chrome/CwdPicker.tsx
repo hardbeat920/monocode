@@ -17,6 +17,7 @@ import {
 } from "../lib/recents";
 import { useLockOverscroll } from "../lib/useLockOverscroll";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
+import { MOD } from "../lib/platform";
 
 type Props = {
   cwd: string;
@@ -399,7 +400,7 @@ export function CwdPicker({
             >
               <span className="text-[13px]">New project</span>
               <span className="shrink-0 font-mono text-[11px] text-content/45">
-                ⌘N
+                {MOD}N
               </span>
             </button>
             {onNewTerminal ? (
@@ -420,7 +421,7 @@ export function CwdPicker({
               >
                 <span className="text-[13px]">New terminal</span>
                 <span className="shrink-0 font-mono text-[11px] text-content/45">
-                  ⌘`
+                  {MOD}`
                 </span>
               </button>
             ) : null}

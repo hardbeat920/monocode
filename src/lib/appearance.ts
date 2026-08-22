@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { IS_MAC } from "./platform";
 
 const THEME_HUE_KEY = "monocode.themeHue";
 const THEME_SATURATION_KEY = "monocode.themeSaturation";
@@ -129,6 +130,7 @@ export function applyThemeTint(hue: number, saturation: number) {
 }
 
 export function initAppearance() {
+  document.documentElement.classList.toggle("is-mac", IS_MAC);
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyColorScheme(loadColorScheme());
   applySidebarOpacity(loadSidebarOpacity());

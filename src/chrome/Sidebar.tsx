@@ -272,10 +272,9 @@ function SidebarComponent({
       }`}
     >
       <div
-        className="flex h-9.75 shrink-0 items-center pr-1.5"
+        className="flex h-9.75 shrink-0 items-center justify-end pr-1.5"
         data-tauri-drag-region
       >
-        <div className="min-w-0 flex-1" data-tauri-drag-region />
         <TabVisitNav
           canGoBack={canGoBack}
           canGoForward={canGoForward}
@@ -286,7 +285,7 @@ function SidebarComponent({
       <div
         role="tablist"
         aria-label="Sidebar"
-        className="flex shrink-0 border-y border-content/10"
+        className="flex shrink-0 border-b border-content/10"
       >
         {tabOrder.map((itemId, index) => {
           const active = tab === itemId;

@@ -21,6 +21,7 @@ import {
   resetGridStretch,
   type TerminalFitMode,
 } from "../lib/terminalLayout";
+import { IS_MAC } from "../lib/platform";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -29,8 +30,6 @@ type Props = {
   active: boolean;
   onMetaChange?: (patch: TerminalMetaPatch) => void;
 };
-
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
 function cssColor(expr: string, fallback: string): string {
   const probe = document.createElement("span");

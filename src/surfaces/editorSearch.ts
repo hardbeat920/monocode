@@ -26,6 +26,7 @@ import {
   type Panel,
   type ViewUpdate,
 } from "@codemirror/view";
+import { MOD, ALT, SHIFT } from "../lib/platform";
 
 const MATCH_CAP = 999;
 const panels = new WeakMap<EditorView, FindPanel>();
@@ -177,13 +178,13 @@ class FindPanel implements Panel {
       value: this.query.replace,
     });
     this.count = elt("span", { class: "cm-find-count" });
-    this.caseButton = toggleButton("Aa", "Match Case", "⌥C");
-    this.wordButton = toggleButton("ab", "Match Whole Word", "⌥W");
-    this.regexButton = toggleButton(".*", "Use Regular Expression", "⌥R");
+    this.caseButton = toggleButton("Aa", "Match Case", `${ALT}C`);
+    this.wordButton = toggleButton("ab", "Match Whole Word", `${ALT}W`);
+    this.regexButton = toggleButton(".*", "Use Regular Expression", `${ALT}R`);
     this.expandButton = iconButton(
       "cm-find-expand",
       "Toggle Replace",
-      "⌥⌘F",
+      `${ALT}${MOD}F`,
       svgIcon("M6 4l4 4-4 4"),
     );
     this.expandButton.setAttribute("aria-expanded", "false");
@@ -191,13 +192,13 @@ class FindPanel implements Panel {
     const prevButton = iconButton(
       "cm-find-step",
       "Previous Match",
-      "⇧⌘G",
+      `${SHIFT}${MOD}G`,
       svgIcon("M4 10l4-4 4 4"),
     );
     const nextButton = iconButton(
       "cm-find-step",
       "Next Match",
-      "⌘G",
+      `${MOD}G`,
       svgIcon("M4 6l4 4 4-4"),
     );
     const closeButton = iconButton(
