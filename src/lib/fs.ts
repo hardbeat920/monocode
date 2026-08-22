@@ -76,6 +76,7 @@ export type GitFileDiff = {
   relative: string;
   status: string;
   original: string;
+  headOriginal: string;
   current: string;
   binary: boolean;
   tooLarge: boolean;

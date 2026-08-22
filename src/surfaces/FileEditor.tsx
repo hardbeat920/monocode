@@ -106,7 +106,8 @@ export function FileEditor({
   const [gitBase, setGitBase] = useState<{
     path: string;
     original: string | null;
-  }>({ path, original: null });
+    headOriginal: string | null;
+  }>({ path, original: null, headOriginal: null });
   const markdown = isMarkdownPath(path);
   const [mode, setMode] = useMarkdownMode(path);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -175,30 +176,35 @@ export function FileEditor({
   }, [path, reloadKey]);
 
   useEffect(() => {
-    if (!showDiff) {
-      setGitBase({ path, original: null });
-      return;
-    }
     const relative = displayPath(path, cwd);
     if (!cwd || cwd === "~" || !relative || relative === path) {
-      setGitBase({ path, original: null });
+      setGitBase({ path, original: null, headOriginal: null });
       return;
     }
     let cancelled = false;
-    setGitBase({ path, original: null });
+    setGitBase({ path, original: null, headOriginal: null });
 
     const load = () => {
       void gitFileDiff(cwd, relative)
         .then((diff) => {
           if (cancelled) return;
-          if (diff.binary || diff.tooLarge) {
-            setGitBase({ path, original: null });
+          if (diff.binary || diff.tooLarge || diff.status === "untracked") {
+            setGitBase({
+              path,
+              original: null,
+              headOriginal: null,
+            });
             return;
           }
-          setGitBase({ path, original: diff.original });
+          setGitBase({
+            path,
+            original: diff.original,
+            headOriginal: diff.headOriginal,
+          });
         })
         .catch(() => {
-          if (!cancelled) setGitBase({ path, original: null });
+          if (!cancelled)
+            setGitBase({ path, original: null, headOriginal: null });
         });
     };
 
@@ -206,14 +212,17 @@ export function FileEditor({
     const onResume = () => load();
     window.addEventListener("focus", onResume);
     const unsubGit = subscribeGitChanged(onResume);
+    const unsubWatch = watchFile(path, onResume);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onResume);
       unsubGit();
+      unsubWatch();
     };
-  }, [cwd, path, showDiff]);
+  }, [cwd, path]);
 
   const gitOriginal = gitBase.path === path ? gitBase.original : null;
+  const gitHeadOriginal = gitBase.path === path ? gitBase.headOriginal : null;
 
   useEffect(() => {
     if (loadState.status !== "ready") return;
@@ -354,6 +363,7 @@ export function FileEditor({
                 value={loadState.content}
                 showDiff={showDiff}
                 gitOriginal={gitOriginal}
+                gitHeadOriginal={gitHeadOriginal}
                 active={active && mode === "source"}
                 navigation={navigation}
                 onDirtyChange={dirtyChange}
@@ -372,6 +382,7 @@ export function FileEditor({
           value={loadState.content}
           showDiff={showDiff}
           gitOriginal={gitOriginal}
+          gitHeadOriginal={gitHeadOriginal}
           active={active}
           navigation={navigation}
           onDirtyChange={dirtyChange}
@@ -406,6 +417,7 @@ function CodeMirrorEditor({
   value,
   showDiff,
   gitOriginal,
+  gitHeadOriginal,
   active,
   navigation,
   onDirtyChange,
@@ -418,6 +430,7 @@ function CodeMirrorEditor({
   value: string;
   showDiff: boolean;
   gitOriginal: string | null;
+  gitHeadOriginal: string | null;
   active: boolean;
   navigation?: EditorNavigationRequest | null;
   onDirtyChange: (dirty: boolean) => void;
@@ -438,6 +451,7 @@ function CodeMirrorEditor({
   const onDocChangeRef = useRef(onDocChange);
   const valueRef = useRef(value);
   const gitOriginalRef = useRef(gitOriginal);
+  const gitHeadOriginalRef = useRef(gitHeadOriginal);
   const chunkNavPinnedRef = useRef<number | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const colorScheme = useColorScheme();
@@ -455,6 +469,7 @@ function CodeMirrorEditor({
   onDocChangeRef.current = onDocChange;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
+  gitHeadOriginalRef.current = gitHeadOriginal;
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
     const positions = diffNavigablePositions(view);
@@ -584,7 +599,7 @@ function CodeMirrorEditor({
                   }
                 : undefined,
             )
-          : [],
+          : editorGit({ gutterOnly: true }),
         lineNumbers(),
         foldGutter(),
         highlightActiveLine(),
@@ -639,10 +654,12 @@ function CodeMirrorEditor({
     dirtyRef.current = false;
     viewRef.current = view;
     lockOverscroll(view.scrollDOM as HTMLDivElement);
+    if (showDiff && gitOriginalRef.current) {
+      setGitOriginal(view, gitOriginalRef.current);
+    } else if (!showDiff && gitHeadOriginalRef.current) {
+      setGitOriginal(view, gitHeadOriginalRef.current);
+    }
     if (showDiff) {
-      if (gitOriginalRef.current) {
-        setGitOriginal(view, gitOriginalRef.current);
-      }
       syncChunkNav(view);
     } else {
       setChunkNav(null);
@@ -676,11 +693,13 @@ function CodeMirrorEditor({
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || !showDiff) return;
-    setGitOriginal(view, gitOriginal);
+    if (!view) return;
+    const original = showDiff ? gitOriginal : gitHeadOriginal;
+    setGitOriginal(view, original);
+    if (!showDiff) return;
     chunkNavPinnedRef.current = null;
     syncChunkNav(view);
-  }, [gitOriginal, showDiff, syncChunkNav]);
+  }, [gitOriginal, gitHeadOriginal, showDiff, syncChunkNav]);
 
   useEffect(() => {
     const view = viewRef.current;

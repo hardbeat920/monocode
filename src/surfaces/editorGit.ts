@@ -20,7 +20,8 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 
-const DIFF_CONFIG = { scanLimit: 5_000, timeout: 100 };
+const DIFF_CONFIG = { scanLimit: 200_000, timeout: 500 };
+const LCS_CELL_LIMIT = 1_000_000;
 
 const setOriginalEffect = StateEffect.define<string | null>();
 
@@ -39,6 +40,10 @@ const gitStageFacet = Facet.define<GitStageHandler, GitStageHandler | null>({
   combine: (values) => values[0] ?? null,
 });
 
+const gutterOnlyFacet = Facet.define<boolean, boolean>({
+  combine: (values) => values.some((v) => v),
+});
+
 const insertedLine = Decoration.line({ class: "cm-gitInsertedLine" });
 const LINE_HEIGHT = Math.round(13 * 1.6);
 
@@ -49,6 +54,28 @@ const addMarker = new (class extends GutterMarker {
   toDOM() {
     const el = document.createElement("div");
     el.className = "cm-gitMarker cm-gitAdd";
+    return el;
+  }
+})();
+
+const delMarker = new (class extends GutterMarker {
+  eq() {
+    return true;
+  }
+  toDOM() {
+    const el = document.createElement("div");
+    el.className = "cm-gitMarker cm-gitDel";
+    return el;
+  }
+})();
+
+const modMarker = new (class extends GutterMarker {
+  eq() {
+    return true;
+  }
+  toDOM() {
+    const el = document.createElement("div");
+    el.className = "cm-gitMarker cm-gitMod";
     return el;
   }
 })();
@@ -78,13 +105,7 @@ const chunksField = StateField.define<readonly Chunk[]>({
     }
     if (!original) return [];
     if (tr.docChanged) {
-      return Chunk.updateB(
-        chunks,
-        original,
-        tr.state.doc,
-        tr.changes,
-        DIFF_CONFIG,
-      );
+      return chunksFor(original, tr.state.doc);
     }
     return chunks;
   },
@@ -149,15 +170,19 @@ class DeletedLinesWidget extends WidgetType {
   }
 }
 
-export function editorGit(options?: { onStage?: GitStageHandler }): Extension {
+export function editorGit(options?: {
+  onStage?: GitStageHandler;
+  gutterOnly?: boolean;
+}): Extension {
   return [
     options?.onStage ? gitStageFacet.of(options.onStage) : [],
+    options?.gutterOnly ? gutterOnlyFacet.of(true) : [],
     originalField,
     chunksField,
     gitDecorations,
     gitGutter,
-    gitHunkActions,
-    gitOverview,
+    options?.gutterOnly ? [] : gitHunkActions,
+    options?.gutterOnly ? [] : gitOverview,
     gitTheme,
   ];
 }
@@ -249,6 +274,11 @@ export function stateWithGitOriginal(
   }).state;
 }
 
+/** Compute diff chunks for testing. Exposes lineDiffChunks via string API. */
+export function diffChunks(original: string, current: string): readonly Chunk[] {
+  return lineDiffChunks(textFromString(original), textFromString(current));
+}
+
 export function revertChunkAt(view: EditorView, pos: number): boolean {
   const original = view.state.field(originalField);
   if (!original) return false;
@@ -331,7 +361,95 @@ export function findChunk(
 
 function chunksFor(original: Text | null, current: Text): readonly Chunk[] {
   if (!original) return [];
-  return Chunk.build(original, current, DIFF_CONFIG);
+  return lineDiffChunks(original, current);
+}
+
+// line-based LCS diff that matches git behavior, avoiding makePresentable
+// boundary shifting on repeated code blocks
+function lineDiffChunks(original: Text, current: Text): readonly Chunk[] {
+  const n = original.lines;
+  const m = current.lines;
+
+  // fall back to Chunk.build for very large inputs
+  if (n * m > LCS_CELL_LIMIT) {
+    return Chunk.build(original, current, DIFF_CONFIG);
+  }
+
+  const aLines = new Array<string>(n);
+  for (let i = 1; i <= n; i++) aLines[i - 1] = original.line(i).text;
+  const bLines = new Array<string>(m);
+  for (let i = 1; i <= m; i++) bLines[i - 1] = current.line(i).text;
+
+  // build LCS table backward
+  const stride = m + 1;
+  const dp = new Uint32Array((n + 1) * stride);
+  for (let i = n - 1; i >= 0; i--) {
+    const row = i * stride;
+    const next = (i + 1) * stride;
+    for (let j = m - 1; j >= 0; j--) {
+      dp[row + j] = aLines[i] === bLines[j]
+        ? dp[next + (j + 1)] + 1
+        : Math.max(dp[next + j], dp[row + (j + 1)]);
+    }
+  }
+
+  // backtrack to find hunks
+  type Hunk = { aStart: number; aEnd: number; bStart: number; bEnd: number };
+  const hunks: Hunk[] = [];
+  let i = 0;
+  let j = 0;
+  let cur: Hunk | null = null;
+
+  while (i < n && j < m) {
+    if (aLines[i] === bLines[j]) {
+      if (cur) { hunks.push(cur); cur = null; }
+      i++;
+      j++;
+    } else if (dp[(i + 1) * stride + j] >= dp[i * stride + (j + 1)]) {
+      if (!cur) cur = { aStart: i, aEnd: i, bStart: j, bEnd: j };
+      cur.aEnd = ++i;
+    } else {
+      if (!cur) cur = { aStart: i, aEnd: i, bStart: j, bEnd: j };
+      cur.bEnd = ++j;
+    }
+  }
+  while (i < n) {
+    if (!cur) cur = { aStart: i, aEnd: i, bStart: j, bEnd: j };
+    cur.aEnd = ++i;
+  }
+  while (j < m) {
+    if (!cur) cur = { aStart: i, aEnd: i, bStart: j, bEnd: j };
+    cur.bEnd = ++j;
+  }
+  if (cur) hunks.push(cur);
+
+  // convert hunks to chunks with character positions
+  const chunks: Chunk[] = [];
+  for (const h of hunks) {
+    let fromA: number;
+    let toA: number;
+    if (h.aStart < h.aEnd) {
+      fromA = original.line(h.aStart + 1).from;
+      toA = original.line(h.aEnd).to + 1;
+    } else {
+      fromA = h.aStart < n ? original.line(h.aStart + 1).from : original.length;
+      toA = fromA;
+    }
+
+    let fromB: number;
+    let toB: number;
+    if (h.bStart < h.bEnd) {
+      fromB = current.line(h.bStart + 1).from;
+      toB = current.line(h.bEnd).to + 1;
+    } else {
+      fromB = h.bStart < m ? current.line(h.bStart + 1).from : current.length;
+      toB = fromB;
+    }
+
+    chunks.push(new Chunk([], fromA, toA, fromB, toB, true));
+  }
+
+  return chunks;
 }
 
 function revertChunkChanges(
@@ -563,19 +681,20 @@ export function overviewTicks(
 function buildDecorations(state: EditorState): GitDecorations {
   const original = state.field(originalField);
   const chunks = state.field(chunksField);
+  const gutterOnly = state.facet(gutterOnlyFacet);
   if (!original || chunks.length === 0) {
     return { lines: Decoration.none, gutter: RangeSet.empty };
   }
 
   const lineItems: { from: number; deco: Decoration }[] = [];
-  const markItems: { from: number }[] = [];
+  const markItems: { from: number; marker: GutterMarker }[] = [];
 
   for (const chunk of chunks) {
     const insertion = chunk.fromB !== chunk.toB;
+    const deletion = chunk.fromA !== chunk.toA;
     const widgetAt = widgetPos(state.doc, chunk);
-    const deleted =
-      chunk.fromA !== chunk.toA ? deletedLineTexts(original, chunk) : [];
-    if (deleted.length > 0) {
+    const deleted = deletion ? deletedLineTexts(original, chunk) : [];
+    if (deleted.length > 0 && !gutterOnly) {
       lineItems.push({
         from: widgetAt,
         deco: Decoration.widget({
@@ -586,14 +705,25 @@ function buildDecorations(state: EditorState): GitDecorations {
       });
     }
 
-    if (!insertion) continue;
+    if (!insertion) {
+      if (gutterOnly && deletion) {
+        markItems.push({ from: widgetAt, marker: delMarker });
+      }
+      continue;
+    }
 
     const start = Math.min(chunk.fromB, state.doc.length);
     const last = Math.max(start, Math.min(chunk.endB, state.doc.length) - 1);
     let line = state.doc.lineAt(start);
+    let first = true;
     while (line.from <= last) {
       lineItems.push({ from: line.from, deco: insertedLine });
-      markItems.push({ from: line.from });
+      if (gutterOnly && deletion && first) {
+        markItems.push({ from: line.from, marker: modMarker });
+      } else {
+        markItems.push({ from: line.from, marker: addMarker });
+      }
+      first = false;
       if (line.number >= state.doc.lines) break;
       line = state.doc.line(line.number + 1);
     }
@@ -607,7 +737,7 @@ function buildDecorations(state: EditorState): GitDecorations {
   const lines = new RangeSetBuilder<Decoration>();
   const marks = new RangeSetBuilder<GutterMarker>();
   for (const item of lineItems) lines.add(item.from, item.from, item.deco);
-  for (const item of markItems) marks.add(item.from, item.from, addMarker);
+  for (const item of markItems) marks.add(item.from, item.from, item.marker);
 
   return { lines: lines.finish(), gutter: marks.finish() };
 }
@@ -919,6 +1049,12 @@ const gitTheme = EditorView.theme({
   },
   ".cm-gitAdd": {
     backgroundColor: "#34d399",
+  },
+  ".cm-gitDel": {
+    backgroundColor: "#f87171",
+  },
+  ".cm-gitMod": {
+    backgroundColor: "#fbbf24",
   },
   ".cm-gitInsertedLine": {
     backgroundColor: "color-mix(in srgb, #34d399 18%, transparent)",
