@@ -23,6 +23,7 @@ import { resolveTabGroupLogo } from "../lib/tabGroups";
 import { useLockOverscroll } from "../lib/useLockOverscroll";
 import { useProjectDiffStats } from "../lib/useProjectDiffStats";
 import { useSessionDiffStats } from "../lib/useSessionDiffStats";
+import { useGitFileStatuses } from "../lib/useGitFileStatuses";
 import { useSortable } from "../lib/useSortable";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTree } from "./FileTree";
@@ -132,6 +133,7 @@ function SidebarComponent({
   });
   const canDragTabs = tabOrder.length > 1;
   const projectDiff = useProjectDiffStats(cwd, open);
+  const gitStatuses = useGitFileStatuses(cwd, open && tab === "files");
   const groupLogos = useTabGroupLogos();
   const projectLogoPath = resolveTabGroupLogo(projectName(cwd), groupLogos);
   const sessionDiffs = useSessionDiffStats(
@@ -370,6 +372,7 @@ function SidebarComponent({
               onFileMoved={onFileMoved}
               onFileDeleted={onFileDeleted}
               onSearch={onOpenFilesSearch}
+              gitStatuses={gitStatuses}
               headerEnd={
                 onToggleDiff ? (
                   <DiffStat
