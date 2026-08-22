@@ -34,9 +34,9 @@ Small, focused pull requests are welcome. Anything large is worth an issue first
 
 ## Build from source
 
-macOS (Apple Silicon) is the only supported target. Linux, Windows, and Intel Macs are out of scope.
+Supports macOS and Linux.
 
-Need Node.js 20+ and a current stable Rust toolchain.
+Need Node.js 20+ and a current stable Rust toolchain. On Linux, ensure standard Tauri prerequisites are installed (e.g. `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libsoup-3.0-dev`, `libjavascriptcoregtk-4.1-dev`).
 
 ```bash
 npm install
