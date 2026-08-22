@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./chrome/Sidebar";
 import { ApprovalToasts } from "./chrome/ApprovalToasts";
 import { TitleBar, type Tab as TitleTab } from "./chrome/TitleBar";
+import { MenuBar } from "./chrome/MenuBar";
 import { FilePicker } from "./chrome/FilePicker";
 import {
   loadSidebarOpen,
@@ -12,6 +13,7 @@ import {
   saveSidebarOpen,
   type SidebarTabId,
 } from "./lib/appearance";
+import { IS_MAC } from "./lib/platform";
 import { displayAttachments, prepareAttachments } from "./lib/attachments";
 import { basename, pickFolder } from "./lib/fs";
 import {
@@ -2579,7 +2581,11 @@ export default function App({
   }, [run]);
 
   return (
-    <div className="flex h-full text-content bg-background-base/40">
+    <div
+      className={`flex h-full text-content ${
+        IS_MAC ? "bg-background-base/40" : "bg-background-base"
+      }`}
+    >
       <Sidebar
         cwd={sidebarCwd}
         open={sidebarOpen}
@@ -2610,6 +2616,18 @@ export default function App({
       />
 
       <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
+        {!IS_MAC ? (
+          <MenuBar
+            onNew={onNew}
+            onNewTerminal={onNewTerminal}
+            onGoToFile={onGoToFile}
+            onToggleSidebar={onToggleSidebar}
+            onToggleDiff={onToggleDiff}
+            onCloseCurrentTab={activeTabId ? () => onCloseTab(activeTabId) : undefined}
+            onPickProject={pickProject}
+            onFindInProject={onFindInProject}
+          />
+        ) : null}
         <TitleBar
           tabs={titleTabs}
           activeId={activeTabId}

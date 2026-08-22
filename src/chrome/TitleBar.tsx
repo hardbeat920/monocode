@@ -12,12 +12,14 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { basename } from "../lib/fs";
 import type { HarnessId } from "../lib/session";
 import {
   canJoinTabGroup,
@@ -51,8 +53,11 @@ import { useSegmentDrag } from "../lib/useSegmentDrag";
 import { useSortable, type SortableDropTarget } from "../lib/useSortable";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { HarnessIcon } from "./HarnessIcon";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { OpacityControl } from "./OpacityControl";
+import { WindowControls } from "./WindowControls";
+import { IS_MAC, MOD } from "../lib/platform";
 
 export type Tab = {
   id: string;
@@ -728,14 +733,14 @@ export function TabVisitNav({
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       <IconButton
-        label="Back (⌘[)"
+        label={`Back (${MOD}[)`}
         disabled={!canGoBack}
         onClick={onGoBack}
       >
         <ChevronLeft className="size-3.5" strokeWidth={1.75} />
       </IconButton>
       <IconButton
-        label="Forward (⌘])"
+        label={`Forward (${MOD}])`}
         disabled={!canGoForward}
         onClick={onGoForward}
       >
@@ -1024,12 +1029,51 @@ function TitleBarComponent({
     syncTabOverflow();
   }, [activeId, collapsedGroups, syncTabOverflow, tabs]);
 
+  const onTitleBarDoubleClick = useCallback((e: ReactMouseEvent) => {
+    if (
+      e.target instanceof HTMLElement &&
+      e.target.hasAttribute("data-tauri-drag-region")
+    ) {
+      try {
+        void getCurrentWindow().toggleMaximize();
+      } catch {}
+    }
+  }, []);
+
+  const activeTab = useMemo(
+    () => tabs.find((t) => t.id === activeId),
+    [activeId, tabs],
+  );
+  const systemTitle = useMemo(() => {
+    const activeName = activeTab
+      ? activeTab.files[0]
+        ? basename(activeTab.files[0])
+        : activeTab.project
+      : "";
+    const project = cwd ? basename(cwd) : "";
+    if (activeName && project && activeName !== project) {
+      return `${activeName} — ${project} — MonoCode`;
+    }
+    if (project) {
+      return `${project} — MonoCode`;
+    }
+    return "MonoCode";
+  }, [activeTab, cwd]);
+
+  useEffect(() => {
+    document.title = systemTitle;
+    try {
+      void getCurrentWindow().setTitle(systemTitle);
+    } catch {}
+  }, [systemTitle]);
+
   return (
     <header
       className="flex h-10 shrink-0 items-stretch border-b border-content/10"
       data-tauri-drag-region
+      onDoubleClick={onTitleBarDoubleClick}
     >
-      {sidebarOpen ? null : (
+      {sidebarOpen || !IS_MAC ? null : (
         <div className="w-[78px] shrink-0" data-tauri-drag-region />
       )}
 
@@ -1043,13 +1087,13 @@ function TitleBarComponent({
           />
         )}
         <IconButton
-          label="Toggle Sidebar (⌘B)"
+          label={`Toggle Sidebar (${MOD}B)`}
           active={sidebarOpen}
           onClick={onToggleSidebar}
         >
           <PanelLeft className="size-3.5" strokeWidth={1.75} />
         </IconButton>
-        <IconButton label="Go to File (⌘P)" onClick={onGoToFile}>
+        <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
           <Search className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       </div>
@@ -1236,25 +1280,40 @@ function TitleBarComponent({
         ) : null}
 
         <div className="flex shrink-0 items-center gap-0.5 border-l border-content/10 px-1.5">
-          <IconButton label="New Tab (⌘T)" onClick={onNew}>
+          <IconButton label={`New Tab (${MOD}T)`} onClick={onNew}>
             <Plus className="size-3.5" strokeWidth={1.75} />
           </IconButton>
           {onNewTerminal ? (
-            <IconButton label="New Terminal (⌘`)" onClick={onNewTerminal}>
+            <IconButton label={`New Terminal (${MOD}\`)`} onClick={onNewTerminal}>
               <SquareTerminal className="size-3.5" strokeWidth={1.75} />
             </IconButton>
           ) : null}
         </div>
 
-        <div className="min-w-0 flex-1" data-tauri-drag-region />
+        <div
+          className="flex min-w-0 flex-1 items-center justify-center px-4"
+          data-tauri-drag-region
+        >
+          {!IS_MAC ? (
+            <span
+              className="pointer-events-none truncate text-[11.5px] font-medium text-content/40 select-none"
+              data-tauri-drag-region
+            >
+              {systemTitle}
+            </span>
+          ) : null}
+        </div>
 
-        <div className="flex shrink-0 items-center gap-1 pr-2">
-          <ProjectDiffStats
-            cwd={cwd}
-            active={diffOpen}
-            onClick={onToggleDiff}
-          />
-          <OpacityControl />
+        <div className="flex h-full shrink-0 items-stretch">
+          <div className="flex items-center gap-1 px-2">
+            <ProjectDiffStats
+              cwd={cwd}
+              active={diffOpen}
+              onClick={onToggleDiff}
+            />
+            {IS_MAC ? <OpacityControl /> : null}
+          </div>
+          {!IS_MAC ? <WindowControls /> : null}
         </div>
       </div>
     </header>
