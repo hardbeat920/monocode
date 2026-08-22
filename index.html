@@ -30,6 +30,12 @@
           if (bodyGlass == null || bodyGlass === "1" || bodyGlass === "true") {
             root.classList.add("glass-body");
           }
+          var isMac =
+            typeof navigator !== "undefined" &&
+            /Mac|iPhone|iPad/.test(navigator.platform);
+          if (isMac) {
+            root.classList.add("is-mac");
+          }
         } catch (_) {}
       })();
     </script>

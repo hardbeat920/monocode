@@ -1,8 +1,13 @@
+#[cfg(target_os = "macos")]
 use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Wry};
+#[cfg(target_os = "macos")]
+use tauri::Wry;
+use tauri::{AppHandle, Emitter};
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
     app.set_menu(build(app)?)?;
+    let _ = app;
     Ok(())
 }
 
@@ -22,6 +27,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let new_window = MenuItemBuilder::with_id("new_window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")

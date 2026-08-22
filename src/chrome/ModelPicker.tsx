@@ -40,6 +40,7 @@ import {
 } from "../lib/session";
 import { useLockOverscroll } from "../lib/useLockOverscroll";
 import { HarnessIcon } from "./HarnessIcon";
+import { MOD } from "../lib/platform";
 
 type Props = {
   harness: HarnessId;
@@ -432,7 +433,7 @@ function ModelList({
         const highlighted = index === active;
         const favorited = favorites.includes(item.id);
         const disabled = !isHarnessAvailable(item.harness);
-        const shortcut = index < 9 && !disabled ? `⌘${index + 1}` : null;
+        const shortcut = index < 9 && !disabled ? `${MOD}${index + 1}` : null;
         return (
           <div
             key={item.id}

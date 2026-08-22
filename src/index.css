@@ -14,6 +14,9 @@
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
 }
 
 :root {
@@ -27,6 +30,7 @@
 
 html {
   color-scheme: dark;
+  font-family: var(--font-sans);
 }
 
 html.theme-light {
@@ -44,14 +48,63 @@ body,
   width: 100%;
   height: 100%;
   margin: 0;
-  background: transparent;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  background: var(--color-background-base);
   color: var(--color-content);
   overflow: hidden;
   overscroll-behavior: none;
   user-select: none;
 }
 
+/* Polished modern scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-content) 16%, transparent);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-content) 32%, transparent);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+html.is-mac,
+html.is-mac body,
+html.is-mac #root {
+  background: transparent;
+}
+
 .sidebar-glass {
+  background: color-mix(
+    in srgb,
+    var(--color-background-base) 90%,
+    black
+  );
+}
+
+html.theme-light .sidebar-glass {
+  background: color-mix(
+    in srgb,
+    var(--color-background-base) 93%,
+    black 7%
+  );
+}
+
+html.is-mac .sidebar-glass {
   background: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
       var(--sidebar-opacity)
@@ -67,13 +120,14 @@ body,
   contain-intrinsic-block-size: auto 240px;
 }
 
-html.glass-body .body-glass {
+html.is-mac.glass-body .body-glass {
   background: color-mix(
     in srgb,
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
     transparent
   );
 }
+
 
 textarea,
 input,

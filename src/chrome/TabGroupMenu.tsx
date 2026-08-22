@@ -20,6 +20,7 @@ import { clearProjectLogo, pickAndSetProjectLogo } from "../lib/projectLogos";
 import { TAB_GROUP_COLORS } from "../lib/tabGroups";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
+import { MOD } from "../lib/platform";
 
 export type TabGroupMenuAction =
   | "new-tab"
@@ -58,7 +59,7 @@ const ITEMS: {
   {
     id: "new-tab",
     label: "New tab in group",
-    shortcut: "⌘T",
+    shortcut: `${MOD}T`,
     icon: SquarePlus,
   },
   {
@@ -69,7 +70,7 @@ const ITEMS: {
   {
     id: "close-group",
     label: "Close group",
-    shortcut: "⌘W",
+    shortcut: `${MOD}W`,
     icon: X,
   },
   {

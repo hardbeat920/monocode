@@ -46,11 +46,10 @@ import {
 import type { HarnessId } from "../lib/session";
 import { generateCommitMessage, generatePrContent } from "../lib/harness";
 import { useLockOverscroll } from "../lib/useLockOverscroll";
+import { MOD } from "../lib/platform";
 
 const MIN_WIDTH = 280;
 const DEFAULT_WIDTH = 300;
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
-const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 let rememberedWidth = DEFAULT_WIDTH;
 let stagedOpen = true;

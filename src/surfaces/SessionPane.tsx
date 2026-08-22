@@ -17,6 +17,7 @@ import {
 } from "../lib/session";
 import { AgentTranscript } from "./AgentTranscript";
 import { EmptySession } from "./EmptySession";
+import { MOD } from "../lib/platform";
 
 type Props = {
   session: Session;
@@ -161,7 +162,7 @@ export const SessionPane = memo(function SessionPane({
           </span>
           <button
             type="button"
-            title="Close Pane (⌘W)"
+            title={`Close Pane (${MOD}W)`}
             aria-label="Close pane"
             data-no-drag
             className="grid size-5 shrink-0 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content"

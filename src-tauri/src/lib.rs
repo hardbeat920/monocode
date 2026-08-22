@@ -90,6 +90,13 @@ pub fn run() {
                     macos::install(&window);
                 }
             }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_decorations(false);
+                    let _ = window.set_shadow(true);
+                }
+            }
             Ok(())
         })
         .on_menu_event(|app, event| {
