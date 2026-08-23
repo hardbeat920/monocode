@@ -48,9 +48,17 @@ import {
   type FsEntry,
 } from "../lib/fs";
 import { displayPath, parentPath, rebasePath } from "../lib/paths";
+import { IS_MAC, MOD } from "../lib/platform";
+import type { GitStatusMap } from "../hooks/useGitFileStatuses";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
-import { IS_MAC, MOD } from "../lib/platform";
+
+const GIT_STATUS_COLOR: Record<string, string> = {
+  modified: "text-amber-400",
+  added: "text-emerald-400",
+  untracked: "text-emerald-400",
+  deleted: "text-red-400",
+};
 
 type Props = {
   cwd: string;
@@ -60,6 +68,7 @@ type Props = {
   onFileDeleted?: (path: string) => void;
   onSearch?: () => void;
   headerEnd?: ReactNode;
+  gitStatuses?: GitStatusMap;
 };
 
 type Creating = { id: number; parent: string; isDir: boolean };
@@ -80,6 +89,7 @@ type TreeCtxValue = {
   renaming: string | null;
   cutPath: string | null;
   epoch: number;
+  gitStatuses?: GitStatusMap;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   onOpenFile: (path: string) => void;
@@ -200,6 +210,7 @@ export function FileTree({
   onFileDeleted,
   onSearch,
   headerEnd,
+  gitStatuses,
 }: Props) {
   const [expanded, setExpanded] = useState(() => loadExpanded(cwd));
   const [selectedPath, setSelectedPath] = useState(() => loadSelected(cwd));
@@ -575,6 +586,7 @@ export function FileTree({
         renaming,
         cutPath: clip?.mode === "cut" ? clip.path : null,
         epoch,
+        gitStatuses,
         onToggle: toggle,
         onSelect,
         onOpenFile,
@@ -775,6 +787,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
     renaming,
     cutPath,
     epoch,
+    gitStatuses,
     onToggle,
     onSelect,
     onOpenFile,
@@ -789,6 +802,10 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
   const [error, setError] = useState<string | null>(null);
   const selected = selectedPath === entry.path;
   const editing = renaming === entry.path;
+  const gitStatus = entry.isDir
+    ? gitStatuses?.dirs.get(entry.path)
+    : gitStatuses?.files.get(entry.path);
+  const gitColor = gitStatus ? GIT_STATUS_COLOR[gitStatus] : undefined;
 
   useEffect(() => {
     if (!entry.isDir || !open) return;
@@ -868,8 +885,10 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
           </span>
           <span
             className={`min-w-0 truncate ${
-              entry.ignored ? "italic text-content/50" : ""
-            } `}
+              entry.ignored
+                ? "italic text-content/50"
+                : gitColor ?? ""
+            }`}
           >
             {entry.name}
           </span>
