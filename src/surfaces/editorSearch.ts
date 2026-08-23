@@ -184,7 +184,7 @@ class FindPanel implements Panel {
     this.expandButton = iconButton(
       "cm-find-expand",
       "Toggle Replace",
-      `${ALT}${MOD}F`,
+      `${MOD}${ALT}F`,
       svgIcon("M6 4l4 4-4 4"),
     );
     this.expandButton.setAttribute("aria-expanded", "false");
@@ -192,7 +192,7 @@ class FindPanel implements Panel {
     const prevButton = iconButton(
       "cm-find-step",
       "Previous Match",
-      `${SHIFT}${MOD}G`,
+      `${MOD}${SHIFT}G`,
       svgIcon("M4 10l4-4 4 4"),
     );
     const nextButton = iconButton(

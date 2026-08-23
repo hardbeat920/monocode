@@ -7,21 +7,29 @@ export function WindowControls() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    const checkMaximized = async () => {
+    let mounted = true;
+
+    const win = getCurrentWindow();
+    void win.isMaximized().then((max) => {
+      if (mounted) setIsMaximized(max);
+    }).catch(() => {});
+
+    void win.onResized(async () => {
       try {
-        const win = getCurrentWindow();
-        setIsMaximized(await win.isMaximized());
-        const unlistenResize = await win.onResized(async () => {
-          setIsMaximized(await win.isMaximized());
-        });
-        unlisten = unlistenResize;
-      } catch {
-        // Fallback if not in Tauri
+        const max = await win.isMaximized();
+        if (mounted) setIsMaximized(max);
+      } catch {}
+    }).then((unlistenFn) => {
+      if (mounted) {
+        unlisten = unlistenFn;
+      } else {
+        unlistenFn();
       }
-    };
-    void checkMaximized();
+    }).catch(() => {});
+
     return () => {
-      if (unlisten) unlisten();
+      mounted = false;
+      unlisten?.();
     };
   }, []);
 

@@ -285,7 +285,7 @@ function SidebarComponent({
       <div
         role="tablist"
         aria-label="Sidebar"
-        className="flex shrink-0 border-b border-content/10"
+        className="flex shrink-0 border-y border-content/10"
       >
         {tabOrder.map((itemId, index) => {
           const active = tab === itemId;
