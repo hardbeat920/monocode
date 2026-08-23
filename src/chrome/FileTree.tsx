@@ -546,11 +546,8 @@ export function FileTree({
     };
     window.addEventListener("focus", onResume);
     document.addEventListener("visibilitychange", onResume);
-    // poll expanded dirs for external changes (delete/create outside monocode)
-    const poll = setInterval(onResume, 2000);
     return () => {
       unsub();
-      clearInterval(poll);
       window.removeEventListener("focus", onResume);
       document.removeEventListener("visibilitychange", onResume);
     };

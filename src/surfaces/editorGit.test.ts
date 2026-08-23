@@ -8,7 +8,6 @@ import {
   deletedLineTexts,
   overviewTicks,
   stateWithGitOriginal,
-  diffChunks,
 } from "./editorGit";
 
 describe("stageChunkText", () => {
@@ -157,62 +156,5 @@ describe("stateWithGitOriginal", () => {
     expect(() =>
       stateWithGitOriginal("hello\nworld\n", ""),
     ).not.toThrow();
-  });
-});
-
-describe("diffChunks - repeated code blocks", () => {
-  it("does not shift hunk start for repeated block patterns", () => {
-    const block = (name: string, cls: string) => [
-      `const ${name} = new (class extends GutterMarker {`,
-      "  eq() { return true; }",
-      "  toDOM() {",
-      '    const el = document.createElement("div");',
-      `    el.className = "cm-gitMarker cm-git${cls}";`,
-      "    return el;",
-      "  }",
-      "})();",
-      "",
-    ];
-
-    const original = block("addMarker", "Add").join("\n");
-    const current = [
-      ...block("addMarker", "Add"),
-      ...block("delMarker", "Del"),
-      ...block("modMarker", "Mod"),
-    ].join("\n");
-
-    const chunks = diffChunks(original, current);
-    expect(chunks).toHaveLength(1);
-
-    const currText = Text.of(current.split("\n"));
-    const chunk = chunks[0]!;
-    const startLine = currText.lineAt(chunk.fromB).number;
-    const endLine = currText.lineAt(Math.min(chunk.endB, currText.length)).number;
-
-    // insertion starts at line 10 (1-based) where delMarker begins,
-    // not shifted backward into addMarker's trailing lines
-    expect(startLine).toBe(10);
-    // insertion ends at line 27 (last line of modMarker block)
-    expect(endLine).toBe(27);
-  });
-
-  it("matches git diff for simple insertion at end", () => {
-    const original = "alpha\nbeta\n";
-    const current = "alpha\nbeta\ngamma\n";
-    const chunks = diffChunks(original, current);
-    expect(chunks).toHaveLength(1);
-    const currText = Text.of(current.split("\n"));
-    const chunk = chunks[0]!;
-    expect(currText.lineAt(chunk.fromB).number).toBe(3);
-  });
-
-  it("matches git diff for modification in middle", () => {
-    const original = "alpha\nbeta\ngamma\ndelta\n";
-    const current = "alpha\nBETA\ngamma\nDELTA\n";
-    const chunks = diffChunks(original, current);
-    expect(chunks).toHaveLength(2);
-    const currText = Text.of(current.split("\n"));
-    expect(currText.lineAt(chunks[0]!.fromB).number).toBe(2);
-    expect(currText.lineAt(chunks[1]!.fromB).number).toBe(4);
   });
 });

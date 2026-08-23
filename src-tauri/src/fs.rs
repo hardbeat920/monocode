@@ -213,7 +213,6 @@ pub struct GitFileDiff {
     pub relative: String,
     pub status: String,
     pub original: String,
-    pub head_original: String,
     pub current: String,
     pub binary: bool,
     pub too_large: bool,
@@ -756,8 +755,6 @@ fn git_file_diff_for(root: &Path, relative: &str) -> Result<GitFileDiff, String>
     let original = git_blob(root, &index_spec);
     let in_index = original.is_some();
     let orig = original.unwrap_or_default();
-    let head_spec = format!("HEAD:{relative}");
-    let head_blob = git_blob(root, &head_spec).unwrap_or_default();
     let current = if abs.is_file() {
         std::fs::read(&abs).unwrap_or_default()
     } else {
@@ -785,17 +782,11 @@ fn git_file_diff_for(root: &Path, relative: &str) -> Result<GitFileDiff, String>
             String::from_utf8_lossy(&current).into_owned(),
         )
     };
-    let head_text = if binary || too_large {
-        String::new()
-    } else {
-        String::from_utf8_lossy(&head_blob).into_owned()
-    };
     Ok(GitFileDiff {
         path: abs.to_string_lossy().into_owned(),
         relative,
         status: status.to_string(),
         original: original_text,
-        head_original: head_text,
         current: current_text,
         binary,
         too_large,
