@@ -48,6 +48,15 @@ export {
   forgetFxSession,
   bindFxSession,
 } from "./fx";
+export {
+  sendAmpTurn,
+  cancelAmpTurn,
+  respondAmpApproval,
+  stopAmpSession,
+  forgetAmpSession,
+  bindAmpSession,
+  steerAmpTurn,
+} from "./amp";
 export { generateCursorSessionTitle } from "./cursorTitle";
 export { generateCodexSessionTitle } from "./codexTitle";
 export { generateOpenCodeSessionTitle } from "./opencodeTitle";

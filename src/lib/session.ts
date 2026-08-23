@@ -7,7 +7,8 @@ export type HarnessId =
   | "cursor"
   | "opencode"
   | "pi"
-  | "fx";
+  | "fx"
+  | "amp";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
@@ -16,6 +17,7 @@ export const HARNESSES: HarnessId[] = [
   "opencode",
   "pi",
   "fx",
+  "amp",
 ];
 
 export type BlockRole =
@@ -144,6 +146,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   opencode: "opencode",
   pi: "pi",
   fx: "fx",
+  amp: "amp",
 };
 
 export const HARNESS_TITLE: Record<HarnessId, string> = {
@@ -153,6 +156,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   fx: "fx",
+  amp: "Amp",
 };
 
 /** fx ACP rejects image and audio blocks; other live harnesses accept files. */

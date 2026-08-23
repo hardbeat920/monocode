@@ -1,3 +1,4 @@
+import amp from "../assets/providers/amp.svg";
 import claude from "../assets/providers/claude.png";
 import codex from "../assets/providers/codex.png";
 import cursor from "../assets/providers/cursor.png";
@@ -13,6 +14,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   opencode,
   pi,
   fx,
+  amp,
 };
 
 const FX_MARK =

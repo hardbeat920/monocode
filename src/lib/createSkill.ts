@@ -11,7 +11,7 @@ description: Create a MonoCode skill as a SKILL.md in .agents/skills. Use when t
 
 # Create a MonoCode skill
 
-Write a portable Agent Skill so every harness (Claude, Cursor, Codex, OpenCode, Pi, fx) can load it.
+Write a portable Agent Skill so every harness (Claude, Cursor, Codex, OpenCode, Pi, fx, Amp) can load it.
 
 ## Storage (required)
 
@@ -20,7 +20,7 @@ Write a portable Agent Skill so every harness (Claude, Cursor, Codex, OpenCode, 
 | This project | \`.agents/skills/<name>/SKILL.md\` |
 | Personal (all projects) | \`~/.agents/skills/<name>/SKILL.md\` |
 
-Never write skills to \`.claude/skills\`, \`.cursor/skills\`, \`~/.cursor/skills-cursor\`, \`.fx/skills\`, or any other harness-only folder. One copy under \`.agents/skills\` is enough.
+Never write skills to \`.claude/skills\`, \`.cursor/skills\`, \`~/.cursor/skills-cursor\`, \`.fx/skills\`, \`~/.config/amp/skills\`, or any other harness-only folder. One copy under \`.agents/skills\` is enough.
 
 Ask where it should live if the user did not say. Default to the project when a project folder is open.
 

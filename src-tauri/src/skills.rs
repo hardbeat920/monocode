@@ -52,6 +52,9 @@ pub(crate) fn list_skills_from(project: &Path, home: Option<&Path>) -> Vec<Disco
     add_root(project.join(".agents/skills"), "project", "agents");
     if let Some(home) = home {
         add_root(home.join(".agents/skills"), "user", "agents");
+        // Amp uses ~/.config/agents/skills and ~/.config/amp/skills for personal skills.
+        add_root(home.join(".config/agents/skills"), "user", "agents");
+        add_root(home.join(".config/amp/skills"), "user", "amp");
     }
 
     for (dir, source) in [

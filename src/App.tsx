@@ -444,6 +444,14 @@ export default function App({
     const stopBridge = startHarnessBridge();
     const reap = () => {
       if (isAppQuitting()) return;
+      // During Vite HMR (dev mode), pagehide/beforeunload fire on full page
+      // reload when a source file changes. Don't kill harness processes or
+      // mark sessions as interrupted - the Rust processes survive the reload,
+      // and sessions resume via bindHarnessSession after the webview returns.
+      if (import.meta.hot) {
+        void persistLiveTranscripts(sessionsRef.current);
+        return;
+      }
       void persistQuitState(
         sessionsRef.current,
         tabsRef.current,

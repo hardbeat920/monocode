@@ -225,6 +225,18 @@ pub fn harness_resolve_fx() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve the Amp CLI (`amp`).
+#[tauri::command]
+pub fn harness_resolve_amp() -> Result<CursorBinary, String> {
+    resolve_amp()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Amp CLI not found. Install it from https://ampcode.com and sign in, then retry.".into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -554,6 +566,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_claude(),
         resolve_pi(),
         resolve_fx(),
+        resolve_amp(),
     ]
     .into_iter()
     .flatten()
@@ -830,6 +843,85 @@ fn resolve_fx() -> Option<PathBuf> {
     }
 
     candidates.into_iter().find(|path| is_fx_agent(path))
+}
+
+fn resolve_amp() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        candidates.push(home.join(".local/bin/amp"));
+        candidates.push(home.join(".npm-global/bin/amp"));
+        candidates.push(home.join("n/bin/amp"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/amp"));
+    candidates.push(PathBuf::from("/usr/local/bin/amp"));
+    candidates.push(PathBuf::from("/usr/bin/amp"));
+    candidates.push(PathBuf::from("/snap/bin/amp"));
+    if let Some(from_shell) = which_via_login_shell("amp") {
+        candidates.push(from_shell);
+    }
+
+    candidates.into_iter().find(|path| is_amp_agent(path))
+}
+
+fn is_amp_agent(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name != "amp" {
+        return false;
+    }
+    file_mentions_ampcode(path) || amp_help_mentions_ampcode(path)
+}
+
+fn file_mentions_ampcode(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 64 * 1024];
+    let Ok(n) = file.read(&mut buf) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&buf[..n]);
+    text.contains("ampcode")
+        || text.contains("AMP_API_KEY")
+        || text.contains("ampcode.com")
+        || text.contains("@ampcode/cli")
+}
+
+fn amp_help_mentions_ampcode(path: &Path) -> bool {
+    let mut cmd = Command::new(path);
+    cmd.arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    isolate_child(&mut cmd);
+    let Ok(child) = cmd.spawn() else {
+        return false;
+    };
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(output)) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .to_ascii_lowercase();
+            text.contains("ampcode") || text.contains("stream-json")
+        }
+        _ => {
+            terminate(pid);
+            false
+        }
+    }
 }
 
 fn is_pi_coding_agent(path: &Path) -> bool {

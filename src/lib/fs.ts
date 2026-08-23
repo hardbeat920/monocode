@@ -23,7 +23,7 @@ export type DiscoveredSkill = {
   description: string;
   path: string;
   scope: "project" | "user" | "builtin";
-  source: "agents" | "claude" | "cursor" | "codex" | "opencode" | "pi" | "fx" | "monocode";
+  source: "agents" | "claude" | "cursor" | "codex" | "opencode" | "pi" | "fx" | "amp" | "monocode";
 };
 
 export function listSkills(cwd: string): Promise<DiscoveredSkill[]> {

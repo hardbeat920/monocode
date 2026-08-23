@@ -150,6 +150,7 @@ pub fn run() {
             harness::harness_resolve_claude,
             harness::harness_resolve_pi,
             harness::harness_resolve_fx,
+            harness::harness_resolve_amp,
             harness::harness_free_port,
             harness::harness_spawn,
             harness::harness_write,

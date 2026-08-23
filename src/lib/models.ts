@@ -122,6 +122,79 @@ export const MODELS: AgentModel[] = [
     name: "GLM 5.2 Fast",
     nativeId: "zai/glm-5.2-fast",
   },
+
+  {
+    id: "amp:low",
+    harness: "amp",
+    name: "Low",
+    nativeId: "low",
+    settings: [
+      {
+        id: "fast",
+        label: "Fast",
+        kind: "toggle",
+        value: "false",
+        options: [
+          { value: "true", label: "On" },
+          { value: "false", label: "Off" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "amp:medium",
+    harness: "amp",
+    name: "Medium",
+    nativeId: "medium",
+    settings: [
+      {
+        id: "fast",
+        label: "Fast",
+        kind: "toggle",
+        value: "false",
+        options: [
+          { value: "true", label: "On" },
+          { value: "false", label: "Off" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "amp:high",
+    harness: "amp",
+    name: "High",
+    nativeId: "high",
+    settings: [
+      {
+        id: "fast",
+        label: "Fast",
+        kind: "toggle",
+        value: "false",
+        options: [
+          { value: "true", label: "On" },
+          { value: "false", label: "Off" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "amp:ultra",
+    harness: "amp",
+    name: "Ultra",
+    nativeId: "ultra",
+    settings: [
+      {
+        id: "fast",
+        label: "Fast",
+        kind: "toggle",
+        value: "false",
+        options: [
+          { value: "true", label: "On" },
+          { value: "false", label: "Off" },
+        ],
+      },
+    ],
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -131,6 +204,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   opencode: "opencode:glm-5",
   pi: "pi:default",
   fx: "fx:zai/glm-5.2-fast",
+  amp: "amp:medium",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -152,6 +226,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "opencode",
   "pi",
   "fx",
+  "amp",
 ];
 
 let overlays: Partial<Record<HarnessId, AgentModel[]>> = {};

@@ -1,6 +1,7 @@
 import type { HarnessId } from "../session";
 import { HARNESSES } from "../session";
 import {
+  resolveAmpBinary,
   resolveClaudeBinary,
   resolveCodexBinary,
   resolveCursorBinary,
@@ -19,6 +20,7 @@ const UNAVAILABLE_HINT: Record<HarnessId, string> = {
   opencode: "Install OpenCode and run `opencode auth login`",
   pi: "Install Pi (`npm i -g @earendil-works/pi-coding-agent`) and authenticate",
   fx: "Install fx (`curl -fsSL https://fx.sh/setup.sh | bash`) and run `fx login`",
+  amp: "Install Amp (`curl -fsSL https://ampcode.com/install.sh | bash`) and sign in at ampcode.com",
 };
 
 let availability: HarnessAvailability = {
@@ -28,6 +30,7 @@ let availability: HarnessAvailability = {
   opencode: false,
   pi: false,
   fx: false,
+  amp: false,
 };
 let version = 0;
 let inflight: Promise<void> | null = null;
@@ -105,6 +108,14 @@ export function probeHarnessAvailability(): Promise<void> {
       if (id === "fx") {
         try {
           await resolveFxBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "amp") {
+        try {
+          await resolveAmpBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

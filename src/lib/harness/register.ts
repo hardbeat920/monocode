@@ -1,4 +1,5 @@
 import { ensureClaudeRegistered } from "./claudeAdapter";
+import { ensureAmpRegistered } from "./ampAdapter";
 import { ensureCodexRegistered } from "./codexAdapter";
 import { ensureCursorRegistered } from "./cursorAdapter";
 import { ensureFxRegistered } from "./fxAdapter";
@@ -13,4 +14,5 @@ export function registerBuiltinHarnesses(): void {
   ensureOpenCodeRegistered();
   ensurePiRegistered();
   ensureFxRegistered();
+  ensureAmpRegistered();
 }
