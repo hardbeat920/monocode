@@ -47,6 +47,15 @@ export function stringField(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+export function textField(
+  rec: Record<string, unknown> | null | undefined,
+  key: string,
+): string | undefined {
+  if (!rec) return undefined;
+  const value = rec[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 export function parseOpenCodeModelSlug(
   slug: string | null | undefined,
 ): ParsedOpenCodeModelSlug | null {
@@ -179,20 +188,26 @@ export function toOpenCodeFileParts(
   return parts;
 }
 
+export type OpenCodeTextSnapshotResult =
+  | { kind: "unchanged"; latestText: string }
+  | { kind: "append"; latestText: string; deltaToEmit: string }
+  | { kind: "conflict"; latestText: string };
+
 export function mergeOpenCodeAssistantText(
   previousText: string | undefined,
   nextText: string,
-): { latestText: string; deltaToEmit: string } {
-  const latestText =
-    previousText &&
-    previousText.length > nextText.length &&
-    previousText.startsWith(nextText)
-      ? previousText
-      : nextText;
-  return {
-    latestText,
-    deltaToEmit: latestText.slice(commonPrefixLength(previousText ?? "", latestText)),
-  };
+): OpenCodeTextSnapshotResult {
+  if (previousText === nextText) {
+    return { kind: "unchanged", latestText: nextText };
+  }
+  if (previousText === undefined || nextText.startsWith(previousText)) {
+    return {
+      kind: "append",
+      latestText: nextText,
+      deltaToEmit: nextText.slice(previousText?.length ?? 0),
+    };
+  }
+  return { kind: "conflict", latestText: previousText };
 }
 
 export function appendOpenCodeAssistantTextDelta(
@@ -200,14 +215,6 @@ export function appendOpenCodeAssistantTextDelta(
   delta: string,
 ): { nextText: string; deltaToEmit: string } {
   return { nextText: previousText + delta, deltaToEmit: delta };
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  let index = 0;
-  while (index < left.length && index < right.length && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
 }
 
 export function titleCaseSlug(value: string): string {
@@ -238,13 +245,21 @@ export function inferDefaultVariant(
   return undefined;
 }
 
-export function inferDefaultAgent(agents: Array<{ name: string }>): string | undefined {
-  return agents.find((agent) => agent.name === "build")?.name ?? agents[0]?.name;
+export function inferDefaultAgent(
+  agents: Array<{ name: string }>,
+): string | undefined {
+  return (
+    agents.find((agent) => agent.name === "build")?.name ?? agents[0]?.name
+  );
 }
 
 export function toolKindFromName(toolName: string): string {
   const normalized = toolName.toLowerCase();
-  if (normalized.includes("bash") || normalized.includes("command") || normalized.includes("shell")) {
+  if (
+    normalized.includes("bash") ||
+    normalized.includes("command") ||
+    normalized.includes("shell")
+  ) {
     return "shell";
   }
   if (
@@ -267,7 +282,9 @@ export function toolKindFromName(toolName: string): string {
   return toolName;
 }
 
-export function previewFromToolPart(part: OpenCodePart): ToolPreview | undefined {
+export function previewFromToolPart(
+  part: OpenCodePart,
+): ToolPreview | undefined {
   const tool = part.tool ?? "tool";
   const state = part.state ?? {};
   const kind = toolKindFromName(tool);
@@ -292,13 +309,18 @@ export function previewFromToolPart(part: OpenCodePart): ToolPreview | undefined
 export function detailFromToolPart(part: OpenCodePart): string | undefined {
   const state = part.state ?? {};
   const status = typeof state.status === "string" ? state.status : "";
-  if (status === "completed" && typeof state.output === "string") return state.output;
+  if (status === "completed" && typeof state.output === "string")
+    return state.output;
   if (status === "error" && typeof state.error === "string") return state.error;
-  if (status === "running" && typeof state.title === "string") return state.title;
+  if (status === "running" && typeof state.title === "string")
+    return state.title;
   return undefined;
 }
 
-export function permissionTitle(permission: string, patterns: string[]): string {
+export function permissionTitle(
+  permission: string,
+  patterns: string[],
+): string {
   const detail = patterns.length > 0 ? patterns.join("\n") : permission;
   switch (permission) {
     case "bash":
@@ -348,7 +370,9 @@ export function contextUsedFromMessageInfo(
   return used > 0 ? used : undefined;
 }
 
-export function eventSessionId(event: Record<string, unknown>): string | undefined {
+export function eventSessionId(
+  event: Record<string, unknown>,
+): string | undefined {
   const properties = asRecord(event.properties);
   if (!properties) return undefined;
   const sessionID = stringField(properties, "sessionID");

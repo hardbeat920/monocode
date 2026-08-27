@@ -1,5 +1,6 @@
 import type { Attachment, RuntimeMode, ToolPreview } from "../session";
 import { composeToolTitle, extractToolPreview } from "./preview";
+import { classifyCompletedText } from "./streamText";
 import type { ApprovalDecision, HarnessEvent } from "./types";
 
 /** Claude Code versions that first ship Opus 5 / Fable 5 / Opus 4.8 / 4.7. */
@@ -398,22 +399,154 @@ export function turnStatusFromResult(rec: Record<string, unknown>): {
   return { status: "failed", error: error ?? "Claude turn failed." };
 }
 
-export function streamDeltaFromEvent(
-  rec: Record<string, unknown>,
-): { kind: "assistant" | "reasoning"; text: string } | null {
+export type ClaudeTextState = {
+  recordSequence: number;
+  entries: ReadonlyMap<string, string>;
+  tailKey: string | null;
+  highestPublishedContentIndex: number;
+  fallbackAllowed: boolean;
+};
+
+export type ClaudeTextStateResult = {
+  state: ClaudeTextState;
+  event?: Extract<HarnessEvent, { type: "message.delta" | "reasoning.delta" }>;
+  conflict?: "position" | "text";
+};
+
+export function createClaudeTextState(recordSequence: number): ClaudeTextState {
+  return {
+    recordSequence,
+    entries: new Map(),
+    tailKey: null,
+    highestPublishedContentIndex: -1,
+    fallbackAllowed: true,
+  };
+}
+
+export function invalidateClaudeTextTail(
+  state: ClaudeTextState,
+): ClaudeTextState {
+  return { ...state, tailKey: null, fallbackAllowed: false };
+}
+
+export function markClaudeContentPublished(
+  state: ClaudeTextState,
+  contentIndex: number,
+): ClaudeTextState {
+  return {
+    ...state,
+    tailKey: null,
+    highestPublishedContentIndex: Math.max(
+      state.highestPublishedContentIndex,
+      contentIndex,
+    ),
+  };
+}
+
+export function reconcileClaudeCompletedTool(
+  state: ClaudeTextState,
+  input: { contentIndex: number; alreadyPublished: boolean },
+): { state: ClaudeTextState; publish: boolean } {
+  if (input.alreadyPublished) return { state, publish: false };
+  return {
+    state: markClaudeContentPublished(state, input.contentIndex),
+    publish: true,
+  };
+}
+
+export function applyClaudeTextDelta(
+  state: ClaudeTextState,
+  delta: {
+    kind: "assistant" | "reasoning";
+    contentIndex: number;
+    text: string;
+  },
+): ClaudeTextStateResult {
+  const key = `${delta.kind}:${delta.contentIndex}`;
+  const entries = new Map(state.entries);
+  entries.set(key, (entries.get(key) ?? "") + delta.text);
+  return {
+    state: {
+      ...state,
+      entries,
+      tailKey: key,
+      highestPublishedContentIndex: Math.max(
+        state.highestPublishedContentIndex,
+        delta.contentIndex,
+      ),
+    },
+    event: claudeTextEvent(delta.kind, delta.text),
+  };
+}
+
+export function applyClaudeCompletedText(
+  state: ClaudeTextState,
+  part: Extract<ClaudeCompletedPart, { kind: "text" | "thinking" }>,
+): ClaudeTextStateResult {
+  const role = part.kind === "text" ? "assistant" : "reasoning";
+  const key = `${role}:${part.contentIndex}`;
+  const streamed = state.entries.get(key);
+  const relationship = classifyCompletedText({
+    streamed: streamed ?? "",
+    completed: part.text,
+  });
+  if (relationship.kind === "already-emitted") return { state };
+  if (relationship.kind === "conflict") {
+    return { state, conflict: "text" };
+  }
+  const positionSafe =
+    streamed === undefined
+      ? state.fallbackAllowed &&
+        part.contentIndex > state.highestPublishedContentIndex
+      : state.tailKey === key;
+  if (!positionSafe) return { state, conflict: "position" };
+
+  const text =
+    relationship.kind === "fallback" ? relationship.text : relationship.suffix;
+  const entries = new Map(state.entries);
+  entries.set(key, part.text);
+  return {
+    state: {
+      ...state,
+      entries,
+      tailKey: key,
+      highestPublishedContentIndex: Math.max(
+        state.highestPublishedContentIndex,
+        part.contentIndex,
+      ),
+    },
+    ...(text ? { event: claudeTextEvent(role, text) } : {}),
+  };
+}
+
+function claudeTextEvent(
+  role: "assistant" | "reasoning",
+  text: string,
+): Extract<HarnessEvent, { type: "message.delta" | "reasoning.delta" }> {
+  return role === "assistant"
+    ? { type: "message.delta", text }
+    : { type: "reasoning.delta", text };
+}
+
+export function streamDeltaFromEvent(rec: Record<string, unknown>): {
+  kind: "assistant" | "reasoning";
+  contentIndex: number;
+  text: string;
+} | null {
   const event = asRecord(rec.event);
   if (!event || stringField(event, "type") !== "content_block_delta") {
     return null;
   }
+  const contentIndex = typeof event.index === "number" ? event.index : -1;
   const delta = asRecord(event.delta);
   const deltaType = stringField(delta, "type") ?? "";
   if (deltaType === "text_delta") {
     const text = typeof delta?.text === "string" ? delta.text : "";
-    return text ? { kind: "assistant", text } : null;
+    return text ? { kind: "assistant", contentIndex, text } : null;
   }
   if (deltaType === "thinking_delta") {
     const text = typeof delta?.thinking === "string" ? delta.thinking : "";
-    return text ? { kind: "reasoning", text } : null;
+    return text ? { kind: "reasoning", contentIndex, text } : null;
   }
   return null;
 }
@@ -471,6 +604,47 @@ export function isSubagentMessage(rec: Record<string, unknown>): boolean {
   return typeof parent === "string" && parent.length > 0;
 }
 
+export type ClaudeToolUse = {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+export type ClaudeCompletedPart =
+  | { kind: "text"; contentIndex: number; text: string }
+  | { kind: "thinking"; contentIndex: number; text: string }
+  | { kind: "tool"; contentIndex: number; use: ClaudeToolUse };
+
+export function completedAssistantParts(
+  rec: Record<string, unknown>,
+): ClaudeCompletedPart[] {
+  const content = asRecord(rec.message)?.content;
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block, contentIndex): ClaudeCompletedPart[] => {
+    const row = asRecord(block);
+    const type = stringField(row, "type");
+    if (type === "text") {
+      const text = typeof row?.text === "string" ? row.text : "";
+      return text ? [{ kind: "text", contentIndex, text }] : [];
+    }
+    if (type === "thinking") {
+      const text = typeof row?.thinking === "string" ? row.thinking : "";
+      return text ? [{ kind: "thinking", contentIndex, text }] : [];
+    }
+    if (type !== "tool_use") return [];
+    const id = stringField(row, "id");
+    const name = stringField(row, "name");
+    if (!id || !name) return [];
+    return [
+      {
+        kind: "tool",
+        contentIndex,
+        use: { id, name, input: asRecord(row?.input) ?? {} },
+      },
+    ];
+  });
+}
+
 export function assistantTextBlocks(rec: Record<string, unknown>): string[] {
   const message = asRecord(rec.message);
   const content = message?.content;
@@ -483,11 +657,9 @@ export function assistantTextBlocks(rec: Record<string, unknown>): string[] {
   });
 }
 
-export function assistantToolUses(rec: Record<string, unknown>): Array<{
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}> {
+export function assistantToolUses(
+  rec: Record<string, unknown>,
+): ClaudeToolUse[] {
   const message = asRecord(rec.message);
   const content = message?.content;
   if (!Array.isArray(content)) return [];

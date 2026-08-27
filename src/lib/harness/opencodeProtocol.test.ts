@@ -16,8 +16,17 @@ import {
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
+  textField,
   toOpenCodePermissionReply,
 } from "./opencodeProtocol";
+
+describe("textField", () => {
+  it("preserves whitespace text without weakening metadata fields", () => {
+    const record = { text: "\n\n", id: "  " };
+    expect(textField(record, "text")).toBe("\n\n");
+    expect(textField(record, "missing")).toBeUndefined();
+  });
+});
 
 describe("parseOpenCodeModelSlug", () => {
   it("splits provider/model", () => {
@@ -100,12 +109,12 @@ describe("OpenCode CLI inventory parsers", () => {
       "anthropic/claude-sonnet-4-6",
       "opencode/glm-5",
     ]);
-    expect(models[1].settings?.some((setting) => setting.id === "variant")).toBe(
-      true,
-    );
-    expect(models[0].settings?.find((setting) => setting.id === "agent")?.value).toBe(
-      "build",
-    );
+    expect(
+      models[1].settings?.some((setting) => setting.id === "variant"),
+    ).toBe(true);
+    expect(
+      models[0].settings?.find((setting) => setting.id === "agent")?.value,
+    ).toBe("build");
   });
 
   it("parses agent list headers", () => {
@@ -122,15 +131,26 @@ describe("OpenCode CLI inventory parsers", () => {
 describe("mergeOpenCodeAssistantText", () => {
   it("emits only the new suffix", () => {
     expect(mergeOpenCodeAssistantText("Hel", "Hello")).toEqual({
+      kind: "append",
       latestText: "Hello",
       deltaToEmit: "lo",
     });
   });
 
-  it("keeps a longer snapshot if the next update shrinks", () => {
-    expect(mergeOpenCodeAssistantText("Hello world", "Hello")).toEqual({
-      latestText: "Hello world",
-      deltaToEmit: "",
+  it("recognizes an unchanged snapshot", () => {
+    expect(mergeOpenCodeAssistantText("Hello", "Hello")).toEqual({
+      kind: "unchanged",
+      latestText: "Hello",
+    });
+  });
+
+  it.each([
+    ["Hello world", "Hello"],
+    ["help", "hello"],
+  ])("rejects an incompatible snapshot: %s -> %s", (previous, next) => {
+    expect(mergeOpenCodeAssistantText(previous, next)).toEqual({
+      kind: "conflict",
+      latestText: previous,
     });
   });
 });
@@ -156,9 +176,9 @@ describe("OpenCode helpers", () => {
     expect(inferDefaultVariant("openai", ["low", "medium", "high"])).toBe(
       "medium",
     );
-    expect(
-      inferDefaultAgent([{ name: "plan" }, { name: "build" }]),
-    ).toBe("build");
+    expect(inferDefaultAgent([{ name: "plan" }, { name: "build" }])).toBe(
+      "build",
+    );
   });
 });
 
@@ -187,7 +207,12 @@ describe("contextUsedFromMessageInfo", () => {
   it("treats an all-zero reading as nothing to report", () => {
     expect(
       contextUsedFromMessageInfo({
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
       }),
     ).toBeUndefined();
   });

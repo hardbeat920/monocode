@@ -9,9 +9,11 @@ import {
   writeChild,
 } from "./child";
 import {
+  applyClaudeCompletedText,
+  applyClaudeTextDelta,
   askUserQuestionAllowInput,
-  assistantTextBlocks,
-  assistantToolUses,
+  completedAssistantParts,
+  createClaudeTextState,
   contextFromResult,
   contextUsedFromAssistant,
   buildClaudeSpawnArgs,
@@ -22,9 +24,11 @@ import {
   extractAskUserQuestionTitle,
   extractExitPlanModePlan,
   inputJsonDeltaFromEvent,
+  invalidateClaudeTextTail,
   isClaudeUltracodeEffort,
   isSubagentMessage,
   isTodoTool,
+  markClaudeContentPublished,
   normalizeClaudeCliEffort,
   parseControlCancelId,
   parseControlRequest,
@@ -32,6 +36,7 @@ import {
   planTextFromTodos,
   previewFromTool,
   resolveClaudeApiModelId,
+  reconcileClaudeCompletedTool,
   runtimeModeToPermission,
   sessionIdFromMessage,
   statusTextFromSystem,
@@ -47,9 +52,15 @@ import {
   turnStatusFromResult,
   type ClaudeCliSettings,
   type ClaudeControlRequest,
+  type ClaudeTextState,
+  type ClaudeToolUse,
 } from "./claudeProtocol";
-import { mergeStream } from "./streamText";
-import type { ApprovalDecision, HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  HarnessEvent,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 type PendingApproval = {
   requestId: string;
@@ -86,8 +97,7 @@ type Live = {
   activeTurn: boolean;
   initDone: (() => void) | null;
   initialized: boolean;
-  emittedAssistant: string;
-  emittedReasoning: string;
+  textState: ClaudeTextState;
 };
 
 type Resume = {
@@ -101,7 +111,8 @@ const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 
-let resolveClaudeBinaryImpl: () => Promise<{ path: string }> = resolveClaudeBinary;
+let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
+  resolveClaudeBinary;
 
 /** Test seam. */
 export function setClaudeBinaryResolver(
@@ -122,16 +133,18 @@ export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
-  live.turns = live.turns.catch(() => undefined).then(async () => {
-    live.cancelled = false;
-    live.muteUpdates = false;
-    try {
-      await runTurn(live, input);
-    } catch (error) {
-      if (live.cancelled) return;
-      throw error;
-    }
-  });
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      try {
+        await runTurn(live, input);
+      } catch (error) {
+        if (live.cancelled) return;
+        throw error;
+      }
+    });
   await live.turns;
 }
 
@@ -147,6 +160,7 @@ export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
 
+  live.textState = invalidateClaudeTextTail(live.textState);
   await writeJson(input.sessionId, message);
 }
 
@@ -240,8 +254,13 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
 
   const { path } = await resolveClaudeBinaryImpl();
   const liveRef: { current: Live | null } = { current: null };
-  const claudeSessionId = canResume && resume ? resume.sessionId : crypto.randomUUID();
-  const launch = launchOptions(input, canResume ? resume?.sessionId : undefined, claudeSessionId);
+  const claudeSessionId =
+    canResume && resume ? resume.sessionId : crypto.randomUUID();
+  const launch = launchOptions(
+    input,
+    canResume ? resume?.sessionId : undefined,
+    claudeSessionId,
+  );
 
   const live: Live = {
     cwd: input.cwd,
@@ -263,8 +282,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     activeTurn: false,
     initDone: null,
     initialized: false,
-    emittedAssistant: "",
-    emittedReasoning: "",
+    textState: createClaudeTextState(0),
   };
   liveRef.current = live;
 
@@ -330,8 +348,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
 
-  live.emittedAssistant = "";
-  live.emittedReasoning = "";
+  live.textState = createClaudeTextState(live.textState.recordSequence + 1);
   live.toolsByIndex.clear();
   live.toolsById.clear();
 
@@ -400,7 +417,8 @@ function handleLine(sessionId: string, live: Live, line: string): void {
 
   if (
     type === "system" &&
-    (stringField(rec, "subtype") === "init" || stringField(rec, "subtype") === "initialized")
+    (stringField(rec, "subtype") === "init" ||
+      stringField(rec, "subtype") === "initialized")
   ) {
     markInitialized(live);
   }
@@ -428,7 +446,10 @@ function handleLine(sessionId: string, live: Live, line: string): void {
   }
   if (type === "system") {
     const text = statusTextFromSystem(rec);
-    if (text) live.onEvent({ type: "status", text });
+    if (text) {
+      live.textState = invalidateClaudeTextTail(live.textState);
+      live.onEvent({ type: "status", text });
+    }
   }
 }
 
@@ -437,18 +458,15 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
   const delta = streamDeltaFromEvent(rec);
   if (delta) {
     if (subagent) return;
-    if (delta.kind === "assistant") {
-      live.emittedAssistant = mergeStream(live.emittedAssistant, delta.text);
-      live.onEvent({ type: "message.delta", text: delta.text });
-    } else {
-      live.emittedReasoning = mergeStream(live.emittedReasoning, delta.text);
-      live.onEvent({ type: "reasoning.delta", text: delta.text });
-    }
+    const result = applyClaudeTextDelta(live.textState, delta);
+    live.textState = result.state;
+    if (result.event) live.onEvent(result.event);
     return;
   }
 
   const started = toolStartFromEvent(rec);
   if (started) {
+    live.textState = markClaudeContentPublished(live.textState, started.index);
     const tool: InFlightTool = {
       id: started.id,
       name: started.name,
@@ -499,38 +517,47 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   const used = contextUsedFromAssistant(rec);
   if (used !== undefined) live.onEvent({ type: "context", used });
 
-  const snapshot = assistantTextBlocks(rec).join("");
-  if (snapshot && snapshot !== live.emittedAssistant) {
-    const next = mergeStream(live.emittedAssistant, snapshot);
-    const delta = next.slice(live.emittedAssistant.length);
-    live.emittedAssistant = next;
-    if (delta) live.onEvent({ type: "message.delta", text: delta });
+  for (const part of completedAssistantParts(rec)) {
+    if (part.kind === "text" || part.kind === "thinking") {
+      const result = applyClaudeCompletedText(live.textState, part);
+      live.textState = result.state;
+      if (result.event) live.onEvent(result.event);
+      continue;
+    }
+    const tool = reconcileClaudeCompletedTool(live.textState, {
+      contentIndex: part.contentIndex,
+      alreadyPublished: live.toolsById.has(part.use.id),
+    });
+    live.textState = tool.state;
+    if (tool.publish) emitCompletedClaudeTool(live, part.use);
   }
 
-  for (const use of assistantToolUses(rec)) {
-    if (live.toolsById.has(use.id)) continue;
-    const tool: InFlightTool = {
-      id: use.id,
-      name: use.name,
-      input: use.input,
-      partialJson: "",
-      title: toolTitle(use.name, use.input),
-    };
-    live.toolsById.set(use.id, tool);
-    live.onEvent({
-      type: "tool.started",
-      callId: tool.id,
-      title: tool.title,
-      kind: toolKindFromName(tool.name),
-      status: "pending",
-      preview: previewFromTool(tool.name, tool.input),
-    });
-    if (use.name === "ExitPlanMode") {
-      const plan = extractExitPlanModePlan(use.input);
-      if (plan) live.onEvent({ type: "plan", text: plan });
-    }
-    emitPlanIfNeeded(live, tool.name, tool.input);
+  live.textState = createClaudeTextState(live.textState.recordSequence + 1);
+}
+
+function emitCompletedClaudeTool(live: Live, use: ClaudeToolUse): void {
+  if (live.toolsById.has(use.id)) return;
+  const tool: InFlightTool = {
+    id: use.id,
+    name: use.name,
+    input: use.input,
+    partialJson: "",
+    title: toolTitle(use.name, use.input),
+  };
+  live.toolsById.set(use.id, tool);
+  live.onEvent({
+    type: "tool.started",
+    callId: tool.id,
+    title: tool.title,
+    kind: toolKindFromName(tool.name),
+    status: "pending",
+    preview: previewFromTool(tool.name, tool.input),
+  });
+  if (use.name === "ExitPlanMode") {
+    const plan = extractExitPlanModePlan(use.input);
+    if (plan) live.onEvent({ type: "plan", text: plan });
   }
+  emitPlanIfNeeded(live, tool.name, tool.input);
 }
 
 function handleUser(live: Live, rec: Record<string, unknown>): void {
@@ -578,6 +605,7 @@ async function handleControlRequest(
 
   const toolName = control.toolName ?? "tool";
   const input = control.input ?? {};
+  live.textState = invalidateClaudeTextTail(live.textState);
 
   if (live.cancelled || live.muteUpdates) {
     await writeJson(
@@ -599,7 +627,13 @@ async function handleControlRequest(
       kind: "other",
       callId: control.toolUseId,
     });
-    const decision = await waitApproval(live, uiId, control.requestId, input, "question");
+    const decision = await waitApproval(
+      live,
+      uiId,
+      control.requestId,
+      input,
+      "question",
+    );
     live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
     const response =
       decision === "allow"
@@ -651,7 +685,13 @@ async function handleControlRequest(
     callId: control.toolUseId,
     preview: previewFromTool(toolName, input),
   });
-  const decision = await waitApproval(live, uiId, control.requestId, input, "permission");
+  const decision = await waitApproval(
+    live,
+    uiId,
+    control.requestId,
+    input,
+    "permission",
+  );
   live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
   await writeJson(
     sessionId,
@@ -710,6 +750,7 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   live.turnEndPending = false;
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);
+  live.textState = createClaudeTextState(live.textState.recordSequence + 1);
   const done = live.turnDone;
   const failed = live.turnFailed;
   live.turnDone = null;

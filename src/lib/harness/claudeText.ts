@@ -8,6 +8,7 @@ import {
   writeChild,
 } from "./child";
 import {
+  asRecord,
   assistantTextBlocks,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
@@ -15,7 +16,13 @@ import {
   stringField,
   turnStatusFromResult,
 } from "./claudeProtocol";
-import { mergeStream } from "./streamText";
+import {
+  applyCollectedTextUpdate,
+  createCollectedTextState,
+  selectCollectedText,
+  type CollectedTextState,
+  type CollectedTextUpdate,
+} from "./streamText";
 
 const TEXT_CHILD_ID = "monocode-claude-text";
 const INIT_TIMEOUT_MS = 8_000;
@@ -25,7 +32,8 @@ const TEXT_MODEL = "claude-haiku-4-5";
 type LiveText = {
   cwd: string;
   collecting: boolean;
-  output: string;
+  textState: CollectedTextState;
+  recordSequence: number;
   closed: boolean;
   ready: boolean;
   turnDone: (() => void) | null;
@@ -35,6 +43,11 @@ type LiveText = {
 
 let live: LiveText | null = null;
 let turns: Promise<void> = Promise.resolve();
+
+export function requireClaudeTextOutput(output: string): string {
+  if (!output.trim()) throw new Error("Claude returned empty output.");
+  return output;
+}
 
 function pickTextModel(): string {
   const models = modelsFor("claude");
@@ -50,9 +63,11 @@ export async function stopClaudeTextPrompt(): Promise<void> {
 
 export function warmupClaudeText(cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
-  const run = turns.catch(() => undefined).then(async () => {
-    await ensureLive(cwd);
-  });
+  const run = turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(cwd);
+    });
   turns = run.then(
     () => undefined,
     () => undefined,
@@ -79,7 +94,8 @@ async function promptOnLive(input: {
   timeoutMs?: number;
 }): Promise<string> {
   const session = await ensureLive(input.cwd);
-  session.output = "";
+  session.textState = createCollectedTextState();
+  session.recordSequence = 0;
   session.collecting = true;
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
 
@@ -104,9 +120,7 @@ async function promptOnLive(input: {
       }),
     ]);
 
-    const output = session.output.trim();
-    if (!output) throw new Error("Claude returned empty output.");
-    return output;
+    return requireClaudeTextOutput(selectCollectedText(session.textState));
   } catch (error) {
     if (session.closed) await dropLive();
     throw error;
@@ -128,7 +142,8 @@ async function startLive(cwd: string): Promise<LiveText> {
   const session: LiveText = {
     cwd,
     collecting: false,
-    output: "",
+    textState: createCollectedTextState(),
+    recordSequence: 0,
     closed: false,
     ready: false,
     turnDone: null,
@@ -186,6 +201,23 @@ async function dropLive(): Promise<void> {
   await killChild(TEXT_CHILD_ID).catch(() => undefined);
 }
 
+export function claudeTextUpdateFromRecord(
+  rec: Record<string, unknown>,
+  scopeId: string,
+): CollectedTextUpdate | null {
+  const type = stringField(rec, "type");
+  if (type === "assistant") {
+    const text = assistantTextBlocks(rec).join("");
+    return text ? { kind: "completed", scopeId, text } : null;
+  }
+  if (type !== "stream_event") return null;
+  const delta = asRecord(asRecord(rec.event)?.delta);
+  return stringField(delta, "type") === "text_delta" &&
+    typeof delta?.text === "string"
+    ? { kind: "delta", scopeId, text: delta.text }
+    : null;
+}
+
 function handleLine(session: LiveText, line: string): void {
   const rec = parseJsonLine(line);
   if (!rec) return;
@@ -200,20 +232,18 @@ function handleLine(session: LiveText, line: string): void {
     session.readyDone = null;
   }
   if (!session.collecting) return;
+  const update = claudeTextUpdateFromRecord(
+    rec,
+    `record:${session.recordSequence}`,
+  );
+  if (update) {
+    session.textState = applyCollectedTextUpdate(session.textState, update);
+  }
   if (type === "assistant") {
-    const snapshot = assistantTextBlocks(rec).join("");
-    if (snapshot) session.output = mergeStream(session.output, snapshot);
+    session.recordSequence += 1;
     return;
   }
-  if (type === "stream_event") {
-    const event = rec.event;
-    if (!event || typeof event !== "object") return;
-    const delta = (event as { delta?: { type?: string; text?: string } }).delta;
-    if (delta?.type === "text_delta" && typeof delta.text === "string") {
-      session.output = mergeStream(session.output, delta.text);
-    }
-    return;
-  }
+  if (update) return;
   if (type === "result") {
     const result = turnStatusFromResult(rec);
     if (result.status === "failed") {

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyCodexTextUpdate,
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
+  createCodexTextState,
+  invalidateCodexTextTail,
   isRecoverableThreadResumeError,
   mapApprovalRequest,
   mapCodexNotification,
@@ -102,9 +105,9 @@ describe("isRecoverableThreadResumeError", () => {
     expect(
       isRecoverableThreadResumeError(new Error("Thread thr_x not found")),
     ).toBe(true);
-    expect(
-      isRecoverableThreadResumeError(new Error("unknown thread id")),
-    ).toBe(true);
+    expect(isRecoverableThreadResumeError(new Error("unknown thread id"))).toBe(
+      true,
+    );
   });
 
   it("rejects unrelated errors", () => {
@@ -120,18 +123,70 @@ describe("isRecoverableThreadResumeError", () => {
 describe("mapCodexNotification", () => {
   it("maps agent message deltas", () => {
     const mapped = mapCodexNotification("item/agentMessage/delta", {
+      itemId: "msg_1",
       delta: "Hello",
     });
-    expect(mapped.events).toEqual([{ type: "message.delta", text: "Hello" }]);
+    expect(mapped.textUpdates).toEqual([
+      {
+        kind: "delta",
+        itemId: "msg_1",
+        channel: "assistant",
+        text: "Hello",
+      },
+    ]);
+    expect(mapped.events).toEqual([]);
+  });
+
+  it("preserves whitespace-only identified deltas", () => {
+    const mapped = mapCodexNotification("item/agentMessage/delta", {
+      itemId: "msg_1",
+      delta: "\n\n",
+    });
+    expect(mapped.textUpdates).toEqual([
+      {
+        kind: "delta",
+        itemId: "msg_1",
+        channel: "assistant",
+        text: "\n\n",
+      },
+    ]);
   });
 
   it("maps reasoning summary deltas", () => {
     const mapped = mapCodexNotification("item/reasoning/summaryTextDelta", {
+      itemId: "reason_1",
       delta: "thinking…",
     });
-    expect(mapped.events).toEqual([
-      { type: "reasoning.delta", text: "thinking…" },
+    expect(mapped.textUpdates).toEqual([
+      {
+        kind: "delta",
+        itemId: "reason_1",
+        channel: "reasoning-summary",
+        text: "thinking…",
+      },
     ]);
+  });
+
+  it("retains completed agent message identity", () => {
+    const mapped = mapCodexNotification("item/completed", {
+      item: { id: "msg_1", type: "agentMessage", text: "Hello" },
+    });
+    expect(mapped.textUpdates).toEqual([
+      {
+        kind: "completed",
+        itemId: "msg_1",
+        channel: "assistant",
+        text: "Hello",
+      },
+    ]);
+    expect(mapped.events).toEqual([{ type: "message.completed" }]);
+    expect(mapped.scheduleTurnWatchdog).toBe(true);
+  });
+
+  it("rejects anonymous text deltas", () => {
+    expect(
+      mapCodexNotification("item/agentMessage/delta", { delta: "Hello" }),
+    ).toEqual({ events: [] });
   });
 
   it("ignores userMessage items echoed by Codex", () => {
@@ -247,9 +302,85 @@ describe("mapCodexNotification", () => {
   });
 
   it("ignores unknown methods", () => {
-    expect(mapCodexNotification("future/unknown", { x: 1 }).events).toEqual(
-      [],
+    expect(mapCodexNotification("future/unknown", { x: 1 }).events).toEqual([]);
+  });
+});
+
+describe("Codex text state", () => {
+  it("deduplicates an equal completed value", () => {
+    let state = createCodexTextState();
+    state = applyCodexTextUpdate(state, {
+      kind: "started",
+      itemId: "msg_1",
+      channel: "assistant",
+    }).state;
+    const delta = applyCodexTextUpdate(state, {
+      kind: "delta",
+      itemId: "msg_1",
+      channel: "assistant",
+      text: "Hello",
+    });
+    expect(delta.event).toEqual({ type: "message.delta", text: "Hello" });
+
+    const completed = applyCodexTextUpdate(delta.state, {
+      kind: "completed",
+      itemId: "msg_1",
+      channel: "assistant",
+      text: "Hello",
+    });
+    expect(completed.event).toBeUndefined();
+    expect(completed.conflict).toBeUndefined();
+  });
+
+  it("emits a completed-only fallback while the item is at the tail", () => {
+    const started = applyCodexTextUpdate(createCodexTextState(), {
+      kind: "started",
+      itemId: "msg_1",
+      channel: "assistant",
+    });
+    const completed = applyCodexTextUpdate(started.state, {
+      kind: "completed",
+      itemId: "msg_1",
+      channel: "assistant",
+      text: "Hello",
+    });
+    expect(completed.event).toEqual({ type: "message.delta", text: "Hello" });
+  });
+
+  it("rejects a completion after another transcript operation", () => {
+    const started = applyCodexTextUpdate(createCodexTextState(), {
+      kind: "started",
+      itemId: "msg_1",
+      channel: "assistant",
+    });
+    const completed = applyCodexTextUpdate(
+      invalidateCodexTextTail(started.state),
+      {
+        kind: "completed",
+        itemId: "msg_1",
+        channel: "assistant",
+        text: "Hello",
+      },
     );
+    expect(completed.event).toBeUndefined();
+    expect(completed.conflict).toBe("position");
+  });
+
+  it("rejects divergent completed text", () => {
+    const delta = applyCodexTextUpdate(createCodexTextState(), {
+      kind: "delta",
+      itemId: "msg_1",
+      channel: "assistant",
+      text: "help",
+    });
+    const completed = applyCodexTextUpdate(delta.state, {
+      kind: "completed",
+      itemId: "msg_1",
+      channel: "assistant",
+      text: "hello",
+    });
+    expect(completed.event).toBeUndefined();
+    expect(completed.conflict).toBe("text");
   });
 });
 
@@ -316,9 +447,9 @@ describe("parseCodexModelList", () => {
     const luna = models.find((m) => m.nativeId === "gpt-5.6-luna");
     expect(luna?.settings?.some((s) => s.id === "reasoningEffort")).toBe(true);
     expect(luna?.settings?.some((s) => s.id === "serviceTier")).toBe(true);
-    expect(
-      luna?.settings?.find((s) => s.id === "reasoningEffort")?.value,
-    ).toBe("medium");
+    expect(luna?.settings?.find((s) => s.id === "reasoningEffort")?.value).toBe(
+      "medium",
+    );
   });
 });
 

@@ -14,7 +14,12 @@ import {
   type StoredCursorToolCall,
 } from "./cursorStore";
 import { stopCursorTitleGeneration } from "./cursorTitle";
-import type { ApprovalDecision, HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  HarnessEvent,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 import {
   composeToolTitle,
   extractSearchQuery,
@@ -85,19 +90,21 @@ export async function sendCursorTurn(input: SendTurnInput): Promise<void> {
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
-  live.turns = live.turns.catch(() => undefined).then(async () => {
-    live.cancelled = false;
-    live.muteUpdates = false;
-    scheduleCursorToolEnrichment(live, 0);
-    try {
-      await applyModelSelection(live, input);
-      if (live.cancelled) return;
-      await prompt(live, input);
-    } catch (error) {
-      if (live.cancelled) return;
-      throw error;
-    }
-  });
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      scheduleCursorToolEnrichment(live, 0);
+      try {
+        await applyModelSelection(live, input);
+        if (live.cancelled) return;
+        await prompt(live, input);
+      } catch (error) {
+        if (live.cancelled) return;
+        throw error;
+      }
+    });
   await live.turns;
 }
 
@@ -408,7 +415,10 @@ async function handleRequest(
   }
   if (method === "cursor/ask_question") {
     await live.acp.respond(id, {
-      outcome: { outcome: "skipped", reason: "MonoCode does not collect answers yet" },
+      outcome: {
+        outcome: "skipped",
+        reason: "MonoCode does not collect answers yet",
+      },
     });
     return;
   }
@@ -440,7 +450,10 @@ async function handlePermission(live: Live, id: number, params: unknown) {
   const title =
     composeToolTitle({
       kind,
-      title: toolLabel(tool, subject ?? tool) ?? command ?? stringField(rec ?? {}, "title"),
+      title:
+        toolLabel(tool, subject ?? tool) ??
+        command ??
+        stringField(rec ?? {}, "title"),
       path: preview?.path,
       query:
         preview?.query ??
@@ -500,44 +513,63 @@ async function handlePermission(live: Live, id: number, params: unknown) {
 
   const optionId =
     decision === "allow"
-      ? pickOption(optionIds, ["allow-once", "allow_once", "allow-always", "allow_always"])
+      ? pickOption(optionIds, [
+          "allow-once",
+          "allow_once",
+          "allow-always",
+          "allow_always",
+        ])
       : pickOption(optionIds, ["reject-once", "reject_once", "reject-always"]);
 
   await live.acp.respond(id, {
     outcome: {
       outcome: "selected",
-      optionId: optionId ?? (decision === "allow" ? "allow-once" : "reject-once"),
+      optionId:
+        optionId ?? (decision === "allow" ? "allow-once" : "reject-once"),
     },
   });
 }
 
+export function textEventFromCursorUpdate(
+  params: unknown,
+): Extract<HarnessEvent, { type: "message.delta" | "reasoning.delta" }> | null {
+  const rec = asRecord(params);
+  const update = asRecord(rec?.update) ?? rec;
+  if (!update) return null;
+  const kind = String(
+    update.sessionUpdate ?? update.session_update ?? update.type ?? "",
+  );
+  if (kind === "agent_message_chunk") {
+    const text = textFromContent(update.content ?? update.text);
+    return text ? { type: "message.delta", text } : null;
+  }
+  if (kind === "agent_thought_chunk") {
+    const text = textFromContent(update.content ?? update.text);
+    return text ? { type: "reasoning.delta", text } : null;
+  }
+  return null;
+}
+
 function handleSessionUpdate(live: Live, params: unknown) {
+  const textEvent = textEventFromCursorUpdate(params);
+  if (textEvent) {
+    live.onEvent(textEvent);
+    return;
+  }
+
   const rec = asRecord(params);
   const update = asRecord(rec?.update) ?? rec;
   if (!update) return;
   const kind = String(
     update.sessionUpdate ?? update.session_update ?? update.type ?? "",
   );
-
-  if (kind === "agent_message_chunk" || kind === "agent_message") {
-    // Whole-message arrays contain distinct content blocks; chunks are exact deltas.
-    const text = textFromContent(
-      update.content ?? update.text,
-      kind === "agent_message" ? "\n" : "",
-    );
-    if (text) live.onEvent({ type: "message.delta", text });
-    return;
-  }
-  if (kind === "agent_thought_chunk" || kind === "agent_thought") {
-    const text = textFromContent(
-      update.content ?? update.text,
-      kind === "agent_thought" ? "\n" : "",
-    );
-    if (text) live.onEvent({ type: "reasoning.delta", text });
-    return;
-  }
-  if (kind === "tool_call" || kind === "tool_call_update" || kind === "tool_call_content_chunk") {
-    const tool = asRecord(update.toolCall) ?? asRecord(update.tool_call) ?? update;
+  if (
+    kind === "tool_call" ||
+    kind === "tool_call_update" ||
+    kind === "tool_call_content_chunk"
+  ) {
+    const tool =
+      asRecord(update.toolCall) ?? asRecord(update.tool_call) ?? update;
     const callId = String(
       tool.toolCallId ??
         tool.tool_call_id ??
@@ -761,13 +793,26 @@ function pickAutoOption(
   if (optionIds.length === 0) return null;
   const tool = (kind ?? "").toLowerCase();
   if (runtimeMode === "supervised") return null;
-  if (runtimeMode === "auto-accept-edits" && (tool === "execute" || tool === "other")) {
+  if (
+    runtimeMode === "auto-accept-edits" &&
+    (tool === "execute" || tool === "other")
+  ) {
     return null;
   }
   if (runtimeMode === "full-access") {
-    return pickOption(optionIds, ["allow-always", "allow_always", "allow-once", "allow_once"]);
+    return pickOption(optionIds, [
+      "allow-always",
+      "allow_always",
+      "allow-once",
+      "allow_once",
+    ]);
   }
-  return pickOption(optionIds, ["allow-once", "allow_once", "allow-always", "allow_always"]);
+  return pickOption(optionIds, [
+    "allow-once",
+    "allow_once",
+    "allow-always",
+    "allow_always",
+  ]);
 }
 
 function pickOption(optionIds: string[], preferred: string[]): string | null {
@@ -889,7 +934,9 @@ function toolDetail(
   if (typeof output === "string" && output.trim()) return capToolDetail(output);
   const outputText = textFromContent(output);
   if (outputText.trim()) return capToolDetail(outputText);
-  return inputLabel(update.rawInput ?? tool.rawInput ?? update.input ?? tool.input);
+  return inputLabel(
+    update.rawInput ?? tool.rawInput ?? update.input ?? tool.input,
+  );
 }
 
 const MAX_TOOL_DETAIL_CHARS = 8_000;
@@ -985,8 +1032,7 @@ function contentPath(content: unknown): string | undefined {
   for (const item of content) {
     const rec = asRecord(item);
     const path =
-      rec &&
-      (stringField(rec, "path") ?? contentPath(rec.content ?? rec.diff));
+      rec && (stringField(rec, "path") ?? contentPath(rec.content ?? rec.diff));
     if (path) return path;
   }
   return undefined;
@@ -1060,9 +1106,7 @@ function looksLikeCallId(value: string): boolean {
   const text = value.trim();
   return (
     /^(call[-_]?|tool[-_])[a-z0-9_-]+$/i.test(text) ||
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      text,
-    )
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)
   );
 }
 

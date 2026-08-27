@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession } from "../session";
-import { appendUser, applyHarnessEvent, appendSteerUser, stopStreaming } from "./apply";
+import {
+  appendUser,
+  applyHarnessEvent,
+  appendSteerUser,
+  stopStreaming,
+} from "./apply";
+import type { HarnessEvent } from "./types";
 
 let now = 0;
 
@@ -50,6 +56,106 @@ describe("turn duration", () => {
   });
 });
 
+describe("streamed text fidelity", () => {
+  it("appends repeated assistant boundaries verbatim", () => {
+    let session = newSession("cursor", "/tmp");
+    for (const text of ["hel", "lo", "\n", "\n", "Wait.", ". Next"]) {
+      session = applyHarnessEvent(session, { type: "message.delta", text });
+    }
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "assistant",
+        text: "hello\n\nWait.. Next",
+        streaming: true,
+      },
+    ]);
+  });
+
+  it("appends whitespace-only reasoning boundaries verbatim", () => {
+    let session = newSession("codex", "/tmp");
+    for (const text of ["thinking", " ", " ", "\n", "\n"]) {
+      session = applyHarnessEvent(session, { type: "reasoning.delta", text });
+    }
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "reasoning",
+        text: "thinking  \n\n",
+        streaming: true,
+      },
+    ]);
+  });
+});
+
+describe("transcript ordering", () => {
+  it("keeps assistant text on both sides of a tool in separate blocks", () => {
+    const events: HarnessEvent[] = [
+      { type: "message.delta", text: "before" },
+      {
+        type: "tool.started",
+        callId: "read-1",
+        title: "Read file",
+        kind: "read",
+      },
+      { type: "message.delta", text: "after" },
+    ];
+
+    const session = events.reduce(applyHarnessEvent, newSession("pi", "/tmp"));
+
+    expect(session.blocks).toMatchObject([
+      { role: "assistant", text: "before", streaming: false },
+      { role: "tool", tool: { callId: "read-1" } },
+      { role: "assistant", text: "after", streaming: true },
+    ]);
+  });
+
+  it("keeps reasoning text on both sides of a tool in separate blocks", () => {
+    const events: HarnessEvent[] = [
+      { type: "reasoning.delta", text: "before" },
+      {
+        type: "tool.started",
+        callId: "read-1",
+        title: "Read file",
+        kind: "read",
+      },
+      { type: "reasoning.delta", text: "after" },
+    ];
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/tmp"),
+    );
+
+    expect(session.blocks).toMatchObject([
+      { role: "reasoning", text: "before", streaming: false },
+      { role: "tool", tool: { callId: "read-1" } },
+      { role: "reasoning", text: "after", streaming: true },
+    ]);
+  });
+
+  it("preserves a complete Markdown fixture", () => {
+    const chunks = [
+      "# Result\n",
+      "\n",
+      "- book",
+      "keeper\n",
+      "\nfirst line ",
+      " \nsecond line\n",
+      "\n```ts\n",
+      'const value = "bookkeeper";\n',
+      "```",
+    ];
+    const session = chunks.reduce(
+      (current, text) =>
+        applyHarnessEvent(current, { type: "message.delta", text }),
+      newSession("cursor", "/tmp"),
+    );
+
+    expect(session.blocks[0]?.text).toBe(chunks.join(""));
+  });
+});
+
 describe("appendSteerUser", () => {
   it("appends a user message without sealing an in-flight assistant block", () => {
     let session = appendUser(newSession("cursor", "/tmp"), "build it");
@@ -68,6 +174,41 @@ describe("appendSteerUser", () => {
     });
     expect(session.blocks[2]?.startedAt).toBeUndefined();
     expect(session.busy).toBe(true);
+  });
+
+  it("completion seals text streams from both sides of an in-turn steer", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "build it");
+    session = applyHarnessEvent(session, {
+      type: "reasoning.delta",
+      text: "before reasoning",
+    });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "before answer",
+    });
+    session = appendSteerUser(session, "focus on tests");
+    session = applyHarnessEvent(session, {
+      type: "reasoning.delta",
+      text: "after reasoning",
+    });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "after answer",
+    });
+
+    session = applyHarnessEvent(session, { type: "reasoning.completed" });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    const textBlocks = session.blocks.filter(
+      (block) => block.role === "assistant" || block.role === "reasoning",
+    );
+    expect(textBlocks.map((block) => block.text)).toEqual([
+      "before reasoning",
+      "before answer",
+      "after reasoning",
+      "after answer",
+    ]);
+    expect(textBlocks.every((block) => block.streaming === false)).toBe(true);
   });
 });
 
@@ -90,7 +231,10 @@ describe("status blocks", () => {
   it("still appends a status that differs from the last one", () => {
     let session = appendUser(newSession("claude", "/tmp"), "go");
     session = applyHarnessEvent(session, { type: "status", text: "Retrying" });
-    session = applyHarnessEvent(session, { type: "status", text: "Compacting" });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      text: "Compacting",
+    });
     expect(
       session.blocks.filter((block) => block.role === "system"),
     ).toHaveLength(2);
@@ -150,7 +294,9 @@ describe("tool enrichment", () => {
       callId: "call_1",
       preview: { kind: "read", path: "src/App.tsx", fileName: "App.tsx" },
     });
-    const tool = session.blocks.find((block) => block.tool?.callId === "call_1");
+    const tool = session.blocks.find(
+      (block) => block.tool?.callId === "call_1",
+    );
     expect(tool?.text).toBe("Read src/App.tsx");
     expect(tool?.tool?.preview?.path).toBe("src/App.tsx");
   });

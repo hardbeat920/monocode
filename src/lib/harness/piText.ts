@@ -1,10 +1,5 @@
 import { modelsFor } from "../models";
-import {
-  killChild,
-  spawnChild,
-  unwatchChild,
-  watchChild,
-} from "./child";
+import { killChild, spawnChild, unwatchChild, watchChild } from "./child";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import {
@@ -15,7 +10,6 @@ import {
   buildPiSpawnArgs,
   isAgentSettled,
 } from "./piProtocol";
-import { mergeStream } from "./streamText";
 
 const INIT_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 45_000;
@@ -66,9 +60,11 @@ export async function stopTextPrompt(flavor: PiFlavor): Promise<void> {
 export function warmupText(flavor: PiFlavor, cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
   const state = stateFor(flavor);
-  const run = state.turns.catch(() => undefined).then(async () => {
-    await ensureLive(flavor, cwd);
-  });
+  const run = state.turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(flavor, cwd);
+    });
   state.turns = run.then(
     () => undefined,
     () => undefined,
@@ -240,9 +236,7 @@ async function dropLive(flavor: PiFlavor): Promise<void> {
   if (current) {
     current.closed = true;
     current.rpc.close();
-    current.turnFailed?.(
-      new Error(`${flavor.label} text generator stopped`),
-    );
+    current.turnFailed?.(new Error(`${flavor.label} text generator stopped`));
     current.turnDone = null;
     current.turnFailed = null;
   }
@@ -254,7 +248,7 @@ function handleFrame(session: LiveText, rec: Record<string, unknown>) {
   if (!session.collecting) return;
   const delta = assistantDeltaFromEvent(rec);
   if (delta?.kind === "text") {
-    session.output = mergeStream(session.output, delta.text);
+    session.output += delta.text;
   }
   if (isAgentSettled(rec) || agentEndWillRetry(rec) === false) {
     if (session.turnDone) finishTurn(session);

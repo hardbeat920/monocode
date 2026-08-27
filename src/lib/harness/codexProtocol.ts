@@ -1,8 +1,6 @@
 import type { RuntimeMode, ToolPreview } from "../session";
-import {
-  composeToolTitle,
-  extractToolPreview,
-} from "./preview";
+import { composeToolTitle, extractToolPreview } from "./preview";
+import { classifyCompletedText } from "./streamText";
 import type { HarnessEvent } from "./types";
 
 /** Codex approval / sandbox settings for thread/start and turn/start. */
@@ -150,6 +148,15 @@ export function stringField(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+export function textField(
+  rec: Record<string, unknown> | null | undefined,
+  key: string,
+): string | undefined {
+  if (!rec) return undefined;
+  const value = rec[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function numberField(
   rec: Record<string, unknown> | null | undefined,
   key: string,
@@ -161,10 +168,7 @@ function numberField(
 export type CodexApprovalKind = "command" | "file-change" | "permissions";
 
 export type CodexApprovalDecisionWire =
-  | "accept"
-  | "acceptForSession"
-  | "decline"
-  | "cancel";
+  "accept" | "acceptForSession" | "decline" | "cancel";
 
 export function toCodexApprovalDecision(
   decision: "allow" | "deny",
@@ -176,8 +180,98 @@ export function toCodexApprovalDecision(
   return "accept";
 }
 
+export type CodexTextChannel =
+  "assistant" | "reasoning-summary" | "reasoning-content";
+
+export type CodexTextUpdate =
+  | {
+      kind: "started";
+      itemId: string;
+      channel: CodexTextChannel;
+    }
+  | {
+      kind: "delta" | "completed";
+      itemId: string;
+      channel: CodexTextChannel;
+      text: string;
+    };
+
+type CodexTextLedgerEntry = {
+  streamed: string;
+};
+
+export type CodexTextState = {
+  entries: ReadonlyMap<string, CodexTextLedgerEntry>;
+  tailKey: string | null;
+};
+
+export type CodexTextUpdateResult = {
+  state: CodexTextState;
+  event?: Extract<HarnessEvent, { type: "message.delta" | "reasoning.delta" }>;
+  conflict?: "position" | "text";
+};
+
+export function createCodexTextState(): CodexTextState {
+  return { entries: new Map(), tailKey: null };
+}
+
+export function invalidateCodexTextTail(state: CodexTextState): CodexTextState {
+  return state.tailKey === null ? state : { ...state, tailKey: null };
+}
+
+export function applyCodexTextUpdate(
+  state: CodexTextState,
+  update: CodexTextUpdate,
+): CodexTextUpdateResult {
+  const key = `${update.itemId}:${update.channel}`;
+  const entries = new Map(state.entries);
+  if (update.kind === "started") {
+    entries.set(key, { streamed: "" });
+    return { state: { entries, tailKey: key } };
+  }
+
+  const current = entries.get(key);
+  if (update.kind === "delta") {
+    const streamed = (current?.streamed ?? "") + update.text;
+    entries.set(key, { streamed });
+    return {
+      state: { entries, tailKey: key },
+      event: codexTextEvent(update.channel, update.text),
+    };
+  }
+
+  const relationship = classifyCompletedText({
+    streamed: current?.streamed ?? "",
+    completed: update.text,
+  });
+  if (relationship.kind === "already-emitted") return { state };
+  if (relationship.kind === "conflict") {
+    return { state, conflict: "text" };
+  }
+  if (!current || state.tailKey !== key) {
+    return { state, conflict: "position" };
+  }
+  const text =
+    relationship.kind === "fallback" ? relationship.text : relationship.suffix;
+  entries.set(key, { streamed: update.text });
+  return {
+    state: { entries, tailKey: key },
+    ...(text ? { event: codexTextEvent(update.channel, text) } : {}),
+  };
+}
+
+function codexTextEvent(
+  channel: CodexTextChannel,
+  text: string,
+): Extract<HarnessEvent, { type: "message.delta" | "reasoning.delta" }> {
+  return channel === "assistant"
+    ? { type: "message.delta", text }
+    : { type: "reasoning.delta", text };
+}
+
 export type MappedCodexNotification = {
   events: HarnessEvent[];
+  textUpdates?: CodexTextUpdate[];
   /** When set, the active turn finished. */
   turnCompleted?: {
     status: "completed" | "failed" | "interrupted" | "cancelled";
@@ -200,25 +294,19 @@ export function mapCodexNotification(
   if (!rec) return { events: [] };
 
   if (method === "item/agentMessage/delta") {
-    const delta = stringField(rec, "delta") ?? "";
-    if (!delta) return { events: [] };
-    return { events: [{ type: "message.delta", text: delta }] };
+    return mapCodexTextDelta(rec, "assistant");
   }
 
   if (method === "item/reasoning/summaryTextDelta") {
-    const delta = stringField(rec, "delta") ?? "";
-    if (!delta) return { events: [] };
-    return { events: [{ type: "reasoning.delta", text: delta }] };
+    return mapCodexTextDelta(rec, "reasoning-summary");
   }
 
   if (method === "item/reasoning/textDelta") {
-    const delta = stringField(rec, "delta") ?? "";
-    if (!delta) return { events: [] };
-    return { events: [{ type: "reasoning.delta", text: delta }] };
+    return mapCodexTextDelta(rec, "reasoning-content");
   }
 
   if (method === "item/plan/delta") {
-    const delta = stringField(rec, "delta") ?? "";
+    const delta = textField(rec, "delta") ?? "";
     if (!delta) return { events: [] };
     return { events: [{ type: "plan", text: delta }] };
   }
@@ -245,7 +333,7 @@ export function mapCodexNotification(
 
   if (method === "item/commandExecution/outputDelta") {
     const itemId = stringField(rec, "itemId") ?? "";
-    const delta = stringField(rec, "delta") ?? "";
+    const delta = textField(rec, "delta") ?? "";
     if (!itemId || !delta) return { events: [] };
     return {
       events: [
@@ -304,6 +392,19 @@ export function mapCodexNotification(
   }
 
   return { events: [] };
+}
+
+function mapCodexTextDelta(
+  rec: Record<string, unknown>,
+  channel: CodexTextChannel,
+): MappedCodexNotification {
+  const itemId = stringField(rec, "itemId");
+  const delta = textField(rec, "delta");
+  if (!itemId || !delta) return { events: [] };
+  return {
+    events: [],
+    textUpdates: [{ kind: "delta", itemId, channel, text: delta }],
+  };
 }
 
 /** Codex thread items MonoCode already renders elsewhere or that are internal metadata. */
@@ -398,48 +499,71 @@ function mapItemLifecycle(
   }
 
   if (itemType === "agentMessage") {
-    // Prefer deltas; completed agent messages may carry full text for non-streaming.
-    if (completed) {
-      const text = stringField(item, "text");
-      const events: HarnessEvent[] = [];
-      if (text) {
-        events.push(
-          { type: "message.delta", text },
-          { type: "message.completed" },
-        );
-      }
+    if (!completed) {
       return {
-        events,
-        scheduleTurnWatchdog: true,
+        events: [],
+        textUpdates: [
+          { kind: "started", itemId: callId, channel: "assistant" },
+        ],
       };
     }
-    return { events: [] };
+    const text = textField(item, "text");
+    return {
+      events: [{ type: "message.completed" }],
+      ...(text
+        ? {
+            textUpdates: [
+              {
+                kind: "completed",
+                itemId: callId,
+                channel: "assistant",
+                text,
+              },
+            ],
+          }
+        : {}),
+      scheduleTurnWatchdog: true,
+    };
   }
 
   if (itemType === "reasoning") {
-    if (completed) {
-      const summary = item.summary;
-      if (Array.isArray(summary)) {
-        const text = summary
+    if (!completed) {
+      return {
+        events: [],
+        textUpdates: [
+          {
+            kind: "started",
+            itemId: callId,
+            channel: "reasoning-summary",
+          },
+        ],
+      };
+    }
+    const summary = item.summary;
+    const text = Array.isArray(summary)
+      ? summary
           .map((part) => {
             if (typeof part === "string") return part;
-            const row = asRecord(part);
-            return stringField(row, "text") ?? "";
+            return textField(asRecord(part), "text") ?? "";
           })
           .filter(Boolean)
-          .join("\n");
-        if (text) {
-          return {
-            events: [
-              { type: "reasoning.delta", text },
-              { type: "reasoning.completed" },
+          .join("\n")
+      : "";
+    return {
+      events: [{ type: "reasoning.completed" }],
+      ...(text
+        ? {
+            textUpdates: [
+              {
+                kind: "completed",
+                itemId: callId,
+                channel: "reasoning-summary",
+                text,
+              },
             ],
-          };
-        }
-      }
-      return { events: [{ type: "reasoning.completed" }] };
-    }
-    return { events: [] };
+          }
+        : {}),
+    };
   }
 
   if (itemType === "plan") {
@@ -464,8 +588,7 @@ function mapToolItem(
     const command = stringField(item, "command") ?? "Shell";
     const status = mapItemStatus(stringField(item, "status"), completed);
     const output =
-      stringField(item, "aggregatedOutput") ??
-      stringField(item, "output");
+      stringField(item, "aggregatedOutput") ?? stringField(item, "output");
     const preview: ToolPreview | undefined = undefined;
     const eventType = completed ? "tool.updated" : "tool.started";
     if (eventType === "tool.started") {
@@ -655,10 +778,7 @@ function buildDiffPreview(
   );
 }
 
-function mapItemStatus(
-  status: string | undefined,
-  completed: boolean,
-): string {
+function mapItemStatus(status: string | undefined, completed: boolean): string {
   if (status === "completed" || status === "failed" || status === "declined") {
     return status === "declined" ? "failed" : status;
   }

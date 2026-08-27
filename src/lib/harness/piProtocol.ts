@@ -54,7 +54,8 @@ export type PiExtensionUiRequest =
     }
   | {
       id: string;
-      method: "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
+      method:
+        "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
       title?: string;
     };
 
@@ -80,6 +81,15 @@ export function stringField(
   if (!rec) return undefined;
   const value = rec[key];
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export function textField(
+  rec: Record<string, unknown> | null | undefined,
+  key: string,
+): string | undefined {
+  if (!rec) return undefined;
+  const value = rec[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 export function parseJsonLine(line: string): Record<string, unknown> | null {
@@ -129,7 +139,9 @@ export function buildPiSpawnArgs(
   return args;
 }
 
-export function parsePiModelRef(nativeId: string | undefined): PiModelRef | null {
+export function parsePiModelRef(
+  nativeId: string | undefined,
+): PiModelRef | null {
   if (!nativeId) return null;
   const trimmed = nativeId.trim();
   if (!trimmed) return null;
@@ -188,7 +200,9 @@ export function buildPiSteer(input: {
   return command;
 }
 
-export function parseRpcResponse(rec: Record<string, unknown>): PiRpcResponse | null {
+export function parseRpcResponse(
+  rec: Record<string, unknown>,
+): PiRpcResponse | null {
   if (stringField(rec, "type") !== "response") return null;
   const command = stringField(rec, "command") ?? "unknown";
   const id = stringField(rec, "id");
@@ -353,7 +367,7 @@ export function assistantDeltaFromEvent(
   if (stringField(rec, "type") !== "message_update") return null;
   const event = asRecord(rec.assistantMessageEvent);
   const type = stringField(event, "type");
-  const delta = stringField(event, "delta");
+  const delta = textField(event, "delta");
   if (!delta) return null;
   if (type === "text_delta") return { kind: "text", text: delta };
   if (type === "thinking_delta") return { kind: "thinking", text: delta };
@@ -379,7 +393,7 @@ export function toolCallDeltaFromEvent(
   if (stringField(rec, "type") !== "message_update") return null;
   const event = asRecord(rec.assistantMessageEvent);
   if (stringField(event, "type") !== "toolcall_delta") return null;
-  const delta = stringField(event, "delta");
+  const delta = textField(event, "delta");
   if (!delta) return null;
   return {
     index: numberField(event, "contentIndex") ?? -1,
@@ -432,9 +446,7 @@ export function toolExecutionUpdateFromEvent(
   };
 }
 
-export function toolExecutionEndFromEvent(
-  rec: Record<string, unknown>,
-): {
+export function toolExecutionEndFromEvent(rec: Record<string, unknown>): {
   id: string;
   name?: string;
   detail?: string;
@@ -456,7 +468,9 @@ export function isAgentSettled(rec: Record<string, unknown>): boolean {
   return stringField(rec, "type") === "agent_settled";
 }
 
-export function agentEndWillRetry(rec: Record<string, unknown>): boolean | null {
+export function agentEndWillRetry(
+  rec: Record<string, unknown>,
+): boolean | null {
   if (stringField(rec, "type") !== "agent_end") return null;
   return rec.willRetry === true;
 }
@@ -476,7 +490,9 @@ export function statusFromPiEvent(rec: Record<string, unknown>): string | null {
   return null;
 }
 
-export function tryParseJsonRecord(partial: string): Record<string, unknown> | null {
+export function tryParseJsonRecord(
+  partial: string,
+): Record<string, unknown> | null {
   try {
     return asRecord(JSON.parse(partial));
   } catch {
@@ -644,10 +660,10 @@ export function thinkingSetting(reasoning: boolean): ModelSetting | undefined {
   };
 }
 
-export function isPiThinkingLevel(value: string | undefined): value is PiThinkingLevel {
-  return (
-    !!value && (PI_THINKING_LEVELS as readonly string[]).includes(value)
-  );
+export function isPiThinkingLevel(
+  value: string | undefined,
+): value is PiThinkingLevel {
+  return !!value && (PI_THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 function thinkingLabel(level: PiThinkingLevel): string {
@@ -661,5 +677,7 @@ function numberField(
   key: string,
 ): number | undefined {
   const value = rec?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }

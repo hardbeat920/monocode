@@ -11,9 +11,16 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
   stringField,
+  textField,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "./jsonRpc";
-import { mergeStream } from "./streamText";
+import {
+  applyCollectedTextUpdate,
+  createCollectedTextState,
+  selectCollectedText,
+  type CollectedTextState,
+  type CollectedTextUpdate,
+} from "./streamText";
 
 const TEXT_CHILD_ID = "monocode-codex-text";
 const INIT_TIMEOUT_MS = 60_000;
@@ -29,7 +36,7 @@ type LiveText = {
   model: string;
   effort: string;
   collecting: boolean;
-  output: string;
+  textState: CollectedTextState;
   closed: boolean;
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
@@ -48,7 +55,9 @@ function pickTextModel(): string {
 
 function pickTextEffort(modelId: string): string {
   const model = modelsFor("codex").find((entry) => entry.nativeId === modelId);
-  const setting = model?.settings?.find((entry) => entry.id === "reasoningEffort");
+  const setting = model?.settings?.find(
+    (entry) => entry.id === "reasoningEffort",
+  );
   const options = setting?.options?.map((option) => option.value) ?? [];
   if (options.includes("low")) return "low";
   if (options.includes("none")) return "none";
@@ -63,9 +72,11 @@ export async function stopCodexTextPrompt(): Promise<void> {
 /** Start the shared Codex app-server in the background so the first prompt is fast. */
 export function warmupCodexText(cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
-  const run = turns.catch(() => undefined).then(async () => {
-    await ensureLive(cwd);
-  });
+  const run = turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(cwd);
+    });
   turns = run.then(
     () => undefined,
     () => undefined,
@@ -93,7 +104,7 @@ async function promptOnLive(input: {
   timeoutMs?: number;
 }): Promise<string> {
   const session = await ensureLive(input.cwd);
-  session.output = "";
+  session.textState = createCollectedTextState();
   session.collecting = true;
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
 
@@ -125,7 +136,7 @@ async function promptOnLive(input: {
       }),
     ]);
 
-    return session.output;
+    return selectCollectedText(session.textState);
   } catch (error) {
     await session.rpc
       .request("turn/interrupt", { threadId: session.threadId })
@@ -183,7 +194,7 @@ async function startLive(cwd: string): Promise<LiveText> {
     model,
     effort: pickTextEffort(model),
     collecting: false,
-    output: "",
+    textState: createCollectedTextState(),
     closed: false,
     turnDone: null,
     turnFailed: null,
@@ -257,6 +268,25 @@ async function dropLive(): Promise<void> {
   await killChild(TEXT_CHILD_ID).catch(() => undefined);
 }
 
+export function codexTextUpdateFromNotification(
+  method: string,
+  params: unknown,
+): CollectedTextUpdate | null {
+  const rec = asRecord(params);
+  if (method === "item/agentMessage/delta") {
+    const scopeId =
+      stringField(rec, "itemId") ?? stringField(rec, "item_id");
+    const text = textField(rec, "delta");
+    return scopeId && text ? { kind: "delta", scopeId, text } : null;
+  }
+  if (method !== "item/completed") return null;
+  const item = asRecord(rec?.item);
+  if (stringField(item, "type") !== "agentMessage") return null;
+  const scopeId = stringField(item, "id");
+  const text = textField(item, "text");
+  return scopeId && text ? { kind: "completed", scopeId, text } : null;
+}
+
 function handleNotification(
   session: LiveText | null,
   method: string,
@@ -271,9 +301,9 @@ function handleNotification(
     return;
   }
 
-  if (method === "item/agentMessage/delta") {
-    const delta = stringField(asRecord(params), "delta") ?? "";
-    if (delta) session.output = mergeStream(session.output, delta);
+  const update = codexTextUpdateFromNotification(method, params);
+  if (update) {
+    session.textState = applyCollectedTextUpdate(session.textState, update);
     return;
   }
 

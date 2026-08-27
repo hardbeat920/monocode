@@ -158,19 +158,13 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
     update.sessionUpdate ?? update.session_update ?? update.type ?? "",
   );
 
-  if (kind === "agent_message_chunk" || kind === "agent_message") {
-    const text = textFromContent(
-      update.content ?? update.text,
-      kind === "agent_message" ? "\n" : "",
-    );
+  if (kind === "agent_message_chunk") {
+    const text = textFromContent(update.content ?? update.text);
     return text ? [{ type: "message.delta", text }] : [];
   }
 
-  if (kind === "agent_thought_chunk" || kind === "agent_thought") {
-    const text = textFromContent(
-      update.content ?? update.text,
-      kind === "agent_thought" ? "\n" : "",
-    );
+  if (kind === "agent_thought_chunk") {
+    const text = textFromContent(update.content ?? update.text);
     return text ? [{ type: "reasoning.delta", text }] : [];
   }
 

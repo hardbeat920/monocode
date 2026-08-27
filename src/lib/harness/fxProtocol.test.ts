@@ -56,12 +56,12 @@ describe("fx protocol", () => {
   });
 
   it("picks allow/reject option ids from ACP permission options", () => {
-    expect(
-      permissionOptionId("allow", ["allow_once", "reject_once"]),
-    ).toBe("allow_once");
-    expect(
-      permissionOptionId("deny", ["allow-once", "reject-once"]),
-    ).toBe("reject-once");
+    expect(permissionOptionId("allow", ["allow_once", "reject_once"])).toBe(
+      "allow_once",
+    );
+    expect(permissionOptionId("deny", ["allow-once", "reject-once"])).toBe(
+      "reject-once",
+    );
   });
 
   it("reads a permission prompt from an ACP request", () => {
@@ -104,6 +104,22 @@ describe("fx protocol", () => {
         content: { type: "text", text: "Hi" },
       }),
     ).toEqual([{ type: "message.delta", text: "Hi" }]);
+    expect(
+      eventsFromAcpUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "\n\n" },
+      }),
+    ).toEqual([{ type: "message.delta", text: "\n\n" }]);
+    expect(
+      eventsFromAcpUpdate({
+        sessionUpdate: "agent_message",
+        messageId: "message-1",
+        content: [
+          { type: "text", text: "First" },
+          { type: "text", text: "Second" },
+        ],
+      }),
+    ).toEqual([]);
 
     const tools = eventsFromAcpUpdate({
       sessionUpdate: "tool_call",

@@ -29,13 +29,19 @@ import {
   sessionErrorMessage,
   stringField,
   textDeltaEvent,
+  textField,
   toOpenCodeFileParts,
   toOpenCodePermissionReply,
   toolKindFromName,
   type OpenCodePart,
 } from "./opencodeProtocol";
 import { composeToolTitle } from "./preview";
-import type { ApprovalDecision, HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  HarnessEvent,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 type PendingApproval = {
   id: string;
@@ -53,6 +59,7 @@ type Live = {
   nextApprovalUiId: number;
   partById: Map<string, OpenCodePart>;
   emittedTextByPartId: Map<string, string>;
+  tailTextPartId: string | null;
   messageRoleById: Map<string, "user" | "assistant">;
   cancelled: boolean;
   muteUpdates: boolean;
@@ -95,16 +102,18 @@ export async function sendOpenCodeTurn(input: SendTurnInput): Promise<void> {
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
-  live.turns = live.turns.catch(() => undefined).then(async () => {
-    live.cancelled = false;
-    live.muteUpdates = false;
-    try {
-      await runTurn(live, input);
-    } catch (error) {
-      if (live.cancelled) return;
-      throw error;
-    }
-  });
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      try {
+        await runTurn(live, input);
+      } catch (error) {
+        if (live.cancelled) return;
+        throw error;
+      }
+    });
   await live.turns;
 }
 
@@ -127,6 +136,7 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   ];
   if (parts.length === 0) return;
 
+  live.tailTextPartId = null;
   await live.client.promptAsync({
     sessionID: live.openCodeSessionId,
     model: parsed,
@@ -277,6 +287,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       nextApprovalUiId: 1,
       partById: new Map(),
       emittedTextByPartId: new Map(),
+      tailTextPartId: null,
       messageRoleById: new Map(),
       cancelled: false,
       muteUpdates: false,
@@ -420,7 +431,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
     }
     case "message.part.delta": {
       const partID = stringField(properties, "partID");
-      const delta = stringField(properties, "delta") ?? "";
+      const delta = textField(properties, "delta") ?? "";
       if (!partID || !delta) break;
       const existing = live.partById.get(partID);
       if (!existing || roleForPart(live, existing) !== "assistant") break;
@@ -431,6 +442,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
         delta,
       );
       live.emittedTextByPartId.set(partID, nextText);
+      live.tailTextPartId = partID;
       if (existing.type === "text" || existing.type === "reasoning") {
         live.partById.set(partID, { ...existing, text: nextText });
       }
@@ -449,11 +461,14 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
       break;
     }
     case "permission.asked": {
-      const id = stringField(properties, "id") ?? stringField(properties, "requestID");
+      const id =
+        stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
       const permission = stringField(properties, "permission") ?? "tool";
       const patterns = Array.isArray(properties.patterns)
-        ? properties.patterns.filter((item): item is string => typeof item === "string")
+        ? properties.patterns.filter(
+            (item): item is string => typeof item === "string",
+          )
         : [];
       const metadata = asRecord(properties.metadata) ?? {};
       const callId =
@@ -470,7 +485,9 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
           tool: permission,
           state: {
             ...metadata,
-            input: metadata.input ?? (patterns[0] ? { path: patterns[0] } : undefined),
+            input:
+              metadata.input ??
+              (patterns[0] ? { path: patterns[0] } : undefined),
           },
         }) ??
         (patterns[0]
@@ -489,6 +506,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
           query: preview?.query,
           previewKind: preview?.kind,
         }) || permissionTitle(permission, patterns);
+      live.tailTextPartId = null;
       if (callId) {
         live.onEvent({
           type: "tool.updated",
@@ -510,7 +528,8 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
       break;
     }
     case "question.asked": {
-      const id = stringField(properties, "id") ?? stringField(properties, "requestID");
+      const id =
+        stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
       const questions = Array.isArray(properties.questions)
         ? properties.questions
@@ -521,6 +540,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
         stringField(first, "question") ??
         "OpenCode question";
       const uiId = live.nextApprovalUiId++;
+      live.tailTextPartId = null;
       live.onEvent({
         type: "approval.requested",
         requestId: uiId,
@@ -535,7 +555,10 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
       const statusType = stringField(status, "type");
       if (statusType === "retry") {
         const message = stringField(status, "message");
-        if (message) live.onEvent({ type: "status", text: message });
+        if (message) {
+          live.tailTextPartId = null;
+          live.onEvent({ type: "status", text: message });
+        }
         break;
       }
       if (statusType === "idle" && live.activeTurn) {
@@ -548,6 +571,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
     }
     case "session.error": {
       const message = sessionErrorMessage(properties.error);
+      live.tailTextPartId = null;
       live.onEvent({ type: "session.error", message });
       finishActiveTurn(live);
       break;
@@ -561,10 +585,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
  * OpenCode reports tokens per assistant message but not the window, so the
  * window comes from the catalog entry for the model that produced it.
  */
-function emitContext(
-  live: Live,
-  info: Record<string, unknown> | null,
-): void {
+function emitContext(live: Live, info: Record<string, unknown> | null): void {
   const used = contextUsedFromMessageInfo(info);
   if (used === undefined) return;
   const providerID = stringField(info, "providerID");
@@ -580,13 +601,17 @@ function emitAssistantText(live: Live, part: OpenCodePart): void {
   const text = part.text;
   if (text === undefined) return;
   const previous = live.emittedTextByPartId.get(part.id);
-  const { latestText, deltaToEmit } = mergeOpenCodeAssistantText(previous, text);
-  live.emittedTextByPartId.set(part.id, latestText);
-  const mapped = textDeltaEvent(part, deltaToEmit);
+  const result = mergeOpenCodeAssistantText(previous, text);
+  if (result.kind === "conflict" || result.kind === "unchanged") return;
+  if (previous !== undefined && live.tailTextPartId !== part.id) return;
+  live.emittedTextByPartId.set(part.id, result.latestText);
+  live.tailTextPartId = part.id;
+  const mapped = textDeltaEvent(part, result.deltaToEmit);
   if (mapped) live.onEvent(mapped);
 }
 
 function emitTool(live: Live, part: OpenCodePart): void {
+  live.tailTextPartId = null;
   const callId = part.callID ?? part.id;
   const tool = part.tool ?? "tool";
   const state = part.state ?? {};
@@ -666,6 +691,7 @@ async function waitApproval(
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   live.turnEndPending = false;
   live.activeTurn = false;
+  live.tailTextPartId = null;
   for (const event of extraEvents) live.onEvent(event);
   const done = live.turnDone;
   const failed = live.turnFailed;
@@ -708,7 +734,9 @@ function roleForPart(
     const known = live.messageRoleById.get(part.messageID);
     if (known) return known;
   }
-  return part.type === "tool" || part.type === "text" || part.type === "reasoning"
+  return part.type === "tool" ||
+    part.type === "text" ||
+    part.type === "reasoning"
     ? "assistant"
     : undefined;
 }

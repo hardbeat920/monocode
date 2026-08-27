@@ -1,24 +1,61 @@
-/** Join a delta or snapshot onto streamed text without repeating overlapping words. */
-export function mergeStream(existing: string, incoming: string): string {
-  if (!incoming) return existing;
-  if (!existing) return incoming;
-  if (incoming === existing) return existing;
-  if (incoming.startsWith(existing)) return incoming;
-  if (existing.endsWith(incoming)) return existing;
+export type CollectedTextUpdate =
+  | { kind: "delta"; scopeId: string; text: string }
+  | { kind: "completed"; scopeId: string; text: string };
 
-  const trimmed = incoming.trimStart();
-  // Cursor can emit blank lines as standalone deltas. Never deduplicate those
-  // against the empty string: every string technically ends with `""`.
-  if (trimmed && trimmed !== incoming) {
-    if (trimmed === existing || existing.endsWith(trimmed)) return existing;
-    if (trimmed.startsWith(existing)) return trimmed;
-  }
+export type CollectedTextState = {
+  activeScopeId: string | null;
+  entries: ReadonlyMap<
+    string,
+    { streamed: string; completed: string | null }
+  >;
+};
 
-  const maxOverlap = Math.min(existing.length, incoming.length, 1024);
-  for (let k = maxOverlap; k > 0; k--) {
-    if (existing.endsWith(incoming.slice(0, k))) {
-      return existing + incoming.slice(k);
-    }
+export function createCollectedTextState(): CollectedTextState {
+  return { activeScopeId: null, entries: new Map() };
+}
+
+export function applyCollectedTextUpdate(
+  state: CollectedTextState,
+  update: CollectedTextUpdate,
+): CollectedTextState {
+  const existing = state.entries.get(update.scopeId);
+  const entry = existing ?? { streamed: "", completed: null };
+  const entries = new Map(state.entries);
+  entries.set(
+    update.scopeId,
+    update.kind === "delta"
+      ? { ...entry, streamed: entry.streamed + update.text }
+      : { ...entry, completed: update.text },
+  );
+  return {
+    activeScopeId: existing ? state.activeScopeId : update.scopeId,
+    entries,
+  };
+}
+
+export type CompletedTextRelationship =
+  | { kind: "already-emitted" }
+  | { kind: "fallback"; text: string }
+  | { kind: "extends"; suffix: string }
+  | { kind: "conflict" };
+
+export function classifyCompletedText(input: {
+  streamed: string;
+  completed: string;
+}): CompletedTextRelationship {
+  if (input.completed === input.streamed) return { kind: "already-emitted" };
+  if (!input.streamed) return { kind: "fallback", text: input.completed };
+  if (input.completed.startsWith(input.streamed)) {
+    return {
+      kind: "extends",
+      suffix: input.completed.slice(input.streamed.length),
+    };
   }
-  return existing + incoming;
+  return { kind: "conflict" };
+}
+
+export function selectCollectedText(state: CollectedTextState): string {
+  if (!state.activeScopeId) return "";
+  const entry = state.entries.get(state.activeScopeId);
+  return entry?.completed ?? entry?.streamed ?? "";
 }

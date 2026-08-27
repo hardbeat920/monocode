@@ -6,7 +6,6 @@ import {
   unwatchChild,
   watchChild,
 } from "./child";
-import { mergeStream } from "./streamText";
 
 const TEXT_CHILD_ID = "monocode-text";
 const INIT_TIMEOUT_MS = 60_000;
@@ -42,9 +41,11 @@ export async function stopCursorTextPrompt(childId?: string): Promise<void> {
 /** Start the shared text ACP process in the background so the first prompt is fast. */
 export function warmupCursorText(cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
-  const run = turns.catch(() => undefined).then(async () => {
-    await ensureLive(cwd);
-  });
+  const run = turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(cwd);
+    });
   turns = run.then(
     () => undefined,
     () => undefined,
@@ -115,8 +116,9 @@ async function startLive(cwd: string): Promise<LiveText> {
   const acp = new AcpClient(TEXT_CHILD_ID, {
     onNotification: (method, params) => {
       const session = acpRef.session;
-      if (!session || method !== "session/update" || !session.collecting) return;
-      session.output = mergeStream(session.output, textFromUpdate(params));
+      if (!session || method !== "session/update" || !session.collecting)
+        return;
+      session.output += textFromCursorTextUpdate(params);
     },
     onRequest: (id, method, params) => {
       void handleTextRequest(acp, id, method, params);
@@ -172,11 +174,7 @@ async function openSession(session: LiveText, cwd: string): Promise<void> {
   const setup = await session.acp.request<{
     sessionId?: string;
     configOptions?: unknown;
-  }>(
-    "session/new",
-    { cwd, mcpServers: [] },
-    REQUEST_TIMEOUT_MS,
-  );
+  }>("session/new", { cwd, mcpServers: [] }, REQUEST_TIMEOUT_MS);
   const acpSessionId = setup.sessionId?.trim();
   if (!acpSessionId) throw new Error("Cursor did not return a session id");
 
@@ -274,14 +272,14 @@ function extractModelConfigId(raw: unknown): string {
   return "model";
 }
 
-function textFromUpdate(params: unknown): string {
+export function textFromCursorTextUpdate(params: unknown): string {
   const rec = asRecord(params);
   const update = asRecord(rec?.update) ?? rec;
   if (!update) return "";
   const kind = String(
     update.sessionUpdate ?? update.session_update ?? update.type ?? "",
   );
-  if (kind !== "agent_message_chunk" && kind !== "agent_message") return "";
+  if (kind !== "agent_message_chunk") return "";
   return textFromContent(update.content ?? update.text);
 }
 

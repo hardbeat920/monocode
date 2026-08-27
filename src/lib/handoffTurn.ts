@@ -4,7 +4,6 @@ import {
   respondHarnessApproval,
   sendHarnessTurn,
 } from "./harness/registry";
-import { mergeStream } from "./harness/streamText";
 import type { HarnessId } from "./session";
 
 const HANDOFF_TIMEOUT_MS = 45_000;
@@ -32,7 +31,7 @@ export async function requestOutgoingHandoff(input: {
       text: buildOutgoingHandoffPrompt(input.userRequest),
       onEvent: (event) => {
         if (event.type === "message.delta") {
-          brief = mergeStream(brief, event.text);
+          brief += event.text;
         }
         if (event.type === "approval.requested") {
           respondHarnessApproval(

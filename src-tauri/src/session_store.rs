@@ -1182,6 +1182,23 @@ mod tests {
     }
 
     #[test]
+    fn streamed_text_round_trips_exactly() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let text = "# Result\n\nbookkeeper..\n\nfirst line  \nsecond line\n\n```ts\nconst value = \"hello\";\n```";
+        let mut row = sample("s1", "/tmp/a", "Exact text");
+        row.blocks = json!([
+            { "id": "u1", "role": "user", "text": "Return exact Markdown" },
+            { "id": "a1", "role": "assistant", "text": text }
+        ]);
+
+        upsert_session(&conn, &row).unwrap();
+        let stored = get_session(&conn, "s1").unwrap().unwrap();
+
+        assert_eq!(stored.blocks[1]["text"], text);
+    }
+
+    #[test]
     fn context_usage_round_trips() {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();

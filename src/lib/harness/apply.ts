@@ -8,7 +8,6 @@ import {
   mergeToolPreview,
   stubFilePreview,
 } from "./preview";
-import { mergeStream } from "./streamText";
 import type { HarnessEvent } from "./types";
 
 export function applyHarnessEvent(
@@ -17,11 +16,11 @@ export function applyHarnessEvent(
 ): Session {
   switch (event.type) {
     case "message.delta":
-      return patchStreaming(session, "assistant", event.text, true);
+      return appendStreamingText(session, "assistant", event.text);
     case "message.completed":
       return finishRole(session, "assistant");
     case "reasoning.delta":
-      return patchStreaming(session, "reasoning", event.text, true);
+      return appendStreamingText(session, "reasoning", event.text);
     case "reasoning.completed":
       return finishRole(session, "reasoning");
     case "tool.started":
@@ -174,22 +173,19 @@ function appendBlock(session: Session, block: Block): Session {
 }
 
 /** Append to the latest block only when it is the same role; never splice into an earlier one. */
-function patchStreaming(
+function appendStreamingText(
   session: Session,
   role: "assistant" | "reasoning",
   text: string,
-  streaming: boolean,
 ): Session {
-  if (!text && role === "reasoning") return session;
+  if (!text) return session;
   const last = session.blocks[session.blocks.length - 1];
   if (last?.role === role) {
-    const nextText = mergeStream(last.text, text);
-    if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
     blocks[blocks.length - 1] = {
       ...last,
-      text: nextText,
-      streaming,
+      text: last.text + text,
+      streaming: true,
     };
     return { ...session, blocks };
   }
@@ -198,7 +194,7 @@ function patchStreaming(
     id: crypto.randomUUID(),
     role,
     text,
-    streaming,
+    streaming: true,
   });
   return { ...session, blocks };
 }
@@ -305,13 +301,13 @@ function upsertTool(
   const index = findToolIndex(session, patch);
   if (index < 0) {
     const detail = capToolDetail(patch.detail);
-    const preview = fillPreview(
-      patch.preview,
-      detail,
+    const preview = fillPreview(patch.preview, detail, patch.kind, patch.title);
+    const label = finalToolLabel(
+      session,
       patch.kind,
-      patch.title,
+      displayLabel(patch),
+      preview,
     );
-    const label = finalToolLabel(session, patch.kind, displayLabel(patch), preview);
     return appendBlock(session, {
       id: crypto.randomUUID(),
       role: "tool",
@@ -402,7 +398,9 @@ function fillPreview(
   kind?: string,
   title?: string,
 ): ToolPreview | undefined {
-  if (preview?.lines?.some((line) => line.kind === "add" || line.kind === "del")) {
+  if (
+    preview?.lines?.some((line) => line.kind === "add" || line.kind === "del")
+  ) {
     return preview;
   }
   if (preview) return { ...preview, lines: undefined };
@@ -530,9 +528,7 @@ function isCallId(value: string): boolean {
   const text = value.trim();
   return (
     /^(call[-_]?|tool[-_])[a-z0-9_-]+$/i.test(text) ||
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      text,
-    )
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)
   );
 }
 

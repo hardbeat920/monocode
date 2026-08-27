@@ -8,18 +8,27 @@ import {
   watchChild,
 } from "./child";
 import {
+  applyCodexTextUpdate,
   asRecord,
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
+  createCodexTextState,
   isRecoverableThreadResumeError,
   mapApprovalRequest,
+  invalidateCodexTextTail,
   mapCodexNotification,
   toCodexApprovalDecision,
   type CodexApprovalKind,
+  type CodexTextState,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "./jsonRpc";
-import type { ApprovalDecision, HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  HarnessEvent,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 type PendingApproval = {
   rpcId: JsonRpcId;
@@ -45,6 +54,7 @@ type Live = {
   /** turn/completed arrived before runTurn registered turnDone. */
   turnEndPending: boolean;
   turnWatchdog?: ReturnType<typeof setTimeout>;
+  textState: CodexTextState;
 };
 
 const TURN_WATCHDOG_MS = 2_000;
@@ -58,7 +68,8 @@ const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 
-let resolveCodexBinaryImpl: () => Promise<{ path: string }> = resolveCodexBinary;
+let resolveCodexBinaryImpl: () => Promise<{ path: string }> =
+  resolveCodexBinary;
 
 /** Test seam. */
 export function setCodexBinaryResolver(
@@ -79,16 +90,18 @@ export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
-  live.turns = live.turns.catch(() => undefined).then(async () => {
-    live.cancelled = false;
-    live.muteUpdates = false;
-    try {
-      await runTurn(live, input);
-    } catch (error) {
-      if (live.cancelled) return;
-      throw error;
-    }
-  });
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      try {
+        await runTurn(live, input);
+      } catch (error) {
+        if (live.cancelled) return;
+        throw error;
+      }
+    });
   await live.turns;
 }
 
@@ -112,6 +125,7 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
     return;
   }
 
+  live.textState = invalidateCodexTextTail(live.textState);
   await live.rpc.request("turn/steer", params);
 }
 
@@ -314,6 +328,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       turnDone: null,
       turnFailed: null,
       turnEndPending: false,
+      textState: createCodexTextState(),
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -359,6 +374,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     return;
   }
 
+  live.textState = createCodexTextState();
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
     live.turnFailed = reject;
@@ -389,13 +405,17 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   }
 }
 
-function handleNotification(
-  live: Live,
-  method: string,
-  params: unknown,
-): void {
+function handleNotification(live: Live, method: string, params: unknown): void {
   const mapped = mapCodexNotification(method, params);
+  for (const update of mapped.textUpdates ?? []) {
+    const result = applyCodexTextUpdate(live.textState, update);
+    live.textState = result.state;
+    if (result.event) live.onEvent(result.event);
+  }
   for (const event of mapped.events) {
+    if (invalidatesCodexTextTail(event)) {
+      live.textState = invalidateCodexTextTail(live.textState);
+    }
     live.onEvent(event);
   }
   if (mapped.activeTurnId !== undefined) {
@@ -409,6 +429,19 @@ function handleNotification(
   }
 }
 
+function invalidatesCodexTextTail(event: HarnessEvent): boolean {
+  return (
+    event.type === "message.completed" ||
+    event.type === "reasoning.completed" ||
+    event.type === "tool.started" ||
+    event.type === "tool.updated" ||
+    event.type === "approval.requested" ||
+    event.type === "plan" ||
+    event.type === "status" ||
+    event.type === "session.error"
+  );
+}
+
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   if (live.turnWatchdog) {
     clearTimeout(live.turnWatchdog);
@@ -419,6 +452,7 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   for (const event of extraEvents) {
     live.onEvent(event);
   }
+  live.textState = createCodexTextState();
   const done = live.turnDone;
   const failed = live.turnFailed;
   live.turnDone = null;

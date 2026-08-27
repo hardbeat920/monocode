@@ -1,19 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { modelsForClaudeVersion } from "./claudeCatalog";
 import {
+  applyClaudeCompletedText,
   applyClaudePromptEffortPrefix,
+  applyClaudeTextDelta,
   askUserQuestionAllowInput,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  completedAssistantParts,
+  createClaudeTextState,
   contextFromResult,
   contextUsedFromAssistant,
   extractExitPlanModePlan,
   isTodoTool,
+  markClaudeContentPublished,
   normalizeClaudeCliEffort,
   parseClaudeVersion,
   parseControlRequest,
   planTextFromTodos,
   resolveClaudeApiModelId,
+  reconcileClaudeCompletedTool,
   runtimeModeToPermission,
   statusTextFromSystem,
   streamDeltaFromEvent,
@@ -34,8 +40,12 @@ describe("runtimeModeToPermission", () => {
 
 describe("normalizeClaudeCliEffort", () => {
   it("drops ultrathink and maps ultracode to xhigh", () => {
-    expect(normalizeClaudeCliEffort("ultrathink", "claude-sonnet-5")).toBeUndefined();
-    expect(normalizeClaudeCliEffort("ultracode", "claude-opus-5")).toBe("xhigh");
+    expect(
+      normalizeClaudeCliEffort("ultrathink", "claude-sonnet-5"),
+    ).toBeUndefined();
+    expect(normalizeClaudeCliEffort("ultracode", "claude-opus-5")).toBe(
+      "xhigh",
+    );
   });
 
   it("maps xhigh to max on older models", () => {
@@ -50,17 +60,21 @@ describe("normalizeClaudeCliEffort", () => {
 
 describe("applyClaudePromptEffortPrefix", () => {
   it("prefixes ultrathink on the prompt", () => {
-    expect(applyClaudePromptEffortPrefix("Investigate the edge cases", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate the edge cases",
-    );
+    expect(
+      applyClaudePromptEffortPrefix("Investigate the edge cases", "ultrathink"),
+    ).toBe("Ultrathink:\nInvestigate the edge cases");
     expect(applyClaudePromptEffortPrefix("hello", "high")).toBe("hello");
   });
 });
 
 describe("resolveClaudeApiModelId", () => {
   it("appends [1m] for the 1M context window", () => {
-    expect(resolveClaudeApiModelId("claude-opus-5", "1m")).toBe("claude-opus-5[1m]");
-    expect(resolveClaudeApiModelId("claude-sonnet-5", "200k")).toBe("claude-sonnet-5");
+    expect(resolveClaudeApiModelId("claude-opus-5", "1m")).toBe(
+      "claude-opus-5[1m]",
+    );
+    expect(resolveClaudeApiModelId("claude-sonnet-5", "200k")).toBe(
+      "claude-sonnet-5",
+    );
   });
 });
 
@@ -80,7 +94,12 @@ describe("buildClaudeSpawnArgs", () => {
     expect(args).toContain("--include-partial-messages");
     expect(args).toContain("--setting-sources=user,project,local");
     expect(args).toEqual(
-      expect.arrayContaining(["--model", "claude-sonnet-5", "--effort", "high"]),
+      expect.arrayContaining([
+        "--model",
+        "claude-sonnet-5",
+        "--effort",
+        "high",
+      ]),
     );
     expect(args).toEqual(
       expect.arrayContaining(["--permission-mode", "acceptEdits"]),
@@ -177,19 +196,53 @@ describe("stream mapping", () => {
         type: "stream_event",
         event: {
           type: "content_block_delta",
+          index: 2,
           delta: { type: "text_delta", text: "Hi" },
         },
       }),
-    ).toEqual({ kind: "assistant", text: "Hi" });
+    ).toEqual({ kind: "assistant", contentIndex: 2, text: "Hi" });
     expect(
       streamDeltaFromEvent({
         type: "stream_event",
         event: {
           type: "content_block_delta",
+          index: 0,
           delta: { type: "thinking_delta", thinking: "hmm" },
         },
       }),
-    ).toEqual({ kind: "reasoning", text: "hmm" });
+    ).toEqual({ kind: "reasoning", contentIndex: 0, text: "hmm" });
+    expect(
+      streamDeltaFromEvent({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 3,
+          delta: { type: "text_delta", text: "\n" },
+        },
+      }),
+    ).toEqual({ kind: "assistant", contentIndex: 3, text: "\n" });
+  });
+
+  it("keeps completed content in native index order", () => {
+    expect(
+      completedAssistantParts({
+        message: {
+          content: [
+            { type: "text", text: "before" },
+            { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
+            { type: "text", text: "after" },
+          ],
+        },
+      }),
+    ).toEqual([
+      { kind: "text", contentIndex: 0, text: "before" },
+      {
+        kind: "tool",
+        contentIndex: 1,
+        use: { id: "toolu_1", name: "Read", input: {} },
+      },
+      { kind: "text", contentIndex: 2, text: "after" },
+    ]);
   });
 
   it("reads tool_use content blocks", () => {
@@ -216,6 +269,109 @@ describe("stream mapping", () => {
   });
 });
 
+describe("Claude text state", () => {
+  it("reconciles streamed text by content index", () => {
+    const delta = applyClaudeTextDelta(createClaudeTextState(1), {
+      kind: "assistant",
+      contentIndex: 0,
+      text: "before",
+    });
+    expect(delta.event).toEqual({ type: "message.delta", text: "before" });
+    expect(
+      applyClaudeCompletedText(delta.state, {
+        kind: "text",
+        contentIndex: 0,
+        text: "before",
+      }).event,
+    ).toBeUndefined();
+  });
+
+  it("emits missing content only after the published index", () => {
+    let state = createClaudeTextState(1);
+    state = markClaudeContentPublished(state, 1);
+    const earlier = applyClaudeCompletedText(state, {
+      kind: "text",
+      contentIndex: 0,
+      text: "before",
+    });
+    expect(earlier.conflict).toBe("position");
+
+    const later = applyClaudeCompletedText(state, {
+      kind: "text",
+      contentIndex: 2,
+      text: "after",
+    });
+    expect(later.event).toEqual({ type: "message.delta", text: "after" });
+  });
+
+  it("replays a completed text-tool-text record in index order", () => {
+    const parts = completedAssistantParts({
+      message: {
+        content: [
+          { type: "text", text: "before" },
+          { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
+          { type: "text", text: "after" },
+        ],
+      },
+    });
+    let state = createClaudeTextState(1);
+    const events: Array<{ type: string; text?: string; callId?: string }> = [];
+    for (const part of parts) {
+      if (part.kind === "tool") {
+        state = markClaudeContentPublished(state, part.contentIndex);
+        events.push({ type: "tool.started", callId: part.use.id });
+        continue;
+      }
+      const result = applyClaudeCompletedText(state, part);
+      state = result.state;
+      if (result.event) events.push(result.event);
+    }
+    expect(events).toEqual([
+      { type: "message.delta", text: "before" },
+      { type: "tool.started", callId: "toolu_1" },
+      { type: "message.delta", text: "after" },
+    ]);
+  });
+
+  it("keeps a partial text tail when completion repeats an earlier tool", () => {
+    let state = markClaudeContentPublished(createClaudeTextState(1), 1);
+    state = applyClaudeTextDelta(state, {
+      kind: "assistant",
+      contentIndex: 2,
+      text: "aft",
+    }).state;
+
+    const tool = reconcileClaudeCompletedTool(state, {
+      contentIndex: 1,
+      alreadyPublished: true,
+    });
+    const completed = applyClaudeCompletedText(tool.state, {
+      kind: "text",
+      contentIndex: 2,
+      text: "after",
+    });
+
+    expect(tool.publish).toBe(false);
+    expect(completed.event).toEqual({ type: "message.delta", text: "er" });
+  });
+
+  it("rejects a suffix after a tool invalidates the text tail", () => {
+    const delta = applyClaudeTextDelta(createClaudeTextState(1), {
+      kind: "assistant",
+      contentIndex: 0,
+      text: "hel",
+    });
+    const state = markClaudeContentPublished(delta.state, 1);
+    const completed = applyClaudeCompletedText(state, {
+      kind: "text",
+      contentIndex: 0,
+      text: "hello",
+    });
+    expect(completed.event).toBeUndefined();
+    expect(completed.conflict).toBe("position");
+  });
+});
+
 describe("turnStatusFromResult", () => {
   it("treats aborted terminals as interrupted", () => {
     expect(
@@ -234,12 +390,16 @@ describe("turnStatusFromResult", () => {
 
 describe("modelsForClaudeVersion", () => {
   it("hides Opus 5 until 2.1.219", () => {
-    const old = modelsForClaudeVersion("2.1.100").map((model) => model.nativeId);
+    const old = modelsForClaudeVersion("2.1.100").map(
+      (model) => model.nativeId,
+    );
     expect(old).not.toContain("claude-opus-5");
     expect(old).not.toContain("claude-opus-4-8");
     expect(old).toContain("claude-sonnet-4-6");
 
-    const next = modelsForClaudeVersion("2.1.233").map((model) => model.nativeId);
+    const next = modelsForClaudeVersion("2.1.233").map(
+      (model) => model.nativeId,
+    );
     expect(next).toContain("claude-opus-5");
     expect(next).toContain("claude-fable-5");
     expect(next).toContain("claude-sonnet-5");
@@ -359,7 +519,9 @@ describe("contextUsedFromAssistant", () => {
   });
 
   it("ignores a message with no usage", () => {
-    expect(contextUsedFromAssistant({ type: "assistant", message: {} })).toBeUndefined();
+    expect(
+      contextUsedFromAssistant({ type: "assistant", message: {} }),
+    ).toBeUndefined();
   });
 });
 
@@ -388,8 +550,16 @@ describe("contextFromResult", () => {
         cache_read_input_tokens: 90_000,
         output_tokens: 500,
         iterations: [
-          { input_tokens: 5, cache_read_input_tokens: 20_000, output_tokens: 200 },
-          { input_tokens: 5, cache_read_input_tokens: 70_000, output_tokens: 300 },
+          {
+            input_tokens: 5,
+            cache_read_input_tokens: 20_000,
+            output_tokens: 200,
+          },
+          {
+            input_tokens: 5,
+            cache_read_input_tokens: 70_000,
+            output_tokens: 300,
+          },
         ],
       },
       modelUsage: { "claude-opus-5": { contextWindow: 200000 } },

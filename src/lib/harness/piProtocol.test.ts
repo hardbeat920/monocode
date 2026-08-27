@@ -221,6 +221,12 @@ describe("streaming events", () => {
         assistantMessageEvent: { type: "thinking_delta", delta: "hmm" },
       }),
     ).toEqual({ kind: "thinking", text: "hmm" });
+    expect(
+      assistantDeltaFromEvent({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "\n\n" },
+      }),
+    ).toEqual({ kind: "text", text: "\n\n" });
 
     expect(
       toolCallStartFromEvent({
@@ -250,7 +256,9 @@ describe("streaming events", () => {
     });
 
     expect(isAgentSettled({ type: "agent_settled" })).toBe(true);
-    expect(agentEndWillRetry({ type: "agent_end", willRetry: true })).toBe(true);
+    expect(agentEndWillRetry({ type: "agent_end", willRetry: true })).toBe(
+      true,
+    );
     expect(agentEndWillRetry({ type: "agent_end" })).toBe(false);
   });
 });
@@ -304,9 +312,12 @@ describe("tools and models", () => {
       }),
     ).toBeUndefined();
     expect(
-      contextFromUsage({
-        usage: { totalTokens: 120 },
-      }, 200),
+      contextFromUsage(
+        {
+          usage: { totalTokens: 120 },
+        },
+        200,
+      ),
     ).toEqual({ used: 120, window: 200 });
     expect(
       contextFromSessionStats({
