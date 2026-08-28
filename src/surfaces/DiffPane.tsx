@@ -19,15 +19,17 @@ type Props = {
   cwd: string;
   textHarness?: HarnessId;
   selectedPath?: string;
+  sessionId?: string;
   focused: boolean;
   onFocus: () => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, sessionId?: string) => void;
 };
 
 export function DiffPane({
   cwd,
   textHarness,
   selectedPath,
+  sessionId,
   focused,
   onFocus,
   onOpenFile,
@@ -145,6 +147,7 @@ export function DiffPane({
         enabled
         textHarness={textHarness}
         selectedPath={selectedPath}
+        sessionId={sessionId}
         onOpenFile={onOpenFile}
       />
     </section>

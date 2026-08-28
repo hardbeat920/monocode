@@ -17,7 +17,7 @@ type Props = {
   cwd: string;
   enabled?: boolean;
   busy?: boolean;
-  onOpenDiff: (path?: string) => void;
+  onOpenDiff: (path?: string, sessionId?: string) => void;
 };
 
 export function SessionReview({
@@ -130,7 +130,10 @@ export function SessionReview({
               <span className="truncate text-[12px]">{files.length} Files</span>
             </button>
           ) : (
-            <FileLabel file={first} onOpenDiff={onOpenDiff} />
+            <FileLabel
+              file={first}
+              onOpenDiff={(path) => onOpenDiff(path, sessionId)}
+            />
           )}
           <div className="flex shrink-0 items-center gap-0.5">
             <button
@@ -165,7 +168,10 @@ export function SessionReview({
           <ul className="scrollbar-none mt-1 max-h-40 overflow-y-auto">
             {files.map((file) => (
               <li key={file.relative}>
-                <FileRow file={file} onOpenDiff={onOpenDiff} />
+                <FileRow
+                  file={file}
+                  onOpenDiff={(path) => onOpenDiff(path, sessionId)}
+                />
               </li>
             ))}
           </ul>

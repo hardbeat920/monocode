@@ -880,7 +880,7 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
     }
 }
 
-fn git_file_diff_for(root: &Path, relative: &str) -> Result<GitFileDiff, String> {
+pub(crate) fn git_file_diff_for(root: &Path, relative: &str) -> Result<GitFileDiff, String> {
     let relative = normalize_diff_path(relative);
     if relative.is_empty()
         || relative.starts_with('/')

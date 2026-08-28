@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use crate::fs::{
-    expand_home, git_checked, git_diff_files_for, resolve_repo_path, GitChangedFile, GitDiffIndex,
-    GitDiffStats, MAX_TEXT_FILE_BYTES,
+    expand_home, git_checked, git_diff_files_for, git_file_diff_for, resolve_repo_path,
+    GitChangedFile, GitDiffIndex, GitDiffStats, GitFileDiff, MAX_TEXT_FILE_BYTES,
 };
 
 const MAX_SNAPSHOT_FILES: usize = 500;
@@ -135,7 +135,10 @@ impl CheckpointStore {
             if manifest.files.contains_key(&relative) {
                 continue;
             }
-            if !file_differs(&dir, &root, &manifest, &relative, &git_dirty) {
+            if matches!(
+                session_change(&dir, &root, &manifest, &relative, &git_dirty),
+                Change::None
+            ) {
                 continue;
             }
             if in_head(&root, &relative) && manifest.tracked.insert(relative.clone()) {
@@ -232,6 +235,30 @@ impl CheckpointStore {
             .insert(relative.clone(), snapshot_file(&dir, &root, &relative)?);
         write_manifest(&dir, &manifest)?;
         self.status(session_id, cwd)
+    }
+
+    /// Diff base for review: the session's snapshot when it has one, else HEAD
+    /// (the path was clean at session start, so HEAD is that same baseline).
+    fn file_diff(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        relative: &str,
+    ) -> Result<GitFileDiff, String> {
+        let root = project_root(cwd)?;
+        let relative = resolve_repo_path(&root, relative)?;
+        let kind = self
+            .load_matching(session_id, cwd)?
+            .and_then(|manifest| manifest.files.get(&relative).copied());
+        match kind {
+            Some(kind) => Ok(checkpoint_file_diff(
+                &self.session_dir(session_id),
+                &root,
+                &relative,
+                kind,
+            )),
+            None => git_file_diff_for(&root, &relative),
+        }
     }
 
     fn load_matching(&self, session_id: &str, cwd: &str) -> Result<Option<Manifest>, String> {
@@ -395,6 +422,20 @@ pub async fn session_checkpoint_stats(
 }
 
 #[tauri::command]
+pub async fn session_checkpoint_file_diff(
+    store: State<'_, CheckpointStore>,
+    session_id: String,
+    cwd: String,
+    relative: String,
+) -> Result<GitFileDiff, String> {
+    validate_id(&session_id, "session")?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || store.file_diff(&session_id, &cwd, &relative))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn session_checkpoint_undo(
     store: State<'_, CheckpointStore>,
     session_id: String,
@@ -441,14 +482,17 @@ fn diff_from_manifest_with(
     let mut files = Vec::new();
 
     for relative in &manifest.touched {
-        if !file_differs(dir, root, manifest, relative, &git_dirty) {
-            continue;
+        match session_change(dir, root, manifest, relative, &git_dirty) {
+            Change::None => continue,
+            Change::Snapshot(before, after) => {
+                files.push(describe_snapshot_change(root, relative, &before, &after));
+            }
+            Change::Head => files.push(describe_head_change(
+                root,
+                relative,
+                by_relative.get(relative.as_str()).copied(),
+            )),
         }
-        files.push(describe_change(
-            root,
-            relative,
-            by_relative.get(relative.as_str()).copied(),
-        ));
     }
 
     files.sort_by(|a, b| a.relative.cmp(&b.relative));
@@ -469,31 +513,73 @@ fn stats_from_status(status: &CheckpointStatus) -> GitDiffStats {
     }
 }
 
-fn file_differs(
+/// What this session did to one path, and against which baseline.
+enum Change {
+    None,
+    /// Snapshotted because the path was already dirty at session start, so its
+    /// baseline is the snapshot. Both sides are carried to avoid a second read.
+    Snapshot(FileState, FileState),
+    /// Clean at session start, so HEAD is the baseline and git's counts apply.
+    Head,
+}
+
+fn session_change(
     dir: &Path,
     root: &Path,
     manifest: &Manifest,
     relative: &str,
     git_dirty: &HashSet<&str>,
-) -> bool {
+) -> Change {
     // Once a tracked path is clean against HEAD, its session change was
     // committed (or otherwise resolved) and no longer needs review.
     if !git_dirty.contains(relative)
         && (manifest.tracked.contains(relative) || in_head(root, relative))
     {
-        return false;
+        return Change::None;
     }
     match manifest.files.get(relative) {
-        Some(SnapshotKind::Skipped) => false,
-        Some(kind) => read_worktree(root, relative) != read_snapshot(dir, relative, *kind),
+        Some(SnapshotKind::Skipped) => Change::None,
+        Some(kind) => {
+            let before = read_snapshot(dir, relative, *kind);
+            let after = read_worktree(root, relative);
+            if before == after {
+                return Change::None;
+            }
+            Change::Snapshot(before, after)
+        }
         None => {
-            git_dirty.contains(relative)
-                || (root.join(relative).is_file() && !in_head(root, relative))
+            let changed = git_dirty.contains(relative)
+                || (root.join(relative).is_file() && !in_head(root, relative));
+            if changed {
+                Change::Head
+            } else {
+                Change::None
+            }
         }
     }
 }
 
-fn describe_change(root: &Path, relative: &str, git: Option<&GitChangedFile>) -> CheckpointFile {
+fn describe_snapshot_change(
+    root: &Path,
+    relative: &str,
+    before: &FileState,
+    after: &FileState,
+) -> CheckpointFile {
+    let (additions, deletions) = line_diff_counts(before, after);
+    CheckpointFile {
+        path: root.join(relative).to_string_lossy().into_owned(),
+        relative: relative.to_string(),
+        status: change_status(before, after).into(),
+        additions,
+        deletions,
+    }
+}
+
+fn describe_head_change(
+    root: &Path,
+    relative: &str,
+    git: Option<&GitChangedFile>,
+) -> CheckpointFile {
     if let Some(file) = git {
         return CheckpointFile {
             path: file.path.clone(),
@@ -512,6 +598,125 @@ fn describe_change(root: &Path, relative: &str, git: Option<&GitChangedFile>) ->
         additions: 0,
         deletions: 0,
     }
+}
+
+fn change_status(before: &FileState, after: &FileState) -> &'static str {
+    match (before, after) {
+        (FileState::Missing, _) => "added",
+        (_, FileState::Missing) => "deleted",
+        _ => "modified",
+    }
+}
+
+fn state_bytes(state: &FileState) -> &[u8] {
+    match state {
+        FileState::Contents(bytes) => bytes,
+        FileState::Missing | FileState::Skipped => &[],
+    }
+}
+
+/// Baseline vs worktree contents for one file, shaped like the HEAD diff so the
+/// editor can render either base with the same merge view.
+fn checkpoint_file_diff(
+    dir: &Path,
+    root: &Path,
+    relative: &str,
+    kind: SnapshotKind,
+) -> GitFileDiff {
+    let before = read_snapshot(dir, relative, kind);
+    let after = read_worktree(root, relative);
+    let status = change_status(&before, &after);
+    let too_large = matches!(before, FileState::Skipped) || matches!(after, FileState::Skipped);
+    let binary = state_bytes(&before).contains(&0) || state_bytes(&after).contains(&0);
+    let (original, current) = if binary || too_large {
+        (String::new(), String::new())
+    } else {
+        (
+            String::from_utf8_lossy(state_bytes(&before)).into_owned(),
+            String::from_utf8_lossy(state_bytes(&after)).into_owned(),
+        )
+    };
+    GitFileDiff {
+        path: root.join(relative).to_string_lossy().into_owned(),
+        relative: relative.to_string(),
+        status: status.to_string(),
+        original,
+        current,
+        binary,
+        too_large,
+    }
+}
+
+/// LCS cells we will fill before calling an edit a whole-file rewrite. Keeps a
+/// reformatted 8 MB file from stalling the status poll.
+const MAX_DIFF_CELLS: usize = 4_000_000;
+
+fn line_diff_counts(before: &FileState, after: &FileState) -> (i64, i64) {
+    if matches!(before, FileState::Skipped) || matches!(after, FileState::Skipped) {
+        return (0, 0);
+    }
+    let before = state_bytes(before);
+    let after = state_bytes(after);
+    if before.contains(&0) || after.contains(&0) {
+        return (0, 0);
+    }
+    count_line_changes(&split_lines(before), &split_lines(after))
+}
+
+fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
+    if lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+fn count_line_changes(before: &[&[u8]], after: &[&[u8]]) -> (i64, i64) {
+    let mut head = 0;
+    while head < before.len() && head < after.len() && before[head] == after[head] {
+        head += 1;
+    }
+    let mut tail = 0;
+    while tail < before.len() - head
+        && tail < after.len() - head
+        && before[before.len() - 1 - tail] == after[after.len() - 1 - tail]
+    {
+        tail += 1;
+    }
+    let before = &before[head..before.len() - tail];
+    let after = &after[head..after.len() - tail];
+    if before.is_empty()
+        || after.is_empty()
+        || before.len().saturating_mul(after.len()) > MAX_DIFF_CELLS
+    {
+        return (after.len() as i64, before.len() as i64);
+    }
+    let common = lcs_len(before, after);
+    (
+        (after.len() - common) as i64,
+        (before.len() - common) as i64,
+    )
+}
+
+fn lcs_len(a: &[&[u8]], b: &[&[u8]]) -> usize {
+    // Roll over the shorter side so the two rows stay bounded by MAX_DIFF_CELLS.
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let mut prev = vec![0usize; short.len() + 1];
+    let mut row = vec![0usize; short.len() + 1];
+    for left in long {
+        for (index, right) in short.iter().enumerate() {
+            row[index + 1] = if left == right {
+                prev[index] + 1
+            } else {
+                row[index].max(prev[index + 1])
+            };
+        }
+        std::mem::swap(&mut prev, &mut row);
+    }
+    prev[short.len()]
 }
 
 fn restore_one(dir: &Path, root: &Path, manifest: &Manifest, relative: &str) -> Result<(), String> {
@@ -1222,6 +1427,107 @@ mod tests {
         assert_eq!(s1.additions, 1);
         assert_eq!(s1.deletions, 0);
         assert_eq!(relatives(&store.status("s1", &cwd).unwrap()), vec!["a.txt"]);
+    }
+
+    fn counts(before: &str, after: &str) -> (i64, i64) {
+        count_line_changes(
+            &split_lines(before.as_bytes()),
+            &split_lines(after.as_bytes()),
+        )
+    }
+
+    #[test]
+    fn line_counts_ignore_untouched_head_and_tail() {
+        assert_eq!(counts("a\nb\nc\n", "a\nB\nc\n"), (1, 1));
+        assert_eq!(counts("a\nc\n", "a\nb\nc\n"), (1, 0));
+        assert_eq!(counts("a\nb\nc\n", "a\nc\n"), (0, 1));
+        assert_eq!(counts("a\nb\n", "a\nb\n"), (0, 0));
+    }
+
+    #[test]
+    fn line_counts_handle_empty_sides() {
+        assert_eq!(counts("", "a\nb\n"), (2, 0));
+        assert_eq!(counts("a\nb\n", ""), (0, 2));
+        assert_eq!(counts("", ""), (0, 0));
+    }
+
+    #[test]
+    fn line_counts_reuse_moved_lines() {
+        // A block inserted in the middle must not bill the lines after it.
+        assert_eq!(counts("a\nb\nc\nd\n", "a\nx\ny\nb\nc\nd\n"), (2, 0));
+    }
+
+    #[test]
+    fn trailing_newline_is_not_a_line() {
+        assert_eq!(split_lines(b"a\nb\n").len(), 2);
+        assert_eq!(split_lines(b"a\nb").len(), 2);
+        assert_eq!(split_lines(b"").len(), 0);
+    }
+
+    #[test]
+    fn binary_and_skipped_sides_report_nothing() {
+        let binary = FileState::Contents(vec![b'a', 0, b'b']);
+        let text = FileState::Contents(b"a\n".to_vec());
+        assert_eq!(line_diff_counts(&binary, &text), (0, 0));
+        assert_eq!(line_diff_counts(&FileState::Skipped, &text), (0, 0));
+        assert_eq!(line_diff_counts(&FileState::Missing, &text), (1, 0));
+    }
+
+    /// The pre-existing dirt must stay off the session's tab.
+    #[test]
+    fn counts_exclude_edits_made_before_the_session() {
+        let repo = tmp("counts-baseline");
+        if !init_git_commit(&repo.0, &[("a.txt", "one\n")]) {
+            return;
+        }
+        // Someone edits the file by hand, then the session starts and adds a line.
+        std::fs::write(repo.0.join("a.txt"), "one\nuser\n").unwrap();
+        let cwd = repo.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure("s1", &cwd).unwrap();
+
+        std::fs::write(repo.0.join("a.txt"), "one\nuser\nagent\n").unwrap();
+        record(&store, "s1", &cwd, &["a.txt"]);
+
+        let status = store.status("s1", &cwd).unwrap();
+        let file = status.files.first().expect("a.txt");
+        assert_eq!((file.additions, file.deletions), (1, 0));
+    }
+
+    #[test]
+    fn file_diff_bases_on_the_session_snapshot() {
+        let repo = tmp("file-diff-base");
+        if !init_git_commit(&repo.0, &[("a.txt", "one\n")]) {
+            return;
+        }
+        std::fs::write(repo.0.join("a.txt"), "one\nuser\n").unwrap();
+        let cwd = repo.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure("s1", &cwd).unwrap();
+        std::fs::write(repo.0.join("a.txt"), "one\nuser\nagent\n").unwrap();
+        record(&store, "s1", &cwd, &["a.txt"]);
+
+        let diff = store.file_diff("s1", &cwd, "a.txt").unwrap();
+        assert_eq!(diff.original, "one\nuser\n");
+        assert_eq!(diff.current, "one\nuser\nagent\n");
+    }
+
+    /// Files that were clean at session start have no snapshot, so HEAD is the base.
+    #[test]
+    fn file_diff_falls_back_to_head_without_a_snapshot() {
+        let repo = tmp("file-diff-head");
+        if !init_git_commit(&repo.0, &[("a.txt", "one\n")]) {
+            return;
+        }
+        let cwd = repo.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure("s1", &cwd).unwrap();
+        std::fs::write(repo.0.join("a.txt"), "one\ntwo\n").unwrap();
+        record(&store, "s1", &cwd, &["a.txt"]);
+
+        let diff = store.file_diff("s1", &cwd, "a.txt").unwrap();
+        assert_eq!(diff.original, "one\n");
+        assert_eq!(diff.current, "one\ntwo\n");
     }
 
     #[test]

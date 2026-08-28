@@ -117,7 +117,7 @@ type Props = {
   canGoForward?: boolean;
   onGoBack?: () => void;
   onGoForward?: () => void;
-  onOpenDiff?: (path: string) => void;
+  onOpenDiff?: (path: string, sessionId?: string) => void;
   selectedDiffPath?: string;
   textHarness?: HarnessId;
   onShowSourceControl?: () => void;
@@ -823,6 +823,7 @@ function SidebarComponent({
             enabled={open}
             textHarness={textHarness}
             selectedPath={selectedDiffPath}
+            sessionId={activeSessionId}
             onOpenFile={onOpenDiff ?? onOpenFile}
           />
         </div>

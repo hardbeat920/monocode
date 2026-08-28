@@ -23,6 +23,14 @@ import {
 } from "react";
 import { FileTypeIcon } from "./FileTypeIcon";
 import {
+  DiffCounts,
+  dirname,
+  IconAction,
+  statusColor,
+  statusLetter,
+} from "./changeParts";
+import { SessionChanges } from "./SessionChanges";
+import {
   basename,
   gitCommit,
   gitDiffIndex,
@@ -51,15 +59,21 @@ import { useLockOverscroll } from "../hooks/useLockOverscroll";
 const GIT_POLL_MS = 2000;
 let stagedOpen = true;
 let changesOpen = true;
+/** Sticky across mounts so switching tabs keeps the scope you were reviewing. */
+let scopeChoice: Scope = "project";
 const indexByCwd = new Map<string, GitDiffIndex>();
 const prByCwd = new Map<string, GitPr | null>();
+
+type Scope = "project" | "session";
 
 type Props = {
   cwd: string;
   enabled: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
-  onOpenFile: (path: string) => void;
+  /** Active session, when one can scope the list to its own edits. */
+  sessionId?: string;
+  onOpenFile: (path: string, sessionId?: string) => void;
 };
 
 export function GitChangesPanel({
@@ -67,10 +81,18 @@ export function GitChangesPanel({
   enabled,
   textHarness,
   selectedPath,
+  sessionId,
   onOpenFile,
 }: Props) {
-  const { index, reload } = useDiffIndex(cwd, enabled);
+  const [scope, setScope] = useState<Scope>(scopeChoice);
+  const sessionScope = Boolean(sessionId) && scope === "session";
+  const { index, reload } = useDiffIndex(cwd, enabled && !sessionScope);
   const files = index?.files ?? [];
+
+  const pickScope = (next: Scope) => {
+    scopeChoice = next;
+    setScope(next);
+  };
 
   if (!cwd || cwd === "~") {
     return (
@@ -81,7 +103,9 @@ export function GitChangesPanel({
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-content/10 px-3">
-        {(index?.additions ?? 0) > 0 || (index?.deletions ?? 0) > 0 ? (
+        {sessionId ? (
+          <ScopeToggle scope={scope} onPick={pickScope} />
+        ) : (index?.additions ?? 0) > 0 || (index?.deletions ?? 0) > 0 ? (
           <DiffCounts
             additions={index?.additions ?? 0}
             deletions={index?.deletions ?? 0}
@@ -89,7 +113,7 @@ export function GitChangesPanel({
         ) : (
           <span className="text-[12px] font-medium text-content">Changes</span>
         )}
-        {index?.branch ? (
+        {!sessionScope && index?.branch ? (
           <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-content/50">
             <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
             <span className="min-w-0 truncate">{index.branch}</span>
@@ -108,21 +132,59 @@ export function GitChangesPanel({
           <span className="ml-auto" />
         )}
       </header>
-      <ChangedFiles
-        cwd={cwd}
-        textHarness={textHarness}
-        index={index}
-        files={files}
-        selected={selectedPath}
-        enabled={enabled}
-        onOpenFile={onOpenFile}
-        onMutated={(paths) => {
-          reload();
-          notifyGitChanged();
-          invalidateWatchedFiles(paths);
-          window.setTimeout(() => invalidateWatchedFiles(paths), 150);
-        }}
-      />
+      {sessionScope && sessionId ? (
+        <SessionChanges
+          sessionId={sessionId}
+          cwd={cwd}
+          enabled={enabled}
+          selectedPath={selectedPath}
+          onOpenFile={(path) => onOpenFile(path, sessionId)}
+        />
+      ) : (
+        <ChangedFiles
+          cwd={cwd}
+          textHarness={textHarness}
+          index={index}
+          files={files}
+          selected={selectedPath}
+          enabled={enabled}
+          onOpenFile={onOpenFile}
+          onMutated={(paths) => {
+            reload();
+            notifyGitChanged();
+            invalidateWatchedFiles(paths);
+            window.setTimeout(() => invalidateWatchedFiles(paths), 150);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ScopeToggle({
+  scope,
+  onPick,
+}: {
+  scope: Scope;
+  onPick: (scope: Scope) => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-px rounded-md bg-content/8 p-px">
+      {(["project", "session"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          aria-pressed={scope === option}
+          onClick={() => onPick(option)}
+          className={`h-5 rounded-[5px] px-2 text-[11px] capitalize ${
+            scope === option
+              ? "bg-content/15 text-content"
+              : "text-content/55 hover:text-content"
+          }`}
+        >
+          {option}
+        </button>
+      ))}
     </div>
   );
 }
@@ -855,70 +917,6 @@ function ChangeRow({
       </div>
     </li>
   );
-}
-
-function IconAction({
-  title,
-  disabled,
-  onClick,
-  children,
-}: {
-  title: string;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      disabled={disabled}
-      onClick={onClick}
-      className="grid size-5 place-items-center rounded text-content/55 hover:bg-content/10 hover:text-content disabled:opacity-40"
-    >
-      {children}
-    </button>
-  );
-}
-
-function DiffCounts({
-  additions,
-  deletions,
-}: {
-  additions: number;
-  deletions: number;
-}) {
-  if (additions <= 0 && deletions <= 0) return null;
-  return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-semibold tabular-nums">
-      {additions > 0 ? (
-        <span className="text-emerald-400">+{additions}</span>
-      ) : null}
-      {deletions > 0 ? (
-        <span className="text-red-400">-{deletions}</span>
-      ) : null}
-    </span>
-  );
-}
-
-function dirname(relative: string): string {
-  const i = relative.lastIndexOf("/");
-  return i > 0 ? relative.slice(0, i) : "";
-}
-
-function statusLetter(status: string): string {
-  if (status === "untracked") return "U";
-  if (status === "added") return "A";
-  if (status === "deleted") return "D";
-  return "M";
-}
-
-function statusColor(status: string): string {
-  if (status === "untracked") return "text-sky-400";
-  if (status === "added") return "text-emerald-400";
-  if (status === "deleted") return "text-red-400";
-  return "text-amber-400";
 }
 
 function useDiffIndex(

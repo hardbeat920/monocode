@@ -85,6 +85,21 @@ describe("editorTabKey", () => {
     expect(isTerminalTab(terminal)).toBe(true);
     expect(isTerminalTab(newFileTab(path, cwd))).toBe(false);
   });
+
+  it("separates a session review from the project review of one file", () => {
+    const cwd = "/repo";
+    const path = "/repo/EventStore.swift";
+    expect(editorTabKey(newFileTab(path, cwd, true, "s1"))).toBe(
+      `review:s1:${path}`,
+    );
+    expect(editorTabKey(newFileTab(path, cwd, true, "s2"))).not.toBe(
+      editorTabKey(newFileTab(path, cwd, true, "s1")),
+    );
+    // A session id without review must not change the plain file tab.
+    expect(editorTabKey(newFileTab(path, cwd, false, "s1"))).toBe(
+      `file:${path}`,
+    );
+  });
 });
 
 describe("openTerminalTab", () => {

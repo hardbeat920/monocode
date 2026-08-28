@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { GitDiffStats } from "./fs";
+import type { GitDiffStats, GitFileDiff } from "./fs";
 
 export type CheckpointFile = {
   path: string;
@@ -87,6 +87,19 @@ export function sessionCheckpointStats(
   return invoke<Record<string, GitDiffStats>>("session_checkpoint_stats", {
     cwd,
     sessionIds,
+  });
+}
+
+/** Session baseline vs worktree, so review shows only this session's edits. */
+export function sessionFileDiff(
+  sessionId: string,
+  cwd: string,
+  relative: string,
+): Promise<GitFileDiff> {
+  return invoke<GitFileDiff>("session_checkpoint_file_diff", {
+    sessionId,
+    cwd,
+    relative,
   });
 }
 

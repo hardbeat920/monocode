@@ -54,7 +54,7 @@ type Props = {
     decision: ApprovalDecision,
   ) => void;
   onOpenFile: (path: string) => void;
-  onOpenDiff: (path?: string) => void;
+  onOpenDiff: (path?: string, sessionId?: string) => void;
   onOpenPlan: (sessionId: string, blockId: string) => void;
   onNewTerminal: (sessionId: string) => void;
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;

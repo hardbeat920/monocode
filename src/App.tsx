@@ -1889,7 +1889,7 @@ export default function App({
   );
 
   const onOpenDiff = useCallback(
-    (path?: string) => {
+    (path?: string, sessionId?: string) => {
       void (async () => {
         const resolved = path
           ? ((await resolveOpenablePath(gitCwdRef.current, path)) ?? path)
@@ -1901,7 +1901,7 @@ export default function App({
             const opened = resolved
               ? openEditorTab(
                   tab,
-                  newFileTab(resolved, sidebarCwdRef.current, true),
+                  newFileTab(resolved, sidebarCwdRef.current, true, sessionId),
                 )
               : tab;
             if (deckLayout) return opened;
@@ -3884,6 +3884,7 @@ export default function App({
                 cwd={gitCwd}
                 textHarness={pickTextHarness(active?.harness)}
                 selectedPath={selectedChangePath(activeTab, gitCwd)}
+                sessionId={active?.id}
                 focused={!!activeTab.diffFocused}
                 onFocus={onFocusDiff}
                 onOpenFile={onOpenDiff}

@@ -70,7 +70,7 @@ type Shared = {
   ) => void;
   onOpenFile: (path: string) => void;
   editorNavigation?: EditorNavigationTarget | null;
-  onOpenDiff: (path?: string) => void;
+  onOpenDiff: (path?: string, sessionId?: string) => void;
   onOpenPlan: (sessionId: string, blockId: string) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
   onNewTerminal: (sessionId: string) => void;

@@ -250,6 +250,7 @@ pub fn run() {
             checkpoint::session_checkpoint_sync,
             checkpoint::session_checkpoint_status,
             checkpoint::session_checkpoint_stats,
+            checkpoint::session_checkpoint_file_diff,
             checkpoint::session_checkpoint_undo,
             checkpoint::session_checkpoint_keep,
             set_traffic_lights_visible,

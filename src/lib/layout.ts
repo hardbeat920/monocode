@@ -35,6 +35,8 @@ export type FilePaneTab = {
   cwd: string;
   plan?: PlanTabSource;
   review?: boolean;
+  /** Diff against this session's checkpoint instead of HEAD. */
+  reviewSessionId?: string;
   terminal?: boolean;
 };
 
@@ -80,12 +82,14 @@ export function newFileTab(
   path: string,
   cwd: string,
   review = false,
+  reviewSessionId?: string,
 ): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path,
     cwd,
     ...(review ? { review: true } : {}),
+    ...(review && reviewSessionId ? { reviewSessionId } : {}),
   };
 }
 
@@ -266,7 +270,11 @@ export function isReviewTab(file: FilePaneTab): boolean {
 export function editorTabKey(file: FilePaneTab): string {
   if (file.terminal) return `terminal:${file.id}`;
   if (file.plan) return `plan:${file.plan.blockId}`;
-  return file.review ? `review:${file.path}` : `file:${file.path}`;
+  if (!file.review) return `file:${file.path}`;
+  // Session and project reviews of one file are different diffs, so different tabs.
+  return file.reviewSessionId
+    ? `review:${file.reviewSessionId}:${file.path}`
+    : `review:${file.path}`;
 }
 
 export function newEditorPane(file: FilePaneTab): EditorPane {

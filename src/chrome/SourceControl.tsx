@@ -6,7 +6,8 @@ type Props = {
   enabled: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
-  onOpenFile: (path: string) => void;
+  sessionId?: string;
+  onOpenFile: (path: string, sessionId?: string) => void;
 };
 
 export function SourceControl({
@@ -14,6 +15,7 @@ export function SourceControl({
   enabled,
   textHarness,
   selectedPath,
+  sessionId,
   onOpenFile,
 }: Props) {
   return (
@@ -23,6 +25,7 @@ export function SourceControl({
         enabled={enabled}
         textHarness={textHarness}
         selectedPath={selectedPath}
+        sessionId={sessionId}
         onOpenFile={onOpenFile}
       />
     </div>

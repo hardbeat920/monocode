@@ -354,6 +354,11 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
     cwd: value.cwd,
     ...(plan ? { plan } : {}),
     ...(value.review === true ? { review: true } : {}),
+    ...(value.review === true &&
+    typeof value.reviewSessionId === "string" &&
+    value.reviewSessionId
+      ? { reviewSessionId: value.reviewSessionId }
+      : {}),
     ...(value.terminal === true ? { terminal: true } : {}),
   };
 }

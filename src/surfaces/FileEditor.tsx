@@ -46,6 +46,7 @@ import {
   subscribeGitChanged,
   writeTextFile,
 } from "../lib/fs";
+import { sessionFileDiff, subscribeReviewChanged } from "../lib/checkpoint";
 import { syncWatchedMtime, watchFile } from "../lib/fileWatch";
 import { displayPath } from "../lib/paths";
 import type { EditorNavigation } from "../lib/search";
@@ -74,6 +75,8 @@ type Props = {
   cwd: string;
   active: boolean;
   showDiff?: boolean;
+  /** Diff against this session's checkpoint baseline instead of HEAD. */
+  diffSessionId?: string;
   navigation?: EditorNavigationRequest | null;
   onDirtyChange: (path: string, dirty: boolean) => void;
   onErrorCountChange?: (path: string, count: number) => void;
@@ -94,6 +97,7 @@ export function FileEditor({
   cwd,
   active,
   showDiff = false,
+  diffSessionId,
   navigation,
   onDirtyChange,
   onErrorCountChange,
@@ -194,7 +198,10 @@ export function FileEditor({
     setGitBase({ path, original: null });
 
     const load = () => {
-      void gitFileDiff(cwd, relative)
+      const pending = diffSessionId
+        ? sessionFileDiff(diffSessionId, cwd, relative)
+        : gitFileDiff(cwd, relative);
+      void pending
         .then((diff) => {
           if (cancelled) return;
           if (diff.binary || diff.tooLarge) {
@@ -226,6 +233,11 @@ export function FileEditor({
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
     const unsubGit = subscribeGitChanged(onGit);
+    const unsubReview = diffSessionId
+      ? subscribeReviewChanged((id) => {
+          if (!id || id === diffSessionId) load();
+        })
+      : null;
     const unsubWatch = watchFile(path, onDisk);
     return () => {
       cancelled = true;
@@ -233,9 +245,10 @@ export function FileEditor({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
       unsubGit();
+      unsubReview?.();
       unsubWatch();
     };
-  }, [cwd, path, reloadFromDisk, showDiff]);
+  }, [cwd, diffSessionId, path, reloadFromDisk, showDiff]);
 
   const gitOriginal = gitBase.path === path ? gitBase.original : null;
 
