@@ -316,11 +316,20 @@ export function providerSessionIdFromState(data: unknown): string | undefined {
   return sessionId;
 }
 
+/**
+ * Pi never puts usage at the top of a frame: a finished message carries it on
+ * `message`, a streaming one on the partial inside `assistantMessageEvent`.
+ * Reading only the top level meant the meter sat still for the whole turn and
+ * caught up from `get_session_stats` after it ended.
+ */
 export function contextFromUsage(
   rec: Record<string, unknown>,
   window?: number,
 ): { used?: number; window?: number } | null {
-  const usage = asRecord(rec.usage);
+  const usage =
+    asRecord(rec.usage) ??
+    asRecord(asRecord(rec.message)?.usage) ??
+    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
   if (!usage) return null;
   const used =
     numberField(usage, "totalTokens") ||
@@ -451,6 +460,19 @@ export function toolExecutionEndFromEvent(
     detail: textFromContent(result?.content) || undefined,
     isError: rec.isError === true,
   };
+}
+
+/**
+ * A failed turn is reported inside the assistant message, not as an error
+ * frame: `stopReason: "error"` with the reason in `errorMessage`. Nothing else
+ * marks it, so an expired provider token ended the turn with empty content and
+ * looked like the agent ignoring you. Empty string means "failed, no reason".
+ */
+export function turnErrorFromEvent(rec: Record<string, unknown>): string | null {
+  if (stringField(rec, "type") !== "message_end") return null;
+  const message = asRecord(rec.message);
+  if (stringField(message, "stopReason") !== "error") return null;
+  return stringField(message, "errorMessage") ?? "";
 }
 
 export function isAgentSettled(rec: Record<string, unknown>): boolean {

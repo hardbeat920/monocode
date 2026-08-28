@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Pi or omp turn that fails now says why. Pi reports a failure inside the assistant message rather than as an error, so an expired provider token ended the turn with no reply and no explanation — it looked like the agent was ignoring you.
+- The context meter stayed at zero for the whole of a Pi or omp turn. Usage was only read from the top of a frame, where Pi never puts it; the meter now follows the turn instead of catching up once it ends.
+
 ## [0.1.16] - 2026-08-28
 
 ### Added

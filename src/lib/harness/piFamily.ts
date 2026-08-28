@@ -40,6 +40,7 @@ import {
   toolKindFromName,
   toolTitle,
   tryParseJsonRecord,
+  turnErrorFromEvent,
   type PiExtensionUiRequest,
 } from "./piProtocol";
 import type { ApprovalDecision, HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
@@ -82,6 +83,8 @@ type Live = {
   activeTurn: boolean;
   emittedAssistant: string;
   emittedReasoning: string;
+  /** Reason the turn failed, held until we know it is not being retried. */
+  turnError: string | null;
 };
 
 type Resume = {
@@ -302,7 +305,7 @@ async function startLive(
   const rpc = new PiRpc(input.sessionId, (rec) => {
     const current = liveRef.current;
     if (!current) return;
-    handleFrame(input.sessionId, current, rec);
+    handleFrame(flavor, input.sessionId, current, rec);
   }, flavor.label);
 
   const live: Live = {
@@ -329,6 +332,7 @@ async function startLive(
     activeTurn: false,
     emittedAssistant: "",
     emittedReasoning: "",
+    turnError: null,
   };
   liveRef.current = live;
 
@@ -388,6 +392,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   await applyModel(live, input);
   live.emittedAssistant = "";
   live.emittedReasoning = "";
+  live.turnError = null;
   live.toolsByIndex.clear();
   live.toolsById.clear();
   live.compacting = false;
@@ -423,6 +428,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 }
 
 function handleFrame(
+  flavor: PiFlavor,
   sessionId: string,
   live: Live,
   rec: Record<string, unknown>,
@@ -442,6 +448,9 @@ function handleFrame(
 
   const status = statusFromPiEvent(rec);
   if (status) live.onEvent({ type: "status", text: status });
+
+  const turnError = turnErrorFromEvent(rec);
+  if (turnError !== null) live.turnError = turnError;
 
   const context = contextFromUsage(rec, live.contextWindow);
   if (context) live.onEvent({ type: "context", ...context });
@@ -526,13 +535,27 @@ function handleFrame(
   }
 
   if (isAgentSettled(rec)) {
+    flushTurnError(flavor, live);
     void settleTurn(live);
     return;
   }
   const willRetry = agentEndWillRetry(rec);
+  // The retry carries the real answer, so the attempt it replaces stays quiet.
+  if (willRetry === true) live.turnError = null;
   if (willRetry === false && !live.compacting && !live.retrying) {
+    flushTurnError(flavor, live);
     void settleTurn(live);
   }
+}
+
+function flushTurnError(flavor: PiFlavor, live: Live): void {
+  const message = live.turnError;
+  if (message === null) return;
+  live.turnError = null;
+  live.onEvent({
+    type: "session.error",
+    message: message || `${flavor.label} turn failed`,
+  });
 }
 
 async function settleTurn(live: Live): Promise<void> {

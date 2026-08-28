@@ -23,6 +23,7 @@ import {
   toolExecutionEndFromEvent,
   toolKindFromName,
   toolTitle,
+  turnErrorFromEvent,
 } from "./piProtocol";
 import { OMP_FLAVOR, PI_FLAVOR } from "./piFlavor";
 
@@ -314,10 +315,78 @@ describe("tools and models", () => {
         usage: { totalTokens: 120 },
       }, 200),
     ).toEqual({ used: 120, window: 200 });
+    // The two shapes a live turn actually sends.
+    expect(
+      contextFromUsage(
+        {
+          type: "message_end",
+          message: { role: "assistant", usage: { totalTokens: 18014 } },
+        },
+        200000,
+      ),
+    ).toEqual({ used: 18014, window: 200000 });
+    expect(
+      contextFromUsage(
+        {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            partial: { usage: { input: 3, output: 1, cacheWrite: 18007 } },
+          },
+        },
+        200000,
+      ),
+    ).toEqual({ used: 18011, window: 200000 });
+    expect(
+      contextFromUsage(
+        { type: "message_end", message: { role: "user" } },
+        200000,
+      ),
+    ).toBeNull();
     expect(
       contextFromSessionStats({
         contextUsage: { tokens: 60, contextWindow: 200000, percent: 30 },
       }),
     ).toEqual({ used: 60, window: 200000 });
+  });
+});
+
+describe("turnErrorFromEvent", () => {
+  it("reads the reason a turn failed with no content", () => {
+    expect(
+      turnErrorFromEvent({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "No API key for provider: openai-codex",
+        },
+      }),
+    ).toBe("No API key for provider: openai-codex");
+  });
+
+  it("still reports a failure that carries no reason", () => {
+    expect(
+      turnErrorFromEvent({
+        type: "message_end",
+        message: { stopReason: "error" },
+      }),
+    ).toBe("");
+  });
+
+  it("ignores healthy messages and other frames", () => {
+    expect(
+      turnErrorFromEvent({
+        type: "message_end",
+        message: { stopReason: "end_turn", content: [{ type: "text", text: "hi" }] },
+      }),
+    ).toBeNull();
+    expect(
+      turnErrorFromEvent({
+        type: "turn_end",
+        message: { stopReason: "error", errorMessage: "boom" },
+      }),
+    ).toBeNull();
   });
 });
