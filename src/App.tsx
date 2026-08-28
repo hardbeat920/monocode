@@ -606,7 +606,12 @@ export default function App({
 
   useEffect(() => {
     void probeHarnessAvailability();
-    void refreshHarnessCatalogs().then(() => {
+    // Only the providers already on screen. Probing the rest would spawn a CLI
+    // for an agent the user may never open — see issue #19.
+    const inUse = sessionsRef.current
+      .filter((session) => isLiveHarness(session.harness))
+      .map((session) => session.harness);
+    void refreshHarnessCatalogs(inUse).then(() => {
       setSessions((prev) =>
         prev.map((session) => {
           if (!isLiveHarness(session.harness)) return session;

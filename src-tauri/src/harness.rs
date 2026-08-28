@@ -107,6 +107,17 @@ impl HarnessHost {
             .remove(session_id)
     }
 
+    /// Shared ids (`monocode-*-probe`, `monocode-*-text`) get respawned under
+    /// the same key, so a dying generation must not evict the child that
+    /// replaced it — that entry is the only handle `kill_all` has left.
+    fn remove_pid(&self, session_id: &str, pid: u32) -> Option<Arc<LiveChild>> {
+        let mut map = self.children.lock().unwrap_or_else(|e| e.into_inner());
+        match map.get(session_id) {
+            Some(live) if live.pid == pid => map.remove(session_id),
+            _ => None,
+        }
+    }
+
     pub(crate) fn kill_all(&self) {
         let kids: Vec<Arc<LiveChild>> = {
             let mut map = self.children.lock().unwrap_or_else(|e| e.into_inner());
@@ -249,6 +260,11 @@ pub fn harness_free_port() -> Result<u16, String> {
         .map_err(|e| format!("Failed to reserve a local port: {e}"))
 }
 
+/// `ttl_ms` is the safety net for one-shot children (catalog and usage probes).
+/// Nothing but the caller's own `finally` used to kill them, so a webview
+/// reload or a closed window stranded a full agent process — one leaked `pi`
+/// probe sat at 1 GB and 14 minutes of CPU. The watchdog only fires when the
+/// entry is still the child it spawned, so a normal kill or a respawn wins.
 #[tauri::command]
 pub fn harness_spawn(
     app: AppHandle,
@@ -257,6 +273,7 @@ pub fn harness_spawn(
     command: String,
     args: Vec<String>,
     cwd: String,
+    ttl_ms: Option<u64>,
 ) -> Result<u32, String> {
     if let Some(prev) = host.remove(&session_id) {
         terminate(prev.pid);
@@ -332,6 +349,20 @@ pub fn harness_spawn(
         }
     });
 
+    if let Some(ttl) = ttl_ms.filter(|ms| *ms > 0) {
+        let ttl_app = app.clone();
+        let ttl_id = session_id.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(ttl));
+            let Some(host) = ttl_app.try_state::<HarnessHost>() else {
+                return;
+            };
+            if host.remove_pid(&ttl_id, pid).is_some() {
+                terminate(pid);
+            }
+        });
+    }
+
     let wait_app = app.clone();
     let wait_id = session_id;
     let wait_pid = pid;
@@ -339,7 +370,7 @@ pub fn harness_spawn(
         let code = child.wait().ok().and_then(|status| status.code());
         if let Some(host) = wait_app.try_state::<HarnessHost>() {
             host.stop_sse(&wait_id);
-            host.remove(&wait_id);
+            host.remove_pid(&wait_id, wait_pid);
         }
         let _ = wait_app.emit(
             EXIT_EVENT,
@@ -1343,6 +1374,41 @@ mod tests {
             let _ = child.kill();
             panic!("process group survived after its leader exited");
         }
+    }
+
+    /// Real stdin handle, dead process: `remove_pid` only compares pids, and a
+    /// fake pid must never reach `terminate`.
+    fn live_child(pid: u32) -> Arc<LiveChild> {
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn test process");
+        let stdin = child.stdin.take().expect("stdin");
+        let _ = child.wait();
+        Arc::new(LiveChild {
+            stdin: Mutex::new(stdin),
+            pid,
+        })
+    }
+
+    #[test]
+    fn a_dead_generation_does_not_evict_its_replacement() {
+        let host = HarnessHost::new();
+        host.insert("monocode-pi-probe".into(), live_child(4001));
+        host.insert("monocode-pi-probe".into(), live_child(4002));
+
+        // The replaced child's wait thread lands after the respawn.
+        assert!(host.remove_pid("monocode-pi-probe", 4001).is_none());
+        assert!(
+            host.get("monocode-pi-probe").is_some(),
+            "replacement lost its registry entry, so kill_all can never reach it"
+        );
+
+        assert!(host.remove_pid("monocode-pi-probe", 4002).is_some());
+        assert!(host.get("monocode-pi-probe").is_none());
     }
 
     #[test]

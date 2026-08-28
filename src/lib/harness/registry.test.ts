@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   isLiveHarness,
   listHarnesses,
+  refreshHarnessCatalog,
+  refreshHarnessCatalogs,
   registerHarness,
   type HarnessAdapter,
 } from "./registry";
@@ -34,5 +36,39 @@ describe("harness registry", () => {
       "codex",
       "cursor",
     ]);
+  });
+});
+
+describe("catalog refresh", () => {
+  it("probes a provider once, and only the ones asked for", async () => {
+    const calls: string[] = [];
+    const withCatalog = (id: "cursor" | "codex" | "claude") => ({
+      ...stub(id, true),
+      refreshCatalog: async () => {
+        calls.push(id);
+      },
+    });
+    registerHarness(withCatalog("cursor"));
+    registerHarness(withCatalog("codex"));
+
+    await refreshHarnessCatalogs(["cursor", "cursor"]);
+    await refreshHarnessCatalog("cursor");
+    expect(calls).toEqual(["cursor"]);
+  });
+
+  it("lets a failed probe run again", async () => {
+    let attempts = 0;
+    registerHarness({
+      ...stub("claude", true),
+      refreshCatalog: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("cli busy");
+      },
+    });
+
+    await refreshHarnessCatalog("claude");
+    await refreshHarnessCatalog("claude");
+    await refreshHarnessCatalog("claude");
+    expect(attempts).toBe(2);
   });
 });

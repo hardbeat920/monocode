@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Model catalogs are read on demand instead of at launch. MonoCode used to start every installed provider CLI on startup just to list its models, so an agent you never opened still showed up in Activity Monitor. Now only the providers your open sessions use are read at launch; the rest are read when you open their tab in the model picker, or when you open Settings → Providers. ([#19](https://github.com/hardbeat920/monocode/issues/19))
+
+### Fixed
+
+- A model-catalog or usage probe left behind by a window reload or close is now killed by the backend instead of living on. One stranded `pi` probe had reached 1 GB and 14 minutes of CPU. ([#19](https://github.com/hardbeat920/monocode/issues/19))
+- Listing Pi's models no longer loads your extensions: 0.8s and 190 MB instead of 2.9s and 357 MB, and one fewer child process.
+
 ## [0.1.16] - 2026-08-28
 
 ### Added

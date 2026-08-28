@@ -19,6 +19,8 @@ import { JsonRpcClient } from "./harness/jsonRpc";
 
 const USAGE_CHILD_ID = "monocode-codex-usage";
 const DISCOVERY_TIMEOUT_MS = 15_000;
+/** Rust-side backstop, above the timeout so our own cleanup normally wins. */
+const USAGE_TTL_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 type ClaudeUsageFetch = {
@@ -91,7 +93,7 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
   );
 
   try {
-    await spawnChild(USAGE_CHILD_ID, path, ["app-server"], cwd);
+    await spawnChild(USAGE_CHILD_ID, path, ["app-server"], cwd, USAGE_TTL_MS);
     return await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {

@@ -28,7 +28,7 @@ import {
   type AgentModel,
   type ModelPickerTab,
 } from "../lib/models";
-import { refreshCodexCatalog } from "../lib/harness/codexCatalog";
+import { refreshHarnessCatalog } from "../lib/harness/registry";
 import {
   harnessUnavailableHint,
   hasProbedHarnessAvailability,
@@ -159,10 +159,11 @@ export function ModelPicker({
     setQuery("");
   }, [open]);
 
+  // The tab the user is looking at is the one provider they have asked about,
+  // so its catalog probe is the only CLI worth spawning.
   useEffect(() => {
-    if (!open || visibleTab !== "codex") return;
-    if (modelsFor("codex").length > 0) return;
-    void refreshCodexCatalog();
+    if (!open || visibleTab === "favorites") return;
+    void refreshHarnessCatalog(visibleTab);
   }, [open, visibleTab]);
 
   useLayoutEffect(() => {

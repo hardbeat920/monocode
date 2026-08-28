@@ -17,6 +17,8 @@ import { JsonRpcClient } from "./jsonRpc";
 
 const PROBE_ID = "monocode-codex-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
+/** Rust-side backstop, above the timeout so our own cleanup normally wins. */
+const PROBE_TTL_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 const REASONING_LABELS: Record<string, string> = {
@@ -73,7 +75,7 @@ async function discoverCodexModels(): Promise<AgentModel[]> {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["app-server"], cwd);
+    await spawnChild(PROBE_ID, path, ["app-server"], cwd, PROBE_TTL_MS);
     return await withTimeout(DISCOVERY_TIMEOUT_MS, async () => {
       await rpc.request(
         "initialize",

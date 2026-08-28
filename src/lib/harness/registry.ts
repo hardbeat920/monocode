@@ -147,14 +147,31 @@ export function bindHarnessSession(
   getHarness(harness)?.bindSession(threadId, providerSessionId, cwd);
 }
 
-export async function refreshHarnessCatalogs(): Promise<void> {
-  await Promise.all(
-    [...adapters.values()].map((adapter) =>
-      adapter.refreshCatalog?.().catch((error: unknown) => {
-        console.debug(`[monocode] ${adapter.id} catalog`, error);
-      }),
-    ),
-  );
+/**
+ * A catalog probe spawns the provider's own CLI, so it has to stay on demand:
+ * refreshing every adapter at launch is what left `pi` running in the
+ * background for people who only use Claude and Codex. Once per run is enough
+ * — a catalog only changes when the CLI is upgraded, which restarts us anyway.
+ */
+const refreshedCatalogs = new Set<HarnessId>();
+
+export async function refreshHarnessCatalog(harness: HarnessId): Promise<void> {
+  const adapter = getHarness(harness);
+  if (!adapter?.refreshCatalog || refreshedCatalogs.has(harness)) return;
+  refreshedCatalogs.add(harness);
+  try {
+    await adapter.refreshCatalog();
+  } catch (error: unknown) {
+    // A CLI that was missing or busy this time gets another chance later.
+    refreshedCatalogs.delete(harness);
+    console.debug(`[monocode] ${harness} catalog`, error);
+  }
+}
+
+export async function refreshHarnessCatalogs(
+  harnesses: Iterable<HarnessId>,
+): Promise<void> {
+  await Promise.all([...new Set(harnesses)].map(refreshHarnessCatalog));
 }
 
 export async function generateHarnessTitle(

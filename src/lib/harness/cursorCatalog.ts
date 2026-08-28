@@ -17,6 +17,8 @@ import {
 
 const PROBE_ID = "monocode-cursor-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
+/** Rust-side backstop, above the timeout so our own cleanup normally wins. */
+const PROBE_TTL_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 const CURSOR_CLIENT_CAPABILITIES = {
@@ -76,7 +78,7 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["acp"], cwd);
+    await spawnChild(PROBE_ID, path, ["acp"], cwd, PROBE_TTL_MS);
     return await withTimeout(DISCOVERY_TIMEOUT_MS, async () => {
       await acp.request(
         "initialize",

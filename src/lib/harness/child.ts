@@ -168,17 +168,25 @@ export function unwatchSse(sessionId: string) {
   sseBuffer.delete(sessionId);
 }
 
+/**
+ * `ttlMs` hands the kill to Rust for one-shot children. Our own cleanup is a
+ * `finally` in the webview, which never runs if the window reloads or closes
+ * mid-probe — that stranded a `pi` catalog probe at 1 GB for a whole session.
+ * Pass it only for children we always expect to kill ourselves.
+ */
 export async function spawnChild(
   sessionId: string,
   command: string,
   args: string[],
   cwd: string,
+  ttlMs?: number,
 ): Promise<void> {
   const pid = await invoke<number>("harness_spawn", {
     sessionId,
     command,
     args,
     cwd,
+    ttlMs,
   });
   if (typeof pid === "number" && pid > 0) livePid.set(sessionId, pid);
 }

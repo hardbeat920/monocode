@@ -11,6 +11,8 @@ import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import { buildPiSpawnArgs, modelsFromRpcData } from "./piProtocol";
 
 const DISCOVERY_TIMEOUT_MS = 45_000;
+/** Rust-side backstop, above the timeout so our own cleanup normally wins. */
+const PROBE_TTL_MS = 60_000;
 
 const inflight = new Map<string, Promise<void>>();
 
@@ -53,8 +55,12 @@ async function discoverModels(flavor: PiFlavor) {
     await spawnChild(
       probeId,
       path,
-      buildPiSpawnArgs(flavor, { noSession: true }),
+      // Listing models needs no extension host. Loading one cost 2.9s and
+      // 357 MB against 0.8s and 190 MB, and it is what pulled in the child
+      // process that kept the leaked probe busy.
+      buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
       cwd,
+      PROBE_TTL_MS,
     );
     const response = await Promise.race([
       rpc.request({ type: "get_available_models" }, DISCOVERY_TIMEOUT_MS),

@@ -70,6 +70,7 @@ import {
   probeHarnessAvailability,
   subscribeHarnessAvailability,
 } from "../lib/harness/availability";
+import { refreshHarnessCatalogs } from "../lib/harness/registry";
 import {
   defaultModelId,
   getModelSnapshot,
@@ -785,8 +786,11 @@ function ProvidersPage() {
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
 
+  // This page lists every provider's model, so the probes belong here rather
+  // than at launch, where they spawned CLIs nobody had asked for.
   useEffect(() => {
     void probeHarnessAvailability();
+    void refreshHarnessCatalogs(HARNESSES);
   }, []);
 
   const onModelChange = (harness: HarnessId, model: string) => {
