@@ -26,6 +26,20 @@ replaceFirst(
   /("version": ")[^"]+(")/,
   `$1${version}$2`,
 );
+// The lockfile carries the version twice: once at the top and once on the
+// root package. Missing them left npm's lockfile claiming 0.1.0 sixteen
+// releases later. The second pattern is anchored on `packages` because the
+// top-level object repeats the same name/version pair.
+replaceFirst(
+  join(root, "package-lock.json"),
+  /^(\{\n\s*"name": "monocode-desktop",\n\s*"version": ")[^"]+(")/,
+  `$1${version}$2`,
+);
+replaceFirst(
+  join(root, "package-lock.json"),
+  /("packages": \{\n\s*"": \{\n\s*"name": "monocode-desktop",\n\s*"version": ")[^"]+(")/,
+  `$1${version}$2`,
+);
 replaceFirst(
   join(root, "Cargo.toml"),
   /^(version = ")[^"]+(")/m,

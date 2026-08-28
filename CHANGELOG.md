@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `npm run set-version` left `package-lock.json` behind, so the lockfile still called itself 0.1.0 sixteen releases on. The script now updates both of the version fields it carries, and the lockfile is back in sync.
+
 ## [0.1.16] - 2026-08-28
 
 ### Added
