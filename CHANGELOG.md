@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Changes panel has a Project/Session toggle. The session view lists only the files that session touched, each with its own Keep and Undo, and opening one diffs it against the snapshot taken when the session started instead of against the index. A session review tab and a project review tab of the same file are now separate tabs.
+
+### Fixed
+
+- A session's file list took its line counts from git's HEAD numbers, so a file that was already dirty when the session started billed someone else's edits to that session.
+
 ## [0.1.16] - 2026-08-28
 
 ### Added
