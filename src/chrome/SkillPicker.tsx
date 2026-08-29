@@ -145,7 +145,7 @@ function SkillList({
         const highlighted = index === active;
         return (
           <button
-            key={`${skill.source}:${skill.path || skill.name}`}
+            key={`${skill.kind}:${skill.source}:${skill.invocation}`}
             ref={highlighted ? activeRef : undefined}
             type="button"
             role="option"
@@ -163,7 +163,7 @@ function SkillList({
                   highlighted ? "font-medium text-skill" : ""
                 }`}
               >
-                /{skill.name}
+                /{skill.invocation}
               </span>
               <span className="shrink-0 text-[10px] uppercase tracking-wide text-content/40">
                 {scopeLabel(skill)}
@@ -312,7 +312,8 @@ function ScopeButton({
 }
 
 function scopeLabel(skill: Skill): string {
-  if (skill.scope === "builtin") return "monocode";
+  if (skill.kind === "native") return skill.source;
+  if (skill.kind === "builtin") return "monocode";
   if (skill.scope === "user") return "personal";
   if (skill.source !== "agents" && skill.source !== "monocode") return skill.source;
   return "project";

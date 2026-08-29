@@ -172,6 +172,7 @@ export const SessionPane = memo(function SessionPane({
       modelSettings={session.modelSettings}
       runtimeMode={session.runtimeMode}
       cwd={session.cwd}
+      executionCwd={workCwd}
       recents={recents}
       hideProjectPicker={hideProjectPicker ? !showDeckProjectPicker : false}
       context={session.context}

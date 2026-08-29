@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_CREATE_SKILL,
+  applySkillsToTurn,
   blankSkillMarkdown,
   injectSkillPrompt,
   isValidSkillName,
@@ -15,19 +16,41 @@ import {
 } from "./skills";
 
 const review: Skill = {
+  kind: "file",
   name: "review-pr",
   description: "Review pull requests against team standards.",
+  invocation: "review-pr",
   path: "/tmp/.agents/skills/review-pr/SKILL.md",
   scope: "project",
   source: "agents",
 };
 
 const native: Skill = {
+  kind: "file",
   name: "cursor-only",
   description: "Cursor native helper",
+  invocation: "cursor-only",
   path: "/tmp/.cursor/skills/cursor-only/SKILL.md",
   scope: "project",
   source: "cursor",
+};
+
+const piNative: Skill = {
+  kind: "native",
+  name: "architect",
+  description: "Design before implementation.",
+  invocation: "skill:architect",
+  source: "pi",
+};
+
+const piFile: Skill = {
+  kind: "file",
+  name: "pi-file",
+  description: "A file discovered by the existing scanner.",
+  invocation: "pi-file",
+  path: "/tmp/.pi/skills/pi-file/SKILL.md",
+  scope: "project",
+  source: "pi",
 };
 
 describe("slashTokenAt", () => {
@@ -56,13 +79,16 @@ describe("slashTokenAt", () => {
 });
 
 describe("replaceSlashToken", () => {
-  it("inserts /name and a trailing space", () => {
+  it("inserts an exact invocation and a trailing space", () => {
     expect(replaceSlashToken("/cre", { start: 0, end: 4, query: "cre" }, "create-skill")).toBe(
       "/create-skill ",
     );
     expect(
       replaceSlashToken("x /r y", { start: 2, end: 4, query: "r" }, "review-pr"),
     ).toBe("x /review-pr y");
+    expect(
+      replaceSlashToken("/arch", { start: 0, end: 5, query: "arch" }, "skill:architect"),
+    ).toBe("/skill:architect ");
   });
 });
 
@@ -80,12 +106,19 @@ describe("skillNamesInText", () => {
 });
 
 describe("skillTextParts", () => {
-  const names = new Set(["review-pr", "create-skill"]);
+  const names = new Set(["review-pr", "create-skill", "skill:architect"]);
 
   it("marks known /skill tokens", () => {
     expect(skillTextParts("/review-pr look at auth", names)).toEqual([
       { text: "/review-pr", skill: true },
       { text: " look at auth", skill: false },
+    ]);
+  });
+
+  it("marks a known namespaced invocation", () => {
+    expect(skillTextParts("/skill:architect inspect this", names)).toEqual([
+      { text: "/skill:architect", skill: true },
+      { text: " inspect this", skill: false },
     ]);
   });
 
@@ -112,6 +145,17 @@ describe("skillTextParts", () => {
         .filter((part) => part.skill)
         .map((part) => part.text),
     ).toEqual(["/review-pr"]);
+  });
+});
+
+describe("applySkillsToTurn", () => {
+  it("leaves Pi-native skill commands unchanged", async () => {
+    await expect(
+      applySkillsToTurn("/skill:architect inspect this", {
+        harness: "pi",
+        cwd: "/repo",
+      }),
+    ).resolves.toBe("/skill:architect inspect this");
   });
 });
 
@@ -187,6 +231,35 @@ describe("rankSkills", () => {
   it("fuzzy-matches names ahead of descriptions", () => {
     const ranked = rankSkills([native, review, BUILTIN_CREATE_SKILL], "rev");
     expect(ranked[0]?.name).toBe("review-pr");
+  });
+
+  it("ranks native Pi rows with project skills", () => {
+    const ranked = rankSkills([review, piNative, piFile], "");
+    expect(ranked.map((skill) => skill.name)).toEqual([
+      "architect",
+      "pi-file",
+      "review-pr",
+    ]);
+  });
+
+  it("gives the built-in row its exact invocation", () => {
+    expect(BUILTIN_CREATE_SKILL.invocation).toBe("create-skill");
+  });
+
+  it("keeps every Pi result when the composer removes the default cap", () => {
+    const rows: Skill[] = Array.from({ length: 75 }, (_, index) => ({
+      kind: "native",
+      name: `skill-${String(index).padStart(2, "0")}`,
+      description: "Pi skill",
+      invocation: `skill:skill-${String(index).padStart(2, "0")}`,
+      source: "pi",
+    }));
+
+    expect(rankSkills(rows, "")).toHaveLength(50);
+    expect(rankSkills(rows, "", Number.POSITIVE_INFINITY)).toHaveLength(75);
+    expect(rankSkills(rows, "skill-74", Number.POSITIVE_INFINITY)[0]?.name).toBe(
+      "skill-74",
+    );
   });
 });
 

@@ -9,8 +9,10 @@ import {
 import { invalidateProjectFiles } from "./fileIndex";
 import { fuzzyMatch } from "./fuzzy";
 import { joinPath } from "./paths";
-import { looksLikeProject } from "./recents";
+import { looksLikeProject, normalizeProjectPath } from "./recents";
 import { isMarkdownBlockquotePosition } from "./quoteDraft";
+import type { HarnessId } from "./session";
+import { discoverPiSkills } from "./harness/piSkills";
 import {
   CREATE_SKILL_BODY,
   CREATE_SKILL_DESCRIPTION,
@@ -29,13 +31,31 @@ export type SkillSource =
   | "fx"
   | "monocode";
 
-export type Skill = {
+type SkillCommon = {
   name: string;
   description: string;
+  invocation: string;
+};
+
+export type FileSkill = SkillCommon & {
+  kind: "file";
   path: string;
-  scope: SkillScope;
+  scope: Exclude<SkillScope, "builtin">;
   source: SkillSource;
 };
+
+export type BuiltinSkill = SkillCommon & {
+  kind: "builtin";
+  scope: "builtin";
+  source: "monocode";
+};
+
+export type NativeSkill = SkillCommon & {
+  kind: "native";
+  source: "pi";
+};
+
+export type Skill = FileSkill | BuiltinSkill | NativeSkill;
 
 export type SlashToken = {
   start: number;
@@ -43,48 +63,174 @@ export type SlashToken = {
   query: string;
 };
 
-export const BUILTIN_CREATE_SKILL: Skill = {
+export const BUILTIN_CREATE_SKILL: BuiltinSkill = {
+  kind: "builtin",
   name: CREATE_SKILL_NAME,
   description: CREATE_SKILL_DESCRIPTION,
-  path: "",
+  invocation: CREATE_SKILL_NAME,
   scope: "builtin",
   source: "monocode",
 };
 
 const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const SKILL_TOKEN_RE = /(^|\s)\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/g;
+const SKILL_TOKEN_RE =
+  /(^|\s)\/([a-z0-9]+(?:-[a-z0-9]+)*(?::[a-z0-9]+(?:-[a-z0-9]+)*)?)(?=\s|$)/g;
 const MAX_PICKER = 50;
+const PI_SKILL_TTL_MS = 30_000;
+const PI_SKILL_RETRY_MS = 5_000;
 
-let cache: { cwd: string; skills: Skill[] } | null = null;
-let inflight: { cwd: string; promise: Promise<Skill[]> } | null = null;
+export type SkillCatalogContext = {
+  harness: HarnessId;
+  cwd: string;
+};
 
-export function peekSkills(cwd: string): Skill[] | null {
-  return cache?.cwd === cwd ? cache.skills : null;
+type CatalogRequest = {
+  generation: number;
+  promise: Promise<Skill[]>;
+};
+
+type CatalogEntry = {
+  cwd: string;
+  skills: Skill[] | null;
+  loadedAt: number;
+  retryAt: number;
+  generation: number;
+  inFlight: CatalogRequest | null;
+};
+
+const catalogEntries = new Map<string, CatalogEntry>();
+
+export function skillCatalogKey(context: SkillCatalogContext): string {
+  return `${context.harness}\0${normalizeProjectPath(context.cwd)}`;
 }
 
-export function invalidateSkills(cwd?: string) {
-  if (!cwd || cache?.cwd === cwd) cache = null;
+export function peekSkills(context: SkillCatalogContext): Skill[] | null {
+  return catalogEntries.get(skillCatalogKey(context))?.skills ?? null;
 }
 
-export async function loadSkills(
-  cwd: string,
-  refresh = false,
+export function invalidateSkills(context?: { cwd: string }) {
+  if (!context) {
+    catalogEntries.clear();
+    return;
+  }
+  const cwd = normalizeProjectPath(context.cwd);
+  for (const entry of catalogEntries.values()) {
+    if (entry.cwd !== cwd) continue;
+    entry.generation += 1;
+    entry.loadedAt = 0;
+    entry.retryAt = 0;
+    entry.inFlight = null;
+  }
+}
+
+export function loadSkills(
+  context: SkillCatalogContext,
+  options?: { refresh?: boolean },
 ): Promise<Skill[]> {
-  if (!refresh && cache?.cwd === cwd) return cache.skills;
-  if (!refresh && inflight?.cwd === cwd) return inflight.promise;
+  const normalized = {
+    harness: context.harness,
+    cwd: normalizeProjectPath(context.cwd),
+  } satisfies SkillCatalogContext;
+  const key = skillCatalogKey(normalized);
+  let entry = catalogEntries.get(key);
+  if (!entry) {
+    entry = {
+      cwd: normalized.cwd,
+      skills: null,
+      loadedAt: 0,
+      retryAt: 0,
+      generation: 0,
+      inFlight: null,
+    };
+    catalogEntries.set(key, entry);
+  }
 
-  const promise = listSkills(cwd)
-    .then((discovered) => mergeCatalog(discovered))
-    .catch(() => mergeCatalog([]))
+  const now = Date.now();
+  if (options?.refresh) {
+    if (entry.inFlight?.generation === entry.generation) {
+      return entry.inFlight.promise;
+    }
+    entry.generation += 1;
+    entry.retryAt = 0;
+    return startCatalogLoad(key, entry, normalized);
+  }
+
+  if (entry.inFlight?.generation === entry.generation) {
+    return entry.inFlight.promise;
+  }
+  if (normalized.harness !== "pi" && entry.skills) {
+    return Promise.resolve(entry.skills);
+  }
+  if (
+    normalized.harness === "pi" &&
+    entry.skills &&
+    now - entry.loadedAt < PI_SKILL_TTL_MS
+  ) {
+    return Promise.resolve(entry.skills);
+  }
+  if (normalized.harness === "pi" && now < entry.retryAt) {
+    return Promise.resolve(entry.skills ?? []);
+  }
+  return startCatalogLoad(key, entry, normalized);
+}
+
+function startCatalogLoad(
+  key: string,
+  entry: CatalogEntry,
+  context: SkillCatalogContext,
+): Promise<Skill[]> {
+  const generation = entry.generation;
+  const promise = loadCatalog(context)
     .then((skills) => {
-      cache = { cwd, skills };
+      if (
+        catalogEntries.get(key) !== entry ||
+        entry.generation !== generation
+      ) {
+        return catalogEntries.get(key)?.skills ?? [];
+      }
+      entry.skills = skills;
+      entry.loadedAt = Date.now();
+      entry.retryAt = 0;
       return skills;
     })
+    .catch(() => {
+      if (
+        catalogEntries.get(key) !== entry ||
+        entry.generation !== generation
+      ) {
+        return catalogEntries.get(key)?.skills ?? [];
+      }
+      if (context.harness === "pi") {
+        entry.retryAt = Date.now() + PI_SKILL_RETRY_MS;
+        return entry.skills ?? [];
+      }
+      const fallback = mergeCatalog([]);
+      entry.skills = fallback;
+      entry.loadedAt = Date.now();
+      return fallback;
+    })
     .finally(() => {
-      if (inflight?.promise === promise) inflight = null;
+      if (
+        catalogEntries.get(key) === entry &&
+        entry.generation === generation &&
+        entry.inFlight?.promise === promise
+      ) {
+        entry.inFlight = null;
+      }
     });
-  inflight = { cwd, promise };
+  entry.inFlight = { generation, promise };
   return promise;
+}
+
+async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
+  if (context.harness === "pi") {
+    const commands = await discoverPiSkills(context.cwd);
+    return commands.map((command): NativeSkill => ({
+      kind: "native",
+      ...command,
+    }));
+  }
+  return mergeCatalog(await listSkills(context.cwd));
 }
 
 export function mergeCatalog(discovered: DiscoveredSkill[]): Skill[] {
@@ -103,10 +249,12 @@ export function mergeCatalog(discovered: DiscoveredSkill[]): Skill[] {
   return [...out.values()];
 }
 
-function asSkill(skill: DiscoveredSkill): Skill {
+function asSkill(skill: DiscoveredSkill): FileSkill {
   return {
+    kind: "file",
     name: skill.name,
     description: skill.description,
+    invocation: skill.name,
     path: skill.path,
     scope: skill.scope === "user" ? "user" : "project",
     source: skill.source === "monocode" ? "monocode" : skill.source,
@@ -142,8 +290,8 @@ export function rankSkills(skills: Skill[], query: string, limit = MAX_PICKER): 
 }
 
 function scopeRank(skill: Skill): number {
-  if (skill.scope === "builtin") return 0;
-  if (skill.scope === "project") return 1;
+  if (skill.kind === "builtin") return 0;
+  if (skill.kind === "native" || skill.scope === "project") return 1;
   return 2;
 }
 
@@ -269,15 +417,18 @@ export function injectSkillPrompt(
 
 export async function applySkillsToTurn(
   text: string,
-  cwd: string,
+  context: SkillCatalogContext,
 ): Promise<string> {
+  if (context.harness === "pi") return text;
   const names = skillNamesInText(text);
   if (names.length === 0) return text;
-  const catalog = await loadSkills(cwd);
-  const picked: Skill[] = [];
+  const catalog = await loadSkills(context);
+  const picked: Array<FileSkill | BuiltinSkill> = [];
   for (const name of names) {
     const skill = catalog.find((item) => item.name === name);
-    if (skill) picked.push(skill);
+    if (skill?.kind === "file" || skill?.kind === "builtin") {
+      picked.push(skill);
+    }
   }
   if (picked.length === 0) return text;
   const bodies: Record<string, string> = {};
@@ -289,8 +440,20 @@ export async function applySkillsToTurn(
   return injectSkillPrompt(text, picked, bodies);
 }
 
-export async function readSkillBody(skill: Skill): Promise<string> {
-  if (!skill.path) return CREATE_SKILL_BODY;
+type SkillLoader = typeof loadSkills;
+
+export function warmPiSkills(
+  context: SkillCatalogContext,
+  load: SkillLoader = loadSkills,
+): void {
+  if (context.harness !== "pi") return;
+  void load(context).catch(() => undefined);
+}
+
+export async function readSkillBody(
+  skill: FileSkill | BuiltinSkill,
+): Promise<string> {
+  if (skill.kind === "builtin") return CREATE_SKILL_BODY;
   try {
     return await readTextFile(skill.path);
   } catch {
@@ -352,7 +515,7 @@ export async function createBlankSkill(input: {
   await createPath(root, relative, true);
   const path = joinPath(root, `${relative}/SKILL.md`);
   await writeTextFile(path, blankSkillMarkdown(name));
-  invalidateSkills(input.cwd);
+  invalidateSkills({ cwd: input.cwd });
   invalidateProjectFiles(input.cwd);
   return path;
 }

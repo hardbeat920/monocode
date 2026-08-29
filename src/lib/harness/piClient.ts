@@ -65,7 +65,13 @@ export class PiRpc {
         },
       });
     });
-    await writeChild(this.sessionId, JSON.stringify(payload));
+    void writeChild(this.sessionId, JSON.stringify(payload)).catch((error) => {
+      const message =
+        error instanceof Error ? error : new Error(String(error));
+      const request = this.pending.get(id);
+      this.pending.delete(id);
+      request?.reject(message);
+    });
     return pending;
   }
 

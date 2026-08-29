@@ -46,9 +46,6 @@ import type { Attachment, HarnessId, RuntimeMode } from "../lib/session";
 import { harnessSupportsAttachments } from "../lib/session";
 import {
   createBlankSkill,
-  loadSkills,
-  mergeCatalog,
-  peekSkills,
   rankSkills,
   replaceSlashToken,
   skillTextParts,
@@ -88,6 +85,7 @@ import {
   type NoteComposerCard,
 } from "../lib/notes";
 import { resolveTabGroupLogo } from "../lib/tabGroups";
+import { useComposerSkills } from "./useComposerSkills";
 
 type Props = {
   enabled?: boolean;
@@ -98,6 +96,7 @@ type Props = {
   modelSettings?: Record<string, string>;
   runtimeMode: RuntimeMode;
   cwd?: string;
+  executionCwd: string;
   branch?: string;
   recents?: RecentProject[];
   hideProjectPicker?: boolean;
@@ -165,6 +164,7 @@ export function Composer({
   modelSettings = {},
   runtimeMode,
   cwd = "~",
+  executionCwd,
   branch,
   recents = [],
   hideProjectPicker = false,
@@ -202,9 +202,6 @@ export function Composer({
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [fileDrag, setFileDrag] = useState(false);
-  const [skills, setSkills] = useState<Skill[]>(
-    () => peekSkills(cwd) ?? mergeCatalog([]),
-  );
   const [slash, setSlash] = useState<SlashToken | null>(null);
   const [skillActive, setSkillActive] = useState(0);
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -233,13 +230,25 @@ export function Composer({
 
   attachmentsRef.current = attachments;
 
-  const rankedSkills = rankSkills(skills, slash?.query ?? "");
   const mentionOpen =
     mention !== null && (looksLikeProject(cwd) || notesEnabled);
   const pickerOpen = creatingSkill || slash !== null;
+  const skillCatalog = useComposerSkills({
+    harness,
+    executionCwd,
+    pickerOpen,
+  });
+  const skills = skillCatalog.skills;
+  const skillLimit =
+    harness === "pi" ? Number.POSITIVE_INFINITY : undefined;
+  const rankedSkills = rankSkills(
+    skills,
+    slash?.query ?? "",
+    skillLimit,
+  );
   const attachmentsSupported = harnessSupportsAttachments(harness);
   const skillNames = useMemo(
-    () => new Set(skills.map((skill) => skill.name)),
+    () => new Set(skills.map((skill) => skill.invocation)),
     [skills],
   );
   const mentionFiles = useMemo(
@@ -335,16 +344,6 @@ export function Composer({
     }
     if (busy) setRunnerLive(true);
   }, [busy, runnerEnabled]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void loadSkills(cwd, pickerOpen).then((next) => {
-      if (!cancelled) setSkills(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [cwd, pickerOpen]);
 
   useEffect(() => {
     setSkillActive(0);
@@ -450,10 +449,10 @@ export function Composer({
         setCreatingSkill(false);
         return;
       }
-      const next = replaceSlashToken(el.value, token, skill.name);
+      const next = replaceSlashToken(el.value, token, skill.invocation);
       el.value = next;
       resizeTextarea(el);
-      let cursor = token.start + skill.name.length + 1;
+      let cursor = token.start + skill.invocation.length + 1;
       if (next[cursor] === " ") cursor += 1;
       el.setSelectionRange(cursor, cursor);
       setDraft(next);
@@ -770,7 +769,9 @@ export function Composer({
                     setCreatingSkill(false);
                     setSlash(null);
                     setCreateError(null);
-                    void loadSkills(cwd, true).then(setSkills);
+                    void skillCatalog
+                      .refresh({ refresh: true })
+                      .catch(() => undefined);
                     onOpenFile?.(path);
                     el?.focus();
                   })

@@ -19,6 +19,10 @@ const sseHandlers = new Map<string, SseHandler>();
 const sseEndHandlers = new Map<string, SseEndHandler>();
 const sseBuffer = new Map<string, string[]>();
 const livePid = new Map<string, number>();
+const pendingExit = new Map<
+  string,
+  Array<{ code: number | null; pid: number }>
+>();
 
 /** True when this exit belongs to the child we currently have spawned. */
 export function isCurrentChildExit(
@@ -32,6 +36,7 @@ export function isCurrentChildExit(
 
 const MAX_BUFFERED = 1000;
 let bridge: Promise<UnlistenFn[]> | null = null;
+let bridgeAttempt: symbol | null = null;
 let users = 0;
 let teardownTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -50,45 +55,89 @@ function pushBounded(
 
 function ensureBridge() {
   if (bridge) return;
-  bridge = Promise.all([
-    listen<LinePayload>("harness-stdout", (event) => {
-      const { sessionId, line } = event.payload;
-      const handler = lineHandlers.get(sessionId);
-      if (handler) {
-        handler(line);
-        return;
+  let failed = false;
+  const installed: UnlistenFn[] = [];
+  const register = (pending: Promise<UnlistenFn>) =>
+    pending.then((unlisten) => {
+      if (failed) {
+        unlisten();
+        return () => undefined;
       }
-      pushBounded(lineBuffer, sessionId, line);
-    }),
-    listen<LinePayload>("harness-stderr", (event) => {
-      const { sessionId, line } = event.payload;
-      stderrHandlers.get(sessionId)?.(line);
-    }),
-    listen<ExitPayload>("harness-exit", (event) => {
-      const { sessionId, code, pid } = event.payload;
-      if (!isCurrentChildExit(livePid.get(sessionId), pid)) return;
-      livePid.delete(sessionId);
-      exitHandlers.get(sessionId)?.(code);
-    }),
-    listen<SsePayload>("harness-sse", (event) => {
-      const { sessionId, data } = event.payload;
-      const handler = sseHandlers.get(sessionId);
-      if (handler) {
-        handler(data);
-        return;
-      }
-      pushBounded(sseBuffer, sessionId, data);
-    }),
-    listen<SseEndPayload>("harness-sse-end", (event) => {
-      const { sessionId, error } = event.payload;
-      sseEndHandlers.get(sessionId)?.(error ?? undefined);
-    }),
-  ]);
+      installed.push(unlisten);
+      return unlisten;
+    });
+  const attempt = Symbol("bridge-installation");
+  bridgeAttempt = attempt;
+  const installation = Promise.all([
+    register(
+      listen<LinePayload>("harness-stdout", (event) => {
+        const { sessionId, line } = event.payload;
+        const handler = lineHandlers.get(sessionId);
+        if (handler) {
+          handler(line);
+          return;
+        }
+        pushBounded(lineBuffer, sessionId, line);
+      }),
+    ),
+    register(
+      listen<LinePayload>("harness-stderr", (event) => {
+        const { sessionId, line } = event.payload;
+        stderrHandlers.get(sessionId)?.(line);
+      }),
+    ),
+    register(
+      listen<ExitPayload>("harness-exit", (event) => {
+        const { sessionId, code, pid } = event.payload;
+        const handler = exitHandlers.get(sessionId);
+        if (!handler || pid == null || pid <= 0) return;
+        const currentPid = livePid.get(sessionId);
+        if (isCurrentChildExit(currentPid, pid)) {
+          livePid.delete(sessionId);
+          handler(code);
+          return;
+        }
+        if (currentPid != null) return;
+        const exits = pendingExit.get(sessionId) ?? [];
+        exits.push({ code, pid });
+        if (exits.length > 8) exits.splice(0, exits.length - 8);
+        pendingExit.set(sessionId, exits);
+      }),
+    ),
+    register(
+      listen<SsePayload>("harness-sse", (event) => {
+        const { sessionId, data } = event.payload;
+        const handler = sseHandlers.get(sessionId);
+        if (handler) {
+          handler(data);
+          return;
+        }
+        pushBounded(sseBuffer, sessionId, data);
+      }),
+    ),
+    register(
+      listen<SseEndPayload>("harness-sse-end", (event) => {
+        const { sessionId, error } = event.payload;
+        sseEndHandlers.get(sessionId)?.(error ?? undefined);
+      }),
+    ),
+  ]).catch((error: unknown) => {
+    failed = true;
+    installed.splice(0).forEach((unlisten) => unlisten());
+    if (bridgeAttempt === attempt) {
+      bridge = null;
+      bridgeAttempt = null;
+    }
+    throw error;
+  });
+  void installation.catch(() => undefined);
+  bridge = installation;
 }
 
 function teardownBridge() {
   const pending = bridge;
   bridge = null;
+  bridgeAttempt = null;
   lineHandlers.clear();
   exitHandlers.clear();
   lineBuffer.clear();
@@ -97,7 +146,10 @@ function teardownBridge() {
   sseEndHandlers.clear();
   sseBuffer.clear();
   livePid.clear();
-  void pending?.then((fns) => fns.forEach((fn) => fn()));
+  pendingExit.clear();
+  void pending
+    ?.then((fns) => fns.forEach((fn) => fn()))
+    .catch(() => undefined);
 }
 
 export function startHarnessBridge(): () => void {
@@ -116,6 +168,18 @@ export function startHarnessBridge(): () => void {
       if (users === 0) teardownBridge();
     }, 0);
   };
+}
+
+export async function acquireHarnessBridge(): Promise<() => void> {
+  const release = startHarnessBridge();
+  const installation = bridge;
+  try {
+    await installation;
+    return release;
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 if (import.meta.hot) {
@@ -148,6 +212,7 @@ export function unwatchChild(sessionId: string) {
   exitHandlers.delete(sessionId);
   lineBuffer.delete(sessionId);
   stderrHandlers.delete(sessionId);
+  pendingExit.delete(sessionId);
 }
 
 export function watchSse(
@@ -174,13 +239,22 @@ export async function spawnChild(
   args: string[],
   cwd: string,
 ): Promise<void> {
+  livePid.delete(sessionId);
+  pendingExit.delete(sessionId);
   const pid = await invoke<number>("harness_spawn", {
     sessionId,
     command,
     args,
     cwd,
   });
-  if (typeof pid === "number" && pid > 0) livePid.set(sessionId, pid);
+  if (typeof pid !== "number" || pid <= 0) return;
+  livePid.set(sessionId, pid);
+  const exits = pendingExit.get(sessionId);
+  pendingExit.delete(sessionId);
+  const exited = exits?.find((event) => event.pid === pid);
+  if (!exited) return;
+  livePid.delete(sessionId);
+  exitHandlers.get(sessionId)?.(exited.code);
 }
 
 export function writeChild(sessionId: string, line: string): Promise<void> {
@@ -189,6 +263,7 @@ export function writeChild(sessionId: string, line: string): Promise<void> {
 
 export function killChild(sessionId: string): Promise<void> {
   livePid.delete(sessionId);
+  pendingExit.delete(sessionId);
   unwatchChild(sessionId);
   return invoke("harness_kill", { sessionId });
 }
@@ -202,6 +277,7 @@ export function killAllChildren(): Promise<void> {
   sseEndHandlers.clear();
   sseBuffer.clear();
   livePid.clear();
+  pendingExit.clear();
   return invoke("harness_kill_all");
 }
 

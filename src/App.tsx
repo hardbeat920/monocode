@@ -229,10 +229,10 @@ import {
   tabVisitForward,
   type TabVisitHistory,
 } from "./lib/tabVisitHistory";
-import { applySkillsToTurn } from "./lib/skills";
-import { applyFileMentionsToTurn } from "./lib/fileMentions";
+import { preparePrompt } from "./lib/promptPreparation";
+import { warmPiSkills } from "./lib/skills";
+import { piSkillContextForSession } from "./lib/sessionSkills";
 import {
-  applyNotesToTurn,
   ADD_NOTE_TO_CHAT_EVENT,
   composeNoteMessage,
   noteCardMeta,
@@ -323,14 +323,6 @@ function scheduleHarnessFlush(run: () => void): ScheduledFlush {
     return { kind: "timeout", id: window.setTimeout(run, 32) };
   }
   return { kind: "raf", id: requestAnimationFrame(run) };
-}
-
-/** Expand the composer's `@file`, `@note`, and `/skill` tokens for the harness. */
-async function preparePrompt(text: string, cwd: string): Promise<string> {
-  return applySkillsToTurn(
-    await applyNotesToTurn(await applyFileMentionsToTurn(text, cwd)),
-    cwd,
-  );
 }
 
 function userTurnCards(
@@ -694,6 +686,16 @@ export default function App({
       (session) => activeTab && leafIds(activeTab.layout).includes(session.id),
     );
   const sessionDefaults = active ?? sessions[0];
+  const activeSkillContext = active
+    ? piSkillContextForSession(active)
+    : null;
+  const activeSkillCwd = activeSkillContext?.cwd;
+
+  useEffect(() => {
+    if (!activeSkillContext || !activeSkillCwd) return;
+    warmPiSkills(activeSkillContext);
+  }, [activeSkillCwd]);
+
   const sidebarCwd =
     active?.cwd ??
     (activeTab ? focusedFileTab(activeTab)?.cwd : undefined) ??
@@ -3022,7 +3024,10 @@ export default function App({
         void (async () => {
           try {
             const prepared = await prepareAttachments(attachments);
-            const prompt = await preparePrompt(harnessText, workCwd);
+            const prompt = await preparePrompt(harnessText, {
+              harness: current.harness,
+              cwd: workCwd,
+            });
             await steerHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -3194,7 +3199,10 @@ export default function App({
         if (turnGen.current.get(sessionId) !== gen) return;
         try {
           const prepared = await prepareAttachments(attachments);
-          const prompt = await preparePrompt(harnessText, workCwd);
+          const prompt = await preparePrompt(harnessText, {
+            harness: current.harness,
+            cwd: workCwd,
+          });
           const earlier = queuedHandoff
             ? userMessagesAfterHandoff(current)
             : [];
