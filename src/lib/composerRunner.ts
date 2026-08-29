@@ -29,6 +29,17 @@ export const EXIT_PEAK = 44;
 export const EXIT_SINK = 20;
 const EXIT_APEX = 0.38;
 
+/** First chevron hit this turn: knock-back, stars, then the mascot learns the hop. */
+export const CRASH_RECOIL_PX = 18;
+export const CRASH_RECOIL_MS = 140;
+export const CRASH_STUN_MS = 560;
+export const CRASH_SHAKE_MS = 480;
+export const STAR_SIZE = 8;
+export const STAR_COUNT = 3;
+export const STAR_ORBIT = 11;
+/** One full star orbit. Longer than the old 280ms spin so it reads as a daze, not a blur. */
+export const STAR_SPIN_MS = 520;
+
 export const COIN_FACE_PATH = mascotPath([
   "........",
   "..####..",
@@ -46,6 +57,28 @@ export const COIN_EDGE_PATH = mascotPath([
   "...##...",
   "...##...",
   "...##...",
+  "...##...",
+  "...##...",
+  "........",
+]);
+
+export const STAR_FACE_PATH = mascotPath([
+  "...##...",
+  "...##...",
+  "..####..",
+  "########",
+  "########",
+  "..####..",
+  "...##...",
+  "...##...",
+]);
+
+export const STAR_EDGE_PATH = mascotPath([
+  "........",
+  "...##...",
+  "...##...",
+  "..####..",
+  "..####..",
   "...##...",
   "...##...",
   "........",
@@ -190,6 +223,71 @@ export function poseAt(
   const x = inset + Math.min(trackWidth, Math.max(0, along));
   const y = jumpHeight(x, obstacle, coins);
   return { x, y, facing, airborne: y > 0.5 };
+}
+
+/** First contact with the chevron this turn — skip if they already learned, or are hopping a coin. */
+export function hitsChevron(
+  x: number,
+  y: number,
+  facing: 1 | -1,
+  obstacle: Obstacle | null,
+  learned: boolean,
+): boolean {
+  if (learned || !obstacle || y > 0.5) return false;
+  const half = RUNNER_SIZE / 2;
+  if (facing === 1) {
+    return x + half >= obstacle.left && x - half < obstacle.right;
+  }
+  return x - half <= obstacle.right && x + half > obstacle.left;
+}
+
+/** Knocked back from the hurdle, easing out, clamped to the track. */
+export function recoilAlong(
+  hitAlong: number,
+  facing: 1 | -1,
+  elapsedMs: number,
+  trackWidth: number,
+): number {
+  const t = Math.min(1, Math.max(0, elapsedMs / CRASH_RECOIL_MS));
+  const eased = 1 - (1 - t) * (1 - t);
+  const next = hitAlong - facing * CRASH_RECOIL_PX * eased;
+  return Math.min(trackWidth, Math.max(0, next));
+}
+
+export function stunShake(elapsedMs: number): { x: number; y: number } {
+  if (elapsedMs <= 0 || elapsedMs >= CRASH_SHAKE_MS) return { x: 0, y: 0 };
+  const decay = 1 - elapsedMs / CRASH_SHAKE_MS;
+  return {
+    x: Math.round(Math.sin(elapsedMs / 32) * 3 * decay),
+    y: Math.round(Math.cos(elapsedMs / 26) * 2 * decay),
+  };
+}
+
+export function stunDone(elapsedMs: number): boolean {
+  return elapsedMs >= CRASH_STUN_MS;
+}
+
+/** Pixel stars orbiting the sprite while it is stunned. Offsets are from the sprite top-left. */
+export function stunStars(
+  elapsedMs: number,
+): { dx: number; dy: number; opacity: number }[] {
+  if (elapsedMs < 0 || elapsedMs >= CRASH_STUN_MS) return [];
+  const fadeAt = CRASH_STUN_MS - 140;
+  const opacity =
+    elapsedMs < fadeAt ? 1 : Math.max(0, 1 - (elapsedMs - fadeAt) / 140);
+  const originX = (RUNNER_SIZE - STAR_SIZE) / 2;
+  const originY = (RUNNER_SIZE - STAR_SIZE) / 2 - 5;
+  const angle = (elapsedMs / STAR_SPIN_MS) * Math.PI * 2;
+  const stars: { dx: number; dy: number; opacity: number }[] = [];
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const a = angle + (i * (Math.PI * 2)) / STAR_COUNT;
+    stars.push({
+      dx: Math.round(originX + Math.cos(a) * STAR_ORBIT),
+      dy: Math.round(originY + Math.sin(a) * STAR_ORBIT),
+      opacity,
+    });
+  }
+  return stars;
 }
 
 export function coinCollected(pose: RunnerPose, coin: Coin): boolean {

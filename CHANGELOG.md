@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Second opinion: the scale icon next to Copy on a finished turn sends that work to another provider in a split pane. Hover a provider to pick its model. The reviewing session shows a compact card instead of the review prompt.
+
+### Changed
+
+- Provider CLIs stay warm for five minutes after a turn so follow-ups stay instant, then park. Title/commit one-shots no longer leave a second process running. The usage footer only polls Claude/Codex when a session in this window actually uses them.
+
 ### Fixed
 
 - `npm run set-version` left `package-lock.json` behind, so the lockfile still called itself 0.1.0 sixteen releases on. The script now updates both of the version fields it carries, and the lockfile is back in sync.
+- Closing a tab in Deck keeps the active tab in the current project when another tab from that project is open. In #22 by @kinsomicrote.
+- Unused provider CLIs no longer start at launch. Catalog probes run only for harnesses in the restored workspace, or when you open that provider in the model picker. Pi/omp probes skip extensions so a leftover `pi` process cannot sit at ~1GB while you work in Codex or Claude. Diagnosed in #19.
+- A Pi or omp turn that fails now reports why. Pi puts the failure on the assistant message (`stopReason: "error"`) instead of an error frame, so an expired provider token ended empty and looked like the agent ignoring you. In #23 by @emircan-sahin.
+- The context meter stayed at zero for a Pi or omp turn. Usage lives on the assistant message (and the streaming partial), not the top of the frame. In #23 by @emircan-sahin.
 
 ## [0.1.16] - 2026-08-28
 

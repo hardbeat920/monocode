@@ -37,10 +37,10 @@ async function discoverModels(flavor: PiFlavor) {
   const probeId = flavor.probeChildId;
   const rpc = new PiRpc(probeId, () => undefined, flavor.label);
 
-  const stop = () => {
+  const stop = async () => {
     rpc.close();
     unwatchChild(probeId);
-    void killChild(probeId).catch(() => undefined);
+    await killChild(probeId).catch(() => undefined);
   };
 
   watchChild(
@@ -53,7 +53,7 @@ async function discoverModels(flavor: PiFlavor) {
     await spawnChild(
       probeId,
       path,
-      buildPiSpawnArgs(flavor, { noSession: true }),
+      buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
       cwd,
     );
     const response = await Promise.race([
@@ -67,7 +67,7 @@ async function discoverModels(flavor: PiFlavor) {
     ]);
     return modelsFromRpcData(flavor, response.data);
   } finally {
-    stop();
+    await stop();
   }
 }
 

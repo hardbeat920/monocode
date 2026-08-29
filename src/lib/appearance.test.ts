@@ -67,9 +67,9 @@ describe("zen mode setting", () => {
     localStorage.removeItem(ZEN_KEY);
   });
 
-  it("defaults to off", () => {
-    expect(TRANSCRIPT_ZEN_DEFAULT).toBe(false);
-    expect(loadTranscriptZen()).toBe(false);
+  it("defaults to on", () => {
+    expect(TRANSCRIPT_ZEN_DEFAULT).toBe(true);
+    expect(loadTranscriptZen()).toBe(true);
   });
 
   it("persists across loads", () => {
@@ -80,9 +80,9 @@ describe("zen mode setting", () => {
   });
 
   it("toggles from the current value", () => {
-    expect(toggleTranscriptZen()).toBe(true);
-    expect(loadTranscriptZen()).toBe(true);
     expect(toggleTranscriptZen()).toBe(false);
     expect(loadTranscriptZen()).toBe(false);
+    expect(toggleTranscriptZen()).toBe(true);
+    expect(loadTranscriptZen()).toBe(true);
   });
 });

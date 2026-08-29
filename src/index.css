@@ -535,6 +535,21 @@ html.is-resizing * {
   animation: mascot-talk 320ms infinite;
 }
 
+/* Freeze the hop while the runner is seeing stars after a chevron bonk. */
+.mascot-stunned .mascot-active,
+.mascot-stunned .mascot-rest,
+.mascot-stunned .mascot-talk {
+  animation: none;
+}
+
+.mascot-stunned .mascot-rest {
+  opacity: 1;
+}
+
+.mascot-stunned .mascot-talk {
+  opacity: 0;
+}
+
 @keyframes shimmer-text {
   from {
     background-position: 100% center;

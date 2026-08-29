@@ -15,12 +15,19 @@ import {
   rateLimitWindowTooltip,
   shouldFetchProvider,
   type ProviderRateLimits,
+  type RateLimitProvider,
   type RateLimitWindow,
 } from "../lib/rateLimits";
 
 const CLOCK_MS = 30_000;
 
-export function UsageFooter() {
+export function UsageFooter({
+  providers,
+}: {
+  providers: RateLimitProvider[];
+}) {
+  const wantClaude = providers.includes("claude");
+  const wantCodex = providers.includes("codex");
   const [claude, setClaude] = useState<ProviderRateLimits>(() =>
     idleRateLimits("claude"),
   );
@@ -38,8 +45,12 @@ export function UsageFooter() {
   const refresh = useCallback((force = false) => {
     if (inflight.current) return inflight.current;
     const visible = document.visibilityState === "visible";
-    const fetchClaude = shouldFetchProvider(claudeRef.current, { force, visible });
-    const fetchCodex = shouldFetchProvider(codexRef.current, { force, visible });
+    const fetchClaude =
+      wantClaude &&
+      shouldFetchProvider(claudeRef.current, { force, visible });
+    const fetchCodex =
+      wantCodex &&
+      shouldFetchProvider(codexRef.current, { force, visible });
     if (!fetchClaude && !fetchCodex) return;
     if (force) setRefreshing(true);
     const jobs: Promise<void>[] = [];
@@ -67,7 +78,7 @@ export function UsageFooter() {
       });
     inflight.current = run;
     return run;
-  }, []);
+  }, [wantClaude, wantCodex]);
 
   useEffect(() => {
     void refresh();
@@ -87,13 +98,15 @@ export function UsageFooter() {
     return () => window.clearInterval(timer);
   }, []);
 
+  if (!wantClaude && !wantCodex) return null;
+
   return (
     <footer
       aria-label="Provider usage"
       className="flex h-7 shrink-0 items-center gap-3 overflow-x-auto border-t border-content/10 px-3 text-[11px] text-content/55"
     >
-      <ProviderChip limits={claude} now={now} />
-      <ProviderChip limits={codex} now={now} />
+      {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
+      {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
       <button
         type="button"
         className="ml-auto grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"

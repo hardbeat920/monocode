@@ -8,13 +8,7 @@ import {
 } from "./models";
 
 export type HarnessId =
-  | "claude"
-  | "codex"
-  | "cursor"
-  | "opencode"
-  | "pi"
-  | "omp"
-  | "fx";
+  "claude" | "codex" | "cursor" | "opencode" | "pi" | "omp" | "fx";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
@@ -44,6 +38,14 @@ export type HandoffMeta = {
   status: HandoffStatus;
   /** Inject this brief into prompts to `to` until that harness accepts a turn. */
   pending?: boolean;
+};
+
+/** Compact transcript card for a second-opinion turn. The agent still gets the full prompt. */
+export type SecondOpinionMeta = {
+  from: HarnessId;
+  to: HarnessId;
+  request?: string;
+  files?: number;
 };
 
 export type ToolPreviewKind = "read" | "write" | "shell" | "search";
@@ -108,13 +110,11 @@ export type Block = {
     decided?: "allow" | "deny";
   };
   handoff?: HandoffMeta;
+  secondOpinion?: SecondOpinionMeta;
 };
 
 export type RuntimeMode =
-  | "supervised"
-  | "auto-accept-edits"
-  | "auto"
-  | "full-access";
+  "supervised" | "auto-accept-edits" | "auto" | "full-access";
 
 export const RUNTIME_MODES: RuntimeMode[] = [
   "supervised",

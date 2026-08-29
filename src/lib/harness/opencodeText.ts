@@ -67,23 +67,27 @@ async function promptOnLive(input: {
   timeoutMs?: number;
 }): Promise<string> {
   const session = await ensureLive(input.cwd);
-  const result = await session.client.prompt({
-    sessionID: session.sessionId,
-    model: session.model,
-    parts: [{ type: "text", text: input.prompt }],
-    timeoutMs: input.timeoutMs ?? REQUEST_TIMEOUT_MS,
-  });
-  const error = result.info?.error;
-  if (error) {
-    throw new Error(
-      typeof error === "object" && error && "message" in error
-        ? String((error as { message: unknown }).message)
-        : "OpenCode text generation failed",
-    );
+  try {
+    const result = await session.client.prompt({
+      sessionID: session.sessionId,
+      model: session.model,
+      parts: [{ type: "text", text: input.prompt }],
+      timeoutMs: input.timeoutMs ?? REQUEST_TIMEOUT_MS,
+    });
+    const error = result.info?.error;
+    if (error) {
+      throw new Error(
+        typeof error === "object" && error && "message" in error
+          ? String((error as { message: unknown }).message)
+          : "OpenCode text generation failed",
+      );
+    }
+    const text = getOpenCodeTextResponse(result.parts);
+    if (!text) throw new Error("OpenCode returned empty output.");
+    return text;
+  } finally {
+    await dropLive();
   }
-  const text = getOpenCodeTextResponse(result.parts);
-  if (!text) throw new Error("OpenCode returned empty output.");
-  return text;
 }
 
 async function ensureLive(cwd: string): Promise<LiveText> {

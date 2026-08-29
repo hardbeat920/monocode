@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newSession } from "./session";
-import {
-  isPersistableId,
-  sanitizeSessionForPersist,
-} from "./sessionStore";
+import { isPersistableId, sanitizeSessionForPersist } from "./sessionStore";
 
 describe("isPersistableId", () => {
   it("accepts alphanumeric ids with hyphens and underscores", () => {
@@ -21,11 +18,12 @@ describe("isPersistableId", () => {
 describe("sanitizeSessionForPersist", () => {
   it("omits a path-like provider session id so upsert can still snapshot git", () => {
     const session = newSession("pi", "/tmp/project");
-    session.providerSessionId =
-      "/Users/me/.pi/agent/sessions/abc.jsonl";
+    session.providerSessionId = "/Users/me/.pi/agent/sessions/abc.jsonl";
     session.blocks = [{ id: "u1", role: "user", text: "hey" }];
 
-    expect(sanitizeSessionForPersist(session).providerSessionId).toBeUndefined();
+    expect(
+      sanitizeSessionForPersist(session).providerSessionId,
+    ).toBeUndefined();
   });
 
   it("keeps a UUID provider session id", () => {
@@ -53,6 +51,33 @@ describe("sanitizeSessionForPersist", () => {
     expect(persisted.blocks[1]).toMatchObject({
       role: "handoff",
       handoff: { from: "cursor", to: "claude", status: "ready", pending: true },
+    });
+  });
+
+  it("keeps a second-opinion card on the user turn", () => {
+    const session = newSession("codex", "/tmp/project");
+    session.blocks = [
+      {
+        id: "u1",
+        role: "user",
+        text: "Second opinion",
+        secondOpinion: {
+          from: "claude",
+          to: "codex",
+          request: "fix the footer",
+          files: 2,
+        },
+      },
+    ];
+    expect(sanitizeSessionForPersist(session).blocks[0]).toMatchObject({
+      role: "user",
+      text: "Second opinion",
+      secondOpinion: {
+        from: "claude",
+        to: "codex",
+        request: "fix the footer",
+        files: 2,
+      },
     });
   });
 });

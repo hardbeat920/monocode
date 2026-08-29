@@ -4,6 +4,7 @@ import {
   bindHarnessSession,
   forgetHarnessSession,
   isLiveHarness,
+  killAllChildren,
 } from "./harness";
 import {
   hasInFlightSessions,
@@ -315,6 +316,9 @@ export async function reapWindowRuntime(
       (id) => killPty(id),
     ),
   );
+  // Catalog probes, title generators, and usage scrapers are not session
+  // children. Drop them so an unused Pi/Codex probe cannot outlive the window.
+  await killAllChildren().catch(() => undefined);
 }
 
 function terminalFileIds(tabs: WorkspaceTab[]): string[] {

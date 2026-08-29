@@ -5,23 +5,34 @@ import {
   COIN_GAP_MAX_MS,
   COIN_GAP_MIN_MS,
   COIN_HOVER,
+  CRASH_RECOIL_MS,
+  CRASH_RECOIL_PX,
+  CRASH_SHAKE_MS,
+  CRASH_STUN_MS,
   EXIT_PEAK,
   EXIT_SINK,
   JUMP_LEAD,
   RUNNER_INSET,
+  RUNNER_SIZE,
+  STAR_COUNT,
   coinCollected,
   exitJumpY,
+  hitsChevron,
   jumpHeight,
   nextCoinDelay,
   obstacleFromRects,
   pickCoinX,
   pingPong,
   poseAt,
+  recoilAlong,
   runnerPose,
   runnerTrack,
   scaleTrackX,
   spriteClipBottom,
   stepAlong,
+  stunDone,
+  stunShake,
+  stunStars,
 } from "./composerRunner";
 
 const BOX = { left: 100, right: 500, top: 200, bottom: 320, width: 400 };
@@ -163,6 +174,50 @@ describe("composerRunner", () => {
       right: 212,
       height: 42,
     });
+  });
+
+  it("crashes into the chevron only on the first approach", () => {
+    const hurdle = { left: 80, right: 104, height: 40 };
+    const half = RUNNER_SIZE / 2;
+
+    expect(hitsChevron(80 - half - 2, 0, 1, hurdle, false)).toBe(false);
+    expect(hitsChevron(80 - half, 0, 1, hurdle, false)).toBe(true);
+    expect(hitsChevron(120, 0, 1, hurdle, false)).toBe(false);
+    expect(hitsChevron(104 + half, 0, -1, hurdle, false)).toBe(true);
+    expect(hitsChevron(50, 0, -1, hurdle, false)).toBe(false);
+    expect(hitsChevron(80 - half, 8, 1, hurdle, false)).toBe(false);
+    expect(hitsChevron(80 - half, 0, 1, hurdle, true)).toBe(false);
+    expect(hitsChevron(80 - half, 0, 1, null, false)).toBe(false);
+  });
+
+  it("knocks the mascot back, shakes, then finishes the stun", () => {
+    expect(recoilAlong(70, 1, 0, 200)).toBe(70);
+    expect(recoilAlong(70, 1, CRASH_RECOIL_MS, 200)).toBe(70 - CRASH_RECOIL_PX);
+    expect(recoilAlong(70, -1, CRASH_RECOIL_MS, 200)).toBe(70 + CRASH_RECOIL_PX);
+    expect(recoilAlong(4, 1, CRASH_RECOIL_MS, 200)).toBe(0);
+    expect(recoilAlong(190, -1, CRASH_RECOIL_MS, 200)).toBe(200);
+
+    expect(stunShake(0)).toEqual({ x: 0, y: 0 });
+    const wobble = [40, 80, 120, 160].map(stunShake);
+    expect(wobble.some((shake) => Math.abs(shake.x) >= 2)).toBe(true);
+    expect(wobble.some((shake) => Math.abs(shake.y) >= 1)).toBe(true);
+    expect(stunShake(CRASH_SHAKE_MS)).toEqual({ x: 0, y: 0 });
+    expect(stunDone(CRASH_STUN_MS - 1)).toBe(false);
+    expect(stunDone(CRASH_STUN_MS)).toBe(true);
+  });
+
+  it("orbits pixel stars around the sprite for the stun, then clears them", () => {
+    const start = stunStars(0);
+    expect(start).toHaveLength(STAR_COUNT);
+    expect(start[0].opacity).toBe(1);
+    expect(new Set(start.map((star) => `${star.dx},${star.dy}`)).size).toBe(
+      STAR_COUNT,
+    );
+
+    const spun = stunStars(140);
+    expect(spun[0].dx).not.toBe(start[0].dx);
+    expect(stunStars(CRASH_STUN_MS - 1)[0].opacity).toBeLessThan(1);
+    expect(stunStars(CRASH_STUN_MS)).toEqual([]);
   });
 
   it("runs on the review bar when it is sitting on the composer", () => {

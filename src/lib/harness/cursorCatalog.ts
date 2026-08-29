@@ -63,10 +63,10 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
     },
   });
 
-  const stop = () => {
+  const stop = async () => {
     acp.close();
     unwatchChild(PROBE_ID);
-    void killChild(PROBE_ID).catch(() => undefined);
+    await killChild(PROBE_ID).catch(() => undefined);
   };
 
   watchChild(
@@ -104,9 +104,11 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
         REQUEST_TIMEOUT_MS,
       );
       return modelsFromSessionNew(created);
-    }, stop);
+    }, () => {
+      void stop();
+    });
   } finally {
-    stop();
+    await stop();
   }
 }
 

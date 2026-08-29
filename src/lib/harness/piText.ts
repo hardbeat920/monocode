@@ -149,6 +149,7 @@ async function promptOnLive(
       if (typeof text === "string") output = text.trim();
     }
     if (!output) throw new Error(`${flavor.label} returned empty output.`);
+    await dropLive(flavor);
     return output;
   } catch (error) {
     session.turnDone = null;

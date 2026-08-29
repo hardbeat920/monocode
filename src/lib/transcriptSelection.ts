@@ -72,3 +72,32 @@ export function placeSelectionMenu(
   const top = Math.min(maxTop, Math.max(VIEWPORT_PADDING, rawTop));
   return { side, left, top };
 }
+
+const FLYOUT_OVERLAP = 4;
+
+/** Nested menu to the right of a parent, flipping left when space is tight. */
+export function placeFlyoutMenu(
+  parent: { left: number; width: number },
+  rowTop: number,
+  menu: Size,
+  viewport: ViewportSize,
+): { side: "right" | "left"; left: number; top: number } {
+  const parentRight = parent.left + parent.width;
+  const rightLeft = parentRight - FLYOUT_OVERLAP;
+  const leftLeft = parent.left - menu.width + FLYOUT_OVERLAP;
+  const fitsRight = rightLeft + menu.width <= viewport.width - VIEWPORT_PADDING;
+  const side: "right" | "left" =
+    fitsRight || leftLeft < VIEWPORT_PADDING ? "right" : "left";
+  const rawLeft = side === "right" ? rightLeft : leftLeft;
+  const maxLeft = Math.max(
+    VIEWPORT_PADDING,
+    viewport.width - menu.width - VIEWPORT_PADDING,
+  );
+  const left = Math.min(maxLeft, Math.max(VIEWPORT_PADDING, rawLeft));
+  const maxTop = Math.max(
+    VIEWPORT_PADDING,
+    viewport.height - menu.height - VIEWPORT_PADDING,
+  );
+  const top = Math.min(maxTop, Math.max(VIEWPORT_PADDING, rowTop));
+  return { side, left, top };
+}

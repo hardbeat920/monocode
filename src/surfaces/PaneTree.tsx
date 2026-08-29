@@ -23,6 +23,7 @@ import type { RecentProject } from "../lib/recents";
 import type { TerminalMetaPatch } from "../lib/terminalTab";
 import type {
   Attachment,
+  Block,
   HarnessId,
   RuntimeMode,
   Session,
@@ -72,6 +73,12 @@ type Shared = {
   editorNavigation?: EditorNavigationTarget | null;
   onOpenDiff: (path?: string) => void;
   onOpenPlan: (sessionId: string, blockId: string) => void;
+  onSecondOpinion?: (
+    sessionId: string,
+    harness: HarnessId,
+    turn: Block[],
+    model: string,
+  ) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
   onNewTerminal: (sessionId: string) => void;
   onTerminalMetaChange?: (fileId: string, patch: TerminalMetaPatch) => void;
@@ -130,6 +137,7 @@ function PaneTreeComponent({
   editorNavigation,
   onOpenDiff,
   onOpenPlan,
+  onSecondOpinion,
   onMovePane,
   onNewTerminal,
   onTerminalMetaChange,
@@ -309,6 +317,7 @@ function PaneTreeComponent({
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
+                onSecondOpinion={onSecondOpinion}
                 onNewTerminal={onNewTerminal}
                 onPaneDragStart={onPaneDragStart}
               />

@@ -114,6 +114,7 @@ async function promptOnLive(input: {
     session.collecting = false;
     session.turnDone = null;
     session.turnFailed = null;
+    await dropLive();
   }
 }
 

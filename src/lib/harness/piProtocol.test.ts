@@ -23,6 +23,7 @@ import {
   toolExecutionEndFromEvent,
   toolKindFromName,
   toolTitle,
+  turnErrorFromEvent,
 } from "./piProtocol";
 import { OMP_FLAVOR, PI_FLAVOR } from "./piFlavor";
 
@@ -46,9 +47,12 @@ describe("buildPiSpawnArgs", () => {
       "rpc",
       "--no-session",
     ]);
+  });
+
+  it("strips extensions for throwaway catalog probes", () => {
     expect(
       buildPiSpawnArgs(PI_FLAVOR, { noSession: true, noExtensions: true }),
-    ).toContain("--no-extensions");
+    ).toEqual(["--mode", "rpc", "--no-session", "--no-extensions"]);
   });
 
   it("isolates throwaway text jobs from tools and project context", () => {
@@ -314,10 +318,106 @@ describe("tools and models", () => {
         usage: { totalTokens: 120 },
       }, 200),
     ).toEqual({ used: 120, window: 200 });
+    // Live 0.80.x shapes: finished total on the assistant message, streaming
+    // total on the nested partial. Tool-result usage is a nested LLM call, not
+    // the context-window level.
+    expect(
+      contextFromUsage(
+        {
+          type: "message_end",
+          message: { role: "assistant", usage: { totalTokens: 18014 } },
+        },
+        200000,
+      ),
+    ).toEqual({ used: 18014, window: 200000 });
+    expect(
+      contextFromUsage(
+        {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            partial: { usage: { input: 3, output: 1, cacheWrite: 18007 } },
+          },
+        },
+        200000,
+      ),
+    ).toEqual({ used: 18011, window: 200000 });
+    expect(
+      contextFromUsage(
+        { type: "message_end", message: { role: "user" } },
+        200000,
+      ),
+    ).toBeNull();
+    expect(
+      contextFromUsage(
+        {
+          type: "message_end",
+          message: {
+            role: "toolResult",
+            usage: { totalTokens: 150 },
+          },
+        },
+        200000,
+      ),
+    ).toBeNull();
     expect(
       contextFromSessionStats({
         contextUsage: { tokens: 60, contextWindow: 200000, percent: 30 },
       }),
     ).toEqual({ used: 60, window: 200000 });
+  });
+});
+
+describe("turnErrorFromEvent", () => {
+  it("reads the reason a turn failed with no content", () => {
+    expect(
+      turnErrorFromEvent({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "No API key for provider: openai-codex",
+        },
+      }),
+    ).toBe("No API key for provider: openai-codex");
+  });
+
+  it("still reports a failure that carries no reason", () => {
+    expect(
+      turnErrorFromEvent({
+        type: "message_end",
+        message: { role: "assistant", stopReason: "error" },
+      }),
+    ).toBe("");
+  });
+
+  it("ignores healthy messages, other roles, and other frames", () => {
+    expect(
+      turnErrorFromEvent({
+        type: "message_end",
+        message: { role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: "hi" }] },
+      }),
+    ).toBeNull();
+    expect(
+      turnErrorFromEvent({
+        type: "message_end",
+        message: {
+          role: "toolResult",
+          stopReason: "error",
+          errorMessage: "tool failed",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      turnErrorFromEvent({
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "boom",
+        },
+      }),
+    ).toBeNull();
   });
 });

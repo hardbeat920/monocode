@@ -89,6 +89,7 @@ export function appendUser(
   session: Session,
   text: string,
   attachments: Attachment[] = [],
+  extra?: { secondOpinion?: Block["secondOpinion"] },
 ): Session {
   return appendBlock(
     { ...session, busy: true },
@@ -98,6 +99,7 @@ export function appendUser(
       text,
       startedAt: Date.now(),
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(extra?.secondOpinion ? { secondOpinion: extra.secondOpinion } : {}),
     },
   );
 }
@@ -305,13 +307,13 @@ function upsertTool(
   const index = findToolIndex(session, patch);
   if (index < 0) {
     const detail = capToolDetail(patch.detail);
-    const preview = fillPreview(
-      patch.preview,
-      detail,
+    const preview = fillPreview(patch.preview, detail, patch.kind, patch.title);
+    const label = finalToolLabel(
+      session,
       patch.kind,
-      patch.title,
+      displayLabel(patch),
+      preview,
     );
-    const label = finalToolLabel(session, patch.kind, displayLabel(patch), preview);
     return appendBlock(session, {
       id: crypto.randomUUID(),
       role: "tool",
@@ -402,7 +404,9 @@ function fillPreview(
   kind?: string,
   title?: string,
 ): ToolPreview | undefined {
-  if (preview?.lines?.some((line) => line.kind === "add" || line.kind === "del")) {
+  if (
+    preview?.lines?.some((line) => line.kind === "add" || line.kind === "del")
+  ) {
     return preview;
   }
   if (preview) return { ...preview, lines: undefined };
@@ -530,9 +534,7 @@ function isCallId(value: string): boolean {
   const text = value.trim();
   return (
     /^(call[-_]?|tool[-_])[a-z0-9_-]+$/i.test(text) ||
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      text,
-    )
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)
   );
 }
 

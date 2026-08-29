@@ -31,7 +31,7 @@ export const SIDEBAR_LAYOUT_DEFAULT: SidebarLayout = "deck";
 
 export const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = "full";
 
-export const TRANSCRIPT_ZEN_DEFAULT = false;
+export const TRANSCRIPT_ZEN_DEFAULT = true;
 
 /** Fired on `window` whenever zen mode flips (detail: boolean). */
 export const TRANSCRIPT_ZEN_CHANGE_EVENT = "monocode:transcriptzenchange";

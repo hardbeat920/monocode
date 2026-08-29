@@ -108,9 +108,9 @@ export function buildPiSpawnArgs(
   input: {
     model?: string;
     resume?: string;
-    /** Catalog probes: do not write a session file. */
+    /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
-    /** Only for throwaway text jobs — never for live chat. */
+    /** Catalog probes and throwaway text jobs — never for live chat. */
     noExtensions?: boolean;
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
@@ -316,11 +316,20 @@ export function providerSessionIdFromState(data: unknown): string | undefined {
   return sessionId;
 }
 
+/**
+ * Current Pi puts streaming usage on the frame. 0.80.x put a finished
+ * assistant total on `message` and a live total on `assistantMessageEvent.partial`.
+ * Tool-result messages can carry nested LLM usage for a sub-call; that is not
+ * the context-window level, so only assistant `message.usage` counts.
+ */
 export function contextFromUsage(
   rec: Record<string, unknown>,
   window?: number,
 ): { used?: number; window?: number } | null {
-  const usage = asRecord(rec.usage);
+  const usage =
+    asRecord(rec.usage) ??
+    assistantMessageUsage(rec) ??
+    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
   if (!usage) return null;
   const used =
     numberField(usage, "totalTokens") ||
@@ -451,6 +460,19 @@ export function toolExecutionEndFromEvent(
     detail: textFromContent(result?.content) || undefined,
     isError: rec.isError === true,
   };
+}
+
+/**
+ * A failed turn is reported inside the assistant message, not as an error
+ * frame: `stopReason: "error"` with the reason in `errorMessage`. Empty string
+ * means "failed, no reason".
+ */
+export function turnErrorFromEvent(rec: Record<string, unknown>): string | null {
+  if (stringField(rec, "type") !== "message_end") return null;
+  const message = asRecord(rec.message);
+  if (stringField(message, "role") !== "assistant") return null;
+  if (stringField(message, "stopReason") !== "error") return null;
+  return stringField(message, "errorMessage") ?? "";
 }
 
 export function isAgentSettled(rec: Record<string, unknown>): boolean {
@@ -655,6 +677,14 @@ function thinkingLabel(level: PiThinkingLevel): string {
   if (level === "xhigh") return "Extra High";
   if (level === "off") return "Off";
   return level.slice(0, 1).toUpperCase() + level.slice(1);
+}
+
+function assistantMessageUsage(
+  rec: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const message = asRecord(rec.message);
+  if (stringField(message, "role") !== "assistant") return null;
+  return asRecord(message?.usage);
 }
 
 function numberField(

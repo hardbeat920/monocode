@@ -8,6 +8,7 @@ import type {
   HandoffMeta,
   HandoffStatus,
   RuntimeMode,
+  SecondOpinionMeta,
   Session,
 } from "./session";
 import { HARNESSES, RUNTIME_MODES } from "./session";
@@ -66,8 +67,7 @@ type SessionUpsertPayload = {
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
   return (
-    session.cwd !== "~" &&
-    session.blocks.some((block) => block.role === "user")
+    session.cwd !== "~" && session.blocks.some((block) => block.role === "user")
   );
 }
 
@@ -76,7 +76,9 @@ export function isPersistableId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
-export function sanitizeSessionForPersist(session: Session): SessionUpsertPayload {
+export function sanitizeSessionForPersist(
+  session: Session,
+): SessionUpsertPayload {
   return {
     id: session.id,
     cwd: normalizeProjectPath(session.cwd),
@@ -108,7 +110,9 @@ export function sanitizeSessionForPersist(session: Session): SessionUpsertPayloa
  */
 const upsertQueues = new Map<string, Promise<unknown>>();
 
-export async function upsertSession(session: Session): Promise<SessionSummary | null> {
+export async function upsertSession(
+  session: Session,
+): Promise<SessionSummary | null> {
   if (!shouldPersistSession(session)) return null;
   const payload = sanitizeSessionForPersist(session);
   const previous = upsertQueues.get(session.id) ?? Promise.resolve();
@@ -226,9 +230,7 @@ export async function takeInFlightSessions(): Promise<
   return Array.isArray(rows) ? rows : [];
 }
 
-export async function saveWorkspaceSnapshot(
-  snapshot: unknown,
-): Promise<void> {
+export async function saveWorkspaceSnapshot(snapshot: unknown): Promise<void> {
   await invoke("workspace_set_snapshot", { snapshot });
 }
 
@@ -261,6 +263,8 @@ function sanitizeBlock(block: Block): Block | null {
   const handoff = sanitizeHandoff(block.handoff);
   if (handoff) next.handoff = handoff;
   else if (block.role === "handoff") return null;
+  const secondOpinion = sanitizeSecondOpinion(block.secondOpinion);
+  if (secondOpinion) next.secondOpinion = secondOpinion;
   return next;
 }
 
@@ -347,6 +351,26 @@ function sanitizeHandoff(value: Block["handoff"]): HandoffMeta | undefined {
     to: value.to,
     status: "ready",
     pending: interrupted || !!value.pending,
+  };
+}
+
+function sanitizeSecondOpinion(
+  value: Block["secondOpinion"],
+): SecondOpinionMeta | undefined {
+  if (!value) return undefined;
+  if (!(HARNESSES as string[]).includes(value.from)) return undefined;
+  if (!(HARNESSES as string[]).includes(value.to)) return undefined;
+  const request =
+    typeof value.request === "string" ? value.request.trim().slice(0, 240) : "";
+  const files =
+    typeof value.files === "number" && Number.isFinite(value.files)
+      ? Math.max(0, Math.round(value.files))
+      : 0;
+  return {
+    from: value.from,
+    to: value.to,
+    ...(request ? { request } : {}),
+    ...(files > 0 ? { files } : {}),
   };
 }
 

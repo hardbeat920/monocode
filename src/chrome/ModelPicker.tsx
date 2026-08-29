@@ -10,6 +10,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   coerceModelPickerTab,
   findModel,
@@ -28,7 +29,6 @@ import {
   type AgentModel,
   type ModelPickerTab,
 } from "../lib/models";
-import { refreshCodexCatalog } from "../lib/harness/codexCatalog";
 import {
   harnessUnavailableHint,
   hasProbedHarnessAvailability,
@@ -37,6 +37,7 @@ import {
   subscribeHarnessAvailability,
   getHarnessAvailabilitySnapshot,
 } from "../lib/harness/availability";
+import { refreshHarnessCatalogs } from "../lib/harness/registry";
 import {
   HARNESSES,
   HARNESS_LABEL,
@@ -69,7 +70,7 @@ function menuStyle(anchor: DOMRect): CSSProperties {
     bottom: window.innerHeight - anchor.top + 6,
     width,
     height: Math.max(180, Math.min(340, anchor.top - 12)),
-    zIndex: 50,
+    zIndex: 80,
   };
 }
 
@@ -102,6 +103,7 @@ export function ModelPicker({
   const [favorites, setFavorites] = useState(loadFavoriteModels);
   const [menu, setMenu] = useState<CSSProperties>();
   const root = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -160,9 +162,8 @@ export function ModelPicker({
   }, [open]);
 
   useEffect(() => {
-    if (!open || visibleTab !== "codex") return;
-    if (modelsFor("codex").length > 0) return;
-    void refreshCodexCatalog();
+    if (!open || visibleTab === "favorites") return;
+    void refreshHarnessCatalogs([visibleTab]);
   }, [open, visibleTab]);
 
   useLayoutEffect(() => {
@@ -179,7 +180,11 @@ export function ModelPicker({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (!root.current?.contains(e.target as Node)) dismiss(false);
+      const target = e.target as Node;
+      if (root.current?.contains(target) || menuRef.current?.contains(target)) {
+        return;
+      }
+      dismiss(false);
     };
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
@@ -362,81 +367,89 @@ export function ModelPicker({
           strokeWidth={1.75}
         />
       </button>
-      {open && menu ? (
-        <div
-          role="dialog"
-          aria-label="Model picker"
-          data-model-picker
-          style={menu}
-          className="flex flex-col overflow-hidden rounded-lg border border-content/10 bg-content/10 shadow-xl backdrop-blur-xl"
-        >
-          <nav
-            role="tablist"
-            aria-label="Providers"
-            aria-keyshortcuts="ArrowLeft ArrowRight"
-            aria-orientation="horizontal"
-            className="flex w-full shrink-0 items-stretch border-b border-content/10"
-          >
-            <ProviderTabButton
-              title="Favorites"
-              selected={visibleTab === "favorites"}
-              onSelect={() => selectTab("favorites")}
+      {/* Portalled: the composer box is a `z-10` stacking context, so an inline
+          fixed menu loses to anything painted above it — in a split pane the
+          arcade backdrop swallowed the list (#29). */}
+      {open && menu
+        ? createPortal(
+            <div
+              ref={menuRef}
+              role="dialog"
+              aria-label="Model picker"
+              data-model-picker
+              style={menu}
+              className="flex flex-col overflow-hidden rounded-lg border border-content/10 bg-content/10 shadow-xl backdrop-blur-xl"
             >
-              <Star
-                className="size-4"
-                strokeWidth={1.75}
-                fill={visibleTab === "favorites" ? "currentColor" : "none"}
-              />
-            </ProviderTabButton>
-            {pickerHarnesses.map((id) => (
-              <ProviderTabButton
-                key={id}
-                title={HARNESS_TITLE[id]}
-                selected={visibleTab === id}
-                onSelect={() => selectTab(id)}
+              <nav
+                role="tablist"
+                aria-label="Providers"
+                aria-keyshortcuts="ArrowLeft ArrowRight"
+                aria-orientation="horizontal"
+                className="flex w-full shrink-0 items-stretch border-b border-content/10"
               >
-                <HarnessIcon harness={id} className="size-4" />
-              </ProviderTabButton>
-            ))}
-          </nav>
+                <ProviderTabButton
+                  title="Favorites"
+                  selected={visibleTab === "favorites"}
+                  onSelect={() => selectTab("favorites")}
+                >
+                  <Star
+                    className="size-4"
+                    strokeWidth={1.75}
+                    fill={visibleTab === "favorites" ? "currentColor" : "none"}
+                  />
+                </ProviderTabButton>
+                {pickerHarnesses.map((id) => (
+                  <ProviderTabButton
+                    key={id}
+                    title={HARNESS_TITLE[id]}
+                    selected={visibleTab === id}
+                    onSelect={() => selectTab(id)}
+                  >
+                    <HarnessIcon harness={id} className="size-4" />
+                  </ProviderTabButton>
+                ))}
+              </nav>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="pb-1.5">
-              <label className="flex items-center gap-2 border-b border-content/10 px-2 py-2.5 text-content/50">
-                <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
-                <input
-                  ref={search}
-                  type="text"
-                  value={query}
-                  placeholder="Search models..."
-                  aria-label="Search models"
-                  className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/40"
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={onSearchKey}
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <div className="pb-1.5">
+                  <label className="flex items-center gap-2 border-b border-content/10 px-2 py-2.5 text-content/50">
+                    <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
+                    <input
+                      ref={search}
+                      type="text"
+                      value={query}
+                      placeholder="Search models..."
+                      aria-label="Search models"
+                      className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/40"
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyDown={onSearchKey}
+                    />
+                  </label>
+                </div>
+                <ModelList
+                  models={visible}
+                  active={active}
+                  currentId={current.id}
+                  favorites={favorites}
+                  emptyLabel={
+                    visibleTab === "favorites" && !query.trim()
+                      ? "No favorite models"
+                      : visibleTab !== "favorites" &&
+                          !isHarnessAvailable(visibleTab)
+                        ? harnessUnavailableHint(visibleTab)
+                        : visibleTab === "codex" && !query.trim()
+                          ? "Loading Codex models…"
+                          : "No matching models"
+                  }
+                  onActive={setActive}
+                  onPick={pick}
+                  onToggleFavorite={toggleFavorite}
                 />
-              </label>
-            </div>
-            <ModelList
-              models={visible}
-              active={active}
-              currentId={current.id}
-              favorites={favorites}
-              emptyLabel={
-                visibleTab === "favorites" && !query.trim()
-                  ? "No favorite models"
-                  : visibleTab !== "favorites" && !isHarnessAvailable(visibleTab)
-                    ? harnessUnavailableHint(visibleTab)
-                    : visibleTab === "codex" && !query.trim()
-                      ? "Loading Codex models…"
-                      : "No matching models"
-              }
-              onActive={setActive}
-              onPick={pick}
-              onToggleFavorite={toggleFavorite}
-            />
-          </div>
-        </div>
-      ) : null}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

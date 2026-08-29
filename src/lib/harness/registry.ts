@@ -1,5 +1,6 @@
 import type { HarnessId } from "../session";
 import type { PrContent } from "../gitText";
+import { hasLiveCatalog } from "../models";
 import type { ApprovalDecision, SendTurnInput, SteerTurnInput } from "./types";
 
 export type TitleInput = {
@@ -54,6 +55,36 @@ export type HarnessAdapter = {
 
 const adapters = new Map<HarnessId, HarnessAdapter>();
 
+/**
+ * After a turn settles, keep the child warm for follow-ups, then park it.
+ * Resume state stays, so the next prompt respawns instead of starting over.
+ */
+export const HARNESS_IDLE_PARK_MS = 5 * 60_000;
+const idleParkTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelIdlePark(sessionId: string): void {
+  const timer = idleParkTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  idleParkTimers.delete(sessionId);
+}
+
+function scheduleIdlePark(harness: HarnessId, sessionId: string): void {
+  cancelIdlePark(sessionId);
+  idleParkTimers.set(
+    sessionId,
+    setTimeout(() => {
+      idleParkTimers.delete(sessionId);
+      void stopHarnessSession(harness, sessionId);
+    }, HARNESS_IDLE_PARK_MS),
+  );
+}
+
+/** Test seam. */
+export function resetHarnessIdlePark(): void {
+  for (const timer of idleParkTimers.values()) clearTimeout(timer);
+  idleParkTimers.clear();
+}
+
 export function registerHarness(adapter: HarnessAdapter): void {
   adapters.set(adapter.id, adapter);
 }
@@ -83,7 +114,12 @@ export async function sendHarnessTurn(input: SendTurnInput & { harness: HarnessI
   if (!adapter.live) {
     throw new Error(`${input.harness} is not connected yet`);
   }
-  await adapter.sendTurn(input);
+  cancelIdlePark(input.sessionId);
+  try {
+    await adapter.sendTurn(input);
+  } finally {
+    scheduleIdlePark(input.harness, input.sessionId);
+  }
 }
 
 export function canSteerHarness(id: HarnessId): boolean {
@@ -99,6 +135,7 @@ export async function steerHarnessTurn(
   if (!adapter.live) {
     throw new Error(`${input.harness} is not connected yet`);
   }
+  cancelIdlePark(input.sessionId);
   await adapter.steerTurn(input);
 }
 
@@ -108,7 +145,9 @@ export async function cancelHarnessTurn(
 ): Promise<void> {
   const adapter = getHarness(harness);
   if (!adapter?.live) return;
+  cancelIdlePark(sessionId);
   await adapter.cancelTurn(sessionId);
+  scheduleIdlePark(harness, sessionId);
 }
 
 export function respondHarnessApproval(
@@ -124,6 +163,7 @@ export async function stopHarnessSession(
   harness: HarnessId,
   sessionId: string,
 ): Promise<void> {
+  cancelIdlePark(sessionId);
   const adapter = getHarness(harness);
   if (!adapter?.live) return;
   await adapter.stopSession(sessionId);
@@ -133,6 +173,7 @@ export async function forgetHarnessSession(
   harness: HarnessId,
   sessionId: string,
 ): Promise<void> {
+  cancelIdlePark(sessionId);
   const adapter = getHarness(harness);
   if (!adapter) return;
   await adapter.forgetSession(sessionId);
@@ -147,13 +188,25 @@ export function bindHarnessSession(
   getHarness(harness)?.bindSession(threadId, providerSessionId, cwd);
 }
 
-export async function refreshHarnessCatalogs(): Promise<void> {
+/**
+ * Probe model lists only for the harnesses the caller actually needs.
+ * Boot used to refresh every adapter; that spawned unused CLIs (Pi with
+ * extensions can sit at ~1GB) even when the workspace never touched them.
+ */
+export async function refreshHarnessCatalogs(
+  ids: Iterable<HarnessId>,
+): Promise<void> {
+  const wanted = new Set(ids);
+  if (wanted.size === 0) return;
   await Promise.all(
-    [...adapters.values()].map((adapter) =>
-      adapter.refreshCatalog?.().catch((error: unknown) => {
-        console.debug(`[monocode] ${adapter.id} catalog`, error);
+    [...adapters.values()]
+      .filter((adapter) => wanted.has(adapter.id))
+      .map(async (adapter) => {
+        if (!adapter.refreshCatalog || hasLiveCatalog(adapter.id)) return;
+        await adapter.refreshCatalog().catch((error: unknown) => {
+          console.debug(`[monocode] ${adapter.id} catalog`, error);
+        });
       }),
-    ),
   );
 }
 

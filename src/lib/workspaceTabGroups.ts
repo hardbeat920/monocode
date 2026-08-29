@@ -54,6 +54,42 @@ export function filterTabsForProject(
   });
 }
 
+export type WorkspaceTabCloseScope = "project" | "workspace";
+
+export function planWorkspaceTabCloseTarget({
+  tabs,
+  sessions,
+  closingTabId,
+  scope,
+}: {
+  tabs: WorkspaceTab[];
+  sessions: Session[];
+  closingTabId: string;
+  scope: WorkspaceTabCloseScope;
+}): string | undefined {
+  const closingIndex = tabs.findIndex((tab) => tab.id === closingTabId);
+  if (closingIndex < 0) return undefined;
+
+  const remaining = tabs.filter((tab) => tab.id !== closingTabId);
+  const globalTarget = remaining[Math.max(0, closingIndex - 1)] ?? remaining[0];
+  if (scope === "workspace") return globalTarget?.id;
+
+  const closingCwd = workspaceTabCwd(tabs[closingIndex], sessions);
+  if (!closingCwd) return globalTarget?.id;
+
+  for (let index = closingIndex - 1; index >= 0; index -= 1) {
+    const cwd = workspaceTabCwd(tabs[index], sessions);
+    if (cwd && sameProjectPath(cwd, closingCwd)) return tabs[index].id;
+  }
+
+  for (let index = closingIndex + 1; index < tabs.length; index += 1) {
+    const cwd = workspaceTabCwd(tabs[index], sessions);
+    if (cwd && sameProjectPath(cwd, closingCwd)) return tabs[index].id;
+  }
+
+  return globalTarget?.id;
+}
+
 export function isGroupableProject(
   project: string | null,
 ): project is string {

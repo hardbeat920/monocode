@@ -70,6 +70,7 @@ import {
   probeHarnessAvailability,
   subscribeHarnessAvailability,
 } from "../lib/harness/availability";
+import { refreshHarnessCatalogs } from "../lib/harness/registry";
 import {
   defaultModelId,
   getModelSnapshot,
@@ -322,7 +323,7 @@ function GeneralPage() {
       </Row>
       <Row
         label="Composer mascot"
-        description="When a turn is running, the project mascot runs along the composer, jumps the scroll-to-latest button, and sometimes grabs a coin."
+        description="When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin."
       >
         <Toggle
           label="Composer mascot"
@@ -852,6 +853,11 @@ function ProviderRow({
   const [inPicker, setInPicker] = useState(() =>
     isPickerProviderVisible(harness),
   );
+
+  useEffect(() => {
+    if (!available || models.length > 0) return;
+    void refreshHarnessCatalogs([harness]);
+  }, [available, harness, models.length]);
 
   const onPickerVisible = (visible: boolean) => {
     savePickerProviderVisible(harness, visible);

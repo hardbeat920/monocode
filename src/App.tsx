@@ -178,7 +178,12 @@ import {
   rememberProject,
   sameProjectPath,
 } from "./lib/recents";
-import { findTabForProject, filterTabsForProject, workspaceTabCwd } from "./lib/workspaceTabGroups";
+import {
+  filterTabsForProject,
+  findTabForProject,
+  planWorkspaceTabCloseTarget,
+  workspaceTabCwd,
+} from "./lib/workspaceTabGroups";
 import {
   HARNESS_LABEL,
   canReplaceSessionTitle,
@@ -190,8 +195,10 @@ import {
   sessionWorkCwd,
   titleFromPrompt,
   type Attachment,
+  type Block,
   type HarnessId,
   type RuntimeMode,
+  type SecondOpinionMeta,
   type Session,
 } from "./lib/session";
 import { dropContextWindow } from "./lib/contextUsage";
@@ -223,6 +230,15 @@ import {
 } from "./lib/tabVisitHistory";
 import { applySkillsToTurn } from "./lib/skills";
 import { applyFileMentionsToTurn } from "./lib/fileMentions";
+import {
+  SECOND_OPINION_TITLE,
+  buildSecondOpinionCard,
+  buildSecondOpinionPrompt,
+  harnessForTurn,
+  turnEditedFiles,
+  turnReport,
+  turnUserRequest,
+} from "./lib/secondOpinion";
 import { PaneTree } from "./surfaces/PaneTree";
 import { ProjectTerminalDock } from "./surfaces/ProjectTerminalDock";
 import { DiffPane } from "./surfaces/DiffPane";
@@ -606,7 +622,12 @@ export default function App({
 
   useEffect(() => {
     void probeHarnessAvailability();
-    void refreshHarnessCatalogs().then(() => {
+    // Only the harnesses already in this window. Probing every installed CLI
+    // at boot left unused agents (especially Pi) running in the background.
+    const harnesses = [
+      ...new Set(sessionsRef.current.map((session) => session.harness)),
+    ];
+    void refreshHarnessCatalogs(harnesses).then(() => {
       setSessions((prev) =>
         prev.map((session) => {
           if (!isLiveHarness(session.harness)) return session;
@@ -669,6 +690,16 @@ export default function App({
     busySessionIdsRef.current = nextBusySessionIds;
   }
   const busySessionIds = busySessionIdsRef.current;
+
+  const usageProviders = useMemo(() => {
+    const ids = new Set<"claude" | "codex">();
+    for (const session of sessions) {
+      if (session.harness === "claude" || session.harness === "codex") {
+        ids.add(session.harness);
+      }
+    }
+    return [...ids];
+  }, [sessions]);
 
   const nextApprovalSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -950,8 +981,9 @@ export default function App({
     });
   }, [tabs]);
 
-  // Tabs are views. A working agent stays in memory (and keeps its child)
-  // until the turn finishes or the session is deleted.
+  // Tabs are views. Hidden idle sessions drop their child. A visible session
+  // keeps its child for a few minutes after a turn so follow-ups stay instant,
+  // then parks it and resumes on the next prompt.
   useEffect(() => {
     const visibleIds = openSessionIds(tabs);
     const idleDetached = sessions.filter(
@@ -1396,6 +1428,12 @@ export default function App({
       }
 
       const finishClose = () => {
+        const nextActiveTabId = planWorkspaceTabCloseTarget({
+          tabs: current,
+          sessions: sessionsRef.current,
+          closingTabId: id,
+          scope: deckLayout ? "project" : "workspace",
+        });
         const next = current.filter((t) => t.id !== id);
         const gone = new Set(
           leafIds(closing.layout).filter((paneId) =>
@@ -1411,8 +1449,8 @@ export default function App({
           return updated;
         });
         setTabs(next);
-        if (id === activeTabIdRef.current) {
-          activateTab((next[Math.max(0, index - 1)] ?? next[0]).id);
+        if (id === activeTabIdRef.current && nextActiveTabId) {
+          activateTab(nextActiveTabId);
         }
         void refreshHistory(sidebarCwd);
       };
@@ -1427,7 +1465,14 @@ export default function App({
       }
       finishClose();
     },
-    [dirtyFiles, activateTab, persistSession, refreshHistory, sidebarCwd],
+    [
+      dirtyFiles,
+      activateTab,
+      deckLayout,
+      persistSession,
+      refreshHistory,
+      sidebarCwd,
+    ],
   );
 
   const onGroupNewTab = useCallback(
@@ -2815,7 +2860,12 @@ export default function App({
   );
 
   const onSubmit = useCallback(
-    (sessionId: string, text: string, attachments: Attachment[] = []) => {
+    (
+      sessionId: string,
+      text: string,
+      attachments: Attachment[] = [],
+      options?: { secondOpinion?: SecondOpinionMeta },
+    ) => {
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
       if (!text.trim() && attachments.length === 0) return;
@@ -2880,11 +2930,18 @@ export default function App({
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
       const isFirstTurn = current.blocks.length === 0;
+      const placeholderTitle = canReplaceSessionTitle(
+        current.title,
+        current.harness,
+        HARNESS_LABEL[current.harness],
+      );
       const titleSeed =
-        isFirstTurn && !current.inboxCard
+        isFirstTurn && !current.inboxCard && placeholderTitle
           ? titleFromPrompt(text, current.harness, attachments)
           : current.title;
       const visible = displayAttachments(attachments);
+      const card = options?.secondOpinion;
+      const visibleText = card ? SECOND_OPINION_TITLE : text;
       const live = isLiveHarness(current.harness);
       const queuedHandoff =
         live && !pendingSwitch ? pendingHandoff(current) : null;
@@ -2909,8 +2966,9 @@ export default function App({
                 {
                   id: crypto.randomUUID(),
                   role: "user",
-                  text,
+                  text: visibleText,
                   ...(visible.length > 0 ? { attachments: visible } : {}),
+                  ...(card ? { secondOpinion: card } : {}),
                 },
                 {
                   id: crypto.randomUUID(),
@@ -2928,15 +2986,21 @@ export default function App({
             });
             return appendUser(
               appendPreparingHandoff(sealed, pendingSwitch.from, next.harness),
-              text,
+              visibleText,
               visible,
+              card ? { secondOpinion: card } : undefined,
             );
           }
-          return appendUser({ ...next, title: titled }, text, visible);
+          return appendUser(
+            { ...next, title: titled },
+            visibleText,
+            visible,
+            card ? { secondOpinion: card } : undefined,
+          );
         }),
       );
 
-      if (isFirstTurn && live) {
+      if (isFirstTurn && live && placeholderTitle) {
         void generateHarnessTitle(current.harness, {
           sessionId,
           cwd: workCwd,
@@ -3079,6 +3143,67 @@ export default function App({
       })();
     },
     [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  const onSecondOpinion = useCallback(
+    (sourceId: string, harness: HarnessId, turn: Block[], model: string) => {
+      const source = sessionsRef.current.find(
+        (session) => session.id === sourceId,
+      );
+      if (!source) return;
+      const cwd = sessionWorkCwd(source);
+      const from = harnessForTurn(source.blocks, turn, source.harness);
+      const userRequest = turnUserRequest(turn);
+      const files = turnEditedFiles(turn, cwd);
+      const prompt = buildSecondOpinionPrompt({
+        from,
+        userRequest,
+        report: turnReport(turn),
+        files,
+      });
+      const session = {
+        ...newSession(harness, cwd, model, source.runtimeMode),
+        title: formatSessionTitle(harness, SECOND_OPINION_TITLE),
+      };
+      const nextSessions = [...sessionsRef.current, session];
+      sessionsRef.current = nextSessions;
+      setSessions(nextSessions);
+
+      const tab = tabsRef.current.find((entry) =>
+        leafIds(entry.layout).includes(sourceId),
+      );
+      if (tab) {
+        const nextTabs = tabsRef.current.map((entry) =>
+          entry.id === tab.id
+            ? {
+                ...entry,
+                layout: splitPane(entry.layout, sourceId, "right", session.id),
+                focusedId: session.id,
+                diffFocused: false,
+              }
+            : entry,
+        );
+        tabsRef.current = nextTabs;
+        setTabs(nextTabs);
+        if (tab.id !== activeTabIdRef.current) setActiveTabId(tab.id);
+      } else {
+        const nextTab = newTab(session.id);
+        appendTab(nextTab, cwd);
+        setActiveTabId(nextTab.id);
+      }
+
+      setProjectTerminalFocused(false);
+      setComposerFocused(false);
+      onSubmit(session.id, prompt, [], {
+        secondOpinion: buildSecondOpinionCard({
+          from,
+          to: harness,
+          userRequest,
+          files,
+        }),
+      });
+    },
+    [appendTab, onSubmit],
   );
 
   const autoContinueKey = sessions
@@ -3869,6 +3994,7 @@ export default function App({
                       editorNavigation={editorNavigation}
                       onOpenDiff={onOpenDiff}
                       onOpenPlan={onOpenPlan}
+                      onSecondOpinion={onSecondOpinion}
                       onMovePane={onMovePane}
                       onNewTerminal={onNewTerminalInSession}
                       onTerminalMetaChange={onTerminalMetaChange}
@@ -3933,7 +4059,7 @@ export default function App({
             }
           />
         ) : null}
-        <UsageFooter />
+        <UsageFooter providers={usageProviders} />
       </div>
 
       {filePickerOpen ? (

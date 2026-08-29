@@ -60,10 +60,10 @@ async function discoverCodexModels(): Promise<AgentModel[]> {
     { includeJsonrpc: false, label: "codex-probe" },
   );
 
-  const stop = () => {
+  const stop = async () => {
     rpc.close();
     unwatchChild(PROBE_ID);
-    void killChild(PROBE_ID).catch(() => undefined);
+    await killChild(PROBE_ID).catch(() => undefined);
   };
 
   watchChild(
@@ -103,9 +103,11 @@ async function discoverCodexModels(): Promise<AgentModel[]> {
       }
 
       return await listAllModels(rpc);
-    }, stop);
+    }, () => {
+      void stop();
+    });
   } finally {
-    stop();
+    await stop();
   }
 }
 

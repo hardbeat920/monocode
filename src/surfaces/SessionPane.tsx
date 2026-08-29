@@ -14,6 +14,7 @@ import {
   sessionDisplayTitle,
   sessionWorkCwd,
   type Attachment,
+  type Block,
   type HarnessId,
   type RuntimeMode,
   type Session,
@@ -56,6 +57,12 @@ type Props = {
   onOpenFile: (path: string) => void;
   onOpenDiff: (path?: string) => void;
   onOpenPlan: (sessionId: string, blockId: string) => void;
+  onSecondOpinion?: (
+    sessionId: string,
+    harness: HarnessId,
+    turn: Block[],
+    model: string,
+  ) => void;
   onNewTerminal: (sessionId: string) => void;
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
@@ -82,6 +89,7 @@ export const SessionPane = memo(function SessionPane({
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
+  onSecondOpinion,
   onNewTerminal,
   onPaneDragStart,
 }: Props) {
@@ -111,8 +119,7 @@ export const SessionPane = memo(function SessionPane({
   }, []);
   const workCwd = sessionWorkCwd(session);
   const isEmpty = session.blocks.length === 0;
-  const showDeckProjectPicker =
-    isEmpty && !looksLikeProject(session.cwd);
+  const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer = !isEmpty || inSplit;
   const composer = (
     <Composer
@@ -126,9 +133,7 @@ export const SessionPane = memo(function SessionPane({
       runtimeMode={session.runtimeMode}
       cwd={session.cwd}
       recents={recents}
-      hideProjectPicker={
-        hideProjectPicker ? !showDeckProjectPicker : false
-      }
+      hideProjectPicker={hideProjectPicker ? !showDeckProjectPicker : false}
       context={session.context}
       quoteRequest={quoteRequest}
       initialDraft={session.inboxCard ? undefined : session.composerSeed}
@@ -226,11 +231,18 @@ export const SessionPane = memo(function SessionPane({
               blocks={session.blocks}
               busy={!!session.busy}
               cwd={workCwd}
+              harness={session.harness}
               onApproval={approve}
               onAddToChat={addSelectionToChat}
               onOpenFile={onOpenFile}
               onOpenDiff={onOpenDiff}
               onOpenPlan={openPlan}
+              onSecondOpinion={
+                onSecondOpinion
+                  ? (harness, turn, model) =>
+                      onSecondOpinion(session.id, harness, turn, model)
+                  : undefined
+              }
               onJumpToBottomChange={setShowJumpToBottom}
               onJumpToBottomReady={onJumpToBottomReady}
             />

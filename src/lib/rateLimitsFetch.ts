@@ -76,10 +76,10 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
     { includeJsonrpc: false, label: "codex-usage" },
   );
 
-  const stop = () => {
+  const stop = async () => {
     rpc.close();
     unwatchChild(USAGE_CHILD_ID);
-    void killChild(USAGE_CHILD_ID).catch(() => undefined);
+    await killChild(USAGE_CHILD_ID).catch(() => undefined);
   };
 
   await killChild(USAGE_CHILD_ID).catch(() => undefined);
@@ -122,7 +122,9 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
         }
         return parsed;
       },
-      stop,
+      () => {
+        void stop();
+      },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -138,7 +140,7 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
     }
     return errorRateLimits("codex", message);
   } finally {
-    stop();
+    await stop();
   }
 }
 

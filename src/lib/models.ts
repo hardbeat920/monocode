@@ -200,6 +200,18 @@ export function setHarnessModels(harness: HarnessId, models: AgentModel[]) {
   emit();
 }
 
+/** True after a live CLI catalog has replaced the built-in fallback list. */
+export function hasLiveCatalog(harness: HarnessId): boolean {
+  return overlays[harness] != null;
+}
+
+/** Test seam. */
+export function resetHarnessModelOverlays() {
+  overlays = {};
+  overlayDefaults = {};
+  emit();
+}
+
 export function defaultModelId(harness: HarnessId): string {
   return overlayDefaults[harness] ?? DEFAULT_MODEL_ID[harness];
 }

@@ -9,8 +9,13 @@ import {
   COLLECT_POP_PX,
   EXIT_MS,
   EXIT_SINK,
+  STAR_COUNT,
+  STAR_EDGE_PATH,
+  STAR_FACE_PATH,
+  STAR_SIZE,
   coinCollected,
   exitJumpY,
+  hitsChevron,
   jumpHeight,
   nextCoinDelay,
   obstacleFromRects,
@@ -18,10 +23,14 @@ import {
   RUNNER_INSET,
   RUNNER_SIZE,
   poseAt,
+  recoilAlong,
   scaleTrackX,
   stepAlong,
   runnerTrack,
   spriteClipBottom,
+  stunDone,
+  stunShake,
+  stunStars,
   type Coin,
 } from "../lib/composerRunner";
 import { projectName } from "../lib/paths";
@@ -48,6 +57,7 @@ type LiveCoin = Coin & {
 };
 
 const COIN_SVG = `<svg viewBox="0 0 8 8" width="${COIN_SIZE}" height="${COIN_SIZE}" shape-rendering="crispEdges" fill="#e8b923" aria-hidden="true"><path class="composer-coin-face" d="${COIN_FACE_PATH}"/><path class="composer-coin-edge" d="${COIN_EDGE_PATH}"/></svg>`;
+const STAR_SVG = `<svg viewBox="0 0 8 8" width="${STAR_SIZE}" height="${STAR_SIZE}" shape-rendering="crispEdges" fill="#f4e27a" aria-hidden="true"><path class="composer-coin-face" d="${STAR_FACE_PATH}"/><path class="composer-coin-edge" d="${STAR_EDGE_PATH}"/></svg>`;
 
 /** Project pixel mascot running the composer's top ledge while a turn is live. */
 export function ComposerRunner({
@@ -60,6 +70,7 @@ export function ComposerRunner({
   const layerRef = useRef<HTMLDivElement>(null);
   const spriteRef = useRef<HTMLDivElement>(null);
   const coinsRef = useRef<HTMLDivElement>(null);
+  const starsRef = useRef<HTMLDivElement>(null);
   const busyRef = useRef(busy);
   const enabledRef = useRef(enabled);
   const onExitedRef = useRef(onExited);
@@ -83,7 +94,8 @@ export function ComposerRunner({
     const layer = layerRef.current;
     const sprite = spriteRef.current;
     const coinLayer = coinsRef.current;
-    if (!layer || !sprite || !coinLayer) return;
+    const starLayer = starsRef.current;
+    if (!layer || !sprite || !coinLayer || !starLayer) return;
 
     let along = 0;
     let facing: 1 | -1 = 1;
@@ -97,10 +109,28 @@ export function ComposerRunner({
     let frozenX = 0;
     let frozenFacing: 1 | -1 = 1;
     let finished = false;
+    let stunning = false;
+    let stunAt = 0;
+    let hitAlong = 0;
+    let hitFacing: 1 | -1 = 1;
     const coins: LiveCoin[] = [];
     const reduced = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
+    let learned = reduced;
+    const starEls = Array.from({ length: STAR_COUNT }, () => {
+      const el = document.createElement("div");
+      el.className = "absolute top-0 left-0";
+      el.style.width = `${STAR_SIZE}px`;
+      el.style.height = `${STAR_SIZE}px`;
+      el.style.opacity = "0";
+      el.style.filter = "drop-shadow(0 1px 0 rgba(0,0,0,0.45))";
+      el.style.transform =
+        "translate3d(var(--star-x, -64px), var(--star-y, -64px), 0)";
+      el.innerHTML = STAR_SVG;
+      starLayer.append(el);
+      return el;
+    });
 
     const showLayer = (shown: boolean) => {
       layer.style.visibility = shown ? "visible" : "hidden";
@@ -113,17 +143,60 @@ export function ComposerRunner({
       x: number,
       y: number,
       facing: 1 | -1,
+      shakeX = 0,
+      shakeY = 0,
     ) => {
       sprite.style.setProperty(
         "--runner-x",
-        `${Math.round(boxLeft + x - RUNNER_SIZE / 2)}px`,
+        `${Math.round(boxLeft + x - RUNNER_SIZE / 2 + shakeX)}px`,
       );
       sprite.style.setProperty(
         "--runner-y",
-        `${Math.round(boxTop - RUNNER_SIZE - y + 1)}px`,
+        `${Math.round(boxTop - RUNNER_SIZE - y + 1 + shakeY)}px`,
       );
       sprite.style.setProperty("--runner-facing", String(facing));
       sprite.style.setProperty("--runner-clip", `${spriteClipBottom(y)}px`);
+    };
+
+    const hideStars = () => {
+      for (const el of starEls) el.style.opacity = "0";
+    };
+
+    const placeStars = (
+      boxLeft: number,
+      boxTop: number,
+      x: number,
+      y: number,
+      elapsed: number,
+      shakeX = 0,
+      shakeY = 0,
+    ) => {
+      const spriteLeft = boxLeft + x - RUNNER_SIZE / 2 + shakeX;
+      const spriteTop = boxTop - RUNNER_SIZE - y + 1 + shakeY;
+      const poses = stunStars(elapsed);
+      for (let i = 0; i < starEls.length; i++) {
+        const el = starEls[i];
+        const star = poses[i];
+        if (!star) {
+          el.style.opacity = "0";
+          continue;
+        }
+        el.style.setProperty(
+          "--star-x",
+          `${Math.round(spriteLeft + star.dx)}px`,
+        );
+        el.style.setProperty(
+          "--star-y",
+          `${Math.round(spriteTop + star.dy)}px`,
+        );
+        el.style.opacity = String(star.opacity);
+      }
+    };
+
+    const endStun = () => {
+      stunning = false;
+      sprite.classList.remove("mascot-stunned");
+      hideStars();
     };
 
     const clearCoins = () => {
@@ -138,6 +211,7 @@ export function ComposerRunner({
       const box = boxRef.current;
       if (!enabledRef.current) {
         showLayer(false);
+        endStun();
         if (!busyRef.current && !finished) {
           finished = true;
           clearCoins();
@@ -166,6 +240,7 @@ export function ComposerRunner({
       if (prevWidth > 0 && prevWidth !== track.width) {
         const prevInset = Math.max(0, prevWidth - RUNNER_INSET * 2);
         along = scaleTrackX(along, prevInset, insetTrack);
+        hitAlong = scaleTrackX(hitAlong, prevInset, insetTrack);
         frozenX = scaleTrackX(frozenX, prevWidth, track.width);
         for (const coin of coins) {
           coin.x = scaleTrackX(coin.x, prevWidth, track.width);
@@ -174,9 +249,13 @@ export function ComposerRunner({
       prevWidth = track.width;
 
       if (busyRef.current) {
-        if (exiting) exiting = false;
+        if (exiting) {
+          exiting = false;
+          learned = reduced;
+          endStun();
+        }
         finished = false;
-        if (!reduced) {
+        if (!reduced && !stunning) {
           const stepped = stepAlong(along, facing, dt, insetTrack);
           along = stepped.along;
           facing = stepped.facing;
@@ -184,6 +263,7 @@ export function ComposerRunner({
       } else if (!exiting && !finished) {
         exiting = true;
         exitAt = now;
+        endStun();
         const current = poseAt(along, facing, track.width, null, []);
         frozenX = current.x;
         frozenFacing = current.facing;
@@ -224,6 +304,15 @@ export function ComposerRunner({
         },
         button?.getBoundingClientRect() ?? null,
       );
+      if (stunning) {
+        along = recoilAlong(hitAlong, hitFacing, now - stunAt, insetTrack);
+        facing = hitFacing;
+        if (stunDone(now - stunAt)) {
+          learned = true;
+          endStun();
+        }
+      }
+
       for (const coin of coins) {
         if (
           coin.collectedAt == null &&
@@ -233,11 +322,42 @@ export function ComposerRunner({
         }
       }
       // Keep grabbed coins in the pose so the hop finishes instead of snapping
-      // back to the rim the frame they are collected.
-      const pose = poseAt(along, facing, track.width, obstacle, coins);
+      // back to the rim the frame they are collected. Skip the chevron hop
+      // until the mascot has bonked it once this turn.
+      const pose = poseAt(
+        along,
+        facing,
+        track.width,
+        learned ? obstacle : null,
+        stunning ? [] : coins,
+      );
+      if (
+        !stunning &&
+        hitsChevron(pose.x, pose.y, pose.facing, obstacle, learned)
+      ) {
+        stunning = true;
+        stunAt = now;
+        hitAlong = along;
+        hitFacing = facing;
+        sprite.classList.add("mascot-stunned");
+      }
+      const shake = stunning ? stunShake(now - stunAt) : { x: 0, y: 0 };
+      if (stunning) {
+        placeStars(
+          track.left,
+          track.top,
+          pose.x,
+          pose.y,
+          now - stunAt,
+          shake.x,
+          shake.y,
+        );
+      } else {
+        hideStars();
+      }
       const hasLive = coins.some((coin) => coin.collectedAt == null);
 
-      if (!reduced && !hasLive && now >= nextCoinAt) {
+      if (!reduced && !stunning && !hasLive && now >= nextCoinAt) {
         const x = pickCoinX(track.width, pose.x, obstacle);
         if (x != null) {
           const el = document.createElement("div");
@@ -262,7 +382,11 @@ export function ComposerRunner({
       }
 
       for (const coin of [...coins]) {
-        if (coin.collectedAt == null && coinCollected(pose, coin)) {
+        if (
+          !stunning &&
+          coin.collectedAt == null &&
+          coinCollected(pose, coin)
+        ) {
           coin.collectedAt = now;
           nextCoinAt = now + nextCoinDelay(false);
         }
@@ -288,7 +412,15 @@ export function ComposerRunner({
         }
       }
 
-      placeSprite(track.left, track.top, pose.x, pose.y, pose.facing);
+      placeSprite(
+        track.left,
+        track.top,
+        pose.x,
+        pose.y,
+        pose.facing,
+        shake.x,
+        shake.y,
+      );
     };
 
     apply(last);
@@ -331,6 +463,7 @@ export function ComposerRunner({
           active
         />
       </div>
+      <div ref={starsRef} className="absolute inset-0" />
     </div>,
     document.body,
   );

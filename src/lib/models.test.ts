@@ -4,6 +4,7 @@ import {
   coerceModelPickerTab,
   defaultModelId,
   defaultSessionChoice,
+  hasLiveCatalog,
   isPickerProviderVisible,
   loadDefaultModels,
   loadHiddenPickerProviders,
@@ -13,10 +14,12 @@ import {
   modelPickerTabs,
   preferredModelId,
   preferredModelSettings,
+  resetHarnessModelOverlays,
   saveDefaultModel,
   saveLastModelChoice,
   saveLastModelSettings,
   savePickerProviderVisible,
+  setHarnessModels,
   showProviderInModelPicker,
   stepModelPickerTab,
   type AgentModel,
@@ -279,5 +282,25 @@ describe("picker provider visibility", () => {
     expect(showProviderInModelPicker("pi", false, false)).toBe(true);
     expect(showProviderInModelPicker("pi", false, true)).toBe(false);
     expect(showProviderInModelPicker("pi", true, true)).toBe(true);
+  });
+});
+
+describe("live catalog overlays", () => {
+  afterEach(() => {
+    resetHarnessModelOverlays();
+  });
+
+  it("is empty until a CLI catalog replaces the fallback list", () => {
+    expect(hasLiveCatalog("pi")).toBe(false);
+    setHarnessModels("pi", [
+      {
+        id: "pi:opus",
+        harness: "pi",
+        name: "Opus",
+        nativeId: "anthropic/opus",
+      },
+    ]);
+    expect(hasLiveCatalog("pi")).toBe(true);
+    expect(hasLiveCatalog("omp")).toBe(false);
   });
 });

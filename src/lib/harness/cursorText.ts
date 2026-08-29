@@ -92,6 +92,7 @@ async function promptOnLive(input: {
     throw error;
   } finally {
     session.collecting = false;
+    await dropLive();
   }
 }
 
