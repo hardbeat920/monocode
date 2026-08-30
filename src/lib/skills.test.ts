@@ -65,6 +65,11 @@ describe("slashTokenAt", () => {
       end: 11,
       query: "rev",
     });
+    expect(slashTokenAt("/skill:arch", 11)).toEqual({
+      start: 0,
+      end: 11,
+      query: "skill:arch",
+    });
   });
 
   it("ignores URLs and paths", () => {
@@ -240,6 +245,11 @@ describe("rankSkills", () => {
       "pi-file",
       "review-pr",
     ]);
+  });
+
+  it("matches the displayed invocation", () => {
+    expect(rankSkills([review, piNative], "skill")).toEqual([piNative]);
+    expect(rankSkills([review, piNative], "skill:arch")).toEqual([piNative]);
   });
 
   it("gives the built-in row its exact invocation", () => {

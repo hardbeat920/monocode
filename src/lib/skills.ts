@@ -276,10 +276,16 @@ export function rankSkills(skills: Skill[], query: string, limit = MAX_PICKER): 
   const scored: { skill: Skill; score: number }[] = [];
   for (const skill of skills) {
     const nameHit = fuzzyMatch(needle, skill.name);
-    const descHit = nameHit ? null : fuzzyMatch(needle, skill.description);
-    const hit = nameHit ?? descHit;
+    const invocationHit = nameHit
+      ? null
+      : fuzzyMatch(needle, skill.invocation);
+    const descHit =
+      nameHit || invocationHit
+        ? null
+        : fuzzyMatch(needle, skill.description);
+    const hit = nameHit ?? invocationHit ?? descHit;
     if (!hit) continue;
-    const score = nameHit ? hit.score + 400 : hit.score;
+    const score = nameHit || invocationHit ? hit.score + 400 : hit.score;
     scored.push({ skill, score });
   }
   scored.sort((a, b) => {
@@ -310,7 +316,7 @@ export function slashTokenAt(text: string, cursor: number): SlashToken | null {
   const typed = text.slice(start + 1, i);
   if (typed.includes("/") || typed.includes("\\")) return null;
   if (/[A-Z]/.test(typed)) return null;
-  if (!/^[a-z0-9-]*$/.test(typed)) return null;
+  if (!/^(?:[a-z0-9-]+(?::[a-z0-9-]*)?)?$/.test(typed)) return null;
 
   return { start, end, query: typed };
 }
