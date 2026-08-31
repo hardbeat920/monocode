@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { INTERRUPT_MESSAGE } from "./inFlight";
-import { leaf, newFileTab, newTab, newTerminalFile } from "./layout";
+import {
+  leaf,
+  newFileTab,
+  newReleaseNotesWorkspaceTab,
+  newTab,
+  newTerminalFile,
+} from "./layout";
 import { createProjectTerminal } from "./projectTerminal";
 import { newSession, type Session } from "./session";
 import {
@@ -25,16 +31,9 @@ describe("collectWorkspaceSnapshot", () => {
     const tab = {
       ...newTab("s1"),
       id: "t1",
-      editorPanes: [
-        { id: "e1", files: [file], activeFileId: file.id },
-      ],
+      editorPanes: [{ id: "e1", files: [file], activeFileId: file.id }],
     };
-    const snapshot = collectWorkspaceSnapshot(
-      [tab],
-      [session],
-      "t1",
-      "/tmp/a",
-    );
+    const snapshot = collectWorkspaceSnapshot([tab], [session], "t1", "/tmp/a");
     expect(snapshot.activeTabId).toBe("t1");
     expect(snapshot.tabs[0]?.editorPanes[0]?.files[0]?.path).toBe(
       "/tmp/a/README.md",
@@ -48,6 +47,17 @@ describe("collectWorkspaceSnapshot", () => {
     ]);
     expect("blocks" in snapshot.sessions[0]!).toBe(false);
     expect(snapshot.projectTerminals).toEqual([]);
+  });
+
+  it("round-trips a release-note descriptor", () => {
+    const tab = newReleaseNotesWorkspaceTab({ version: "0.1.22" });
+    const snapshot = collectWorkspaceSnapshot([tab], [], tab.id, "~");
+    const workspace = hydrateWorkspaceSnapshot(snapshot, new Map());
+
+    expect(workspace?.tabs[0]?.editorPanes[0]?.files[0]?.releaseNotes).toEqual({
+      version: "0.1.22",
+    });
+    expect(workspace?.sessions).toEqual([]);
   });
 
   it("stores the project terminal dock", () => {
@@ -75,19 +85,76 @@ describe("parseWorkspaceSnapshot", () => {
   it("returns null for empty or invalid payloads", () => {
     expect(parseWorkspaceSnapshot(null)).toBeNull();
     expect(parseWorkspaceSnapshot({ tabs: [], activeTabId: "t1" })).toBeNull();
-    expect(parseWorkspaceSnapshot({ tabs: [{}], activeTabId: "t1" })).toBeNull();
+    expect(
+      parseWorkspaceSnapshot({ tabs: [{}], activeTabId: "t1" }),
+    ).toBeNull();
   });
 
   it("drops unknown fields and repairs a missing active tab", () => {
     const tab = { ...newTab("s1"), id: "t1" };
     const parsed = parseWorkspaceSnapshot({
       tabs: [{ ...tab, extra: true }],
-      sessions: [{ id: "s1", harness: "cursor", runtimeMode: "supervised", cwd: "/tmp/a" }],
+      sessions: [
+        {
+          id: "s1",
+          harness: "cursor",
+          runtimeMode: "supervised",
+          cwd: "/tmp/a",
+        },
+      ],
       activeTabId: "missing",
       projectCwd: "/tmp/a",
     });
     expect(parsed?.activeTabId).toBe("t1");
     expect(parsed?.tabs[0] && "extra" in parsed.tabs[0]).toBe(false);
+  });
+
+  it.each([
+    { releaseNotes: { version: "" } },
+    { releaseNotes: { version: 123 } },
+    {
+      releaseNotes: { version: "0.1.22" },
+      plan: { sessionId: "s", blockId: "b", title: "Plan" },
+    },
+    { releaseNotes: { version: "0.1.22" }, review: true },
+    { releaseNotes: { version: "0.1.22" }, terminal: true },
+  ])("rejects a tab whose release pane is invalid: %j", (descriptor) => {
+    const valid = { ...newTab("session-a"), id: "valid-tab" };
+    const invalidPaneId = "invalid-release-pane";
+    const invalid = {
+      kind: "session",
+      id: "invalid-tab",
+      layout: leaf(invalidPaneId),
+      focusedId: invalidPaneId,
+      editorPanes: [
+        {
+          id: invalidPaneId,
+          activeFileId: "release-file",
+          files: [
+            {
+              id: "release-file",
+              path: "release-notes:0.1.22",
+              cwd: "~",
+              ...descriptor,
+            },
+          ],
+        },
+      ],
+      terminalPanes: [],
+    };
+
+    const parsed = parseWorkspaceSnapshot({
+      tabs: [valid, invalid],
+      sessions: [],
+      activeTabId: "invalid-tab",
+      projectCwd: "~",
+    });
+    expect(parsed?.tabs.map((tab) => tab.id)).toEqual(["valid-tab"]);
+
+    const workspace = parsed && hydrateWorkspaceSnapshot(parsed, new Map());
+    expect(
+      workspace?.sessions.some((session) => session.id === invalidPaneId),
+    ).toBe(false);
   });
 });
 
@@ -116,7 +183,16 @@ describe("hydrateWorkspaceSnapshot", () => {
       "/tmp/a",
     );
     const loaded = new Map([
-      ["s1", { ...left, blocks: [...left.blocks, { id: "a1", role: "assistant" as const, text: "stored" }] }],
+      [
+        "s1",
+        {
+          ...left,
+          blocks: [
+            ...left.blocks,
+            { id: "a1", role: "assistant" as const, text: "stored" },
+          ],
+        },
+      ],
     ]);
     const workspace = hydrateWorkspaceSnapshot(snapshot, loaded);
     expect(workspace?.tabs).toHaveLength(1);
@@ -124,12 +200,12 @@ describe("hydrateWorkspaceSnapshot", () => {
     expect(workspace?.tabs[0]?.editorPanes[0]?.files[0]?.path).toBe(
       "/tmp/a/src/lib.rs",
     );
-    expect(workspace?.sessions.find((session) => session.id === "s1")?.blocks).toEqual(
-      loaded.get("s1")?.blocks,
-    );
-    expect(workspace?.sessions.find((session) => session.id === "s2")?.blocks).toEqual(
-      [],
-    );
+    expect(
+      workspace?.sessions.find((session) => session.id === "s1")?.blocks,
+    ).toEqual(loaded.get("s1")?.blocks);
+    expect(
+      workspace?.sessions.find((session) => session.id === "s2")?.blocks,
+    ).toEqual([]);
   });
 
   it("marks in-flight chats interrupted and adds a tab if they were parked", () => {
@@ -153,9 +229,9 @@ describe("hydrateWorkspaceSnapshot", () => {
     expect(workspace?.tabs).toHaveLength(2);
     const resumed = workspace?.sessions.find((session) => session.id === "s2");
     expect(resumed?.busy).toBe(false);
-    expect(resumed?.blocks.some((block) => block.text === INTERRUPT_MESSAGE)).toBe(
-      true,
-    );
+    expect(
+      resumed?.blocks.some((block) => block.text === INTERRUPT_MESSAGE),
+    ).toBe(true);
   });
 
   it("keeps terminal-only tabs", () => {

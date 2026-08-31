@@ -1,3 +1,4 @@
+import type { ReleaseNotesTabSource } from "./releaseNotes";
 import {
   applyTerminalMeta,
   defaultTerminalTitle,
@@ -39,6 +40,7 @@ export type FilePaneTab = {
   path: string;
   cwd: string;
   plan?: PlanTabSource;
+  releaseNotes?: ReleaseNotesTabSource;
   review?: boolean;
   terminal?: boolean;
   /** Foreground command when it isn't the shell. Live only — not persisted. */
@@ -107,6 +109,26 @@ export function newPlanTab(
     path: `plan:${blockId}`,
     cwd,
     plan: { sessionId, blockId, title },
+  };
+}
+
+export function newReleaseNotesWorkspaceTab(
+  releaseNotes: ReleaseNotesTabSource,
+): WorkspaceTab {
+  const file: FilePaneTab = {
+    id: crypto.randomUUID(),
+    path: `release-notes:${releaseNotes.version}`,
+    cwd: "~",
+    releaseNotes,
+  };
+  const pane = newEditorPane(file);
+  return {
+    kind: "session",
+    id: crypto.randomUUID(),
+    layout: leaf(pane.id),
+    focusedId: pane.id,
+    editorPanes: [pane],
+    terminalPanes: [],
   };
 }
 
@@ -206,8 +228,22 @@ export function isPlanTab(
   return !!file.plan;
 }
 
+export function isReleaseNotesTab(
+  file: FilePaneTab,
+): file is FilePaneTab & { releaseNotes: ReleaseNotesTabSource } {
+  return !!file.releaseNotes;
+}
+
 export function isTerminalTab(file: FilePaneTab): boolean {
   return !!file.terminal;
+}
+
+export function isVirtualDocumentTab(file: FilePaneTab): boolean {
+  return isPlanTab(file) || isReleaseNotesTab(file);
+}
+
+export function isFilesystemTab(file: FilePaneTab): boolean {
+  return !isTerminalTab(file) && !isVirtualDocumentTab(file);
 }
 
 export function focusedFileTab(tab: WorkspaceTab): FilePaneTab | undefined {
@@ -220,9 +256,7 @@ export function focusedFileTab(tab: WorkspaceTab): FilePaneTab | undefined {
 /** Move terminal tabs out of file panes so the two never share a tab strip. */
 export function isolateTerminalPanes(tab: WorkspaceTab): WorkspaceTab {
   const existingTerminals = tab.terminalPanes ?? [];
-  const mixed = tab.editorPanes.some((pane) =>
-    pane.files.some(isTerminalTab),
-  );
+  const mixed = tab.editorPanes.some((pane) => pane.files.some(isTerminalTab));
   if (!mixed && tab.terminalPanes) return tab;
 
   let layout = tab.layout;
@@ -265,12 +299,13 @@ export function isolateTerminalPanes(tab: WorkspaceTab): WorkspaceTab {
 }
 
 export function isReviewTab(file: FilePaneTab): boolean {
-  return !!file.review && !file.plan;
+  return !!file.review && !isVirtualDocumentTab(file);
 }
 
 export function editorTabKey(file: FilePaneTab): string {
   if (file.terminal) return `terminal:${file.id}`;
   if (file.plan) return `plan:${file.plan.blockId}`;
+  if (file.releaseNotes) return `release-notes:${file.releaseNotes.version}`;
   return file.review ? `review:${file.path}` : `file:${file.path}`;
 }
 

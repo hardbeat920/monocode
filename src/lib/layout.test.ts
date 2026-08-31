@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   closeLeaf,
   editorTabKey,
+  isFilesystemTab,
+  isReleaseNotesTab,
+  isReviewTab,
   isTerminalTab,
   layoutLeaves,
   layoutSashes,
   leaf,
   newFileTab,
   newPlanTab,
+  newReleaseNotesWorkspaceTab,
   newTab,
   newTerminalFile,
   newTerminalWorkspaceTab,
@@ -89,6 +93,31 @@ describe("editorTabKey", () => {
   });
 });
 
+describe("newReleaseNotesWorkspaceTab", () => {
+  it("creates a projectless editor-only workspace tab", () => {
+    const tab = newReleaseNotesWorkspaceTab({ version: "0.1.23" });
+    const file = tab.editorPanes[0]?.files[0];
+
+    expect(file && isReleaseNotesTab(file)).toBe(true);
+    expect(file && editorTabKey(file)).toBe("release-notes:0.1.23");
+    expect(file && isReviewTab(file)).toBe(false);
+    expect(file && isFilesystemTab(file)).toBe(false);
+    expect(tab.terminalPanes).toEqual([]);
+    expect(layoutLeaves(tab.layout).map((pane) => pane.id)).toEqual([
+      tab.editorPanes[0]?.id,
+    ]);
+    expect(tab.focusedId).toBe(tab.editorPanes[0]?.id);
+  });
+
+  it("deduplicates release files by version", () => {
+    const first = newReleaseNotesWorkspaceTab({ version: "0.1.23" })
+      .editorPanes[0]!.files[0]!;
+    const second = newReleaseNotesWorkspaceTab({ version: "0.1.23" })
+      .editorPanes[0]!.files[0]!;
+    expect(editorTabKey(first)).toBe(editorTabKey(second));
+  });
+});
+
 describe("openTerminalTab", () => {
   it("occupies a session pane instead of splitting a leftover chat", () => {
     const tab = newTab("session-a");
@@ -124,7 +153,10 @@ describe("openTerminalTab", () => {
     );
     const first = newTerminalFile("/repo");
     const withTerminal = openTerminalTab(withFile, first);
-    const extra = newTerminalFile("/repo", nextTerminalTitle(withTerminal, "/repo"));
+    const extra = newTerminalFile(
+      "/repo",
+      nextTerminalTitle(withTerminal, "/repo"),
+    );
     const next = openTerminalTab(withTerminal, extra);
     expect(next.editorPanes).toHaveLength(1);
     expect(next.editorPanes[0]?.files.map((file) => file.path)).toEqual([
@@ -176,10 +208,7 @@ describe("openEditorTab", () => {
       newTab("session-a"),
       newTerminalFile("/repo"),
     );
-    const next = openEditorTab(
-      terminal,
-      newFileTab("/repo/App.tsx", "/repo"),
-    );
+    const next = openEditorTab(terminal, newFileTab("/repo/App.tsx", "/repo"));
     expect(next.terminalPanes[0]?.files.every(isTerminalTab)).toBe(true);
     expect(next.editorPanes[0]?.files.map((file) => file.path)).toEqual([
       "/repo/App.tsx",

@@ -44,6 +44,19 @@ jobs:
             echo "Tag v$TAG does not match package.json ($PKG), Cargo.toml ($CARGO), or tauri.conf.json ($CONF)"
             exit 1
           fi
+          node - "$TAG" <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const version = process.argv[2];
+          const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const heading = new RegExp(
+            `^## \\[${escaped}\\](?: - \\d{4}-\\d{2}-\\d{2})?$`,
+            "m",
+          );
+          if (!heading.test(readFileSync("CHANGELOG.md", "utf8"))) {
+            console.error(`CHANGELOG.md has no valid release section for ${version}`);
+            process.exit(1);
+          }
+          NODE
 
       - name: Write release config
         env:

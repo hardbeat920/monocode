@@ -2,7 +2,14 @@ import { GripVertical, Terminal, X } from "./icons";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useLayoutEffect, useRef } from "react";
 import { basename } from "../lib/fs";
-import { isPlanTab, isReviewTab, isTerminalTab, type FilePaneTab } from "../lib/layout";
+import {
+  isPlanTab,
+  isReleaseNotesTab,
+  isReviewTab,
+  isTerminalTab,
+  type FilePaneTab,
+} from "../lib/layout";
+import { releaseNotesTitle } from "../lib/releaseNotes";
 import { terminalTabLabel } from "../lib/terminalTab";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useSortable } from "../hooks/useSortable";
@@ -20,6 +27,47 @@ type Props = {
   label?: string;
   trailing?: ReactNode;
 };
+
+export type SurfaceTabPresentation = {
+  name: string;
+  label: string;
+  iconName: string;
+  tooltip: string;
+};
+
+export function surfaceTabPresentation(
+  file: FilePaneTab,
+): SurfaceTabPresentation {
+  if (isReleaseNotesTab(file)) {
+    const title = releaseNotesTitle(file.releaseNotes.version);
+    return {
+      name: title,
+      label: title,
+      iconName: "CHANGELOG.md",
+      tooltip: title,
+    };
+  }
+
+  const review = isReviewTab(file);
+  const terminal = isTerminalTab(file);
+  const name = isPlanTab(file)
+    ? file.plan.title.trim() || "Plan"
+    : terminal
+      ? terminalTabLabel(file)
+      : basename(file.path);
+  return {
+    name,
+    label: review ? `${name} (Working Tree)` : name,
+    iconName: isPlanTab(file) ? "plan.md" : name,
+    tooltip: isPlanTab(file)
+      ? name
+      : terminal
+        ? `${name} — ${file.cwd}`
+        : review
+          ? `${file.path} (Working Tree)`
+          : file.path,
+  };
+}
 
 /** Mirrors the VS Code tab tooltip: the path, then what is wrong with it. */
 export function appendProblems(title: string, errors: number): string {
@@ -84,13 +132,7 @@ export function SurfaceTabs({
         const errors = fileErrorCounts.get(file.id) ?? 0;
         const review = isReviewTab(file);
         const terminal = isTerminalTab(file);
-        const name = isPlanTab(file)
-          ? file.plan?.title?.trim() || "Plan"
-          : terminal
-            ? terminalTabLabel(file)
-            : basename(file.path);
-        const label = review ? `${name} (Working Tree)` : name;
-        const iconName = isPlanTab(file) ? "plan.md" : name;
+        const { label, iconName, tooltip } = surfaceTabPresentation(file);
         const dragging = sortable.draggingId === file.id;
         const showStart =
           sortable.draggingId &&
@@ -135,16 +177,7 @@ export function SurfaceTabs({
               type="button"
               role="tab"
               aria-selected={active}
-              title={appendProblems(
-                isPlanTab(file)
-                  ? name
-                  : terminal
-                    ? `${name} — ${file.cwd}`
-                    : review
-                      ? `${file.path} (Working Tree)`
-                      : file.path,
-                errors,
-              )}
+              title={appendProblems(tooltip, errors)}
               onClick={() => {
                 if (sortable.consumeClick()) return;
                 onSelectFile(file.id);

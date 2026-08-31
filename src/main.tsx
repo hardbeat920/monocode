@@ -6,6 +6,7 @@ import App from "./App";
 import { initAppearance } from "./lib/appearance";
 import { initSounds } from "./lib/sounds";
 import { handleQuitRequested, loadBootWorkspace } from "./lib/appLifecycle";
+import { consumeInstalledUpdate } from "./lib/updateNotice";
 import "./index.css";
 
 initAppearance();
@@ -39,10 +40,15 @@ void listen("quit_requested", () => {
 });
 
 void loadBootWorkspace().then(({ windowTransfer, resumed }) => {
+  const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <BootGate>
-        <App windowTransfer={windowTransfer} resumed={resumed} />
+        <App
+          windowTransfer={windowTransfer}
+          resumed={resumed}
+          installedUpdate={installedUpdate}
+        />
       </BootGate>
     </React.StrictMode>,
   );

@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- After an in-app update, MonoCode shows a notification with a **What's new** action. It opens the bundled notes in a read-only tab only when requested. The notes remain available under Settings → General → About.
 - Inbox pull request and issue details load the conversation (comments, reviews, and review threads) in the background, so the description still appears first.
 - Grok Build joins the provider list. Install it with `curl -fsSL https://x.ai/cli/install.sh | bash` and run `grok login` (or set `XAI_API_KEY`). MonoCode runs `grok agent stdio` like the other ACP harnesses: live turns, supervised approvals, model catalog, reasoning effort, context usage, skills from `.grok/skills`, and titles / commit / PR text.
 - Search sits next to Inbox and Notes in the sidebar project picker, with the same ⌘K / Ctrl+K hint.

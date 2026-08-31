@@ -9,6 +9,7 @@ import {
   type PlanTabSource,
   type WorkspaceTab,
 } from "./layout";
+import type { ReleaseNotesTabSource } from "./releaseNotes";
 import {
   clampDockSize,
   isDockSide,
@@ -265,16 +266,15 @@ function sanitizeTab(raw: unknown): WorkspaceTab | null {
   if (typeof value.id !== "string" || !value.id) return null;
   const layout = sanitizeLayout(value.layout);
   if (!layout) return null;
-  const editorPanes = Array.isArray(value.editorPanes)
-    ? value.editorPanes
-        .map(sanitizePane)
-        .filter((pane): pane is EditorPane => pane != null)
-    : [];
-  const terminalPanes = Array.isArray(value.terminalPanes)
-    ? value.terminalPanes
-        .map(sanitizePane)
-        .filter((pane): pane is EditorPane => pane != null)
-    : [];
+  const editorResult = sanitizePanes(value.editorPanes);
+  const terminalResult = sanitizePanes(value.terminalPanes);
+  const invalidPaneIds = new Set([
+    ...editorResult.invalidIds,
+    ...terminalResult.invalidIds,
+  ]);
+  if (leafIds(layout).some((id) => invalidPaneIds.has(id))) return null;
+  const editorPanes = editorResult.panes;
+  const terminalPanes = terminalResult.panes;
   const focusedId =
     typeof value.focusedId === "string" && value.focusedId
       ? value.focusedId
@@ -324,6 +324,26 @@ function sanitizeLayout(raw: unknown): LayoutNode | null {
   return { type: "split", id: value.id, dir, children, sizes: normalized };
 }
 
+function sanitizePanes(raw: unknown): {
+  panes: EditorPane[];
+  invalidIds: string[];
+} {
+  if (!Array.isArray(raw)) return { panes: [], invalidIds: [] };
+  const panes: EditorPane[] = [];
+  const invalidIds: string[] = [];
+  for (const entry of raw) {
+    const pane = sanitizePane(entry);
+    if (pane) {
+      panes.push(pane);
+      continue;
+    }
+    if (!entry || typeof entry !== "object") continue;
+    const id = (entry as Record<string, unknown>).id;
+    if (typeof id === "string" && id) invalidIds.push(id);
+  }
+  return { panes, invalidIds };
+}
+
 function sanitizePane(raw: unknown): EditorPane | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
@@ -348,14 +368,33 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
   if (typeof value.path !== "string" || !value.path) return null;
   if (typeof value.cwd !== "string" || !value.cwd) return null;
   const plan = sanitizePlan(value.plan);
+  const hasReleaseNotes = "releaseNotes" in value;
+  const releaseNotes = sanitizeReleaseNotes(value.releaseNotes);
+  if (hasReleaseNotes && !releaseNotes) return null;
+  if (
+    releaseNotes &&
+    (value.plan != null || value.review === true || value.terminal === true)
+  ) {
+    return null;
+  }
   return {
     id: value.id,
     path: value.path,
     cwd: value.cwd,
     ...(plan ? { plan } : {}),
+    ...(releaseNotes ? { releaseNotes } : {}),
     ...(value.review === true ? { review: true } : {}),
     ...(value.terminal === true ? { terminal: true } : {}),
   };
+}
+
+function sanitizeReleaseNotes(
+  raw: unknown,
+): ReleaseNotesTabSource | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const version = (raw as Record<string, unknown>).version;
+  if (typeof version !== "string" || !version.trim()) return undefined;
+  return { version: version.trim() };
 }
 
 function sanitizeProjectTerminal(raw: unknown): ProjectTerminalDock | null {

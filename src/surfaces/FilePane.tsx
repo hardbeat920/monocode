@@ -7,6 +7,7 @@ import {
 import { SurfaceTabs } from "../chrome/SurfaceTabs";
 import {
   isPlanTab,
+  isReleaseNotesTab,
   isTerminalTab,
   type EditorPane,
   type FilePaneTab,
@@ -17,6 +18,7 @@ import { editorPathsEqual } from "../lib/search";
 import type { Session } from "../lib/session";
 import { MarkdownPreview, MarkdownSource } from "./AgentMarkdown";
 import { FileEditor } from "./FileEditor";
+import { ReleaseNotesSurface } from "./ReleaseNotesSurface";
 import { TerminalView } from "./TerminalView";
 
 type Props = {
@@ -86,6 +88,8 @@ function FilePaneComponent({
                 sessions={sessions}
                 onOpenFile={onOpenFile}
               />
+            ) : isReleaseNotesTab(file) ? (
+              <ReleaseNotesSurface source={file.releaseNotes} />
             ) : isTerminalTab(file) ? (
               <TerminalView
                 id={file.id}

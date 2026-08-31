@@ -154,6 +154,7 @@ type Props = {
   onDeleteSession: (sessionId: string) => void;
   onRestoreProject?: (path: string) => void;
   onDeleteProject?: (path: string) => void;
+  onOpenWhatsNew: (version: string) => void;
 };
 
 export function SettingsView({
@@ -167,6 +168,7 @@ export function SettingsView({
   onDeleteSession,
   onRestoreProject,
   onDeleteProject,
+  onOpenWhatsNew,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const onCloseRef = useRef(onClose);
@@ -228,7 +230,9 @@ export function SettingsView({
             title={settingsSectionLabel(section)}
             description={settingsSectionDescription(section)}
           />
-          {section === "general" ? <GeneralPage /> : null}
+          {section === "general" ? (
+            <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
+          ) : null}
           {section === "appearance" ? (
             <AppearancePage appearance={appearance} />
           ) : null}
@@ -251,7 +255,11 @@ export function SettingsView({
   );
 }
 
-function GeneralPage() {
+function GeneralPage({
+  onOpenWhatsNew,
+}: {
+  onOpenWhatsNew: (version: string) => void;
+}) {
   const [layout, setLayout] = useState<SidebarLayout>(loadSidebarLayout);
   const [transcriptLayout, setTranscriptLayout] =
     useState<TranscriptLayout>(loadTranscriptLayout);
@@ -441,7 +449,7 @@ function GeneralPage() {
       <LinearSettings />
 
       <Heading title="About" />
-      <UpdateRow />
+      <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
     </>
   );
 }
@@ -602,7 +610,11 @@ function LinearSettings() {
   );
 }
 
-function UpdateRow() {
+function UpdateRow({
+  onOpenWhatsNew,
+}: {
+  onOpenWhatsNew: (version: string) => void;
+}) {
   const [snapshot, setSnapshot] = useState<UpdaterSnapshot>({
     phase: "idle",
     currentVersion: "…",
@@ -657,16 +669,24 @@ function UpdateRow() {
       }
       description={status}
     >
-      <SecondaryButton onClick={() => void onClick()} disabled={busy}>
-        {busy ? (
+      <div className="flex items-center gap-2">
+        <SecondaryButton
+          onClick={() => onOpenWhatsNew(snapshot.currentVersion)}
+          disabled={snapshot.currentVersion === "…"}
+        >
+          What's new
+        </SecondaryButton>
+        <SecondaryButton onClick={() => void onClick()} disabled={busy}>
+          {busy ? (
           <Loader className="size-3.5 animate-spin" aria-hidden />
         ) : hasUpdate ? (
           <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
         ) : (
           <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
         )}
-        {hasUpdate ? "Download" : "Check for updates"}
-      </SecondaryButton>
+          {hasUpdate ? "Download" : "Check for updates"}
+        </SecondaryButton>
+      </div>
     </Row>
   );
 }

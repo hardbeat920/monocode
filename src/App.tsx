@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { message } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Sidebar } from "./chrome/Sidebar";
 import { ApprovalToasts } from "./chrome/ApprovalToasts";
+import { UpdateToast } from "./chrome/UpdateToast";
 import { TitleBar, type Tab as TitleTab } from "./chrome/TitleBar";
 import { MenuBar } from "./chrome/MenuBar";
 import { FilePicker } from "./chrome/FilePicker";
@@ -37,7 +39,7 @@ import {
   firstLeafId,
   focusedFileTab,
   isolateTerminalPanes,
-  isPlanTab,
+  isFilesystemTab,
   isTerminalTab,
   leaf,
   leafIds,
@@ -45,6 +47,7 @@ import {
   neighborLeafId,
   newFileTab,
   newPlanTab,
+  newReleaseNotesWorkspaceTab,
   newTab,
   newTerminalFile,
   newTerminalWorkspaceTab,
@@ -66,6 +69,14 @@ import {
   type SplitDir,
   type WorkspaceTab,
 } from "./lib/layout";
+import {
+  releaseNotesForVersion,
+  releaseNotesTitle,
+} from "./lib/releaseNotes";
+import {
+  focusReleaseNotesTarget,
+  planReleaseNotesOpen,
+} from "./lib/releaseNotesWorkspace";
 import { orderByIds } from "./lib/reorder";
 import {
   addTerminalToDock,
@@ -304,6 +315,7 @@ import {
   collectWorkspaceSnapshot,
   workspaceSnapshotKey,
 } from "./lib/workspaceSnapshot";
+import type { InstalledUpdate } from "./lib/updateNotice";
 import {
   bindResumedSessions,
   hasInFlightSessions,
@@ -410,9 +422,11 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
 export default function App({
   windowTransfer = null,
   resumed = null,
+  installedUpdate = null,
 }: {
   windowTransfer?: WindowTransferPayload | null;
   resumed?: ResumedWorkspace | null;
+  installedUpdate?: InstalledUpdate | null;
 }) {
   const [projectCwd, setProjectCwd] = useState(
     () =>
@@ -494,6 +508,7 @@ export default function App({
     () => true,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updateNotice, setUpdateNotice] = useState(installedUpdate);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionId>(loadSettingsSection);
   const [editorNavigation, setEditorNavigation] =
@@ -1161,6 +1176,38 @@ export default function App({
     [projectOfTab],
   );
 
+  const onOpenWhatsNew = useCallback(
+    (version: string) => {
+      const document = releaseNotesForVersion(version);
+      if (!document) {
+        void message(
+          "Release notes for this version are not available in this build.",
+          { title: "MonoCode" },
+        );
+        return;
+      }
+
+      setFilePickerOpen(false);
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setSettingsOpen(false);
+
+      const plan = planReleaseNotesOpen(tabsRef.current, version);
+      if (plan.kind === "focus") {
+        setTabs((current) => focusReleaseNotesTarget(current, plan));
+        setActiveTabId(plan.tabId);
+      } else {
+        const tab = newReleaseNotesWorkspaceTab(document.source);
+        appendTab(tab);
+        setActiveTabId(tab.id);
+      }
+      setComposerFocused(false);
+      setUpdateNotice(null);
+    },
+    [appendTab],
+  );
+
   const onNew = useCallback(() => {
     setSearchViewOpen(false);
     setInboxViewOpen(false);
@@ -1649,7 +1696,9 @@ export default function App({
         ...closing.editorPanes.flatMap((pane) => pane.files),
         ...(closing.terminalPanes ?? []).flatMap((pane) => pane.files),
       ];
-      const unsaved = closingFiles.filter((file) => dirtyFiles.has(file.id));
+      const unsaved = closingFiles.filter(
+        (file) => isFilesystemTab(file) && dirtyFiles.has(file.id),
+      );
       if (
         unsaved.length > 0 &&
         !window.confirm("Close this tab with unsaved files?")
@@ -1824,8 +1873,7 @@ export default function App({
       if (index < 0) return;
       const file = pane.files[index];
       if (
-        !file.plan &&
-        !file.terminal &&
+        isFilesystemTab(file) &&
         dirtyFiles.has(fileId) &&
         !window.confirm(`Close ${basename(file.path)} without saving?`)
       ) {
@@ -1948,7 +1996,9 @@ export default function App({
         ...tab.editorPanes.flatMap((pane) => pane.files),
         ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
       ];
-      const unsaved = closingFiles.filter((file) => dirtyFiles.has(file.id));
+      const unsaved = closingFiles.filter(
+        (file) => isFilesystemTab(file) && dirtyFiles.has(file.id),
+      );
       if (
         unsaved.length > 0 &&
         !window.confirm("Close this conversation with unsaved files?")
@@ -2951,12 +3001,9 @@ export default function App({
           editorPanes: tab.editorPanes.map((pane) => ({
             ...pane,
             files: pane.files.map((file) =>
-              file.plan || file.terminal
-                ? file
-                : {
-                    ...file,
-                    path: rebasePath(file.path, from, to),
-                  },
+              isFilesystemTab(file)
+                ? { ...file, path: rebasePath(file.path, from, to) }
+                : file,
             ),
           })),
         };
@@ -2970,7 +3017,9 @@ export default function App({
     for (const tab of tabsRef.current) {
       for (const pane of tab.editorPanes) {
         for (const file of pane.files) {
-          if (isEqualOrInside(file.path, path)) dropped.add(file.id);
+          if (isFilesystemTab(file) && isEqualOrInside(file.path, path)) {
+            dropped.add(file.id);
+          }
         }
       }
     }
@@ -3896,7 +3945,7 @@ export default function App({
     for (const tab of tabs) {
       for (const pane of tab.editorPanes) {
         for (const file of pane.files) {
-          if (file.plan || file.terminal || seen.has(file.path)) continue;
+          if (!isFilesystemTab(file) || seen.has(file.path)) continue;
           seen.add(file.path);
           paths.push(file.path);
         }
@@ -4493,6 +4542,7 @@ export default function App({
             onDeleteProject={(path) =>
               onRemoveProject(path, { purgeData: true })
             }
+            onOpenWhatsNew={onOpenWhatsNew}
           />
         ) : null}
         {searchViewOpen || inboxViewOpen || notesViewOpen || settingsOpen ? null : (
@@ -4521,6 +4571,11 @@ export default function App({
         onFocusSession={onOpenApprovalSession}
         onApproval={onApproval}
       />
+      <UpdateToast
+        update={updateNotice}
+        onOpen={onOpenWhatsNew}
+        onDismiss={() => setUpdateNotice(null)}
+      />
     </div>
   );
 }
@@ -4547,8 +4602,7 @@ function selectedChangePath(
   gitCwd?: string,
 ): string | undefined {
   const file = focusedFileTab(tab);
-  if (!file || isPlanTab(file) || isTerminalTab(file) || !file.review)
-    return undefined;
+  if (!file || !isFilesystemTab(file) || !file.review) return undefined;
   return displayPath(file.path, gitCwd || file.cwd);
 }
 
@@ -4609,12 +4663,18 @@ function toTitleTab(
       ? `terminal:${file.id}`
       : file.plan
         ? `plan:${file.plan.blockId}`
-        : file.path;
+        : file.releaseNotes
+          ? `release-notes:${file.releaseNotes.version}`
+          : file.path;
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
     files.push(
       file.plan?.title?.trim() ||
-        (file.terminal ? terminalTabLabel(file) : basename(file.path)),
+        (file.releaseNotes
+          ? releaseNotesTitle(file.releaseNotes.version)
+          : file.terminal
+            ? terminalTabLabel(file)
+            : basename(file.path)),
     );
   };
   const focusedPane =
@@ -4659,7 +4719,9 @@ function toTitleTab(
     multiPane,
     fileFocused,
     dirty: tab.editorPanes.some((pane) =>
-      pane.files.some((file) => dirtyFiles.has(file.id)),
+      pane.files.some(
+        (file) => isFilesystemTab(file) && dirtyFiles.has(file.id),
+      ),
     ),
     terminal: hasTerminal && harnesses.length === 0,
     groupId: tab.groupId,
@@ -4674,7 +4736,9 @@ function dropOpenFiles(
   let focusedId = tab.focusedId;
   const editorPanes: EditorPane[] = [];
   for (const pane of tab.editorPanes) {
-    const files = pane.files.filter((file) => !shouldDrop(file.path));
+    const files = pane.files.filter(
+      (file) => !isFilesystemTab(file) || !shouldDrop(file.path),
+    );
     if (files.length === 0) {
       const sibling = siblingLeafId(layout, pane.id);
       const withoutPane = removePane(layout, pane.id);

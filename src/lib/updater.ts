@@ -3,6 +3,7 @@ import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { announceUpdateAvailable } from "./sounds";
+import { rememberInstalledUpdate } from "./updateNotice";
 
 export type UpdaterPhase =
   | "idle"
@@ -152,6 +153,7 @@ export async function installPendingUpdate(
       });
     });
 
+    rememberInstalledUpdate(update.version);
     pendingUpdate = null;
     await relaunch();
     return {
