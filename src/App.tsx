@@ -22,6 +22,7 @@ import {
   type SidebarTabId,
 } from "./lib/appearance";
 import { IS_MAC } from "./lib/platform";
+import { runUpdateFlow } from "./lib/updater";
 import { displayAttachments, prepareAttachments } from "./lib/attachments";
 import { basename, notifyGitChanged, pickFolder, restoreSessionCheckout } from "./lib/fs";
 import {
@@ -4092,6 +4093,9 @@ export default function App({
       listen("open_inbox", () => actions.current.onOpenInbox()),
       listen("open_notes", () => actions.current.onOpenNotes()),
       listen("open_settings", () => actions.current.openSettings()),
+      listen("check_for_updates", () => {
+        void runUpdateFlow(true);
+      }),
       listen("sidebar_opacity", () => {
         actions.current.openSettings("appearance");
       }),

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Check for Updates lives in the app menu — next to Settings on macOS and in the File menu elsewhere — so you can check anytime; Settings → General has it too.
+
 ### Changed
 
 - Launch holds the logo until the restored workspace is ready, then fades to that first paint. The window stays up through the Dock bounce so the mark is visible instead of a blank or shifting chrome.

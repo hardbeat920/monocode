@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { ALT, MOD, SHIFT } from "../lib/platform";
 import { toggleTranscriptZen } from "../lib/appearance";
+import { runUpdateFlow } from "../lib/updater";
 
 type MenuKey = "file" | "view" | "terminal";
 
@@ -142,6 +143,9 @@ export function MenuBar({
         case "toggle_diff":
           onShowSourceControl?.();
           break;
+        case "check_for_updates":
+          void runUpdateFlow(true);
+          break;
       }
     },
     [
@@ -175,6 +179,8 @@ export function MenuBar({
           { kind: "item", id: "find_in_project", label: "Find in Files…", shortcut: `${MOD}${SHIFT}F` },
           { kind: "sep" },
           { kind: "item", id: "close_tab", label: "Close Pane", shortcut: `${MOD}W` },
+          { kind: "sep" },
+          { kind: "item", id: "check_for_updates", label: "Check for Updates…" },
         ];
       case "view":
         return [

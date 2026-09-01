@@ -22,7 +22,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "focus_down" | "toggle_sidebar" | "toggle_zen" | "sidebar_opacity" | "open_project"
         | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
         | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" => {
+        | "open_model_picker" | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
         _ => {}
@@ -34,6 +34,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let open_settings = MenuItemBuilder::with_id("open_settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
+    let check_for_updates =
+        MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
     let new_window = MenuItemBuilder::with_id("new_window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
@@ -171,6 +173,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             .about(Some(AboutMetadata::default()))
             .separator()
             .item(&open_settings)
+            .item(&check_for_updates)
             .separator()
             .hide()
             .hide_others()
