@@ -29,6 +29,8 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 
 macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg), open it, drag MonoCode to Applications.
 
+Linux (x86_64): download the `.deb` or AppImage from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install the `.deb` with `sudo apt install ./MonoCode_*.deb`, or make the AppImage executable with `chmod +x MonoCode_*.AppImage` and run it directly.
+
 ## Some notes
 
 This is very early and you should expect bugs.
@@ -45,6 +47,19 @@ Need Node.js 20+ and a current stable Rust toolchain. On Linux, ensure standard 
 npm install
 npm run tauri dev
 ```
+
+### Ubuntu / Debian packages
+
+On an Ubuntu/Debian workstation, the repository can install the native Tauri prerequisites and build distributable Linux packages directly:
+
+```bash
+npm run setup:linux:deb
+npm ci
+npm run build:linux
+```
+
+The Linux build emits `.deb` and AppImage bundles under `target/release/bundle/`.
+Tauri loads `src-tauri/tauri.linux.conf.json` automatically for Linux development and builds.
 
 ## License
 

@@ -18,10 +18,17 @@
     ]
   },
   "bundle": {
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "createUpdaterArtifacts": false,
+    "category": "DeveloperTool",
     "linux": {
       "appimage": {
         "bundleMediaFramework": false
       }
-    }
+    },
+    "resources": null
   }
 }

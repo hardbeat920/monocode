@@ -15,7 +15,9 @@
     "check:rust": "cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test",
     "set-version": "node scripts/bump-version.mjs",
     "tauri": "tauri",
-    "tauri:stable": "tauri dev --no-watch --config src-tauri/tauri.stable.conf.json"
+    "tauri:stable": "tauri dev --no-watch --config src-tauri/tauri.stable.conf.json",
+    "setup:linux:deb": "bash scripts/install-linux-deps-debian.sh",
+    "build:linux": "tauri build --bundles deb,appimage"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

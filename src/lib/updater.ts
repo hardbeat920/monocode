@@ -22,6 +22,11 @@ export type UpdaterSnapshot = {
 
 let pendingUpdate: Update | null = null;
 
+function isUpdaterNotConfiguredError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /updater does not have any endpoints set/i.test(text);
+}
+
 export async function readAppVersion(): Promise<string> {
   try {
     return await getVersion();
@@ -78,6 +83,19 @@ export async function runUpdateFlow(
 
     return installPendingUpdate(onProgress);
   } catch (err) {
+    if (isUpdaterNotConfiguredError(err)) {
+      pendingUpdate = null;
+      const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
+      onProgress?.(idle);
+      if (manual) {
+        await message(
+          "Automatic updates aren't configured for this build.\n\nDownload releases at https://github.com/hardbeat920/monocode/releases/latest",
+          { title: "MonoCode" },
+        );
+      }
+      return idle;
+    }
+
     const error = err instanceof Error ? err.message : String(err);
     const failed: UpdaterSnapshot = { phase: "error", currentVersion, error };
     onProgress?.(failed);

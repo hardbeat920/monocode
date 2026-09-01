@@ -15,7 +15,7 @@ You need Node.js 20+, a current stable Rust toolchain, and at least one provider
 - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
 - [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`
 
-macOS and Linux are supported targets.
+macOS and Linux are supported targets. On Debian/Ubuntu, `npm run setup:linux:deb` installs the native Tauri build dependencies.
 
 ```bash
 npm install

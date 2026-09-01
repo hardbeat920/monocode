@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   release:
+    needs: linux
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,9 +106,9 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           BUNDLE="target/release/bundle"
-          TAR=$(ls "$BUNDLE"/macos/*.app.tar.gz | head -n 1)
+          TAR=$(find "$BUNDLE/macos" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)
           SIG="${TAR}.sig"
-          DMG=$(ls "$BUNDLE"/dmg/*.dmg | head -n 1)
+          DMG=$(find "$BUNDLE/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)
           BASE="${R2_PUBLIC_BASE_URL%/}"
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           RELEASE_PREFIX="releases/${VERSION}"
@@ -148,16 +149,71 @@ jobs:
           aws s3 cp "$DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" --content-type "application/json" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
 
+      - name: Download Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: target/release/bundle/linux
+
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           BUNDLE="target/release/bundle"
-          TAR=$(ls "$BUNDLE"/macos/*.app.tar.gz | head -n 1)
+          TAR=$(find "$BUNDLE/macos" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)
           SIG="${TAR}.sig"
-          DMG=$(ls "$BUNDLE"/dmg/*.dmg | head -n 1)
+          DMG=$(find "$BUNDLE/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          shopt -s nullglob
+          DEB=("$BUNDLE"/linux/*.deb)
+          APPIMAGE=("$BUNDLE"/linux/*.AppImage)
+          if (( ${#DEB[@]} != 1 || ${#APPIMAGE[@]} != 1 )); then
+            echo "Expected exactly one .deb and one AppImage" >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --title "MonoCode $VERSION" \
             --notes "See CHANGELOG.md for details." \
-            "$DMG" "$TAR" "$SIG"
+            "$DMG" "$TAR" "$SIG" "${DEB[0]}" "${APPIMAGE[0]}"
+
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        run: bash scripts/install-linux-deps-debian.sh
+
+      - run: npm ci
+
+      - name: Build Linux packages
+        run: npm run build:linux
+
+      - name: Stage Linux packages
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          deb=(target/release/bundle/deb/*.deb)
+          appimage=(target/release/bundle/appimage/*.AppImage)
+          if (( ${#deb[@]} != 1 || ${#appimage[@]} != 1 )); then
+            echo "Expected exactly one .deb and one AppImage" >&2
+            exit 1
+          fi
+          mkdir -p release-artifacts
+          cp "${deb[0]}" "${appimage[0]}" release-artifacts/
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: release-artifacts/
+          if-no-files-found: error
