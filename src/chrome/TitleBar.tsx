@@ -752,7 +752,7 @@ export function IconButton({
   );
 }
 
-function DevModeLabel() {
+export function DevModeLabel() {
   if (!import.meta.env.DEV) return null;
   return (
     <span
@@ -761,6 +761,14 @@ function DevModeLabel() {
     >
       Development
     </span>
+  );
+}
+
+export function DevModeSlot() {
+  return (
+    <div className="flex min-w-0 flex-1 items-center">
+      <DevModeLabel />
+    </div>
   );
 }
 
@@ -783,7 +791,6 @@ export function TabVisitNav({
 }) {
   return (
     <div className="flex min-w-0 items-center">
-      <DevModeLabel />
       <div className="flex shrink-0 items-center">
         <IconButton
           label={`Back (${MOD}[)`}
