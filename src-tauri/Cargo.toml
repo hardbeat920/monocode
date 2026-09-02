@@ -20,7 +20,12 @@ tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde.workspace = true
 serde_json.workspace = true
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
+futures-util = "0.3"
+hostname = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net"] }
+uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"], default-features = false }
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }

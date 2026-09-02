@@ -12,6 +12,7 @@ mod notes;
 mod project_logo;
 mod pty;
 mod rate_limits;
+mod remote;
 mod search;
 mod session_store;
 mod skills;
@@ -136,6 +137,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
+        .manage(remote::RemoteHost::new())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
@@ -273,6 +275,11 @@ pub fn run() {
             window::enable_window_glass,
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
+            remote::remote_status,
+            remote::remote_start,
+            remote::remote_stop,
+            remote::remote_regenerate_token,
+            remote::remote_set_token,
             project_logo::save_project_logo,
             project_logo::remove_project_logo,
         ])

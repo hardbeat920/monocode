@@ -334,7 +334,9 @@ fn spawn_unix(
             false
         };
         if emit {
-            let _ = wait_app.emit(EXIT_EVENT, PtyExit { id: wait_id, code });
+            let payload = PtyExit { id: wait_id, code };
+            let _ = wait_app.emit(EXIT_EVENT, payload.clone());
+            crate::remote::fanout_event(&wait_app, EXIT_EVENT, payload);
         }
     });
 
@@ -551,13 +553,12 @@ fn emit_pty_data(app: &AppHandle, id: &str, bytes: &[u8]) {
         return;
     }
     let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
-    let _ = app.emit(
-        DATA_EVENT,
-        PtyData {
-            id: id.to_string(),
-            data,
-        },
-    );
+    let payload = PtyData {
+        id: id.to_string(),
+        data,
+    };
+    let _ = app.emit(DATA_EVENT, payload.clone());
+    crate::remote::fanout_event(app, DATA_EVENT, payload);
 }
 
 #[cfg(unix)]

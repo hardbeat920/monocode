@@ -1,7 +1,10 @@
+import "./lib/cryptoPolyfill";
 import React, { useLayoutEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { RemoteGate } from "./bridge/RemoteGate";
+import { isRemoteSession } from "./bridge/remoteClient";
 import App from "./App";
 import { initAppearance } from "./lib/appearance";
 import { initSounds } from "./lib/sounds";
@@ -17,7 +20,9 @@ function dismissBootSplash() {
   if (!splash || splash.dataset.dismissed === "1") return;
   splash.dataset.dismissed = "1";
   const fade = () => {
-    void invoke("enable_window_glass");
+    if (!isRemoteSession()) {
+      void invoke("enable_window_glass");
+    }
     splash.classList.add("boot-splash-out");
     window.setTimeout(() => splash.remove(), 180);
   };
@@ -44,15 +49,17 @@ void loadBootWorkspace().then(
     const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
-        <BootGate>
-          <App
-            windowTransfer={windowTransfer}
-            resumed={resumed}
-            installedUpdate={installedUpdate}
-            history={history}
-            historyCwd={historyCwd}
-          />
-        </BootGate>
+        <RemoteGate>
+          <BootGate>
+            <App
+              windowTransfer={windowTransfer}
+              resumed={resumed}
+              installedUpdate={installedUpdate}
+              history={history}
+              historyCwd={historyCwd}
+            />
+          </BootGate>
+        </RemoteGate>
       </React.StrictMode>,
     );
   },

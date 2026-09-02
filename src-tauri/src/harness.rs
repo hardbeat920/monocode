@@ -385,13 +385,12 @@ pub fn harness_spawn(
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            let _ = stdout_app.emit(
-                STDOUT_EVENT,
-                HarnessLine {
-                    session_id: stdout_id.clone(),
-                    line,
-                },
-            );
+            let payload = HarnessLine {
+                session_id: stdout_id.clone(),
+                line,
+            };
+            let _ = stdout_app.emit(STDOUT_EVENT, payload.clone());
+            crate::remote::fanout_event(&stdout_app, STDOUT_EVENT, payload);
         }
     });
 
@@ -400,13 +399,12 @@ pub fn harness_spawn(
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
             let Ok(line) = line else { break };
-            let _ = stderr_app.emit(
-                STDERR_EVENT,
-                HarnessLine {
-                    session_id: stderr_id.clone(),
-                    line,
-                },
-            );
+            let payload = HarnessLine {
+                session_id: stderr_id.clone(),
+                line,
+            };
+            let _ = stderr_app.emit(STDERR_EVENT, payload.clone());
+            crate::remote::fanout_event(&stderr_app, STDERR_EVENT, payload);
         }
     });
 
@@ -420,14 +418,13 @@ pub fn harness_spawn(
                 host.stop_sse(&wait_id);
             }
         }
-        let _ = wait_app.emit(
-            EXIT_EVENT,
-            HarnessExit {
-                session_id: wait_id,
-                code,
-                pid: wait_pid,
-            },
-        );
+        let payload = HarnessExit {
+            session_id: wait_id,
+            code,
+            pid: wait_pid,
+        };
+        let _ = wait_app.emit(EXIT_EVENT, payload.clone());
+        crate::remote::fanout_event(&wait_app, EXIT_EVENT, payload);
     });
 
     Ok(pid)
@@ -585,13 +582,12 @@ fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &Ato
                 continue;
             }
             let payload = std::mem::take(&mut data);
-            let _ = app.emit(
-                SSE_EVENT,
-                HarnessSse {
-                    session_id: session_id.to_string(),
-                    data: payload,
-                },
-            );
+            let payload = HarnessSse {
+                session_id: session_id.to_string(),
+                data: payload,
+            };
+            let _ = app.emit(SSE_EVENT, payload.clone());
+            crate::remote::fanout_event(app, SSE_EVENT, payload);
             continue;
         }
         if let Some(rest) = line.strip_prefix("data:") {
@@ -605,13 +601,12 @@ fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &Ato
 }
 
 fn emit_sse_end(app: &AppHandle, session_id: &str, error: Option<String>) {
-    let _ = app.emit(
-        SSE_END_EVENT,
-        HarnessSseEnd {
-            session_id: session_id.to_string(),
-            error,
-        },
-    );
+    let payload = HarnessSseEnd {
+        session_id: session_id.to_string(),
+        error,
+    };
+    let _ = app.emit(SSE_END_EVENT, payload.clone());
+    crate::remote::fanout_event(app, SSE_END_EVENT, payload);
 }
 
 fn assert_loopback(url: &str) -> Result<(), String> {

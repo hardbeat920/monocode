@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isRemoteSession } from "../bridge/remoteClient";
 import { IS_MAC } from "./platform";
 
 const THEME_HUE_KEY = "monocode.themeHue";
@@ -276,7 +277,9 @@ export function applySidebarBlur(value: number) {
   const next = Math.round(
     clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX),
   );
-  void invoke("set_window_background_blur", { radius: next });
+  if (!isRemoteSession()) {
+    void invoke("set_window_background_blur", { radius: next });
+  }
   return next;
 }
 

@@ -142,6 +142,18 @@ import {
   runUpdateFlow,
   type UpdaterSnapshot,
 } from "../lib/updater";
+import {
+  loadRemoteAccessToken,
+  remoteRegenerateToken,
+  remoteSetToken,
+  remoteStart,
+  remoteStatus,
+  remoteStop,
+  remoteUrlWithToken,
+  saveRemoteAccessToken,
+  type RemoteStatus,
+} from "../lib/remote";
+import { isTauriRuntime } from "../bridge/isTauri";
 
 type Props = {
   section: SettingsSectionId;
@@ -445,11 +457,196 @@ function GeneralPage({
         />
       </Row>
 
+      {isTauriRuntime() ? (
+        <>
+          <Heading title="Remote access" />
+          <RemoteSettings />
+        </>
+      ) : null}
+
       <Heading title="Linear" />
       <LinearSettings />
 
       <Heading title="About" />
       <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
+    </>
+  );
+}
+
+function RemoteSettings() {
+  const [status, setStatus] = useState<RemoteStatus | null>(null);
+  const [tokenInput, setTokenInput] = useState(loadRemoteAccessToken);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await remoteStatus();
+      setStatus(next);
+      if (next.enabled && next.token) {
+        setTokenInput(next.token);
+        saveRemoteAccessToken(next.token);
+      }
+      setError(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const onToggle = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = status?.enabled
+        ? await remoteStop()
+        : await remoteStart();
+      setStatus(next);
+      if (next.enabled && next.token) {
+        setTokenInput(next.token);
+        saveRemoteAccessToken(next.token);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSetToken = async () => {
+    const trimmed = tokenInput.trim();
+    if (busy || trimmed.length < 8) return;
+    setBusy(true);
+    setError(null);
+    try {
+      saveRemoteAccessToken(trimmed);
+      if (status?.enabled) {
+        const next = await remoteSetToken(trimmed);
+        setStatus(next);
+        setTokenInput(next.token);
+        saveRemoteAccessToken(next.token);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRegenerate = async () => {
+    if (busy || !status?.enabled) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await remoteRegenerateToken();
+      setStatus(next);
+      setTokenInput(next.token);
+      saveRemoteAccessToken(next.token);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // ignore
+    }
+  };
+
+  const enabled = status?.enabled === true;
+  const activeToken = enabled && status?.token ? status.token : tokenInput.trim();
+  const tokenDirty =
+    enabled && status?.token
+      ? tokenInput.trim() !== status.token
+      : tokenInput.trim() !== loadRemoteAccessToken();
+
+  return (
+    <>
+      <Row
+        label="Browser remote control"
+        description="Serve the MonoCode UI on your LAN or Tailscale network. Other devices open the URL in a browser and paste the access token."
+      >
+        <Toggle label="Remote access" on={enabled} onChange={() => void onToggle()} />
+      </Row>
+      <Row
+        label="Access token"
+        description={
+          enabled
+            ? "Required on first connect from another device. Set a custom token or regenerate to invalidate old links."
+            : "A random token is generated for you. Edit it before enabling, or regenerate after you turn remote access on."
+        }
+      >
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={(event) => setTokenInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void onSetToken();
+              }}
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              aria-label="Remote access token"
+              autoComplete="off"
+              spellCheck={false}
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+            />
+          </label>
+          <SecondaryButton
+            onClick={() => void onSetToken()}
+            disabled={busy || tokenInput.trim().length < 8 || !tokenDirty}
+          >
+            {busy ? "Saving" : "Set"}
+          </SecondaryButton>
+          {enabled && activeToken ? (
+            <>
+              <SecondaryButton onClick={() => void copy(activeToken)}>
+                Copy
+              </SecondaryButton>
+              <SecondaryButton onClick={() => void onRegenerate()} disabled={busy}>
+                Regenerate
+              </SecondaryButton>
+            </>
+          ) : null}
+        </div>
+      </Row>
+      {enabled && status ? (
+        <Row
+          label="Open in browser"
+          description="Use your machine hostname, LAN IP, or Tailscale IP with the same port."
+        >
+          <div className="flex min-w-0 flex-col items-end gap-2">
+            {status.urls.map((url) => (
+              <div key={url} className="flex max-w-full items-center gap-2">
+                <a
+                  href={remoteUrlWithToken(url, status.token)}
+                  className="truncate text-[12px] text-content/70 underline decoration-content/20 underline-offset-2 hover:text-content"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {remoteUrlWithToken(url, status.token)}
+                </a>
+                <SecondaryButton
+                  onClick={() =>
+                    void copy(remoteUrlWithToken(url, status.token))
+                  }
+                >
+                  Copy
+                </SecondaryButton>
+              </div>
+            ))}
+          </div>
+        </Row>
+      ) : null}
+      {error ? <p className="text-[12px] text-red-400">{error}</p> : null}
     </>
   );
 }
