@@ -25,6 +25,35 @@ export type AgentModel = {
   contextWindow?: number;
 };
 
+export const ANTIGRAVITY_REASONING_SETTINGS_3: ModelSetting[] = [
+  {
+    id: "effort",
+    label: "Reasoning",
+    kind: "select",
+    value: "high",
+    options: [
+      { value: "high", label: "High" },
+      { value: "medium", label: "Medium" },
+      { value: "low", label: "Low" },
+    ],
+  },
+];
+
+export const ANTIGRAVITY_REASONING_SETTINGS_2: ModelSetting[] = [
+  {
+    id: "effort",
+    label: "Reasoning",
+    kind: "select",
+    value: "high",
+    options: [
+      { value: "high", label: "High" },
+      { value: "low", label: "Low" },
+    ],
+  },
+];
+
+export const ANTIGRAVITY_MODEL_SETTINGS = ANTIGRAVITY_REASONING_SETTINGS_3;
+
 export const MODELS: AgentModel[] = [
   {
     id: "claude:sonnet-5",
@@ -136,6 +165,67 @@ export const MODELS: AgentModel[] = [
     ],
   },
 
+  {
+    id: "antigravity:default",
+    harness: "antigravity",
+    name: "Default",
+    nativeId: "",
+    contextWindow: 1_000_000,
+  },
+  {
+    id: "antigravity:gemini-3.8-flash",
+    harness: "antigravity",
+    name: "Gemini 3.8 Flash",
+    nativeId: "gemini-3.8-flash",
+    contextWindow: 1_000_000,
+    settings: ANTIGRAVITY_REASONING_SETTINGS_3,
+  },
+  {
+    id: "antigravity:gemini-3.7-flash",
+    harness: "antigravity",
+    name: "Gemini 3.7 Flash",
+    nativeId: "gemini-3.7-flash",
+    contextWindow: 1_000_000,
+    settings: ANTIGRAVITY_REASONING_SETTINGS_3,
+  },
+  {
+    id: "antigravity:gemini-3.6-flash",
+    harness: "antigravity",
+    name: "Gemini 3.6 Flash",
+    nativeId: "gemini-3.6-flash",
+    contextWindow: 1_000_000,
+    settings: ANTIGRAVITY_REASONING_SETTINGS_3,
+  },
+  {
+    id: "antigravity:gemini-3.1-pro",
+    harness: "antigravity",
+    name: "Gemini 3.1 Pro",
+    nativeId: "gemini-3.1-pro",
+    contextWindow: 1_000_000,
+    settings: ANTIGRAVITY_REASONING_SETTINGS_2,
+  },
+  {
+    id: "antigravity:claude-sonnet-4-6",
+    harness: "antigravity",
+    name: "Claude Sonnet 4.6 (Thinking)",
+    nativeId: "claude-sonnet-4-6",
+    contextWindow: 200_000,
+  },
+  {
+    id: "antigravity:claude-opus-4-6-thinking",
+    harness: "antigravity",
+    name: "Claude Opus 4.6 (Thinking)",
+    nativeId: "claude-opus-4-6-thinking",
+    contextWindow: 200_000,
+  },
+  {
+    id: "antigravity:gpt-oss-120b-medium",
+    harness: "antigravity",
+    name: "GPT-OSS 120B (Medium)",
+    nativeId: "gpt-oss-120b-medium",
+    contextWindow: 128_000,
+  },
+
   { id: "opencode:glm-5", harness: "opencode", name: "GLM 5" },
   { id: "opencode:minimax-m2.5", harness: "opencode", name: "MiniMax M2.5" },
   { id: "opencode:kimi-k2.5", harness: "opencode", name: "Kimi K2.5" },
@@ -177,6 +267,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   codex: "",
   cursor: "cursor:composer-2.5",
   grok: "grok:grok-4.6",
+  antigravity: "antigravity:default",
   opencode: "opencode:glm-5",
   pi: "pi:default",
   omp: "omp:default",
@@ -202,6 +293,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "codex",
   "cursor",
   "grok",
+  "antigravity",
   "opencode",
   "pi",
   "omp",
@@ -295,7 +387,13 @@ export function findModel(id: string): AgentModel | undefined {
     }
     indexById = index;
   }
-  return indexById.get(id);
+  const exact = indexById.get(id);
+  if (exact) return exact;
+  if (id.startsWith("antigravity:")) {
+    const stripped = id.replace(/-(high|medium|low)$/, "");
+    if (stripped !== id) return indexById.get(stripped);
+  }
+  return undefined;
 }
 
 export function resolveModel(harness: HarnessId, id?: string): AgentModel {
@@ -707,6 +805,15 @@ function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
       models.find((model) => model.id === DEFAULT_MODEL_ID.fx)?.id ??
       models[0]?.id ??
       DEFAULT_MODEL_ID.fx
+    );
+  }
+  if (harness === "antigravity") {
+    return (
+      models.find((model) => model.id === DEFAULT_MODEL_ID.antigravity)?.id ??
+      models.find((model) => model.nativeId === "gemini-3.8-flash-high")?.id ??
+      models.find((model) => model.nativeId === "gemini-3.7-flash-high")?.id ??
+      models[0]?.id ??
+      DEFAULT_MODEL_ID.antigravity
     );
   }
   return (

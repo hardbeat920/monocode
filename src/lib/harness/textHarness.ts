@@ -2,6 +2,7 @@ import type { HarnessId } from "../session";
 import { isHarnessAvailable } from "./availability";
 import type { PrContent } from "../gitText";
 import {
+  generateHarnessBranchName,
   generateHarnessCommitMessage,
   generateHarnessPrContent,
   warmupHarnessText,
@@ -12,6 +13,7 @@ const TEXT_HARNESSES: HarnessId[] = [
   "cursor",
   "codex",
   "grok",
+  "antigravity",
   "opencode",
 ];
 
@@ -43,4 +45,12 @@ export function generatePrContent(
   preferred?: HarnessId,
 ): Promise<(PrContent & { base: string; head: string }) | null> {
   return generateHarnessPrContent(pickTextHarness(preferred), cwd);
+}
+
+export function generateBranchName(
+  cwd: string,
+  message: string,
+  preferred?: HarnessId,
+): Promise<string | null> {
+  return generateHarnessBranchName(pickTextHarness(preferred), cwd, message);
 }

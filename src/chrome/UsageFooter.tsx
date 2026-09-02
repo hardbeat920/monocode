@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
 import {
+  fetchAntigravityRateLimits,
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
 } from "../lib/rateLimitsFetch";
@@ -46,19 +47,25 @@ export function UsageFooter({
 }) {
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
+  const wantAntigravity = providers.includes("antigravity");
   const [claude, setClaude] = useState<ProviderRateLimits>(() =>
     idleRateLimits("claude"),
   );
   const [codex, setCodex] = useState<ProviderRateLimits>(() =>
     idleRateLimits("codex"),
   );
+  const [antigravity, setAntigravity] = useState<ProviderRateLimits>(() =>
+    idleRateLimits("antigravity"),
+  );
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const inflight = useRef<Promise<void> | null>(null);
   const claudeRef = useRef(claude);
   const codexRef = useRef(codex);
+  const antigravityRef = useRef(antigravity);
   claudeRef.current = claude;
   codexRef.current = codex;
+  antigravityRef.current = antigravity;
 
   const refresh = useCallback((force = false) => {
     if (inflight.current) return inflight.current;
@@ -69,7 +76,10 @@ export function UsageFooter({
     const fetchCodex =
       wantCodex &&
       shouldFetchProvider(codexRef.current, { force, visible });
-    if (!fetchClaude && !fetchCodex) return;
+    const fetchAntigravity =
+      wantAntigravity &&
+      shouldFetchProvider(antigravityRef.current, { force, visible });
+    if (!fetchClaude && !fetchCodex && !fetchAntigravity) return;
     if (force) setRefreshing(true);
     const jobs: Promise<void>[] = [];
     if (fetchClaude) {
@@ -88,6 +98,14 @@ export function UsageFooter({
         }),
       );
     }
+    if (fetchAntigravity) {
+      setAntigravity((current) => fetchingRateLimits("antigravity", current));
+      jobs.push(
+        fetchAntigravityRateLimits().then((value) => {
+          setAntigravity(value);
+        }),
+      );
+    }
     const run = Promise.allSettled(jobs)
       .then(() => undefined)
       .finally(() => {
@@ -96,7 +114,7 @@ export function UsageFooter({
       });
     inflight.current = run;
     return run;
-  }, [wantClaude, wantCodex]);
+  }, [wantClaude, wantCodex, wantAntigravity]);
 
   useEffect(() => {
     void refresh();
@@ -116,7 +134,7 @@ export function UsageFooter({
     return () => window.clearInterval(timer);
   }, []);
 
-  const showUsage = wantClaude || wantCodex;
+  const showUsage = wantClaude || wantCodex || wantAntigravity;
   const showTerminals = terminals.length > 0;
   const showRight = showUsage || showTerminals;
   const ariaLabel = showUsage
@@ -136,6 +154,9 @@ export function UsageFooter({
         <>
           {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
           {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
+          {wantAntigravity ? (
+            <ProviderChip limits={antigravity} now={now} />
+          ) : null}
         </>
       ) : session ? (
         <SessionChip session={session} />

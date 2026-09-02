@@ -9,6 +9,7 @@ import {
   idleRateLimits,
   isRateLimitSnapshotStale,
   mapUsageWindow,
+  parseAntigravityRateLimits,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
   parseResetTimestamp,
@@ -179,6 +180,60 @@ describe("parseCodexRateLimits", () => {
     expect(limits.weekly?.usedPercent).toBe(20);
   });
 });
+
+describe("parseAntigravityRateLimits", () => {
+  it("parses 5h and weekly limits from agy /usage JSON output", () => {
+    const jsonOutput = JSON.stringify({
+      command: {
+        name: "usage",
+        data: {
+          groups: [
+            {
+              name: "Gemini Models",
+              buckets: [
+                {
+                  id: "gemini-weekly",
+                  name: "Weekly Limit Remaining",
+                  window: "weekly",
+                  remaining_fraction: 0.86,
+                  reset_time: "2026-09-06T08:00:00Z",
+                },
+                {
+                  id: "gemini-5h",
+                  name: "Five Hour Limit Remaining",
+                  window: "5h",
+                  remaining_fraction: 0.6,
+                  reset_time: "2026-09-02T15:00:00Z",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const limits = parseAntigravityRateLimits(jsonOutput);
+    expect(limits.provider).toBe("antigravity");
+    expect(limits.status).toBe("ok");
+    expect(limits.session?.usedPercent).toBe(40);
+    expect(limits.session?.windowMinutes).toBe(300);
+    expect(limits.session?.resetsAt).toBe(Date.parse("2026-09-02T15:00:00Z"));
+    expect(limits.weekly?.usedPercent).toBe(14);
+    expect(limits.weekly?.windowMinutes).toBe(10_080);
+    expect(limits.weekly?.resetsAt).toBe(Date.parse("2026-09-06T08:00:00Z"));
+  });
+
+  it("handles empty or invalid JSON gracefully", () => {
+    const empty = parseAntigravityRateLimits("{}");
+    expect(empty.provider).toBe("antigravity");
+    expect(empty.session).toBeNull();
+    expect(empty.weekly).toBeNull();
+
+    const invalid = parseAntigravityRateLimits("not json");
+    expect(invalid.status).toBe("error");
+  });
+});
+
 
 describe("rateLimitWindowTooltip", () => {
   it("includes used percent and remaining time", () => {

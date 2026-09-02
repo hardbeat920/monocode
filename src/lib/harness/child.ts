@@ -147,9 +147,7 @@ function teardownBridge() {
   sseBuffer.clear();
   livePid.clear();
   pendingExit.clear();
-  void pending
-    ?.then((fns) => fns.forEach((fn) => fn()))
-    .catch(() => undefined);
+  void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
 }
 
 export function startHarnessBridge(): () => void {
@@ -311,6 +309,10 @@ export function resolveFxBinary(): Promise<{ path: string }> {
 
 export function resolveGrokBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_grok");
+}
+
+export function resolveAntigravityBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_antigravity");
 }
 
 export function freeHarnessPort(): Promise<number> {

@@ -50,8 +50,10 @@ pub(crate) fn list_skills_from(project: &Path, home: Option<&Path>) -> Vec<Disco
 
     // Highest priority first so later roots cannot replace a name.
     add_root(project.join(".agents/skills"), "project", "agents");
+    add_root(project.join(".agent/skills"), "project", "agents");
     if let Some(home) = home {
         add_root(home.join(".agents/skills"), "user", "agents");
+        add_root(home.join(".agent/skills"), "user", "agents");
     }
 
     for (dir, source) in [
@@ -63,6 +65,8 @@ pub(crate) fn list_skills_from(project: &Path, home: Option<&Path>) -> Vec<Disco
         (".omp/skills", "omp"),
         (".fx/skills", "fx"),
         (".grok/skills", "grok"),
+        (".antigravity/skills", "antigravity"),
+        (".gemini/skills", "antigravity"),
     ] {
         add_root(project.join(dir), "project", source);
         if let Some(home) = home {
@@ -72,6 +76,26 @@ pub(crate) fn list_skills_from(project: &Path, home: Option<&Path>) -> Vec<Disco
     if let Some(home) = home {
         add_root(home.join(".pi/agent/skills"), "user", "pi");
         add_root(home.join(".omp/agent/skills"), "user", "omp");
+        // Antigravity CLI keeps global skills alongside its Gemini-compatible
+        // configuration and builtin skills. Workspace skills are discovered via
+        // `.agents/skills`, `.agent/skills`, `.antigravity/skills`, and `.gemini/skills`.
+        add_root(home.join(".gemini/config/skills"), "user", "antigravity");
+        add_root(
+            home.join(".gemini/antigravity-cli/skills"),
+            "user",
+            "antigravity",
+        );
+        add_root(
+            home.join(".gemini/antigravity-cli/builtin/skills"),
+            "builtin",
+            "antigravity",
+        );
+        add_root(
+            home.join(".gemini/antigravity/builtin/skills"),
+            "builtin",
+            "antigravity",
+        );
+        add_root(home.join(".antigravity/skills"), "user", "antigravity");
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(&mut by_name, root, scope, "claude", &namespace);
         }
@@ -632,6 +656,29 @@ mod tests {
         let user_skill = skills.iter().find(|s| s.name == "grok-global").unwrap();
         assert_eq!(user_skill.source, "grok");
         assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_antigravity_global_skill_roots() {
+        let project = tmp("proj-antigravity");
+        let home = tmp("home-antigravity");
+        write_skill(
+            &home.0.join(".gemini/config/skills"),
+            "review-code",
+            "---\nname: review-code\ndescription: Review code\n---\n",
+        );
+        write_skill(
+            &home.0.join(".gemini/antigravity-cli/skills"),
+            "ship-feature",
+            "---\nname: ship-feature\ndescription: Ship a feature\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0));
+        for name in ["review-code", "ship-feature"] {
+            let skill = skills.iter().find(|skill| skill.name == name).unwrap();
+            assert_eq!(skill.source, "antigravity");
+            assert_eq!(skill.scope, "user");
+        }
     }
 
     #[test]

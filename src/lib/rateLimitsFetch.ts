@@ -2,13 +2,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "./fs";
 import {
   errorRateLimits,
+  parseAntigravityRateLimits,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
   unavailableRateLimits,
   type ProviderRateLimits,
 } from "./rateLimits";
 import {
+  execChild,
   killChild,
+  resolveAntigravityBinary,
   resolveCodexBinary,
   spawnChild,
   unwatchChild,
@@ -141,6 +144,40 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
     return errorRateLimits("codex", message);
   } finally {
     await stop();
+  }
+}
+
+export async function fetchAntigravityRateLimits(): Promise<ProviderRateLimits> {
+  let path: string;
+  try {
+    path = (await resolveAntigravityBinary()).path;
+  } catch {
+    return unavailableRateLimits("antigravity", "Antigravity CLI not found");
+  }
+
+  const cwd = await homeDir();
+  try {
+    const output = await execChild(
+      path,
+      ["--output-format", "json", "-p", "/usage"],
+      cwd,
+    );
+    const parsed = parseAntigravityRateLimits(output);
+    if (parsed.session || parsed.weekly) return parsed;
+    return unavailableRateLimits("antigravity", "No Antigravity usage data");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      /not signed in|authentication required|not authenticated|login/i.test(
+        message,
+      )
+    ) {
+      return unavailableRateLimits("antigravity", "Antigravity not signed in");
+    }
+    if (/ENOENT|not found|could not run/i.test(message)) {
+      return unavailableRateLimits("antigravity", "Antigravity CLI not found");
+    }
+    return errorRateLimits("antigravity", message);
   }
 }
 

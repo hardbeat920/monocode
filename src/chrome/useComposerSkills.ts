@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import {
+  ANTIGRAVITY_NATIVE_SKILLS,
   loadSkills,
   mergeCatalog,
   peekSkills,
@@ -59,7 +60,12 @@ export function useComposerSkills(input: {
   );
   const contextKey = skillCatalogKey(context);
   const fallback = useMemo<Skill[]>(
-    () => (input.harness === "pi" ? [] : mergeCatalog([])),
+    () =>
+      input.harness === "pi"
+        ? []
+        : input.harness === "antigravity"
+          ? mergeCatalog([], ANTIGRAVITY_NATIVE_SKILLS)
+          : mergeCatalog([]),
     [input.harness],
   );
   const currentToken = useRef<ComposerSkillContextToken | null>(null);

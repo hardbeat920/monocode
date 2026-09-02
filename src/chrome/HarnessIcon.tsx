@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import antigravity from "../assets/providers/antigravity.svg";
 import claude from "../assets/providers/claude.svg";
 import codex from "../assets/providers/codex.svg";
 import cursor from "../assets/providers/cursor.svg";
@@ -14,6 +15,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   codex,
   cursor,
   grok,
+  antigravity,
   opencode,
   pi,
   omp,

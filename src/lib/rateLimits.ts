@@ -1,6 +1,6 @@
 import { asRecord } from "./harness/codexProtocol";
 
-export type RateLimitProvider = "claude" | "codex";
+export type RateLimitProvider = "claude" | "codex" | "antigravity";
 
 export type RateLimitStatus =
   "idle" | "fetching" | "ok" | "error" | "unavailable";
@@ -57,11 +57,13 @@ export function shouldFetchRateLimits(input: {
   visible: boolean;
   claude: ProviderRateLimits;
   codex: ProviderRateLimits;
+  antigravity?: ProviderRateLimits;
   now?: number;
 }): boolean {
   return (
     shouldFetchProvider(input.claude, input) ||
-    shouldFetchProvider(input.codex, input)
+    shouldFetchProvider(input.codex, input) ||
+    (input.antigravity ? shouldFetchProvider(input.antigravity, input) : false)
   );
 }
 
@@ -294,6 +296,94 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     provider: "codex",
     session: mapCodexSnapshot(classified.session, SESSION_WINDOW_MINUTES),
     weekly: mapCodexSnapshot(classified.weekly, WEEKLY_WINDOW_MINUTES),
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+export function parseAntigravityRateLimits(result: unknown): ProviderRateLimits {
+  let parsed: unknown = result;
+  if (typeof result === "string") {
+    try {
+      parsed = JSON.parse(result);
+    } catch {
+      const start = result.indexOf("{");
+      const end = result.lastIndexOf("}");
+      if (start !== -1 && end > start) {
+        try {
+          parsed = JSON.parse(result.slice(start, end + 1));
+        } catch {
+          return errorRateLimits("antigravity", "Antigravity usage response was not JSON");
+        }
+      } else {
+        return errorRateLimits("antigravity", "Antigravity usage response was not JSON");
+      }
+    }
+  }
+  const rec = asRecord(parsed);
+  if (!rec) {
+    return errorRateLimits("antigravity", "Antigravity usage response was empty");
+  }
+  const command = asRecord(rec.command);
+  const data = asRecord(command?.data) ?? asRecord(rec.data) ?? rec;
+  const groups = Array.isArray(data.groups) ? (data.groups as unknown[]) : [];
+
+  let session: RateLimitWindow | null = null;
+  let weekly: RateLimitWindow | null = null;
+
+  for (const rawGroup of groups) {
+    const group = asRecord(rawGroup);
+    const buckets = Array.isArray(group?.buckets) ? (group.buckets as unknown[]) : [];
+    for (const rawBucket of buckets) {
+      const bucket = asRecord(rawBucket);
+      if (!bucket) continue;
+      const windowType = typeof bucket.window === "string" ? bucket.window.toLowerCase() : "";
+      const bucketId = typeof bucket.id === "string" ? bucket.id.toLowerCase() : "";
+      const remaining = typeof bucket.remaining_fraction === "number" ? bucket.remaining_fraction : null;
+      if (remaining == null) continue;
+      const usedPercent = Math.round(clampUsedPercent((1 - remaining) * 100) * 100) / 100;
+      const nameLower = typeof bucket.name === "string" ? bucket.name.toLowerCase() : "";
+      const is5h =
+        windowType === "5h" ||
+        windowType === "five_hour" ||
+        windowType === "5_hour" ||
+        bucketId.includes("5h") ||
+        bucketId.includes("five_hour") ||
+        bucketId.includes("5-hour") ||
+        nameLower.includes("five hour") ||
+        nameLower.includes("5-hour");
+      const isWeekly =
+        windowType === "weekly" ||
+        bucketId.includes("weekly") ||
+        nameLower.includes("weekly");
+
+      const resetsAt = parseResetTimestamp(bucket.reset_time ?? bucket.resetTime);
+
+      if (is5h) {
+        if (!session || usedPercent > session.usedPercent) {
+          session = {
+            usedPercent,
+            windowMinutes: SESSION_WINDOW_MINUTES,
+            resetsAt,
+          };
+        }
+      } else if (isWeekly) {
+        if (!weekly || usedPercent > weekly.usedPercent) {
+          weekly = {
+            usedPercent,
+            windowMinutes: WEEKLY_WINDOW_MINUTES,
+            resetsAt,
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    provider: "antigravity",
+    session,
+    weekly,
     updatedAt: Date.now(),
     error: null,
     status: "ok",

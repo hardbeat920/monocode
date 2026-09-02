@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Antigravity CLI joins the provider list. Install it with `curl -fsSL https://antigravity.google/cli/install.sh | bash`, then run `agy` to sign in. MonoCode uses its official streaming protocol for live sessions, model discovery, persistent conversations, skills, and staged image, video, audio, document, and file attachments.
 - Settings → General → Diff view: Editor or Unified. Unified stacks every working-tree change in one **Changes** tab — GitHub-style review, editor syntax colours, sticky file headers and line numbers, and a single horizontal scroll that stops at the end of the line. Editor keeps the previous per-file working-tree tabs.
 
 ## [0.1.29] - 2026-09-02

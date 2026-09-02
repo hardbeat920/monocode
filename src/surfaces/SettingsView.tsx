@@ -234,7 +234,7 @@ export function SettingsView({
             <AppearancePage appearance={appearance} />
           ) : null}
           {section === "keybindings" ? <KeybindingsPage /> : null}
-          {section === "providers" ? <ProvidersPage /> : null}
+          {section === "providers" ? <ProvidersPage cwd={cwd} /> : null}
           {section === "archive" ? (
             <ArchivePage
               cwd={cwd}
@@ -879,7 +879,7 @@ function KeybindingsPage() {
   );
 }
 
-function ProvidersPage() {
+function ProvidersPage({ cwd }: { cwd: string }) {
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
   useSyncExternalStore(
     subscribeHarnessAvailability,
@@ -921,6 +921,7 @@ function ProvidersPage() {
         <ProviderRow
           key={harness}
           harness={harness}
+          cwd={cwd}
           selectedModel={
             defaultModels[harness] ??
             (choice?.harness === harness
@@ -938,12 +939,14 @@ function ProvidersPage() {
 
 function ProviderRow({
   harness,
+  cwd,
   selectedModel,
   isDefault,
   onDefault,
   onModelChange,
 }: {
   harness: HarnessId;
+  cwd: string;
   selectedModel: string;
   isDefault: boolean;
   onDefault: (harness: HarnessId, model: string) => void;
@@ -959,8 +962,8 @@ function ProviderRow({
 
   useEffect(() => {
     if (!available || models.length > 0) return;
-    void refreshHarnessCatalogs([harness]);
-  }, [available, harness, models.length]);
+    void refreshHarnessCatalogs([harness], cwd);
+  }, [available, cwd, harness, models.length]);
 
   const onPickerVisible = (visible: boolean) => {
     savePickerProviderVisible(harness, visible);

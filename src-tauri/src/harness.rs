@@ -304,6 +304,19 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve the Google Antigravity CLI (`agy`).
+#[tauri::command(async)]
+pub fn harness_resolve_antigravity() -> Result<CursorBinary, String> {
+    resolve_antigravity()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Antigravity CLI not found. Install it with `curl -fsSL https://antigravity.google/cli/install.sh | bash` and run `agy login`, then retry."
+                .into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -634,6 +647,10 @@ const EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["models"],
     &["status", "--json"],
     &["agent", "list"],
+    &["--output-format", "json", "models"],
+    &["--output-format", "json", "agents"],
+    &["--output-format", "json", "-p", "/usage"],
+    &["-p", "/usage"],
 ];
 
 fn exec_args_allowed(args: &[String]) -> bool {
@@ -655,6 +672,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_omp(),
         resolve_fx(),
         resolve_grok(),
+        resolve_antigravity(),
     ]
     .into_iter()
     .flatten()
@@ -688,11 +706,15 @@ fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<Str
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, command);
-    if let Some(dir) = cwd {
-        let workdir = expand_home(dir);
-        if workdir.is_dir() {
-            cmd.current_dir(workdir);
-        }
+    let workdir = cwd
+        .map(expand_home)
+        .filter(|path| path.is_dir())
+        .or_else(|| dirs_home().map(PathBuf::from).filter(|path| path.is_dir()));
+    if let Some(workdir) = workdir {
+        // One-shot probes must never inherit the GUI process directory. On
+        // macOS that can be `/`, which lets agy treat the whole machine as its
+        // workspace when a caller forgot to provide a cwd.
+        cmd.current_dir(workdir);
     }
 
     let child = cmd
@@ -704,7 +726,7 @@ fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<Str
         let _ = tx.send(child.wait_with_output());
     });
 
-    match rx.recv_timeout(Duration::from_secs(15)) {
+    match rx.recv_timeout(Duration::from_secs(90)) {
         Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             if output.status.success() || !stdout.trim().is_empty() {
@@ -935,6 +957,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "codex"
             | "opencode"
             | "grok"
+            | "agy"
             | "omp"
             | "fx"
             | "pi"
@@ -1351,6 +1374,51 @@ fn resolve_grok() -> Option<PathBuf> {
     }
 
     candidates.into_iter().find(|path| is_grok_agent(path))
+}
+
+fn resolve_antigravity() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // The official installer uses ~/.local/bin. Keep this stable shim ahead
+    // of PATH so upgrades do not turn into a new macOS TCC identity.
+    if let Some(home) = &home {
+        for name in antigravity_binary_names() {
+            candidates.push(home.join(".local/bin").join(name));
+            candidates.push(home.join(".gemini/bin").join(name));
+            candidates.push(home.join(".antigravity/bin").join(name));
+        }
+        #[cfg(target_os = "windows")]
+        for name in antigravity_binary_names() {
+            candidates.push(home.join("AppData/Local/Antigravity/bin").join(name));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    for name in antigravity_binary_names() {
+        candidates.push(PathBuf::from("/opt/homebrew/bin").join(name));
+    }
+    for name in antigravity_binary_names() {
+        candidates.push(PathBuf::from("/usr/local/bin").join(name));
+        candidates.push(PathBuf::from("/usr/bin").join(name));
+        candidates.push(PathBuf::from("/snap/bin").join(name));
+    }
+    for name in antigravity_binary_names() {
+        if let Some(from_shell) = which_via_login_shell(name) {
+            candidates.push(from_shell);
+        }
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(target_os = "windows")]
+fn antigravity_binary_names() -> &'static [&'static str] {
+    &["agy.exe", "agy"]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn antigravity_binary_names() -> &'static [&'static str] {
+    &["agy"]
 }
 
 fn is_pi_coding_agent(path: &Path) -> bool {
@@ -2309,6 +2377,11 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_uses_the_official_cli_name() {
+        assert_eq!(antigravity_binary_names(), &["agy"]);
+    }
+
+    #[test]
     fn passwd_identity_resolves_the_current_user() {
         let id = passwd_identity().expect("passwd");
         assert!(!id.user.is_empty());
@@ -2333,6 +2406,16 @@ mod exec_allowlist_tests {
         assert!(exec_args_allowed(&args(&["models"])));
         assert!(exec_args_allowed(&args(&["status", "--json"])));
         assert!(exec_args_allowed(&args(&["agent", "list"])));
+        assert!(exec_args_allowed(&args(&[
+            "--output-format",
+            "json",
+            "models"
+        ])));
+        assert!(exec_args_allowed(&args(&[
+            "--output-format",
+            "json",
+            "agents"
+        ])));
     }
 
     #[test]
@@ -2449,6 +2532,9 @@ mod reap_logic_tests {
             "/opt/homebrew/bin/node /Users/n/.local/share/cursor-agent/versions/x/index.js worker-server"
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
+        assert!(looks_like_harness_argv(
+            "/Users/n/.local/bin/agy --input-format stream-json"
+        ));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(

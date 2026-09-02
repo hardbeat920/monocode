@@ -40,6 +40,7 @@ import { Popover } from "./Popover";
 type Props = {
   from: HarnessId;
   onPick: (harness: HarnessId, model: string) => void;
+  cwd?: string;
   icon?: IconComponent;
   title?: string;
   disabledTitle?: string;
@@ -55,11 +56,16 @@ const SUBMENU_OVERLAP = -4;
 /** Neither menu is inside the other, so a click in one is not a click away. */
 const SELF = "[data-provider-target]";
 
-export function HandoffButton({ from, onPick }: Pick<Props, "from" | "onPick">) {
+export function HandoffButton({
+  from,
+  onPick,
+  cwd,
+}: Pick<Props, "from" | "onPick" | "cwd">) {
   return (
     <SecondOpinionButton
       from={from}
       onPick={onPick}
+      cwd={cwd}
       icon={Replace}
       title="Handoff"
       disabledTitle="Install another provider to hand off"
@@ -72,6 +78,7 @@ export function HandoffButton({ from, onPick }: Pick<Props, "from" | "onPick">) 
 export function SecondOpinionButton({
   from,
   onPick,
+  cwd,
   icon: Icon = MessageMultiple,
   title = "Second opinion",
   disabledTitle = "Install another provider for a second opinion",
@@ -127,8 +134,8 @@ export function SecondOpinionButton({
 
   useEffect(() => {
     if (!open || !activeHarness) return;
-    void refreshHarnessCatalogs([activeHarness]);
-  }, [open, activeHarness]);
+    void refreshHarnessCatalogs([activeHarness], cwd);
+  }, [cwd, open, activeHarness]);
 
   useEffect(() => {
     setActive(0);

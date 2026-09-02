@@ -49,6 +49,7 @@ import { MOD } from "../lib/platform";
 type Props = {
   harness: HarnessId;
   model: string;
+  cwd?: string;
   hotkeys?: boolean;
   onChange: (harness: HarnessId, model: string) => void;
   onClose?: () => void;
@@ -61,6 +62,7 @@ const MENU_MAX_HEIGHT = 340;
 export function ModelPicker({
   harness,
   model,
+  cwd,
   hotkeys = false,
   onChange,
   onClose,
@@ -143,8 +145,8 @@ export function ModelPicker({
 
   useEffect(() => {
     if (!open || visibleTab === "favorites") return;
-    void refreshHarnessCatalogs([visibleTab]);
-  }, [open, visibleTab]);
+    void refreshHarnessCatalogs([visibleTab], cwd);
+  }, [cwd, open, visibleTab]);
 
   useEffect(() => {
     const inBlockingUi = (target: EventTarget | null) => {

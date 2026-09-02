@@ -158,7 +158,9 @@ function questionFromUnknown(
     multiSelect:
       rec.multiSelect === true ||
       rec.allowMultiple === true ||
-      rec.multiple === true,
+      rec.multiple === true ||
+      rec.is_multi_select === true ||
+      rec.isMultiSelect === true,
     allowCustom,
     options,
   };
