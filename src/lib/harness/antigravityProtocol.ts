@@ -7,6 +7,10 @@ import type { HarnessEvent } from "./types";
 /** The documented streaming protocol is available in agy 1.1.15 and later. */
 export const ANTIGRAVITY_MINIMUM_VERSION = "1.1.24";
 
+// agy's five-minute print-mode default applies to each stream-json turn too.
+// Match the other long-running harnesses so active tool work is not cut short.
+const ANTIGRAVITY_TURN_TIMEOUT = "30m";
+
 type RecordValue = Record<string, unknown>;
 
 export function asRecord(value: unknown): RecordValue | null {
@@ -127,6 +131,8 @@ export function buildAntigravitySpawnArgs(input: {
     "stream-json",
     "--output-format",
     "stream-json",
+    "--print-timeout",
+    ANTIGRAVITY_TURN_TIMEOUT,
     "--disable-slash-commands",
   ];
   const effective = effectiveAntigravitySettings({

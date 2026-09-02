@@ -27,6 +27,8 @@ describe("Antigravity stream-json protocol", () => {
         "stream-json",
         "--output-format",
         "stream-json",
+        "--print-timeout",
+        "30m",
         "--disable-slash-commands",
         "--model",
         "gemini-3.7-flash-high",
