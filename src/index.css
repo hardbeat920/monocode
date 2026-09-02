@@ -323,6 +323,90 @@ header[data-tauri-drag-region] button {
   margin-block: 0;
 }
 
+.agent-markdown .markdown-code-copy {
+  appearance: none;
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  right: 8px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  color: color-mix(in srgb, var(--color-content) 45%, transparent);
+  transition:
+    color 160ms ease,
+    background-color 160ms ease;
+}
+
+.agent-markdown .markdown-code-copy:hover {
+  background: color-mix(in srgb, var(--color-content) 10%, transparent);
+  color: var(--color-content);
+}
+
+.agent-markdown .markdown-code-copy:focus-visible {
+  background: color-mix(in srgb, var(--color-content) 10%, transparent);
+  color: var(--color-content);
+}
+
+.agent-markdown .markdown-code-copy svg {
+  width: 15px;
+  height: 15px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.agent-markdown .markdown-code-copy-pages,
+.agent-markdown .markdown-code-copy-check {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.agent-markdown .markdown-code-copy-pages {
+  transition:
+    opacity 120ms ease 100ms,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-markdown .markdown-code-copy-check {
+  opacity: 0;
+  stroke-dasharray: 16;
+  stroke-dashoffset: 16;
+  transform: scale(0.65) rotate(-12deg);
+  transition:
+    opacity 80ms ease 180ms,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke-dashoffset 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-markdown .markdown-code-copy.is-copied .markdown-code-copy-pages {
+  opacity: 0;
+  transform: scale(0.55) rotate(12deg);
+  transition:
+    opacity 120ms ease,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-markdown .markdown-code-copy.is-copied .markdown-code-copy-check {
+  opacity: 1;
+  stroke-dashoffset: 0;
+  transform: scale(1) rotate(0);
+  transition:
+    opacity 80ms ease,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke-dashoffset 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .agent-markdown .markdown-code-icon {
   position: absolute;
   z-index: 1;
@@ -347,6 +431,12 @@ header[data-tauri-drag-region] button {
   font-weight: 500;
   color: color-mix(in srgb, var(--color-content) 65%, transparent);
   pointer-events: none;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-copy)
+  .markdown-code-path {
+  right: 42px;
 }
 
 .agent-markdown .markdown-code-path-link {
@@ -416,6 +506,19 @@ header[data-tauri-drag-region] button {
 
 .agent-markdown [data-streamdown="code-block-header"]:has(span:empty) {
   display: none;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-copy)
+  [data-streamdown="code-block-header"]:has(span:empty) {
+  display: flex;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-markdown .markdown-code-copy-pages,
+  .agent-markdown .markdown-code-copy-check {
+    transition: none;
+  }
 }
 
 .agent-markdown [data-streamdown="code-block-body"] {

@@ -1718,6 +1718,57 @@ export default function App({
     ],
   );
 
+  const onCloseOtherTabs = useCallback(() => {
+    const current = tabsRef.current;
+    const activeId = activeTabIdRef.current;
+    const active = current.find((tab) => tab.id === activeId);
+    const closing = current.filter((tab) => tab.id !== activeId);
+    if (!active || closing.length === 0) return;
+
+    const closingFiles = closing.flatMap((tab) => [
+      ...tab.editorPanes.flatMap((pane) => pane.files),
+      ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
+    ]);
+    const unsaved = closingFiles.filter(
+      (file) => isFilesystemTab(file) && dirtyFiles.has(file.id),
+    );
+    if (
+      unsaved.length > 0 &&
+      !window.confirm("Close other tabs with unsaved files?")
+    ) {
+      return;
+    }
+
+    const finishClose = () => {
+      const sessionIds = new Set(
+        closing.flatMap((tab) =>
+          leafIds(tab.layout).filter((paneId) =>
+            sessionsRef.current.some((session) => session.id === paneId),
+          ),
+        ),
+      );
+      for (const sessionId of sessionIds) {
+        persistSession(
+          sessionsRef.current.find((session) => session.id === sessionId),
+        );
+      }
+      setDirtyFiles((prev) => {
+        const next = new Set(prev);
+        for (const file of closingFiles) next.delete(file.id);
+        return next;
+      });
+      setTabs([active]);
+      void refreshHistory(sidebarCwd);
+    };
+
+    const terminals = closingFiles.filter((file) => file.terminal);
+    if (terminals.length > 0) {
+      void confirmCloseTerminals(terminals).then((ok) => ok && finishClose());
+      return;
+    }
+    finishClose();
+  }, [dirtyFiles, persistSession, refreshHistory, sidebarCwd]);
+
   const onCloseFile = useCallback(
     (paneId: string, fileId: string) => {
       const tab = tabsRef.current.find((entry) =>
@@ -3742,6 +3793,7 @@ export default function App({
 
   const actions = useRef({
     onNew,
+    onCloseOtherTabs,
     onClosePane,
     onNext,
     onPrev,
@@ -3764,6 +3816,7 @@ export default function App({
   });
   actions.current = {
     onNew,
+    onCloseOtherTabs,
     onClosePane,
     onNext,
     onPrev,
@@ -3827,6 +3880,8 @@ export default function App({
         e.stopPropagation();
         const a = actions.current;
         if (cmd === "new") run("new", a.onNew);
+        else if (cmd === "close-others")
+          run("close-others", a.onCloseOtherTabs);
         else if (cmd === "close") run("close", a.onClosePane);
         else if (cmd === "next") run("next", a.onNext);
         else if (cmd === "prev") run("prev", a.onPrev);
@@ -3892,6 +3947,9 @@ export default function App({
   useEffect(() => {
     const unlisten: Array<Promise<() => void>> = [
       listen("new_tab", () => run("new", actions.current.onNew)),
+      listen("close_other_tabs", () =>
+        run("close-others", actions.current.onCloseOtherTabs),
+      ),
       listen("close_tab", () => run("close", actions.current.onClosePane)),
       listen("next_tab", () => run("next", actions.current.onNext)),
       listen("prev_tab", () => run("prev", actions.current.onPrev)),
@@ -4079,6 +4137,7 @@ export default function App({
             onCloseCurrentTab={
               activeTabId ? () => onCloseTab(activeTabId) : undefined
             }
+            onCloseOtherTabs={onCloseOtherTabs}
             onPickProject={pickProject}
             onFindInProject={onFindInProject}
             onSearch={onOpenSearch}

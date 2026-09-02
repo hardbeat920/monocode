@@ -53,6 +53,12 @@ describe("tabCommand", () => {
 
   it("keeps existing tab chrome bindings", () => {
     expect(tabCommand(key({ key: "t", metaKey: true }))).toBe("new");
+    expect(
+      tabCommand(key({ key: "t", metaKey: true, altKey: true })),
+    ).toBe("close-others");
+    expect(
+      tabCommand(key({ key: "t", ctrlKey: true, altKey: true })),
+    ).toBe("close-others");
     expect(tabCommand(key({ key: "d", metaKey: true }))).toBe("split-right");
     expect(tabCommand(key({ key: "j", metaKey: true }))).toBe(
       "toggle-terminal",

@@ -304,6 +304,7 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
   { command: "Tab: New", keys: `${MOD}T`, when: "Always" },
+  { command: "Tab: Close Others", keys: `${MOD}${ALT}T`, when: "Always" },
   { command: "Tab: Next", keys: `${MOD}${SHIFT}]`, when: "Always" },
   { command: "Tab: Previous", keys: `${MOD}${SHIFT}[`, when: "Always" },
   { command: "Tab: Cycle Next", keys: `${CTRL}Tab`, when: "Always" },

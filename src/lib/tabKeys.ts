@@ -1,6 +1,7 @@
 /**
  * Workspace keybindings:
  *   New tab             cmd-t
+ *   Close other tabs    cmd-opt-t
  *   Close tab           cmd-w
  *   Split pane right    cmd-d
  *   Split pane down     shift-cmd-d
@@ -23,6 +24,7 @@ import type { FocusDir } from "./layout";
 
 export type TabCommand =
   | "new"
+  | "close-others"
   | "close"
   | "next"
   | "prev"
@@ -42,6 +44,7 @@ export function tabCommand(e: KeyboardEvent): TabCommand | null {
   const mod = e.metaKey || e.ctrlKey;
 
   if (mod && e.altKey && !e.shiftKey) {
+    if (e.key.toLowerCase() === "t") return "close-others";
     if (e.key === "ArrowLeft") return { focus: "left" };
     if (e.key === "ArrowRight") return { focus: "right" };
     if (e.key === "ArrowUp") return { focus: "up" };
