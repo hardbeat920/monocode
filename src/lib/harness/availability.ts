@@ -2,6 +2,7 @@ import type { HarnessId } from "../session";
 import { HARNESSES } from "../session";
 import {
   resolveClaudeBinary,
+  resolveAntigravityBinary,
   resolveCodexBinary,
   resolveCursorBinary,
   resolveFxBinary,
@@ -26,6 +27,10 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
     name: "Grok Build CLI",
     install: "curl -fsSL https://x.ai/cli/install.sh | bash",
   },
+  antigravity: {
+    name: "Antigravity CLI",
+    install: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+  },
   opencode: { name: "OpenCode CLI" },
   pi: { name: "Pi CLI", install: "npm i -g @earendil-works/pi-coding-agent" },
   omp: { name: "omp CLI", install: "curl -fsSL https://omp.sh/install | sh" },
@@ -37,6 +42,7 @@ let availability: HarnessAvailability = {
   codex: false,
   cursor: false,
   grok: false,
+  antigravity: false,
   opencode: false,
   pi: false,
   omp: false,
@@ -60,7 +66,9 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
-export function subscribeHarnessAvailability(onStoreChange: () => void): () => void {
+export function subscribeHarnessAvailability(
+  onStoreChange: () => void,
+): () => void {
   listeners.add(onStoreChange);
   return () => {
     listeners.delete(onStoreChange);
@@ -85,9 +93,9 @@ export function harnessUnavailableHint(id: HarnessId): string {
   return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;
 }
 
-export function probeHarnessAvailability(
-  options?: { force?: boolean },
-): Promise<void> {
+export function probeHarnessAvailability(options?: {
+  force?: boolean;
+}): Promise<void> {
   if (inflight) return inflight;
   if (!options?.force && probedAt > 0 && Date.now() - probedAt < PROBE_TTL_MS) {
     return Promise.resolve();
@@ -154,6 +162,14 @@ export function probeHarnessAvailability(
       if (id === "grok") {
         try {
           await resolveGrokBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "antigravity") {
+        try {
+          await resolveAntigravityBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

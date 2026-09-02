@@ -225,6 +225,7 @@ pub fn run() {
             harness::harness_resolve_pi,
             harness::harness_resolve_fx,
             harness::harness_resolve_grok,
+            harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,
             harness::harness_write,

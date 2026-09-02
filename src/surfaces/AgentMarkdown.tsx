@@ -22,7 +22,7 @@ import type { PluggableList } from "unified";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { createLazyMermaidPlugin } from "./mermaidPlugin";
 import { resolveWorkspacePath } from "../lib/paths";
-import { isAtxHeadingLine } from "../lib/markdownSource";
+import { isAtxHeadingLine, normalizeFileLinks } from "../lib/markdownSource";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 
@@ -51,6 +51,7 @@ const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
       allowedLinkPrefixes: ["*"],
       allowDataImages: true,
       imageBlockPolicy: "remove" as const,
+      linkBlockPolicy: "text-only" as const,
     },
   ],
 ];
@@ -245,6 +246,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   cwd?: string;
   onOpenFile?: (path: string) => void;
 }) {
+  const normalizedText = useMemo(() => normalizeFileLinks(text), [text]);
   const fileOpen = useMemo(() => ({ cwd, onOpenFile }), [cwd, onOpenFile]);
   return (
     <FileOpenContext.Provider value={fileOpen}>
@@ -256,7 +258,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
         plugins={MARKDOWN_PLUGINS}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
       >
-        {text}
+        {normalizedText}
       </Streamdown>
     </FileOpenContext.Provider>
   );

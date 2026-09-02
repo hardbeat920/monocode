@@ -221,17 +221,26 @@ describe("provider defaults", () => {
       model: defaultModelId("cursor"),
     });
   });
+
+  it("has a usable Antigravity fallback before its live catalog arrives", () => {
+    expect(defaultModelId("antigravity")).toBe("antigravity:default");
+    expect(preferredModelId("antigravity")).toBe("antigravity:default");
+  });
 });
 
 describe("model picker tabs", () => {
   const available = (id: HarnessId) =>
-    id === "claude" || id === "fx" || id === "cursor";
+    id === "claude" ||
+    id === "fx" ||
+    id === "cursor" ||
+    id === "antigravity";
 
   it("starts with favorites then installed providers", () => {
     expect(modelPickerTabs(available)).toEqual([
       "favorites",
       "claude",
       "cursor",
+      "antigravity",
       "fx",
     ]);
   });
@@ -239,6 +248,7 @@ describe("model picker tabs", () => {
   it("wraps left and right across favorites and providers", () => {
     expect(stepModelPickerTab("favorites", 1, available)).toBe("claude");
     expect(stepModelPickerTab("claude", 1, available)).toBe("cursor");
+    expect(stepModelPickerTab("cursor", 1, available)).toBe("antigravity");
     expect(stepModelPickerTab("fx", 1, available)).toBe("favorites");
     expect(stepModelPickerTab("favorites", -1, available)).toBe("fx");
   });

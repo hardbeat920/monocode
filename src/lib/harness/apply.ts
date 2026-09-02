@@ -84,11 +84,7 @@ export function applyHarnessEvent(
         text: event.text,
       });
     case "session.error":
-      return appendBlock(stopStreaming(session), {
-        id: crypto.randomUUID(),
-        role: "system",
-        text: event.message,
-      });
+      return appendError(stopStreaming(session), event.message);
     case "session.providerBound":
       return { ...session, providerSessionId: event.providerSessionId };
     case "status":
@@ -196,6 +192,17 @@ function appendStatus(session: Session, text: string): Session {
     id: crypto.randomUUID(),
     role: "system",
     text: trimmed,
+  });
+}
+
+/** Both an adapter and its caller may report the same rejected turn. */
+function appendError(session: Session, text: string): Session {
+  const last = session.blocks[session.blocks.length - 1];
+  if (last?.role === "system" && last.text === text) return session;
+  return appendBlock(session, {
+    id: crypto.randomUUID(),
+    role: "system",
+    text,
   });
 }
 

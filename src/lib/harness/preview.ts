@@ -38,6 +38,8 @@ export function extractToolPreview(
     locationLine(update.locations ?? update.location) ??
     locationLine(tool.locations ?? tool.location) ??
     firstNumber(inputs, "line") ??
+    firstNumber(inputs, "StartLine") ??
+    firstNumber(inputs, "startLine") ??
     firstNumber(inputs, "offset");
   const kind = previewKind(rawKind, title, !!diff, !!path);
   const query = extractSearchQuery(inputs);
@@ -183,7 +185,7 @@ export function isExecuteTool(kind?: string, title?: string): boolean {
 /** The argv / script a shell tool is about to run, if the harness sent it. */
 export function extractShellCommand(...values: unknown[]): string | undefined {
   for (const raw of inputRecords(...values)) {
-    for (const key of ["command", "cmd", "script"]) {
+    for (const key of ["command", "cmd", "script", "commandLine", "CommandLine"]) {
       const found = commandField(raw[key]);
       if (found) return found;
     }
@@ -264,13 +266,16 @@ export function formatAgentType(value: string): string {
 export function extractSearchQuery(value: unknown): string | undefined {
   const keys = [
     "pattern",
+    "Pattern",
     "query",
+    "Query",
     "glob",
     "glob_pattern",
     "globPattern",
     "search_term",
     "searchTerm",
     "regex",
+    "Regex",
   ];
   for (const raw of inputRecords(value)) {
     for (const key of keys) {
@@ -394,6 +399,22 @@ export function composeToolTitle(opts: {
     return "Find";
   }
 
+  if (previewKind === "write" || isEditTool(kind, title, undefined)) {
+    if (/^(?:edit|write|update|modify|create|replace)(?:ed|ing)?\s+\S/i.test(title)) {
+      return title;
+    }
+    const verb = /write|create|new/i.test(title) ? "Write" : "Edit";
+    if (path) return `${verb} ${path}`;
+    const rest = title
+      .replace(
+        /^(?:edit|write|update|modify|create|replace)(?:ing)?(?:\s+file)?\b\s*/i,
+        "",
+      )
+      .trim();
+    if (rest && !isWeakToolTitle(rest)) return `${verb} ${rest}`;
+    return verb;
+  }
+
   return title;
 }
 
@@ -409,7 +430,7 @@ export function stubFilePreview(
 }
 
 export function isWeakToolTitle(value: string): boolean {
-  return /^(tool|shell|bash|execute|command|skill|read|edit|search|find|grep|glob|fetch|other|write|delete|move|think|run|list|working|reading|editing|searching|writing|running|listing|fetching|thinking|deleting|moving|mcp:\s*tool|read file|edit file|write file|run command|ran command|unnamed)$/i.test(
+  return /^(tool|shell|bash|execute|command|skill|read|edit|search|find|grep|glob|fetch|other|write|delete|move|think|run|list|working|reading|editing|searching|writing|running|listing|fetching|thinking|deleting|moving|mcp:\s*tool|read file|edit file|write file|run command|ran command|unnamed|run_command|replace_file_content|write_to_file|view_file|grep_search|find_by_name)$/i.test(
     value.trim(),
   );
 }
@@ -539,12 +560,16 @@ function inputPath(rawInput: Record<string, unknown>): string | undefined {
     "filePath",
     "file_path",
     "targetFile",
+    "TargetFile",
     "target_file",
     "relative_workspace_path",
     "relativeWorkspacePath",
     "uri",
     "file",
     "absolutePath",
+    "AbsolutePath",
+    "searchDirectory",
+    "SearchDirectory",
   ];
   for (const key of keys) {
     const value = coerceString(rawInput[key]);

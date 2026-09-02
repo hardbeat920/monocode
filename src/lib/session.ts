@@ -11,13 +11,22 @@ import {
 } from "./models";
 
 export type HarnessId =
-  "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi" | "omp" | "fx";
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "grok"
+  | "antigravity"
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "fx";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
   "codex",
   "cursor",
   "grok",
+  "antigravity",
   "opencode",
   "pi",
   "omp",
@@ -202,6 +211,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   codex: "codex",
   cursor: "cursor",
   grok: "grok",
+  antigravity: "antigravity",
   opencode: "opencode",
   pi: "pi",
   omp: "omp",
@@ -213,6 +223,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   codex: "Codex",
   cursor: "Cursor",
   grok: "Grok Build",
+  antigravity: "Antigravity CLI",
   opencode: "OpenCode",
   pi: "Pi",
   omp: "omp",

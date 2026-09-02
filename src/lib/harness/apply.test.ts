@@ -151,6 +151,27 @@ describe("status blocks", () => {
   });
 });
 
+describe("error blocks", () => {
+  it("does not append the same turn error twice", () => {
+    let session = appendUser(newSession("antigravity", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "session.error",
+      message: "timeout waiting for response",
+    });
+    session = applyHarnessEvent(session, {
+      type: "session.error",
+      message: "timeout waiting for response",
+    });
+
+    const errors = session.blocks.filter(
+      (block) =>
+        block.role === "system" &&
+        block.text === "timeout waiting for response",
+    );
+    expect(errors).toHaveLength(1);
+  });
+});
+
 describe("applyHarnessEvent context", () => {
   it("tracks the newest level instead of summing turns", () => {
     let session = newSession("claude", "/repo");

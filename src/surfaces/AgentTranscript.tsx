@@ -378,6 +378,7 @@ export function AgentTranscript({
                   }
                   copyText={turnCopyText(turn)}
                   onSaveNote={onSaveNote}
+                  cwd={cwd}
                   fromHarness={
                     harness ? harnessForTurn(blocks, turn, harness) : undefined
                   }
@@ -451,6 +452,7 @@ function TurnDuration({
   completedAt,
   copyText: output,
   onSaveNote,
+  cwd,
   fromHarness,
   onSecondOpinion,
   onHandoff,
@@ -464,6 +466,7 @@ function TurnDuration({
   completedAt?: number;
   copyText?: string;
   onSaveNote?: (text: string) => void;
+  cwd?: string;
   fromHarness?: HarnessId;
   onSecondOpinion?: (harness: HarnessId, model: string) => void;
   onHandoff?: (harness: HarnessId, model: string) => void;
@@ -505,10 +508,14 @@ function TurnDuration({
             <Check className="size-3.5" strokeWidth={1.75} />
           )}
           {fromHarness && onHandoff ? (
-            <HandoffButton from={fromHarness} onPick={onHandoff} />
+            <HandoffButton from={fromHarness} cwd={cwd} onPick={onHandoff} />
           ) : null}
           {fromHarness && onSecondOpinion ? (
-            <SecondOpinionButton from={fromHarness} onPick={onSecondOpinion} />
+            <SecondOpinionButton
+              from={fromHarness}
+              cwd={cwd}
+              onPick={onSecondOpinion}
+            />
           ) : null}
         </span>
       ) : (

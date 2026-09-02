@@ -1,5 +1,18 @@
 export { startHarnessBridge, killAllChildren } from "./child";
-export { applyHarnessEvent, appendUser, appendSteerUser, stopStreaming } from "./apply";
+export {
+  sendAntigravityTurn,
+  cancelAntigravityTurn,
+  respondAntigravityApproval,
+  stopAntigravitySession,
+  forgetAntigravitySession,
+  bindAntigravitySession,
+} from "./antigravity";
+export {
+  applyHarnessEvent,
+  appendUser,
+  appendSteerUser,
+  stopStreaming,
+} from "./apply";
 export {
   sendCursorTurn,
   cancelCursorTurn,
@@ -64,6 +77,7 @@ export {
   forgetGrokSession,
   bindGrokSession,
 } from "./grok";
+export { generateAntigravitySessionTitle } from "./antigravityTitle";
 export { generateCursorSessionTitle } from "./cursorTitle";
 export { generateCodexSessionTitle } from "./codexTitle";
 export { generateOpenCodeSessionTitle } from "./opencodeTitle";
@@ -71,32 +85,34 @@ export { generateClaudeSessionTitle } from "./claudeTitle";
 export { generatePiSessionTitle, generateOmpSessionTitle } from "./piTitle";
 export { generateGrokSessionTitle } from "./grokTitle";
 export {
+  generateAntigravityCommitMessage,
+  generateAntigravityPrContent,
+  generateAntigravityBranchName,
+} from "./antigravityGit";
+export {
   generateCursorCommitMessage,
   generateCursorPrContent,
   stopCursorGitText,
 } from "./cursorGit";
-export {
-  generateCodexCommitMessage,
-  generateCodexPrContent,
-} from "./codexGit";
+export { generateCodexCommitMessage, generateCodexPrContent } from "./codexGit";
 export {
   generateOpenCodeCommitMessage,
   generateOpenCodePrContent,
+  generateOpenCodeBranchName,
 } from "./opencodeGit";
 export {
   generateClaudeCommitMessage,
   generateClaudePrContent,
 } from "./claudeGit";
-export {
-  generateGrokCommitMessage,
-  generateGrokPrContent,
-} from "./grokGit";
+export { generateGrokCommitMessage, generateGrokPrContent } from "./grokGit";
 export {
   generateCommitMessage,
   generatePrContent,
+  generateBranchName,
   pickTextHarness,
   warmupText,
 } from "./textHarness";
+export { warmupAntigravityText, stopAntigravityTextPrompt } from "./antigravityText";
 export { warmupCursorText } from "./cursorText";
 export { warmupOpenCodeText } from "./opencodeText";
 export { warmupClaudeText } from "./claudeText";
@@ -109,6 +125,7 @@ export { refreshClaudeCatalog } from "./claudeCatalog";
 export { refreshPiCatalog, refreshOmpCatalog } from "./piCatalog";
 export { refreshFxCatalog } from "./fxCatalog";
 export { refreshGrokCatalog } from "./grokCatalog";
+export { refreshAntigravityCatalog } from "./antigravityCatalog";
 export { registerBuiltinHarnesses } from "./register";
 export {
   getHarnessAvailabilitySnapshot,
@@ -137,5 +154,9 @@ export {
   generateHarnessPrContent,
 } from "./registry";
 export type { ApprovalDecision, HarnessEvent, SteerTurnInput } from "./types";
-export type { UserQuestion, UserQuestionPrompt, UserQuestionReply } from "../userQuestion";
+export type {
+  UserQuestion,
+  UserQuestionPrompt,
+  UserQuestionReply,
+} from "../userQuestion";
 export type { HarnessAdapter } from "./registry";

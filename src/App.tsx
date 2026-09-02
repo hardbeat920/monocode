@@ -688,7 +688,7 @@ export default function App({
     const harnesses = [
       ...new Set(sessionsRef.current.map((session) => session.harness)),
     ];
-    void refreshHarnessCatalogs(harnesses).then(() => {
+    void refreshHarnessCatalogs(harnesses, projectCwd).then(() => {
       setSessions((prev) =>
         prev.map((session) => {
           if (!isLiveHarness(session.harness)) return session;
@@ -707,7 +707,7 @@ export default function App({
         }),
       );
     });
-  }, []);
+  }, [projectCwd]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
   const active =
@@ -763,7 +763,11 @@ export default function App({
   const busySessionIds = busySessionIdsRef.current;
 
   const usageProviders = useMemo(() => {
-    if (active?.harness === "claude" || active?.harness === "codex") {
+    if (
+      active?.harness === "claude" ||
+      active?.harness === "codex" ||
+      active?.harness === "antigravity"
+    ) {
       return [active.harness];
     }
     return [];

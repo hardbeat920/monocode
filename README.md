@@ -12,7 +12,7 @@
   <img src="docs/screenshot.jpg" alt="MonoCode with sessions, agent chat, diffs, terminal, and editor" width="920" />
 </p>
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Pi, omp, and fx. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
+Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, Antigravity, OpenCode, Pi, omp, and fx. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
 
 ## Install
 
@@ -22,6 +22,7 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 > - [Codex](https://developers.openai.com/codex/cli) - `codex login`
 > - [Cursor CLI](https://cursor.com/cli) - `agent login`
 > - [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
+> - [Antigravity CLI](https://antigravity.google/docs/cli/overview) - `curl -fsSL https://antigravity.google/cli/install.sh | bash` then run `agy` to sign in
 > - [OpenCode](https://opencode.ai) - `opencode auth login`
 > - [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
 > - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`

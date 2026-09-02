@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_CREATE_SKILL,
+  ANTIGRAVITY_NATIVE_SKILLS,
   applySkillsToTurn,
   blankSkillMarkdown,
   injectSkillPrompt,
@@ -285,5 +286,37 @@ describe("skill names", () => {
     const md = blankSkillMarkdown("review-pr");
     expect(md).toContain("name: review-pr");
     expect(md).toContain("# Review Pr");
+  });
+});
+
+describe("Antigravity native skills", () => {
+  it("includes /boost, /plan, /goal and other native commands", () => {
+    const names = ANTIGRAVITY_NATIVE_SKILLS.map((s) => s.name);
+    expect(names).toContain("boost");
+    expect(names).toContain("plan");
+    expect(names).toContain("goal");
+    expect(names).toContain("grill-me");
+    expect(names).toContain("teamwork-preview");
+    expect(names).toContain("browser");
+    expect(names).toContain("learn");
+    expect(names).toContain("schedule");
+  });
+
+  it("applies /boost skill prompt to turn", async () => {
+    const prompt = await applySkillsToTurn("Please refactor the auth system /boost", {
+      harness: "antigravity",
+      cwd: "/repo",
+    });
+    expect(prompt).toContain("## /boost");
+    expect(prompt).toContain("Activate boosted reasoning");
+    expect(prompt).toContain("Please refactor the auth system /boost");
+  });
+
+  it("merges Antigravity native skills into catalog", () => {
+    const catalog = mergeCatalog([], ANTIGRAVITY_NATIVE_SKILLS);
+    const boost = catalog.find((s) => s.name === "boost");
+    expect(boost).toBeDefined();
+    expect(boost?.kind).toBe("native");
+    expect(boost?.source).toBe("antigravity");
   });
 });

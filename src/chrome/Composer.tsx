@@ -970,6 +970,7 @@ export function Composer({
                 <ModelPicker
                   harness={harness}
                   model={model}
+                  cwd={executionCwd}
                   hotkeys={hotkeys && enabled}
                   onChange={onModelChange}
                   onClose={() => ref.current?.focus()}

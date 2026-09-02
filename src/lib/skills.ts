@@ -30,6 +30,7 @@ export type SkillSource =
   | "omp"
   | "fx"
   | "grok"
+  | "antigravity"
   | "monocode";
 
 type SkillCommon = {
@@ -53,7 +54,98 @@ export type BuiltinSkill = SkillCommon & {
 
 export type NativeSkill = SkillCommon & {
   kind: "native";
-  source: "pi";
+  source: "pi" | "antigravity";
+};
+
+export const ANTIGRAVITY_NATIVE_SKILLS: NativeSkill[] = [
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "boost",
+    description: "Deep thinking, strategic planning, multiple perspectives, and rigorous verification.",
+    invocation: "boost",
+  },
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "plan",
+    description: "Step-by-step architectural and implementation planning before making changes.",
+    invocation: "plan",
+  },
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "goal",
+    description: "Autonomous execution mode: persists until the objective and verification pass.",
+    invocation: "goal",
+  },
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "grill-me",
+    description: "Interactive interview to resolve trade-offs, ambiguities, and design decisions.",
+    invocation: "grill-me",
+  },
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "teamwork-preview",
+    description: "Orchestrate subagents concurrently to divide and conquer large tasks.",
+    invocation: "teamwork-preview",
+  },
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "browser",
+    description: "Web research, live documentation lookups, and web application testing.",
+    invocation: "browser",
+  },
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "learn",
+    description: "Persist lessons, corrections, and codebase rules into memory.",
+    invocation: "learn",
+  },
+  {
+    kind: "native",
+    source: "antigravity",
+    name: "schedule",
+    description: "Set recurring background tasks, crons, or one-time timers.",
+    invocation: "schedule",
+  },
+];
+
+export const ANTIGRAVITY_SKILL_BODIES: Record<string, string> = {
+  boost: `Activate boosted reasoning, deep thinking, strategic planning, multiple perspectives, and rigorous verification:
+1. **Explore Perspectives**: Analyze the problem through multiple design and architecture viewpoints before choosing a path. Identify subtle failure modes, edge cases, and backward-compatibility risks.
+2. **Formulate a Strategic Plan**: Outline a clear, step-by-step hypothesis and execution plan. Break complex operations into isolated, verifiable milestones.
+3. **Execute with Precision**: Implement clean, well-factored code adhering strictly to existing codebase conventions. Preserve all unrelated comments and docstrings.
+4. **Rigorous Verification**: Run relevant test suites and verify all touched areas thoroughly. Formulate and run new tests to prove correctness if coverage is missing.`,
+  plan: `Create a comprehensive, step-by-step implementation plan before modifying any code:
+1. Summarize the user's intent and scope.
+2. Detail the architecture decisions, files to modify/create, and potential risks or alternatives.
+3. Provide a clear checklist of actionable implementation steps.
+4. Stop after delivering the plan and wait for the user's confirmation before executing code changes.`,
+  goal: `Operate in autonomous goal-driven mode:
+1. Formulate a comprehensive roadmap to achieve the specified goal.
+2. Persistently execute each stage, run tests, diagnose errors, and fix issues autonomously.
+3. Do not stop until all acceptance criteria are fully met and verified.`,
+  "grill-me": `Conduct an interactive clarifying interview with the user:
+1. Analyze the request to identify trade-offs, underspecified requirements, and architectural forks.
+2. Ask targeted, multiple-choice questions to resolve ambiguities before implementing any solution.`,
+  "teamwork-preview": `Orchestrate a team of subagents to execute this task:
+1. Deconstruct the task into modular, parallel work streams.
+2. Launch subagents (using invoke_subagent) with dedicated roles (e.g. research, frontend, backend, test).
+3. Coordinate findings and integrate the final deliverable.`,
+  browser: `Focus on web research, live documentation inspection, and web application interactions:
+1. Fetch authoritative URLs and read online references to ensure solutions use the latest APIs.
+2. Validate findings against official documentation.`,
+  learn: `Extract durable patterns, rules, and preferences from this conversation:
+1. Identify corrections, project conventions, and user preferences demonstrated in this session.
+2. Propose or write updated rules to document these practices for future sessions.`,
+  schedule: `Configure and manage scheduled tasks or background timers:
+1. Help the user schedule recurring cron jobs or one-shot reminders using the available scheduling tools.`,
 };
 
 export type Skill = FileSkill | BuiltinSkill | NativeSkill;
@@ -205,7 +297,10 @@ function startCatalogLoad(
         entry.retryAt = Date.now() + PI_SKILL_RETRY_MS;
         return entry.skills ?? [];
       }
-      const fallback = mergeCatalog([]);
+      const fallback =
+        context.harness === "antigravity"
+          ? mergeCatalog([], ANTIGRAVITY_NATIVE_SKILLS)
+          : mergeCatalog([]);
       entry.skills = fallback;
       entry.loadedAt = Date.now();
       return fallback;
@@ -231,15 +326,25 @@ async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
       ...command,
     }));
   }
-  return mergeCatalog(await listSkills(context.cwd));
+  const discovered = await listSkills(context.cwd).catch(() => []);
+  if (context.harness === "antigravity") {
+    return mergeCatalog(discovered, ANTIGRAVITY_NATIVE_SKILLS);
+  }
+  return mergeCatalog(discovered);
 }
 
-export function mergeCatalog(discovered: DiscoveredSkill[]): Skill[] {
+export function mergeCatalog(
+  discovered: DiscoveredSkill[],
+  extraSkills: Skill[] = [],
+): Skill[] {
   const out = new Map<string, Skill>();
   const add = (skill: Skill) => {
     if (!skill.name || out.has(skill.name)) return;
     out.set(skill.name, skill);
   };
+  for (const skill of extraSkills) {
+    add(skill);
+  }
   for (const skill of discovered) {
     if (skill.source === "agents") add(asSkill(skill));
   }
@@ -430,10 +535,14 @@ export async function applySkillsToTurn(
   const names = skillNamesInText(text);
   if (names.length === 0) return text;
   const catalog = await loadSkills(context);
-  const picked: Array<FileSkill | BuiltinSkill> = [];
+  const picked: Skill[] = [];
   for (const name of names) {
     const skill = catalog.find((item) => item.name === name);
-    if (skill?.kind === "file" || skill?.kind === "builtin") {
+    if (
+      skill?.kind === "file" ||
+      skill?.kind === "builtin" ||
+      (skill?.kind === "native" && skill.source === "antigravity")
+    ) {
       picked.push(skill);
     }
   }
@@ -458,9 +567,12 @@ export function warmPiSkills(
 }
 
 export async function readSkillBody(
-  skill: FileSkill | BuiltinSkill,
+  skill: Skill,
 ): Promise<string> {
   if (skill.kind === "builtin") return CREATE_SKILL_BODY;
+  if (skill.kind === "native") {
+    return ANTIGRAVITY_SKILL_BODIES[skill.name] ?? "";
+  }
   try {
     return await readTextFile(skill.path);
   } catch {
