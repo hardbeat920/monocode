@@ -6,20 +6,16 @@ const THEME_HUE_KEY = "monocode.themeHue";
 const THEME_SATURATION_KEY = "monocode.themeSaturation";
 const OPACITY_KEY = "monocode.sidebarOpacity";
 const BLUR_KEY = "monocode.sidebarBlur";
-const OPEN_KEY = "monocode.sidebarOpen";
 const PROJECT_RAIL_OPEN_KEY = "monocode.projectRailOpen";
 const BODY_KEY = "monocode.bodyGlass";
 const SCHEME_KEY = "monocode.colorScheme";
 const SIDEBAR_TAB_ORDER_KEY = "monocode.sidebarTabOrder";
 const PROJECT_RAIL_WIDTH_KEY = "monocode.projectRailWidth";
-const SIDEBAR_LAYOUT_KEY = "monocode.sidebarLayout";
 const TRANSCRIPT_LAYOUT_KEY = "monocode.transcriptLayout";
-const TRANSCRIPT_ZEN_KEY = "monocode.transcriptZen";
 const TRANSCRIPT_ANCHOR_KEY = "monocode.transcriptAnchor";
 
 export type ColorScheme = "dark" | "light";
 export type ThemePreference = ColorScheme | "system";
-export type SidebarLayout = "classic" | "deck";
 export type TranscriptLayout = "full" | "chat";
 
 export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";
@@ -27,19 +23,9 @@ export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";
 /** Fired on `window` whenever the color scheme flips (detail: ColorScheme). */
 export const SCHEME_CHANGE_EVENT = "monocode:schemechange";
 
-/** Fired on `window` whenever the sidebar layout flips (detail: SidebarLayout). */
-export const LAYOUT_CHANGE_EVENT = "monocode:layoutchange";
-
-export const SIDEBAR_LAYOUT_DEFAULT: SidebarLayout = "deck";
-
 export const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = "full";
 
-export const TRANSCRIPT_ZEN_DEFAULT = true;
-
 export const TRANSCRIPT_ANCHOR_DEFAULT = true;
-
-/** Fired on `window` whenever zen mode flips (detail: boolean). */
-export const TRANSCRIPT_ZEN_CHANGE_EVENT = "monocode:transcriptzenchange";
 
 /** Fired on `window` whenever prompt-to-top anchoring flips (detail: boolean). */
 export const TRANSCRIPT_ANCHOR_CHANGE_EVENT = "monocode:transcriptanchorchange";
@@ -305,14 +291,6 @@ function isSidebarTabId(value: unknown): value is SidebarTabId {
   );
 }
 
-export function loadSidebarOpen(): boolean {
-  return readFlag(OPEN_KEY) ?? false;
-}
-
-export function saveSidebarOpen(value: boolean) {
-  writeFlag(OPEN_KEY, value);
-}
-
 export function loadProjectRailOpen(): boolean {
   return readFlag(PROJECT_RAIL_OPEN_KEY) ?? true;
 }
@@ -366,30 +344,6 @@ export function saveProjectRailWidth(value: number) {
   );
 }
 
-function isSidebarLayout(value: unknown): value is SidebarLayout {
-  return value === "classic" || value === "deck";
-}
-
-export function loadSidebarLayout(): SidebarLayout {
-  try {
-    const raw = localStorage.getItem(SIDEBAR_LAYOUT_KEY);
-    return isSidebarLayout(raw) ? raw : SIDEBAR_LAYOUT_DEFAULT;
-  } catch {
-    return SIDEBAR_LAYOUT_DEFAULT;
-  }
-}
-
-export function saveSidebarLayout(value: SidebarLayout) {
-  try {
-    localStorage.setItem(SIDEBAR_LAYOUT_KEY, value);
-  } catch {
-    // private mode / quota
-  }
-  window.dispatchEvent(
-    new CustomEvent<SidebarLayout>(LAYOUT_CHANGE_EVENT, { detail: value }),
-  );
-}
-
 function isTranscriptLayout(value: unknown): value is TranscriptLayout {
   return value === "full" || value === "chat";
 }
@@ -416,24 +370,6 @@ export function saveTranscriptLayout(value: TranscriptLayout) {
       detail: next,
     }),
   );
-}
-
-export function loadTranscriptZen(): boolean {
-  return readFlag(TRANSCRIPT_ZEN_KEY) ?? TRANSCRIPT_ZEN_DEFAULT;
-}
-
-export function saveTranscriptZen(value: boolean) {
-  writeFlag(TRANSCRIPT_ZEN_KEY, value);
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(
-    new CustomEvent<boolean>(TRANSCRIPT_ZEN_CHANGE_EVENT, { detail: value }),
-  );
-}
-
-export function toggleTranscriptZen(): boolean {
-  const next = !loadTranscriptZen();
-  saveTranscriptZen(next);
-  return next;
 }
 
 export function loadTranscriptAnchor(): boolean {

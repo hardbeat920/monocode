@@ -17,6 +17,7 @@ import {
   saveSessionFolders,
   setFolderCollapsed,
   setFolderColor,
+  setFolderCustomColor,
   reorderSessionFolders,
   ungroupedSessions,
   uniqueFolderName,
@@ -232,6 +233,24 @@ describe("folder mutations", () => {
     expect(folderShellFill(undefined)).toBeUndefined();
   });
 
+  it("stores a custom hex and prefers it over a palette index", () => {
+    const folders = [folder("g", ["a"], { colorIndex: 2 })];
+    const custom = setFolderCustomColor(folders, "g", "#3B82F6");
+    expect(custom[0]?.customColor).toBe("#3b82f6");
+    expect(custom[0]?.colorIndex).toBeUndefined();
+    expect(setFolderCustomColor(custom, "g", "#3b82f6")).toBe(custom);
+    expect(setFolderCustomColor(custom, "g", "not-a-color")).toBe(custom);
+    expect(setFolderCustomColor(custom, "g", null)[0]?.customColor).toBeUndefined();
+    expect(folderAccent(2, "#3b82f6")).toBe("#3b82f6");
+    expect(folderShellFill(undefined, "#3b82f6")).toMatch(
+      /color-mix\(in srgb, #3b82f6 18%/,
+    );
+    const preset = setFolderColor(custom, "g", 3);
+    expect(preset[0]?.colorIndex).toBe(3);
+    expect(preset[0]?.customColor).toBeUndefined();
+    expect(setFolderColor(custom, "g", null)[0]?.customColor).toBeUndefined();
+  });
+
   it("reorders named folders and leaves others in place", () => {
     const folders = [
       folder("a", ["s1"]),
@@ -346,6 +365,36 @@ describe("session folder persistence", () => {
     const folders = [folder("g", ["a"], { name: "Work", colorIndex: 4 })];
     saveSessionFolders("/tmp/project", folders);
     expect(loadSessionFolders("/tmp/project")[0]?.colorIndex).toBe(4);
+  });
+
+  it("round-trips a custom folder color and prefers it over a palette index", () => {
+    const folders = [
+      folder("g", ["a"], { name: "Work", customColor: "#AABBCC" }),
+    ];
+    saveSessionFolders("/tmp/project", folders);
+    expect(loadSessionFolders("/tmp/project")[0]).toMatchObject({
+      customColor: "#aabbcc",
+    });
+    expect(loadSessionFolders("/tmp/project")[0]?.colorIndex).toBeUndefined();
+
+    saveSessionFolders("/tmp/project", [
+      folder("g", ["a"], {
+        name: "Work",
+        colorIndex: 4,
+        customColor: "#ff00aa",
+      }),
+    ]);
+    expect(loadSessionFolders("/tmp/project")[0]).toMatchObject({
+      customColor: "#ff00aa",
+    });
+    expect(loadSessionFolders("/tmp/project")[0]?.colorIndex).toBeUndefined();
+  });
+
+  it("drops an invalid custom folder color on load", () => {
+    saveSessionFolders("/tmp/project", [
+      folder("g", ["a"], { name: "Work", customColor: "red" }),
+    ]);
+    expect(loadSessionFolders("/tmp/project")[0]?.customColor).toBeUndefined();
   });
 
   it("drops a project key when the last folder is gone", () => {

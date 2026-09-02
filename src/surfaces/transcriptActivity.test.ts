@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Block } from "../lib/session";
 import {
   activityPhaseTitle,
-  activityPreviousLabel,
   activityStillRunning,
   buildActivityPhases,
   editVerb,
@@ -12,7 +11,6 @@ import {
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
-  splitActivityRows,
   toolCallLabel,
   turnCopyText,
 } from "./transcriptActivity";
@@ -109,21 +107,6 @@ describe("groupTurnItems", () => {
     expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("still splits around assistant text and file edits", () => {
-    const items = groupTurnItems([
-      shell("a"),
-      { id: "msg", role: "assistant", text: "next I will edit" },
-      edit("e"),
-      shell("b", "pending", { requestId: 1 }),
-    ]);
-    expect(items.map((item) => item.type)).toEqual([
-      "activity",
-      "block",
-      "block",
-      "activity",
-    ]);
-  });
-
   it("does not split a stack across empty assistant placeholders", () => {
     const items = groupTurnItems([
       shell("a"),
@@ -136,29 +119,78 @@ describe("groupTurnItems", () => {
     if (items[0]?.type !== "activity") return;
     expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "b", "c"]);
   });
-});
 
-describe("splitActivityRows", () => {
-  it("keeps the latest completed tool as the headline and inserts approvals above the collapsed rest", () => {
-    const rows = splitActivityRows([
-      shell("a"),
-      shell("find"),
-      shell("read", "pending", { requestId: 1 }),
-      shell("run", "pending", { requestId: 2 }),
-    ]);
-    expect(rows.latest?.id).toBe("find");
-    expect(rows.pending.map((block) => block.id)).toEqual(["read", "run"]);
-    expect(rows.hidden.map((block) => block.id)).toEqual(["a"]);
+  it("folds edits into the activity stack", () => {
+    const items = groupTurnItems([shell("a"), edit("b"), shell("c")]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "activity",
+      blocks: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    });
   });
 
-  it("shows only pending rows when nothing in the stack has finished", () => {
-    const rows = splitActivityRows([
-      shell("read", "pending", { requestId: 1 }),
-      shell("run", "pending", { requestId: 2 }),
+  it("keeps an edit awaiting approval out of the stack", () => {
+    const pending = edit("b");
+    pending.approval = { requestId: 1 };
+    const items = groupTurnItems([shell("a"), pending]);
+    expect(items.map((item) => item.type)).toEqual(["activity", "block"]);
+  });
+
+  it("folds prose between tool calls in and leaves the final answer out", () => {
+    const items = groupTurnItems([
+      { id: "u", role: "user", text: "cut the release" },
+      { id: "a1", role: "assistant", text: "Running the checks first." },
+      shell("a"),
+      { id: "a2", role: "assistant", text: "Checks pass. Bumping:" },
+      edit("b"),
+      { id: "a3", role: "assistant", text: "Released." },
     ]);
-    expect(rows.latest).toBeUndefined();
-    expect(rows.pending.map((block) => block.id)).toEqual(["read", "run"]);
-    expect(rows.hidden).toEqual([]);
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+    ]);
+    if (items[1]?.type !== "activity") return;
+    expect(items[1].blocks.map((block) => block.id)).toEqual([
+      "a1",
+      "a",
+      "a2",
+      "b",
+    ]);
+    expect(items[2]).toMatchObject({ type: "block", block: { id: "a3" } });
+  });
+
+  it("keeps the trailing run of prose blocks out of the stack", () => {
+    const items = groupTurnItems([
+      shell("a"),
+      { id: "a1", role: "assistant", text: "Half" },
+      { id: "a2", role: "assistant", text: "Done", streaming: true },
+    ]);
+    expect(items.map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "block",
+    ]);
+  });
+
+  it("folds every paragraph when the turn ends on a tool call", () => {
+    const items = groupTurnItems([
+      { id: "a1", role: "assistant", text: "Looking now." },
+      shell("a"),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: "activity" });
+  });
+
+  it("keeps thinking in the stack so a long think is visible", () => {
+    const items = groupTurnItems([
+      { id: "r", role: "reasoning", text: "**Checking the config**" },
+      shell("a"),
+      { id: "done", role: "assistant", text: "Done." },
+    ]);
+    expect(items.map((item) => item.type)).toEqual(["activity", "block"]);
+    if (items[0]?.type !== "activity") return;
+    expect(items[0].blocks.map((block) => block.id)).toEqual(["r", "a"]);
   });
 });
 
@@ -208,124 +240,6 @@ describe("groupTurns", () => {
       ["h1"],
       ["u2"],
     ]);
-  });
-});
-
-describe("zen mode grouping", () => {
-  it("folds edits into the activity stack", () => {
-    const items = groupTurnItems([shell("a"), edit("b"), shell("c")], true);
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      type: "activity",
-      blocks: [{ id: "a" }, { id: "b" }, { id: "c" }],
-    });
-  });
-
-  it("leaves edits as their own blocks when zen is off", () => {
-    const items = groupTurnItems([shell("a"), edit("b"), shell("c")]);
-    expect(items.map((item) => item.type)).toEqual([
-      "activity",
-      "block",
-      "activity",
-    ]);
-  });
-
-  it("keeps an edit awaiting approval out of the stack", () => {
-    const pending = edit("b");
-    pending.approval = { requestId: 1 };
-    const items = groupTurnItems([shell("a"), pending], true);
-    expect(items.map((item) => item.type)).toEqual(["activity", "block"]);
-  });
-
-  it("folds prose between tool calls in and leaves the final answer out", () => {
-    const items = groupTurnItems(
-      [
-        { id: "u", role: "user", text: "cut the release" },
-        { id: "a1", role: "assistant", text: "Running the checks first." },
-        shell("a"),
-        { id: "a2", role: "assistant", text: "Checks pass. Bumping:" },
-        edit("b"),
-        { id: "a3", role: "assistant", text: "Released." },
-      ],
-      true,
-    );
-    expect(items.map((item) => item.type)).toEqual([
-      "block",
-      "activity",
-      "block",
-    ]);
-    if (items[1]?.type !== "activity") return;
-    expect(items[1].blocks.map((block) => block.id)).toEqual([
-      "a1",
-      "a",
-      "a2",
-      "b",
-    ]);
-    expect(items[2]).toMatchObject({ type: "block", block: { id: "a3" } });
-  });
-
-  it("keeps the trailing run of prose blocks out of the stack", () => {
-    const items = groupTurnItems(
-      [
-        shell("a"),
-        { id: "a1", role: "assistant", text: "Half" },
-        { id: "a2", role: "assistant", text: "Done", streaming: true },
-      ],
-      true,
-    );
-    expect(items.map((item) => item.type)).toEqual([
-      "activity",
-      "block",
-      "block",
-    ]);
-  });
-
-  it("folds every paragraph when the turn ends on a tool call", () => {
-    const items = groupTurnItems(
-      [{ id: "a1", role: "assistant", text: "Looking now." }, shell("a")],
-      true,
-    );
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ type: "activity" });
-  });
-
-  it("leaves prose alone when zen is off", () => {
-    const items = groupTurnItems([
-      { id: "a1", role: "assistant", text: "Looking now." },
-      shell("a"),
-    ]);
-    expect(items.map((item) => item.type)).toEqual(["block", "activity"]);
-  });
-
-  it("keeps thinking in the stack so a long think is visible", () => {
-    const items = groupTurnItems(
-      [
-        { id: "r", role: "reasoning", text: "**Checking the config**" },
-        shell("a"),
-        { id: "done", role: "assistant", text: "Done." },
-      ],
-      true,
-    );
-    expect(items.map((item) => item.type)).toEqual(["activity", "block"]);
-    if (items[0]?.type !== "activity") return;
-    expect(items[0].blocks.map((block) => block.id)).toEqual(["r", "a"]);
-  });
-
-  it("drops thinking entirely when zen is off", () => {
-    const items = groupTurnItems([
-      { id: "r", role: "reasoning", text: "thinking" },
-      shell("a"),
-    ]);
-    expect(items).toHaveLength(1);
-    if (items[0]?.type !== "activity") return;
-    expect(items[0].blocks.map((block) => block.id)).toEqual(["a"]);
-  });
-});
-
-describe("activityPreviousLabel", () => {
-  it("counts what is waiting behind the disclosure", () => {
-    expect(activityPreviousLabel(1)).toBe("+1 previous tool call");
-    expect(activityPreviousLabel(4)).toBe("+4 previous tool calls");
   });
 });
 
@@ -534,23 +448,20 @@ describe("running subagents", () => {
 
 describe("lastActivityIndex", () => {
   it("points at the fold that sits under the final answer", () => {
-    const items = groupTurnItems(
-      [
-        { id: "u", role: "user", text: "go" },
-        shell("a"),
-        { id: "p", role: "plan", text: "## Plan" },
-        shell("b"),
-        { id: "done", role: "assistant", text: "Done." },
-      ],
-      true,
-    );
+    const items = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      { id: "p", role: "plan", text: "## Plan" },
+      shell("b"),
+      { id: "done", role: "assistant", text: "Done." },
+    ]);
     expect(lastActivityIndex(items)).toBe(3);
   });
 
   it("returns -1 for a turn that ran no tools", () => {
     expect(
       lastActivityIndex(
-        groupTurnItems([{ id: "a", role: "assistant", text: "Hi." }], true),
+        groupTurnItems([{ id: "a", role: "assistant", text: "Hi." }]),
       ),
     ).toBe(-1);
   });

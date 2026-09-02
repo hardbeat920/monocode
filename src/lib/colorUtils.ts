@@ -1,9 +1,13 @@
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+export const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 export type Hsv = { h: number; s: number; v: number };
 
+export function isHexColor(value: string): boolean {
+  return HEX_COLOR_RE.test(value);
+}
+
 export function normalizeHex(color: string): string {
-  if (HEX_COLOR_RE.test(color)) return color.toLowerCase();
+  if (isHexColor(color)) return color.toLowerCase();
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   if (!ctx) return "#808080";

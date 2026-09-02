@@ -120,6 +120,9 @@ export type InboxListResult = {
 
 const INBOX_CACHE_FRESH_MS = 30_000;
 
+/** Closed history competes for the same slots, so an unfiltered fetch needs the wider page. */
+const INBOX_ALL_LIMIT = 100;
+
 type InboxListCache = InboxListResult & {
   key: string;
   fetchedAt: number;
@@ -204,6 +207,7 @@ export function listGithubWorkItems(
     assignedToMe: query.assignedToMe,
     state: query.state,
     search: query.search.trim(),
+    limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
   });
 }
 
@@ -504,6 +508,7 @@ async function fetchLinearInboxItems(query: InboxQuery): Promise<InboxItem[]> {
     assignedToMe: query.assignedToMe,
     state: query.state,
     teamIds: teamIds ?? [],
+    limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
   });
   const hidden = new Set(hiddenIds);
   return issues

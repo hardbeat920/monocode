@@ -266,12 +266,36 @@ describe("hasActiveInboxFilters", () => {
 });
 
 describe("inboxFetchState", () => {
-  it("fetches open items unless closed or merged is selected", () => {
-    expect(inboxFetchState(DEFAULT_INBOX_FILTERS)).toBe("open");
+  it("fetches everything while no status is selected", () => {
+    expect(inboxFetchState(DEFAULT_INBOX_FILTERS)).toBe("all");
+  });
+
+  it("narrows to open once only open or draft is selected", () => {
+    expect(
+      inboxFetchState({
+        ...DEFAULT_INBOX_FILTERS,
+        status: { ...DEFAULT_INBOX_FILTERS.status, open: true },
+      }),
+    ).toBe("open");
+    expect(
+      inboxFetchState({
+        ...DEFAULT_INBOX_FILTERS,
+        status: { ...DEFAULT_INBOX_FILTERS.status, draft: true },
+      }),
+    ).toBe("open");
+  });
+
+  it("widens to all when closed or merged is selected", () => {
     expect(
       inboxFetchState({
         ...DEFAULT_INBOX_FILTERS,
         status: { ...DEFAULT_INBOX_FILTERS.status, closed: true },
+      }),
+    ).toBe("all");
+    expect(
+      inboxFetchState({
+        ...DEFAULT_INBOX_FILTERS,
+        status: { ...DEFAULT_INBOX_FILTERS.status, open: true, merged: true },
       }),
     ).toBe("all");
   });

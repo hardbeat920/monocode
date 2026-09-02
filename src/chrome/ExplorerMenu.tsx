@@ -25,6 +25,7 @@ type Props = {
   items: ExplorerMenuItem[];
   ariaLabel?: string;
   header?: ReactNode;
+  width?: number;
   onPick: (id: string) => void;
   onClose: () => void;
 };
@@ -47,6 +48,7 @@ export function ExplorerMenu({
   items,
   ariaLabel = "File actions",
   header,
+  width = MENU_WIDTH,
   onPick,
   onClose,
 }: Props) {
@@ -88,7 +90,7 @@ export function ExplorerMenu({
     <Popover
       anchor={{ x, y }}
       gap={0}
-      width={MENU_WIDTH}
+      width={width}
       autoFocus
       onDismiss={onClose}
       role="menu"

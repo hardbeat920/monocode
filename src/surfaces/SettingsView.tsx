@@ -31,24 +31,19 @@ import {
   loadBodyGlass,
   loadThemePreference,
   loadSidebarBlur,
-  loadSidebarLayout,
   loadSidebarOpacity,
   loadThemeHue,
   loadThemeSaturation,
   loadTranscriptLayout,
-  loadTranscriptZen,
   loadTranscriptAnchor,
   saveBodyGlass,
   saveThemePreference,
   saveSidebarBlur,
-  saveSidebarLayout,
   saveSidebarOpacity,
   saveThemeHue,
   saveThemeSaturation,
   saveTranscriptLayout,
-  saveTranscriptZen,
   saveTranscriptAnchor,
-  TRANSCRIPT_ZEN_CHANGE_EVENT,
   TRANSCRIPT_ANCHOR_CHANGE_EVENT,
   SIDEBAR_BLUR_DEFAULT,
   SIDEBAR_BLUR_MAX,
@@ -63,7 +58,6 @@ import {
   THEME_SATURATION_MAX,
   THEME_SATURATION_MIN,
   type ThemePreference,
-  type SidebarLayout,
   type TranscriptLayout,
 } from "../lib/appearance";
 import {
@@ -88,7 +82,7 @@ import {
   subscribeModels,
 } from "../lib/models";
 import { prettyCwd, projectName } from "../lib/paths";
-import { ALT, MAC_WINDOW_CHROME, MOD } from "../lib/platform";
+import { MAC_WINDOW_CHROME } from "../lib/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -274,10 +268,8 @@ function GeneralPage({
 }: {
   onOpenWhatsNew: (version: string) => void;
 }) {
-  const [layout, setLayout] = useState<SidebarLayout>(loadSidebarLayout);
   const [transcriptLayout, setTranscriptLayout] =
     useState<TranscriptLayout>(loadTranscriptLayout);
-  const [transcriptZen, setTranscriptZen] = useState(loadTranscriptZen);
   const [transcriptAnchor, setTranscriptAnchor] =
     useState(loadTranscriptAnchor);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
@@ -292,29 +284,14 @@ function GeneralPage({
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
 
   useEffect(() => {
-    const onZen = (event: Event) => {
-      setTranscriptZen((event as CustomEvent<boolean>).detail === true);
-    };
     const onAnchor = (event: Event) => {
       setTranscriptAnchor((event as CustomEvent<boolean>).detail === true);
     };
-    window.addEventListener(TRANSCRIPT_ZEN_CHANGE_EVENT, onZen);
     window.addEventListener(TRANSCRIPT_ANCHOR_CHANGE_EVENT, onAnchor);
     return () => {
-      window.removeEventListener(TRANSCRIPT_ZEN_CHANGE_EVENT, onZen);
       window.removeEventListener(TRANSCRIPT_ANCHOR_CHANGE_EVENT, onAnchor);
     };
   }, []);
-
-  const onLayout = (next: SidebarLayout) => {
-    saveSidebarLayout(next);
-    setLayout(next);
-  };
-
-  const onTranscriptZen = (next: boolean) => {
-    saveTranscriptZen(next);
-    setTranscriptZen(next);
-  };
 
   const onTranscriptLayout = (next: TranscriptLayout) => {
     saveTranscriptLayout(next);
@@ -359,20 +336,6 @@ function GeneralPage({
   return (
     <>
       <Row
-        label="Workspace layout"
-        description="Classic keeps a single sidebar. Deck adds the project rail, the workspace panel, and the project terminal dock."
-      >
-        <Segmented
-          label="Workspace layout"
-          value={layout}
-          options={[
-            { value: "deck", label: "Deck" },
-            { value: "classic", label: "Classic" },
-          ]}
-          onChange={onLayout}
-        />
-      </Row>
-      <Row
         label="Transcript layout"
         description="Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app."
       >
@@ -394,16 +357,6 @@ function GeneralPage({
           label="Anchor prompts to top"
           on={transcriptAnchor}
           onChange={onTranscriptAnchor}
-        />
-      </Row>
-      <Row
-        label="Zen mode"
-        description={`The agent's work reads as groups: a run of related tool calls under the line the agent wrote to introduce it. The group it is in stays open and grows a step at a time — tool calls, thinking, the notes it drops between them — and folds back to its header the moment it moves on, leaving a labelled outline above the final answer. Click any group to read it back. Edits waiting on approval still show their diff. ${MOD}${ALT}Z toggles it.`}
-      >
-        <Toggle
-          label="Zen mode"
-          on={transcriptZen}
-          onChange={onTranscriptZen}
         />
       </Row>
       <Row

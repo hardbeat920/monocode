@@ -135,9 +135,11 @@ export function hasActiveInboxFilters(
   );
 }
 
+/** No status box checked means "no restriction", so the fetch has to widen with it. */
 export function inboxFetchState(filters: InboxFilters): "open" | "all" {
-  if (filters.status.closed || filters.status.merged) return "all";
-  return "open";
+  const { open, draft, closed, merged } = filters.status;
+  if (closed || merged) return "all";
+  return open || draft ? "open" : "all";
 }
 
 export function filterInboxByProject(

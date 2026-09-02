@@ -100,11 +100,11 @@ export function isHiddenTool(block: Block): boolean {
 }
 
 /**
- * Zen mode folds edits in with the reads and searches. An edit still awaiting
- * approval stays out: you cannot judge a diff you cannot see.
+ * Foldable work: tool calls, thinking, and edits. An edit still awaiting
+ * approval stays out — you cannot judge a diff you cannot see.
  */
-export function isActivityBlock(block: Block, zen = false): boolean {
-  if (zen && isThinkingBlock(block)) return true;
+export function isActivityBlock(block: Block): boolean {
+  if (isThinkingBlock(block)) return true;
   if (block.role !== "tool" && block.role !== "approval") return false;
   if (
     isEditTool(
@@ -112,14 +112,14 @@ export function isActivityBlock(block: Block, zen = false): boolean {
       block.text || block.tool?.title,
       block.tool?.preview,
     ) &&
-    (!zen || needsApproval(block))
+    needsApproval(block)
   ) {
     return false;
   }
   return !isHiddenTool(block);
 }
 
-/** Reasoning the agent streams while it works. Zen shows it, nothing else does. */
+/** Reasoning the agent streams while it works. */
 export function isThinkingBlock(block: Block): boolean {
   return block.role === "reasoning" && !!block.text.trim();
 }
@@ -135,7 +135,7 @@ export function isProseBlock(block: Block): boolean {
 
 /**
  * Where the turn's final answer starts: the trailing run of assistant prose.
- * Zen folds everything before it, so the last thing the agent says is the only
+ * Everything before it folds, so the last thing the agent says is the only
  * full-size thing left. A block still streaming sits in that run, which is why
  * text renders in full as it arrives and only folds once the next tool starts.
  */
@@ -199,15 +199,14 @@ export function groupTurns(blocks: Block[]): Block[][] {
 }
 
 /**
- * Zen folds a turn's whole working process — tool calls and the prose between
- * them — into one activity group, leaving the final answer standing alone.
+ * Fold a turn's working process — tool calls and the prose between them —
+ * into one activity group, leaving the final answer standing alone.
  */
-export function groupTurnItems(blocks: Block[], zen = false): TurnItem[] {
+export function groupTurnItems(blocks: Block[]): TurnItem[] {
   const visible = blocks.filter(
-    (block) => !isIgnoredTurnBlock(block, zen) && !isHiddenTool(block),
+    (block) => !isIgnoredTurnBlock(block) && !isHiddenTool(block),
   );
-  // Zen off: nothing folds, so every prose block counts as final.
-  const finalStart = zen ? finalResponseStart(visible) : 0;
+  const finalStart = finalResponseStart(visible);
   const items: TurnItem[] = [];
   let activity: Block[] = [];
   const flush = () => {
@@ -217,10 +216,7 @@ export function groupTurnItems(blocks: Block[], zen = false): TurnItem[] {
     activity = [];
   };
   visible.forEach((block, index) => {
-    if (
-      isActivityBlock(block, zen) ||
-      (index < finalStart && isProseBlock(block))
-    ) {
+    if (isActivityBlock(block) || (index < finalStart && isProseBlock(block))) {
       activity.push(block);
       return;
     }
@@ -231,10 +227,10 @@ export function groupTurnItems(blocks: Block[], zen = false): TurnItem[] {
   return items;
 }
 
-function isIgnoredTurnBlock(block: Block, zen: boolean): boolean {
-  // Zen keeps thinking as a step in the group, so a long think does not read
-  // as the agent having stalled. Everywhere else it stays out of the transcript.
-  if (block.role === "reasoning") return !zen || !block.text.trim();
+function isIgnoredTurnBlock(block: Block): boolean {
+  // Keep thinking as a step in the group, so a long think does not read as
+  // the agent having stalled.
+  if (block.role === "reasoning") return !block.text.trim();
   return block.role === "assistant" && !block.text.trim();
 }
 
@@ -248,27 +244,8 @@ export function turnCopyText(blocks: Block[]): string {
 }
 
 /**
- * Rows for the live stack: the newest finished call holds the line, anything
- * waiting on you sits under it, and the rest waits behind the disclosure.
- */
-export function splitActivityRows(blocks: Block[]): {
-  latest?: Block;
-  pending: Block[];
-  hidden: Block[];
-} {
-  const pending = blocks.filter(needsApproval);
-  const completed = blocks.filter((block) => !needsApproval(block));
-  const latest = completed[completed.length - 1];
-  return {
-    latest,
-    pending,
-    hidden: latest ? completed.slice(0, -1) : [],
-  };
-}
-
-/**
- * The activity group a settled zen turn hangs its "Worked for" line on: the
- * last one, which sits right above the final answer.
+ * The activity group a settled turn hangs its "Worked for" line on: the last
+ * one, which sits right above the final answer.
  */
 export function lastActivityIndex(items: TurnItem[]): number {
   for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -293,10 +270,6 @@ export function hasRunningSubagent(blocks: Block[]): boolean {
       isAgentTool(block.tool?.kind, block.text || block.tool?.title) &&
       toolCallState(block) === "pending",
   );
-}
-
-export function activityPreviousLabel(count: number): string {
-  return `+${count} previous ${count === 1 ? "tool call" : "tool calls"}`;
 }
 
 /**

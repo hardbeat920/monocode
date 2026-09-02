@@ -19,6 +19,7 @@ import BrainIcon from "@hugeicons/core-free-icons/BrainIcon";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import CaseSensitiveIcon from "@hugeicons/core-free-icons/CaseSensitiveIcon";
 import CircleArrowDown01Icon from "@hugeicons/core-free-icons/CircleArrowDown01Icon";
+import CancelCircleIcon from "@hugeicons/core-free-icons/CancelCircleIcon";
 import CircleDashedIcon from "@hugeicons/core-free-icons/CircleDashedIcon";
 import CircleDotIcon from "@hugeicons/core-free-icons/CircleDotIcon";
 import CloudUploadIcon from "@hugeicons/core-free-icons/CloudUploadIcon";
@@ -40,6 +41,9 @@ import FolderOpenIcon from "@hugeicons/core-free-icons/FolderOpenIcon";
 import GaugeIcon from "@hugeicons/core-free-icons/GaugeIcon";
 import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
 import GitCompareIcon from "@hugeicons/core-free-icons/GitCompareIcon";
+import GitMergeIcon from "@hugeicons/core-free-icons/GitMergeIcon";
+import GitPullRequestClosedIcon from "@hugeicons/core-free-icons/GitPullRequestClosedIcon";
+import GitPullRequestDraftIcon from "@hugeicons/core-free-icons/GitPullRequestDraftIcon";
 import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
 import ImageAdd01Icon from "@hugeicons/core-free-icons/ImageAdd01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
@@ -146,6 +150,7 @@ export const ChevronUp = wrap(ArrowUp01Icon, "ChevronUp");
 export const CircleAlert = wrap(AlertCircleIcon, "CircleAlert");
 export const CircleDashed = wrap(CircleDashedIcon, "CircleDashed");
 export const CircleDot = wrap(CircleDotIcon, "CircleDot");
+export const CircleX = wrap(CancelCircleIcon, "CircleX");
 export const CloudUpload = wrap(CloudUploadIcon, "CloudUpload");
 export const Copy = wrap(Copy01Icon, "Copy");
 export const ExternalLink = wrap(LinkSquare02Icon, "ExternalLink");
@@ -159,7 +164,16 @@ export const FolderPlus = wrap(FolderAddIcon, "FolderPlus");
 export const Gauge = wrap(GaugeIcon, "Gauge");
 export const GitBranch = wrap(GitBranchIcon, "GitBranch");
 export const GitCompare = wrap(GitCompareIcon, "GitCompare");
+export const GitMerge = wrap(GitMergeIcon, "GitMerge");
 export const GitPullRequest = wrap(GitPullRequestIcon, "GitPullRequest");
+export const GitPullRequestClosed = wrap(
+  GitPullRequestClosedIcon,
+  "GitPullRequestClosed",
+);
+export const GitPullRequestDraft = wrap(
+  GitPullRequestDraftIcon,
+  "GitPullRequestDraft",
+);
 export const GripVertical = wrap(DragDropVerticalIcon, "GripVertical");
 export const ImagePlus = wrap(ImageAdd01Icon, "ImagePlus");
 export const Inbox = wrap(InboxIcon, "Inbox");

@@ -101,11 +101,13 @@ export function listLinearIssues(query: {
   assignedToMe: boolean;
   state: "open" | "all";
   teamIds: string[];
+  limit?: number;
 }): Promise<LinearIssue[]> {
   return invoke<LinearIssue[]>("linear_list_issues", {
     assignedToMe: query.assignedToMe,
     state: query.state,
     teamIds: query.teamIds,
+    limit: query.limit,
   });
 }
 

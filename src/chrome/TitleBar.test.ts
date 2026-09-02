@@ -68,32 +68,12 @@ describe("tabCopy", () => {
       }),
     );
     expect(copy.headline).toBe("Only chat");
-    expect(copy.meta).toBe("agent-terminal");
+    expect(copy.meta).toBe("");
   });
 
-  it("uses a single line when not grouped and nothing is open", () => {
+  it("labels an empty tab New session", () => {
     const copy = tabCopy(tab({ project: "agent-terminal" }));
-    expect(copy.headline).toBe("agent-terminal");
-    expect(copy.meta).toBe("");
-  });
-
-  it("labels an empty tab New session in deck layout", () => {
-    const copy = tabCopy(tab({ project: "agent-terminal" }), {
-      deckLayout: true,
-    });
     expect(copy.headline).toBe("New session");
-    expect(copy.meta).toBe("");
-  });
-
-  it("does not repeat the project as meta in deck layout", () => {
-    const copy = tabCopy(
-      tab({
-        title: "Only chat",
-        project: "agent-terminal",
-      }),
-      { deckLayout: true },
-    );
-    expect(copy.headline).toBe("Only chat");
     expect(copy.meta).toBe("");
   });
 });

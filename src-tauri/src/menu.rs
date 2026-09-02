@@ -19,10 +19,10 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         "quit" => crate::window::request_quit(app),
         "new_tab" | "close_tab" | "next_tab" | "prev_tab" | "back_tab" | "forward_tab"
         | "split_right" | "split_down" | "focus_left" | "focus_right" | "focus_up"
-        | "focus_down" | "toggle_sidebar" | "toggle_zen" | "sidebar_opacity" | "open_project"
-        | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
-        | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" | "check_for_updates" => {
+        | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project" | "go_to_file"
+        | "open_search" | "open_inbox" | "open_notes" | "find_in_project" | "find"
+        | "new_terminal" | "new_terminal_tab" | "toggle_terminal" | "open_model_picker"
+        | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
         _ => {}
@@ -100,9 +100,6 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let toggle_sidebar = MenuItemBuilder::with_id("toggle_sidebar", "Toggle Sidebar")
         .accelerator("CmdOrCtrl+B")
         .build(app)?;
-    let toggle_zen = MenuItemBuilder::with_id("toggle_zen", "Toggle Zen Mode")
-        .accelerator("CmdOrCtrl+Alt+Z")
-        .build(app)?;
     let open_model_picker = MenuItemBuilder::with_id("open_model_picker", "Switch Model…")
         .accelerator("CmdOrCtrl+.")
         .build(app)?;
@@ -138,7 +135,6 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
     let view = SubmenuBuilder::new(app, "View")
         .item(&toggle_sidebar)
-        .item(&toggle_zen)
         .item(&open_inbox)
         .item(&open_notes)
         .item(&toggle_terminal)

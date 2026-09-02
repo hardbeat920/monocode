@@ -1,20 +1,109 @@
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { hexToHsv, hsvToHex, normalizeHex, type Hsv } from "../lib/colorUtils";
+import { Pipette } from "./icons";
 
 type Props = {
   value: string;
   onChange: (hex: string) => void;
 };
 
+export function ColorSwatchRow({
+  colors,
+  colorIndex,
+  customColor,
+  customPickerOpen,
+  customHighlighted,
+  onPickIndex,
+  onToggleCustom,
+}: {
+  colors: readonly string[];
+  colorIndex: number | null | undefined;
+  customColor: string | null | undefined;
+  customPickerOpen: boolean;
+  customHighlighted?: boolean;
+  onPickIndex: (index: number) => void;
+  onToggleCustom?: () => void;
+}) {
+  const pipetteActive = customHighlighted ?? (customColor != null || customPickerOpen);
+  return (
+    <div className="flex items-center justify-between gap-1 px-0.5">
+      {colors.map((color, index) => {
+        const selected =
+          customColor == null &&
+          (colorIndex === index || (colorIndex == null && index === 0));
+        return (
+          <button
+            key={color}
+            type="button"
+            title={`Color ${index + 1}`}
+            aria-label={`Color ${index + 1}`}
+            aria-pressed={selected}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onPickIndex(index)}
+            className="grid size-5 place-items-center rounded-full"
+          >
+            <span
+              className={`size-3.5 rounded-full ${
+                selected
+                  ? "ring-2 ring-content/80 ring-offset-1 ring-offset-transparent"
+                  : ""
+              }`}
+              style={{ background: color }}
+            />
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        title="Custom color"
+        aria-label="Custom color"
+        aria-expanded={customPickerOpen}
+        aria-pressed={customColor != null}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onToggleCustom}
+        className="grid size-5 place-items-center rounded-full"
+      >
+        <span
+          className={`grid size-3.5 place-items-center overflow-hidden rounded-full ${
+            pipetteActive
+              ? "ring-2 ring-content/80 ring-offset-1 ring-offset-transparent"
+              : ""
+          }`}
+          style={
+            customColor
+              ? { background: customColor }
+              : {
+                  background:
+                    "conic-gradient(red, yellow, lime, aqua, blue, magenta, red)",
+                }
+          }
+        >
+          {!customColor ? (
+            <Pipette className="size-2 text-white drop-shadow-sm" strokeWidth={2.25} />
+          ) : null}
+        </span>
+      </button>
+    </div>
+  );
+}
+
 export function ColorPickerPopover({ value, onChange }: Props) {
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const hex = normalizeHex(value);
+    setHsv((prev) =>
+      hsvToHex(prev.h, prev.s, prev.v) === hex ? prev : hexToHsv(hex),
+    );
+  }, [value]);
 
   const applyHsv = useCallback(
     (updater: Hsv | ((prev: Hsv) => Hsv)) => {

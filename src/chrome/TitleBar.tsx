@@ -1,7 +1,6 @@
 import {
   ChevronLeft,
   ChevronRight,
-  GitCompare,
   Inbox,
   PanelLeft,
   Plus,
@@ -19,48 +18,14 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { basename } from "../lib/fs";
 import { looksLikeProject } from "../lib/recents";
 import type { HarnessId } from "../lib/session";
-import {
-  canJoinTabGroup,
-  canJoinTabOnto,
-  loadCollapsedTabGroups,
-  loadTabGroupColors,
-  loadTabGroupCustomColors,
-  loadTabGroupLabels,
-  loadTabGroupMascots,
-  loadTabGroupLogos,
-  reorderTabSegments,
-  resolveTabGroupColor,
-  resolveTabGroupColorIndex,
-  resolveTabGroupCustomColor,
-  resolveTabGroupLabel,
-  resolveTabGroupMascot,
-  resolveTabGroupLogo,
-  saveCollapsedTabGroups,
-  saveTabGroupColor,
-  saveTabGroupCustomColor,
-  saveTabGroupLabel,
-  saveTabGroupMascot,
-  sharedGroupProject,
-  TAB_GROUP_LOGOS_CHANGED,
-  segmentTabs,
-  type TabGroupSegment,
-} from "../lib/tabGroups";
-import { TabGroupMenu, type TabGroupMenuAction } from "./TabGroupMenu";
 import { CwdPicker } from "./CwdPicker";
-import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
-import { ProjectLogoIcon } from "./ProjectLogoIcon";
-import { ProjectMascot } from "./ProjectMascot";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
-import { useSegmentDrag } from "../hooks/useSegmentDrag";
-import { useSortable, type SortableDropTarget } from "../hooks/useSortable";
+import { useSortable } from "../hooks/useSortable";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -97,18 +62,9 @@ type Props = {
   tabs: Tab[];
   activeId: string;
   cwd: string;
-  gitCwd?: string;
-  sidebarOpen: boolean;
-  deckLayout?: boolean;
   projectRailOpen?: boolean;
-  sourceControlActive?: boolean;
   onToggleSidebar: () => void;
-  onShowSourceControl?: () => void;
   onSelect: (id: string) => void;
-  canGoBack?: boolean;
-  canGoForward?: boolean;
-  onGoBack?: () => void;
-  onGoForward?: () => void;
   onNew: () => void;
   onNewTerminal?: () => void;
   onShowTerminal?: () => void;
@@ -119,15 +75,6 @@ type Props = {
   onClose: (id: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
   onGoToFile?: () => void;
-  onJoinTab?: (draggedId: string, targetId: string) => void;
-  onJoinTabToGroup?: (tabId: string, groupId: string) => void;
-  onAddToNewGroup?: (tabId: string) => void;
-  onAddToGroup?: (tabId: string, groupId: string) => void;
-  onRemoveFromGroup?: (tabId: string) => void;
-  onUngroup?: (groupId: string) => void;
-  onGroupNewTab?: (groupId: string) => void;
-  onGroupClose?: (tabIds: string[]) => void;
-  onGroupMoveToNewWindow?: (tabIds: string[]) => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
   remoteMobile?: boolean;
@@ -139,21 +86,16 @@ function sessionMeta(tab: Tab): string {
   return "";
 }
 
-export function tabCopy(
-  tab: Tab,
-  options?: { inGroup?: boolean; deckLayout?: boolean },
-): {
+export function tabCopy(tab: Tab): {
   headline: string;
   meta: string;
   tooltip: string;
 } {
-  const inGroup = options?.inGroup ?? false;
-  const deckLayout = options?.deckLayout ?? false;
   const project = tab.project.trim() || "~";
   const conversation = tab.title.trim();
   const file = tab.files[0] ?? "";
   const sessions = sessionMeta(tab);
-  const untitled = deckLayout ? "New session" : inGroup ? "New chat" : project;
+  const untitled = "New session";
 
   let headline: string;
   const metaParts: string[] = [];
@@ -176,9 +118,6 @@ export function tabCopy(
     }
   } else {
     headline = conversation || file || untitled;
-    if (!deckLayout && !inGroup && headline !== project && project !== "~") {
-      metaParts.push(project);
-    }
     if (sessions) metaParts.push(sessions);
   }
 
@@ -248,27 +187,7 @@ function TabHarnesses({
   );
 }
 
-type TabGroupPosition = "first" | "middle" | "last" | "only";
-
 type SortableApi = ReturnType<typeof useSortable>;
-
-/** `blocked` marks a drop the tab bar refuses — groups never span projects. */
-type TabDropTarget = "join" | "blocked";
-
-function dropTargetFor(
-  target: SortableDropTarget | null,
-  kind: "tab" | "group",
-  id: string,
-): TabDropTarget | null {
-  if (!target || target.kind !== kind || target.id !== id) return null;
-  return target.allowed ? "join" : "blocked";
-}
-
-function dropTargetTint(target: TabDropTarget): string {
-  return target === "blocked" ? "bg-rose-500/20" : "bg-accent/20";
-}
-
-type SegmentDragApi = ReturnType<typeof useSegmentDrag>;
 
 function TitleTabItem({
   tab,
@@ -279,11 +198,7 @@ function TitleTabItem({
   sortable,
   onSelect,
   onClose,
-  onContextMenu,
-  dropTarget,
-  groupPosition,
   itemRef,
-  deckLayout = false,
 }: {
   tab: Tab;
   index: number;
@@ -293,15 +208,10 @@ function TitleTabItem({
   sortable: SortableApi;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
-  onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
-  dropTarget?: TabDropTarget | null;
-  groupPosition?: TabGroupPosition;
   itemRef?: (el: HTMLDivElement | null) => void;
-  deckLayout?: boolean;
 }) {
   const dragging = canDrag && sortable.draggingId === tab.id;
-  const inGroup = groupPosition != null;
-  const { headline, meta, tooltip } = tabCopy(tab, { inGroup, deckLayout });
+  const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
   const showStart =
     canDrag &&
@@ -322,9 +232,7 @@ function TitleTabItem({
         sortable.setItemRef(tab.id, el);
         itemRef?.(el);
       }}
-      className={`group @container relative flex h-full cursor-default touch-none items-center self-stretch ${
-        deckLayout ? "min-w-0 w-full" : "w-56 min-w-28 shrink"
-      } ${dragging ? "opacity-40" : ""}`}
+      className={`group @container relative flex h-full cursor-default touch-none items-center self-stretch min-w-0 w-full ${dragging ? "opacity-40" : ""}`}
       data-tauri-drag-region="false"
       onPointerDown={(event) => {
         if (event.button !== 0) return;
@@ -334,22 +242,12 @@ function TitleTabItem({
         onSelect(tab.id);
         if (canDrag) sortable.onItemPointerDown(tab.id, event);
       }}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onContextMenu?.(event);
-      }}
     >
       {showStart ? (
         <div className="pointer-events-none absolute inset-y-1.5 left-0 z-20 w-0.5 rounded-full bg-accent" />
       ) : null}
       {showEnd ? (
         <div className="pointer-events-none absolute inset-y-1.5 right-0 z-20 w-0.5 rounded-full bg-accent" />
-      ) : null}
-      {dropTarget ? (
-        <div
-          className={`pointer-events-none absolute inset-x-0 inset-y-1.5 z-10 rounded-md ${dropTargetTint(dropTarget)}`}
-        />
       ) : null}
       <button
         type="button"
@@ -429,258 +327,6 @@ function TitleTabItem({
           <X className="size-3" strokeWidth={1.75} />
         </button>
       ) : null}
-    </div>
-  );
-}
-
-function GroupLabel({
-  color,
-  collapsed,
-  project,
-  projectKey,
-  mascotName,
-  busy,
-  count,
-  logoPath,
-  canDrag,
-  onToggle,
-  onContextMenu,
-  onPointerDown,
-  consumeClick,
-  dropTarget,
-  labelRef,
-}: {
-  color: string;
-  collapsed: boolean;
-  project: string;
-  projectKey: string;
-  mascotName: string | null;
-  busy: boolean;
-  count: number;
-  logoPath?: string | null;
-  canDrag: boolean;
-  onToggle: () => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  consumeClick: () => boolean;
-  dropTarget?: TabDropTarget | null;
-  labelRef?: (el: HTMLButtonElement | null) => void;
-}) {
-  return (
-    <button
-      ref={labelRef}
-      type="button"
-      title={
-        collapsed
-          ? `Expand ${project} · ${count} tabs`
-          : `Drag to reorder · Click to collapse ${project}`
-      }
-      aria-label={collapsed ? `Expand ${project}` : `Collapse ${project}`}
-      aria-expanded={!collapsed}
-      data-tauri-drag-region="false"
-      onClick={() => {
-        if (consumeClick()) return;
-        onToggle();
-      }}
-      onContextMenu={onContextMenu}
-      onPointerDown={onPointerDown}
-      className={`relative sticky left-0 z-20 flex h-7.5 max-w-36 shrink-0 cursor-default items-center gap-1.5 self-center rounded-md px-2.5 pr-3 text-[11px] font-medium hover:brightness-110 ${
-        canDrag ? "touch-none" : ""
-      }`}
-      style={{
-        background: `color-mix(in srgb, ${color} 20%, var(--color-background-base, #1a1a1a) 80%)`,
-      }}
-    >
-      {dropTarget ? (
-        <span
-          className={`pointer-events-none absolute inset-0 rounded-md ${dropTargetTint(dropTarget)}`}
-        />
-      ) : null}
-      {logoPath ? (
-        <ProjectLogoIcon
-          path={logoPath}
-          className="size-3.5 shrink-0 rounded-sm"
-          imageClassName="size-3.5"
-        />
-      ) : (
-        <ProjectMascot
-          project={projectKey}
-          color={color}
-          name={mascotName}
-          className="size-3 min-w-3 shrink-0"
-          active={busy}
-        />
-      )}
-      <span className="text-[12.5px] truncate">{project}</span>
-      {collapsed ? (
-        <span className="text-content shrink-0 tabular-nums opacity-70 pl-1">
-          {count}
-        </span>
-      ) : null}
-    </button>
-  );
-}
-
-function TabGroupBlock({
-  segmentIndex,
-  segment,
-  displayColor,
-  displayLabel,
-  projectKey,
-  mascotName,
-  logoPath,
-  activeId,
-  closable,
-  canDrag,
-  canDragGroup,
-  sortable,
-  segmentDrag,
-  collapsed,
-  dropTarget,
-  onSelect,
-  onClose,
-  onTabContextMenu,
-  onToggleCollapse,
-  onGroupContextMenu,
-  deckLayout = false,
-}: {
-  segmentIndex: number;
-  segment: Extract<TabGroupSegment, { kind: "group" }>;
-  displayColor: string;
-  displayLabel: string;
-  projectKey: string;
-  mascotName: string | null;
-  logoPath?: string | null;
-  activeId: string;
-  closable: boolean;
-  canDrag: boolean;
-  canDragGroup: boolean;
-  sortable: SortableApi;
-  segmentDrag: SegmentDragApi;
-  collapsed: boolean;
-  dropTarget?: TabDropTarget | null;
-  onSelect: (id: string) => void;
-  onClose: (id: string) => void;
-  onTabContextMenu: (tab: Tab, event: ReactMouseEvent<HTMLDivElement>) => void;
-  onToggleCollapse: () => void;
-  onGroupContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  deckLayout?: boolean;
-}) {
-  const activeInGroup = segment.tabs.some((tab) => tab.id === activeId);
-  const groupBusy = segment.tabs.some((tab) => tab.busyHarnesses.length > 0);
-  const activeTabRef = useRef<HTMLDivElement | null>(null);
-  const draggingGroup = segmentDrag.draggingFromIndex === segmentIndex;
-  const showSegmentStart =
-    canDragGroup &&
-    segmentDrag.draggingFromIndex != null &&
-    segmentDrag.toIndex === segmentIndex &&
-    segmentDrag.toIndex < segmentDrag.draggingFromIndex;
-  const showSegmentEnd =
-    canDragGroup &&
-    segmentDrag.draggingFromIndex != null &&
-    segmentDrag.toIndex === segmentIndex &&
-    segmentDrag.toIndex > segmentDrag.draggingFromIndex;
-
-  useEffect(() => {
-    if (
-      sortable.draggingId ||
-      segmentDrag.draggingFromIndex != null ||
-      collapsed
-    ) {
-      return;
-    }
-    if (activeInGroup) {
-      activeTabRef.current?.scrollIntoView({
-        inline: "nearest",
-        block: "nearest",
-      });
-    }
-  }, [
-    activeId,
-    activeInGroup,
-    collapsed,
-    segmentDrag.draggingFromIndex,
-    sortable.draggingId,
-  ]);
-
-  return (
-    <div
-      ref={(el) => segmentDrag.setSegmentRef(segmentIndex, el)}
-      className={`relative flex h-full cursor-default items-center gap-0.5 ${
-        deckLayout ? "min-w-0 flex-1" : "shrink-0"
-      } ${draggingGroup ? "opacity-40" : ""}`}
-      data-tauri-drag-region="false"
-    >
-      {showSegmentStart ? (
-        <div className="pointer-events-none absolute inset-y-1.5 left-0 z-30 w-0.5 rounded-full bg-accent" />
-      ) : null}
-      {showSegmentEnd ? (
-        <div className="pointer-events-none absolute inset-y-1.5 right-0 z-30 w-0.5 rounded-full bg-accent" />
-      ) : null}
-      <GroupLabel
-        color={displayColor}
-        collapsed={collapsed}
-        project={displayLabel}
-        projectKey={projectKey}
-        mascotName={mascotName}
-        busy={groupBusy}
-        count={segment.tabs.length}
-        logoPath={logoPath}
-        canDrag={canDragGroup}
-        dropTarget={dropTarget}
-        labelRef={(el) => sortable.setGroupDropRef(segment.key, el)}
-        onToggle={onToggleCollapse}
-        onContextMenu={onGroupContextMenu}
-        consumeClick={segmentDrag.consumeClick}
-        onPointerDown={(event) => {
-          if (!canDragGroup) return;
-          segmentDrag.onSegmentPointerDown(segmentIndex, event);
-        }}
-      />
-      {collapsed ? null : (
-        <>
-          {segment.tabs.map((tab, offset) => {
-            const index = segment.startIndex + offset;
-            const position: TabGroupPosition =
-              segment.tabs.length === 1
-                ? "only"
-                : offset === 0
-                  ? "first"
-                  : offset === segment.tabs.length - 1
-                    ? "last"
-                    : "middle";
-            return (
-              <TitleTabItem
-                key={tab.id}
-                tab={tab}
-                index={index}
-                active={tab.id === activeId}
-                closable={closable}
-                canDrag={canDrag}
-                sortable={sortable}
-                onSelect={onSelect}
-                onClose={onClose}
-                onContextMenu={(event) => onTabContextMenu(tab, event)}
-                dropTarget={dropTargetFor(sortable.dropTarget, "tab", tab.id)}
-                groupPosition={position}
-                deckLayout={deckLayout}
-                itemRef={
-                  tab.id === activeId
-                    ? (el) => {
-                        activeTabRef.current = el;
-                      }
-                    : undefined
-                }
-              />
-            );
-          })}
-        </>
-      )}
-      <span
-        className="pointer-events-none absolute inset-x-1 bottom-1 z-20 h-0.5 rounded-full"
-        style={{ background: displayColor }}
-        aria-hidden
-      />
     </div>
   );
 }
@@ -852,18 +498,9 @@ function TitleBarComponent({
   tabs,
   activeId,
   cwd,
-  gitCwd,
-  sidebarOpen,
-  deckLayout = false,
   projectRailOpen = true,
-  sourceControlActive = false,
   onToggleSidebar,
-  onShowSourceControl,
   onSelect,
-  canGoBack = false,
-  canGoForward = false,
-  onGoBack,
-  onGoForward,
   onNew,
   onNewTerminal,
   onShowTerminal,
@@ -874,44 +511,12 @@ function TitleBarComponent({
   onClose,
   onReorder,
   onGoToFile,
-  onJoinTab,
-  onJoinTabToGroup,
-  onAddToNewGroup,
-  onAddToGroup,
-  onRemoveFromGroup,
-  onUngroup,
-  onGroupNewTab,
-  onGroupClose,
-  onGroupMoveToNewWindow,
   recents = [],
   onSelectProject,
   remoteMobile = false,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
-  const segments = deckLayout
-    ? tabs.map((tab, index) => ({ kind: "single" as const, tab, index }))
-    : segmentTabs(tabs);
-  const canDragSegments = !deckLayout && segments.length > 1;
-  const projectOf = (id: string) => tabs.find((tab) => tab.id === id)?.project;
-  const sortable = useSortable(
-    tabIds,
-    onReorder,
-    deckLayout
-      ? {}
-      : {
-          onDropOnItem: onJoinTab,
-          onDropOnGroup: onJoinTabToGroup,
-          // Tab groups are project-scoped; a foreign drop is flagged, not applied.
-          canDropOn: (draggedId, kind, id) =>
-            kind === "group"
-              ? canJoinTabGroup(tabs, draggedId, id, projectOf)
-              : canJoinTabOnto(tabs, draggedId, id, projectOf),
-        },
-  );
-  const segmentDrag = useSegmentDrag(segments.length, (fromIndex, toIndex) => {
-    const valid = reorderTabSegments(tabs, fromIndex, toIndex);
-    if (valid) onReorder(valid);
-  });
+  const sortable = useSortable(tabIds, onReorder);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(
@@ -940,204 +545,14 @@ function TitleBarComponent({
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const closable = tabs.length > 1;
   const canDrag = tabs.length > 1;
-  const [collapsedGroups, setCollapsedGroups] = useState(
-    loadCollapsedTabGroups,
-  );
-  const [groupColors, setGroupColors] = useState(loadTabGroupColors);
-  const [groupCustomColors, setGroupCustomColors] = useState(
-    loadTabGroupCustomColors,
-  );
-  const [groupLabels, setGroupLabels] = useState(loadTabGroupLabels);
-  const [groupLogos, setGroupLogos] = useState(loadTabGroupLogos);
-  const [groupMascots, setGroupMascots] = useState(loadTabGroupMascots);
-  const [groupMenu, setGroupMenu] = useState<{
-    x: number;
-    y: number;
-    groupId: string;
-    tabIds: string[];
-  } | null>(null);
-  const [tabMenu, setTabMenu] = useState<{
-    x: number;
-    y: number;
-    tabId: string;
-  } | null>(null);
-
-  const groupSummaries = segments.flatMap((segment) => {
-    if (segment.kind !== "group") return [];
-    const shared = sharedGroupProject(segment.tabs);
-    return [
-      {
-        id: segment.key,
-        label: resolveTabGroupLabel(
-          segment.key,
-          groupLabels,
-          shared || "Group",
-        ),
-      },
-    ];
-  });
-
-  const groupMenuTabs = groupMenu
-    ? tabs.filter((tab) => tab.groupId === groupMenu.groupId)
-    : [];
-  const groupMenuShared = sharedGroupProject(groupMenuTabs);
-
-  const toggleGroupCollapse = useCallback((project: string) => {
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(project)) next.delete(project);
-      else next.add(project);
-      saveCollapsedTabGroups(next);
-      return next;
-    });
-  }, []);
-
-  const onGroupContextMenu = useCallback(
-    (
-      segment: Extract<TabGroupSegment, { kind: "group" }>,
-      event: ReactMouseEvent<HTMLButtonElement>,
-    ) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setGroupMenu({
-        x: event.clientX,
-        y: event.clientY,
-        groupId: segment.key,
-        tabIds: segment.tabs.map((tab) => tab.id),
-      });
-    },
-    [],
-  );
-
-  const onGroupMenuPick = useCallback(
-    (action: TabGroupMenuAction) => {
-      if (!groupMenu) return;
-      const { groupId, tabIds } = groupMenu;
-      setGroupMenu(null);
-      if (action === "new-tab") onGroupNewTab?.(groupId);
-      else if (action === "new-window") onGroupMoveToNewWindow?.(tabIds);
-      else if (action === "close-group") onGroupClose?.(tabIds);
-      else if (action === "ungroup") onUngroup?.(groupId);
-      else if (action === "delete-group") {
-        const shared =
-          tabs.find((tab) => tab.groupId === groupId)?.project ?? "Group";
-        if (
-          window.confirm(
-            `Delete “${resolveTabGroupLabel(groupId, groupLabels, shared)}” and close ${tabIds.length} tabs?`,
-          )
-        ) {
-          onGroupClose?.(tabIds);
-        }
-      }
-    },
-    [
-      groupLabels,
-      groupMenu,
-      onGroupClose,
-      onGroupMoveToNewWindow,
-      onGroupNewTab,
-      onUngroup,
-      tabs,
-    ],
-  );
-
-  const onTabContextMenu = useCallback(
-    (tab: Tab, event: ReactMouseEvent<HTMLDivElement>) => {
-      if (deckLayout) return;
-      setTabMenu({ x: event.clientX, y: event.clientY, tabId: tab.id });
-    },
-    [deckLayout],
-  );
-
-  const tabMenuItems: ExplorerMenuItem[] = (() => {
-    if (!tabMenu || deckLayout) return [];
-    const tab = tabs.find((entry) => entry.id === tabMenu.tabId);
-    if (!tab) return [];
-    const items: ExplorerMenuItem[] = [
-      { kind: "item", id: "new-group", label: "Add to new group" },
-    ];
-    const others = groupSummaries.filter(
-      (group) =>
-        group.id !== tab.groupId &&
-        canJoinTabGroup(tabs, tab.id, group.id, projectOf),
-    );
-    if (others.length > 0) {
-      items.push({ kind: "sep" });
-      for (const group of others) {
-        items.push({
-          kind: "item",
-          id: `add:${group.id}`,
-          label: `Add to ${group.label}`,
-        });
-      }
-    }
-    if (tab.groupId) {
-      items.push({ kind: "sep" });
-      items.push({ kind: "item", id: "remove", label: "Remove from group" });
-    }
-    return items;
-  })();
-
-  const onTabMenuPick = useCallback(
-    (id: string) => {
-      if (!tabMenu) return;
-      const tabId = tabMenu.tabId;
-      setTabMenu(null);
-      if (id === "new-group") onAddToNewGroup?.(tabId);
-      else if (id === "remove") onRemoveFromGroup?.(tabId);
-      else if (id.startsWith("add:")) onAddToGroup?.(tabId, id.slice(4));
-    },
-    [onAddToGroup, onAddToNewGroup, onRemoveFromGroup, tabMenu],
-  );
-
-  const onGroupRename = useCallback((projectKey: string, label: string) => {
-    saveTabGroupLabel(projectKey, label);
-    setGroupLabels(loadTabGroupLabels());
-  }, []);
-
-  const onGroupMascotChange = useCallback(
-    (projectKey: string, name: string | null) => {
-      saveTabGroupMascot(projectKey, name);
-      setGroupMascots(loadTabGroupMascots());
-    },
-    [],
-  );
-
-  const onGroupColorChange = useCallback(
-    (projectKey: string, colorIndex: number | null) => {
-      saveTabGroupColor(projectKey, colorIndex);
-      setGroupColors(loadTabGroupColors());
-      setGroupCustomColors(loadTabGroupCustomColors());
-    },
-    [],
-  );
-
-  const onGroupCustomColorChange = useCallback(
-    (projectKey: string, color: string) => {
-      saveTabGroupCustomColor(projectKey, color);
-      setGroupColors(loadTabGroupColors());
-      setGroupCustomColors(loadTabGroupCustomColors());
-    },
-    [],
-  );
-
-  const onGroupLogoChange = useCallback(() => {
-    setGroupLogos(loadTabGroupLogos());
-  }, []);
 
   useEffect(() => {
-    const refresh = () => setGroupLogos(loadTabGroupLogos());
-    window.addEventListener(TAB_GROUP_LOGOS_CHANGED, refresh);
-    return () => window.removeEventListener(TAB_GROUP_LOGOS_CHANGED, refresh);
-  }, []);
-
-  useEffect(() => {
-    if (sortable.draggingId || segmentDrag.draggingFromIndex != null) return;
+    if (sortable.draggingId) return;
     activeTabRef.current?.scrollIntoView({
       inline: "nearest",
       block: "nearest",
     });
-  }, [activeId, segmentDrag.draggingFromIndex, sortable.draggingId]);
+  }, [activeId, sortable.draggingId]);
 
   useLayoutEffect(() => {
     const el = tabStripRef.current;
@@ -1154,7 +569,7 @@ function TitleBarComponent({
 
   useLayoutEffect(() => {
     syncTabOverflow();
-  }, [activeId, collapsedGroups, syncTabOverflow, tabs]);
+  }, [activeId, syncTabOverflow, tabs]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeId),
@@ -1183,11 +598,11 @@ function TitleBarComponent({
     } catch {}
   }, [systemTitle]);
 
-  const railClosed = deckLayout && !projectRailOpen;
+  const railClosed = !projectRailOpen;
   const showCurrentProject = looksLikeProject(cwd);
-  // Until a project is picked, deck mode hides the rail and the sidebar, so
-  // nothing project-scoped is actionable and the window controls need room.
-  const projectless = deckLayout && !showCurrentProject;
+  // Until a project is picked, the rail and the sidebar hide, so nothing
+  // project-scoped is actionable and the window controls need room.
+  const projectless = !showCurrentProject;
   // An open project is labeled in the sidebar, above Sessions / Explorer /
   // Changes. Without a project that sidebar is gone, so the picker stays here.
   const showProjectButton =
@@ -1195,13 +610,6 @@ function TitleBarComponent({
   const trailingControls = (
     <div className="flex h-full shrink-0 items-stretch">
       <div className="flex items-center gap-0.5 px-2">
-        {!deckLayout ? (
-          <ProjectDiffStats
-            cwd={gitCwd || cwd}
-            active={sourceControlActive}
-            onClick={onShowSourceControl}
-          />
-        ) : null}
         {projectless && railClosed && onOpenInbox ? (
           <IconButton label="Inbox" onClick={onOpenInbox}>
             <Inbox className="size-3.5" strokeWidth={1.75} />
@@ -1222,7 +630,7 @@ function TitleBarComponent({
             </IconButton>
           </>
         ) : null}
-        {deckLayout && !projectless && (onShowTerminal || onNewTerminal) ? (
+        {!projectless && (onShowTerminal || onNewTerminal) ? (
           <IconButton
             label={
               projectTerminalActive ? "Terminal" : `New Terminal (${MOD}\`)`
@@ -1237,10 +645,7 @@ function TitleBarComponent({
             <Terminal className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
-        {deckLayout &&
-        !projectRailOpen &&
-        !showCurrentProject &&
-        onOpenSettings ? (
+        {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
           <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
             <Settings className="size-3.5" strokeWidth={1.75} />
           </IconButton>
@@ -1260,45 +665,20 @@ function TitleBarComponent({
     >
       {/* Both the rail and the sidebar step aside without a project, so the
           title bar takes over the traffic lights and the rail toggle. */}
-      {(projectless && railClosed) || (!sidebarOpen && MAC_WINDOW_CHROME) ? (
-        <div className="w-[78px] shrink-0" />
-      ) : null}
       {projectless && railClosed ? (
-        <div className="flex shrink-0 items-center px-1.5">
-          <IconButton
-            label={`Toggle Sidebar (${MOD}B)`}
-            onClick={onToggleSidebar}
-          >
-            <PanelLeft className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        </div>
+        <>
+          <div className="w-[78px] shrink-0" />
+          <div className="flex shrink-0 items-center px-1.5">
+            <IconButton
+              label={`Toggle Sidebar (${MOD}B)`}
+              onClick={onToggleSidebar}
+            >
+              <PanelLeft className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          </div>
+        </>
       ) : null}
-      {deckLayout ? null : (
-        <div className="flex shrink-0 items-center gap-0.5 px-2">
-          {sidebarOpen ? null : (
-            <>
-              <DevModeLabel />
-              <TabVisitNav
-                canGoBack={canGoBack}
-                canGoForward={canGoForward}
-                onGoBack={onGoBack}
-                onGoForward={onGoForward}
-              />
-            </>
-          )}
-          <IconButton
-            label={`Toggle Sidebar (${MOD}B)`}
-            active={sidebarOpen}
-            onClick={onToggleSidebar}
-          >
-            <PanelLeft className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-          <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
-            <Search className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        </div>
-      )}
-      {remoteMobile && deckLayout && railClosed && !projectless ? (
+      {remoteMobile && railClosed && !projectless ? (
         <div className="flex shrink-0 items-center px-1.5">
           <IconButton
             label={`Toggle Sidebar (${MOD}B)`}
@@ -1324,17 +704,11 @@ function TitleBarComponent({
 
       <div
         className={`flex min-w-0 flex-1 items-stretch${
-          deckLayout && !showProjectButton ? "" : " border-l border-content/10"
+          showProjectButton ? " border-l border-content/10" : ""
         }`}
       >
-        {/*
-          Strip sizes to its tabs (w-56 each), sits left; + follows.
-          When crowded, tabs shrink to min-w-28 then the strip scrolls.
-        */}
         <div
-          className={`relative h-full min-w-0 overflow-hidden ${
-            deckLayout ? "flex-1" : "shrink"
-          }`}
+          className="relative h-full min-w-0 flex-1 overflow-hidden"
           onWheel={(event) => {
             const el = tabStripRef.current;
             if (!el || el.scrollWidth <= el.clientWidth) return;
@@ -1353,198 +727,41 @@ function TitleBarComponent({
             ref={setTabStripRef}
             className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none px-1.5"
           >
-            {segments.map((segment, segmentIndex) => {
-              const showSegmentStart =
-                canDragSegments &&
-                segmentDrag.draggingFromIndex != null &&
-                segmentDrag.toIndex === segmentIndex &&
-                segmentDrag.toIndex < segmentDrag.draggingFromIndex;
-              const showSegmentEnd =
-                canDragSegments &&
-                segmentDrag.draggingFromIndex != null &&
-                segmentDrag.toIndex === segmentIndex &&
-                segmentDrag.toIndex > segmentDrag.draggingFromIndex;
-
-              if (segment.kind === "group") {
-                const shared = sharedGroupProject(segment.tabs);
-                return (
-                  <TabGroupBlock
-                    key={segment.key}
-                    segmentIndex={segmentIndex}
-                    segment={segment}
-                    displayColor={resolveTabGroupColor(
-                      segment.key,
-                      groupColors,
-                      groupCustomColors,
-                      shared || segment.key,
-                    )}
-                    displayLabel={resolveTabGroupLabel(
-                      segment.key,
-                      groupLabels,
-                      shared || "Group",
-                    )}
-                    projectKey={shared || segment.key}
-                    mascotName={resolveTabGroupMascot(
-                      segment.key,
-                      groupMascots,
-                    )}
-                    logoPath={
-                      shared ? resolveTabGroupLogo(shared, groupLogos) : null
-                    }
-                    activeId={activeId}
-                    closable={closable}
-                    canDrag={canDrag}
-                    canDragGroup={canDragSegments}
-                    sortable={sortable}
-                    segmentDrag={segmentDrag}
-                    collapsed={collapsedGroups.has(segment.key)}
-                    dropTarget={dropTargetFor(
-                      sortable.dropTarget,
-                      "group",
-                      segment.key,
-                    )}
-                    onSelect={onSelect}
-                    onClose={onClose}
-                    onTabContextMenu={onTabContextMenu}
-                    onToggleCollapse={() => toggleGroupCollapse(segment.key)}
-                    onGroupContextMenu={(event) =>
-                      onGroupContextMenu(segment, event)
-                    }
-                    deckLayout={deckLayout}
-                  />
-                );
-              }
-
-              const tab = segment.tab;
-              const active = tab.id === activeId;
-              const draggingSegment =
-                segmentDrag.draggingFromIndex === segmentIndex;
-              return (
-                <div
-                  key={tab.id}
-                  ref={(el) => segmentDrag.setSegmentRef(segmentIndex, el)}
-                  className={`relative flex h-full cursor-default items-center ${
-                    deckLayout ? "w-56 min-w-28 shrink" : "shrink-0"
-                  } ${draggingSegment ? "opacity-40" : ""}`}
-                  data-tauri-drag-region="false"
-                >
-                  {showSegmentStart ? (
-                    <div className="pointer-events-none absolute inset-y-1.5 left-0 z-30 w-0.5 rounded-full bg-accent" />
-                  ) : null}
-                  {showSegmentEnd ? (
-                    <div className="pointer-events-none absolute inset-y-1.5 right-0 z-30 w-0.5 rounded-full bg-accent" />
-                  ) : null}
-                  <TitleTabItem
-                    tab={tab}
-                    index={segment.index}
-                    active={active}
-                    closable={closable}
-                    canDrag={canDrag}
-                    sortable={sortable}
-                    onSelect={onSelect}
-                    onClose={onClose}
-                    onContextMenu={(event) => onTabContextMenu(tab, event)}
-                    dropTarget={dropTargetFor(
-                      sortable.dropTarget,
-                      "tab",
-                      tab.id,
-                    )}
-                    deckLayout={deckLayout}
-                    itemRef={
-                      tab.id === activeId
-                        ? (el) => {
-                            activeTabRef.current = el;
-                          }
-                        : undefined
-                    }
-                  />
-                </div>
-              );
-            })}
+            {tabs.map((tab, index) => (
+              <div
+                key={tab.id}
+                className="relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
+                data-tauri-drag-region="false"
+              >
+                <TitleTabItem
+                  tab={tab}
+                  index={index}
+                  active={tab.id === activeId}
+                  closable={closable}
+                  canDrag={canDrag}
+                  sortable={sortable}
+                  onSelect={onSelect}
+                  onClose={onClose}
+                  itemRef={
+                    tab.id === activeId
+                      ? (el) => {
+                          activeTabRef.current = el;
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+            ))}
           </div>
         </div>
 
-        {groupMenu ? (
-          <TabGroupMenu
-            x={groupMenu.x}
-            y={groupMenu.y}
-            groupId={groupMenu.groupId}
-            label={resolveTabGroupLabel(
-              groupMenu.groupId,
-              groupLabels,
-              groupMenuShared || "Group",
-            )}
-            colorIndex={resolveTabGroupColorIndex(
-              groupMenu.groupId,
-              groupColors,
-              groupCustomColors,
-            )}
-            customColor={resolveTabGroupCustomColor(
-              groupMenu.groupId,
-              groupCustomColors,
-            )}
-            currentColor={resolveTabGroupColor(
-              groupMenu.groupId,
-              groupColors,
-              groupCustomColors,
-              groupMenuShared || groupMenu.groupId,
-            )}
-            logoPath={
-              groupMenuShared
-                ? resolveTabGroupLogo(groupMenuShared, groupLogos)
-                : null
-            }
-            logoProject={groupMenuShared}
-            mascotName={resolveTabGroupMascot(groupMenu.groupId, groupMascots)}
-            mascotProject={groupMenuShared || groupMenu.groupId}
-            onRename={onGroupRename}
-            onColorChange={onGroupColorChange}
-            onCustomColorChange={onGroupCustomColorChange}
-            onMascotChange={onGroupMascotChange}
-            onLogoChange={onGroupLogoChange}
-            onPick={onGroupMenuPick}
-            onClose={() => setGroupMenu(null)}
-          />
-        ) : null}
-
-        {tabMenu ? (
-          <ExplorerMenu
-            x={tabMenu.x}
-            y={tabMenu.y}
-            items={tabMenuItems}
-            ariaLabel="Tab actions"
-            onPick={onTabMenuPick}
-            onClose={() => setTabMenu(null)}
-          />
-        ) : null}
-
-        {/* Deck mode keeps New in the sidebar and Terminal in the title bar,
-            so the strip carries no trailing actions. */}
-        {deckLayout ? null : (
-          <div className="flex shrink-0 items-center gap-0.5 border-l border-content/10 px-1.5">
-            <IconButton label={`New Tab (${MOD}T)`} onClick={onNew}>
-              <Plus className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
-            {onNewTerminal ? (
-              <IconButton
-                label={`New Terminal (${MOD}\`)`}
-                onClick={onNewTerminal}
-              >
-                <Terminal className="size-3.5" strokeWidth={1.75} />
-              </IconButton>
-            ) : null}
+        {MAC_WINDOW_CHROME || remoteMobile ? null : (
+          <div className="flex min-w-0 flex-1 items-center justify-center px-4">
+            <span className="pointer-events-none truncate text-[11.5px] font-medium text-content/40 select-none">
+              {systemTitle}
+            </span>
           </div>
         )}
-
-        {!remoteMobile && !(deckLayout && MAC_WINDOW_CHROME) ? (
-          <div className="flex min-w-0 flex-1 items-center justify-center px-4">
-            {!MAC_WINDOW_CHROME ? (
-              <span className="pointer-events-none truncate text-[11.5px] font-medium text-content/40 select-none">
-                {systemTitle}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
         {trailingControls}
       </div>
     </header>
@@ -1552,63 +769,3 @@ function TitleBarComponent({
 }
 
 export const TitleBar = memo(TitleBarComponent);
-
-function ProjectDiffStats({
-  cwd,
-  active,
-  onClick,
-}: {
-  cwd: string;
-  active: boolean;
-  onClick?: () => void;
-}) {
-  const enabled = Boolean(cwd) && cwd !== "~" && Boolean(onClick);
-  const stats = useProjectDiffStats(cwd, enabled);
-  if (!enabled) return null;
-
-  const files = stats?.files ?? 0;
-  const additions = stats?.additions ?? 0;
-  const deletions = stats?.deletions ?? 0;
-  const hasStats = additions > 0 || deletions > 0;
-  const label = hasStats
-    ? [
-        `${files} ${files === 1 ? "file" : "files"} changed`,
-        additions > 0 ? `+${additions}` : "",
-        deletions > 0 ? `-${deletions}` : "",
-      ]
-        .filter(Boolean)
-        .join(" ")
-    : active
-      ? "Hide changes"
-      : "Show changes";
-
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      data-tauri-drag-region="false"
-      onClick={onClick}
-      className={`flex h-6.5 items-center gap-1 rounded-md ${
-        hasStats
-          ? "px-1.5 font-mono text-[11px] font-semibold tabular-nums"
-          : "w-6.5 justify-center"
-      } ${
-        active
-          ? "bg-content/10 text-content"
-          : "text-content/50 hover:bg-content/10 hover:text-content"
-      }`}
-    >
-      {hasStats ? null : (
-        <GitCompare className="size-3.5 shrink-0" strokeWidth={1.75} />
-      )}
-      {additions > 0 ? (
-        <span className="text-emerald-400">+{additions}</span>
-      ) : null}
-      {deletions > 0 ? (
-        <span className="text-red-400">-{deletions}</span>
-      ) : null}
-    </button>
-  );
-}

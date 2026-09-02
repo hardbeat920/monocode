@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
-import { ALT, MOD, SHIFT } from "../lib/platform";
-import { toggleTranscriptZen } from "../lib/appearance";
+import { MOD, SHIFT } from "../lib/platform";
 import { runUpdateFlow } from "../lib/updater";
 
 type MenuKey = "file" | "view" | "terminal";
@@ -134,9 +133,6 @@ export function MenuBar({
         case "toggle_sidebar":
           onToggleSidebar();
           break;
-        case "toggle_zen":
-          toggleTranscriptZen();
-          break;
         case "open_model_picker":
           window.dispatchEvent(new Event("open_model_picker"));
           break;
@@ -185,7 +181,6 @@ export function MenuBar({
       case "view":
         return [
           { kind: "item", id: "toggle_sidebar", label: "Toggle Sidebar", shortcut: `${MOD}B` },
-          { kind: "item", id: "toggle_zen", label: "Toggle Zen Mode", shortcut: `${MOD}${ALT}Z` },
           { kind: "item", id: "open_inbox", label: "Inbox" },
           ...(onOpenNotes
             ? [{ kind: "item" as const, id: "open_notes", label: "Notes" }]

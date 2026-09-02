@@ -2,14 +2,19 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ChevronDown,
   CircleDot,
+  CircleX,
   ExternalLink,
   GitCompare,
+  GitMerge,
   GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
   Inbox,
   ListFilter,
   LoaderCircle,
   RefreshCw,
   Search,
+  type IconComponent,
 } from "../chrome/icons";
 import {
   useEffect,
@@ -71,7 +76,6 @@ import {
 import { projectName } from "../lib/paths";
 import { MAC_WINDOW_CHROME } from "../lib/platform";
 import { sameProjectPath, type RecentProject } from "../lib/recents";
-import { setInboxSelection, useInboxSelection } from "../lib/inboxSelection";
 import {
   isInboxEntryUnseen,
   markInboxItemSeen,
@@ -243,7 +247,6 @@ type Props = {
   cwd: string;
   recents: RecentProject[];
   besideRail?: boolean;
-  variant?: "overlay" | "sidebar";
   onClose?: () => void;
   onToggleSidebar?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
@@ -253,12 +256,10 @@ export function InboxView({
   cwd,
   recents,
   besideRail = false,
-  variant = "overlay",
   onClose,
   onToggleSidebar,
   onStart,
 }: Props) {
-  const sidebar = variant === "sidebar";
   const listLock = useLockOverscroll<HTMLDivElement>();
   const detailLock = useLockOverscroll<HTMLDivElement>();
   const onCloseRef = useRef(onClose);
@@ -330,7 +331,6 @@ export function InboxView({
   });
 
   useEffect(() => {
-    if (sidebar) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -343,7 +343,7 @@ export function InboxView({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [filterMenu, sidebar]);
+  }, [filterMenu]);
 
   useEffect(() => {
     const onChange = () => {
@@ -421,10 +421,6 @@ export function InboxView({
     if (key !== selectedKey) setSelectedKey(key);
   }, [selected, selectedKey]);
 
-  useEffect(() => {
-    setInboxSelection(selected);
-  }, [selected]);
-
   const onFiltersChange = (next: InboxFilters) => {
     const pruned = pruneInboxFilters(
       next,
@@ -453,12 +449,8 @@ export function InboxView({
 
   const list = (
     <div
-      ref={sidebar ? undefined : resize.setPaneRef}
-      className={
-        sidebar
-          ? "flex min-h-0 min-w-0 flex-1 flex-col"
-          : "relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
-      }
+      ref={resize.setPaneRef}
+      className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
     >
       <div
         role="tablist"
@@ -576,18 +568,16 @@ export function InboxView({
           </ul>
         )}
       </div>
-      {sidebar ? null : (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize inbox list"
-          className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
-            resize.dragging ? "bg-content/15" : "hover:bg-content/10"
-          }`}
-          onPointerDown={resize.onPointerDown}
-          onDoubleClick={resize.onDoubleClick}
-        />
-      )}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize inbox list"
+        className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
+          resize.dragging ? "bg-content/15" : "hover:bg-content/10"
+        }`}
+        onPointerDown={resize.onPointerDown}
+        onDoubleClick={resize.onDoubleClick}
+      />
     </div>
   );
 
@@ -602,19 +592,6 @@ export function InboxView({
       onClose={() => setFilterMenu(null)}
     />
   ) : null;
-
-  if (sidebar) {
-    return (
-      <div
-        role="region"
-        aria-label="Inbox"
-        className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
-      >
-        {list}
-        {filtersPortal}
-      </div>
-    );
-  }
 
   return (
     <div
@@ -663,41 +640,6 @@ export function InboxView({
   );
 }
 
-export function InboxDetailPane({
-  cwd,
-  recents,
-  onStart,
-}: {
-  cwd: string;
-  recents: RecentProject[];
-  onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
-}) {
-  const item = useInboxSelection();
-  const logos = useTabGroupLogos();
-  const projects = useMemo(
-    () => inboxProjectsForRail(recents, cwd),
-    [cwd, recents],
-  );
-  const projectOptions = useMemo(
-    () => inboxProjectOptions(projects, logos),
-    [logos, projects],
-  );
-  return (
-    <div
-      role="region"
-      aria-label="Inbox"
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-none text-content"
-    >
-      <InboxDetailBody
-        item={item}
-        cwd={cwd}
-        projects={projectOptions}
-        onStart={onStart}
-      />
-    </div>
-  );
-}
-
 function InboxDetailBody({
   item,
   cwd,
@@ -733,6 +675,40 @@ function InboxDetailBody({
   );
 }
 
+type InboxStatusMark = {
+  Icon: IconComponent;
+  className: string;
+  label: string;
+};
+
+/** Status reads from the glyph first and the color second, so it survives color blindness. */
+function inboxStatusMark(item: InboxItem): InboxStatusMark {
+  const label = inboxItemStatus(item);
+  const pr = item.kind === "pr";
+  if (label === "Draft") {
+    return {
+      Icon: GitPullRequestDraft,
+      className: "text-content/50",
+      label,
+    };
+  }
+  if (label === "Merged") {
+    return { Icon: GitMerge, className: "text-violet-400/90", label };
+  }
+  if (label === "Closed") {
+    return {
+      Icon: pr ? GitPullRequestClosed : CircleX,
+      className: "text-rose-400/90",
+      label,
+    };
+  }
+  return {
+    Icon: pr ? GitPullRequest : CircleDot,
+    className: "text-emerald-400/90",
+    label,
+  };
+}
+
 function InboxCard({
   item,
   active,
@@ -749,7 +725,8 @@ function InboxCard({
   onSelect: () => void;
 }) {
   useInboxSeenTick();
-  const KindIcon = item.kind === "pr" ? GitPullRequest : CircleDot;
+  const status = inboxStatusMark(item);
+  const kindLabel = item.kind === "pr" ? "Pull request" : "Issue";
   const time = formatRelativeTime(item.updatedAt);
   const name = projectName(item.projectPath);
   const linear = item.provider === "linear";
@@ -764,7 +741,9 @@ function InboxCard({
       type="button"
       title={item.title}
       aria-current={active ? "true" : undefined}
-      aria-label={unseen ? `${item.title}, new` : undefined}
+      aria-label={`${status.label} ${kindLabel.toLowerCase()} ${inboxItemRef(
+        item,
+      )}: ${item.title}${unseen ? ", new" : ""}`}
       onClick={onSelect}
       className={`flex w-full flex-col rounded-md border px-2.5 py-2 text-left ${
         active
@@ -778,13 +757,12 @@ function InboxCard({
             provider={item.provider}
             className="size-3.5 shrink-0"
           />
-          <KindIcon
-            className="size-3 shrink-0 text-content/45"
+          <status.Icon
+            className={`size-3 shrink-0 ${status.className}`}
             strokeWidth={1.75}
           />
           <span className="min-w-0 truncate text-[11px] text-content/50">
-            {item.kind === "pr" ? "Pull request" : "Issue"} ·{" "}
-            {inboxItemRef(item)}
+            {kindLabel} · {inboxItemRef(item)}
           </span>
         </span>
         {time || unseen ? (
@@ -888,15 +866,7 @@ function InboxDetail({
   const status = linear
     ? item.state || inboxItemStatus(item)
     : inboxItemStatus(item);
-  const statusKind = inboxItemStatus(item);
-  const statusClass =
-    statusKind === "Open"
-      ? "text-emerald-400/90"
-      : statusKind === "Draft"
-        ? "text-content/50"
-        : statusKind === "Merged"
-          ? "text-violet-400/90"
-          : "text-content/45";
+  const statusMark = inboxStatusMark(item);
 
   const source = linear
     ? item.teamName || item.repo
@@ -1117,7 +1087,10 @@ function InboxDetail({
           <InboxProviderMark provider={item.provider} className="size-3.5" />
           <span>{item.kind === "pr" ? "Pull request" : "Issue"}</span>
           <span className="tabular-nums">{inboxItemRef(item)}</span>
-          <span className={statusClass}>{status}</span>
+          <span className={`flex items-center gap-1 ${statusMark.className}`}>
+            <statusMark.Icon className="size-3.5" strokeWidth={1.75} />
+            {status}
+          </span>
           {source ? <span className="truncate">{source}</span> : null}
         </div>
         <h1 className="text-[20px] font-semibold leading-tight text-content">

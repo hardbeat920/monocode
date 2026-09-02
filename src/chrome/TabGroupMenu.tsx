@@ -1,7 +1,6 @@
 import {
   AppWindow,
   ImagePlus,
-  Pipette,
   SquarePlus,
   Trash2,
   Ungroup,
@@ -20,7 +19,7 @@ import { normalizeHex } from "../lib/colorUtils";
 import { clearProjectLogo, pickAndSetProjectLogo } from "../lib/projectLogos";
 import { PROJECT_MASCOTS, projectMascot } from "../lib/projectMascots";
 import { TAB_GROUP_COLORS } from "../lib/tabGroups";
-import { ColorPickerPopover } from "./ColorPickerPopover";
+import { ColorPickerPopover, ColorSwatchRow } from "./ColorPickerPopover";
 import { Popover } from "./Popover";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { ProjectMascot } from "./ProjectMascot";
@@ -229,64 +228,18 @@ export function TabGroupMenu({
         </div>
       ) : null}
 
-      <div className="mb-2 flex items-center justify-between gap-1 px-0.5">
-        {TAB_GROUP_COLORS.map((color, index) => {
-          const selected =
-            customColor == null &&
-            (colorIndex === index || (colorIndex == null && index === 0));
-          return (
-            <button
-              key={color}
-              type="button"
-              title={`Color ${index + 1}`}
-              aria-label={`Color ${index + 1}`}
-              aria-pressed={selected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                setCustomPickerOpen(false);
-                onColorChange(groupId, index === 0 ? null : index);
-              }}
-              className="grid size-5 place-items-center rounded-full"
-            >
-              <span
-                className={`size-3.5 rounded-full ${
-                  selected ? "ring-2 ring-content/80 ring-offset-1 ring-offset-transparent" : ""
-                }`}
-                style={{ background: color }}
-              />
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          title="Custom color"
-          aria-label="Custom color"
-          aria-expanded={customPickerOpen}
-          aria-pressed={customColor != null}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setCustomPickerOpen((open) => !open)}
-          className="grid size-5 place-items-center rounded-full"
-        >
-          <span
-            className={`grid size-3.5 place-items-center overflow-hidden rounded-full ${
-              customColor != null || customPickerOpen
-                ? "ring-2 ring-content/80 ring-offset-1 ring-offset-transparent"
-                : ""
-            }`}
-            style={
-              customColor
-                ? { background: customColor }
-                : {
-                    background:
-                      "conic-gradient(red, yellow, lime, aqua, blue, magenta, red)",
-                  }
-            }
-          >
-            {!customColor ? (
-              <Pipette className="size-2 text-white drop-shadow-sm" strokeWidth={2.25} />
-            ) : null}
-          </span>
-        </button>
+      <div className="mb-2">
+        <ColorSwatchRow
+          colors={TAB_GROUP_COLORS}
+          colorIndex={colorIndex}
+          customColor={customColor}
+          customPickerOpen={customPickerOpen}
+          onPickIndex={(index) => {
+            setCustomPickerOpen(false);
+            onColorChange(groupId, index === 0 ? null : index);
+          }}
+          onToggleCustom={() => setCustomPickerOpen((open) => !open)}
+        />
       </div>
 
       {customPickerOpen ? (

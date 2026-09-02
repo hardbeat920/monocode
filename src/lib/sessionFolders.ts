@@ -1,3 +1,4 @@
+import { isHexColor } from "./colorUtils";
 import { compareSessionSummaries } from "./sessionHistory";
 import type { SessionSummary } from "./sessionStore";
 import { normalizeProjectPath } from "./recents";
@@ -13,6 +14,8 @@ export type SessionFolder = {
   collapsed: boolean;
   /** Palette index from `TAB_GROUP_COLORS`. Missing or 0 is the default wash. */
   colorIndex?: number;
+  /** Custom hex from the folder color picker. Wins over `colorIndex`. */
+  customColor?: string;
 };
 
 export type SessionListDropTarget =
@@ -34,6 +37,7 @@ type StoredFolder = {
   sessionIds?: unknown;
   collapsed?: unknown;
   colorIndex?: unknown;
+  customColor?: unknown;
 };
 
 export function folderContaining(
@@ -216,15 +220,40 @@ export function setFolderColor(
 ): SessionFolder[] {
   const folder = folders.find((entry) => entry.id === folderId);
   const nextIndex = sanitizeColorIndex(colorIndex);
-  if (!folder || folder.colorIndex === nextIndex) return folders;
+  if (
+    !folder ||
+    (folder.colorIndex === nextIndex && folder.customColor == null)
+  ) {
+    return folders;
+  }
   return folders.map((entry) => {
     if (entry.id !== folderId) return entry;
-    if (nextIndex == null) {
-      const { colorIndex: _dropped, ...rest } = entry;
-      return rest;
-    }
-    return { ...entry, colorIndex: nextIndex };
+    const next = withoutColors(entry);
+    return nextIndex == null ? next : { ...next, colorIndex: nextIndex };
   });
+}
+
+export function setFolderCustomColor(
+  folders: SessionFolder[],
+  folderId: string,
+  color: string | null,
+): SessionFolder[] {
+  const folder = folders.find((entry) => entry.id === folderId);
+  if (!folder) return folders;
+  if (color == null) {
+    if (folder.customColor == null) return folders;
+    return folders.map((entry) =>
+      entry.id === folderId ? withoutColors(entry) : entry,
+    );
+  }
+  const hex = parseCustomHex(color);
+  if (hex == null) return folders;
+  if (folder.customColor === hex && folder.colorIndex == null) return folders;
+  return folders.map((entry) =>
+    entry.id === folderId
+      ? { ...withoutColors(entry), customColor: hex }
+      : entry,
+  );
 }
 
 /** Reorder only the named folders; anything else keeps its slot. */
@@ -247,10 +276,13 @@ export function reorderSessionFolders(
   );
 }
 
-/** Saturated project palette, or undefined for the default content wash. */
+/** Saturated project palette or custom hex, or undefined for the default wash. */
 export function folderAccent(
   colorIndex: number | undefined,
+  customColor?: string,
 ): string | undefined {
+  const hex = parseCustomHex(customColor);
+  if (hex) return hex;
   const index = sanitizeColorIndex(colorIndex ?? null);
   return index == null ? undefined : TAB_GROUP_COLORS[index];
 }
@@ -258,8 +290,9 @@ export function folderAccent(
 /** Quiet fill so a folder tint never reads as a solid chip. */
 export function folderShellFill(
   colorIndex: number | undefined,
+  customColor?: string,
 ): string | undefined {
-  const accent = folderAccent(colorIndex);
+  const accent = folderAccent(colorIndex, customColor);
   if (!accent) return undefined;
   return `color-mix(in srgb, ${accent} 18%, transparent)`;
 }
@@ -399,6 +432,9 @@ function parseFolder(value: unknown): SessionFolder | null {
     rec.sessionIds.filter((id): id is string => typeof id === "string" && !!id),
   );
   if (sessionIds.length === 0) return null;
+  const customColor = parseCustomHex(
+    typeof rec.customColor === "string" ? rec.customColor : null,
+  );
   const colorIndex = sanitizeColorIndex(
     typeof rec.colorIndex === "number" ? rec.colorIndex : null,
   );
@@ -407,8 +443,22 @@ function parseFolder(value: unknown): SessionFolder | null {
     name,
     sessionIds,
     collapsed: rec.collapsed === true,
-    ...(colorIndex != null ? { colorIndex } : {}),
+    ...(customColor != null
+      ? { customColor }
+      : colorIndex != null
+        ? { colorIndex }
+        : {}),
   };
+}
+
+function parseCustomHex(color: string | null | undefined): string | undefined {
+  if (typeof color !== "string" || !isHexColor(color)) return undefined;
+  return color.toLowerCase();
+}
+
+function withoutColors(folder: SessionFolder): SessionFolder {
+  const { colorIndex: _index, customColor: _custom, ...rest } = folder;
+  return rest;
 }
 
 function uniqueIds(ids: string[]): string[] {

@@ -52,7 +52,6 @@ import {
 import { HarnessIcon } from "../chrome/HarnessIcon";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
-import { useTranscriptZen } from "../hooks/useTranscriptZen";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../lib/appearance";
@@ -60,7 +59,6 @@ import { AgentMarkdown } from "./AgentMarkdown";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
 import {
   activityPhaseTitle,
-  activityPreviousLabel,
   activityStillRunning,
   buildActivityPhases,
   editVerb,
@@ -74,7 +72,6 @@ import {
   needsApproval,
   nestedScrollAbsorbsWheel,
   proseSummary,
-  splitActivityRows,
   toolCallLabel,
   toolCallState,
   turnCopyText,
@@ -143,7 +140,6 @@ export function AgentTranscript({
     onAddToChat !== undefined,
   );
   const transcriptLayout = useTranscriptLayout();
-  const zen = useTranscriptZen();
   const promptAnchor = useTranscriptAnchor();
   const lastUserId = lastUserBlockId(blocks);
   const seenUserId = useRef(lastUserId);
@@ -316,10 +312,10 @@ export function AgentTranscript({
           const userBlock = turnUserBlock(turn);
           const durationMs = userBlock?.durationMs;
           const settled = !(busy && isLastTurn);
-          const items = groupTurnItems(turn, zen);
-          // Where the work ends and the answer begins, in zen: the last group
-          // of activity in the turn.
-          const foldedAt = zen ? lastActivityIndex(items) : -1;
+          const items = groupTurnItems(turn);
+          // Where the work ends and the answer begins: the last group of
+          // activity in the turn.
+          const foldedAt = lastActivityIndex(items);
           const startedAt = userBlock?.startedAt;
           // The agent starting its answer is the end of the work: fold the
           // groups then, not when the turn finally settles, so the collapse
@@ -345,7 +341,6 @@ export function AgentTranscript({
             >
               {items.map((item, itemIndex) =>
                 item.type === "activity" ? (
-                  zen ? (
                     <ActivityPhases
                       key={item.blocks[0].id}
                       blocks={item.blocks}
@@ -355,16 +350,6 @@ export function AgentTranscript({
                       onOpenFile={onOpenFile}
                       onOpenDiff={onOpenDiff}
                     />
-                  ) : (
-                    <ActivityGroup
-                      key={item.blocks[0].id}
-                      blocks={item.blocks}
-                      cwd={cwd}
-                      onApproval={onApproval}
-                      onOpenFile={onOpenFile}
-                      onOpenDiff={onOpenDiff}
-                    />
-                  )
                 ) : (
                   <TranscriptBlock
                     key={item.block.id}
@@ -816,100 +801,13 @@ function UserMessageBlock({
   );
 }
 
-/** One activity row: py-1 around a 20px line. */
-const ACTIVITY_ROW_HEIGHT = "h-7";
-
-const DISCLOSURE_ROW = "flex w-fit items-center gap-1.5 py-1 font-sans text-sm";
-
 /**
- * The default transcript's tool stack: the call the agent is on holds the
- * line, and everything it has already finished waits behind a disclosure.
- */
-function ActivityGroup({
-  blocks,
-  cwd,
-  onApproval,
-  onOpenFile,
-  onOpenDiff,
-}: {
-  blocks: Block[];
-  cwd?: string;
-  onApproval?: (requestId: number, decision: ApprovalDecision) => void;
-  onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string) => void;
-}) {
-  const [showPrevious, setShowPrevious] = useState(false);
-  const { latest, pending, hidden } = splitActivityRows(blocks);
-
-  return (
-    <div className="flex min-w-0 flex-col gap-0.5 px-4">
-      {hidden.length > 0 ? (
-        <button
-          type="button"
-          aria-expanded={showPrevious}
-          aria-label={
-            showPrevious
-              ? "Hide previous tool calls"
-              : `Show ${hidden.length} previous tool calls`
-          }
-          onClick={() => setShowPrevious((open) => !open)}
-          className={`${DISCLOSURE_ROW} ${ACTIVITY_ROW_HEIGHT} shrink-0 text-content/40 transition-colors duration-200 hover:text-content/70`}
-        >
-          <ChevronRight
-            className={`size-3.5 shrink-0 transition-transform duration-200 ${
-              showPrevious ? "rotate-90" : ""
-            }`}
-            strokeWidth={1.75}
-          />
-          <span>
-            {showPrevious
-              ? "Hide previous"
-              : activityPreviousLabel(hidden.length)}
-          </span>
-        </button>
-      ) : null}
-      {showPrevious
-        ? hidden.map((block) => (
-            <ActivityRow
-              key={block.id}
-              block={block}
-              cwd={cwd}
-              expanded
-              onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
-            />
-          ))
-        : null}
-      {latest ? (
-        <ActivityRow
-          block={latest}
-          cwd={cwd}
-          live
-          onOpenFile={onOpenFile}
-          onOpenDiff={onOpenDiff}
-        />
-      ) : null}
-      {pending.map((block) => (
-        <ActivityRow
-          key={block.id}
-          block={block}
-          cwd={cwd}
-          onApproval={onApproval}
-          onOpenFile={onOpenFile}
-          onOpenDiff={onOpenDiff}
-        />
-      ))}
-    </div>
-  );
-}
-
-/**
- * Zen's activity view: the turn's work as phases. A phase is a run of related
- * calls under the line the agent wrote to introduce it — "now I need to find
- * the theme provider", then the searches and reads that followed. The phase
- * the agent is in stays open, with new steps scrolling inside a short window;
- * the moment it moves on the phase folds back to its header, so a long turn
- * ends up as a handful of labelled groups sitting above the answer.
+ * The turn's work as phases. A phase is a run of related calls under the line
+ * the agent wrote to introduce it — "now I need to find the theme provider",
+ * then the searches and reads that followed. The phase the agent is in stays
+ * open, with new steps scrolling inside a short window; the moment it moves
+ * on the phase folds back to its header, so a long turn ends up as a handful
+ * of labelled groups sitting above the answer.
  */
 function ActivityPhases({
   blocks,
@@ -1048,7 +946,6 @@ function ActivityPhaseGroup({
           <ActivityRow
             block={phase.steps[0]}
             cwd={cwd}
-            variant="phase"
             live={active}
             onApproval={onApproval}
             onOpenFile={onOpenFile}
@@ -1141,7 +1038,6 @@ function ActivityPhaseGroup({
                 <ActivityRow
                   block={block}
                   cwd={cwd}
-                  variant="phase"
                   live={active}
                   onApproval={onApproval}
                   onOpenFile={onOpenFile}
@@ -1191,58 +1087,38 @@ function ActivityPhaseIcon({
 function ActivityRow({
   block,
   cwd,
-  expanded = false,
   live = false,
-  variant = "stack",
   onApproval,
   onOpenFile,
   onOpenDiff,
 }: {
   block: Block;
   cwd?: string;
-  expanded?: boolean;
   live?: boolean;
-  variant?: "stack" | "phase";
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
-  const railed = variant === "phase";
   if (isThinkingBlock(block)) {
     return (
       <ActivityThinkingRow
         block={block}
         cwd={cwd}
-        expandable={expanded || railed}
-        bare={railed}
+        expandable
+        bare
         onOpenFile={onOpenFile}
       />
     );
   }
   if (isProseBlock(block)) {
-    if (railed) {
-      return (
-        <ActivityNoteRow
-          block={block}
-          cwd={cwd}
-          bare
-          expandable
-          onOpenFile={onOpenFile}
-        />
-      );
-    }
-    return expanded ? (
-      <div className="flex min-w-0 gap-1.5 py-1 text-content">
-        <Minus
-          className="mt-[5px] size-3.5 shrink-0 text-content/50"
-          strokeWidth={1.75}
-        />
-        <div className="min-w-0 flex-1">
-          <AgentMarkdown text={block.text} cwd={cwd} onOpenFile={onOpenFile} />
-        </div>
-      </div>
-    ) : (
-      <ActivityNoteRow block={block} />
+    return (
+      <ActivityNoteRow
+        block={block}
+        cwd={cwd}
+        bare
+        expandable
+        onOpenFile={onOpenFile}
+      />
     );
   }
   return (
@@ -1250,7 +1126,7 @@ function ActivityRow({
       block={block}
       cwd={cwd}
       live={live}
-      bare={railed}
+      bare
       onApproval={onApproval}
       onOpenFile={onOpenFile}
       onOpenDiff={onOpenDiff}
