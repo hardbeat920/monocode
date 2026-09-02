@@ -8,9 +8,41 @@ export type RemoteStatus = {
 };
 
 const TOKEN_KEY = "monocode.remoteAccessToken";
+const ENABLED_KEY = "monocode.remoteAccessEnabled";
 
 function createRemoteAccessToken(): string {
   return crypto.randomUUID();
+}
+
+export function loadRemoteAccessEnabled(): boolean {
+  try {
+    return localStorage.getItem(ENABLED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveRemoteAccessEnabled(enabled: boolean) {
+  try {
+    if (enabled) {
+      localStorage.setItem(ENABLED_KEY, "1");
+    } else {
+      localStorage.removeItem(ENABLED_KEY);
+    }
+  } catch {
+    // private mode / quota
+  }
+}
+
+export async function initRemoteAccess(): Promise<void> {
+  if (!loadRemoteAccessEnabled()) return;
+  try {
+    const status = await remoteStatus();
+    if (status.enabled) return;
+    await remoteStart();
+  } catch (error) {
+    console.warn("Failed to restore remote access:", error);
+  }
 }
 
 export function loadRemoteAccessToken(): string {
@@ -47,11 +79,17 @@ export function remoteStart(port?: number, token?: string): Promise<RemoteStatus
   if (port != null) args.port = port;
   const preferred = token?.trim() || loadRemoteAccessToken();
   if (preferred) args.token = preferred;
-  return invoke<RemoteStatus>("remote_start", args);
+  return invoke<RemoteStatus>("remote_start", args).then((status) => {
+    saveRemoteAccessEnabled(true);
+    return status;
+  });
 }
 
 export function remoteStop(): Promise<RemoteStatus> {
-  return invoke<RemoteStatus>("remote_stop");
+  return invoke<RemoteStatus>("remote_stop").then((status) => {
+    saveRemoteAccessEnabled(false);
+    return status;
+  });
 }
 
 export function remoteRegenerateToken(): Promise<RemoteStatus> {

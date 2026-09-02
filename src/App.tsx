@@ -11,7 +11,9 @@ import { MenuBar } from "./chrome/MenuBar";
 import { FilePicker } from "./chrome/FilePicker";
 import { UsageFooter } from "./chrome/UsageFooter";
 import { useProjectBranches } from "./hooks/useProjectBranches";
+import { useNarrowViewport } from "./hooks/useNarrowViewport";
 import { useSidebarLayout } from "./hooks/useSidebarLayout";
+import { isRemoteSession } from "./bridge/remoteClient";
 import {
   LAYOUT_CHANGE_EVENT,
   loadSidebarOpen,
@@ -481,6 +483,8 @@ export default function App({
   );
   const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
+  const narrowViewport = useNarrowViewport();
+  const remoteMobile = isRemoteSession() && narrowViewport;
   const sidebarLayout = useSidebarLayout();
   const deckLayout = sidebarLayout === "deck";
   const tabCloseScope = deckLayout ? "project" : "workspace";
@@ -509,6 +513,22 @@ export default function App({
     () => true,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const remoteMobileInit = useRef(false);
+  useEffect(() => {
+    document.documentElement.classList.toggle("remote-mobile", remoteMobile);
+    return () => document.documentElement.classList.remove("remote-mobile");
+  }, [remoteMobile]);
+  useEffect(() => {
+    if (!remoteMobile || remoteMobileInit.current) return;
+    remoteMobileInit.current = true;
+    setSidebarOpen(false);
+    saveSidebarOpen(false);
+    setProjectRailOpen(false);
+    saveProjectRailOpen(false);
+  }, [remoteMobile]);
+  const sidebarShellOpen = remoteMobile
+    ? settingsOpen || (deckLayout ? projectRailOpen : sidebarOpen)
+    : deckLayout || sidebarOpen || settingsOpen;
   const [updateNotice, setUpdateNotice] = useState(installedUpdate);
   const [whatsNewVersion, setWhatsNewVersion] = useState<string | null>(null);
   const [settingsSection, setSettingsSection] =
@@ -3783,6 +3803,33 @@ export default function App({
     });
   }, [deckLayout]);
 
+  const onCloseMobileSidebar = useCallback(() => {
+    if (settingsOpen) setSettingsOpen(false);
+    if (deckLayout) {
+      setProjectRailOpen(false);
+      saveProjectRailOpen(false);
+      return;
+    }
+    setSidebarOpen(false);
+    saveSidebarOpen(false);
+  }, [deckLayout, settingsOpen]);
+
+  const onSelectHistorySessionMobile = useCallback(
+    async (sessionId: string) => {
+      await onSelectHistorySession(sessionId);
+      if (remoteMobile) onCloseMobileSidebar();
+    },
+    [onCloseMobileSidebar, onSelectHistorySession, remoteMobile],
+  );
+
+  const onSelectProjectMobile = useCallback(
+    (path: string) => {
+      onSelectProject(path);
+      if (remoteMobile) onCloseMobileSidebar();
+    },
+    [onCloseMobileSidebar, onSelectProject, remoteMobile],
+  );
+
   const onToggleProjectRail = useCallback(() => {
     setProjectRailOpen((open) => {
       const next = !open;
@@ -4237,7 +4284,7 @@ export default function App({
       <Sidebar
         cwd={sidebarCwd}
         gitCwd={gitCwd}
-        open={deckLayout || sidebarOpen || settingsOpen}
+        open={sidebarShellOpen}
         layout={sidebarLayout}
         tab={sidebarTab}
         onTabChange={setSidebarTab}
@@ -4251,7 +4298,9 @@ export default function App({
         activeSessionId={active?.id}
         status={historyFailed ? "error" : "idle"}
         pending={historyPending}
-        onSelectSession={onSelectHistorySession}
+        onSelectSession={
+          remoteMobile ? onSelectHistorySessionMobile : onSelectHistorySession
+        }
         onPlaceSessionOnPane={onPlaceSessionOnPane}
         onRenameSession={onRenameHistorySession}
         onArchiveSession={onArchiveHistorySession}
@@ -4277,7 +4326,13 @@ export default function App({
         )}
         liveAgents={liveAgents}
         onSelectAgent={onSelectLiveAgent}
-        onSelectProject={deckLayout ? onSelectProject : undefined}
+        onSelectProject={
+          deckLayout
+            ? remoteMobile
+              ? onSelectProjectMobile
+              : onSelectProject
+            : undefined
+        }
         onOpenProject={deckLayout ? pickProject : undefined}
         onRemoveProject={deckLayout ? onRemoveProject : undefined}
         onNew={onNew}
@@ -4302,6 +4357,8 @@ export default function App({
         updateNotice={updateNotice}
         onOpenWhatsNew={onOpenWhatsNew}
         onDismissUpdate={() => setUpdateNotice(null)}
+        mobileOverlay={remoteMobile}
+        onMobileOverlayClose={onCloseMobileSidebar}
       />
 
       <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
@@ -4374,7 +4431,8 @@ export default function App({
           onGroupClose={onGroupCloseTabs}
           onGroupMoveToNewWindow={onGroupMoveToNewWindow}
           recents={recents}
-          onSelectProject={deckLayout ? onSelectProject : undefined}
+          onSelectProject={deckLayout ? (remoteMobile ? onSelectProjectMobile : onSelectProject) : undefined}
+          remoteMobile={remoteMobile}
         />
 
         <main className="relative min-h-0 min-w-0 flex-1">

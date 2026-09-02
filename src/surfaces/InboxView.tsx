@@ -69,7 +69,7 @@ import {
   type InboxSource,
 } from "../lib/inboxFilters";
 import { projectName } from "../lib/paths";
-import { IS_MAC } from "../lib/platform";
+import { MAC_WINDOW_CHROME } from "../lib/platform";
 import { sameProjectPath, type RecentProject } from "../lib/recents";
 import { setInboxSelection, useInboxSelection } from "../lib/inboxSelection";
 import {
@@ -627,7 +627,9 @@ export function InboxView({
         className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
         data-tauri-drag-region="deep"
       >
-        {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
+        {MAC_WINDOW_CHROME && !besideRail ? (
+          <div className="w-[78px] shrink-0" />
+        ) : null}
         {besideRail ? null : (
           <OverlayNav onBack={onClose} onToggleSidebar={onToggleSidebar} />
         )}
@@ -638,7 +640,7 @@ export function InboxView({
           />
           <span className="min-w-0 truncate text-content">Inbox</span>
         </div>
-        {IS_MAC ? null : <WindowControls />}
+        {MAC_WINDOW_CHROME ? null : <WindowControls />}
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1">

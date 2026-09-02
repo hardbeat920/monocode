@@ -88,7 +88,7 @@ import {
   subscribeModels,
 } from "../lib/models";
 import { prettyCwd, projectName } from "../lib/paths";
-import { ALT, IS_MAC, MOD } from "../lib/platform";
+import { ALT, MAC_WINDOW_CHROME, MOD } from "../lib/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -209,7 +209,9 @@ export function SettingsView({
         className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
         data-tauri-drag-region="deep"
       >
-        {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
+        {MAC_WINDOW_CHROME && !besideRail ? (
+          <div className="w-[78px] shrink-0" />
+        ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-2 px-3 text-[13px]">
           <span className="shrink-0 text-content/45">Settings</span>
           <span aria-hidden className="shrink-0 text-content/25">
@@ -230,7 +232,7 @@ export function SettingsView({
             Restore defaults
           </button>
         ) : null}
-        {IS_MAC ? null : <WindowControls />}
+        {MAC_WINDOW_CHROME ? null : <WindowControls />}
       </div>
 
       <div

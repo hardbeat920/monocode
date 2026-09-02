@@ -975,3 +975,42 @@ header[data-tauri-drag-region] button {
     opacity: 0.7;
   }
 }
+
+/* Browser remote control on phone-sized viewports */
+html.remote-mobile {
+  -webkit-text-size-adjust: 100%;
+}
+
+html.remote-mobile body,
+html.remote-mobile #root {
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
+html.remote-mobile .remote-mobile-sidebar > aside,
+html.remote-mobile .remote-mobile-sidebar > nav {
+  width: min(360px, 100vw) !important;
+  max-width: 100%;
+}
+
+html.remote-mobile .remote-mobile-sidebar [role="separator"] {
+  display: none;
+}
+
+html.remote-mobile [data-app-settings] .px-8 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+html.remote-mobile [data-app-settings] .py-8 {
+  padding-top: 1.5rem;
+  padding-bottom: 1.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.remote-mobile .remote-mobile-sidebar {
+    transition: none;
+  }
+}

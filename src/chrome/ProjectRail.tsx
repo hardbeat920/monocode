@@ -29,7 +29,7 @@ import {
   saveProjectRailWidth,
 } from "../lib/appearance";
 import { basename, revealPath, type GitDiffStats } from "../lib/fs";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MAC, MAC_WINDOW_CHROME, MOD } from "../lib/platform";
 import { projectName } from "../lib/paths";
 import {
   collectRailProjects,
@@ -360,7 +360,7 @@ export function ProjectRail({
         className="flex h-10 shrink-0 select-none items-center pr-1.5"
         data-tauri-drag-region="deep"
       >
-        {IS_MAC ? <div className="w-[78px] shrink-0" /> : null}
+        {MAC_WINDOW_CHROME ? <div className="w-[78px] shrink-0" /> : null}
         <DevModeSlot />
         <TabVisitNav
           canGoBack={canGoBack}

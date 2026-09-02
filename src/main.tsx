@@ -7,13 +7,18 @@ import { RemoteGate } from "./bridge/RemoteGate";
 import { isRemoteSession } from "./bridge/remoteClient";
 import App from "./App";
 import { initAppearance } from "./lib/appearance";
+import { initRemoteAccess } from "./lib/remote";
 import { initSounds } from "./lib/sounds";
 import { handleQuitRequested, loadBootWorkspace } from "./lib/appLifecycle";
 import { consumeInstalledUpdate } from "./lib/updateNotice";
+import { isTauriRuntime } from "./bridge/isTauri";
 import "./index.css";
 
 initAppearance();
 initSounds();
+if (isTauriRuntime()) {
+  void initRemoteAccess();
+}
 
 function dismissBootSplash() {
   const splash = document.getElementById("boot-splash");

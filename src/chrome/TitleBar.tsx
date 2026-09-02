@@ -66,7 +66,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { WindowControls } from "./WindowControls";
-import { IS_MAC, MOD } from "../lib/platform";
+import { MAC_WINDOW_CHROME, MOD } from "../lib/platform";
 import type { RecentProject } from "../lib/recents";
 
 export type Tab = {
@@ -130,6 +130,7 @@ type Props = {
   onGroupMoveToNewWindow?: (tabIds: string[]) => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
+  remoteMobile?: boolean;
 };
 
 function sessionMeta(tab: Tab): string {
@@ -884,6 +885,7 @@ function TitleBarComponent({
   onGroupMoveToNewWindow,
   recents = [],
   onSelectProject,
+  remoteMobile = false,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
   const segments = deckLayout
@@ -1244,7 +1246,7 @@ function TitleBarComponent({
           </IconButton>
         ) : null}
       </div>
-      {!IS_MAC ? <WindowControls /> : null}
+      {!MAC_WINDOW_CHROME ? <WindowControls /> : null}
     </div>
   );
 
@@ -1258,7 +1260,7 @@ function TitleBarComponent({
     >
       {/* Both the rail and the sidebar step aside without a project, so the
           title bar takes over the traffic lights and the rail toggle. */}
-      {(projectless && railClosed) || (!sidebarOpen && IS_MAC) ? (
+      {(projectless && railClosed) || (!sidebarOpen && MAC_WINDOW_CHROME) ? (
         <div className="w-[78px] shrink-0" />
       ) : null}
       {projectless && railClosed ? (
@@ -1296,6 +1298,17 @@ function TitleBarComponent({
           </IconButton>
         </div>
       )}
+      {remoteMobile && deckLayout && railClosed && !projectless ? (
+        <div className="flex shrink-0 items-center px-1.5">
+          <IconButton
+            label={`Toggle Sidebar (${MOD}B)`}
+            active={!railClosed}
+            onClick={onToggleSidebar}
+          >
+            <PanelLeft className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        </div>
+      ) : null}
       {showProjectButton && onSelectProject ? (
         <CwdPicker
           cwd={cwd}
@@ -1523,15 +1536,15 @@ function TitleBarComponent({
           </div>
         )}
 
-        {deckLayout && IS_MAC ? null : (
+        {!remoteMobile && !(deckLayout && MAC_WINDOW_CHROME) ? (
           <div className="flex min-w-0 flex-1 items-center justify-center px-4">
-            {!IS_MAC ? (
+            {!MAC_WINDOW_CHROME ? (
               <span className="pointer-events-none truncate text-[11.5px] font-medium text-content/40 select-none">
                 {systemTitle}
               </span>
             ) : null}
           </div>
-        )}
+        ) : null}
         {trailingControls}
       </div>
     </header>

@@ -30,7 +30,7 @@ import {
   type SidebarTabId,
 } from "../lib/appearance";
 import { basename } from "../lib/fs";
-import { IS_MAC, MOD } from "../lib/platform";
+import { MAC_WINDOW_CHROME, MOD } from "../lib/platform";
 import { resolveModel } from "../lib/models";
 import { projectName } from "../lib/paths";
 import { sessionDisplayTitle } from "../lib/session";
@@ -221,6 +221,9 @@ type Props = {
   updateNotice?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
+  /** Slide-over drawer on narrow remote browser sessions. */
+  mobileOverlay?: boolean;
+  onMobileOverlayClose?: () => void;
 };
 
 function SidebarComponent({
@@ -288,6 +291,8 @@ function SidebarComponent({
   updateNotice = null,
   onOpenWhatsNew,
   onDismissUpdate,
+  mobileOverlay = false,
+  onMobileOverlayClose,
 }: Props) {
   const gitRoot = gitCwd || cwd;
   const inboxUnseen = useInboxUnseen(recents, cwd);
@@ -953,7 +958,7 @@ function SidebarComponent({
               className="flex h-10 shrink-0 select-none items-center border-b border-content/10 pr-1.5"
               data-tauri-drag-region="deep"
             >
-              {IS_MAC ? <div className="w-[78px] shrink-0" /> : null}
+              {MAC_WINDOW_CHROME ? <div className="w-[78px] shrink-0" /> : null}
               <DevModeSlot />
               <TabVisitNav
                 canGoBack={canGoBack}
@@ -1429,12 +1434,34 @@ function SidebarComponent({
   );
 
   return (
-    <div
-      className={`flex h-full shrink-0 ${
-        railVisible || sidebarVisible ? "" : "hidden"
-      }`}
-    >
-      {railVisible && onSelectProject && onOpenProject ? (
+    <>
+      {mobileOverlay && open && (railVisible || sidebarVisible) ? (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          className="remote-mobile-sidebar-backdrop fixed inset-0 z-40 bg-black/50"
+          onClick={onMobileOverlayClose}
+        />
+      ) : null}
+      <div
+        className={`flex h-full shrink-0 ${
+          mobileOverlay
+            ? "remote-mobile-sidebar pointer-events-none fixed inset-y-0 left-0 z-50 max-w-[min(100vw,360px)] transition-transform duration-200 ease-out"
+            : ""
+        } ${
+          mobileOverlay
+            ? open && (railVisible || sidebarVisible)
+              ? "pointer-events-auto translate-x-0"
+              : "-translate-x-full"
+            : railVisible || sidebarVisible
+              ? ""
+              : "hidden"
+        }`}
+      >
+      {railVisible &&
+      onSelectProject &&
+      onOpenProject &&
+      (!mobileOverlay || settingsOpen) ? (
         <ProjectRail
           cwd={cwd}
           recents={recents}
@@ -1469,7 +1496,8 @@ function SidebarComponent({
         />
       ) : null}
       {sidebarVisible ? sidebarContent : null}
-    </div>
+      </div>
+    </>
   );
 }
 

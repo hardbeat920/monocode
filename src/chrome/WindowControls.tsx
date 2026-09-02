@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Minus, Square, X } from "./icons";
 import { useEffect, useState } from "react";
+import { isRemoteSession } from "../bridge/remoteClient";
 
 export function WindowControls() {
   const [isMaximized, setIsMaximized] = useState(false);
@@ -50,6 +51,8 @@ export function WindowControls() {
       void getCurrentWindow().close();
     } catch {}
   };
+
+  if (isRemoteSession()) return null;
 
   return (
     <div

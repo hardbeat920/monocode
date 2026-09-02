@@ -33,10 +33,10 @@ export function RemoteGate({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#171717] px-6 text-content">
+    <div className="flex min-h-screen items-center justify-center bg-[#171717] px-4 py-6 text-content sm:px-6">
       <form
         onSubmit={onSubmit}
-        className="w-full max-w-md rounded-2xl border border-content/10 bg-content/[0.03] p-6 shadow-2xl"
+        className="w-full max-w-md rounded-2xl border border-content/10 bg-content/[0.03] p-5 shadow-2xl sm:p-6"
       >
         <h1 className="text-[18px] font-medium">Connect to MonoCode</h1>
         <p className="mt-2 text-[13px] leading-relaxed text-content/55">

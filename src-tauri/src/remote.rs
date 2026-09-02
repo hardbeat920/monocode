@@ -231,7 +231,12 @@ impl RemoteRuntime {
 
     fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
-        if let Some(tx) = self.shutdown_tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(tx) = self
+            .shutdown_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             let _ = tx.try_send(());
         }
     }
@@ -242,11 +247,17 @@ impl RemoteRuntime {
     }
 }
 
-async fn run_server(runtime: RemoteRuntime, mut shutdown_rx: mpsc::Receiver<()>) -> Result<(), String> {
+async fn run_server(
+    runtime: RemoteRuntime,
+    mut shutdown_rx: mpsc::Receiver<()>,
+) -> Result<(), String> {
     let addr = SocketAddr::from(([0, 0, 0, 0], runtime.port));
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|error| format!("Failed to bind remote server on port {}: {error}", runtime.port))?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|error| {
+        format!(
+            "Failed to bind remote server on port {}: {error}",
+            runtime.port
+        )
+    })?;
 
     let app = Router::new()
         .route("/api/remote/status", get(health))
@@ -370,7 +381,9 @@ async fn handle_client_message(runtime: &RemoteRuntime, message: ClientMessage) 
                     id: message.id,
                     ok: Some(false),
                     result: None,
-                    error: Some(format!("Command `{command}` is not available over remote access")),
+                    error: Some(format!(
+                        "Command `{command}` is not available over remote access"
+                    )),
                     name: None,
                     payload: None,
                 };
@@ -467,9 +480,8 @@ fn invoke_on_main(
 fn response_to_json(response: InvokeResponse) -> Result<serde_json::Value, String> {
     match response {
         InvokeResponse::Ok(body) => match body {
-            InvokeResponseBody::Json(raw) => {
-                serde_json::from_str(&raw).map_err(|error| format!("Invalid JSON response: {error}"))
-            }
+            InvokeResponseBody::Json(raw) => serde_json::from_str(&raw)
+                .map_err(|error| format!("Invalid JSON response: {error}")),
             InvokeResponseBody::Raw(bytes) => Ok(serde_json::Value::String(
                 base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
             )),
