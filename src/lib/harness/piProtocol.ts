@@ -668,7 +668,9 @@ export function modelsFromRpcData(
     seen.add(nativeId);
     const name = stringField(model, "name") || modelId;
     const contextWindow = numberField(model, "contextWindow");
-    const settings = thinkingSetting(model.reasoning === true);
+    const settings =
+      thinkingSettingFromCatalog(asRecord(model.thinking)) ??
+      thinkingSetting(model.reasoning === true);
     models.push({
       id: `${flavor.id}:${nativeId}`,
       harness: flavor.id,
@@ -694,16 +696,61 @@ export function thinkingSetting(reasoning: boolean): ModelSetting | undefined {
     })),
   };
 }
+/**
+ * omp session selectors, mirroring the omp model panel
+ * (`[Inherit, Off, ...getSupportedEfforts(model)]`). Each catalog entry
+ * carries its real ladder in `thinking.efforts` with the real default in
+ * `thinking.defaultLevel` (null → inherit the server default). `auto` is
+ * intentionally absent: it is a coding-agent-layer sentinel the RPC server
+ * never resolves, so offering it would silently misbehave.
+ */
+export const OMP_THINKING_INHERIT = "inherit";
 
-export function isPiThinkingLevel(value: string | undefined): value is PiThinkingLevel {
+export function thinkingSettingFromCatalog(
+  thinking: Record<string, unknown> | null,
+): ModelSetting | undefined {
+  if (!thinking) return undefined;
+  const efforts: string[] = [];
+  const raw = thinking.efforts;
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (
+        typeof entry === "string" &&
+        entry !== "off" &&
+        (PI_THINKING_LEVELS as readonly string[]).includes(entry) &&
+        !efforts.includes(entry)
+      ) {
+        efforts.push(entry);
+      }
+    }
+  }
+  const options = [
+    { value: OMP_THINKING_INHERIT, label: thinkingLabel(OMP_THINKING_INHERIT) },
+    { value: "off", label: thinkingLabel("off") },
+    ...efforts.map((value) => ({ value, label: thinkingLabel(value) })),
+  ];
+  const fallback = stringField(thinking, "defaultLevel");
+  const value =
+    fallback && options.some((option) => option.value === fallback)
+      ? fallback
+      : OMP_THINKING_INHERIT;
+  return { id: "thinking", label: "Thinking", kind: "select", value, options };
+}
+
+export function isPiThinkingLevel(
+  value: string | undefined,
+): value is PiThinkingLevel | "inherit" {
   return (
-    !!value && (PI_THINKING_LEVELS as readonly string[]).includes(value)
+    !!value &&
+    (value === OMP_THINKING_INHERIT ||
+      (PI_THINKING_LEVELS as readonly string[]).includes(value))
   );
 }
 
-function thinkingLabel(level: PiThinkingLevel): string {
+function thinkingLabel(level: string): string {
   if (level === "xhigh") return "Extra High";
   if (level === "off") return "Off";
+  if (level === OMP_THINKING_INHERIT) return "Inherit";
   return level.slice(0, 1).toUpperCase() + level.slice(1);
 }
 

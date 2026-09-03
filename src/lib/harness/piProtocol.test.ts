@@ -10,6 +10,7 @@ import {
   extensionUiResponse,
   extensionUiTitle,
   isAgentSettled,
+  isPiThinkingLevel,
   mergeToolInput,
   modelsFromRpcData,
   needsExtensionUiReply,
@@ -333,6 +334,77 @@ describe("tools and models", () => {
     expect(models[0]?.settings?.[0]?.id).toBe("thinking");
     expect(models[0]?.contextWindow).toBe(200000);
     expect(models[1]?.settings).toBeUndefined();
+  });
+
+  it("uses the catalog thinking ladder and default", () => {
+    const models = modelsFromRpcData(OMP_FLAVOR, {
+      models: [
+        {
+          id: "a",
+          name: "A",
+          provider: "openrouter",
+          reasoning: true,
+          thinking: {
+            mode: "effort",
+            efforts: ["low", "medium", "high", "xhigh", "max"],
+            defaultLevel: "high",
+            requiresEffort: true,
+          },
+        },
+        {
+          id: "b",
+          name: "B",
+          provider: "openrouter",
+          reasoning: true,
+          thinking: {
+            mode: "effort",
+            efforts: ["minimal", "low", "medium", "high"],
+          },
+        },
+        {
+          id: "c",
+          name: "C",
+          provider: "openrouter",
+          reasoning: true,
+          thinking: { mode: "effort", efforts: ["bogus", "low", "low"] },
+        },
+        { id: "d", name: "D", provider: "openrouter", reasoning: false },
+      ],
+    });
+    const setting = (id: string) =>
+      models.find((model) => model.id === `omp:openrouter/${id}`)?.settings?.[0];
+    expect(setting("a")?.value).toBe("high");
+    expect(setting("a")?.options?.map((option) => option.value)).toEqual([
+      "inherit",
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(setting("b")?.value).toBe("inherit");
+    expect(setting("b")?.options?.map((option) => option.value)).toEqual([
+      "inherit",
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(setting("c")?.options?.map((option) => option.value)).toEqual([
+      "inherit",
+      "off",
+      "low",
+    ]);
+    expect(setting("d")).toBeUndefined();
+  });
+
+  it("accepts inherit as a thinking level but not auto", () => {
+    expect(isPiThinkingLevel("inherit")).toBe(true);
+    expect(isPiThinkingLevel("max")).toBe(true);
+    expect(isPiThinkingLevel("auto")).toBe(false);
+    expect(isPiThinkingLevel(undefined)).toBe(false);
   });
 
   it("reads session and context stats", () => {
