@@ -369,6 +369,9 @@ async function startLive(
   liveByThread.set(input.sessionId, live);
 
   try {
+    // One handshake so later large frames (get_messages, agent_end) chunk too.
+    // Pi does not know it and stays on v1 (see PiRpc.negotiate).
+    await rpc.negotiate().catch(() => false);
     const stateFrame = await rpc.request(
       { type: "get_state" },
       INIT_TIMEOUT_MS,

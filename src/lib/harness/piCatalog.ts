@@ -56,6 +56,9 @@ async function discoverModels(flavor: PiFlavor) {
       buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
       cwd,
     );
+    // omp ≥v2 chunks large catalogs past the 1MB transport limit; Pi does
+    // not know this handshake and stays on v1 (see PiRpc.negotiate).
+    await rpc.negotiate().catch(() => false);
     const response = await Promise.race([
       rpc.request({ type: "get_available_models" }, DISCOVERY_TIMEOUT_MS),
       new Promise<never>((_, reject) => {
