@@ -273,7 +273,7 @@ function CodeCopyButton({ code }: { code: string }) {
       aria-label={copied ? "Copied" : "Copy code"}
       className={`markdown-code-copy ${copied ? "is-copied" : ""}`}
       onClick={() => {
-        void copyText(code).then(
+        void copyText(code.replace(/\r?\n$/, "")).then(
           () => {
             setCopied(true);
             if (timer.current != null) window.clearTimeout(timer.current);
