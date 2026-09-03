@@ -213,6 +213,7 @@ import {
 import {
   canDispatchQueuedHead,
   dequeueQueuedMessage,
+  queuedMessageForSubmit,
 } from "./lib/messageQueue";
 import { dropContextWindow } from "./lib/contextUsage";
 import {
@@ -3070,9 +3071,10 @@ export default function App({
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
       if (options?.queuedMessageId) {
+        const mode =
+          options.followUpBehavior === "steer" ? "steer" : "dispatch";
         if (
-          current.queuedMessages?.[0]?.id !== options.queuedMessageId ||
-          !canDispatchQueuedHead(current)
+          !queuedMessageForSubmit(current, options.queuedMessageId, mode)
         ) {
           return;
         }
@@ -3146,21 +3148,19 @@ export default function App({
         const visible = displayAttachments(attachments);
         const cards = userTurnCards(noteCard);
         setSessions((prev) =>
-          prev.map((s) =>
-            s.id === sessionId
-              ? appendSteerUser(
-                  {
-                    ...s,
-                    inboxCard: undefined,
-                    noteCard: undefined,
-                    handoffCard: undefined,
-                  },
-                  text,
-                  visible,
-                  cards,
-                )
-              : s,
-          ),
+          prev.map((s) => {
+            if (s.id !== sessionId) return s;
+            let next: Session = {
+              ...s,
+              inboxCard: undefined,
+              noteCard: undefined,
+              handoffCard: undefined,
+            };
+            if (options?.queuedMessageId) {
+              next = dequeueQueuedMessage(next, options.queuedMessageId);
+            }
+            return appendSteerUser(next, text, visible, cards);
+          }),
         );
         void (async () => {
           try {
@@ -3545,18 +3545,18 @@ export default function App({
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
-      const message = session?.queuedMessages?.find(
-        (entry) => entry.id === messageId,
-      );
-      if (!message) return;
-      onDeleteQueuedMessage(sessionId, messageId);
+      const message = session
+        ? queuedMessageForSubmit(session, messageId, "steer")
+        : undefined;
+      if (!session || !message) return;
       onSubmit(sessionId, message.text, message.attachments, {
         followUpBehavior: "steer",
+        queuedMessageId: message.id,
         noteCard: message.noteCard,
         handoffCard: message.handoffCard,
       });
     },
-    [onDeleteQueuedMessage, onSubmit],
+    [onSubmit],
   );
 
   const onResumeQueue = useCallback(

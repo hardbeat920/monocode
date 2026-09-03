@@ -44,3 +44,19 @@ export function canDispatchQueuedHead(session: Session): boolean {
   if (isPreparingHandoff(session)) return false;
   return true;
 }
+
+/** Resolve a queued row for auto-dispatch (head, idle) or an explicit Steer. */
+export function queuedMessageForSubmit(
+  session: Session,
+  messageId: string,
+  mode: "dispatch" | "steer",
+): QueuedMessage | undefined {
+  const message = session.queuedMessages?.find(
+    (entry) => entry.id === messageId,
+  );
+  if (!message) return undefined;
+  if (mode === "steer") return message;
+  if (queuedHead(session)?.id !== messageId) return undefined;
+  if (!canDispatchQueuedHead(session)) return undefined;
+  return message;
+}

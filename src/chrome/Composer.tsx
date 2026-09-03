@@ -207,6 +207,15 @@ function MessageQueue({
 }) {
   const [editingId, setEditingId] = useState<string>();
   const [editDraft, setEditDraft] = useState("");
+  const onEditingChangeRef = useRef(onEditingChange);
+  onEditingChangeRef.current = onEditingChange;
+  const editingIdRef = useRef(editingId);
+  editingIdRef.current = editingId;
+  useEffect(() => {
+    return () => {
+      if (editingIdRef.current) onEditingChangeRef.current?.();
+    };
+  }, []);
   if (messages.length === 0) return null;
   const paused = status === "paused";
 

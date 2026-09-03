@@ -5,6 +5,7 @@ import {
   dequeueQueuedMessage,
   isEditingQueuedHead,
   queuedHead,
+  queuedMessageForSubmit,
 } from "./messageQueue";
 import { newSession, type QueuedMessage, type Session } from "./session";
 
@@ -95,5 +96,25 @@ describe("dequeueQueuedMessage", () => {
     expect(next.queuedMessages?.map((message) => message.id)).toEqual(["b"]);
     expect(next.editingQueuedMessageId).toBe("b");
     expect(next.queueStatus).toBe("active");
+  });
+});
+
+describe("queuedMessageForSubmit", () => {
+  it("only auto-dispatches the idle head", () => {
+    expect(queuedMessageForSubmit(chat(), "a", "dispatch")?.id).toBe("a");
+    expect(queuedMessageForSubmit(chat(), "b", "dispatch")).toBeUndefined();
+    expect(
+      queuedMessageForSubmit(chat({ busy: true }), "a", "dispatch"),
+    ).toBeUndefined();
+  });
+
+  it("lets Steer target any remaining row, including while busy or paused", () => {
+    expect(
+      queuedMessageForSubmit(chat({ busy: true }), "b", "steer")?.id,
+    ).toBe("b");
+    expect(
+      queuedMessageForSubmit(chat({ queueStatus: "paused" }), "a", "steer")?.id,
+    ).toBe("a");
+    expect(queuedMessageForSubmit(chat(), "missing", "steer")).toBeUndefined();
   });
 });
