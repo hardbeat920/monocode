@@ -17,6 +17,7 @@ import {
 } from "react";
 import { HarnessIcon } from "../chrome/HarnessIcon";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
+import { ModelPicker } from "../chrome/ModelPicker";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -1011,14 +1012,12 @@ function ProviderRow({
       }
     >
       {current ? (
-        <Select
-          label={`${HARNESS_TITLE[harness]} model`}
-          value={current.id}
-          onChange={(next) => onModelChange(harness, next)}
-          options={models.map((item) => ({
-            value: item.id,
-            label: item.name,
-          }))}
+        <ModelPicker
+          harness={harness}
+          model={current.id}
+          scope={harness}
+          align="center"
+          onChange={(_, model) => onModelChange(harness, model)}
         />
       ) : null}
       <SecondaryButton
@@ -1383,33 +1382,6 @@ function Toggle({
         }`}
       />
     </button>
-  );
-}
-
-function Select({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <select
-      aria-label={label}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      className="max-w-52 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-[12px] text-content outline-none hover:border-content/20"
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
   );
 }
 

@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Popover } from "./Popover";
+import { pickerRowTone } from "./pickerRow";
 import {
   getModelSnapshot,
   resolveModel,
@@ -219,7 +220,7 @@ function SelectSetting({
           data-model-settings
           tabIndex={-1}
           onKeyDown={onMenuKey}
-          className="p-1"
+          className="flex flex-col gap-0.5 p-1"
         >
           {setting.options.map((option, index) => {
             const selected = option.value === value;
@@ -233,11 +234,7 @@ function SelectSetting({
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActive(index)}
                 onClick={() => pick(option.value)}
-                className={`flex w-full items-center rounded-lg px-2 py-1.5 text-left text-[13px] ${
-                  highlighted || selected
-                    ? "bg-content/10 text-content"
-                    : "text-content hover:bg-content/5"
-                }`}
+                className={`flex w-full items-center rounded-lg px-2 py-1.5 text-left text-[13px] text-content ${pickerRowTone({ highlighted, selected })}`}
               >
                 {option.label}
               </button>

@@ -19,6 +19,7 @@ import {
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { MatchText } from "./MatchText";
 import { Popover } from "./Popover";
+import { pickerRowTone } from "./pickerRow";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 
 type Props = {
@@ -277,7 +278,7 @@ export function CwdPicker({
             role="listbox"
             aria-label="Projects"
             onMouseMove={onListMouseMove}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 py-1.5"
+            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-none px-1.5 py-1.5"
           >
             {rows.length === 0 ? (
               <div className="px-3 py-4 text-[12px] text-content/50">
@@ -298,7 +299,7 @@ export function CwdPicker({
                       onMouseDown={(e) => e.preventDefault()}
                       onMouseEnter={() => onRowEnter(index)}
                       onClick={() => pick(row)}
-                      className={`mt-1 flex h-8 w-full min-w-0 scroll-my-2 items-center gap-2 rounded-md px-2 text-left ${
+                      className={`flex h-8 w-full min-w-0 scroll-my-2 items-center gap-2 rounded-md px-2 text-left ${
                         highlighted
                           ? "bg-content/10 text-content"
                           : "text-content/80 hover:bg-content/5 hover:text-content"
@@ -326,11 +327,7 @@ export function CwdPicker({
                     onMouseDown={(e) => e.preventDefault()}
                     onMouseEnter={() => onRowEnter(index)}
                     onClick={() => pick(row)}
-                    className={`flex w-full scroll-my-2 items-center gap-2 rounded-lg px-2 py-1.5 text-left ${
-                      highlighted || selected
-                        ? "bg-content/10 text-content"
-                        : "text-content hover:bg-content/5"
-                    }`}
+                    className={`flex w-full scroll-my-2 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-content ${pickerRowTone({ highlighted, selected })}`}
                   >
                     {selected ? (
                       <Check

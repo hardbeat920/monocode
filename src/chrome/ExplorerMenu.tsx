@@ -98,7 +98,7 @@ export function ExplorerMenu({
       aria-label={ariaLabel}
       onKeyDown={onMenuKey}
       onContextMenu={(e) => e.preventDefault()}
-      className="overflow-y-auto overscroll-none p-1"
+      className="flex flex-col gap-0.5 overflow-y-auto overscroll-none p-1"
     >
       {header ? (
         <>

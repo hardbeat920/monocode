@@ -50,7 +50,9 @@ import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { HarnessIcon } from "./HarnessIcon";
 import { MatchText } from "./MatchText";
 import { Popover } from "./Popover";
+import { pickerRowTone } from "./pickerRow";
 import { MOD } from "../lib/platform";
+import type { PopoverAlign, PopoverSide } from "../lib/popover";
 
 type Props = {
   harness: HarnessId;
@@ -58,6 +60,11 @@ type Props = {
   hotkeys?: boolean;
   onChange: (harness: HarnessId, model: string) => void;
   onClose?: () => void;
+  /** Locks the picker to one provider: no tab bar, search within it only. */
+  scope?: HarnessId;
+  /** Defaults to "bottom" when scoped, "top" otherwise. */
+  side?: PopoverSide;
+  align?: PopoverAlign;
 };
 
 const MENU_WIDTH = 300;
@@ -70,7 +77,12 @@ export function ModelPicker({
   hotkeys = false,
   onChange,
   onClose,
+  scope,
+  side,
+  align = "start",
 }: Props) {
+  const locked = scope != null;
+  const effectiveSide = side ?? (locked ? "bottom" : "top");
   const catalogVersion = useSyncExternalStore(
     subscribeModels,
     getModelSnapshot,
@@ -106,9 +118,11 @@ export function ModelPicker({
       isHarnessAvailable(id),
       hasProbedHarnessAvailability(),
     );
-  const pickerHarnesses = HARNESSES.filter(shownInPicker);
-  const visibleTab = coerceModelPickerTab(tab, shownInPicker);
-  if (visibleTab !== tab) {
+  const pickerHarnesses =
+    scope != null ? [scope] : HARNESSES.filter(shownInPicker);
+  const visibleTab: ModelPickerTab =
+    scope ?? coerceModelPickerTab(tab, shownInPicker);
+  if (!locked && visibleTab !== tab) {
     setTab(visibleTab);
   }
   tabRef.current = visibleTab;
@@ -143,7 +157,8 @@ export function ModelPicker({
   useEffect(() => {
     if (!open) return;
     void probeHarnessAvailability();
-    setTab(coerceModelPickerTab(loadModelPickerTab(), shownInPicker));
+    if (!locked)
+      setTab(coerceModelPickerTab(loadModelPickerTab(), shownInPicker));
     setQuery("");
   }, [open]);
 
@@ -188,6 +203,7 @@ export function ModelPicker({
       }
       if (mod || e.altKey || e.shiftKey) return;
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (locked) return;
       if (inBlockingUi(e.target)) return;
       e.preventDefault();
       e.stopPropagation();
@@ -259,7 +275,7 @@ export function ModelPicker({
   }, [visible.length]);
 
   const pick = (item: AgentModel) => {
-    if (!isHarnessAvailable(item.harness)) return;
+    if (!locked && !isHarnessAvailable(item.harness)) return;
     onChange(item.harness, item.id);
     dismiss(true);
   };
@@ -288,14 +304,21 @@ export function ModelPicker({
     if (e.key === "Enter") {
       e.preventDefault();
       const item = visible[active];
-      if (item && isHarnessAvailable(item.harness)) pick(item);
+      if (item && (locked || isHarnessAvailable(item.harness))) pick(item);
       return;
     }
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && !e.altKey && !e.shiftKey && e.key >= "1" && e.key <= "9") {
+    if (
+      !locked &&
+      mod &&
+      !e.altKey &&
+      !e.shiftKey &&
+      e.key >= "1" &&
+      e.key <= "9"
+    ) {
       e.preventDefault();
       const item = visible[Number(e.key) - 1];
-      if (item && isHarnessAvailable(item.harness)) pick(item);
+      if (item && (locked || isHarnessAvailable(item.harness))) pick(item);
     }
   };
 
@@ -337,7 +360,8 @@ export function ModelPicker({
       {open ? (
         <Popover
           anchor={root}
-          side="top"
+          side={effectiveSide}
+          align={align}
           width={MENU_WIDTH}
           minHeight={MENU_MIN_HEIGHT}
           maxHeight={MENU_MAX_HEIGHT}
@@ -348,35 +372,37 @@ export function ModelPicker({
           data-model-picker
           className="flex flex-col overflow-hidden"
         >
-          <nav
-            role="tablist"
-            aria-label="Providers"
-            aria-keyshortcuts="ArrowLeft ArrowRight"
-            aria-orientation="horizontal"
-            className="flex w-full shrink-0 items-stretch border-b border-content/10"
-          >
-            <ProviderTabButton
-              title="Favorites"
-              selected={visibleTab === "favorites"}
-              onSelect={() => selectTab("favorites")}
+          {locked ? null : (
+            <nav
+              role="tablist"
+              aria-label="Providers"
+              aria-keyshortcuts="ArrowLeft ArrowRight"
+              aria-orientation="horizontal"
+              className="flex w-full shrink-0 items-stretch border-b border-content/10"
             >
-              <Star
-                className="size-4"
-                strokeWidth={1.75}
-                fill={visibleTab === "favorites" ? "currentColor" : "none"}
-              />
-            </ProviderTabButton>
-            {pickerHarnesses.map((id) => (
               <ProviderTabButton
-                key={id}
-                title={HARNESS_TITLE[id]}
-                selected={visibleTab === id}
-                onSelect={() => selectTab(id)}
+                title="Favorites"
+                selected={visibleTab === "favorites"}
+                onSelect={() => selectTab("favorites")}
               >
-                <HarnessIcon harness={id} className="size-4" />
+                <Star
+                  className="size-4"
+                  strokeWidth={1.75}
+                  fill={visibleTab === "favorites" ? "currentColor" : "none"}
+                />
               </ProviderTabButton>
-            ))}
-          </nav>
+              {pickerHarnesses.map((id) => (
+                <ProviderTabButton
+                  key={id}
+                  title={HARNESS_TITLE[id]}
+                  selected={visibleTab === id}
+                  onSelect={() => selectTab(id)}
+                >
+                  <HarnessIcon harness={id} className="size-4" />
+                </ProviderTabButton>
+              ))}
+            </nav>
+          )}
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="pb-1.5">
@@ -401,18 +427,24 @@ export function ModelPicker({
               query={query}
               favorites={favorites}
               emptyLabel={
-                visibleTab === "favorites" && !query.trim()
-                  ? "No favorite models"
-                  : visibleTab !== "favorites" &&
-                      !isHarnessAvailable(visibleTab)
-                    ? harnessUnavailableHint(visibleTab)
-                    : visibleTab === "codex" && !query.trim()
-                      ? "Loading Codex models…"
-                      : "No matching models"
+                locked
+                  ? scope === "codex" && !query.trim()
+                    ? "Loading Codex models…"
+                    : "No matching models"
+                  : visibleTab === "favorites" && !query.trim()
+                    ? "No favorite models"
+                    : visibleTab !== "favorites" &&
+                        !isHarnessAvailable(visibleTab)
+                      ? harnessUnavailableHint(visibleTab)
+                      : visibleTab === "codex" && !query.trim()
+                        ? "Loading Codex models…"
+                        : "No matching models"
               }
               onActive={setActive}
               onPick={pick}
               onToggleFavorite={toggleFavorite}
+              allowUnavailable={locked}
+              minimal={locked}
             />
           </div>
         </Popover>
@@ -474,6 +506,8 @@ function ModelList({
   onActive,
   onPick,
   onToggleFavorite,
+  allowUnavailable = false,
+  minimal = false,
 }: {
   models: AgentModel[];
   active: number;
@@ -484,6 +518,9 @@ function ModelList({
   onActive: (index: number) => void;
   onPick: (model: AgentModel) => void;
   onToggleFavorite: (id: string) => void;
+  allowUnavailable?: boolean;
+  /** Hides shortcut badges and favorite toggles. */
+  minimal?: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -547,13 +584,13 @@ function ModelList({
       role="listbox"
       aria-label="Models"
       onMouseMove={onListMouseMove}
-      className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 pb-1.5"
+      className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-none px-1.5 pb-1.5"
     >
       {models.map((item, index) => {
         const selected = item.id === currentId;
         const highlighted = index === active;
         const favorited = favorites.includes(item.id);
-        const disabled = !isHarnessAvailable(item.harness);
+        const disabled = !allowUnavailable && !isHarnessAvailable(item.harness);
         const shortcut = index < 9 && !disabled ? `${MOD}${index + 1}` : null;
         const provider = modelProviderLabel(item);
         const nativeId = nativeModelId(item);
@@ -565,9 +602,7 @@ function ModelList({
             className={`flex w-full scroll-my-2 items-center gap-1 rounded-lg px-1 ${
               disabled
                 ? ""
-                : highlighted || selected
-                  ? "bg-content/10"
-                  : "hover:bg-content/5"
+                : pickerRowTone({ highlighted, selected })
             }`}
           >
             <button
@@ -607,35 +642,37 @@ function ModelList({
                   </span>
                 </span>
               </span>
-              {shortcut ? (
+              {shortcut && !minimal ? (
                 <span className="shrink-0 rounded-md bg-content/10 px-1.5 py-0.5 font-mono text-[10px] text-content/50">
                   {shortcut}
                 </span>
               ) : null}
             </button>
-            <button
-              type="button"
-              title={favorited ? "Remove from favorites" : "Add to favorites"}
-              aria-label={
-                favorited ? "Remove from favorites" : "Add to favorites"
-              }
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleFavorite(item.id);
-              }}
-              className={`grid size-6 shrink-0 place-items-center rounded-md ${
-                favorited
-                  ? "text-content"
-                  : "text-content/30 hover:text-content/70"
-              }`}
-            >
-              <Star
-                className="size-3.5"
-                strokeWidth={1.75}
-                fill={favorited ? "currentColor" : "none"}
-              />
-            </button>
+            {minimal ? null : (
+              <button
+                type="button"
+                title={favorited ? "Remove from favorites" : "Add to favorites"}
+                aria-label={
+                  favorited ? "Remove from favorites" : "Add to favorites"
+                }
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite(item.id);
+                }}
+                className={`grid size-6 shrink-0 place-items-center rounded-md ${
+                  favorited
+                    ? "text-content"
+                    : "text-content/30 hover:text-content/70"
+                }`}
+              >
+                <Star
+                  className="size-3.5"
+                  strokeWidth={1.75}
+                  fill={favorited ? "currentColor" : "none"}
+                />
+              </button>
+            )}
           </div>
         );
       })}

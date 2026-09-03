@@ -12,6 +12,7 @@ import {
   type RuntimeMode,
 } from "../lib/session";
 import { Popover } from "./Popover";
+import { pickerRowTone } from "./pickerRow";
 
 type Props = {
   value: RuntimeMode;
@@ -114,7 +115,7 @@ export function AccessPicker({ value, onChange, onClose }: Props) {
           data-access-picker
           tabIndex={-1}
           onKeyDown={onMenuKey}
-          className="p-1"
+          className="flex flex-col gap-0.5 p-1"
         >
           {RUNTIME_MODES.map((mode, index) => {
             const ModeIcon = ICONS[mode];
@@ -129,11 +130,7 @@ export function AccessPicker({ value, onChange, onClose }: Props) {
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActive(index)}
                 onClick={() => pick(mode)}
-                className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left ${
-                  highlighted || selected
-                    ? "bg-content/10 text-content"
-                    : "text-content hover:bg-content/5"
-                }`}
+                className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content ${pickerRowTone({ highlighted, selected })}`}
               >
                 <ModeIcon
                   className="mt-0.5 size-3.5 shrink-0 text-content/70"

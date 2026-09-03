@@ -21,6 +21,7 @@ import { substringPositions } from "../lib/fuzzy";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useProjectBranchesState } from "../hooks/useProjectBranches";
 import { Popover } from "./Popover";
+import { pickerRowTone } from "./pickerRow";
 import { MatchText } from "./MatchText";
 import { SwitchBranchDialog } from "./SwitchBranchDialog";
 
@@ -458,7 +459,7 @@ function BranchList({
       role="listbox"
       aria-label="Branches"
       onMouseMove={onListMouseMove}
-      className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 py-1.5"
+      className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-none px-1.5 py-1.5"
     >
       {rows.map((row, index) => {
         const highlighted = index === active;
@@ -480,16 +481,12 @@ function BranchList({
             onClick={() => onPick(row)}
             className={
               row.kind === "create"
-                ? `mb-1 flex h-8 w-full min-w-0 scroll-my-2 items-center gap-2 rounded-md px-2 text-left disabled:opacity-60 ${
+                ? `flex h-8 w-full min-w-0 scroll-my-2 items-center gap-2 rounded-md px-2 text-left disabled:opacity-60 ${
                     highlighted
                       ? "bg-content/15 text-content"
                       : "bg-content/10 text-content hover:bg-content/15"
                   }`
-                : `flex w-full scroll-my-2 items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:opacity-60 ${
-                    highlighted || selected
-                      ? "bg-content/10 text-content"
-                      : "text-content hover:bg-content/5"
-                  }`
+                : `flex w-full scroll-my-2 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-content disabled:opacity-60 ${pickerRowTone({ highlighted, selected })}`
             }
           >
             {row.kind === "create" ? (

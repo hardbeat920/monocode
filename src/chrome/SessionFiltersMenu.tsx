@@ -71,7 +71,7 @@ export function SessionFiltersMenu({
       role="menu"
       aria-label="Filter sessions"
       onContextMenu={(event) => event.preventDefault()}
-      className="overflow-y-auto overscroll-none p-1"
+      className="flex flex-col gap-0.5 overflow-y-auto overscroll-none p-1"
     >
       <FilterItem
         label="Archived"

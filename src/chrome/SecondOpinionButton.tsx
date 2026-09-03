@@ -327,7 +327,7 @@ export function SecondOpinionButton({
               aria-label={`${HARNESS_TITLE[activeHarness]} models`}
               onMouseEnter={() => setInSubmenu(true)}
               data-provider-target
-              className="overflow-y-auto overscroll-none p-1"
+              className="flex flex-col gap-0.5 overflow-y-auto overscroll-none p-1"
             >
               {models.map((model, index) => {
                 const highlighted = index === modelActive;

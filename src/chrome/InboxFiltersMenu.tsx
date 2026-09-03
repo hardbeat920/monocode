@@ -104,7 +104,7 @@ export function InboxFiltersMenu({
       role="menu"
       aria-label="Filter inbox"
       onContextMenu={(event) => event.preventDefault()}
-      className="overflow-y-auto overscroll-none p-1"
+      className="flex flex-col gap-0.5 overflow-y-auto overscroll-none p-1"
     >
       <FilterItem
         label="Assigned to me"

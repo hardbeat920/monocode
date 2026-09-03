@@ -139,7 +139,7 @@ function SkillList({
       role="listbox"
       aria-label="Skills"
       onMouseMove={onListMouseMove}
-      className="max-h-[min(240px,40vh)] overflow-y-auto overscroll-none px-1 py-1"
+      className="flex max-h-[min(240px,40vh)] flex-col gap-0.5 overflow-y-auto overscroll-none px-1 py-1"
     >
       {skills.map((skill, index) => {
         const highlighted = index === active;
