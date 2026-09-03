@@ -63,6 +63,8 @@ pub(crate) fn list_skills_from(project: &Path, home: Option<&Path>) -> Vec<Disco
         (".omp/skills", "omp"),
         (".fx/skills", "fx"),
         (".grok/skills", "grok"),
+        (".antigravity/skills", "antigravity"),
+        (".gemini/skills", "antigravity"),
     ] {
         add_root(project.join(dir), "project", source);
         if let Some(home) = home {
@@ -72,6 +74,7 @@ pub(crate) fn list_skills_from(project: &Path, home: Option<&Path>) -> Vec<Disco
     if let Some(home) = home {
         add_root(home.join(".pi/agent/skills"), "user", "pi");
         add_root(home.join(".omp/agent/skills"), "user", "omp");
+        add_root(home.join(".gemini/antigravity-cli/skills"), "user", "antigravity");
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(&mut by_name, root, scope, "claude", &namespace);
         }

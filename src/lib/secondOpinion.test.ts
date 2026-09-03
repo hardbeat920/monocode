@@ -107,6 +107,7 @@ describe("secondOpinionTargets", () => {
     "omp",
     "fx",
     "grok",
+    "antigravity",
   ];
   const installed = (id: HarnessId) => id === "claude" || id === "codex";
   const visible = (id: HarnessId) => all.includes(id);

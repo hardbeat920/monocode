@@ -304,6 +304,18 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Google Antigravity CLI (`agy` / `antigravity`).
+#[tauri::command(async)]
+pub fn harness_resolve_antigravity() -> Result<CursorBinary, String> {
+    resolve_antigravity()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Antigravity CLI not found. Install it and authenticate, then retry.".into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -655,6 +667,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_omp(),
         resolve_fx(),
         resolve_grok(),
+        resolve_antigravity(),
     ]
     .into_iter()
     .flatten()
@@ -938,6 +951,8 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "pi"
+            | "agy"
+            | "antigravity"
             | "worker-server"
             | "app-server"
     )
@@ -1353,6 +1368,102 @@ fn resolve_grok() -> Option<PathBuf> {
     candidates.into_iter().find(|path| is_grok_agent(path))
 }
 
+fn resolve_antigravity() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        candidates.push(home.join(".local/bin/agy"));
+        candidates.push(home.join(".local/bin/antigravity"));
+        candidates.push(home.join(".gemini/antigravity-cli/bin/agy"));
+        candidates.push(home.join(".gemini/antigravity-cli/bin/antigravity"));
+        candidates.push(home.join(".npm-global/bin/agy"));
+        candidates.push(home.join(".npm-global/bin/antigravity"));
+        candidates.push(home.join(".cargo/bin/agy"));
+        candidates.push(home.join(".cargo/bin/antigravity"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/opt/homebrew/bin/agy"));
+        candidates.push(PathBuf::from("/opt/homebrew/bin/antigravity"));
+    }
+    candidates.push(PathBuf::from("/usr/local/bin/agy"));
+    candidates.push(PathBuf::from("/usr/local/bin/antigravity"));
+    candidates.push(PathBuf::from("/usr/bin/agy"));
+    candidates.push(PathBuf::from("/usr/bin/antigravity"));
+    candidates.push(PathBuf::from("/snap/bin/agy"));
+    candidates.push(PathBuf::from("/snap/bin/antigravity"));
+    if let Some(from_shell) = which_via_login_shell("agy") {
+        candidates.push(from_shell);
+    }
+    if let Some(from_shell) = which_via_login_shell("antigravity") {
+        candidates.push(from_shell);
+    }
+
+    candidates.into_iter().find(|path| is_antigravity_agent(path))
+}
+
+fn is_antigravity_agent(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+    if name != "agy" && name != "antigravity" && stem != "agy" && stem != "antigravity" {
+        return false;
+    }
+    file_mentions_antigravity_agent(path) || help_mentions_antigravity(path)
+}
+
+fn file_mentions_antigravity_agent(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 64 * 1024];
+    let Ok(n) = file.read(&mut buf) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&buf[..n]);
+    text.contains("antigravity")
+        || text.contains("stream-json")
+        || text.contains("dangerously-skip-permissions")
+}
+
+fn help_mentions_antigravity(path: &Path) -> bool {
+    let mut cmd = Command::new(path);
+    cmd.arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_gui_env(&mut cmd);
+    isolate_child(&mut cmd);
+    let Ok(child) = cmd.spawn() else {
+        return false;
+    };
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(output)) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .to_ascii_lowercase();
+            text.contains("stream-json")
+                || text.contains("dangerously-skip-permissions")
+                || text.contains("antigravity")
+        }
+        _ => {
+            terminate(pid);
+            false
+        }
+    }
+}
+
 fn is_pi_coding_agent(path: &Path) -> bool {
     if !path.is_file() {
         return false;
@@ -1657,6 +1768,7 @@ fn gui_search_path_from(
         parts.push(format!("{home}/.opencode/bin"));
         parts.push(format!("{home}/.grok/bin"));
         parts.push(format!("{home}/.npm-global/bin"));
+        parts.push(format!("{home}/.gemini/antigravity-cli/bin"));
     }
     parts.push("/opt/homebrew/bin".into());
     parts.push("/usr/local/bin".into());

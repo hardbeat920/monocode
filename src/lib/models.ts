@@ -170,6 +170,68 @@ export const MODELS: AgentModel[] = [
     name: "GLM 5.2 Fast",
     nativeId: "zai/glm-5.2-fast",
   },
+  {
+    id: "antigravity:gemini-3.8-flash",
+    harness: "antigravity",
+    name: "Gemini 3.8 Flash",
+    nativeId: "gemini-3.8-flash",
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "high", label: "High" },
+          { value: "medium", label: "Medium" },
+          { value: "low", label: "Low" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "antigravity:gemini-3.7-flash",
+    harness: "antigravity",
+    name: "Gemini 3.7 Flash",
+    nativeId: "gemini-3.7-flash",
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "high", label: "High" },
+          { value: "medium", label: "Medium" },
+          { value: "low", label: "Low" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "antigravity:gemini-3.1-pro",
+    harness: "antigravity",
+    name: "Gemini 3.1 Pro",
+    nativeId: "gemini-3.1-pro",
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "high", label: "High" },
+          { value: "low", label: "Low" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "antigravity:claude-sonnet-4-6",
+    harness: "antigravity",
+    name: "Claude Sonnet 4.6 (Thinking)",
+    nativeId: "claude-sonnet-4-6",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -181,6 +243,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   pi: "pi:default",
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
+  antigravity: "antigravity:gemini-3.8-flash",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -206,6 +269,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "pi",
   "omp",
   "fx",
+  "antigravity",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];
@@ -707,6 +771,23 @@ function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
       models.find((model) => model.id === DEFAULT_MODEL_ID.fx)?.id ??
       models[0]?.id ??
       DEFAULT_MODEL_ID.fx
+    );
+  }
+  if (harness === "antigravity") {
+    const preferred = [
+      "gemini-3.8-flash",
+      "gemini-3.8-flash-high",
+      "gemini-3.7-flash",
+      "gemini-3.7-flash-high",
+    ];
+    for (const nativeId of preferred) {
+      const hit = models.find((model) => model.nativeId === nativeId);
+      if (hit) return hit.id;
+    }
+    return (
+      models.find((model) => model.id === DEFAULT_MODEL_ID.antigravity)?.id ??
+      models[0]?.id ??
+      DEFAULT_MODEL_ID.antigravity
     );
   }
   return (

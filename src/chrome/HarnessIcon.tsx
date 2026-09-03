@@ -7,6 +7,7 @@ import grok from "../assets/providers/grok.svg";
 import omp from "../assets/providers/omp.svg";
 import opencode from "../assets/providers/opencode.svg";
 import pi from "../assets/providers/pi.svg";
+import antigravity from "../assets/providers/antigravity.svg";
 import type { HarnessId } from "../lib/session";
 
 export const HARNESS_ICONS: Record<HarnessId, string> = {
@@ -18,6 +19,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   pi,
   omp,
   fx,
+  antigravity,
 };
 
 /** White marks that must follow `currentColor` so they stay visible in light mode. */
@@ -28,6 +30,7 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "pi",
   "omp",
   "fx",
+  "antigravity",
 ]);
 
 function MonoIcon({
@@ -114,6 +117,13 @@ export function HarnessIcon({
           fillRule="evenodd"
           d="M15.5 17H26.5V25.5H15.5V17ZM19 20V22.5H20.5V20H19ZM22.5 20V22.5H24V20H22.5Z"
         />
+      </MonoIcon>
+    );
+  }
+  if (harness === "antigravity") {
+    return (
+      <MonoIcon className={className}>
+        <path d="M14.5 0C14.5 8.008 8.008 14.5 0 14.5C8.008 14.5 14.5 20.992 14.5 29C14.5 20.992 20.992 14.5 29 14.5C20.992 14.5 14.5 8.008 14.5 0Z" />
       </MonoIcon>
     );
   }

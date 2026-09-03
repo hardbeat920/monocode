@@ -44,7 +44,7 @@ import {
 import type { HandoffComposerCard } from "../lib/handoff";
 import { looksLikeProject, type RecentProject } from "../lib/recents";
 import type { Attachment, HarnessId, RuntimeMode } from "../lib/session";
-import { harnessSupportsAttachments } from "../lib/session";
+import { HARNESS_TITLE, harnessSupportsAttachments } from "../lib/session";
 import type { UserQuestionPrompt, UserQuestionReply } from "../lib/userQuestion";
 import {
   createBlankSkill,
@@ -943,7 +943,7 @@ export function Composer({
               label={
                 attachmentsSupported
                   ? "Attach files"
-                  : "fx does not support attachments"
+                  : `${HARNESS_TITLE[harness]} does not support attachments`
               }
               disabled={!attachmentsSupported}
               onClick={attachFromPicker}

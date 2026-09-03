@@ -302,5 +302,25 @@ describe("live catalog overlays", () => {
     ]);
     expect(hasLiveCatalog("pi")).toBe(true);
     expect(hasLiveCatalog("omp")).toBe(false);
+    expect(hasLiveCatalog("antigravity")).toBe(false);
+  });
+
+  it("prefers flash for antigravity overlay defaults", () => {
+    expect(defaultModelId("antigravity")).toBe("antigravity:gemini-3.8-flash");
+    setHarnessModels("antigravity", [
+      {
+        id: "antigravity:gemini-3.8-flash",
+        harness: "antigravity",
+        name: "Flash",
+        nativeId: "gemini-3.8-flash",
+      },
+      {
+        id: "antigravity:gemini-3.7-flash",
+        harness: "antigravity",
+        name: "Flash 3.7",
+        nativeId: "gemini-3.7-flash",
+      },
+    ]);
+    expect(defaultModelId("antigravity")).toBe("antigravity:gemini-3.8-flash");
   });
 });
