@@ -59,6 +59,22 @@ function isUpper(ch: string): boolean {
   return ch >= "A" && ch <= "Z";
 }
 
+/** Case-insensitive substring positions — every non-overlapping occurrence.
+ *  Feeds MatchText for pickers whose filter is a plain substring search. */
+export function substringPositions(text: string, needle: string): number[] {
+  const q = needle.trim().toLowerCase();
+  if (!q) return [];
+  const hay = text.toLowerCase();
+  const out: number[] = [];
+  let from = 0;
+  for (;;) {
+    const at = hay.indexOf(q, from);
+    if (at === -1) return out;
+    for (let k = 0; k < q.length; k++) out.push(at + k);
+    from = at + q.length;
+  }
+}
+
 /** Prefer filename hits over directory-only hits. Positions index `relative`. */
 export function scorePath(
   query: string,

@@ -104,6 +104,9 @@ export function FilePicker({
   useEffect(() => {
     if (!open) return;
     search.current?.focus();
+    // Re-focus after paint so a parent focus-restore effect can't steal it.
+    const raf = requestAnimationFrame(() => search.current?.focus());
+    return () => cancelAnimationFrame(raf);
   }, [open]);
 
   useEffect(() => {
@@ -297,7 +300,7 @@ function FileList({
             onMouseDown={(e) => e.preventDefault()}
             onMouseEnter={() => onRowEnter(index)}
             onClick={() => onPick(file)}
-            className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm leading-none ${
+            className={`flex h-8 w-full scroll-my-2 items-center gap-2 rounded-md px-2 text-left text-sm leading-none ${
               highlighted ? "bg-content/10 text-content" : "text-content"
             }`}
           >

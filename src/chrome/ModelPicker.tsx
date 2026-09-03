@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -16,6 +17,7 @@ import {
   loadFavoriteModels,
   loadModelPickerTab,
   matchesModelQuery,
+  modelNameMatchPositions,
   modelsFor,
   resolveModel,
   saveFavoriteModels,
@@ -44,6 +46,7 @@ import {
 } from "../lib/session";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { HarnessIcon } from "./HarnessIcon";
+import { MatchText } from "./MatchText";
 import { Popover } from "./Popover";
 import { MOD } from "../lib/platform";
 
@@ -210,7 +213,12 @@ export function ModelPicker({
   }, [hotkeys]);
 
   useEffect(() => {
-    if (open) search.current?.focus();
+    if (!open) return;
+    search.current?.focus();
+    // The popover measures on its first pass before painting; re-focus after
+    // placement (and after any parent focus-restore effect) so the query wins.
+    const raf = requestAnimationFrame(() => search.current?.focus());
+    return () => cancelAnimationFrame(raf);
   }, [open]);
 
   const visible = useMemo(() => {
@@ -383,6 +391,7 @@ export function ModelPicker({
               models={visible}
               active={active}
               currentId={current.id}
+              query={query}
               favorites={favorites}
               emptyLabel={
                 visibleTab === "favorites" && !query.trim()
@@ -452,6 +461,7 @@ function ModelList({
   models,
   active,
   currentId,
+  query,
   favorites,
   emptyLabel,
   onActive,
@@ -461,6 +471,7 @@ function ModelList({
   models: AgentModel[];
   active: number;
   currentId: string;
+  query: string;
   favorites: string[];
   emptyLabel: string;
   onActive: (index: number) => void;
@@ -470,6 +481,8 @@ function ModelList({
   const listRef = useRef<HTMLDivElement>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLDivElement>(null);
+  const pointer = useRef({ x: Number.NaN, y: Number.NaN, allow: false });
+  const fromPointer = useRef(false);
 
   const setListRef = (el: HTMLDivElement | null) => {
     listRef.current = el;
@@ -477,8 +490,30 @@ function ModelList({
   };
 
   useEffect(() => {
+    pointer.current.allow = false;
+  }, [models]);
+
+  useEffect(() => {
+    if (fromPointer.current) {
+      fromPointer.current = false;
+      return;
+    }
+    pointer.current.allow = false;
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  const onListMouseMove = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.clientX === pointer.current.x && e.clientY === pointer.current.y) {
+      return;
+    }
+    pointer.current = { x: e.clientX, y: e.clientY, allow: true };
+  };
+
+  const onRowEnter = (index: number) => {
+    if (!pointer.current.allow) return;
+    fromPointer.current = true;
+    onActive(index);
+  };
 
   useEffect(() => {
     const el = listRef.current;
@@ -504,6 +539,7 @@ function ModelList({
       ref={setListRef}
       role="listbox"
       aria-label="Models"
+      onMouseMove={onListMouseMove}
       className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 pb-1.5"
     >
       {models.map((item, index) => {
@@ -516,8 +552,8 @@ function ModelList({
           <div
             key={item.id}
             ref={highlighted ? activeRef : undefined}
-            onMouseEnter={() => onActive(index)}
-            className={`flex w-full items-center gap-1 rounded-lg px-1 ${
+            onMouseEnter={() => onRowEnter(index)}
+            className={`flex w-full scroll-my-2 items-center gap-1 rounded-lg px-1 ${
               disabled
                 ? ""
                 : highlighted || selected
@@ -545,7 +581,11 @@ function ModelList({
             >
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium leading-5">
-                  {item.name}
+                  <MatchText
+                    text={item.name}
+                    positions={modelNameMatchPositions(item, query)}
+                    active={query.trim().length > 0}
+                  />
                 </span>
                 <span className="mt-0.5 flex items-center gap-1 text-[11px] leading-4 text-content/50">
                   <HarnessIcon

@@ -299,6 +299,41 @@ export function matchesModelQuery(model: AgentModel, query: string): boolean {
   return tokens.every((token) => haystack.includes(token));
 }
 
+/**
+ * MatchText positions for the model display name. Uses the same tokenizing
+ * and punctuation-blind normalization as matchesModelQuery, mapped back to
+ * indices in the original name. Tokens that only match the id/native id
+ * contribute nothing.
+ */
+export function modelNameMatchPositions(
+  model: AgentModel,
+  query: string,
+): number[] {
+  const tokens = query.toLowerCase().match(/[a-z]+|[0-9]+/g) ?? [];
+  if (tokens.length === 0) return [];
+  const flat: string[] = [];
+  const indexMap: number[] = [];
+  for (let i = 0; i < model.name.length; i++) {
+    const ch = model.name[i].toLowerCase();
+    if ((ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9")) {
+      flat.push(ch);
+      indexMap.push(i);
+    }
+  }
+  const hay = flat.join("");
+  const found = new Set<number>();
+  for (const token of tokens) {
+    let from = 0;
+    for (;;) {
+      const at = hay.indexOf(token, from);
+      if (at === -1) break;
+      for (let k = 0; k < token.length; k++) found.add(indexMap[at + k]);
+      from = at + token.length;
+    }
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
 export function allModels(): AgentModel[] {
   return (allCache ??= HARNESS_ORDER.flatMap(modelsFor));
 }

@@ -1,10 +1,11 @@
-import { Check, GitBranch, Plus, Search } from "./icons";
+import { Check, ChevronDown, GitBranch, Plus, Search } from "./icons";
 import {
   useEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
   gitCheckout,
@@ -16,9 +17,11 @@ import {
   notifyGitChanged,
   type GitBranchInfo,
 } from "../lib/fs";
+import { substringPositions } from "../lib/fuzzy";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useProjectBranchesState } from "../hooks/useProjectBranches";
 import { Popover } from "./Popover";
+import { MatchText } from "./MatchText";
 import { SwitchBranchDialog } from "./SwitchBranchDialog";
 
 type Props = {
@@ -92,7 +95,12 @@ export function BranchPicker({
   }, [open]);
 
   useEffect(() => {
-    if (open) search.current?.focus();
+    if (!open) return;
+    search.current?.focus();
+    // The popover measures on its first pass before painting; re-focus after
+    // placement (and after any parent focus-restore effect) so the query wins.
+    const raf = requestAnimationFrame(() => search.current?.focus());
+    return () => cancelAnimationFrame(raf);
   }, [open]);
 
   useEffect(() => {
@@ -250,8 +258,8 @@ export function BranchPicker({
   const interactive = enabled && !awaitingBranch && !missingGit;
 
   return (
-    <div className="flex max-w-[45%] shrink-0 items-center gap-2.5">
-      <div ref={root} className="relative min-w-0">
+    <div className="flex shrink-0 items-center">
+      <div ref={root} className="relative">
         <button
           type="button"
           title={title}
@@ -276,14 +284,16 @@ export function BranchPicker({
           }}
           className={
             missingGit
-              ? "flex min-w-0 cursor-default items-center gap-1.5 text-content/50"
-              : `flex min-w-0 items-center gap-1.5 ${
-                  open ? "text-content" : "text-content/50 hover:text-content"
-                } disabled:opacity-40 disabled:hover:text-content/50`
+              ? "flex h-6.5 max-w-52 cursor-default items-center gap-1 rounded-md bg-content/10 px-1.5 text-content/50"
+              : `flex h-6.5 max-w-52 items-center gap-1 rounded-md px-1.5 ${
+                  open
+                    ? "bg-content/10 text-content"
+                    : "bg-content/10 text-content hover:bg-content/15"
+                } disabled:opacity-40`
           }
         >
-          <GitBranch className="size-3.5 shrink-0" strokeWidth={1.5} />
-          <span className="relative truncate font-mono text-[12px]">
+          <GitBranch className="size-3.5 shrink-0" strokeWidth={1.75} />
+          <span className="relative min-w-0 truncate font-mono text-[11px]">
             {awaitingBranch ? (
               <>
                 {/*
@@ -299,6 +309,12 @@ export function BranchPicker({
               label
             )}
           </span>
+          {missingGit ? null : (
+            <ChevronDown
+              className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
+              strokeWidth={1.75}
+            />
+          )}
         </button>
         {blocked ? (
           <SwitchBranchDialog
@@ -365,6 +381,7 @@ export function BranchPicker({
               rows={rows}
               active={active}
               busy={busy}
+              query={query}
               emptyLabel={query.trim() ? "No matching branches" : "No branches"}
               onActive={setActive}
               onPick={pick}
@@ -385,6 +402,7 @@ function BranchList({
   rows,
   active,
   busy,
+  query,
   emptyLabel,
   onActive,
   onPick,
@@ -392,16 +410,41 @@ function BranchList({
   rows: Row[];
   active: number;
   busy: boolean;
+  query: string;
   emptyLabel: string;
   onActive: (index: number) => void;
   onPick: (row: Row) => void;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
+  const pointer = useRef({ x: Number.NaN, y: Number.NaN, allow: false });
+  const fromPointer = useRef(false);
 
   useEffect(() => {
+    pointer.current.allow = false;
+  }, [rows]);
+
+  useEffect(() => {
+    if (fromPointer.current) {
+      fromPointer.current = false;
+      return;
+    }
+    pointer.current.allow = false;
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  const onListMouseMove = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.clientX === pointer.current.x && e.clientY === pointer.current.y) {
+      return;
+    }
+    pointer.current = { x: e.clientX, y: e.clientY, allow: true };
+  };
+
+  const onRowEnter = (index: number) => {
+    if (!pointer.current.allow) return;
+    fromPointer.current = true;
+    onActive(index);
+  };
 
   if (rows.length === 0) {
     return (
@@ -414,6 +457,7 @@ function BranchList({
       ref={lockOverscroll}
       role="listbox"
       aria-label="Branches"
+      onMouseMove={onListMouseMove}
       className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 py-1.5"
     >
       {rows.map((row, index) => {
@@ -432,16 +476,16 @@ function BranchList({
             aria-selected={selected}
             disabled={busy}
             onMouseDown={(e) => e.preventDefault()}
-            onMouseEnter={() => onActive(index)}
+            onMouseEnter={() => onRowEnter(index)}
             onClick={() => onPick(row)}
             className={
               row.kind === "create"
-                ? `mb-1 flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left disabled:opacity-60 ${
+                ? `mb-1 flex h-8 w-full min-w-0 scroll-my-2 items-center gap-2 rounded-md px-2 text-left disabled:opacity-60 ${
                     highlighted
                       ? "bg-content/15 text-content"
                       : "bg-content/10 text-content hover:bg-content/15"
                   }`
-                : `flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:opacity-60 ${
+                : `flex w-full scroll-my-2 items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:opacity-60 ${
                     highlighted || selected
                       ? "bg-content/10 text-content"
                       : "text-content hover:bg-content/5"
@@ -466,7 +510,11 @@ function BranchList({
                   />
                 )}
                 <span className="min-w-0 flex-1 truncate font-mono text-[12px]">
-                  {row.branch.name}
+                  <MatchText
+                    text={row.branch.name}
+                    positions={substringPositions(row.branch.name, query)}
+                    active={query.trim().length > 0}
+                  />
                 </span>
                 {row.branch.remote ? (
                   <span className="shrink-0 text-[10px] text-content/40">

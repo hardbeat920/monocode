@@ -11,6 +11,7 @@ import {
   loadLastModelChoice,
   loadLastModelSettings,
   matchesModelQuery,
+  modelNameMatchPositions,
   mergeModelSettings,
   modelPickerTabs,
   preferredModelId,
@@ -325,5 +326,32 @@ describe("matchesModelQuery", () => {
     expect(matchesModelQuery(spark, "")).toBe(true);
     expect(matchesModelQuery(spark, "   ")).toBe(true);
     expect(matchesModelQuery(spark, "zzz")).toBe(false);
+  });
+});
+describe("modelNameMatchPositions", () => {
+  const spark: AgentModel = {
+    id: "omp:muse-spark-1.3-contributor-free",
+    harness: "omp",
+    name: "Muse Spark 1.3 Free",
+    nativeId: "muse-spark-1.3-contributor-free",
+  };
+
+  it("maps punctuation-blind tokens back to name indices", () => {
+    // "muse1.3" -> tokens muse,1,3; name indices: Muse=0-3, 1=11, 3=13.
+    expect(modelNameMatchPositions(spark, "muse1.3")).toEqual([
+      0, 1, 2, 3, 11, 13,
+    ]);
+  });
+
+  it("is case-insensitive and returns empty for blank queries", () => {
+    expect(modelNameMatchPositions(spark, "SPARK")).toEqual([5, 6, 7, 8, 9]);
+    expect(modelNameMatchPositions(spark, "")).toEqual([]);
+    expect(modelNameMatchPositions(spark, "   ")).toEqual([]);
+  });
+
+  it("ignores tokens that only match the id", () => {
+    // "contributor" matches the id but not the display name.
+    expect(modelNameMatchPositions(spark, "contributor")).toEqual([]);
+    expect(modelNameMatchPositions(spark, "free")).toEqual([15, 16, 17, 18]);
   });
 });

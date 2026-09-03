@@ -153,7 +153,7 @@ function SkillList({
             onMouseDown={(e) => e.preventDefault()}
             onMouseEnter={() => onRowEnter(index)}
             onClick={() => onPick(skill)}
-            className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left ${
+            className={`flex w-full scroll-my-2 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left ${
               highlighted ? "bg-skill/15 text-content" : "text-content"
             }`}
           >
