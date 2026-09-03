@@ -1104,6 +1104,26 @@ function IconAction({
   );
 }
 
+function DiffCounts({
+  additions,
+  deletions,
+}: {
+  additions: number;
+  deletions: number;
+}) {
+  if (additions <= 0 && deletions <= 0) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-semibold tabular-nums">
+      {additions > 0 ? (
+        <span className="text-emerald-400">+{additions}</span>
+      ) : null}
+      {deletions > 0 ? (
+        <span className="text-red-400">-{deletions}</span>
+      ) : null}
+    </span>
+  );
+}
+
 function ChangesViewToggle({
   view,
   onChange,
