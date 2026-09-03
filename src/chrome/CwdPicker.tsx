@@ -10,17 +10,27 @@ import {
 } from "react";
 import { basename } from "../lib/fs";
 import { substringPositions } from "../lib/fuzzy";
-import { prettyCwd, prettyParent } from "../lib/paths";
+import { prettyCwd, prettyParent, projectName } from "../lib/paths";
 import {
   looksLikeProject,
   sameProjectPath,
   type RecentProject,
 } from "../lib/recents";
+import {
+  loadTabGroupColors,
+  loadTabGroupCustomColors,
+  loadTabGroupMascots,
+  resolveTabGroupColor,
+  resolveTabGroupLogo,
+  resolveTabGroupMascot,
+} from "../lib/tabGroups";
+import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { MatchText } from "./MatchText";
 import { Popover } from "./Popover";
 import { pickerRowTone } from "./pickerRow";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
+import { ProjectMascot } from "./ProjectMascot";
 
 type Props = {
   cwd: string;
@@ -74,6 +84,20 @@ export function CwdPicker({
   onCwdChangeRef.current = onCwdChange;
   const onNewProjectRef = useRef(onNewProject);
   onNewProjectRef.current = onNewProject;
+  const groupLogos = useTabGroupLogos();
+  const [groupMascots] = useState(loadTabGroupMascots);
+  const [groupColors] = useState(loadTabGroupColors);
+  const [groupCustomColors] = useState(loadTabGroupCustomColors);
+  const triggerKey = projectName(cwd);
+  const triggerLogoPath =
+    projectLogoPath ?? resolveTabGroupLogo(triggerKey, groupLogos);
+  const triggerColor = resolveTabGroupColor(
+    triggerKey,
+    groupColors,
+    groupCustomColors,
+    triggerKey,
+  );
+  const triggerMascot = resolveTabGroupMascot(triggerKey, groupMascots);
   const inProject = looksLikeProject(cwd);
   const label = prettyCwd(cwd);
   const filtering = query.trim().length > 0;
@@ -224,10 +248,19 @@ export function CwdPicker({
       >
         {children ?? (
           <>
-            <ProjectLogoIcon
-              path={projectLogoPath}
-              fallbackStrokeWidth={1.5}
-            />
+            {triggerLogoPath ? (
+              <ProjectLogoIcon
+                path={triggerLogoPath}
+                fallbackStrokeWidth={1.5}
+              />
+            ) : (
+              <ProjectMascot
+                project={triggerKey}
+                color={triggerColor}
+                name={triggerMascot}
+                className="size-3.5 shrink-0"
+              />
+            )}
             <span className="truncate font-mono text-[12px]">{label}</span>
           </>
         )}
@@ -316,6 +349,15 @@ export function CwdPicker({
                   );
                 }
                 const selected = row.current;
+                const rowKey = projectName(row.path);
+                const rowLogoPath = resolveTabGroupLogo(rowKey, groupLogos);
+                const rowColor = resolveTabGroupColor(
+                  rowKey,
+                  groupColors,
+                  groupCustomColors,
+                  rowKey,
+                );
+                const rowMascot = resolveTabGroupMascot(rowKey, groupMascots);
                 return (
                   <button
                     key={row.path}
@@ -334,11 +376,19 @@ export function CwdPicker({
                         className="size-3.5 shrink-0"
                         strokeWidth={1.75}
                       />
-                    ) : (
+                    ) : rowLogoPath ? (
                       <ProjectLogoIcon
-                        path={row.path}
-                        className="size-3.5 shrink-0 text-content/50"
+                        path={rowLogoPath}
+                        className="size-3.5 shrink-0 rounded-sm"
+                        imageClassName="size-3.5"
                         fallbackStrokeWidth={1.75}
+                      />
+                    ) : (
+                      <ProjectMascot
+                        project={rowKey}
+                        color={rowColor}
+                        name={rowMascot}
+                        className="size-3.5 shrink-0"
                       />
                     )}
                     <span className="min-w-0 flex-1 truncate text-[12px]">
