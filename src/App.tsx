@@ -210,6 +210,10 @@ import {
   type SecondOpinionMeta,
   type Session,
 } from "./lib/session";
+import {
+  canDispatchQueuedHead,
+  dequeueQueuedMessage,
+} from "./lib/messageQueue";
 import { dropContextWindow } from "./lib/contextUsage";
 import {
   deleteSession,
@@ -3060,10 +3064,19 @@ export default function App({
         followUpBehavior?: FollowUpBehavior;
         noteCard?: NoteComposerCard;
         handoffCard?: HandoffComposerCard;
+        queuedMessageId?: string;
       },
     ) => {
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
+      if (options?.queuedMessageId) {
+        if (
+          current.queuedMessages?.[0]?.id !== options.queuedMessageId ||
+          !canDispatchQueuedHead(current)
+        ) {
+          return;
+        }
+      }
       const noteCard =
         options && "noteCard" in options ? options.noteCard : current.noteCard;
       const handoffCard =
@@ -3211,12 +3224,15 @@ export default function App({
         prev.map((s) => {
           if (s.id !== sessionId) return s;
           const titled = isFirstTurn ? titleSeed : s.title;
-          const next = {
+          let next: Session = {
             ...s,
             inboxCard: undefined,
             noteCard: undefined,
             handoffCard: undefined,
           };
+          if (options?.queuedMessageId) {
+            next = dequeueQueuedMessage(next, options.queuedMessageId);
+          }
           if (!live) {
             return {
               ...next,
@@ -3423,10 +3439,11 @@ export default function App({
   );
 
   useEffect(() => {
+    const timers: number[] = [];
+    const scheduled = new Set<string>();
     for (const session of sessions) {
       const queued = session.queuedMessages ?? [];
       if (session.busy || queued.length === 0) continue;
-      if (session.editingQueuedMessageId) continue;
 
       if (session.queueStatus === "resuming") {
         setSessions((prev) =>
@@ -3439,7 +3456,7 @@ export default function App({
         continue;
       }
       if (
-        session.queueStatus === "paused" ||
+        !canDispatchQueuedHead(session) ||
         queueDispatchingRef.current.has(session.id)
       ) {
         continue;
@@ -3448,50 +3465,44 @@ export default function App({
       const next = queued[0];
       if (!next) continue;
       queueDispatchingRef.current.add(session.id);
-      setSessions((prev) =>
-        prev.map((entry) => {
-          if (entry.id !== session.id) return entry;
-          const remaining = (entry.queuedMessages ?? []).filter(
-            (message) => message.id !== next.id,
+      scheduled.add(session.id);
+      timers.push(
+        window.setTimeout(() => {
+          queueDispatchingRef.current.delete(session.id);
+          const latest = sessionsRef.current.find(
+            (entry) => entry.id === session.id,
           );
-          return {
-            ...entry,
-            queuedMessages: remaining.length > 0 ? remaining : undefined,
-            queueStatus: remaining.length > 0 ? "active" : undefined,
-          };
-        }),
+          const head = latest?.queuedMessages?.[0];
+          if (
+            !latest ||
+            !head ||
+            head.id !== next.id ||
+            !canDispatchQueuedHead(latest)
+          ) {
+            return;
+          }
+          onSubmit(session.id, head.text, head.attachments, {
+            queuedMessageId: head.id,
+            noteCard: head.noteCard,
+            handoffCard: head.handoffCard,
+          });
+        }, 0),
       );
-      window.setTimeout(() => {
-        onSubmit(session.id, next.text, next.attachments, {
-          followUpBehavior: "steer",
-          noteCard: next.noteCard,
-          handoffCard: next.handoffCard,
-        });
-        queueDispatchingRef.current.delete(session.id);
-      }, 0);
     }
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+      for (const id of scheduled) queueDispatchingRef.current.delete(id);
+    };
   }, [onSubmit, sessions]);
 
   const onDeleteQueuedMessage = useCallback(
     (sessionId: string, messageId: string) => {
       setSessions((prev) =>
-        prev.map((session) => {
-          if (session.id !== sessionId) return session;
-          const queuedMessages = (session.queuedMessages ?? []).filter(
-            (message) => message.id !== messageId,
-          );
-          return {
-            ...session,
-            queuedMessages:
-              queuedMessages.length > 0 ? queuedMessages : undefined,
-            queueStatus:
-              queuedMessages.length > 0 ? session.queueStatus : undefined,
-            editingQueuedMessageId:
-              session.editingQueuedMessageId === messageId
-                ? undefined
-                : session.editingQueuedMessageId,
-          };
-        }),
+        prev.map((session) =>
+          session.id === sessionId
+            ? dequeueQueuedMessage(session, messageId)
+            : session,
+        ),
       );
     },
     [],

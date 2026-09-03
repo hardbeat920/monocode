@@ -173,7 +173,7 @@ export type Session = {
   queuedMessages?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
   queueStatus?: MessageQueueStatus;
-  /** Prevent queue dispatch while user edits this message. In-memory only. */
+  /** Prevent auto-dispatch while this queued row is being edited. In-memory only. */
   editingQueuedMessageId?: string;
   /** Provider-side conversation id (Cursor ACP session id). */
   providerSessionId?: string;
