@@ -18,7 +18,9 @@ import {
   loadModelPickerTab,
   matchesModelQuery,
   modelNameMatchPositions,
+  modelProviderLabel,
   modelsFor,
+  nativeModelId,
   resolveModel,
   saveFavoriteModels,
   saveModelPickerTab,
@@ -297,12 +299,17 @@ export function ModelPicker({
     }
   };
 
+  const currentProvider = modelProviderLabel(current);
+  const currentTitle =
+    currentProvider != null
+      ? `${HARNESS_TITLE[current.harness]} · ${currentProvider} · ${current.name} (${MOD}.)`
+      : `${HARNESS_TITLE[current.harness]} · ${current.name} (${MOD}.)`;
   return (
     <div ref={root} className="relative">
       <button
         type="button"
-        title={`${HARNESS_TITLE[current.harness]} · ${current.name} (${MOD}.)`}
-        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}`}
+        title={currentTitle}
+        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}${currentProvider != null ? ` ${currentProvider}` : ""}`}
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -548,6 +555,8 @@ function ModelList({
         const favorited = favorites.includes(item.id);
         const disabled = !isHarnessAvailable(item.harness);
         const shortcut = index < 9 && !disabled ? `${MOD}${index + 1}` : null;
+        const provider = modelProviderLabel(item);
+        const nativeId = nativeModelId(item);
         return (
           <div
             key={item.id}
@@ -568,7 +577,7 @@ function ModelList({
               aria-disabled={disabled}
               disabled={disabled}
               title={
-                disabled ? harnessUnavailableHint(item.harness) : undefined
+                disabled ? harnessUnavailableHint(item.harness) : nativeId
               }
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
@@ -592,9 +601,9 @@ function ModelList({
                     harness={item.harness}
                     className="size-3 shrink-0 opacity-80"
                   />
-                  <span className="truncate">
+                  <span className="truncate" title={nativeId}>
                     {HARNESS_TITLE[item.harness]} ·{" "}
-                    {HARNESS_LABEL[item.harness]}
+                    {provider ?? HARNESS_LABEL[item.harness]}
                   </span>
                 </span>
               </span>

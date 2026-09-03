@@ -388,6 +388,19 @@ export function nativeModelId(model: AgentModel | string): string {
   return findModel(model)?.nativeId ?? nativeIdFrom(model);
 }
 
+/**
+ * Provider segment of a catalog native id (`openrouter/meta/...` → `openrouter`).
+ * Live pi/omp catalogs report `provider/model` native ids, so two routes to the
+ * same display name stay distinguishable in the picker. Static fallback models
+ * without a `provider/model` shape return undefined and keep the harness label.
+ */
+export function modelProviderLabel(model: AgentModel): string | undefined {
+  const native = (model.nativeId ?? nativeIdFrom(model.id)).trim();
+  const slash = native.indexOf("/");
+  if (slash <= 0) return undefined;
+  return native.slice(0, slash);
+}
+
 export function defaultModelSettings(
   model: AgentModel,
 ): Record<string, string> {

@@ -12,6 +12,7 @@ import {
   loadLastModelSettings,
   matchesModelQuery,
   modelNameMatchPositions,
+  modelProviderLabel,
   mergeModelSettings,
   modelPickerTabs,
   preferredModelId,
@@ -353,5 +354,40 @@ describe("modelNameMatchPositions", () => {
     // "contributor" matches the id but not the display name.
     expect(modelNameMatchPositions(spark, "contributor")).toEqual([]);
     expect(modelNameMatchPositions(spark, "free")).toEqual([15, 16, 17, 18]);
+  });
+});
+
+describe("modelProviderLabel", () => {
+  it("returns the provider segment of a live catalog native id", () => {
+    expect(
+      modelProviderLabel({
+        id: "omp:openrouter/meta/muse-spark-1.3-contributor",
+        harness: "omp",
+        name: "Muse Spark 1.3 Contributor",
+        nativeId: "openrouter/meta/muse-spark-1.3-contributor",
+      }),
+    ).toBe("openrouter");
+    expect(
+      modelProviderLabel({
+        id: "omp:opencode-go/muse-spark-1.3-contributor",
+        harness: "omp",
+        name: "Muse Spark 1.3 Contributor",
+        nativeId: "opencode-go/muse-spark-1.3-contributor",
+      }),
+    ).toBe("opencode-go");
+  });
+
+  it("falls back to the harness label for static models", () => {
+    expect(
+      modelProviderLabel({
+        id: "claude:sonnet-5",
+        harness: "claude",
+        name: "Claude Sonnet 5",
+        nativeId: "claude-sonnet-5",
+      }),
+    ).toBeUndefined();
+    expect(
+      modelProviderLabel({ id: "opencode:glm-5", harness: "opencode", name: "GLM 5" }),
+    ).toBeUndefined();
   });
 });
