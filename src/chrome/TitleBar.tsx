@@ -3,7 +3,6 @@ import {
   ChevronRight,
   Inbox,
   PanelLeft,
-  Plus,
   Search,
   Settings,
   StickyNote,
@@ -24,6 +23,7 @@ import { basename } from "../lib/fs";
 import { looksLikeProject } from "../lib/recents";
 import type { HarnessId } from "../lib/session";
 import { CwdPicker } from "./CwdPicker";
+import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useSortable } from "../hooks/useSortable";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -73,6 +73,9 @@ type Props = {
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
   onClose: (id: string) => void;
+  onCloseOthers?: (id: string) => void;
+  onCloseToRight?: (id: string) => void;
+  onCloseToLeft?: (id: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
   onGoToFile?: () => void;
   recents?: RecentProject[];
@@ -198,6 +201,7 @@ function TitleTabItem({
   sortable,
   onSelect,
   onClose,
+  onContextMenu,
   itemRef,
 }: {
   tab: Tab;
@@ -208,6 +212,7 @@ function TitleTabItem({
   sortable: SortableApi;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
+  onContextMenu: (id: string, event: { clientX: number; clientY: number; preventDefault: () => void; stopPropagation: () => void }) => void;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
   const dragging = canDrag && sortable.draggingId === tab.id;
@@ -242,6 +247,13 @@ function TitleTabItem({
         onSelect(tab.id);
         if (canDrag) sortable.onItemPointerDown(tab.id, event);
       }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (closable) onClose(tab.id);
+      }}
+      onContextMenu={(event) => onContextMenu(tab.id, event)}
     >
       {showStart ? (
         <div className="pointer-events-none absolute inset-y-1.5 left-0 z-20 w-0.5 rounded-full bg-accent" />
@@ -322,7 +334,9 @@ function TitleTabItem({
             e.stopPropagation();
             onClose(tab.id);
           }}
-          className="absolute right-1 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded text-content/50 opacity-0 hover:bg-content/10 hover:text-content group-hover:opacity-100"
+          className={`absolute right-1 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content ${
+            active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          }`}
         >
           <X className="size-3" strokeWidth={1.75} />
         </button>
@@ -509,6 +523,9 @@ function TitleBarComponent({
   onOpenInbox,
   onOpenNotes,
   onClose,
+  onCloseOthers,
+  onCloseToRight,
+  onCloseToLeft,
   onReorder,
   onGoToFile,
   recents = [],
@@ -545,6 +562,64 @@ function TitleBarComponent({
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const closable = tabs.length > 1;
   const canDrag = tabs.length > 1;
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
+  const onTabContextMenu = useCallback((id: string, event: { clientX: number; clientY: number; preventDefault: () => void; stopPropagation: () => void }) => {
+    if (tabs.length < 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setTabMenu({ x: event.clientX, y: event.clientY, tabId: id });
+  }, [tabs.length]);
+
+  const closeTabMenu = useCallback(() => setTabMenu(null), []);
+
+  const menuIndex = tabMenu ? tabs.findIndex((tab) => tab.id === tabMenu.tabId) : -1;
+  const menuItems: ExplorerMenuItem[] =
+    menuIndex < 0
+      ? []
+      : [
+          { kind: "item", id: "close", label: "Close Tab", shortcut: `${MOD}W` },
+          { kind: "sep" },
+          {
+            kind: "item",
+            id: "close-others",
+            label: "Close Other Tabs",
+            disabled: tabs.length < 2,
+          },
+          {
+            kind: "item",
+            id: "close-right",
+            label: "Close Tabs to the Right",
+            disabled: menuIndex >= tabs.length - 1,
+          },
+          {
+            kind: "item",
+            id: "close-left",
+            label: "Close Tabs to the Left",
+            disabled: menuIndex <= 0,
+          },
+        ];
+
+  const onTabMenuPick = useCallback((id: string) => {
+    const tabId = tabMenu?.tabId;
+    setTabMenu(null);
+    if (!tabId) return;
+    if (id === "close") {
+      onClose(tabId);
+      return;
+    }
+    if (id === "close-others") {
+      (onCloseOthers ?? ((target: string) => onClose(target)))(tabId);
+      return;
+    }
+    if (id === "close-right") {
+      if (onCloseToRight) onCloseToRight(tabId);
+      return;
+    }
+    if (id === "close-left") {
+      if (onCloseToLeft) onCloseToLeft(tabId);
+      return;
+    }
+  }, [onClose, onCloseOthers, onCloseToLeft, onCloseToRight, tabMenu]);
 
   useEffect(() => {
     if (sortable.draggingId) return;
@@ -621,14 +696,9 @@ function TitleBarComponent({
           </IconButton>
         ) : null}
         {railClosed && !projectless ? (
-          <>
-            <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
-              <Search className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
-            <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
-              <Plus className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
-          </>
+          <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
+            <Search className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
         ) : null}
         {!projectless && (onShowTerminal || onNewTerminal) ? (
           <IconButton
@@ -715,6 +785,10 @@ function TitleBarComponent({
           <div
             ref={setTabStripRef}
             className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none px-1.5"
+            onDoubleClick={(event) => {
+              if ((event.target as HTMLElement | null)?.closest("[data-tauri-drag-region='false']")) return;
+              onNew();
+            }}
           >
             {tabs.map((tab, index) => (
               <div
@@ -731,6 +805,7 @@ function TitleBarComponent({
                   sortable={sortable}
                   onSelect={onSelect}
                   onClose={onClose}
+                  onContextMenu={onTabContextMenu}
                   itemRef={
                     tab.id === activeId
                       ? (el) => {
@@ -753,6 +828,16 @@ function TitleBarComponent({
         )}
         {trailingControls}
       </div>
+      {tabMenu && menuIndex >= 0 ? (
+        <ExplorerMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          ariaLabel="Tab actions"
+          items={menuItems}
+          onPick={onTabMenuPick}
+          onClose={closeTabMenu}
+        />
+      ) : null}
     </header>
   );
 }

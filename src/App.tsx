@@ -1717,18 +1717,34 @@ export default function App({
     [activateTab, persistSession, refreshHistory, sidebarCwd, tabCloseScope],
   );
 
-  const onCloseOtherTabs = useCallback(() => {
+  const onCloseWorkspaceTabs = useCallback((ids: string[]) => {
     const current = tabsRef.current;
+    const idSet = new Set(ids);
+    const closing = current.filter((tab) => idSet.has(tab.id));
+    if (closing.length === 0) return;
+    const remaining = current.filter((tab) => !idSet.has(tab.id));
+    // The workspace always keeps at least one tab; closing the last one is a no-op.
+    if (remaining.length === 0) return;
     const activeId = activeTabIdRef.current;
-    const closing = current.filter((tab) => tab.id !== activeId);
-    if (
-      !current.some((tab) => tab.id === activeId) ||
-      closing.length === 0
-    ) {
-      return;
+    let nextActiveTabId: string | undefined;
+    if (idSet.has(activeId)) {
+      const remainingIds = new Set(remaining.map((tab) => tab.id));
+      const activeIndex = current.findIndex((tab) => tab.id === activeId);
+      const start = activeIndex >= 0 ? activeIndex : 0;
+      for (let dist = 0; dist < current.length; dist += 1) {
+        const left = current[start - dist];
+        if (left && remainingIds.has(left.id)) {
+          nextActiveTabId = left.id;
+          break;
+        }
+        const right = current[start + dist];
+        if (right && remainingIds.has(right.id)) {
+          nextActiveTabId = right.id;
+          break;
+        }
+      }
     }
 
-    const closingIds = new Set(closing.map((tab) => tab.id));
     const closingFiles = closing.flatMap((tab) => [
       ...tab.editorPanes.flatMap((pane) => pane.files),
       ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
@@ -1756,16 +1772,17 @@ export default function App({
         for (const file of closingFiles) next.delete(file.id);
         return next;
       });
-      setTabs((prev) =>
-        prev.filter((tab) => tab.id === activeId || !closingIds.has(tab.id)),
-      );
+      setTabs(remaining);
+      if (nextActiveTabId) activateTab(nextActiveTabId);
       void refreshHistory(sidebarCwd);
     };
 
     void (async () => {
       if (unsaved.length > 0) {
         const ok = await confirmDiscardUnsaved(
-          "Close other tabs with unsaved files?",
+          closing.length === 1
+            ? "Close this tab with unsaved files?"
+            : `Close ${closing.length} tabs with unsaved files?`,
         );
         if (!ok) return;
       }
@@ -1775,7 +1792,28 @@ export default function App({
       }
       finishClose();
     })();
-  }, [persistSession, refreshHistory, sidebarCwd]);
+  }, [activateTab, persistSession, refreshHistory, sidebarCwd]);
+
+  const onCloseOtherTabs = useCallback((keepId?: string) => {
+    const current = tabsRef.current;
+    const keep = keepId ?? activeTabIdRef.current;
+    if (!current.some((tab) => tab.id === keep)) return;
+    onCloseWorkspaceTabs(current.filter((tab) => tab.id !== keep).map((tab) => tab.id));
+  }, [onCloseWorkspaceTabs]);
+
+  const onCloseTabsToRight = useCallback((targetId: string) => {
+    const current = tabsRef.current;
+    const index = current.findIndex((tab) => tab.id === targetId);
+    if (index < 0) return;
+    onCloseWorkspaceTabs(current.slice(index + 1).map((tab) => tab.id));
+  }, [onCloseWorkspaceTabs]);
+
+  const onCloseTabsToLeft = useCallback((targetId: string) => {
+    const current = tabsRef.current;
+    const index = current.findIndex((tab) => tab.id === targetId);
+    if (index < 0) return;
+    onCloseWorkspaceTabs(current.slice(0, index).map((tab) => tab.id));
+  }, [onCloseWorkspaceTabs]);
 
   const onCloseFile = useCallback(
     (paneId: string, fileId: string) => {
@@ -4396,6 +4434,9 @@ export default function App({
           onOpenInbox={onOpenInbox}
           onOpenNotes={notesEnabled ? onOpenNotes : undefined}
           onClose={onCloseTab}
+          onCloseOthers={onCloseOtherTabs}
+          onCloseToRight={onCloseTabsToRight}
+          onCloseToLeft={onCloseTabsToLeft}
           onReorder={onReorderTabs}
           onGoToFile={onGoToFile}
           recents={recents}
