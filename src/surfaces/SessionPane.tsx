@@ -95,7 +95,7 @@ type Props = {
     turn: Block[],
     model: string,
   ) => void;
-  onNewTerminal: (sessionId: string) => void;
+  onNewProject?: () => void;
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
@@ -131,7 +131,7 @@ export const SessionPane = memo(function SessionPane({
   onOpenPlan,
   onSecondOpinion,
   onHandoff,
-  onNewTerminal,
+  onNewProject,
   onPaneDragStart,
 }: Props) {
   const title = sessionDisplayTitle(session.title, session.harness);
@@ -231,7 +231,7 @@ export const SessionPane = memo(function SessionPane({
       onFocus={() => onFocus(session.id)}
       onCwdChange={(cwd) => onCwdChange(session.id, cwd)}
       onBranchChange={() => onBranchChange(session.id)}
-      onNewTerminal={() => onNewTerminal(session.id)}
+      onNewProject={onNewProject}
       onModelChange={(harness, model) =>
         onModelChange(session.id, harness, model)
       }
@@ -377,7 +377,7 @@ export const SessionPane = memo(function SessionPane({
         )}
       </div>
       {dockComposer ? (
-        <div className="mx-auto w-full max-w-4xl shrink-0">{composer}</div>
+        <div className="mx-auto w-full max-w-4xl shrink-0 px-4 pb-3">{composer}</div>
       ) : null}
     </div>
   );

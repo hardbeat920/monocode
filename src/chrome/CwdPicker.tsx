@@ -1,12 +1,15 @@
-import { ChevronDown, ChevronRight } from "./icons";
+import { Check, ChevronDown, Plus, Search } from "./icons";
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { basename } from "../lib/fs";
+import { substringPositions } from "../lib/fuzzy";
 import { prettyCwd, prettyParent } from "../lib/paths";
 import {
   looksLikeProject,
@@ -14,10 +17,9 @@ import {
   type RecentProject,
 } from "../lib/recents";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { LAYER } from "../lib/layers";
+import { MatchText } from "./MatchText";
 import { Popover } from "./Popover";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
-import { MOD } from "../lib/platform";
 
 type Props = {
   cwd: string;
@@ -31,24 +33,17 @@ type Props = {
   chevron?: boolean;
   children?: ReactNode;
   onCwdChange: (path: string) => void;
-  onNewTerminal?: () => void;
+  onNewProject?: () => void;
   onClose?: () => void;
 };
 
-const MENU_WIDTH = 288;
-const MENU_MAX_HEIGHT = 360;
-const SUBMENU_MAX_HEIGHT = 320;
-const PREVIEW = 5;
-const SUBMENU_GAP = 4;
-const HOVER_CLOSE_MS = 100;
-/* Both menus sit outside the trigger, so neither counts as a click-away. */
-const SELF = "[data-cwd-picker],[data-cwd-submenu]";
+const MENU_WIDTH = 280;
+const MENU_MIN_HEIGHT = 180;
+const MENU_MAX_HEIGHT = 300;
 
 type Row =
-  | { kind: "recent"; path: string }
-  | { kind: "more" }
-  | { kind: "new-terminal" };
-
+  | { kind: "recent"; path: string; current: boolean }
+  | { kind: "new-project" };
 export function CwdPicker({
   cwd,
   recents,
@@ -60,126 +55,139 @@ export function CwdPicker({
   chevron = false,
   children,
   onCwdChange,
-  onNewTerminal,
+  onNewProject,
   onClose,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
-  const moreRef = useRef<HTMLButtonElement>(null);
-  const closeMoreTimer = useRef<number | null>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
+  const pointer = useRef({ x: Number.NaN, y: Number.NaN, allow: false });
+  const fromPointer = useRef(false);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-
+  const onCwdChangeRef = useRef(onCwdChange);
+  onCwdChangeRef.current = onCwdChange;
+  const onNewProjectRef = useRef(onNewProject);
+  onNewProjectRef.current = onNewProject;
   const inProject = looksLikeProject(cwd);
   const label = prettyCwd(cwd);
-  const otherRecents = useMemo(
-    () =>
-      recents.filter((item) => !inProject || !sameProjectPath(item.path, cwd)),
-    [cwd, inProject, recents],
-  );
-  const previewRecents = otherRecents.slice(0, PREVIEW);
-  const overflowRecents = otherRecents.slice(PREVIEW);
-  const hasMore = overflowRecents.length > 0;
+  const filtering = query.trim().length > 0;
 
   const rows = useMemo((): Row[] => {
-    const out: Row[] = previewRecents.map((item) => ({
-      kind: "recent",
-      path: item.path,
-    }));
-    if (hasMore) out.push({ kind: "more" });
-    if (onNewTerminal) out.push({ kind: "new-terminal" });
+    const needle = query.trim().toLowerCase();
+    const matches = (path: string) => {
+      if (!needle) return true;
+      return (
+        basename(path).toLowerCase().includes(needle) ||
+        path.toLowerCase().includes(needle)
+      );
+    };
+    const out: Row[] = [];
+    if (inProject) out.push({ kind: "recent", path: cwd, current: true });
+    for (const item of recents) {
+      if (inProject && sameProjectPath(item.path, cwd)) continue;
+      if (!matches(item.path)) continue;
+      out.push({ kind: "recent", path: item.path, current: false });
+    }
+    if (onNewProject) out.push({ kind: "new-project" });
     return out;
-  }, [hasMore, onNewTerminal, previewRecents]);
+  }, [cwd, inProject, onNewProject, query, recents]);
 
   const dismiss = (restore = false) => {
     setOpen(false);
-    setMoreOpen(false);
+    setQuery("");
     setActive(0);
-    if (closeMoreTimer.current != null) {
-      window.clearTimeout(closeMoreTimer.current);
-      closeMoreTimer.current = null;
-    }
     if (restore) onCloseRef.current?.();
   };
 
-  const openMore = () => {
-    if (closeMoreTimer.current != null) {
-      window.clearTimeout(closeMoreTimer.current);
-      closeMoreTimer.current = null;
-    }
-    setMoreOpen(true);
-  };
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    setActive(0);
+  }, [open]);
 
-  const scheduleCloseMore = () => {
-    if (closeMoreTimer.current != null)
-      window.clearTimeout(closeMoreTimer.current);
-    closeMoreTimer.current = window.setTimeout(() => {
-      closeMoreTimer.current = null;
-      setMoreOpen(false);
-    }, HOVER_CLOSE_MS);
-  };
+  useEffect(() => {
+    if (!open) return;
+    search.current?.focus();
+    // The popover measures on its first pass before painting; re-focus after
+    // placement (and after any parent focus-restore effect) so the query wins.
+    const raf = requestAnimationFrame(() => search.current?.focus());
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
 
-  const pick = (row: Row) => {
-    if (row.kind === "more") return;
-    dismiss(true);
-    if (row.kind === "new-terminal") {
-      onNewTerminal?.();
+  useEffect(() => {
+    setActive((i) => (rows.length === 0 ? 0 : Math.min(i, rows.length - 1)));
+  }, [rows.length]);
+
+  useEffect(() => {
+    pointer.current.allow = false;
+  }, [rows]);
+
+  useEffect(() => {
+    if (fromPointer.current) {
+      fromPointer.current = false;
       return;
     }
-    onCwdChange(row.path);
+    pointer.current.allow = false;
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  const pick = (row: Row) => {
+    if (row.kind === "new-project") {
+      dismiss(true);
+      onNewProjectRef.current?.();
+      return;
+    }
+    dismiss(true);
+    if (row.current) return;
+    onCwdChangeRef.current(row.path);
+  };
+  const onListMouseMove = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.clientX === pointer.current.x && e.clientY === pointer.current.y) {
+      return;
+    }
+    pointer.current = { x: e.clientX, y: e.clientY, allow: true };
   };
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+  const onRowEnter = (index: number) => {
+    if (!pointer.current.allow) return;
+    fromPointer.current = true;
+    setActive(index);
+  };
+
+  const onSearchKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (rows.length === 0) return;
+      setActive((i) => Math.min(rows.length - 1, i + 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (rows.length === 0) return;
+      setActive((i) => Math.max(0, i - 1));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const row = rows[active];
+      if (row) pick(row);
+    }
+  };
+
+  const onTriggerKey = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
     if (!enabled) return;
     if (!open) {
       if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         setOpen(true);
       }
-      return;
-    }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      const row = rows[active + 1];
-      if (row?.kind === "more") openMore();
-      setActive((i) => Math.min(rows.length - 1, i + 1));
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive((i) => Math.max(0, i - 1));
-    }
-    if (e.key === "ArrowRight") {
-      const row = rows[active];
-      if (row?.kind === "more") {
-        e.preventDefault();
-        openMore();
-      }
-    }
-    if (e.key === "ArrowLeft") {
-      if (moreOpen) {
-        e.preventDefault();
-        setMoreOpen(false);
-      }
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const row = rows[active];
-      if (row?.kind === "more") {
-        openMore();
-        return;
-      }
-      if (row) pick(row);
     }
   };
-
-  const newTerminalIndex = onNewTerminal
-    ? previewRecents.length + (hasMore ? 1 : 0)
-    : -1;
-  const moreIndex = hasMore ? previewRecents.length : -1;
-
   return (
     <div
       ref={root}
@@ -202,7 +210,7 @@ export function CwdPicker({
           }
           setOpen(true);
         }}
-        onKeyDown={onKeyDown}
+        onKeyDown={onTriggerKey}
         className={
           buttonClassName
             ? `${buttonClassName} ${
@@ -236,156 +244,125 @@ export function CwdPicker({
           anchor={root}
           side={placement === "below" ? "bottom" : "top"}
           width={MENU_WIDTH}
+          minHeight={MENU_MIN_HEIGHT}
           maxHeight={MENU_MAX_HEIGHT}
-          ignore={SELF}
           onDismiss={(reason) => dismiss(reason === "escape")}
-          role="menu"
+          role="dialog"
           aria-label="Project picker"
           data-cwd-picker
           className="flex flex-col overflow-hidden"
         >
+          <label className="flex shrink-0 items-center gap-2 border-b border-content/10 px-2 py-2.5 text-content/50">
+            <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
+            <input
+              ref={search}
+              type="text"
+              value={query}
+              placeholder="Search projects..."
+              aria-label="Search projects"
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/40"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setActive(0);
+              }}
+              onKeyDown={onSearchKey}
+            />
+          </label>
           <div
             ref={lockOverscroll}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-none py-1"
+            role="listbox"
+            aria-label="Projects"
+            onMouseMove={onListMouseMove}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 py-1.5"
           >
-            {inProject ? (
-              <>
-                <p className="px-2.5 pb-1 pt-2 text-[10px] uppercase tracking-widest text-content/50">
-                  Current project
-                </p>
-                <div className="px-2.5 py-1.5 text-content/50">
-                  <p className="truncate text-[13px] text-content">
-                    {basename(cwd)}
-                  </p>
-                  <p className="truncate font-mono text-[11px]">
-                    {prettyParent(cwd)}
-                  </p>
-                </div>
-              </>
-            ) : null}
-            {previewRecents.length > 0 ? (
-              <>
-                <p className="px-2.5 pb-1 pt-2 text-[10px] uppercase tracking-widest text-content/50">
-                  Recent projects
-                </p>
-                {previewRecents.map((item, index) => (
+            {rows.length === 0 ? (
+              <div className="px-3 py-4 text-[12px] text-content/50">
+                {filtering ? "No matching projects" : "No projects"}
+              </div>
+            ) : (
+              rows.map((row, index) => {
+                const highlighted = index === active;
+                if (row.kind === "new-project") {
+                  return (
+                    <button
+                      key="new-project"
+                      ref={highlighted ? activeRef : undefined}
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      title="New project"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => onRowEnter(index)}
+                      onClick={() => pick(row)}
+                      className={`mt-1 flex h-8 w-full min-w-0 scroll-my-2 items-center gap-2 rounded-md px-2 text-left ${
+                        highlighted
+                          ? "bg-content/10 text-content"
+                          : "text-content/80 hover:bg-content/5 hover:text-content"
+                      }`}
+                    >
+                      <Plus
+                        className="size-3.5 shrink-0"
+                        strokeWidth={1.75}
+                      />
+                      <span className="min-w-0 truncate text-[12px]">
+                        New project
+                      </span>
+                    </button>
+                  );
+                }
+                const selected = row.current;
+                return (
                   <button
-                    key={item.path}
+                    key={row.path}
+                    ref={highlighted ? activeRef : undefined}
                     type="button"
-                    role="menuitem"
-                    title={item.path}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onMouseEnter={() => {
-                      setMoreOpen(false);
-                      setActive(index);
-                    }}
-                    onClick={() => pick({ kind: "recent", path: item.path })}
-                    className={`flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left ${
-                      active === index
+                    role="option"
+                    aria-selected={selected}
+                    title={row.path}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => onRowEnter(index)}
+                    onClick={() => pick(row)}
+                    className={`flex w-full scroll-my-2 items-center gap-2 rounded-lg px-2 py-1.5 text-left ${
+                      highlighted || selected
                         ? "bg-content/10 text-content"
-                        : "text-content/80 hover:bg-content/5"
+                        : "text-content hover:bg-content/5"
                     }`}
                   >
-                    <span className="min-w-0 truncate text-[13px]">
-                      {basename(item.path)}
+                    {selected ? (
+                      <Check
+                        className="size-3.5 shrink-0"
+                        strokeWidth={1.75}
+                      />
+                    ) : (
+                      <ProjectLogoIcon
+                        path={row.path}
+                        className="size-3.5 shrink-0 text-content/50"
+                        fallbackStrokeWidth={1.75}
+                      />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-[12px]">
+                      <MatchText
+                        text={basename(row.path)}
+                        positions={substringPositions(basename(row.path), query)}
+                        active={filtering}
+                      />
                     </span>
-                    <span className="max-w-28 shrink-0 truncate font-mono text-[11px] text-content/45">
-                      {prettyParent(item.path)}
+                    <span className="max-w-28 shrink-0 truncate font-mono text-[10px] text-content/40">
+                      <MatchText
+                        text={prettyParent(row.path)}
+                        positions={substringPositions(prettyParent(row.path), query)}
+                        active={filtering}
+                      />
                     </span>
                   </button>
-                ))}
-              </>
-            ) : null}
-            {hasMore ? (
-              <button
-                ref={moreRef}
-                type="button"
-                role="menuitem"
-                aria-haspopup="menu"
-                aria-expanded={moreOpen}
-                onMouseDown={(e) => e.stopPropagation()}
-                onMouseEnter={() => {
-                  setActive(moreIndex);
-                  openMore();
-                }}
-                onMouseLeave={scheduleCloseMore}
-                onFocus={() => {
-                  setActive(moreIndex);
-                  openMore();
-                }}
-                className={`flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left ${
-                  active === moreIndex || moreOpen
-                    ? "bg-content/10 text-content"
-                    : "text-content/80 hover:bg-content/5"
-                }`}
-              >
-                <span className="text-[13px]">More Projects</span>
-                <ChevronRight
-                  className="size-3.5 shrink-0"
-                  strokeWidth={1.75}
-                />
-              </button>
-            ) : null}
+                );
+              })
+            )}
           </div>
-          {onNewTerminal ? (
-            <div className="shrink-0 border-t border-content/10 py-1">
-              <button
-                type="button"
-                role="menuitem"
-                onMouseDown={(e) => e.stopPropagation()}
-                onMouseEnter={() => {
-                  setMoreOpen(false);
-                  setActive(newTerminalIndex);
-                }}
-                onClick={() => pick({ kind: "new-terminal" })}
-                className={`flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left ${
-                  active === newTerminalIndex
-                    ? "bg-content/10 text-content"
-                    : "text-content/80 hover:bg-content/5"
-                }`}
-              >
-                <span className="text-[13px]">New terminal</span>
-                <span className="shrink-0 font-mono text-[11px] text-content/45">
-                  {MOD}`
-                </span>
-              </button>
-            </div>
-          ) : null}
-        </Popover>
-      ) : null}
-      {open && moreOpen ? (
-        <Popover
-          anchor={moreRef}
-          side="right"
-          gap={SUBMENU_GAP}
-          width={MENU_WIDTH}
-          maxHeight={SUBMENU_MAX_HEIGHT}
-          layer={LAYER.submenu}
-          role="menu"
-          aria-label="More projects"
-          data-cwd-submenu
-          className="overflow-y-auto overscroll-none py-1"
-          onMouseEnter={openMore}
-          onMouseLeave={scheduleCloseMore}
-        >
-          {overflowRecents.map((item) => (
-            <button
-              key={item.path}
-              type="button"
-              role="menuitem"
-              title={item.path}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => pick({ kind: "recent", path: item.path })}
-              className="flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left text-content/80 hover:bg-content/5 hover:text-content"
-            >
-              <span className="min-w-0 truncate text-[13px]">
-                {basename(item.path)}
-              </span>
-              <span className="max-w-28 shrink-0 truncate font-mono text-[11px] text-content/45">
-                {prettyParent(item.path)}
-              </span>
-            </button>
-          ))}
         </Popover>
       ) : null}
     </div>

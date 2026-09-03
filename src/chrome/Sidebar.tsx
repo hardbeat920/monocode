@@ -202,7 +202,6 @@ type Props = {
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   onNew?: () => string | void;
-  onNewTerminal?: () => void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
@@ -270,7 +269,6 @@ function SidebarComponent({
   onOpenProject,
   onRemoveProject,
   onNew,
-  onNewTerminal,
   onSearch,
   onOpenInbox,
   onOpenNotes,
@@ -946,11 +944,10 @@ function SidebarComponent({
               recents={recents}
               busy={projectPathBusy(busyProjectPaths, cwd)}
               onSelectProject={onSelectProject}
-              onNewTerminal={onNewTerminal}
-              onSearch={onSearch}
+              onOpenProject={onOpenProject}
+              onNew={onNew}
               onOpenInbox={onOpenInbox}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
-              searchActive={searchActive}
               inboxActive={inboxActive}
               notesActive={notesActive}
               inboxUnseen={inboxUnseen}
@@ -1383,11 +1380,10 @@ function SidebarProjectPicker({
   recents,
   busy,
   onSelectProject,
-  onNewTerminal,
-  onSearch,
+  onOpenProject,
+  onNew,
   onOpenInbox,
   onOpenNotes,
-  searchActive = false,
   inboxActive = false,
   notesActive = false,
   inboxUnseen = false,
@@ -1396,11 +1392,10 @@ function SidebarProjectPicker({
   recents: RecentProject[];
   busy: boolean;
   onSelectProject: (path: string) => void;
-  onNewTerminal?: () => void;
-  onSearch?: () => void;
+  onOpenProject?: () => void;
+  onNew?: () => string | void;
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
-  searchActive?: boolean;
   inboxActive?: boolean;
   notesActive?: boolean;
   inboxUnseen?: boolean;
@@ -1435,7 +1430,7 @@ function SidebarProjectPicker({
         placement="below"
         chevron
         onCwdChange={onSelectProject}
-        onNewTerminal={onNewTerminal}
+        onNewProject={onOpenProject}
         className="min-w-0 items-center"
         buttonClassName="flex h-6.5 w-full items-center gap-1.5 rounded-md px-2 text-[12px] leading-none text-content/50 hover:text-content"
       >
@@ -1457,13 +1452,9 @@ function SidebarProjectPicker({
         <span className="min-w-0 truncate">{label}</span>
       </CwdPicker>
       <div className="flex items-center ml-auto">
-        {onSearch ? (
-          <IconButton
-            label={`Search (${MOD}K)`}
-            active={searchActive}
-            onClick={onSearch}
-          >
-            <Search className="size-3.5" strokeWidth={1.75} />
+        {onNew ? (
+          <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+            <Plus className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
         {onOpenInbox ? (

@@ -108,7 +108,7 @@ type Shared = {
     model: string,
   ) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
-  onNewTerminal: (sessionId: string) => void;
+  onNewProject?: () => void;
   onTerminalMetaChange?: (fileId: string, patch: TerminalMetaPatch) => void;
 };
 
@@ -165,7 +165,7 @@ function PaneTreeComponent({
   onSecondOpinion,
   onHandoff,
   onMovePane,
-  onNewTerminal,
+  onNewProject,
   onTerminalMetaChange,
 }: Props) {
   const treeRef = useRef<HTMLDivElement>(null);
@@ -353,7 +353,7 @@ function PaneTreeComponent({
                 onOpenPlan={onOpenPlan}
                 onSecondOpinion={onSecondOpinion}
                 onHandoff={onHandoff}
-                onNewTerminal={onNewTerminal}
+                onNewProject={onNewProject}
                 onPaneDragStart={onPaneDragStart}
               />
             ) : null}

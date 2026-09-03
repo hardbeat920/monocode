@@ -1487,20 +1487,6 @@ export default function App({
     projectCwd,
   ]);
 
-  const onNewTerminalInSession = useCallback(
-    (sessionId: string) => {
-      const session = sessionsRef.current.find(
-        (entry) => entry.id === sessionId,
-      );
-      onOpenTerminal(
-        session ? sessionWorkCwd(session) : projectCwd,
-        false,
-        sessionId,
-      );
-    },
-    [onOpenTerminal, projectCwd],
-  );
-
   const onToggleProjectTerminal = useCallback(() => {
     if (!looksLikeProject(projectCwd)) return;
     const dock = findProjectTerminal(
@@ -4343,7 +4329,6 @@ export default function App({
         onRemoveProject={onRemoveProject}
         onNew={onNew}
         openSessions={openProjectSessions}
-        onNewTerminal={onNewTerminal}
         onSearch={onOpenSearch}
         onOpenInbox={onOpenInbox}
         onOpenNotes={notesEnabled ? onOpenNotes : undefined}
@@ -4415,6 +4400,7 @@ export default function App({
           onGoToFile={onGoToFile}
           recents={recents}
           onSelectProject={onSelectProject}
+          onOpenProject={pickProject}
         />
 
         <main className="relative min-h-0 min-w-0 flex-1">
@@ -4529,7 +4515,7 @@ export default function App({
                       onSecondOpinion={onSecondOpinion}
                       onHandoff={onHandoff}
                       onMovePane={onMovePane}
-                      onNewTerminal={onNewTerminalInSession}
+                      onNewProject={pickProject}
                       onTerminalMetaChange={onTerminalMetaChange}
                     />
                   </div>

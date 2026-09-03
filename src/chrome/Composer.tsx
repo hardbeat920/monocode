@@ -33,7 +33,7 @@ import {
   pickAttachments,
   revokeAttachment,
 } from "../lib/attachments";
-import type { ContextUsage } from "../lib/contextUsage";
+import { contextRatio, type ContextUsage } from "../lib/contextUsage";
 import {
   loadProjectFiles,
   peekProjectFiles,
@@ -137,7 +137,7 @@ type Props = {
   onFocus: () => void;
   onCwdChange: (cwd: string) => void;
   onBranchChange?: () => void;
-  onNewTerminal?: () => void;
+  onNewProject?: () => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange?: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -380,7 +380,7 @@ export function Composer({
   onFocus,
   onCwdChange,
   onBranchChange,
-  onNewTerminal,
+  onNewProject,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
@@ -711,7 +711,7 @@ export function Composer({
     if (!focused) return;
     if (
       document.querySelector(
-        "[data-model-picker], [data-access-picker], [data-model-settings], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker]",
+        "[data-model-picker], [data-access-picker], [data-model-settings], [data-file-picker], [data-branch-picker], [data-cwd-picker], [data-skill-picker], [data-mention-picker]",
       )
     )
       return;
@@ -940,7 +940,7 @@ export function Composer({
   return (
     <div
       data-composer
-      className={`relative shrink-0 ${shell ? "" : "p-1.5 pt-0"}`}
+      className={`relative shrink-0 ${shell ? "" : "p-1.5"}`}
       onMouseDown={onFocus}
     >
       {question && onQuestionReply ? (
@@ -1044,29 +1044,21 @@ export function Composer({
               Drop files to attach
             </div>
           ) : null}
-          <div className="flex min-w-0 items-center gap-2.5 px-3 pt-2.5">
-            {hideProjectPicker ? null : (
+          {!hideProjectPicker ? (
+            <div className="flex min-w-0 items-center gap-2.5 px-3 pt-2.5">
               <CwdPicker
                 cwd={cwd}
                 recents={recents}
                 projectLogoPath={projectLogoPath}
-                enabled={enabled}
                 onCwdChange={onCwdChange}
-                onNewTerminal={onNewTerminal}
+                onNewProject={onNewProject}
                 onClose={() => ref.current?.focus()}
               />
-            )}
-            <BranchPicker
-              cwd={cwd}
-              branch={branch}
-              enabled={enabled && !busy}
-              onChange={onBranchChange}
-              onClose={() => ref.current?.focus()}
-            />
-            <div className="ml-auto flex shrink-0 items-center">
-              <ContextMeter usage={context} />
+              <div className="ml-auto flex shrink-0 items-center">
+                <ContextMeter usage={context} />
+              </div>
             </div>
-          </div>
+          ) : null}
 
           {attachments.length > 0 ? (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
@@ -1099,9 +1091,7 @@ export function Composer({
             <div
               ref={highlightRef}
               aria-hidden
-              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap break-words px-3 text-sm leading-5.5 text-content font-sans ${
-                shell ? "py-4" : "py-3"
-              }`}
+              className="composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap break-words px-3 pt-2 pb-2 text-sm leading-5.5 text-content font-sans"
             >
               <ComposerHighlight
                 text={draft}
@@ -1126,7 +1116,7 @@ export function Composer({
                         : "Ask, build, / for skills, @ for references... "
               }
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
-                shell ? "py-4" : "py-3"
+                shell ? "min-h-[90px] py-4" : "min-h-[56px] py-3"
               }`}
               onFocus={onFocus}
               onKeyDown={onKeyDown}
@@ -1198,7 +1188,17 @@ export function Composer({
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-2">
+              {hideProjectPicker && contextRatio(context) !== null ? (
+                <ContextMeter usage={context} />
+              ) : null}
+              <BranchPicker
+                cwd={cwd}
+                branch={branch}
+                enabled={enabled && !busy}
+                onChange={onBranchChange}
+                onClose={() => ref.current?.focus()}
+              />
               <ComposerAction
                 busy={busy}
                 hasValue={hasValue}
