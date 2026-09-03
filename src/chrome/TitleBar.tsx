@@ -48,6 +48,8 @@ export type Tab = {
   busyHarnesses: HarnessId[];
   /** Open file basenames, active files first. */
   files: string[];
+  /** Fresh new-chat with nothing to reset; a lone one stays locked. */
+  blank?: boolean;
   /** Split layout with more than one pane in this tab. */
   multiPane?: boolean;
   /** Focus is on a file/terminal pane rather than a conversation pane. */
@@ -133,6 +135,14 @@ export function tabCopy(tab: Tab): {
   if (tab.dirty) tooltipParts.push("Unsaved changes");
 
   return { headline, meta, tooltip: tooltipParts.join(" · ") };
+}
+
+/** A lone tab stays interactive only when it hosts a real chat: closing it
+ * resets the conversation (newchat) instead of removing the tab. A fresh
+ * new-chat has nothing to reset, and home-style tabs (release notes,
+ * terminal-only, file-only) carry no session, so those stay locked. */
+export function isClosableTab(tab: Tab, totalTabs: number): boolean {
+  return totalTabs > 1 || (tab.sessionCount > 0 && !tab.blank);
 }
 
 /** Which tab-strip edges still have overflow to scroll toward. */
@@ -560,15 +570,15 @@ function TitleBarComponent({
     el.scrollBy({ left: direction * amount, behavior: "smooth" });
   }, []);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
-  const closable = tabs.length > 1;
   const canDrag = tabs.length > 1;
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const onTabContextMenu = useCallback((id: string, event: { clientX: number; clientY: number; preventDefault: () => void; stopPropagation: () => void }) => {
-    if (tabs.length < 2) return;
+    const target = tabs.find((tab) => tab.id === id);
+    if (!target || !isClosableTab(target, tabs.length)) return;
     event.preventDefault();
     event.stopPropagation();
     setTabMenu({ x: event.clientX, y: event.clientY, tabId: id });
-  }, [tabs.length]);
+  }, [tabs]);
 
   const closeTabMenu = useCallback(() => setTabMenu(null), []);
 
@@ -800,7 +810,7 @@ function TitleBarComponent({
                   tab={tab}
                   index={index}
                   active={tab.id === activeId}
-                  closable={closable}
+                  closable={isClosableTab(tab, tabs.length)}
                   canDrag={canDrag}
                   sortable={sortable}
                   onSelect={onSelect}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tabCopy, tabStripOverflow, type Tab } from "./TitleBar";
+import { isClosableTab, tabCopy, tabStripOverflow, type Tab } from "./TitleBar";
 
 function tab(overrides: Partial<Tab> = {}): Tab {
   return {
@@ -93,5 +93,24 @@ describe("tabStripOverflow", () => {
 
   it("shows only the left chevron at the end", () => {
     expect(tabStripOverflow(400, 400, 800)).toEqual({ left: true, right: false });
+  });
+});
+
+describe("isClosableTab", () => {
+  it("keeps a lone chat tab interactive", () => {
+    expect(isClosableTab(tab({ sessionCount: 1 }), 1)).toBe(true);
+  });
+
+  it("hides close on a lone blank new-chat tab", () => {
+    expect(isClosableTab(tab({ sessionCount: 1, blank: true }), 1)).toBe(false);
+  });
+
+  it("locks a lone home tab without sessions", () => {
+    expect(isClosableTab(tab({ sessionCount: 0 }), 1)).toBe(false);
+  });
+
+  it("allows closing any tab when several are open", () => {
+    expect(isClosableTab(tab({ sessionCount: 0 }), 2)).toBe(true);
+    expect(isClosableTab(tab({ sessionCount: 1, blank: true }), 2)).toBe(true);
   });
 });

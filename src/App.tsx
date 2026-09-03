@@ -410,6 +410,7 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
       tab.project === other.project &&
       tab.title === other.title &&
       tab.sessionCount === other.sessionCount &&
+      tab.blank === other.blank &&
       tab.dirty === other.dirty &&
       tab.more.join("\u0000") === other.more.join("\u0000") &&
       tab.harnesses.join("\u0000") === other.harnesses.join("\u0000") &&
@@ -1652,6 +1653,74 @@ export default function App({
     onOpenTerminal(active?.cwd ?? projectCwd, true);
   }, [active?.cwd, onOpenTerminal, projectCwd]);
 
+  const onClearTabSession = useCallback(
+    (id: string) => {
+      const tab = tabs.find((entry) => entry.id === id);
+      if (!tab || isBlankWorkspaceTab(tab, sessionsRef.current)) return;
+
+      const closingFiles = [
+        ...tab.editorPanes.flatMap((pane) => pane.files),
+        ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
+      ];
+      const unsaved = closingFiles.filter(
+        (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
+      );
+
+      const oldSessionId = leafIds(tab.layout).find((paneId) =>
+        sessionsRef.current.some((session) => session.id === paneId),
+      );
+      const oldSession = sessionsRef.current.find(
+        (session) => session.id === oldSessionId,
+      );
+      if (!oldSession) return;
+
+      const finishClear = () => {
+        persistSession(oldSession);
+
+        const session = newSession(
+          oldSession.harness,
+          oldSession.cwd,
+          oldSession.model,
+          oldSession.runtimeMode,
+          oldSession.modelSettings,
+        );
+
+        setSessions((prev) => [...prev, session]);
+        setDirtyFiles((prev) => {
+          const updated = new Set(prev);
+          for (const file of closingFiles) updated.delete(file.id);
+          return updated;
+        });
+        setTabs((prev) =>
+          prev.map((entry) =>
+            entry.id === id
+              ? {
+                  ...entry,
+                  layout: leaf(session.id),
+                  focusedId: session.id,
+                  editorPanes: [],
+                  terminalPanes: [],
+                  diffOpen: false,
+                  diffFocused: false,
+                }
+              : entry,
+          ),
+        );
+        setComposerFocused(true);
+        void refreshHistory(sidebarCwd);
+      };
+
+      if (unsaved.length === 0) {
+        finishClear();
+        return;
+      }
+      void confirmDiscardUnsaved(
+        "Close this conversation with unsaved files?",
+      ).then((ok) => ok && finishClear());
+    },
+    [tabs, persistSession, refreshHistory, sidebarCwd],
+  );
+
   const onCloseTab = useCallback(
     (id: string, opts?: { confirmedTerminalIds?: string[] }) => {
       const current = tabsRef.current;
@@ -1663,7 +1732,14 @@ export default function App({
         closingTabId: id,
         scope: tabCloseScope,
       });
-      if (closePlan.action === "keep") return;
+      if (closePlan.action === "keep") {
+        // The workspace keeps one tab: closing the last chat tab resets its
+        // conversation (same as newchat) instead of removing the tab.
+        // Non-chat tabs (release notes, terminal-only) have no session, so
+        // onClearTabSession leaves them untouched.
+        if (current.length === 1) onClearTabSession(id);
+        return;
+      }
       const closing = current[index];
       const closingFiles = [
         ...closing.editorPanes.flatMap((pane) => pane.files),
@@ -1714,7 +1790,7 @@ export default function App({
         finishClose();
       })();
     },
-    [activateTab, persistSession, refreshHistory, sidebarCwd, tabCloseScope],
+    [activateTab, onClearTabSession, persistSession, refreshHistory, sidebarCwd, tabCloseScope],
   );
 
   const onCloseWorkspaceTabs = useCallback((ids: string[]) => {
@@ -1945,73 +2021,6 @@ export default function App({
     [activeTabId, onCloseTab, projectCwd, tabCloseScope],
   );
 
-  const onClearTabSession = useCallback(
-    (id: string) => {
-      const tab = tabs.find((entry) => entry.id === id);
-      if (!tab || isBlankWorkspaceTab(tab, sessionsRef.current)) return;
-
-      const closingFiles = [
-        ...tab.editorPanes.flatMap((pane) => pane.files),
-        ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
-      ];
-      const unsaved = closingFiles.filter(
-        (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
-      );
-
-      const oldSessionId = leafIds(tab.layout).find((paneId) =>
-        sessionsRef.current.some((session) => session.id === paneId),
-      );
-      const oldSession = sessionsRef.current.find(
-        (session) => session.id === oldSessionId,
-      );
-      if (!oldSession) return;
-
-      const finishClear = () => {
-        persistSession(oldSession);
-
-        const session = newSession(
-          oldSession.harness,
-          oldSession.cwd,
-          oldSession.model,
-          oldSession.runtimeMode,
-          oldSession.modelSettings,
-        );
-
-        setSessions((prev) => [...prev, session]);
-        setDirtyFiles((prev) => {
-          const updated = new Set(prev);
-          for (const file of closingFiles) updated.delete(file.id);
-          return updated;
-        });
-        setTabs((prev) =>
-          prev.map((entry) =>
-            entry.id === id
-              ? {
-                  ...entry,
-                  layout: leaf(session.id),
-                  focusedId: session.id,
-                  editorPanes: [],
-                  terminalPanes: [],
-                  diffOpen: false,
-                  diffFocused: false,
-                }
-              : entry,
-          ),
-        );
-        setComposerFocused(true);
-        void refreshHistory(sidebarCwd);
-      };
-
-      if (unsaved.length === 0) {
-        finishClear();
-        return;
-      }
-      void confirmDiscardUnsaved(
-        "Close this conversation with unsaved files?",
-      ).then((ok) => ok && finishClear());
-    },
-    [tabs, persistSession, refreshHistory, sidebarCwd],
-  );
 
   const onClosePane = useCallback(
     (sessionId?: string) => {
@@ -4796,6 +4805,7 @@ function toTitleTab(
     title: focused ? conversationTitle(focused) : "",
     more,
     sessionCount: tabSessions.length,
+    blank: isBlankWorkspaceTab(tab, sessions),
     harnesses,
     busyHarnesses,
     files,
