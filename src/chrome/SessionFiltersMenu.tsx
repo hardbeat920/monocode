@@ -1,6 +1,6 @@
 import { Check } from "./icons";
 import { type ReactNode } from "react";
-import { Popover } from "./Popover";
+import { Popover, type PopoverAnchor } from "./Popover";
 import {
   DEFAULT_SESSION_SIDEBAR_FILTERS,
   hasActiveSessionFilters,
@@ -13,8 +13,7 @@ import { HarnessIcon } from "./HarnessIcon";
 const MENU_WIDTH = 228;
 
 type Props = {
-  x: number;
-  y: number;
+  anchor: PopoverAnchor;
   harnesses: HarnessId[];
   filters: SessionSidebarFilters;
   onChange: (filters: SessionSidebarFilters) => void;
@@ -29,8 +28,7 @@ const TIME_OPTIONS: { id: SessionTimeFilter; label: string }[] = [
 ];
 
 export function SessionFiltersMenu({
-  x,
-  y,
+  anchor,
   harnesses,
   filters,
   onChange,
@@ -63,8 +61,10 @@ export function SessionFiltersMenu({
 
   return (
     <Popover
-      anchor={{ x, y }}
-      gap={0}
+      anchor={anchor}
+      side="right"
+      align="start"
+      gap={2}
       width={MENU_WIDTH}
       maxHeight={480}
       onDismiss={onClose}

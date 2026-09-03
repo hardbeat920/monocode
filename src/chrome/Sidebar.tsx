@@ -331,9 +331,8 @@ function SidebarComponent({
   const [sessionFilters, setSessionFilters] = useState(
     loadSessionSidebarFilters,
   );
-  const [filterMenu, setFilterMenu] = useState<{ x: number; y: number } | null>(
-    null,
-  );
+  const [filterMenu, setFilterMenu] = useState(false);
+  const filterHeaderRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sessionListLimit, setSessionListLimit] = useState(SESSION_LIST_PAGE);
   const loadMoreRef = useRef<HTMLLIElement>(null);
@@ -530,7 +529,7 @@ function SidebarComponent({
 
   useEffect(() => {
     if (tab !== "sessions") {
-      setFilterMenu(null);
+      setFilterMenu(false);
       setSearchQuery("");
     }
   }, [tab]);
@@ -540,7 +539,7 @@ function SidebarComponent({
     const onScroll = () => {
       setSessionMenu(null);
       setFolderMenu(null);
-      setFilterMenu(null);
+      setFilterMenu(false);
     };
     const scrollParent = sessionsScrollRef.current ?? window;
     scrollParent.addEventListener("scroll", onScroll, true);
@@ -732,7 +731,7 @@ function SidebarComponent({
   ) => {
     e.preventDefault();
     e.stopPropagation();
-    setFilterMenu(null);
+    setFilterMenu(false);
     setFolderMenu(null);
     const keepSelection =
       selectedSessionIds.size > 1 && selectedSessionIds.has(sessionId);
@@ -801,7 +800,7 @@ function SidebarComponent({
   ) => {
     e.preventDefault();
     e.stopPropagation();
-    setFilterMenu(null);
+    setFilterMenu(false);
     setSessionMenu(null);
     setFolderMenu({ x: e.clientX, y: e.clientY, folderId });
   };
@@ -954,18 +953,14 @@ function SidebarComponent({
     saveSessionSidebarFilters(next);
   };
 
-  const onFilterButtonClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
+  const onFilterButtonClick = () => {
     if (filterMenu) {
-      setFilterMenu(null);
+      setFilterMenu(false);
       return;
     }
-    const rect = event.currentTarget.getBoundingClientRect();
     setSessionMenu(null);
     setFolderMenu(null);
-    setFilterMenu({
-      x: rect.right - 228,
-      y: rect.bottom + 2,
-    });
+    setFilterMenu(true);
   };
 
   const sessionSearchInput = (
@@ -1171,7 +1166,10 @@ function SidebarComponent({
           )}
         </div>
         {tab === "sessions" && cwd && cwd !== "~" ? (
-          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2">
+          <div
+            ref={filterHeaderRef}
+            className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2"
+          >
             <div className="relative flex h-7 min-w-0 flex-1 items-center">
               <Search className="pointer-events-none absolute left-2 size-3 shrink-0 opacity-50" />
               {sessionSearchInput}
@@ -1179,7 +1177,7 @@ function SidebarComponent({
             <SessionsHeaderButton
               label="Filter sessions"
               active={filtersActive}
-              open={!!filterMenu}
+              open={filterMenu}
               hasPopup
               onClick={onFilterButtonClick}
             >
@@ -1485,12 +1483,11 @@ function SidebarComponent({
       ) : null}
       {filterMenu ? (
         <SessionFiltersMenu
-          x={filterMenu.x}
-          y={filterMenu.y}
+          anchor={filterHeaderRef}
           harnesses={sessionHarnesses}
           filters={sessionFilters}
           onChange={onSessionFiltersChange}
-          onClose={() => setFilterMenu(null)}
+          onClose={() => setFilterMenu(false)}
         />
       ) : null}
       <div
