@@ -10,6 +10,7 @@ import {
   loadHiddenPickerProviders,
   loadLastModelChoice,
   loadLastModelSettings,
+  matchesModelQuery,
   mergeModelSettings,
   modelPickerTabs,
   preferredModelId,
@@ -302,5 +303,27 @@ describe("live catalog overlays", () => {
     ]);
     expect(hasLiveCatalog("pi")).toBe(true);
     expect(hasLiveCatalog("omp")).toBe(false);
+  });
+});
+describe("matchesModelQuery", () => {
+  const spark: AgentModel = {
+    id: "omp:muse-spark-1.3-contributor-free",
+    harness: "omp",
+    name: "Muse Spark 1.3 Free",
+    nativeId: "muse-spark-1.3-contributor-free",
+  };
+
+  it("matches across spaces and dots", () => {
+    expect(matchesModelQuery(spark, "muse1.3")).toBe(true);
+    expect(matchesModelQuery(spark, "MUSE SPARK")).toBe(true);
+    expect(matchesModelQuery(spark, "spark free")).toBe(true);
+    expect(matchesModelQuery(spark, "contributor-free")).toBe(true);
+  });
+
+  it("requires every token to match", () => {
+    expect(matchesModelQuery(spark, "muse opus")).toBe(false);
+    expect(matchesModelQuery(spark, "")).toBe(true);
+    expect(matchesModelQuery(spark, "   ")).toBe(true);
+    expect(matchesModelQuery(spark, "zzz")).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import type { HarnessId } from "./session";
-import { HARNESSES } from "./session";
+import { HARNESS_LABEL, HARNESS_TITLE, HARNESSES } from "./session";
 
 export type ModelSettingChoice = {
   value: string;
@@ -280,6 +280,23 @@ function baseModelsFor(harness: HarnessId): AgentModel[] {
 
 export function modelsFor(harness: HarnessId): AgentModel[] {
   return overlays[harness] ?? baseModelsFor(harness);
+}
+
+/**
+ * Picker search: case-insensitive, punctuation-blind, every query segment
+ * must match somewhere. The query is split into letter/digit runs, so
+ * `muse1.3` becomes `muse`+`1`+`3` and finds `Muse Spark 1.3` (and its
+ * `muse-spark-1.3-contributor-free` native id), where a plain substring
+ * search on the display name fails on the spaces and dots.
+ */
+export function matchesModelQuery(model: AgentModel, query: string): boolean {
+  const tokens = query.toLowerCase().match(/[a-z]+|[0-9]+/g) ?? [];
+  if (tokens.length === 0) return true;
+  const haystack =
+    `${model.name} ${model.nativeId ?? ""} ${model.id} ${HARNESS_TITLE[model.harness]} ${HARNESS_LABEL[model.harness]}`
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+  return tokens.every((token) => haystack.includes(token));
 }
 
 export function allModels(): AgentModel[] {
