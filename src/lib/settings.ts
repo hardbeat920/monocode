@@ -78,6 +78,31 @@ export function saveSettingsSection(id: SettingsSectionId) {
 
 const COMPOSER_RUNNER_KEY = "monocode.composerRunner";
 
+const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+
+export type FollowUpBehavior = "steer" | "queue";
+
+export const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = "steer";
+
+export function loadFollowUpBehavior(): FollowUpBehavior {
+  try {
+    const raw = localStorage.getItem(FOLLOW_UP_BEHAVIOR_KEY);
+    return raw === "queue" || raw === "steer"
+      ? raw
+      : FOLLOW_UP_BEHAVIOR_DEFAULT;
+  } catch {
+    return FOLLOW_UP_BEHAVIOR_DEFAULT;
+  }
+}
+
+export function saveFollowUpBehavior(value: FollowUpBehavior) {
+  try {
+    localStorage.setItem(FOLLOW_UP_BEHAVIOR_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+}
+
 export const COMPOSER_RUNNER_DEFAULT = true;
 
 /** Fired on `window` when the composer mascot setting flips. */

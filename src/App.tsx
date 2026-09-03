@@ -142,6 +142,7 @@ import {
   sessionChildHarnesses,
   sessionThroughTurn,
   shouldAskOutgoingAgent,
+  type HandoffComposerCard,
   userMessagesAfterHandoff,
   wrapHandoffPrompt,
 } from "./lib/handoff";
@@ -275,11 +276,13 @@ import {
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   loadDiffViewer,
+  loadFollowUpBehavior,
   loadSettingsSection,
   saveSettingsSection,
   subscribeLiveAgentsEnabled,
   subscribeNotesEnabled,
   type SettingsSectionId,
+  type FollowUpBehavior,
 } from "./lib/settings";
 import {
   handleEditorFindKey,
@@ -537,6 +540,7 @@ export default function App({
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const queueDispatchingRef = useRef(new Set<string>());
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const dirtyFilesRef = useRef(dirtyFiles);
@@ -3031,12 +3035,21 @@ export default function App({
       sessionId: string,
       text: string,
       attachments: Attachment[] = [],
-      options?: { secondOpinion?: SecondOpinionMeta },
+      options?: {
+        secondOpinion?: SecondOpinionMeta;
+        followUpBehavior?: FollowUpBehavior;
+        noteCard?: NoteComposerCard;
+        handoffCard?: HandoffComposerCard;
+      },
     ) => {
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
-      const noteCard = current.noteCard;
-      const handoffCard = current.handoffCard;
+      const noteCard =
+        options && "noteCard" in options ? options.noteCard : current.noteCard;
+      const handoffCard =
+        options && "handoffCard" in options
+          ? options.handoffCard
+          : current.handoffCard;
       if (
         !text.trim() &&
         attachments.length === 0 &&
@@ -3055,6 +3068,35 @@ export default function App({
           : null;
 
       if (current.busy && !pendingSwitch) {
+        const followUpBehavior =
+          options?.followUpBehavior ?? loadFollowUpBehavior();
+        if (followUpBehavior === "queue") {
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    inboxCard: undefined,
+                    noteCard: undefined,
+                    handoffCard: undefined,
+                    queuedMessages: [
+                      ...(s.queuedMessages ?? []),
+                      {
+                        id: crypto.randomUUID(),
+                        text,
+                        attachments,
+                        noteCard,
+                        handoffCard,
+                      },
+                    ],
+                    queueStatus:
+                      s.queueStatus === "paused" ? "paused" : "active",
+                  }
+                : s,
+            ),
+          );
+          return;
+        }
         if (
           !isLiveHarness(current.harness) ||
           !canSteerHarness(current.harness)
@@ -3360,6 +3402,159 @@ export default function App({
     [enqueueHarnessEvent, flushHarnessEvents],
   );
 
+  useEffect(() => {
+    for (const session of sessions) {
+      const queued = session.queuedMessages ?? [];
+      if (session.busy || queued.length === 0) continue;
+      if (session.editingQueuedMessageId) continue;
+
+      if (session.queueStatus === "resuming") {
+        setSessions((prev) =>
+          prev.map((entry) =>
+            entry.id === session.id
+              ? { ...entry, queueStatus: "active" }
+              : entry,
+          ),
+        );
+        continue;
+      }
+      if (
+        session.queueStatus === "paused" ||
+        queueDispatchingRef.current.has(session.id)
+      ) {
+        continue;
+      }
+
+      const next = queued[0];
+      if (!next) continue;
+      queueDispatchingRef.current.add(session.id);
+      setSessions((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== session.id) return entry;
+          const remaining = (entry.queuedMessages ?? []).filter(
+            (message) => message.id !== next.id,
+          );
+          return {
+            ...entry,
+            queuedMessages: remaining.length > 0 ? remaining : undefined,
+            queueStatus: remaining.length > 0 ? "active" : undefined,
+          };
+        }),
+      );
+      window.setTimeout(() => {
+        onSubmit(session.id, next.text, next.attachments, {
+          followUpBehavior: "steer",
+          noteCard: next.noteCard,
+          handoffCard: next.handoffCard,
+        });
+        queueDispatchingRef.current.delete(session.id);
+      }, 0);
+    }
+  }, [onSubmit, sessions]);
+
+  const onDeleteQueuedMessage = useCallback(
+    (sessionId: string, messageId: string) => {
+      setSessions((prev) =>
+        prev.map((session) => {
+          if (session.id !== sessionId) return session;
+          const queuedMessages = (session.queuedMessages ?? []).filter(
+            (message) => message.id !== messageId,
+          );
+          return {
+            ...session,
+            queuedMessages:
+              queuedMessages.length > 0 ? queuedMessages : undefined,
+            queueStatus:
+              queuedMessages.length > 0 ? session.queueStatus : undefined,
+            editingQueuedMessageId:
+              session.editingQueuedMessageId === messageId
+                ? undefined
+                : session.editingQueuedMessageId,
+          };
+        }),
+      );
+    },
+    [],
+  );
+
+  const onQueuedMessageEditingChange = useCallback(
+    (sessionId: string, messageId?: string) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId
+            ? { ...session, editingQueuedMessageId: messageId }
+            : session,
+        ),
+      );
+    },
+    [],
+  );
+
+  const onEditQueuedMessage = useCallback(
+    (sessionId: string, messageId: string, text: string) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                queuedMessages: session.queuedMessages?.map((message) =>
+                  message.id === messageId ? { ...message, text } : message,
+                ),
+                editingQueuedMessageId: undefined,
+              }
+            : session,
+        ),
+      );
+    },
+    [],
+  );
+
+  const onSteerQueuedMessage = useCallback(
+    (sessionId: string, messageId: string) => {
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      const message = session?.queuedMessages?.find(
+        (entry) => entry.id === messageId,
+      );
+      if (!message) return;
+      onDeleteQueuedMessage(sessionId, messageId);
+      onSubmit(sessionId, message.text, message.attachments, {
+        followUpBehavior: "steer",
+        noteCard: message.noteCard,
+        handoffCard: message.handoffCard,
+      });
+    },
+    [onDeleteQueuedMessage, onSubmit],
+  );
+
+  const onResumeQueue = useCallback(
+    (sessionId: string) => {
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      if (
+        !session ||
+        session.busy ||
+        session.queueStatus !== "paused" ||
+        !session.queuedMessages?.length
+      ) {
+        return;
+      }
+      setSessions((prev) =>
+        prev.map((entry) =>
+          entry.id === sessionId
+            ? { ...entry, queueStatus: "resuming" }
+            : entry,
+        ),
+      );
+      onSubmit(sessionId, CONTINUE_PROMPT, [], {
+        followUpBehavior: "steer",
+      });
+    },
+    [onSubmit],
+  );
+
   const openSessionBeside = useCallback(
     (sourceId: string, session: Session, cwd: string, focusComposer = false) => {
       const nextSessions = [...sessionsRef.current, session];
@@ -3501,9 +3696,12 @@ export default function App({
         prev.map((s) => {
           if (s.id !== sessionId) return s;
           const stopped = stopStreaming(s);
-          return isPreparingHandoff(stopped)
+          const completed = isPreparingHandoff(stopped)
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
+          return completed.queuedMessages?.length
+            ? { ...completed, queueStatus: "paused" }
+            : completed;
         }),
       );
       if (session) {
@@ -4279,6 +4477,13 @@ export default function App({
                       onRuntimeModeChange={onRuntimeModeChange}
                       onSubmit={onSubmit}
                       onStop={onStop}
+                      onDeleteQueuedMessage={onDeleteQueuedMessage}
+                      onEditQueuedMessage={onEditQueuedMessage}
+                      onQueuedMessageEditingChange={
+                        onQueuedMessageEditingChange
+                      }
+                      onSteerQueuedMessage={onSteerQueuedMessage}
+                      onResumeQueue={onResumeQueue}
                       onInboxCardDismiss={onInboxCardDismiss}
                       onNoteCardDismiss={onNoteCardDismiss}
                       onHandoffCardDismiss={onHandoffCardDismiss}

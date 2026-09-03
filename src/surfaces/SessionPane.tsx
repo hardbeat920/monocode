@@ -55,6 +55,18 @@ type Props = {
     attachments: Attachment[],
   ) => void;
   onStop: (sessionId: string) => void;
+  onDeleteQueuedMessage: (sessionId: string, messageId: string) => void;
+  onEditQueuedMessage: (
+    sessionId: string,
+    messageId: string,
+    text: string,
+  ) => void;
+  onQueuedMessageEditingChange: (
+    sessionId: string,
+    messageId?: string,
+  ) => void;
+  onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
+  onResumeQueue: (sessionId: string) => void;
   onInboxCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
@@ -104,6 +116,11 @@ export const SessionPane = memo(function SessionPane({
   onRuntimeModeChange,
   onSubmit,
   onStop,
+  onDeleteQueuedMessage,
+  onEditQueuedMessage,
+  onQueuedMessageEditingChange,
+  onSteerQueuedMessage,
+  onResumeQueue,
   onInboxCardDismiss,
   onNoteCardDismiss,
   onHandoffCardDismiss,
@@ -224,6 +241,21 @@ export const SessionPane = memo(function SessionPane({
       onRuntimeModeChange={(mode) => onRuntimeModeChange(session.id, mode)}
       onSubmit={(text, attachments) => onSubmit(session.id, text, attachments)}
       onStop={() => onStop(session.id)}
+      queuedMessages={session.queuedMessages}
+      queueStatus={session.queueStatus}
+      onDeleteQueuedMessage={(messageId) =>
+        onDeleteQueuedMessage(session.id, messageId)
+      }
+      onEditQueuedMessage={(messageId, text) =>
+        onEditQueuedMessage(session.id, messageId, text)
+      }
+      onQueuedMessageEditingChange={(messageId) =>
+        onQueuedMessageEditingChange(session.id, messageId)
+      }
+      onSteerQueuedMessage={(messageId) =>
+        onSteerQueuedMessage(session.id, messageId)
+      }
+      onResumeQueue={() => onResumeQueue(session.id)}
       onOpenFile={onOpenFile}
       busy={!!session.busy}
     >

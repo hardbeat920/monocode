@@ -93,6 +93,16 @@ export type Attachment = {
   previewUrl?: string;
 };
 
+export type QueuedMessage = {
+  id: string;
+  text: string;
+  attachments: Attachment[];
+  noteCard?: NoteComposerCard;
+  handoffCard?: HandoffComposerCard;
+};
+
+export type MessageQueueStatus = "active" | "paused" | "resuming";
+
 export type Block = {
   id: string;
   role: BlockRole;
@@ -159,6 +169,12 @@ export type Session = {
   blocks: Block[];
   /** True while a harness turn is in flight. */
   busy?: boolean;
+  /** Follow-ups waiting for current turn. In-memory only. */
+  queuedMessages?: QueuedMessage[];
+  /** Paused after user stops current turn; resuming waits for continued turn. */
+  queueStatus?: MessageQueueStatus;
+  /** Prevent queue dispatch while user edits this message. In-memory only. */
+  editingQueuedMessageId?: string;
   /** Provider-side conversation id (Cursor ACP session id). */
   providerSessionId?: string;
   /** Context-window level reported by the harness. Absent until it reports. */

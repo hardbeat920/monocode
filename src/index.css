@@ -1088,3 +1088,10 @@ header[data-tauri-drag-region] button {
     opacity: 0.7;
   }
 }
+
+[data-session-review-shell]
+  + [data-message-queue]
+  [data-message-queue-card] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}

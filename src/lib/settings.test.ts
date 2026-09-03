@@ -2,16 +2,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSER_RUNNER_DEFAULT,
   DIFF_VIEWER_DEFAULT,
+  FOLLOW_UP_BEHAVIOR_DEFAULT,
   GRID_ARCADE_ENABLED_DEFAULT,
   LIVE_AGENTS_ENABLED_DEFAULT,
   loadComposerRunner,
   loadDiffViewer,
+  loadFollowUpBehavior,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
   saveDiffViewer,
+  saveFollowUpBehavior,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
@@ -22,6 +25,29 @@ const NOTES_KEY = "monocode.notesEnabled";
 const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
+const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+
+describe("follow-up behavior setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(FOLLOW_UP_BEHAVIOR_KEY);
+  });
+
+  it("defaults to steer", () => {
+    expect(FOLLOW_UP_BEHAVIOR_DEFAULT).toBe("steer");
+    expect(loadFollowUpBehavior()).toBe("steer");
+  });
+
+  it("persists queue behavior", () => {
+    saveFollowUpBehavior("queue");
+    expect(loadFollowUpBehavior()).toBe("queue");
+  });
+
+  it("ignores unknown stored values", () => {
+    localStorage.setItem(FOLLOW_UP_BEHAVIOR_KEY, "interrupt");
+    expect(loadFollowUpBehavior()).toBe("steer");
+  });
+});
 
 function mockLocalStorage() {
   const data = new Map<string, string>();

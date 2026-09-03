@@ -105,7 +105,7 @@ export function SessionReview({
   };
 
   return (
-    <div className="px-2">
+    <div className="px-2" data-session-review-shell>
       <div
         className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
         data-session-review
