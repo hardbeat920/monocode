@@ -304,6 +304,10 @@ function SidebarComponent({
   const [now, setNow] = useState(() => Date.now());
   const sessionsLock = useLockOverscroll<HTMLDivElement>();
   const sessionsScrollRef = useRef<HTMLDivElement>(null);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const selectionAnchorRef = useRef<string | null>(null);
   const [sessionMenu, setSessionMenu] = useState<{
     x: number;
     y: number;
@@ -499,6 +503,24 @@ function SidebarComponent({
       return next;
     });
   }, [activeSessionId, cwd, openSessions, pending, sessions, status]);
+  useEffect(() => {
+    const known = new Set(sessions.map((session) => session.id));
+    for (const session of openSessions) known.add(session.id);
+    if (activeSessionId) known.add(activeSessionId);
+    setSelectedSessionIds((current) => {
+      if (current.size === 0) return current;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of current) {
+        if (known.has(id)) next.add(id);
+        else changed = true;
+      }
+      if (selectionAnchorRef.current && !next.has(selectionAnchorRef.current)) {
+        selectionAnchorRef.current = null;
+      }
+      return changed ? next : current;
+    });
+  }, [sessions, openSessions, activeSessionId]);
 
   useEffect(() => {
     if (tab !== "sessions") return;
@@ -524,6 +546,24 @@ function SidebarComponent({
     scrollParent.addEventListener("scroll", onScroll, true);
     return () => scrollParent.removeEventListener("scroll", onScroll, true);
   }, [sessionMenu, folderMenu, filterMenu]);
+  useEffect(() => {
+    if (selectedSessionIds.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      clearSessionSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedSessionIds.size]);
 
   const commitSessionFolders = (next: SessionFolder[]) => {
     setSessionFolders(next);
@@ -545,6 +585,63 @@ function SidebarComponent({
       return next;
     });
   };
+  const clearSessionSelection = () => {
+    setSelectedSessionIds(new Set());
+    selectionAnchorRef.current = null;
+  };
+
+  const toggleSessionSelected = (sessionId: string) => {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+    selectionAnchorRef.current = sessionId;
+  };
+
+  const extendSessionRange = (sessionId: string) => {
+    const anchor =
+      selectionAnchorRef.current && visibleSessions.some((s) => s.id === selectionAnchorRef.current)
+        ? selectionAnchorRef.current
+        : (activeSessionId ?? null);
+    if (!anchor) {
+      toggleSessionSelected(sessionId);
+      return;
+    }
+    const order = visibleSessions.map((s) => s.id);
+    const from = order.indexOf(anchor);
+    const to = order.indexOf(sessionId);
+    if (from === -1 || to === -1) {
+      toggleSessionSelected(sessionId);
+      return;
+    }
+    const [start, end] = from <= to ? [from, to] : [to, from];
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      for (let i = start; i <= end; i++) next.add(order[i] as string);
+      return next;
+    });
+  };
+
+  const handleSessionCardClick = (
+    sessionId: string,
+    e: ReactMouseEvent<HTMLButtonElement>,
+  ) => {
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      toggleSessionSelected(sessionId);
+      return;
+    }
+    if (e.shiftKey) {
+      e.preventDefault();
+      extendSessionRange(sessionId);
+      return;
+    }
+    clearSessionSelection();
+    selectionAnchorRef.current = sessionId;
+    onSelectSession(sessionId);
+  };
 
   const menuSession = sessionMenu
     ? sessions.find((session) => session.id === sessionMenu.sessionId)
@@ -560,6 +657,10 @@ function SidebarComponent({
     { kind: "sep" },
     { kind: "item", id: "ungroup", label: "Ungroup" },
   ];
+  const isMultiSelectMenu =
+    !!sessionMenu &&
+    selectedSessionIds.size > 1 &&
+    selectedSessionIds.has(sessionMenu.sessionId);
   const sessionMenuItems: ExplorerMenuItem[] = [
     ...(onPinSession
       ? [
@@ -570,7 +671,7 @@ function SidebarComponent({
           },
         ]
       : []),
-    ...(onRenameSession
+    ...(onRenameSession && !isMultiSelectMenu
       ? [
           {
             kind: "item" as const,
@@ -633,7 +734,65 @@ function SidebarComponent({
     e.stopPropagation();
     setFilterMenu(null);
     setFolderMenu(null);
+    const keepSelection =
+      selectedSessionIds.size > 1 && selectedSessionIds.has(sessionId);
+    if (!keepSelection) {
+      selectionAnchorRef.current = sessionId;
+      setSelectedSessionIds(new Set([sessionId]));
+    }
     setSessionMenu({ x: e.clientX, y: e.clientY, sessionId });
+  };
+
+  const bulkSessionIds = (fallbackId: string): string[] => {
+    if (selectedSessionIds.size > 1 && selectedSessionIds.has(fallbackId)) {
+      return [...selectedSessionIds];
+    }
+    return [fallbackId];
+  };
+
+  const bulkArchive = (ids: string[]) => {
+    if (!onArchiveSession) return;
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    for (const id of ids) {
+      const archived = !!byId.get(id)?.archived;
+      onArchiveSession(id, !archived);
+    }
+    clearSessionSelection();
+  };
+
+  const bulkPin = (ids: string[]) => {
+    if (!onPinSession) return;
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const anyUnpinned = ids.some((id) => !byId.get(id)?.pinned);
+    for (const id of ids) onPinSession(id, anyUnpinned);
+  };
+
+  const bulkDelete = (ids: string[]) => {
+    if (!onDeleteSession) return;
+    for (const id of ids) onDeleteSession(id);
+    clearSessionSelection();
+  };
+
+  const bulkNewFolder = (ids: string[]) => {
+    const { folders, id: createdId } = createFolderWithSessions(
+      sessionFolders,
+      ids,
+    );
+    if (!createdId) return;
+    commitSessionFolders(folders);
+    setRenamingFolderId(createdId);
+  };
+
+  const bulkAddToFolder = (ids: string[], folderId: string) => {
+    let next = sessionFolders;
+    for (const id of ids) next = addSessionToFolder(next, folderId, id);
+    commitSessionFolders(setFolderCollapsed(next, folderId, false));
+  };
+
+  const bulkRemoveFromFolder = (ids: string[]) => {
+    let next = sessionFolders;
+    for (const id of ids) next = removeSessionFromFolder(next, id);
+    commitSessionFolders(next);
   };
 
   const onFolderContextMenu = (
@@ -650,9 +809,35 @@ function SidebarComponent({
   const onSessionMenuPick = (id: string) => {
     if (!sessionMenu) return;
     const sessionId = sessionMenu.sessionId;
+    const ids = bulkSessionIds(sessionId);
     const archived = !!menuSession?.archived;
     const pinned = !!menuSession?.pinned;
     setSessionMenu(null);
+    if (ids.length > 1) {
+      if (id === "pin") {
+        bulkPin(ids);
+        return;
+      }
+      if (id === "rename") return;
+      if (id === "folder-new") {
+        bulkNewFolder(ids);
+        return;
+      }
+      if (id.startsWith("folder-add:")) {
+        bulkAddToFolder(ids, id.slice("folder-add:".length));
+        return;
+      }
+      if (id === "folder-remove") {
+        bulkRemoveFromFolder(ids);
+        return;
+      }
+      if (id === "archive") {
+        bulkArchive(ids);
+        return;
+      }
+      if (id === "delete") bulkDelete(ids);
+      return;
+    }
     if (id === "pin") {
       onPinSession?.(sessionId, !pinned);
       return;
@@ -662,28 +847,15 @@ function SidebarComponent({
       return;
     }
     if (id === "folder-new") {
-      const { folders, id: createdId } = createFolderWithSessions(
-        sessionFolders,
-        [sessionId],
-      );
-      if (!createdId) return;
-      commitSessionFolders(folders);
-      setRenamingFolderId(createdId);
+      bulkNewFolder([sessionId]);
       return;
     }
     if (id.startsWith("folder-add:")) {
-      const folderId = id.slice("folder-add:".length);
-      commitSessionFolders(
-        setFolderCollapsed(
-          addSessionToFolder(sessionFolders, folderId, sessionId),
-          folderId,
-          false,
-        ),
-      );
+      bulkAddToFolder([sessionId], id.slice("folder-add:".length));
       return;
     }
     if (id === "folder-remove") {
-      commitSessionFolders(removeSessionFromFolder(sessionFolders, sessionId));
+      bulkRemoveFromFolder([sessionId]);
       return;
     }
     if (id === "archive") {
@@ -760,7 +932,9 @@ function SidebarComponent({
         dropTarget={isSessionDrop("session", session.id)}
         compact={compact}
         now={now}
+        selected={selectedSessionIds.has(session.id)}
         onSelect={onSelectSession}
+        onToggleSelect={handleSessionCardClick}
         onPrefetch={onPrefetchSession}
         onPlaceOnPane={onPlaceSessionOnPane}
         onListDrop={onSessionListDrop}
@@ -1017,6 +1191,13 @@ function SidebarComponent({
           ref={(el) => {
             sessionsLock(el);
             sessionsScrollRef.current = el;
+          }}
+          tabIndex={-1}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && selectedSessionIds.size > 0) {
+              e.stopPropagation();
+              clearSessionSelection();
+            }
           }}
           className={`min-h-0 flex-1 overflow-y-auto overscroll-none ${
             tab === "sessions" ? "" : "hidden"
@@ -1775,7 +1956,9 @@ function SessionCard({
   dropTarget,
   compact = false,
   now,
+  selected = false,
   onSelect,
+  onToggleSelect,
   onPrefetch,
   onPlaceOnPane,
   onListDrop,
@@ -1792,7 +1975,9 @@ function SessionCard({
   dropTarget?: boolean;
   compact?: boolean;
   now: number;
+  selected?: boolean;
   onSelect: (sessionId: string) => void;
+  onToggleSelect?: (sessionId: string, e: ReactMouseEvent<HTMLButtonElement>) => void;
   onPrefetch?: (sessionId: string) => void;
   onPlaceOnPane?: (sessionId: string, targetId: string, edge: PaneEdge) => void;
   onListDrop?: (draggedId: string, target: SessionListDropTarget) => void;
@@ -1951,25 +2136,30 @@ function SessionCard({
     window.addEventListener("pointercancel", onUp);
     window.addEventListener("keydown", onKey);
   };
-
   return (
+
     <button
       type="button"
       title={title}
       aria-current={isActive ? "true" : undefined}
+      aria-selected={selected ? "true" : undefined}
       data-session-card={session.id}
       data-tauri-drag-region="false"
       onPointerDown={onPointerDown}
       onPointerEnter={() => onPrefetch?.(session.id)}
-      onClick={() => {
+      onClick={(e) => {
         if (performance.now() < skipClickUntil.current) return;
+        if (onToggleSelect) {
+          onToggleSelect(session.id, e);
+          return;
+        }
         onSelect(session.id);
       }}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       className={`relative border flex w-full touch-none flex-col rounded-md px-2.5 text-left ${
         compact ? "py-1.5" : "py-2"
-      } ${dragging ? "opacity-40" : ""} ${
+      } ${dragging ? "opacity-40" : ""} ${selected ? "ring-1 ring-accent/60" : ""} ${
         dropTarget
           ? "text-content border-transparent"
           : needsApproval
