@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { message } from "@tauri-apps/plugin-dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Sidebar } from "./chrome/Sidebar";
 import { ApprovalToasts } from "./chrome/ApprovalToasts";
@@ -385,6 +385,11 @@ function openSessionIds(tabs: WorkspaceTab[]): Set<string> {
   return ids;
 }
 
+/** Native sheet. `window.confirm` is swallowed when a macOS menu accelerator fires. */
+function confirmDiscardUnsaved(message: string): Promise<boolean> {
+  return ask(message, { title: "MonoCode", kind: "warning" });
+}
+
 function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((tab, index) => {
@@ -534,6 +539,8 @@ export default function App({
   sessionsRef.current = sessions;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const dirtyFilesRef = useRef(dirtyFiles);
+  dirtyFilesRef.current = dirtyFiles;
   const projectTerminalsRef = useRef(projectTerminals);
   projectTerminalsRef.current = projectTerminals;
   const projectTerminalFocusedRef = useRef(projectTerminalFocused);
@@ -1666,14 +1673,12 @@ export default function App({
         ...(closing.terminalPanes ?? []).flatMap((pane) => pane.files),
       ];
       const unsaved = closingFiles.filter(
-        (file) => isFilesystemTab(file) && dirtyFiles.has(file.id),
+        (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
       );
-      if (
-        unsaved.length > 0 &&
-        !window.confirm("Close this tab with unsaved files?")
-      ) {
-        return;
-      }
+      const confirmed = new Set(opts?.confirmedTerminalIds ?? []);
+      const terminals = closingFiles.filter(
+        (file) => file.terminal && !confirmed.has(file.id),
+      );
 
       const finishClose = () => {
         const nextActiveTabId = closePlan.nextActiveTabId;
@@ -1698,46 +1703,43 @@ export default function App({
         void refreshHistory(sidebarCwd);
       };
 
-      const confirmed = new Set(opts?.confirmedTerminalIds ?? []);
-      const terminals = closingFiles.filter(
-        (file) => file.terminal && !confirmed.has(file.id),
-      );
-      if (terminals.length > 0) {
-        void confirmCloseTerminals(terminals).then((ok) => ok && finishClose());
-        return;
-      }
-      finishClose();
+      void (async () => {
+        if (unsaved.length > 0) {
+          const ok = await confirmDiscardUnsaved(
+            "Close this tab with unsaved files?",
+          );
+          if (!ok) return;
+        }
+        if (terminals.length > 0) {
+          const ok = await confirmCloseTerminals(terminals);
+          if (!ok) return;
+        }
+        finishClose();
+      })();
     },
-    [
-      dirtyFiles,
-      activateTab,
-      persistSession,
-      refreshHistory,
-      sidebarCwd,
-      tabCloseScope,
-    ],
+    [activateTab, persistSession, refreshHistory, sidebarCwd, tabCloseScope],
   );
 
   const onCloseOtherTabs = useCallback(() => {
     const current = tabsRef.current;
     const activeId = activeTabIdRef.current;
-    const active = current.find((tab) => tab.id === activeId);
     const closing = current.filter((tab) => tab.id !== activeId);
-    if (!active || closing.length === 0) return;
+    if (
+      !current.some((tab) => tab.id === activeId) ||
+      closing.length === 0
+    ) {
+      return;
+    }
 
+    const closingIds = new Set(closing.map((tab) => tab.id));
     const closingFiles = closing.flatMap((tab) => [
       ...tab.editorPanes.flatMap((pane) => pane.files),
       ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
     ]);
     const unsaved = closingFiles.filter(
-      (file) => isFilesystemTab(file) && dirtyFiles.has(file.id),
+      (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
     );
-    if (
-      unsaved.length > 0 &&
-      !window.confirm("Close other tabs with unsaved files?")
-    ) {
-      return;
-    }
+    const terminals = closingFiles.filter((file) => file.terminal);
 
     const finishClose = () => {
       const sessionIds = new Set(
@@ -1757,17 +1759,26 @@ export default function App({
         for (const file of closingFiles) next.delete(file.id);
         return next;
       });
-      setTabs([active]);
+      setTabs((prev) =>
+        prev.filter((tab) => tab.id === activeId || !closingIds.has(tab.id)),
+      );
       void refreshHistory(sidebarCwd);
     };
 
-    const terminals = closingFiles.filter((file) => file.terminal);
-    if (terminals.length > 0) {
-      void confirmCloseTerminals(terminals).then((ok) => ok && finishClose());
-      return;
-    }
-    finishClose();
-  }, [dirtyFiles, persistSession, refreshHistory, sidebarCwd]);
+    void (async () => {
+      if (unsaved.length > 0) {
+        const ok = await confirmDiscardUnsaved(
+          "Close other tabs with unsaved files?",
+        );
+        if (!ok) return;
+      }
+      if (terminals.length > 0) {
+        const ok = await confirmCloseTerminals(terminals);
+        if (!ok) return;
+      }
+      finishClose();
+    })();
+  }, [persistSession, refreshHistory, sidebarCwd]);
 
   const onCloseFile = useCallback(
     (paneId: string, fileId: string) => {
@@ -1781,13 +1792,8 @@ export default function App({
       const index = pane.files.findIndex((file) => file.id === fileId);
       if (index < 0) return;
       const file = pane.files[index];
-      if (
-        isFilesystemTab(file) &&
-        dirtyFiles.has(fileId) &&
-        !window.confirm(`Close ${basename(file.path)} without saving?`)
-      ) {
-        return;
-      }
+      const needsUnsavedConfirm =
+        isFilesystemTab(file) && dirtyFilesRef.current.has(fileId);
 
       const finishClose = () => {
         const files = pane.files.filter((entry) => entry.id !== fileId);
@@ -1887,13 +1893,21 @@ export default function App({
         }
       };
 
-      if (file.terminal) {
-        void confirmCloseTerminal(file).then((ok) => ok && finishClose());
-        return;
-      }
-      finishClose();
+      void (async () => {
+        if (needsUnsavedConfirm) {
+          const ok = await confirmDiscardUnsaved(
+            `Close ${basename(file.path)} without saving?`,
+          );
+          if (!ok) return;
+        }
+        if (file.terminal) {
+          const ok = await confirmCloseTerminal(file);
+          if (!ok) return;
+        }
+        finishClose();
+      })();
     },
-    [activeTabId, dirtyFiles, onCloseTab, projectCwd, tabCloseScope],
+    [activeTabId, onCloseTab, projectCwd, tabCloseScope],
   );
 
   const onClearTabSession = useCallback(
@@ -1906,14 +1920,8 @@ export default function App({
         ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
       ];
       const unsaved = closingFiles.filter(
-        (file) => isFilesystemTab(file) && dirtyFiles.has(file.id),
+        (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
       );
-      if (
-        unsaved.length > 0 &&
-        !window.confirm("Close this conversation with unsaved files?")
-      ) {
-        return;
-      }
 
       const oldSessionId = leafIds(tab.layout).find((paneId) =>
         sessionsRef.current.some((session) => session.id === paneId),
@@ -1923,41 +1931,51 @@ export default function App({
       );
       if (!oldSession) return;
 
-      persistSession(oldSession);
+      const finishClear = () => {
+        persistSession(oldSession);
 
-      const session = newSession(
-        oldSession.harness,
-        oldSession.cwd,
-        oldSession.model,
-        oldSession.runtimeMode,
-        oldSession.modelSettings,
-      );
+        const session = newSession(
+          oldSession.harness,
+          oldSession.cwd,
+          oldSession.model,
+          oldSession.runtimeMode,
+          oldSession.modelSettings,
+        );
 
-      setSessions((prev) => [...prev, session]);
-      setDirtyFiles((prev) => {
-        const updated = new Set(prev);
-        for (const file of closingFiles) updated.delete(file.id);
-        return updated;
-      });
-      setTabs((prev) =>
-        prev.map((entry) =>
-          entry.id === id
-            ? {
-                ...entry,
-                layout: leaf(session.id),
-                focusedId: session.id,
-                editorPanes: [],
-                terminalPanes: [],
-                diffOpen: false,
-                diffFocused: false,
-              }
-            : entry,
-        ),
-      );
-      setComposerFocused(true);
-      void refreshHistory(sidebarCwd);
+        setSessions((prev) => [...prev, session]);
+        setDirtyFiles((prev) => {
+          const updated = new Set(prev);
+          for (const file of closingFiles) updated.delete(file.id);
+          return updated;
+        });
+        setTabs((prev) =>
+          prev.map((entry) =>
+            entry.id === id
+              ? {
+                  ...entry,
+                  layout: leaf(session.id),
+                  focusedId: session.id,
+                  editorPanes: [],
+                  terminalPanes: [],
+                  diffOpen: false,
+                  diffFocused: false,
+                }
+              : entry,
+          ),
+        );
+        setComposerFocused(true);
+        void refreshHistory(sidebarCwd);
+      };
+
+      if (unsaved.length === 0) {
+        finishClear();
+        return;
+      }
+      void confirmDiscardUnsaved(
+        "Close this conversation with unsaved files?",
+      ).then((ok) => ok && finishClear());
     },
-    [tabs, dirtyFiles, persistSession, refreshHistory, sidebarCwd],
+    [tabs, persistSession, refreshHistory, sidebarCwd],
   );
 
   const onClosePane = useCallback(
