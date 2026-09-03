@@ -119,7 +119,8 @@ import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { ProjectMascot } from "./ProjectMascot";
 import { SessionFiltersMenu } from "./SessionFiltersMenu";
 import { SessionsEmpty } from "./SessionsEmpty";
-import { SidebarUpdateFooter } from "./SidebarUpdate";
+import { UpdateIconButton } from "./UpdateIconButton";
+import { UpdateRailCard } from "./UpdateRailCard";
 import { SourceControl } from "./SourceControl";
 
 const MIN_WIDTH = 260;
@@ -1251,19 +1252,26 @@ function SidebarComponent({
         ) : null}
         {showSidebarFooter ? (
           <>
-            <SidebarUpdateFooter
-              update={updateNotice}
-              onOpenWhatsNew={onOpenWhatsNew}
-              onDismissUpdate={onDismissUpdate}
-            />
-            <div className="flex shrink-0 flex-col gap-px p-2 pt-0">
-              <RailAction
-                label="Settings"
-                icon={Settings}
-                onClick={onOpenSettings}
-                shortcut={`${MOD},`}
-                ariaLabel={`Settings (${MOD},)`}
-              />
+            <div className="flex flex-col gap-1.5 p-2 pb-1">
+              {updateNotice && onOpenWhatsNew && onDismissUpdate ? (
+                <UpdateRailCard
+                  update={updateNotice}
+                  onOpen={onOpenWhatsNew}
+                  onDismiss={onDismissUpdate}
+                />
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1 p-2 pt-0">
+              <div className="min-w-0 flex-1">
+                <RailAction
+                  label="Settings"
+                  icon={Settings}
+                  onClick={onOpenSettings}
+                  shortcut={`${MOD},`}
+                  ariaLabel={`Settings (${MOD},)`}
+                />
+              </div>
+              <UpdateIconButton />
             </div>
           </>
         ) : null}

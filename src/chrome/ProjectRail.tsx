@@ -65,7 +65,8 @@ import { ProjectMascot } from "./ProjectMascot";
 import { RailAction, RailSearch } from "./RailAction";
 import { RemoveProjectDialog } from "./RemoveProjectDialog";
 import { DevModeSlot, TabVisitNav } from "./TitleBar";
-import { SidebarUpdateFooter } from "./SidebarUpdate";
+import { UpdateIconButton } from "./UpdateIconButton";
+import { UpdateRailCard } from "./UpdateRailCard";
 import type { InstalledUpdate } from "../lib/updateNotice";
 import { SettingsNav } from "./SettingsRail";
 import { Shimmer } from "../surfaces/Shimmer";
@@ -467,19 +468,26 @@ export function ProjectRail({
             groupCustomColors={groupCustomColors}
             groupMascots={groupMascots}
           />
-          <SidebarUpdateFooter
-            update={updateNotice}
-            onOpenWhatsNew={onOpenWhatsNew}
-            onDismissUpdate={onDismissUpdate}
-          />
-          <div className="flex shrink-0 flex-col gap-px p-2 pt-0">
-            <RailAction
-              label="Settings"
-              icon={Settings}
-              onClick={onOpenSettings}
-              shortcut={`${MOD},`}
-              ariaLabel={`Settings (${MOD},)`}
-            />
+          <div className="flex flex-col gap-1.5 p-2 pb-1">
+            {updateNotice && onOpenWhatsNew && onDismissUpdate ? (
+              <UpdateRailCard
+                update={updateNotice}
+                onOpen={onOpenWhatsNew}
+                onDismiss={onDismissUpdate}
+              />
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1 p-2 pt-0">
+            <div className="min-w-0 flex-1">
+              <RailAction
+                label="Settings"
+                icon={Settings}
+                onClick={onOpenSettings}
+                shortcut={`${MOD},`}
+                ariaLabel={`Settings (${MOD},)`}
+              />
+            </div>
+            <UpdateIconButton />
           </div>
         </>
       )}
