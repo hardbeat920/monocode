@@ -1095,3 +1095,46 @@ header[data-tauri-drag-region] button {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
+
+/* Graph node cutouts so lane strokes do not show through the circles. */
+.git-history-item svg {
+  display: block;
+  overflow: visible;
+}
+.git-history-item svg circle {
+  stroke: var(--color-background-base);
+}
+.git-history-item:hover svg circle:first-of-type {
+  stroke: transparent;
+}
+.git-history-item:hover svg circle:nth-of-type(2) {
+  stroke: color-mix(
+    in srgb,
+    var(--color-content) 5%,
+    var(--color-background-base)
+  );
+}
+.git-history-item.is-selected svg circle:nth-of-type(2) {
+  stroke: color-mix(
+    in srgb,
+    var(--color-content) 10%,
+    var(--color-background-base)
+  );
+}
+.git-history-item.is-head svg circle:last-child {
+  fill: var(--color-background-base);
+}
+.git-history-item.is-head:hover svg circle:last-child {
+  fill: color-mix(
+    in srgb,
+    var(--color-content) 5%,
+    var(--color-background-base)
+  );
+}
+.git-history-item.is-head.is-selected svg circle:last-child {
+  fill: color-mix(
+    in srgb,
+    var(--color-content) 10%,
+    var(--color-background-base)
+  );
+}

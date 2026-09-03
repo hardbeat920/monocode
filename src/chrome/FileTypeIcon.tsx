@@ -40,7 +40,7 @@ function getSnapshot() {
   return pack;
 }
 
-/** VS Code Material Icon Theme — filename maps to the matching icon. */
+/** Filename maps to the matching Material Icon Theme icon. */
 export function FileTypeIcon({
   name,
   isDir,
@@ -84,7 +84,7 @@ export function FileTypeIcon({
 /**
  * The package only checks `fileExtension` when that prop is set — it does not
  * peel an extension off `fileName`. Try the full name, then compound suffixes
- * (`d.ts`, then `ts`) so `.rs` / `.toml` / `.json` resolve like VS Code.
+ * (`d.ts`, then `ts`) so `.rs` / `.toml` / `.json` resolve by compound suffix.
  */
 function resolveFileIcon(icons: IconPack, fileName: string): string {
   const key = fileName.toLowerCase();

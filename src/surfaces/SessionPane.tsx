@@ -336,6 +336,7 @@ export const SessionPane = memo(function SessionPane({
               visible={visible}
               cwd={workCwd}
               harness={session.harness}
+              model={session.model}
               pendingQuestion={!!session.pendingQuestion}
               onApproval={approve}
               onAddToChat={addSelectionToChat}

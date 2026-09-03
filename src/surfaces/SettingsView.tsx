@@ -356,7 +356,7 @@ function GeneralPage({
       </Row>
       <Row
         label="Diff view"
-        description="Editor keeps working-tree changes in the file, like VS Code. Unified stacks every changed file in a GitHub-style review, with sticky headers and collapsed unchanged lines."
+        description="Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines."
       >
         <Segmented
           label="Diff view"

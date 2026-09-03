@@ -18,11 +18,20 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { FileTypeIcon } from "./FileTypeIcon";
+import {
+  GitHistoryGraph,
+  GraphResizeSash,
+  GRAPH_PANEL_DEFAULT,
+  GRAPH_PANEL_MIN,
+  loadGraphPanelHeight,
+  saveGraphPanelHeight,
+} from "./GitHistoryGraph";
 import {
   basename,
   gitCommit,
@@ -41,6 +50,7 @@ import {
   subscribeGitChanged,
   type GitChangedFile,
   type GitDiffIndex,
+  type GitHistoryCommit,
   type GitPr,
 } from "../lib/fs";
 import type { HarnessId } from "../lib/session";
@@ -62,6 +72,7 @@ function confirmNative(message: string, okLabel?: string): Promise<boolean> {
 
 let stagedOpen = true;
 let changesOpen = true;
+let graphOpen = true;
 const indexByCwd = new Map<string, GitDiffIndex>();
 const prByCwd = new Map<string, GitPr | null>();
 
@@ -70,7 +81,9 @@ type Props = {
   enabled: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
+  selectedSha?: string;
   onOpenFile: (path: string) => void;
+  onOpenCommit: (commit: GitHistoryCommit) => void;
 };
 
 export function GitChangesPanel({
@@ -78,10 +91,25 @@ export function GitChangesPanel({
   enabled,
   textHarness,
   selectedPath,
+  selectedSha,
   onOpenFile,
+  onOpenCommit,
 }: Props) {
   const { index, reload } = useDiffIndex(cwd, enabled);
   const files = index?.files ?? [];
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [graphHeight, setGraphHeight] = useState(loadGraphPanelHeight);
+  const [graphExpanded, setGraphExpanded] = useState(graphOpen);
+
+  useLayoutEffect(() => {
+    const pane = paneRef.current;
+    if (!pane || pane.clientHeight < GRAPH_PANEL_MIN + 160) return;
+    const max = pane.clientHeight - 160;
+    if (graphHeight > max) {
+      setGraphHeight(max);
+      saveGraphPanelHeight(max);
+    }
+  }, [graphHeight]);
 
   if (!cwd || cwd === "~") {
     return (
@@ -90,7 +118,10 @@ export function GitChangesPanel({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+    <div
+      ref={paneRef}
+      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
+    >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-content/10 px-3">
         {(index?.additions ?? 0) > 0 || (index?.deletions ?? 0) > 0 ? (
           <DiffCounts
@@ -126,6 +157,7 @@ export function GitChangesPanel({
         files={files}
         selected={selectedPath}
         enabled={enabled}
+        fill
         onOpenFile={onOpenFile}
         onMutated={(paths) => {
           reload();
@@ -134,6 +166,42 @@ export function GitChangesPanel({
           window.setTimeout(() => invalidateWatchedFiles(paths), 150);
         }}
       />
+      {graphExpanded ? (
+      <GraphResizeSash
+        height={graphHeight}
+        onHeightPaint={setGraphHeight}
+        onHeightCommit={(next) => {
+          setGraphHeight(next);
+          saveGraphPanelHeight(next);
+        }}
+        maxHeight={() => {
+          const pane = paneRef.current;
+          if (!pane) return GRAPH_PANEL_DEFAULT * 2;
+          return Math.max(
+            GRAPH_PANEL_MIN,
+            pane.clientHeight - 160,
+          );
+        }}
+      />
+      ) : null}
+      <div
+        className={`shrink-0 overflow-hidden border-t border-content/10 ${
+          graphExpanded ? "min-h-0" : "h-7"
+        }`}
+        style={graphExpanded ? { height: graphHeight } : undefined}
+      >
+        <GitHistoryGraph
+          cwd={cwd}
+          enabled={enabled}
+          expanded={graphExpanded}
+          selectedSha={selectedSha}
+          onToggleExpanded={() => {
+            graphOpen = !graphExpanded;
+            setGraphExpanded(graphOpen);
+          }}
+          onOpenCommit={onOpenCommit}
+        />
+      </div>
     </div>
   );
 }
@@ -145,6 +213,7 @@ function ChangedFiles({
   files,
   selected,
   enabled,
+  fill,
   onOpenFile,
   onMutated,
 }: {
@@ -154,6 +223,7 @@ function ChangedFiles({
   files: GitChangedFile[];
   selected?: string;
   enabled: boolean;
+  fill: boolean;
   onOpenFile: (path: string) => void;
   onMutated: (paths?: string[]) => void;
 }) {
@@ -374,7 +444,9 @@ function ChangedFiles({
   };
 
   return (
-    <aside className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <aside
+      className={`flex min-h-0 min-w-0 flex-col ${fill ? "flex-1" : "shrink-0"}`}
+    >
       <div className="shrink-0 border-b border-content/10 p-2">
         <div className="relative">
           <textarea

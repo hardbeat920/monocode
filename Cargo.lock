@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "monocode"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "base64 0.22.1",
  "block2",

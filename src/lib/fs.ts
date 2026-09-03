@@ -96,6 +96,46 @@ export function gitFileDiff(cwd: string, relative: string): Promise<GitFileDiff>
   return invoke<GitFileDiff>("git_file_diff", { cwd, relative });
 }
 
+export type GitHistoryRef = {
+  name: string;
+  kind: "local" | "remote" | "tag" | string;
+};
+
+export type GitHistoryCommit = {
+  sha: string;
+  shortSha: string;
+  parents: string[];
+  author: string;
+  timestamp: number;
+  subject: string;
+  refs: GitHistoryRef[];
+  head: boolean;
+};
+
+export type GitHistory = {
+  head: string | null;
+  commits: GitHistoryCommit[];
+};
+
+export function gitHistory(cwd: string, limit = 200): Promise<GitHistory> {
+  return invoke<GitHistory>("git_history", { cwd, limit });
+}
+
+export function gitCommitFiles(
+  cwd: string,
+  sha: string,
+): Promise<GitChangedFile[]> {
+  return invoke<GitChangedFile[]>("git_commit_files", { cwd, sha });
+}
+
+export function gitCommitFileDiff(
+  cwd: string,
+  sha: string,
+  relative: string,
+): Promise<GitFileDiff> {
+  return invoke<GitFileDiff>("git_commit_file_diff", { cwd, sha, relative });
+}
+
 export function gitStageContents(
   cwd: string,
   relative: string,

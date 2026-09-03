@@ -26,7 +26,10 @@ import { AttachmentChip } from "../chrome/AttachmentChip";
 import { FilePreview } from "../chrome/FilePreview";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { PlanPreview } from "../chrome/PlanPreview";
-import { HandoffButton, SecondOpinionButton } from "../chrome/SecondOpinionButton";
+import {
+  HandoffButton,
+  SecondOpinionButton,
+} from "../chrome/SecondOpinionButton";
 import { SecondOpinionCard } from "../chrome/SecondOpinionCard";
 import { NoteMiniCard } from "../chrome/NoteMiniCard";
 import { TerminalSpinner } from "../chrome/TerminalSpinner";
@@ -40,6 +43,7 @@ import {
 import { copyText } from "../lib/clipboard";
 import { playCue } from "../lib/sounds";
 import { displayPath, resolveWorkspacePath } from "../lib/paths";
+import { resolveModel } from "../lib/models";
 import { harnessForTurn } from "../lib/secondOpinion";
 import { Shimmer } from "./Shimmer";
 import {
@@ -89,6 +93,7 @@ type Props = {
   busy?: boolean;
   cwd?: string;
   harness?: HarnessId;
+  model?: string;
   pendingQuestion?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
@@ -109,6 +114,7 @@ export function AgentTranscript({
   busy,
   cwd,
   harness,
+  model,
   pendingQuestion = false,
   onApproval,
   onAddToChat,
@@ -148,6 +154,7 @@ export function AgentTranscript({
     if (lastUserId && !anchorTurn) setAnchorTurn(true);
   }
   const liveStartedAt = turnUserBlock(blocks)?.startedAt;
+  const modelName = harness ? resolveModel(harness, model).name : undefined;
   const waitingForApproval = hasPendingApproval(blocks) || pendingQuestion;
   const preparingHandoff = blocks.some(
     (block) =>
@@ -328,6 +335,9 @@ export function AgentTranscript({
                 (item) => item.type === "block" && isProseBlock(item.block),
               );
           const workStillRunning = activityStillRunning(turn);
+          const turnHarness = harness
+            ? harnessForTurn(blocks, turn, harness)
+            : undefined;
           return (
             <div
               key={turn[0].id}
@@ -341,15 +351,15 @@ export function AgentTranscript({
             >
               {items.map((item, itemIndex) =>
                 item.type === "activity" ? (
-                    <ActivityPhases
-                      key={item.blocks[0].id}
-                      blocks={item.blocks}
-                      cwd={cwd}
-                      done={settled || (answering && !workStillRunning)}
-                      onApproval={onApproval}
-                      onOpenFile={onOpenFile}
-                      onOpenDiff={onOpenDiff}
-                    />
+                  <ActivityPhases
+                    key={item.blocks[0].id}
+                    blocks={item.blocks}
+                    cwd={cwd}
+                    done={settled || (answering && !workStillRunning)}
+                    onApproval={onApproval}
+                    onOpenFile={onOpenFile}
+                    onOpenDiff={onOpenDiff}
+                  />
                 ) : (
                   <TranscriptBlock
                     key={item.block.id}
@@ -373,14 +383,14 @@ export function AgentTranscript({
                 <TurnDuration
                   elapsedMs={durationMs}
                   done
+                  modelName={modelName}
                   completedAt={
                     startedAt != null ? startedAt + durationMs : undefined
                   }
                   copyText={turnCopyText(turn)}
                   onSaveNote={onSaveNote}
-                  fromHarness={
-                    harness ? harnessForTurn(blocks, turn, harness) : undefined
-                  }
+                  harness={turnHarness}
+                  fromHarness={turnHarness}
                   onSecondOpinion={
                     onSecondOpinion
                       ? (target, model) => onSecondOpinion(target, turn, model)
@@ -401,6 +411,8 @@ export function AgentTranscript({
                     pendingQuestion ? "Waiting for answers" : undefined
                   }
                   subagent={hasRunningSubagent(turn)}
+                  modelName={modelName}
+                  harness={turnHarness}
                 />
               ) : null}
             </div>
@@ -423,11 +435,15 @@ function LiveWorking({
   paused,
   waitingLabel,
   subagent = false,
+  modelName,
+  harness,
 }: {
   startedAt?: number;
   paused: boolean;
   waitingLabel?: string;
   subagent?: boolean;
+  modelName?: string;
+  harness?: HarnessId;
 }) {
   const elapsedMs = useElapsedFrom(startedAt, paused);
   return (
@@ -437,6 +453,8 @@ function LiveWorking({
       waiting={paused}
       waitingLabel={waitingLabel}
       subagent={subagent}
+      modelName={modelName}
+      harness={harness}
     />
   );
 }
@@ -448,6 +466,8 @@ function TurnDuration({
   waiting = false,
   waitingLabel,
   subagent = false,
+  modelName,
+  harness,
   completedAt,
   copyText: output,
   onSaveNote,
@@ -461,6 +481,8 @@ function TurnDuration({
   waiting?: boolean;
   waitingLabel?: string;
   subagent?: boolean;
+  modelName?: string;
+  harness?: HarnessId;
   completedAt?: number;
   copyText?: string;
   onSaveNote?: (text: string) => void;
@@ -469,8 +491,8 @@ function TurnDuration({
   onHandoff?: (harness: HarnessId, model: string) => void;
 }) {
   const label = waiting
-    ? waitingLabel ?? "Waiting for approval"
-    : formatWorkingDuration(elapsedMs, done, subagent);
+    ? (waitingLabel ?? "Waiting for approval")
+    : formatWorkingDuration(elapsedMs, done, subagent, modelName);
   const dot = (
     <span
       aria-hidden
@@ -486,14 +508,18 @@ function TurnDuration({
           ? label
           : live
             ? subagent
-              ? "Subagent is running"
-              : "Agent is working"
+              ? modelName
+                ? `${modelName} subagent is running`
+                : "Subagent is running"
+              : modelName
+                ? `${modelName} is working`
+                : "Agent is working"
             : label
       }
-      className="flex items-center gap-3 px-4 pt-1 pb-3 font-sans text-sm text-content/40"
+      className="flex min-w-0 items-center gap-2.5 px-4 pt-1 pb-3 font-sans text-sm text-content/40"
     >
       {done ? (
-        <span className="flex items-center gap-2">
+        <span className="flex shrink-0 items-center gap-1">
           {output ? (
             <>
               <CopyTurnButton text={output} />
@@ -517,16 +543,25 @@ function TurnDuration({
 
       {done ? dot : null}
 
-      {live && !done ? (
-        <Shimmer duration={1}>{label}</Shimmer>
-      ) : (
-        <span>{label}</span>
-      )}
+      <span className="flex min-w-0 items-center gap-1.5">
+        {harness ? (
+          <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+        ) : null}
+        {live && !done ? (
+          <Shimmer duration={1} className="min-w-0 truncate">
+            {label}
+          </Shimmer>
+        ) : (
+          <span className="min-w-0 truncate" title={label}>
+            {label}
+          </span>
+        )}
+      </span>
 
       {completedAt != null ? (
         <>
           {dot}
-          <span className="text-content/35">
+          <span className="shrink-0 text-content/35">
             {formatClockTime(completedAt)}
           </span>
         </>
@@ -1403,21 +1438,35 @@ function formatWorkingDuration(
   elapsedMs: number | null,
   done = false,
   subagent = false,
+  modelName?: string,
 ): string {
-  if (elapsedMs == null) {
-    if (done) return "Worked";
-    return subagent ? "Subagent running…" : "Working…";
+  const who = modelName?.trim();
+  const elapsed = formatElapsed(elapsedMs);
+  const verb = workingVerb(done, subagent, !who);
+  if (elapsed == null) {
+    if (done) return who ? `${who} ${verb}` : verb;
+    return who ? `${who} ${verb}…` : `${verb}…`;
   }
+  return who ? `${who} ${verb} for ${elapsed}` : `${verb} for ${elapsed}`;
+}
+
+function workingVerb(
+  done: boolean,
+  subagent: boolean,
+  capitalized: boolean,
+): string {
+  if (done) return capitalized ? "Worked" : "worked";
+  if (subagent) return capitalized ? "Subagent running" : "subagent running";
+  return capitalized ? "Working" : "working";
+}
+
+function formatElapsed(elapsedMs: number | null): string | null {
+  if (elapsedMs == null) return null;
   const totalSec = Math.max(1, Math.round(elapsedMs / 1000));
-  const label = done
-    ? "Worked for"
-    : subagent
-      ? "Subagent running for"
-      : "Working for";
-  if (totalSec < 60) return `${label} ${totalSec}s`;
+  if (totalSec < 60) return `${totalSec}s`;
   const minutes = Math.floor(totalSec / 60);
   const seconds = totalSec % 60;
-  return seconds ? `${label} ${minutes}m ${seconds}s` : `${label} ${minutes}m`;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
 function ToolCall({

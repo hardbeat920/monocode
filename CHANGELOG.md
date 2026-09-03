@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-09-03
+
+### Added
+
+- Changes: a git graph under the working tree (swimlanes, merge arcs, HEAD ring). Click a commit for a read-only unified diff of that revision. The list is HEAD, its upstream, and the default branch — the newest 200 commits, not stashes or unmerged local branches. Drag the sash to resize; the Graph header collapses the pane.
+- Opening an image file shows a viewer with zoom, dimensions, and file size instead of the text editor. The view reloads when the file changes.
+- Inbox issue and pull request markdown shows GitHub and Linear images and videos inline.
+- Changes: discard every unstaged file from the section header, with a native confirm.
+- File → New Tab (`⌘T` / `Ctrl+T`), Inbox in the app menu, and a copy control on agent markdown code blocks. In #54 by @tcmarkfeld.
+- Transcript turn status names the model and shows the harness icon while a turn is working, waiting, or done.
+
+### Fixed
+
+- Unified diff: every added or deleted line in a hunk can be staged, not only the first. The line-number gutter stays put while the code scrolls sideways, and the per-line stage control appears on hover.
+- Closing other tabs with unsaved files uses a native confirm. `window.confirm` was swallowed when a macOS menu accelerator fired, so Close Other Tabs skipped the discard prompt. In #54 by @tcmarkfeld.
+
 ## [0.1.30] - 2026-09-02
 
 ### Added
@@ -429,7 +445,7 @@ Thanks [@Queaxtra](https://github.com/Queaxtra) for the filter and archive ideas
 
 - Light mode: toggle Dark/Light in the appearance panel. Terminal, editor, markdown (including Mermaid), and sidebar all follow the scheme; preference persists across restarts.
 - Editor syntax linting for supported source files (JavaScript, TypeScript, JSON, CSS, HTML, Rust, and Python): lightweight diagnostics straight from the Lezer parse tree, with wavy red underlines and hover tooltips. Catches unclosed brackets, stray quotes, and other typo-class mistakes - not a type checker or language server.
-- File tabs show syntax problems: the label turns red and the tooltip appends a problem count, similar to VS Code.
+- File tabs show syntax problems: the label turns red and the tooltip appends a problem count.
 - Context meter in the composer: a ring showing how much of the model context window the session is using, with exact token counts on hover. It turns amber at 75% and red at 90%.
 - Context usage is read from each CLI rather than estimated, so the window matches whatever model the session actually runs. Claude Code, Codex, and OpenCode report it; Cursor does not expose token usage over ACP, so no meter is shown for Cursor sessions.
 - The last context reading is stored with the session, so reopening a closed session shows its meter right away instead of waiting for the next turn.
@@ -461,7 +477,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.30...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.31...HEAD
+[0.1.31]: https://github.com/hardbeat920/monocode/compare/v0.1.30...v0.1.31
 [0.1.30]: https://github.com/hardbeat920/monocode/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/hardbeat920/monocode/compare/v0.1.28...v0.1.29
 [0.1.28]: https://github.com/hardbeat920/monocode/compare/v0.1.27...v0.1.28

@@ -106,7 +106,7 @@ async function runRefresh() {
   }
 }
 
-/** Folder that VS Code would create into, given the explorer selection. */
+/** Folder to create into, given the explorer selection. */
 export function createParentOf(cwd: string, selectedPath: string | null): string {
   if (!selectedPath || selectedPath === cwd) return cwd;
   const parent = parentPath(selectedPath);

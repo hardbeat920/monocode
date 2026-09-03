@@ -254,6 +254,67 @@ pub async fn git_file_diff(cwd: String, relative: String) -> Result<GitFileDiff,
         .map_err(|e| e.to_string())?
 }
 
+const GIT_HISTORY_DEFAULT: u32 = 200;
+const GIT_HISTORY_MAX: u32 = 500;
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHistoryRef {
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHistoryCommit {
+    pub sha: String,
+    pub short_sha: String,
+    pub parents: Vec<String>,
+    pub author: String,
+    pub timestamp: i64,
+    pub subject: String,
+    pub refs: Vec<GitHistoryRef>,
+    pub head: bool,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHistory {
+    pub head: Option<String>,
+    pub commits: Vec<GitHistoryCommit>,
+}
+
+/// Recent commits for the Graph view: HEAD, upstream, and the default
+/// branch. Newest first, with parent SHAs for the graph.
+#[tauri::command]
+pub async fn git_history(cwd: String, limit: Option<u32>) -> Result<GitHistory, String> {
+    tauri::async_runtime::spawn_blocking(move || git_history_for(&expand_home(&cwd), limit))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Files changed in one commit (first parent / root).
+#[tauri::command]
+pub async fn git_commit_files(cwd: String, sha: String) -> Result<Vec<GitChangedFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || git_commit_files_for(&expand_home(&cwd), &sha))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Parent vs commit contents for one path in a historical commit.
+#[tauri::command]
+pub async fn git_commit_file_diff(
+    cwd: String,
+    sha: String,
+    relative: String,
+) -> Result<GitFileDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_commit_file_diff_for(&expand_home(&cwd), &sha, &relative)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Stage a changed file (`git add`).
 #[tauri::command]
 pub async fn git_stage_file(cwd: String, relative: String) -> Result<(), String> {
@@ -366,7 +427,7 @@ pub async fn git_pull(cwd: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Pull incoming commits, then push local commits (VS Code Sync Changes).
+/// Pull incoming commits, then push local commits.
 #[tauri::command]
 pub async fn git_sync(cwd: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || git_sync_changes_for(&expand_home(&cwd)))
@@ -1006,6 +1067,286 @@ fn git_file_diff_for(root: &Path, relative: &str) -> Result<GitFileDiff, String>
         status: status.to_string(),
         original: original_text,
         current: current_text,
+        binary,
+        too_large,
+    })
+}
+
+/// Tips for the Graph filter: current HEAD, its upstream, and
+/// the repo default branch. Omits `refs/stash` and unmerged local branches.
+fn git_history_tips(root: &Path) -> Vec<String> {
+    let mut tips = vec!["HEAD".to_string()];
+    if git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
+        tips.push("@{upstream}".to_string());
+    }
+    if let Some(remote) = git_remote_name(root) {
+        if let Some(branch) = git_default_branch(root, Some(remote.as_str())) {
+            let spec = format!("{remote}/{branch}");
+            if git_ref_exists(root, &format!("refs/remotes/{spec}")) {
+                tips.push(spec);
+            }
+        }
+    }
+    tips
+}
+
+fn git_history_for(root: &Path, limit: Option<u32>) -> Result<GitHistory, String> {
+    if !git_is_work_tree(root) {
+        return Ok(GitHistory::default());
+    }
+    let n = limit
+        .unwrap_or(GIT_HISTORY_DEFAULT)
+        .clamp(1, GIT_HISTORY_MAX);
+    let count = n.to_string();
+    let head = git_stdout(root, &["rev-parse", "HEAD"]);
+    let remotes = git_remote_names(root);
+    let tips = git_history_tips(root);
+    let mut args = vec![
+        "log".to_string(),
+        "--topo-order".to_string(),
+        "--decorate=short".to_string(),
+        "--max-count".to_string(),
+        count,
+        "--format=%H%x00%h%x00%P%x00%an%x00%at%x00%D%x00%s%x1e".to_string(),
+    ];
+    args.extend(tips);
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(text) = git_run(root, &args_ref) else {
+        return Ok(GitHistory {
+            head,
+            commits: Vec::new(),
+        });
+    };
+    Ok(GitHistory {
+        commits: parse_git_history_log(&text, head.as_deref(), &remotes),
+        head,
+    })
+}
+
+fn parse_git_history_log(
+    text: &str,
+    head: Option<&str>,
+    remotes: &[String],
+) -> Vec<GitHistoryCommit> {
+    let mut commits = Vec::new();
+    for record in text.split('\u{1e}') {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+        let mut fields = record.split('\0');
+        let Some(sha) = fields.next() else { continue };
+        let Some(short_sha) = fields.next() else {
+            continue;
+        };
+        let Some(parents) = fields.next() else {
+            continue;
+        };
+        let Some(author) = fields.next() else {
+            continue;
+        };
+        let Some(timestamp) = fields.next() else {
+            continue;
+        };
+        let Some(decorations) = fields.next() else {
+            continue;
+        };
+        let subject = fields.next().unwrap_or("");
+        if sha.is_empty() {
+            continue;
+        }
+        let (is_head, refs) = parse_git_decorations(decorations, head, sha, remotes);
+        commits.push(GitHistoryCommit {
+            sha: sha.to_string(),
+            short_sha: if short_sha.is_empty() {
+                sha.chars().take(7).collect()
+            } else {
+                short_sha.to_string()
+            },
+            parents: parents.split_whitespace().map(str::to_string).collect(),
+            author: author.to_string(),
+            timestamp: timestamp.parse().unwrap_or(0),
+            subject: subject.to_string(),
+            refs,
+            head: is_head,
+        });
+    }
+    commits
+}
+
+fn parse_git_decorations(
+    raw: &str,
+    head: Option<&str>,
+    sha: &str,
+    remotes: &[String],
+) -> (bool, Vec<GitHistoryRef>) {
+    let mut is_head = head == Some(sha);
+    let mut refs = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some(name) = part.strip_prefix("HEAD -> ") {
+            is_head = true;
+            if !name.is_empty() {
+                refs.push(GitHistoryRef {
+                    name: name.to_string(),
+                    kind: "local".into(),
+                });
+            }
+        } else if part == "HEAD" {
+            is_head = true;
+        } else if let Some(tag) = part.strip_prefix("tag: ") {
+            if !tag.is_empty() {
+                refs.push(GitHistoryRef {
+                    name: tag.to_string(),
+                    kind: "tag".into(),
+                });
+            }
+        } else if part.ends_with("/HEAD") {
+            continue;
+        } else if remotes
+            .iter()
+            .any(|remote| part == remote || part.starts_with(&format!("{remote}/")))
+        {
+            refs.push(GitHistoryRef {
+                name: part.to_string(),
+                kind: "remote".into(),
+            });
+        } else {
+            refs.push(GitHistoryRef {
+                name: part.to_string(),
+                kind: "local".into(),
+            });
+        }
+    }
+    (is_head, refs)
+}
+
+fn git_remote_names(root: &Path) -> Vec<String> {
+    git_run(root, &["remote"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn git_peel_commit(root: &Path, spec: &str) -> Result<String, String> {
+    let spec = spec.trim();
+    if spec.len() < 4 || spec.len() > 40 || !spec.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid commit".into());
+    }
+    let peeled = format!("{spec}^{{commit}}");
+    git_stdout(root, &["rev-parse", "--verify", &peeled]).ok_or_else(|| "Unknown commit".into())
+}
+
+fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, String> {
+    if !git_is_work_tree(root) {
+        return Err("Not a git repository".into());
+    }
+    let sha = git_peel_commit(root, sha)?;
+    let mut files: HashMap<String, FileAcc> = HashMap::new();
+    let mut statuses: HashMap<String, &'static str> = HashMap::new();
+    if let Some(text) = git_run(
+        root,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--root",
+            "--no-renames",
+            "--numstat",
+            &sha,
+        ],
+    ) {
+        add_numstat_map(&text, &mut files);
+    }
+    if let Some(names) = git_run(
+        root,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--root",
+            "--no-renames",
+            "--name-status",
+            &sha,
+        ],
+    ) {
+        add_name_status(&names, &mut statuses);
+    }
+    let mut out = Vec::with_capacity(files.len().max(statuses.len()));
+    let mut seen = HashSet::new();
+    for (relative, acc) in files {
+        seen.insert(relative.clone());
+        let status = statuses.get(&relative).copied().unwrap_or("modified");
+        out.push(GitChangedFile {
+            path: root.join(&relative).to_string_lossy().into_owned(),
+            relative,
+            status: status.to_string(),
+            additions: acc.additions,
+            deletions: acc.deletions,
+            staged: false,
+            unstaged: false,
+        });
+    }
+    for (relative, status) in statuses {
+        if seen.contains(&relative) {
+            continue;
+        }
+        out.push(GitChangedFile {
+            path: root.join(&relative).to_string_lossy().into_owned(),
+            relative,
+            status: status.to_string(),
+            additions: 0,
+            deletions: 0,
+            staged: false,
+            unstaged: false,
+        });
+    }
+    out.sort_by(|a, b| a.relative.cmp(&b.relative));
+    Ok(out)
+}
+
+fn git_commit_file_diff_for(root: &Path, sha: &str, relative: &str) -> Result<GitFileDiff, String> {
+    let relative = resolve_repo_path(root, relative)?;
+    if !git_is_work_tree(root) {
+        return Err("Not a git repository".into());
+    }
+    let sha = git_peel_commit(root, sha)?;
+    let parent = git_stdout(root, &["rev-parse", "--verify", &format!("{sha}^")]);
+    let original_bytes = match &parent {
+        Some(parent) => git_blob(root, &format!("{parent}:{relative}")).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let current_bytes = git_blob(root, &format!("{sha}:{relative}")).unwrap_or_default();
+    let binary = original_bytes.contains(&0) || current_bytes.contains(&0);
+    let too_large = original_bytes.len() as u64 > MAX_TEXT_FILE_BYTES
+        || current_bytes.len() as u64 > MAX_TEXT_FILE_BYTES;
+    let status = if original_bytes.is_empty() && !current_bytes.is_empty() {
+        "added"
+    } else if !original_bytes.is_empty() && current_bytes.is_empty() {
+        "deleted"
+    } else {
+        "modified"
+    };
+    let (original, current) = if binary || too_large {
+        (String::new(), String::new())
+    } else {
+        (
+            String::from_utf8_lossy(&original_bytes).into_owned(),
+            String::from_utf8_lossy(&current_bytes).into_owned(),
+        )
+    };
+    Ok(GitFileDiff {
+        path: root.join(&relative).to_string_lossy().into_owned(),
+        relative,
+        status: status.to_string(),
+        original,
+        current,
         binary,
         too_large,
     })
@@ -2763,7 +3104,7 @@ fn already_exists(label: &str) -> String {
 }
 
 /// Create a file or folder under `parent`. `name` may contain `/` or `\` to
-/// nest (VS Code explorer). Returns the created path.
+/// nest. Returns the created path.
 #[tauri::command(async)]
 pub fn create_path(parent: String, name: String, is_dir: bool) -> Result<String, String> {
     let parent_dir = expand_home(&parent);
@@ -3973,6 +4314,189 @@ mod tests {
         let dir = tmp("git-file-diff-none");
         std::fs::write(dir.0.join("notes.txt"), "hello\n").unwrap();
         assert!(git_file_diff_for(&dir.0, "notes.txt").is_err());
+    }
+
+    #[test]
+    fn parse_git_decorations_classifies_head_local_remote_and_tags() {
+        let remotes = vec!["origin".to_string()];
+        let (head, refs) = parse_git_decorations(
+            "HEAD -> main, origin/main, origin/HEAD, tag: v0.1.30, fix/foo",
+            Some("abc"),
+            "abc",
+            &remotes,
+        );
+        assert!(head);
+        assert_eq!(
+            refs,
+            vec![
+                GitHistoryRef {
+                    name: "main".into(),
+                    kind: "local".into()
+                },
+                GitHistoryRef {
+                    name: "origin/main".into(),
+                    kind: "remote".into()
+                },
+                GitHistoryRef {
+                    name: "v0.1.30".into(),
+                    kind: "tag".into()
+                },
+                GitHistoryRef {
+                    name: "fix/foo".into(),
+                    kind: "local".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn git_history_lists_commits_parents_and_head() {
+        let dir = tmp("git-history");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        assert!(git(&dir.0, &["add", "."]));
+        assert!(git(&dir.0, &["commit", "-m", "second"]));
+
+        let history = git_history_for(&dir.0, Some(10)).unwrap();
+        assert_eq!(history.commits.len(), 2);
+        assert_eq!(history.commits[0].subject, "second");
+        assert_eq!(history.commits[1].subject, "init");
+        assert_eq!(
+            history.commits[0].parents,
+            vec![history.commits[1].sha.clone()]
+        );
+        assert!(history.commits[0].head);
+        assert!(!history.commits[1].head);
+        assert!(history.commits[0]
+            .refs
+            .iter()
+            .any(|r| r.kind == "local" && r.name == "main"));
+    }
+
+    #[test]
+    fn git_history_empty_outside_a_repo() {
+        let dir = tmp("git-history-none");
+        assert_eq!(
+            git_history_for(&dir.0, None).unwrap(),
+            GitHistory::default()
+        );
+    }
+
+    #[test]
+    fn git_commit_diff_reads_parent_and_current() {
+        let dir = tmp("git-commit-diff");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        assert!(git(&dir.0, &["add", "."]));
+        assert!(git(&dir.0, &["commit", "-m", "update a"]));
+        let history = git_history_for(&dir.0, Some(1)).unwrap();
+        let sha = &history.commits[0].sha;
+
+        let files = git_commit_files_for(&dir.0, sha).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative, "a.txt");
+        assert_eq!(files[0].status, "modified");
+
+        let diff = git_commit_file_diff_for(&dir.0, sha, "a.txt").unwrap();
+        assert_eq!(diff.original, "alpha\n");
+        assert_eq!(diff.current, "beta\n");
+        assert_eq!(diff.status, "modified");
+    }
+
+    #[test]
+    fn git_commit_diff_root_commit_is_added() {
+        let dir = tmp("git-commit-root");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        let history = git_history_for(&dir.0, Some(1)).unwrap();
+        let sha = &history.commits[0].sha;
+        let files = git_commit_files_for(&dir.0, sha).unwrap();
+        assert_eq!(files[0].status, "added");
+        let diff = git_commit_file_diff_for(&dir.0, sha, "a.txt").unwrap();
+        assert_eq!(diff.original, "");
+        assert_eq!(diff.current, "alpha\n");
+        assert_eq!(diff.status, "added");
+    }
+
+    #[test]
+    fn git_commit_diff_rejects_bad_sha_and_path() {
+        let dir = tmp("git-commit-bad");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        assert!(git_commit_files_for(&dir.0, "../oops").is_err());
+        assert!(git_commit_files_for(&dir.0, "not-hex!").is_err());
+        let history = git_history_for(&dir.0, Some(1)).unwrap();
+        let sha = &history.commits[0].sha;
+        assert!(git_commit_file_diff_for(&dir.0, sha, "../secret.txt").is_err());
+    }
+
+    #[test]
+    fn git_history_records_merge_parents() {
+        let dir = tmp("git-history-merge");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        assert!(git(&dir.0, &["checkout", "-b", "feature"]));
+        std::fs::write(dir.0.join("feat.txt"), "one\n").unwrap();
+        assert!(git(&dir.0, &["add", "."]));
+        assert!(git(&dir.0, &["commit", "-m", "feature work"]));
+        assert!(git(&dir.0, &["checkout", "main"]));
+        std::fs::write(dir.0.join("main.txt"), "two\n").unwrap();
+        assert!(git(&dir.0, &["add", "."]));
+        assert!(git(&dir.0, &["commit", "-m", "main work"]));
+        assert!(git(
+            &dir.0,
+            &["merge", "feature", "--no-ff", "-m", "Merge feature"]
+        ));
+
+        let history = git_history_for(&dir.0, Some(20)).unwrap();
+        let merge = history
+            .commits
+            .iter()
+            .find(|commit| commit.subject == "Merge feature")
+            .unwrap();
+        assert_eq!(merge.parents.len(), 2);
+    }
+
+    #[test]
+    fn git_history_skips_stash_and_unmerged_branches() {
+        let dir = tmp("git-history-auto");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        assert!(git(&dir.0, &["checkout", "-b", "feature"]));
+        std::fs::write(dir.0.join("feat.txt"), "one\n").unwrap();
+        assert!(git(&dir.0, &["add", "."]));
+        assert!(git(&dir.0, &["commit", "-m", "feature only"]));
+        std::fs::write(dir.0.join("wip.txt"), "stash me\n").unwrap();
+        assert!(git(&dir.0, &["stash", "push", "-u", "-m", "wip stash"]));
+        assert!(git(&dir.0, &["checkout", "main"]));
+        std::fs::write(dir.0.join("main.txt"), "two\n").unwrap();
+        assert!(git(&dir.0, &["add", "."]));
+        assert!(git(&dir.0, &["commit", "-m", "main only"]));
+
+        let history = git_history_for(&dir.0, Some(20)).unwrap();
+        let subjects: Vec<&str> = history
+            .commits
+            .iter()
+            .map(|commit| commit.subject.as_str())
+            .collect();
+        assert!(subjects.contains(&"main only"));
+        assert!(subjects.contains(&"init"));
+        assert!(!subjects.iter().any(|s| s.contains("feature only")));
+        assert!(!subjects
+            .iter()
+            .any(|s| s.contains("wip stash") || s.contains("WIP on")));
+        assert!(!history
+            .commits
+            .iter()
+            .any(|commit| commit.refs.iter().any(|r| r.name.contains("stash"))));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-/** VS Code explorer `validateFileName` / `getWellFormedFileName` (unix). */
+/** Unix file-name checks for the explorer: empty, slashes, invalid names. */
 
 export type NameIssue =
   | { severity: "error"; kind: "empty" }

@@ -28,7 +28,7 @@ import {
   saveSidebarTabOrder,
   type SidebarTabId,
 } from "../lib/appearance";
-import { basename } from "../lib/fs";
+import { basename, type GitHistoryCommit } from "../lib/fs";
 import { IS_MAC, MOD } from "../lib/platform";
 import { resolveModel } from "../lib/models";
 import { projectName } from "../lib/paths";
@@ -188,7 +188,9 @@ type Props = {
   onGoBack?: () => void;
   onGoForward?: () => void;
   onOpenDiff?: (path: string) => void;
+  onOpenCommit?: (commit: GitHistoryCommit) => void;
   selectedDiffPath?: string;
+  selectedCommitSha?: string;
   textHarness?: HarnessId;
   onShowSourceControl?: () => void;
   recents?: RecentProject[];
@@ -254,7 +256,9 @@ function SidebarComponent({
   onGoBack,
   onGoForward,
   onOpenDiff,
+  onOpenCommit,
   selectedDiffPath,
+  selectedCommitSha,
   textHarness,
   onShowSourceControl,
   recents = [],
@@ -1239,7 +1243,9 @@ function SidebarComponent({
               enabled={open}
               textHarness={textHarness}
               selectedPath={selectedDiffPath}
+              selectedSha={selectedCommitSha}
               onOpenFile={onOpenDiff ?? onOpenFile}
+              onOpenCommit={onOpenCommit ?? (() => {})}
             />
           </div>
         ) : null}

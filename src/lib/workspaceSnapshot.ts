@@ -3,6 +3,7 @@ import {
   isTerminalTab,
   leafIds,
   newTab,
+  type CommitTabSource,
   type EditorPane,
   type FilePaneTab,
   type LayoutNode,
@@ -370,9 +371,22 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
   const plan = sanitizePlan(value.plan);
   const hasReleaseNotes = "releaseNotes" in value;
   const releaseNotes = sanitizeReleaseNotes(value.releaseNotes);
+  const hasCommit = "commit" in value;
+  const commit = sanitizeCommit(value.commit);
   if (hasReleaseNotes && !releaseNotes) return null;
+  if (hasCommit && !commit) return null;
   if (
     releaseNotes &&
+    (value.plan != null ||
+      value.review === true ||
+      value.changes === true ||
+      value.terminal === true ||
+      commit != null)
+  ) {
+    return null;
+  }
+  if (
+    commit &&
     (value.plan != null ||
       value.review === true ||
       value.changes === true ||
@@ -386,9 +400,25 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
     cwd: value.cwd,
     ...(plan ? { plan } : {}),
     ...(releaseNotes ? { releaseNotes } : {}),
+    ...(commit ? { commit } : {}),
     ...(value.review === true ? { review: true } : {}),
     ...(value.changes === true ? { changes: true, review: true } : {}),
     ...(value.terminal === true ? { terminal: true } : {}),
+  };
+}
+
+function sanitizeCommit(raw: unknown): CommitTabSource | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.sha !== "string" || !value.sha.trim()) return undefined;
+  if (typeof value.shortSha !== "string" || !value.shortSha.trim()) {
+    return undefined;
+  }
+  if (typeof value.subject !== "string") return undefined;
+  return {
+    sha: value.sha.trim(),
+    shortSha: value.shortSha.trim(),
+    subject: value.subject,
   };
 }
 
