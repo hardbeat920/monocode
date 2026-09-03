@@ -406,6 +406,8 @@ export function Composer({
   const consumedQuoteId = useRef<number | null>(null);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
+  const slashDismissedRef = useRef<{ text: string; cursor: number } | null>(null);
+  const mentionDismissedRef = useRef<{ text: string; cursor: number } | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
   const [hasValue, setHasValue] = useState(
     () =>
@@ -627,10 +629,35 @@ export function Composer({
 
   const syncTokensFromTextarea = (el: HTMLTextAreaElement) => {
     if (creatingSkill) return;
+    const text = el.value;
     const cursor = el.selectionStart ?? 0;
-    const token = slashTokenAt(el.value, cursor);
-    setSlash(token);
-    setMention(token ? null : mentionTokenAt(el.value, cursor));
+    const slashDismissed = slashDismissedRef.current;
+    if (slashDismissed && (slashDismissed.text !== text || slashDismissed.cursor !== cursor)) {
+      slashDismissedRef.current = null;
+    }
+    const mentionDismissed = mentionDismissedRef.current;
+    if (mentionDismissed && (mentionDismissed.text !== text || mentionDismissed.cursor !== cursor)) {
+      mentionDismissedRef.current = null;
+    }
+    const token = slashTokenAt(text, cursor);
+    if (token && slashDismissedRef.current?.text === text && slashDismissedRef.current?.cursor === cursor) {
+      setSlash(null);
+    } else {
+      if (!token) slashDismissedRef.current = null;
+      setSlash(token);
+    }
+    if (token) {
+      mentionDismissedRef.current = null;
+      setMention(null);
+      return;
+    }
+    const mentionToken = mentionTokenAt(text, cursor);
+    if (mentionToken && mentionDismissedRef.current?.text === text && mentionDismissedRef.current?.cursor === cursor) {
+      setMention(null);
+    } else {
+      if (!mentionToken) mentionDismissedRef.current = null;
+      setMention(mentionToken);
+    }
   };
 
   useEffect(() => {
@@ -650,6 +677,8 @@ export function Composer({
       syncHasValue(result.draft, attachmentsRef.current);
       setSlash(null);
       setMention(null);
+      slashDismissedRef.current = null;
+      mentionDismissedRef.current = null;
       setCreatingSkill(false);
       setCreateError(null);
       el.setSelectionRange(result.draft.length, result.draft.length);
@@ -664,6 +693,7 @@ export function Composer({
       const token = slashRef.current;
       if (!el || !token) {
         setSlash(null);
+        slashDismissedRef.current = null;
         setCreatingSkill(false);
         return;
       }
@@ -676,6 +706,7 @@ export function Composer({
       setDraft(next);
       syncHasValue(next, attachmentsRef.current);
       setSlash(null);
+      slashDismissedRef.current = null;
       setCreatingSkill(false);
       el.focus();
     },
@@ -688,6 +719,7 @@ export function Composer({
       const token = mentionRef.current;
       if (!el || !token) {
         setMention(null);
+        mentionDismissedRef.current = null;
         return;
       }
       const label = isNoteMentionPath(file.path)
@@ -702,6 +734,7 @@ export function Composer({
       setDraft(next);
       syncHasValue(next, attachmentsRef.current);
       setMention(null);
+      mentionDismissedRef.current = null;
       el.focus();
     },
     [syncHasValue],
@@ -829,14 +862,22 @@ export function Composer({
     setAttachments([]);
     setSlash(null);
     setMention(null);
+    slashDismissedRef.current = null;
+    mentionDismissedRef.current = null;
     setCreatingSkill(false);
     setCreateError(null);
     syncHasValue("", []);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (creatingSkill) return;
-
+    if (creatingSkill) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setCreatingSkill(false);
+        setCreateError(null);
+      }
+      return;
+    }
     if (mentionOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -854,6 +895,8 @@ export function Composer({
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        const el = e.currentTarget;
+        mentionDismissedRef.current = { text: el.value, cursor: el.selectionStart ?? 0 };
         setMention(null);
         return;
       }
@@ -891,6 +934,8 @@ export function Composer({
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        const el = e.currentTarget;
+        slashDismissedRef.current = { text: el.value, cursor: el.selectionStart ?? 0 };
         setSlash(null);
         return;
       }
@@ -1130,6 +1175,8 @@ export function Composer({
                 resizeTextarea(el);
                 setDraft(el.value);
                 syncHasValue(el.value, attachments);
+                slashDismissedRef.current = null;
+                mentionDismissedRef.current = null;
                 syncTokensFromTextarea(el);
               }}
             />

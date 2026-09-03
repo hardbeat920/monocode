@@ -218,7 +218,16 @@ function CreateSkillForm({
   };
 
   return (
-    <form onSubmit={submit} className="px-2.5 py-2">
+    <form
+      onSubmit={submit}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }}
+      className="px-2.5 py-2"
+    >
       <p className="mb-2 text-[11px] text-content/50">
         Writes a starter SKILL.md you can edit.
       </p>
@@ -230,11 +239,6 @@ function CreateSkillForm({
         aria-label="Skill name"
         disabled={busy}
         onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key !== "Escape") return;
-          e.preventDefault();
-          onCancel();
-        }}
         className="mb-2 w-full rounded-md bg-content/10 px-2 py-1.5 font-mono text-[13px] text-content outline-none placeholder:text-content/40"
       />
       <div className="mb-2 flex gap-1">
