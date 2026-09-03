@@ -226,9 +226,11 @@ export function ComposerRunner({
 
       const shell = box.closest("[data-composer]");
       const review = shell?.querySelector("[data-session-review]");
+      const queue = shell?.querySelector("[data-message-queue-card]");
+      const ledge = review ?? queue;
       const track = runnerTrack(
         box.getBoundingClientRect(),
-        review?.getBoundingClientRect() ?? null,
+        ledge?.getBoundingClientRect() ?? null,
       );
       if (track.width <= 0) {
         showLayer(false);
