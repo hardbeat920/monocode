@@ -6,8 +6,12 @@ import {
   ChevronRight,
   CloudUpload,
   ExternalLink,
+  Folder,
+  FolderOpen,
+  FolderTree,
   GitBranch,
   GitPullRequest,
+  ListView,
   Loader,
   Minus,
   Plus,
@@ -19,6 +23,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -73,6 +78,31 @@ function confirmNative(message: string, okLabel?: string): Promise<boolean> {
 let stagedOpen = true;
 let changesOpen = true;
 let graphOpen = true;
+
+type ChangesView = "list" | "tree";
+
+const CHANGES_VIEW_KEY = "monocode.gitChangesView";
+
+let changesView: ChangesView = "list";
+
+function loadChangesView(): ChangesView {
+  try {
+    const raw = localStorage.getItem(CHANGES_VIEW_KEY);
+    if (raw === "list" || raw === "tree") changesView = raw;
+  } catch {
+    // private mode / no storage: keep the in-memory default
+  }
+  return changesView;
+}
+
+function saveChangesView(next: ChangesView) {
+  changesView = next;
+  try {
+    localStorage.setItem(CHANGES_VIEW_KEY, next);
+  } catch {
+    // private mode / quota: the in-memory value still applies
+  }
+}
 const indexByCwd = new Map<string, GitDiffIndex>();
 const prByCwd = new Map<string, GitPr | null>();
 
@@ -110,6 +140,11 @@ export function GitChangesPanel({
       saveGraphPanelHeight(max);
     }
   }, [graphHeight]);
+  const [view, setView] = useState<ChangesView>(() => loadChangesView());
+  const changeView = (next: ChangesView) => {
+    saveChangesView(next);
+    setView(next);
+  };
 
   if (!cwd || cwd === "~") {
     return (
@@ -123,6 +158,7 @@ export function GitChangesPanel({
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
     >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-content/10 px-3">
+        <ChangesViewToggle view={view} onChange={changeView} />
         {(index?.additions ?? 0) > 0 || (index?.deletions ?? 0) > 0 ? (
           <DiffCounts
             additions={index?.additions ?? 0}
@@ -158,6 +194,7 @@ export function GitChangesPanel({
         selected={selectedPath}
         enabled={enabled}
         fill
+        view={view}
         onOpenFile={onOpenFile}
         onMutated={(paths) => {
           reload();
@@ -214,6 +251,7 @@ function ChangedFiles({
   selected,
   enabled,
   fill,
+  view,
   onOpenFile,
   onMutated,
 }: {
@@ -224,6 +262,7 @@ function ChangedFiles({
   selected?: string;
   enabled: boolean;
   fill: boolean;
+  view: ChangesView;
   onOpenFile: (path: string) => void;
   onMutated: (paths?: string[]) => void;
 }) {
@@ -574,7 +613,17 @@ function ChangedFiles({
                   },
                 ]}
               >
-                {staged.map((file) => (
+              {view === "tree" ? (
+                <ChangeFileTree
+                  files={staged}
+                  kind="staged"
+                  selected={selected}
+                  busy={busy}
+                  onOpenFile={onOpenFile}
+                  onAction={run}
+                />
+              ) : (
+                staged.map((file) => (
                   <ChangeRow
                     key={`staged:${file.relative}`}
                     file={file}
@@ -584,7 +633,8 @@ function ChangedFiles({
                     onOpenFile={onOpenFile}
                     onAction={run}
                   />
-                ))}
+                ))
+              )}
               </FileSection>
             ) : null}
             {unstaged.length > 0 ? (
@@ -609,7 +659,17 @@ function ChangedFiles({
                   },
                 ]}
               >
-                {unstaged.map((file) => (
+              {view === "tree" ? (
+                <ChangeFileTree
+                  files={unstaged}
+                  kind="unstaged"
+                  selected={selected}
+                  busy={busy}
+                  onOpenFile={onOpenFile}
+                  onAction={run}
+                />
+              ) : (
+                unstaged.map((file) => (
                   <ChangeRow
                     key={`unstaged:${file.relative}`}
                     file={file}
@@ -619,7 +679,8 @@ function ChangedFiles({
                     onOpenFile={onOpenFile}
                     onAction={run}
                   />
-                ))}
+                ))
+              )}
               </FileSection>
             ) : null}
           </>
@@ -895,6 +956,7 @@ function ChangeRow({
   active,
   busy,
   kind,
+  indent = 0,
   onOpenFile,
   onAction,
 }: {
@@ -902,6 +964,7 @@ function ChangeRow({
   active: boolean;
   busy: boolean;
   kind: "staged" | "unstaged";
+  indent?: number;
   onOpenFile: (path: string) => void;
   onAction: (
     file: GitChangedFile,
@@ -919,6 +982,7 @@ function ChangeRow({
             ? "bg-content/10 text-content"
             : "text-content hover:bg-content/5"
         }`}
+        style={indent > 0 ? { paddingLeft: 8 + indent } : undefined}
       >
         <button
           type="button"
@@ -931,7 +995,7 @@ function ChangeRow({
           <FileTypeIcon name={name} isDir={false} size={16} />
           <span className="min-w-0 flex-1 truncate">
             <span className="text-[13px] font-medium">{name}</span>
-            {dir ? (
+            {dir && indent === 0 ? (
               <span className="ml-1.5 text-[11px] text-content/40">{dir}</span>
             ) : null}
           </span>
@@ -1003,23 +1067,284 @@ function IconAction({
   );
 }
 
-function DiffCounts({
-  additions,
-  deletions,
+function ChangesViewToggle({
+  view,
+  onChange,
 }: {
-  additions: number;
-  deletions: number;
+  view: ChangesView;
+  onChange: (next: ChangesView) => void;
 }) {
-  if (additions <= 0 && deletions <= 0) return null;
+  const cls = (active: boolean) =>
+    `grid size-6 place-items-center rounded-md ${
+      active
+        ? "bg-content/10 text-content"
+        : "text-content/45 hover:bg-content/5 hover:text-content"
+    }`;
   return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-semibold tabular-nums">
-      {additions > 0 ? (
-        <span className="text-emerald-400">+{additions}</span>
+    <div
+      role="group"
+      aria-label="Changes view"
+      className="flex shrink-0 items-center gap-px rounded-md border border-content/10 p-px"
+    >
+      <button
+        type="button"
+        title="List view"
+        aria-label="List view"
+        aria-pressed={view === "list"}
+        onClick={() => onChange("list")}
+        className={cls(view === "list")}
+      >
+        <ListView className="size-3.5" strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        title="Tree view"
+        aria-label="Tree view"
+        aria-pressed={view === "tree"}
+        onClick={() => onChange("tree")}
+        className={cls(view === "tree")}
+      >
+        <FolderTree className="size-3.5" strokeWidth={1.75} />
+      </button>
+    </div>
+  );
+}
+
+type ChangeTreeNode = {
+  /** Canonical dir path (path-first identity, "" never occurs for nodes). */
+  path: string;
+  /** Flattened display label, e.g. "src/chrome". */
+  label: string;
+  depth: number;
+  dirs: ChangeTreeNode[];
+  files: GitChangedFile[];
+  total: number;
+};
+
+/**
+ * Directory grouping for the tree view, modeled on trees.software concepts:
+ * path-first identity over `relative`, one memoizable build per file list
+ * (prepared-input style), `flattenEmptyDirectories` chain collapsing, and a
+ * Git-status lane via the existing per-file status letters. File rows reuse
+ * ChangeRow so stage/open/discard behavior matches the list view.
+ */
+function buildChangeTree(files: readonly GitChangedFile[]): {
+  dirs: ChangeTreeNode[];
+  files: GitChangedFile[];
+} {
+  type Raw = { dirs: Map<string, Raw>; files: GitChangedFile[] };
+  const root: Raw = { dirs: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.relative.split("/");
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const part = parts[i]!;
+      let child = node.dirs.get(part);
+      if (!child) {
+        child = { dirs: new Map(), files: [] };
+        node.dirs.set(part, child);
+      }
+      node = child;
+    }
+    node.files.push(file);
+  }
+  const toNodes = (
+    raw: Raw,
+    parentPath: string,
+    depth: number,
+  ): { dirs: ChangeTreeNode[]; files: GitChangedFile[] } => {
+    const outFiles = [...raw.files].sort((a, b) =>
+      a.relative.localeCompare(b.relative),
+    );
+    const outDirs = [...raw.dirs.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, child]): ChangeTreeNode => {
+        const path = parentPath ? `${parentPath}/${name}` : name;
+        const inner = toNodes(child, path, depth + 1);
+        let node: ChangeTreeNode = {
+          path,
+          label: name,
+          depth,
+          dirs: inner.dirs,
+          files: inner.files,
+          total: 0,
+        };
+        while (node.files.length === 0 && node.dirs.length === 1) {
+          const only = node.dirs[0]!;
+          node = {
+            path: only.path,
+            label: `${node.label}/${only.label}`,
+            depth,
+            dirs: only.dirs,
+            files: only.files,
+            total: 0,
+          };
+        }
+        node.total =
+          node.files.length +
+          node.dirs.reduce((sum, dir) => sum + dir.total, 0);
+        return node;
+      });
+    return { dirs: outDirs, files: outFiles };
+  };
+  return toNodes(root, "", 0);
+}
+
+function ChangeFileTree({
+  files,
+  kind,
+  selected,
+  busy,
+  onOpenFile,
+  onAction,
+}: {
+  files: GitChangedFile[];
+  kind: "staged" | "unstaged";
+  selected?: string;
+  busy: string | null;
+  onOpenFile: (path: string) => void;
+  onAction: (
+    file: GitChangedFile,
+    action: "stage" | "unstage" | "discard",
+  ) => void;
+}) {
+  const { dirs, files: rootFiles } = useMemo(
+    () => buildChangeTree(files),
+    [files],
+  );
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggle = useCallback((path: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+  return (
+    <>
+      {dirs.map((node) => (
+        <ChangeDirNode
+          key={`${kind}:${node.path}`}
+          node={node}
+          kind={kind}
+          selected={selected}
+          busy={busy}
+          collapsed={collapsed}
+          onToggle={toggle}
+          onOpenFile={onOpenFile}
+          onAction={onAction}
+        />
+      ))}
+      {rootFiles.map((file) => (
+        <ChangeRow
+          key={`${kind}:${file.relative}`}
+          file={file}
+          active={selected === file.relative}
+          busy={busy === file.relative}
+          kind={kind}
+          onOpenFile={onOpenFile}
+          onAction={onAction}
+        />
+      ))}
+    </>
+  );
+}
+
+function ChangeDirNode({
+  node,
+  kind,
+  selected,
+  busy,
+  collapsed,
+  onToggle,
+  onOpenFile,
+  onAction,
+}: {
+  node: ChangeTreeNode;
+  kind: "staged" | "unstaged";
+  selected?: string;
+  busy: string | null;
+  collapsed: Set<string>;
+  onToggle: (path: string) => void;
+  onOpenFile: (path: string) => void;
+  onAction: (
+    file: GitChangedFile,
+    action: "stage" | "unstage" | "discard",
+  ) => void;
+}) {
+  const open = !collapsed.has(node.path);
+  return (
+    <li>
+      <div className="group flex h-7 w-full items-center gap-1 pr-2 leading-none text-content hover:bg-content/5">
+        <button
+          type="button"
+          title={node.path}
+          aria-expanded={open}
+          onClick={() => onToggle(node.path)}
+          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          style={{ paddingLeft: 8 + node.depth * 12 }}
+        >
+          {open ? (
+            <ChevronDown
+              className="size-3.5 shrink-0 text-content/50"
+              strokeWidth={1.75}
+            />
+          ) : (
+            <ChevronRight
+              className="size-3.5 shrink-0 text-content/50"
+              strokeWidth={1.75}
+            />
+          )}
+          {open ? (
+            <FolderOpen
+              className="size-3.5 shrink-0 text-content/50"
+              strokeWidth={1.75}
+            />
+          ) : (
+            <Folder
+              className="size-3.5 shrink-0 text-content/50"
+              strokeWidth={1.75}
+            />
+          )}
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+            {node.label}
+          </span>
+          <span className="shrink-0 text-[10px] tabular-nums text-content/40">
+            {node.total}
+          </span>
+        </button>
+      </div>
+      {open ? (
+        <ul>
+          {node.dirs.map((child) => (
+            <ChangeDirNode
+              key={`${kind}:${child.path}`}
+              node={child}
+              kind={kind}
+              selected={selected}
+              busy={busy}
+              collapsed={collapsed}
+              onToggle={onToggle}
+              onOpenFile={onOpenFile}
+              onAction={onAction}
+            />
+          ))}
+          {node.files.map((file) => (
+            <ChangeRow
+              key={`${kind}:${file.relative}`}
+              file={file}
+              active={selected === file.relative}
+              busy={busy === file.relative}
+              kind={kind}
+              indent={(node.depth + 1) * 12}
+              onOpenFile={onOpenFile}
+              onAction={onAction}
+            />
+          ))}
+        </ul>
       ) : null}
-      {deletions > 0 ? (
-        <span className="text-red-400">-{deletions}</span>
-      ) : null}
-    </span>
+    </li>
   );
 }
 
