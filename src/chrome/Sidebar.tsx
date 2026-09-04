@@ -547,6 +547,11 @@ function SidebarComponent({
     scrollParent.addEventListener("scroll", onScroll, true);
     return () => scrollParent.removeEventListener("scroll", onScroll, true);
   }, [sessionMenu, folderMenu, filterMenu]);
+  // Multi-select is dismissed by Escape or by a plain left-click anywhere
+  // outside a session card. Window-level: clicks in the main pane or other
+  // sidebar chrome must also exit the highlight state. Menu/popover/input
+  // targets are excluded so bulk menu picks still see the selection and
+  // typing never drops it. Card targets are owned by handleSessionCardClick.
   useEffect(() => {
     if (selectedSessionIds.size === 0) return;
     const onKey = (e: KeyboardEvent) => {
@@ -562,8 +567,27 @@ function SidebarComponent({
       }
       clearSessionSelection();
     };
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (!target || typeof target.closest !== "function") return;
+      if (target.closest("[data-session-card]")) return;
+      if (
+        target.closest(
+          'input, textarea, select, [contenteditable="true"], [role="menu"], [role="dialog"], [role="listbox"]',
+        )
+      ) {
+        return;
+      }
+      clearSessionSelection();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+    };
   }, [selectedSessionIds.size]);
 
   const commitSessionFolders = (next: SessionFolder[]) => {
