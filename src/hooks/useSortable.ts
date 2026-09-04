@@ -30,6 +30,15 @@ export type SortableOptions = {
   ) => boolean;
 };
 
+export type SortableDragGhost = {
+  /** Current pointer position (client coords); the ghost's top-left pins here. */
+  x: number;
+  y: number;
+  /** Source item size, so the ghost matches the dragged tab. */
+  width: number;
+  height: number;
+};
+
 type DragState = {
   id: string;
   pointerId: number;
@@ -75,6 +84,9 @@ export function useSortable(
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [toIndex, setToIndex] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<SortableDropTarget | null>(null);
+  const [dragGhost, setDragGhost] = useState<SortableDragGhost | null>(null);
+  const ghostRaf = useRef(0);
+  const pendingGhost = useRef<SortableDragGhost | null>(null);
 
   const setItemRef = useCallback((id: string, el: HTMLElement | null) => {
     if (el) nodes.current.set(id, el);
@@ -170,6 +182,28 @@ export function useSortable(
       handle.setPointerCapture(event.pointerId);
       const restoreSelection = suppressTextSelection();
 
+      let ghostBase: Omit<SortableDragGhost, "x" | "y"> | null = null;
+      const queueGhost = (x: number, y: number) => {
+        if (!ghostBase) return;
+        pendingGhost.current = { ...ghostBase, x, y };
+        if (ghostRaf.current) return;
+        ghostRaf.current = requestAnimationFrame(() => {
+          ghostRaf.current = 0;
+          const next = pendingGhost.current;
+          pendingGhost.current = null;
+          if (next) setDragGhost(next);
+        });
+      };
+      const clearGhost = () => {
+        if (ghostRaf.current) {
+          cancelAnimationFrame(ghostRaf.current);
+          ghostRaf.current = 0;
+        }
+        ghostBase = null;
+        pendingGhost.current = null;
+        setDragGhost(null);
+      };
+
       const onMove = (ev: PointerEvent) => {
         const current = drag.current;
         if (!current || current.id !== id) return;
@@ -184,7 +218,15 @@ export function useSortable(
           setGrabbing(true);
           setDraggingId(id);
           setToIndex(from);
+          const rect = nodes.current.get(id)?.getBoundingClientRect();
+          ghostBase = {
+            width: rect?.width ?? 224,
+            height: rect?.height ?? 30,
+          };
+          setDragGhost({ ...ghostBase, x: ev.clientX, y: ev.clientY });
           onActivateRef.current?.(id);
+        } else {
+          queueGhost(ev.clientX, ev.clientY);
         }
         const dropOn = dropTargetAt(id, ev.clientX, ev.clientY);
         const next = indexAt(ev.clientX, ev.clientY);
@@ -222,6 +264,7 @@ export function useSortable(
         setDraggingId(null);
         setToIndex(null);
         setDropTarget(null);
+        clearGhost();
         try {
           handle.releasePointerCapture(state.pointerId);
         } catch {
@@ -266,6 +309,7 @@ export function useSortable(
     fromIndex: draggingId ? ids.indexOf(draggingId) : null,
     toIndex: draggingId && !dropTarget ? toIndex : null,
     dropTarget: draggingId ? dropTarget : null,
+    dragGhost: draggingId ? dragGhost : null,
     setItemRef,
     setGroupDropRef,
     onItemPointerDown,

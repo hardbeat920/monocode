@@ -21,6 +21,8 @@ import {
 } from "react";
 import { basename } from "../lib/fs";
 import { looksLikeProject } from "../lib/recents";
+import { createPortal } from "react-dom";
+import { LAYER } from "../lib/layers";
 import type { HarnessId } from "../lib/session";
 import { CwdPicker } from "./CwdPicker";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
@@ -355,6 +357,35 @@ function TitleTabItem({
   );
 }
 
+/** Floating copy of the dragged tab that follows the pointer. The in-strip
+ * item dims to an insertion slot (see TitleTabItem), so without this the drag
+ * shows only the accent position cursor. */
+function TitleTabGhost({ tab }: { tab: Tab }) {
+  const { headline } = tabCopy(tab);
+  const fileIcon = tab.files[0];
+  return (
+    <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2.5">
+      {tab.harnesses.length > 0 ? (
+        <TabHarnesses
+          harnesses={tab.harnesses}
+          busyHarnesses={tab.busyHarnesses}
+          dimmed={false}
+        />
+      ) : tab.terminal || !fileIcon ? (
+        <Terminal className="size-3.5 shrink-0 text-content" strokeWidth={1.75} />
+      ) : (
+        <FileTypeIcon name={fileIcon} isDir={false} size={14} />
+      )}
+      <span className="min-w-0 flex-1 truncate text-[13px] leading-none text-content">
+        {headline}
+      </span>
+      {tab.dirty ? (
+        <span className="size-1.5 shrink-0 rounded-full bg-content/70" />
+      ) : null}
+    </div>
+  );
+}
+
 function TabStripChevron({
   side,
   onClick,
@@ -571,6 +602,10 @@ function TitleBarComponent({
   }, []);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const canDrag = tabs.length > 1;
+  const draggedTab = sortable.draggingId
+    ? tabs.find((tab) => tab.id === sortable.draggingId)
+    : undefined;
+  const dragGhost = sortable.dragGhost;
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const onTabContextMenu = useCallback((id: string, event: { clientX: number; clientY: number; preventDefault: () => void; stopPropagation: () => void }) => {
     const target = tabs.find((tab) => tab.id === id);
@@ -739,10 +774,11 @@ function TitleBarComponent({
   // on a direct hit, which left every label and spacer dead. Tauri still
   // exempts buttons, links and inputs on its own.
   return (
-    <header
-      className="flex h-10 shrink-0 select-none items-stretch border-b border-content/10"
-      data-tauri-drag-region="deep"
-    >
+    <>
+      <header
+        className="flex h-10 shrink-0 select-none items-stretch border-b border-content/10"
+        data-tauri-drag-region="deep"
+      >
       {/* Both the rail and the sidebar step aside without a project, so the
           title bar takes over the traffic lights and the rail toggle. */}
       {projectless && railClosed ? (
@@ -848,7 +884,33 @@ function TitleBarComponent({
           onClose={closeTabMenu}
         />
       ) : null}
-    </header>
+      </header>
+      {draggedTab && dragGhost
+        ? createPortal(
+            <div
+              aria-hidden
+              className="pointer-events-none rounded-md border border-content/15 bg-content/10 shadow-xl backdrop-blur-xl"
+              style={{
+                position: "fixed",
+                left: Math.min(
+                  Math.max(dragGhost.x, 8),
+                  Math.max(8, window.innerWidth - dragGhost.width - 8),
+                ),
+                top: Math.min(
+                  Math.max(dragGhost.y, 8),
+                  Math.max(8, window.innerHeight - dragGhost.height - 8),
+                ),
+                width: dragGhost.width,
+                height: dragGhost.height,
+                zIndex: LAYER.popover,
+              }}
+            >
+              <TitleTabGhost tab={draggedTab} />
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
