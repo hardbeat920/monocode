@@ -23,6 +23,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
+import { LAYER } from "../lib/layers";
 import {
   loadSidebarTabOrder,
   saveSidebarTabOrder,
@@ -431,7 +433,7 @@ function SidebarComponent({
     },
     { axis: "y" },
   );
-  const visibleTabs = tabOrder.filter((itemId) => itemId !== "inbox");
+  const visibleTabs: SidebarTab[] = tabOrder.filter((itemId) => itemId !== "inbox");
   const canDragTabs = visibleTabs.length > 1;
   const showProjectRail = Boolean(onSelectProject && onOpenProject);
   // Settings live in the rail slot, so they keep it visible even when the
@@ -995,20 +997,29 @@ function SidebarComponent({
   const changeDeletions = changeStats?.deletions ?? 0;
   const hasChangeStats = changeAdditions > 0 || changeDeletions > 0;
 
+  // useSortable tracks tabOrder (which keeps the hidden inbox slot), but the
+  // strip renders visibleTabs — translate the drop indices into visible
+  // coordinates, otherwise the insertion cursor lands on the wrong tab.
+  const dragFromVisible =
+    sortable.draggingId != null
+      ? visibleTabs.indexOf(sortable.draggingId as (typeof visibleTabs)[number])
+      : -1;
+  const dragToVisible =
+    sortable.toIndex != null && tabOrder[sortable.toIndex] != null
+      ? visibleTabs.indexOf(tabOrder[sortable.toIndex] as (typeof visibleTabs)[number])
+      : -1;
   const workspaceTabItems = visibleTabs.map((itemId, index) => {
     const active = tab === itemId;
     const isChangesTab = itemId === "changes";
     const draggingTab = sortable.draggingId === itemId;
     const showStart =
-      sortable.draggingId &&
-      sortable.toIndex === index &&
-      sortable.fromIndex !== null &&
-      sortable.toIndex < sortable.fromIndex;
+      dragToVisible === index &&
+      dragFromVisible !== -1 &&
+      dragToVisible < dragFromVisible;
     const showEnd =
-      sortable.draggingId &&
-      sortable.toIndex === index &&
-      sortable.fromIndex !== null &&
-      sortable.toIndex > sortable.fromIndex;
+      dragToVisible === index &&
+      dragFromVisible !== -1 &&
+      dragToVisible > dragFromVisible;
     return (
       <div
         key={itemId}
@@ -1506,6 +1517,10 @@ function SidebarComponent({
     </aside>
   );
 
+  const draggedWorkspaceTab =
+    visibleTabs.find((itemId) => itemId === sortable.draggingId) ?? null;
+  const workspaceDragGhost = sortable.dragGhost;
+
   return (
     <div
       className={`flex h-full shrink-0 ${
@@ -1547,6 +1562,42 @@ function SidebarComponent({
         />
       ) : null}
       {sidebarVisible ? sidebarContent : null}
+      {draggedWorkspaceTab && workspaceDragGhost
+        ? createPortal(
+            <div
+              aria-hidden
+              className="pointer-events-none flex items-center"
+              style={{
+                position: "fixed",
+                left: Math.min(
+                  Math.max(workspaceDragGhost.x, 8),
+                  Math.max(8, window.innerWidth - workspaceDragGhost.width - 8),
+                ),
+                top: Math.min(
+                  Math.max(workspaceDragGhost.y, 8),
+                  Math.max(8, window.innerHeight - workspaceDragGhost.height - 8),
+                ),
+                width: workspaceDragGhost.width,
+                height: workspaceDragGhost.height,
+                zIndex: LAYER.popover,
+              }}
+            >
+              <div className="flex h-6 w-full items-center justify-center rounded-md border border-content/15 bg-content/10 px-2 text-[12px] leading-none text-content shadow-xl backdrop-blur-xl">
+                {draggedWorkspaceTab === "changes" && hasChangeStats ? (
+                  <DiffStat
+                    additions={changeAdditions}
+                    deletions={changeDeletions}
+                  />
+                ) : (
+                  <span className="block truncate">
+                    {TAB_LABELS[draggedWorkspaceTab]}
+                  </span>
+                )}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
