@@ -1,5 +1,6 @@
 import { homeDir } from "../fs";
 import {
+  MODELS,
   setHarnessModels,
   type AgentModel,
   type ModelSetting,
@@ -194,6 +195,16 @@ export function flattenOpenCodeModels(
         ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
       });
     }
+  }
+  // Keep the providers MonoCode knows about even when the local OpenCode
+  // installation has not emitted them yet. Once configured, the live catalog
+  // entries above replace these fallback entries by their complete metadata.
+  const seen = new Set(models.map((model) => model.nativeId));
+  for (const model of MODELS) {
+    if (model.harness !== "opencode" || !model.nativeId || seen.has(model.nativeId)) {
+      continue;
+    }
+    models.push(model);
   }
   return models.sort((left, right) => left.name.localeCompare(right.name));
 }

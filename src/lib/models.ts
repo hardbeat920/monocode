@@ -152,6 +152,28 @@ export const MODELS: AgentModel[] = [
     name: "Claude Sonnet 4.6",
   },
   { id: "opencode:gpt-5.4", harness: "opencode", name: "GPT-5.4" },
+  // Built-in OpenCode-compatible providers. These remain available as a
+  // fallback until `opencode models --verbose` returns a live catalog.
+  {
+    id: "opencode:zai/glm-5.2",
+    harness: "opencode",
+    name: "Z.AI · GLM-5.2",
+    nativeId: "zai/glm-5.2",
+    contextWindow: 200_000,
+  },
+  {
+    id: "opencode:mimo/mimo-v2.5-pro",
+    harness: "opencode",
+    name: "MiMo · MiMo V2.5 Pro",
+    nativeId: "mimo/mimo-v2.5-pro",
+    contextWindow: 1_048_576,
+  },
+  {
+    id: "opencode:opencode-zen/big-pickle",
+    harness: "opencode",
+    name: "OpenCode Zen · Big Pickle",
+    nativeId: "opencode-zen/big-pickle",
+  },
   {
     id: "pi:default",
     harness: "pi",
