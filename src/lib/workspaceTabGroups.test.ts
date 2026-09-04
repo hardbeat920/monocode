@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { leaf, leafIds, newTab, type WorkspaceTab } from "./layout";
+import { leafIds, newTab, type WorkspaceTab } from "./layout";
 import type { Session } from "./session";
 import {
-  applyDeletedSessionToWorkspace,
   applyPlaceSessionOnPane,
   filterTabsForProject,
   findTabForProject,
@@ -170,99 +169,6 @@ describe("planWorkspaceTabClose", () => {
         scope: "project",
       }),
     ).toEqual({ action: "keep" });
-  });
-});
-
-describe("applyDeletedSessionToWorkspace", () => {
-  const sessions = [
-    session("m1", "/projects/monocode"),
-    session("r1", "/projects/ruler"),
-    session("m2", "/projects/monocode"),
-  ];
-  const tabs = [tab("tm1", "m1"), tab("tr1", "r1"), tab("tm2", "m2")];
-
-  function replacementFrom(seed: Session | undefined): Session {
-    return session("replacement", seed?.cwd ?? "/tmp/fallback");
-  }
-
-  it("stays in the project when deleting its last open tab in project scope", () => {
-    const next = applyDeletedSessionToWorkspace({
-      tabs: [tab("tr1", "r1"), tab("tm1", "m1")],
-      sessions: sessions.slice(0, 2),
-      sessionId: "m1",
-      activeTabId: "tm1",
-      scope: "project",
-      createReplacement: replacementFrom,
-    });
-    expect(next.activeTabId).toBe("tm1");
-    expect(next.tabs.map((entry) => entry.id)).toEqual(["tr1", "tm1"]);
-    expect(next.tabs[1]?.focusedId).toBe("replacement");
-    expect(next.sessions.map((entry) => entry.id)).toEqual(["r1", "replacement"]);
-  });
-
-  it("activates the previous same-project tab in project scope", () => {
-    const next = applyDeletedSessionToWorkspace({
-      tabs,
-      sessions,
-      sessionId: "m2",
-      activeTabId: "tm2",
-      scope: "project",
-      createReplacement: replacementFrom,
-    });
-    expect(next.activeTabId).toBe("tm1");
-    expect(next.tabs.map((entry) => entry.id)).toEqual(["tm1", "tr1"]);
-  });
-
-  it("activates the next same-project tab when none exists to the left", () => {
-    const next = applyDeletedSessionToWorkspace({
-      tabs,
-      sessions,
-      sessionId: "m1",
-      activeTabId: "tm1",
-      scope: "project",
-      createReplacement: replacementFrom,
-    });
-    expect(next.activeTabId).toBe("tm2");
-    expect(next.tabs.map((entry) => entry.id)).toEqual(["tr1", "tm2"]);
-  });
-
-  it("jumps to the global neighbor in workspace scope", () => {
-    const next = applyDeletedSessionToWorkspace({
-      tabs: tabs.slice(0, 2),
-      sessions,
-      sessionId: "m1",
-      activeTabId: "tm1",
-      scope: "workspace",
-      createReplacement: replacementFrom,
-    });
-    expect(next.activeTabId).toBe("tr1");
-    expect(next.tabs.map((entry) => entry.id)).toEqual(["tr1"]);
-  });
-
-  it("keeps a split tab when only one pane is deleted", () => {
-    const split: WorkspaceTab = {
-      ...tab("split", "m1"),
-      layout: {
-        type: "split",
-        id: "s",
-        dir: "right",
-        children: [leaf("m1"), leaf("m2")],
-        sizes: [0.5, 0.5],
-      },
-      focusedId: "m1",
-    };
-    const next = applyDeletedSessionToWorkspace({
-      tabs: [split, tab("tr1", "r1")],
-      sessions,
-      sessionId: "m1",
-      activeTabId: "split",
-      scope: "project",
-      createReplacement: replacementFrom,
-    });
-    expect(next.activeTabId).toBe("split");
-    expect(next.tabs).toHaveLength(2);
-    expect(next.tabs[0]?.focusedId).toBe("m2");
-    expect(next.sessions.map((entry) => entry.id)).toEqual(["r1", "m2"]);
   });
 });
 
