@@ -119,6 +119,11 @@ describe("buildMentionIndex", () => {
       { name: "abs", path: "/tmp/abs", relative: "/tmp/abs" },
       { name: "at.md", path: "/p/at.md", relative: "see@me.md" },
       { name: "nul", path: "/p/nul", relative: "bad\0name.md" },
+      { name: "ls.md", path: "/p/ls.md", relative: "docs/read\u2028me.md" },
+      { name: "ps.md", path: "/p/ps.md", relative: "docs/read\u2029me.md" },
+      { name: "nel.md", path: "/p/nel.md", relative: "a\u0085b.md" },
+      { name: "bidi.md", path: "/p/bidi.md", relative: "photo\u202Egpj.md" },
+      { name: "zwsp.ts", path: "/p/zwsp.ts", relative: "file\u200B.ts" },
     ]);
     expect(unsafe.labels.size).toBe(0);
   });

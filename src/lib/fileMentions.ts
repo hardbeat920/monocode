@@ -308,10 +308,10 @@ function pathDepth(relative: string): number {
   return depth;
 }
 
-/** Workspace-relative only: no absolute paths, `..`, or control characters. */
+/** Workspace-relative only: no absolute paths, `..`, or control / format characters. */
 function isSafeProjectRelative(relative: string): boolean {
   if (!relative || relative.length > MAX_QUERY * 4) return false;
-  if (/[\u0000-\u001f\u007f]/.test(relative)) return false;
+  if (hasUnsafeChars(relative)) return false;
   if (relative.startsWith("/") || relative.startsWith("\\")) return false;
   if (relative.includes("://")) return false;
   for (const part of relative.split("/")) {
@@ -335,8 +335,13 @@ function isTokenSafe(value: string): boolean {
     value.length > 0 &&
     value.length <= MAX_QUERY &&
     !/[\s@\\]/.test(value) &&
-    !/[\u0000-\u001f\u007f]/.test(value)
+    !hasUnsafeChars(value)
   );
+}
+
+/** ASCII/C1 controls, bidi/format marks, and Unicode line/paragraph separators. */
+function hasUnsafeChars(value: string): boolean {
+  return /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value);
 }
 
 function isMentionableRelative(relative: string): boolean {
