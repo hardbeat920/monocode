@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isClosableTab, tabCopy, tabStripOverflow, type Tab } from "./TitleBar";
+import {
+  isClosableTab,
+  tabAttention,
+  tabCopy,
+  tabStripOverflow,
+  type Tab,
+} from "./TitleBar";
 
 function tab(overrides: Partial<Tab> = {}): Tab {
   return {
@@ -112,5 +118,25 @@ describe("isClosableTab", () => {
   it("allows closing any tab when several are open", () => {
     expect(isClosableTab(tab({ sessionCount: 0 }), 2)).toBe(true);
     expect(isClosableTab(tab({ sessionCount: 1, blank: true }), 2)).toBe(true);
+  });
+});
+
+describe("tabAttention", () => {
+  it("returns null without any status", () => {
+    expect(tabAttention(tab())).toBeNull();
+  });
+
+  it("prefers approval over working and done", () => {
+    expect(
+      tabAttention(tab({ needsApproval: true, busy: true, done: true })),
+    ).toBe("approval");
+  });
+
+  it("prefers working over done", () => {
+    expect(tabAttention(tab({ busy: true, done: true }))).toBe("working");
+  });
+
+  it("reports unseen done", () => {
+    expect(tabAttention(tab({ done: true }))).toBe("done");
   });
 });

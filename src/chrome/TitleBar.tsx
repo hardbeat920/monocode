@@ -56,6 +56,12 @@ export type Tab = {
   multiPane?: boolean;
   /** Focus is on a file/terminal pane rather than a conversation pane. */
   fileFocused?: boolean;
+  /** A session in this tab waits for approval (SessionCard amber). */
+  needsApproval?: boolean;
+  /** A session in this tab has an in-flight turn (SessionCard accent). */
+  busy?: boolean;
+  /** A session in this tab finished while unseen (SessionCard emerald). */
+  done?: boolean;
   /** Explicit tab group; absent means ungrouped. */
   groupId?: string;
   dirty?: boolean;
@@ -201,6 +207,66 @@ function TabHarnesses({
     </span>
   );
 }
+/** Unread attention on a tab, highest priority first. Mirrors the SessionCard
+ * status order: needs approval (amber) beats working (accent) beats unseen
+ * done (emerald). */
+export type TabAttention = "approval" | "working" | "done";
+
+export function tabAttention(tab: Tab): TabAttention | null {
+  if (tab.needsApproval) return "approval";
+  if (tab.busy) return "working";
+  if (tab.done) return "done";
+  return null;
+}
+
+/** Dot fill matching the SessionCard status text color for each attention. */
+const ATTENTION_DOT: Record<TabAttention, string> = {
+  approval: "bg-amber-400",
+  working: "bg-accent",
+  done: "bg-emerald-400",
+};
+
+function TabIcon({
+  tab,
+  dimmed,
+  dot,
+}: {
+  tab: Tab;
+  dimmed: boolean;
+  dot: boolean;
+}) {
+  const fileIcon = tab.files[0];
+  const attention = tabAttention(tab);
+  return (
+    <span className="relative shrink-0">
+      {tab.harnesses.length > 0 ? (
+        <TabHarnesses
+          harnesses={tab.harnesses}
+          busyHarnesses={tab.busyHarnesses}
+          dimmed={dimmed}
+        />
+      ) : tab.terminal || !fileIcon ? (
+        <Terminal
+          className={`size-3.5 shrink-0 ${
+            dimmed ? "text-content/55" : "text-content"
+          }`}
+          strokeWidth={1.75}
+        />
+      ) : (
+        <span className={dimmed ? "opacity-55" : undefined}>
+          <FileTypeIcon name={fileIcon} isDir={false} size={14} />
+        </span>
+      )}
+      {dot && attention ? (
+        <span
+          aria-hidden
+          className={`absolute -right-0.5 -top-0.5 size-1.5 rounded-full ${ATTENTION_DOT[attention]}`}
+        />
+      ) : null}
+    </span>
+  );
+}
+
 
 type SortableApi = ReturnType<typeof useSortable>;
 
@@ -229,7 +295,6 @@ function TitleTabItem({
 }) {
   const dragging = canDrag && sortable.draggingId === tab.id;
   const { headline, meta, tooltip } = tabCopy(tab);
-  const fileIcon = tab.files[0];
   const showStart =
     canDrag &&
     sortable.draggingId &&
@@ -290,24 +355,7 @@ function TitleTabItem({
             : "text-content/50 hover:bg-content/5 hover:text-content"
         }`}
       >
-        {tab.harnesses.length > 0 ? (
-          <TabHarnesses
-            harnesses={tab.harnesses}
-            busyHarnesses={tab.busyHarnesses}
-            dimmed={!active}
-          />
-        ) : tab.terminal || !fileIcon ? (
-          <Terminal
-            className={`size-3.5 shrink-0 ${
-              active ? "text-content" : "text-content/55"
-            }`}
-            strokeWidth={1.75}
-          />
-        ) : (
-          <span className={!active ? "opacity-55" : undefined}>
-            <FileTypeIcon name={fileIcon} isDir={false} size={14} />
-          </span>
-        )}
+        <TabIcon tab={tab} dimmed={!active} dot={!active} />
         <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
           <span className="flex min-w-0 items-center gap-1">
             <span
@@ -362,20 +410,9 @@ function TitleTabItem({
  * shows only the accent position cursor. */
 function TitleTabGhost({ tab }: { tab: Tab }) {
   const { headline } = tabCopy(tab);
-  const fileIcon = tab.files[0];
   return (
     <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2.5">
-      {tab.harnesses.length > 0 ? (
-        <TabHarnesses
-          harnesses={tab.harnesses}
-          busyHarnesses={tab.busyHarnesses}
-          dimmed={false}
-        />
-      ) : tab.terminal || !fileIcon ? (
-        <Terminal className="size-3.5 shrink-0 text-content" strokeWidth={1.75} />
-      ) : (
-        <FileTypeIcon name={fileIcon} isDir={false} size={14} />
-      )}
+      <TabIcon tab={tab} dimmed={false} dot />
       <span className="min-w-0 flex-1 truncate text-[13px] leading-none text-content">
         {headline}
       </span>
