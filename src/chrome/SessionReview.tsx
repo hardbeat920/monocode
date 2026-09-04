@@ -17,7 +17,11 @@ type Props = {
   cwd: string;
   enabled?: boolean;
   busy?: boolean;
-  onOpenDiff: (path?: string) => void;
+  undoLocked?: boolean;
+  onOpenDiff: (
+    path?: string,
+    session?: { sessionId: string; cwd: string },
+  ) => void;
 };
 
 export function SessionReview({
@@ -25,6 +29,7 @@ export function SessionReview({
   cwd,
   enabled = true,
   busy = false,
+  undoLocked = false,
   onOpenDiff,
 }: Props) {
   const [files, setFiles] = useState<CheckpointFile[]>([]);
@@ -84,6 +89,7 @@ export function SessionReview({
   const many = files.length > 1;
   const first = files[0];
   if (!first) return null;
+  const canUndoAll = !undoLocked && files.every((file) => file.undoable);
 
   const run = (action: "keep" | "undo") => {
     if (disabled) return;
@@ -105,7 +111,7 @@ export function SessionReview({
   };
 
   return (
-    <div className="px-2">
+    <div className="px-2" data-session-review-shell>
       <div
         className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
         data-session-review
@@ -130,13 +136,24 @@ export function SessionReview({
               <span className="truncate text-[12px]">{files.length} Files</span>
             </button>
           ) : (
-            <FileLabel file={first} onOpenDiff={onOpenDiff} />
+            <FileLabel
+              file={first}
+              sessionId={sessionId}
+              cwd={cwd}
+              onOpenDiff={onOpenDiff}
+            />
           )}
           <div className="flex shrink-0 items-center gap-0.5">
             <button
               type="button"
-              title="Undo all session changes"
-              disabled={disabled}
+              title={
+                canUndoAll
+                  ? "Undo all session changes"
+                  : undoLocked
+                    ? "Undo is unavailable while another session is running in this project"
+                    : "Undo is unavailable because a file changed outside this session"
+              }
+              disabled={disabled || !canUndoAll}
               onClick={() => run("undo")}
               className="h-6 rounded-md px-1.5  text-[11px] text-content/55 hover:bg-content/10 hover:text-content disabled:opacity-40"
             >
@@ -154,7 +171,7 @@ export function SessionReview({
             <button
               type="button"
               title="Review changes"
-              onClick={() => onOpenDiff()}
+              onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
               className="h-6 rounded-md bg-content/15 px-2 text-[11px] text-content/80 hover:bg-content/20 hover:text-content"
             >
               Review
@@ -165,7 +182,12 @@ export function SessionReview({
           <ul className="scrollbar-none mt-1 max-h-40 overflow-y-auto">
             {files.map((file) => (
               <li key={file.relative}>
-                <FileRow file={file} onOpenDiff={onOpenDiff} />
+                <FileRow
+                  file={file}
+                  sessionId={sessionId}
+                  cwd={cwd}
+                  onOpenDiff={onOpenDiff}
+                />
               </li>
             ))}
           </ul>
@@ -177,17 +199,24 @@ export function SessionReview({
 
 function FileLabel({
   file,
+  sessionId,
+  cwd,
   onOpenDiff,
 }: {
   file: CheckpointFile;
-  onOpenDiff: (path?: string) => void;
+  sessionId: string;
+  cwd: string;
+  onOpenDiff: (
+    path?: string,
+    session?: { sessionId: string; cwd: string },
+  ) => void;
 }) {
   const name = basename(file.relative);
   return (
     <button
       type="button"
       title={file.relative}
-      onClick={() => onOpenDiff(file.path)}
+      onClick={() => onOpenDiff(file.path, { sessionId, cwd })}
       className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left text-content/80 hover:text-content"
     >
       <FileTypeIcon name={name} isDir={false} size={14} />
@@ -199,17 +228,24 @@ function FileLabel({
 
 function FileRow({
   file,
+  sessionId,
+  cwd,
   onOpenDiff,
 }: {
   file: CheckpointFile;
-  onOpenDiff: (path?: string) => void;
+  sessionId: string;
+  cwd: string;
+  onOpenDiff: (
+    path?: string,
+    session?: { sessionId: string; cwd: string },
+  ) => void;
 }) {
   const name = basename(file.relative);
   return (
     <button
       type="button"
       title={file.relative}
-      onClick={() => onOpenDiff(file.path)}
+      onClick={() => onOpenDiff(file.path, { sessionId, cwd })}
       className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-1 text-left text-content/80 hover:bg-content/10 hover:text-content"
     >
       <FileTypeIcon name={name} isDir={false} size={16} />
@@ -222,6 +258,13 @@ function FileRow({
 }
 
 function DiffCounts({ file }: { file: CheckpointFile }) {
+  if (!file.exact) {
+    return (
+      <span className="shrink-0 text-[11px] font-medium text-amber-300/80">
+        Shared file
+      </span>
+    );
+  }
   if (file.additions <= 0 && file.deletions <= 0) return null;
   return (
     <span className="shrink-0 font-mono text-[11px] font-semibold">

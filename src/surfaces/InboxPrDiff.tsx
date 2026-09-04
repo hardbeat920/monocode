@@ -2,12 +2,7 @@ import { useMemo } from "react";
 import type { GithubPrDiff } from "../lib/githubTasks";
 import { mergePrDiff, parsePrPatch, type PrDiffFile } from "../lib/prDiff";
 import { blocksFromLines, type UnifiedLine } from "../lib/unifiedDiff";
-import {
-  UnifiedDiffView,
-  type UnifiedDiffFileModel,
-} from "./UnifiedDiffView";
-
-const MAX_DISPLAY_LINES = 2000;
+import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
 
 type Props = {
   diff: GithubPrDiff;
@@ -16,7 +11,7 @@ type Props = {
 export function InboxPrDiff({ diff }: Props) {
   const files = useMemo(() => {
     const parsed = mergePrDiff(diff.files, parsePrPatch(diff.patch));
-    return parsed.map((file) => toModel(file));
+    return parsed.map((file) => toModel(file, diff.truncated));
   }, [diff]);
 
   return (
@@ -25,12 +20,14 @@ export function InboxPrDiff({ diff }: Props) {
       truncated={diff.truncated}
       totals={{ additions: diff.additions, deletions: diff.deletions }}
       fill={false}
+      fileLayout="cards"
+      initialExpansion="first"
     />
   );
 }
 
-function toModel(file: PrDiffFile): UnifiedDiffFileModel {
-  const lines = file.lines.slice(0, MAX_DISPLAY_LINES).map(toUnifiedLine);
+function toModel(file: PrDiffFile, truncated: boolean): UnifiedDiffFileModel {
+  const lines = file.lines.map(toUnifiedLine);
   return {
     id: file.path,
     path: file.path,
@@ -40,7 +37,11 @@ function toModel(file: PrDiffFile): UnifiedDiffFileModel {
         : file.path,
     binary: file.binary,
     emptyMessage:
-      !file.binary && file.lines.length === 0 ? "No textual diff" : undefined,
+      !file.binary && file.lines.length === 0
+        ? truncated
+          ? "Patch unavailable because this pull request is too large"
+          : "No textual diff"
+        : undefined,
     additions: file.additions,
     deletions: file.deletions,
     blocks: blocksFromLines(lines),

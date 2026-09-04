@@ -55,6 +55,10 @@ import { syncWatchedMtime, watchFile } from "../lib/fileWatch";
 import { displayPath } from "../lib/paths";
 import type { EditorNavigation } from "../lib/search";
 import { MarkdownPreview } from "./AgentMarkdown";
+import {
+  DiffCommentComposer,
+  type DiffCommentComposerTarget,
+} from "./DiffCommentComposer";
 import { editorAutocomplete } from "./editorAutocomplete";
 import { languageForPath, schemeExtensions } from "./editorChrome";
 import { preserveEditorViewport, replaceEditorDoc } from "./editorDoc";
@@ -114,6 +118,7 @@ export function FileEditor({
     original: string | null;
   }>({ path, original: null });
   const markdown = isMarkdownPath(path);
+  const svg = isSvgPath(path);
   const [mode, setMode] = useMarkdownMode(path);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveGeneration = useRef(0);
@@ -372,18 +377,23 @@ export function FileEditor({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      {markdown ? (
+      {markdown || svg ? (
         <MarkdownViewShell
           mode={mode}
           onModeChange={setMode}
           preview={
-            <MarkdownPreview text={draft} cwd={cwd} onOpenFile={onOpenFile} />
+            markdown ? (
+              <MarkdownPreview text={draft} cwd={cwd} onOpenFile={onOpenFile} />
+            ) : (
+              <SvgPreview source={draft} />
+            )
           }
           source={
             <div className="flex h-full min-h-0 min-w-0 flex-col">
               <CodeMirrorEditor
                 key={`${path}:${reloadKey}`}
                 path={path}
+                commentPath={relativePath}
                 value={loadState.content}
                 showDiff={showDiff}
                 gitOriginal={gitOriginal}
@@ -402,6 +412,7 @@ export function FileEditor({
         <CodeMirrorEditor
           key={`${path}:${reloadKey}`}
           path={path}
+          commentPath={relativePath}
           value={loadState.content}
           showDiff={showDiff}
           gitOriginal={gitOriginal}
@@ -436,6 +447,7 @@ export function FileEditor({
 
 function CodeMirrorEditor({
   path,
+  commentPath,
   value,
   showDiff,
   gitOriginal,
@@ -448,6 +460,7 @@ function CodeMirrorEditor({
   onDocChange,
 }: {
   path: string;
+  commentPath: string;
   value: string;
   showDiff: boolean;
   gitOriginal: string | null;
@@ -480,6 +493,8 @@ function CodeMirrorEditor({
     additions: number;
     deletions: number;
   } | null>(null);
+  const [commentTarget, setCommentTarget] =
+    useState<DiffCommentComposerTarget | null>(null);
   activeRef.current = active;
   onDirtyChangeRef.current = onDirtyChange;
   onErrorCountChangeRef.current = onErrorCountChange;
@@ -617,13 +632,12 @@ function CodeMirrorEditor({
       extensions: [
         minimalSetup,
         showDiff
-          ? editorGit(
-              onStageGit
-                ? {
-                    onStage: (contents) => onStageGitRef.current?.(contents),
-                  }
+          ? editorGit({
+              onStage: onStageGit
+                ? (contents) => onStageGitRef.current?.(contents)
                 : undefined,
-            )
+              onComment: setCommentTarget,
+            })
           : [],
         lineNumbers(),
         foldGutter(),
@@ -796,19 +810,28 @@ function CodeMirrorEditor({
   }, [active, path]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {showDiff ? (
-        <DiffChunkNav
-          index={chunkNav?.index ?? 0}
-          total={chunkNav?.positions.length ?? 0}
-          additions={chunkNav?.additions ?? 0}
-          deletions={chunkNav?.deletions ?? 0}
-          onPrev={() => stepChunkNav(-1)}
-          onNext={() => stepChunkNav(1)}
+    <>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {showDiff ? (
+          <DiffChunkNav
+            index={chunkNav?.index ?? 0}
+            total={chunkNav?.positions.length ?? 0}
+            additions={chunkNav?.additions ?? 0}
+            deletions={chunkNav?.deletions ?? 0}
+            onPrev={() => stepChunkNav(-1)}
+            onNext={() => stepChunkNav(1)}
+          />
+        ) : null}
+        <div ref={hostRef} className="min-h-0 flex-1" />
+      </div>
+      {commentTarget ? (
+        <DiffCommentComposer
+          path={commentPath}
+          target={commentTarget}
+          onDismiss={() => setCommentTarget(null)}
         />
       ) : null}
-      <div ref={hostRef} className="min-h-0 flex-1" />
-    </div>
+    </>
   );
 }
 
@@ -1018,6 +1041,35 @@ function mergeLineRanges(ranges: LineRange[]): LineRange[] {
     }
   }
   return merged;
+}
+
+/**
+ * SVG is text, so it stays editable in CodeMirror and renders through an
+ * `<img>` rather than inline. In that context the webview runs no script and
+ * fetches no external reference the document asks for, which is what makes it
+ * safe to preview a file the agent may have just written.
+ */
+function SvgPreview({ source }: { source: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const next = URL.createObjectURL(
+      new Blob([source], { type: "image/svg+xml" }),
+    );
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [source]);
+
+  if (!url) return null;
+  return (
+    <div className="grid h-full place-items-center overflow-auto p-6">
+      <img src={url} alt="" className="max-h-full max-w-full object-contain" />
+    </div>
+  );
+}
+
+function isSvgPath(path: string): boolean {
+  return basename(path).toLowerCase().endsWith(".svg");
 }
 
 function isMarkdownPath(path: string): boolean {

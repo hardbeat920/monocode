@@ -1,6 +1,7 @@
 import {
   bindOpenCodeSession,
   cancelOpenCodeTurn,
+  compactOpenCodeContext,
   forgetOpenCodeSession,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
@@ -22,6 +23,7 @@ export const openCodeAdapter: HarnessAdapter = {
   id: "opencode",
   live: true,
   sendTurn: sendOpenCodeTurn,
+  compactContext: compactOpenCodeContext,
   steerTurn: steerOpenCodeTurn,
   cancelTurn: cancelOpenCodeTurn,
   respondApproval: respondOpenCodeApproval,

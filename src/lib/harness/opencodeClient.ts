@@ -54,25 +54,47 @@ export class OpenCodeClient {
     sessionID: string,
     body: Record<string, unknown>,
   ): Promise<OpenCodeSession> {
-    return this.request<OpenCodeSession>("PATCH", `/session/${enc(sessionID)}`, {
-      body,
-    });
+    return this.request<OpenCodeSession>(
+      "PATCH",
+      `/session/${enc(sessionID)}`,
+      {
+        body,
+      },
+    );
   }
 
   async forkSession(
     sessionID: string,
     directory: string,
   ): Promise<OpenCodeSession> {
-    return this.request<OpenCodeSession>("POST", `/session/${enc(sessionID)}/fork`, {
-      query: { directory },
-      body: {},
-    });
+    return this.request<OpenCodeSession>(
+      "POST",
+      `/session/${enc(sessionID)}/fork`,
+      {
+        query: { directory },
+        body: {},
+      },
+    );
   }
 
   async abortSession(sessionID: string): Promise<void> {
     await this.request<unknown>("POST", `/session/${enc(sessionID)}/abort`, {
       body: {},
     }).catch(() => undefined);
+  }
+
+  async summarizeSession(
+    sessionID: string,
+    model: { providerID: string; modelID: string },
+  ): Promise<void> {
+    await this.request<unknown>(
+      "POST",
+      `/session/${enc(sessionID)}/summarize`,
+      {
+        body: model,
+        timeoutMs: 30 * 60_000,
+      },
+    );
   }
 
   async promptAsync(input: {
@@ -142,11 +164,15 @@ export class OpenCodeClient {
     onEnd?: (error?: string) => void,
   ): Promise<void> {
     const url = this.url("/event");
-    watchSse(sessionId, (data) => {
-      const parsed = parseJson(data);
-      const rec = asRecord(parsed);
-      if (rec) onEvent(rec);
-    }, onEnd);
+    watchSse(
+      sessionId,
+      (data) => {
+        const parsed = parseJson(data);
+        const rec = asRecord(parsed);
+        if (rec) onEvent(rec);
+      },
+      onEnd,
+    );
     await openHarnessSse(sessionId, url, this.headers());
   }
 

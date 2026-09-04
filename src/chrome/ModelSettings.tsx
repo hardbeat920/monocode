@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, Gauge, Maximize2, Zap } from "./icons";
+import { AiIdea, ChevronDown, Gauge, Maximize2, Zap } from "./icons";
 import {
   useEffect,
   useMemo,
@@ -35,8 +35,18 @@ export function ModelSettings({
   const catalog = useSyncCatalog();
   const settings = useMemo(() => {
     void catalog;
-    const list = resolveModel(harness, model).settings ?? [];
-    const order = ["variant", "agent", "effort", "reasoning", "thinking", "fast", "context"];
+    const list = (resolveModel(harness, model).settings ?? []).filter(
+      (setting) => !(harness === "opencode" && setting.id === "agent"),
+    );
+    const order = [
+      "variant",
+      "agent",
+      "effort",
+      "reasoning",
+      "thinking",
+      "fast",
+      "context",
+    ];
     return [...list].sort((a, b) => {
       const ai = order.indexOf(a.id);
       const bi = order.indexOf(b.id);
@@ -91,7 +101,7 @@ function ToggleSetting({
 }) {
   const on = value === "true";
   const Icon =
-    setting.id === "fast" ? Zap : setting.id === "thinking" ? Brain : Gauge;
+    setting.id === "fast" ? Zap : setting.id === "thinking" ? AiIdea : Gauge;
   return (
     <button
       type="button"

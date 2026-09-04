@@ -1,5 +1,6 @@
 import type { Attachment, ToolPreview } from "../session";
 import type { AgentModel, ModelSetting } from "../models";
+import { isTaskListToolName } from "../taskList";
 import type { PiFlavor } from "./piFlavor";
 import { extractToolPreview, titleFromToolInput } from "./preview";
 import { streamTextDelta } from "./streamText";
@@ -55,7 +56,8 @@ export type PiExtensionUiRequest =
     }
   | {
       id: string;
-      method: "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
+      method:
+        "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
       title?: string;
     };
 
@@ -141,6 +143,7 @@ export function buildPiSpawnArgs(
     noExtensions?: boolean;
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
+    plan?: boolean;
   },
 ): string[] {
   const args = ["--mode", "rpc"];
@@ -148,6 +151,8 @@ export function buildPiSpawnArgs(
   if (input.isolated || input.noExtensions) args.push("--no-extensions");
   if (input.isolated) {
     args.push(...flavor.isolateFlags);
+  } else if (input.plan) {
+    args.push("--tools", flavor.planTools.join(","));
   }
   if (input.resume?.trim()) {
     args.push(flavor.resumeFlag, input.resume.trim());
@@ -157,7 +162,9 @@ export function buildPiSpawnArgs(
   return args;
 }
 
-export function parsePiModelRef(nativeId: string | undefined): PiModelRef | null {
+export function parsePiModelRef(
+  nativeId: string | undefined,
+): PiModelRef | null {
   if (!nativeId) return null;
   const trimmed = nativeId.trim();
   if (!trimmed) return null;
@@ -216,7 +223,9 @@ export function buildPiSteer(input: {
   return command;
 }
 
-export function parseRpcResponse(rec: Record<string, unknown>): PiRpcResponse | null {
+export function parseRpcResponse(
+  rec: Record<string, unknown>,
+): PiRpcResponse | null {
   if (stringField(rec, "type") !== "response") return null;
   const command = stringField(rec, "command") ?? "unknown";
   const id = stringField(rec, "id");
@@ -455,9 +464,7 @@ export function toolExecutionStartFromEvent(
   return { id, name, input: toolArgsFromEvent(rec) };
 }
 
-export function toolExecutionUpdateFromEvent(
-  rec: Record<string, unknown>,
-): {
+export function toolExecutionUpdateFromEvent(rec: Record<string, unknown>): {
   id: string;
   name?: string;
   detail?: string;
@@ -475,9 +482,7 @@ export function toolExecutionUpdateFromEvent(
   };
 }
 
-export function toolExecutionEndFromEvent(
-  rec: Record<string, unknown>,
-): {
+export function toolExecutionEndFromEvent(rec: Record<string, unknown>): {
   id: string;
   name?: string;
   detail?: string;
@@ -500,7 +505,9 @@ export function toolExecutionEndFromEvent(
  * frame: `stopReason: "error"` with the reason in `errorMessage`. Empty string
  * means "failed, no reason".
  */
-export function turnErrorFromEvent(rec: Record<string, unknown>): string | null {
+export function turnErrorFromEvent(
+  rec: Record<string, unknown>,
+): string | null {
   if (stringField(rec, "type") !== "message_end") return null;
   const message = asRecord(rec.message);
   if (stringField(message, "role") !== "assistant") return null;
@@ -512,7 +519,9 @@ export function isAgentSettled(rec: Record<string, unknown>): boolean {
   return stringField(rec, "type") === "agent_settled";
 }
 
-export function agentEndWillRetry(rec: Record<string, unknown>): boolean | null {
+export function agentEndWillRetry(
+  rec: Record<string, unknown>,
+): boolean | null {
   if (stringField(rec, "type") !== "agent_end") return null;
   return rec.willRetry === true;
 }
@@ -532,7 +541,9 @@ export function statusFromPiEvent(rec: Record<string, unknown>): string | null {
   return null;
 }
 
-export function tryParseJsonRecord(partial: string): Record<string, unknown> | null {
+export function tryParseJsonRecord(
+  partial: string,
+): Record<string, unknown> | null {
   try {
     return asRecord(JSON.parse(partial));
   } catch {
@@ -558,6 +569,7 @@ export function textFromContent(content: unknown): string {
 
 export function toolKindFromName(toolName: string): string {
   const normalized = toolName.toLowerCase();
+  if (isTaskListToolName(toolName)) return "tasks";
   if (
     normalized.includes("bash") ||
     normalized.includes("command") ||
@@ -695,10 +707,10 @@ export function thinkingSetting(reasoning: boolean): ModelSetting | undefined {
   };
 }
 
-export function isPiThinkingLevel(value: string | undefined): value is PiThinkingLevel {
-  return (
-    !!value && (PI_THINKING_LEVELS as readonly string[]).includes(value)
-  );
+export function isPiThinkingLevel(
+  value: string | undefined,
+): value is PiThinkingLevel {
+  return !!value && (PI_THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 function thinkingLabel(level: PiThinkingLevel): string {
@@ -720,5 +732,7 @@ function numberField(
   key: string,
 ): number | undefined {
   const value = rec?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }

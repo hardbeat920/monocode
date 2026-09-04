@@ -20,6 +20,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
+import type { UnifiedLine } from "../lib/unifiedDiff";
 
 const DIFF_CONFIG = { scanLimit: 5_000, timeout: 100 };
 
@@ -35,8 +36,17 @@ type ChunkRange = {
 };
 
 type GitStageHandler = (contents: string) => Promise<void> | void;
+export type GitCommentTarget = { line: UnifiedLine; anchor: DOMRect };
+type GitCommentHandler = (target: GitCommentTarget) => void;
 
 const gitStageFacet = Facet.define<GitStageHandler, GitStageHandler | null>({
+  combine: (values) => values[0] ?? null,
+});
+
+const gitCommentFacet = Facet.define<
+  GitCommentHandler,
+  GitCommentHandler | null
+>({
   combine: (values) => values[0] ?? null,
 });
 
@@ -122,6 +132,7 @@ class DeletedLinesWidget extends WidgetType {
   constructor(
     readonly lines: readonly string[],
     readonly pos: number,
+    readonly firstLine: number,
   ) {
     super();
   }
@@ -129,6 +140,7 @@ class DeletedLinesWidget extends WidgetType {
   eq(other: DeletedLinesWidget) {
     return (
       this.pos === other.pos &&
+      this.firstLine === other.firstLine &&
       this.lines.length === other.lines.length &&
       this.lines.every((line, i) => line === other.lines[i])
     );
@@ -138,9 +150,10 @@ class DeletedLinesWidget extends WidgetType {
     const wrap = document.createElement("div");
     wrap.className = "cm-gitDeletedChunk";
     wrap.setAttribute("aria-hidden", "true");
-    for (const text of this.lines) {
+    for (const [index, text] of this.lines.entries()) {
       const line = wrap.appendChild(document.createElement("div"));
       line.className = "cm-gitDeletedLine";
+      line.dataset.oldLine = String(this.firstLine + index);
       line.textContent = text || "\u00a0";
     }
     return wrap;
@@ -155,9 +168,13 @@ class DeletedLinesWidget extends WidgetType {
   }
 }
 
-export function editorGit(options?: { onStage?: GitStageHandler }): Extension {
+export function editorGit(options?: {
+  onStage?: GitStageHandler;
+  onComment?: GitCommentHandler;
+}): Extension {
   return [
     options?.onStage ? gitStageFacet.of(options.onStage) : [],
+    options?.onComment ? gitCommentFacet.of(options.onComment) : [],
     originalField,
     chunksField,
     gitDecorations,
@@ -618,10 +635,13 @@ function buildDecorations(state: EditorState): GitDecorations {
     const deleted =
       chunk.fromA !== chunk.toA ? deletedLineTexts(original, chunk) : [];
     if (deleted.length > 0) {
+      const firstLine = original.lineAt(
+        Math.min(chunk.fromA, original.length),
+      ).number;
       lineItems.push({
         from: widgetAt,
         deco: Decoration.widget({
-          widget: new DeletedLinesWidget(deleted, widgetAt),
+          widget: new DeletedLinesWidget(deleted, widgetAt, firstLine),
           block: true,
           side: -1,
         }),
@@ -778,18 +798,24 @@ const gitOverview = ViewPlugin.fromClass(
 const gitHunkActions = ViewPlugin.fromClass(
   class {
     readonly bar: HTMLDivElement;
+    readonly commentButton: HTMLButtonElement;
     readonly revertButton: HTMLButtonElement;
     readonly stageButton: HTMLButtonElement;
     hover = -1;
+    commentLine: UnifiedLine | null = null;
     busy = false;
 
     constructor(readonly view: EditorView) {
       this.bar = document.createElement("div");
       this.bar.className = "cm-gitHunkBar";
       this.bar.hidden = true;
+      this.commentButton = hunkButton("Comment on line", COMMENT_SVG);
       this.revertButton = hunkButton("Revert change", UNDO_SVG);
       this.stageButton = hunkButton("Stage change", PLUS_SVG);
-      this.bar.append(this.revertButton, this.stageButton);
+      this.bar.append(this.commentButton, this.revertButton, this.stageButton);
+      this.commentButton.addEventListener("mousedown", (event) => {
+        this.onAction(event, "comment");
+      });
       this.revertButton.addEventListener("mousedown", (event) => {
         this.onAction(event, "revert");
       });
@@ -797,6 +823,7 @@ const gitHunkActions = ViewPlugin.fromClass(
         this.onAction(event, "stage");
       });
       this.stageButton.hidden = view.state.facet(gitStageFacet) == null;
+      this.commentButton.hidden = view.state.facet(gitCommentFacet) == null;
       view.dom.appendChild(this.bar);
       view.dom.addEventListener("mousemove", this.onMove);
       view.dom.addEventListener("mouseleave", this.onLeave);
@@ -810,6 +837,7 @@ const gitHunkActions = ViewPlugin.fromClass(
         update.state.field(chunksField) !== update.startState.field(chunksField)
       ) {
         this.hover = -1;
+        this.commentLine = null;
       }
       if (
         update.docChanged ||
@@ -820,6 +848,7 @@ const gitHunkActions = ViewPlugin.fromClass(
         this.sync();
       }
       this.stageButton.hidden = update.state.facet(gitStageFacet) == null;
+      this.commentButton.hidden = update.state.facet(gitCommentFacet) == null;
     }
 
     destroy() {
@@ -837,6 +866,8 @@ const gitHunkActions = ViewPlugin.fromClass(
       }
       const index = hunkIndexAt(this.view, event.clientY);
       if (index !== this.hover) this.hover = index;
+      const chunk = this.view.state.field(chunksField)[index];
+      this.commentLine = chunk ? commentLineAt(this.view, chunk, event) : null;
       this.sync();
     };
 
@@ -848,6 +879,7 @@ const gitHunkActions = ViewPlugin.fromClass(
         return;
       }
       this.hover = -1;
+      this.commentLine = null;
       this.sync();
     };
 
@@ -855,11 +887,20 @@ const gitHunkActions = ViewPlugin.fromClass(
       this.sync();
     };
 
-    onAction(event: MouseEvent, action: "revert" | "stage") {
+    onAction(event: MouseEvent, action: "comment" | "revert" | "stage") {
       event.preventDefault();
       event.stopPropagation();
       const chunk = this.view.state.field(chunksField)[this.hover];
       if (!chunk || this.busy) return;
+      if (action === "comment") {
+        const onComment = this.view.state.facet(gitCommentFacet);
+        if (!onComment || !this.commentLine) return;
+        onComment({
+          line: this.commentLine,
+          anchor: this.commentButton.getBoundingClientRect(),
+        });
+        return;
+      }
       const pos = widgetPos(this.view.state.doc, chunk);
       if (action === "revert") {
         revertChunkAt(this.view, pos);
@@ -893,6 +934,8 @@ const gitHunkActions = ViewPlugin.fromClass(
       const gutterRect = gutter.getBoundingClientRect();
       this.bar.hidden = false;
       this.stageButton.hidden = this.view.state.facet(gitStageFacet) == null;
+      this.commentButton.hidden =
+        this.view.state.facet(gitCommentFacet) == null || !this.commentLine;
       const height = this.bar.offsetHeight;
       const width = this.bar.offsetWidth;
       const mid = (bounds.top + bounds.bottom) / 2;
@@ -940,6 +983,65 @@ function hunkScreenBounds(
     top: scroller.top + top - view.scrollDOM.scrollTop,
     bottom: scroller.top + bottom - view.scrollDOM.scrollTop,
   };
+}
+
+function commentLineAt(
+  view: EditorView,
+  chunk: Chunk,
+  event: MouseEvent,
+): UnifiedLine | null {
+  const original = view.state.field(originalField);
+  const target = event.target instanceof Element ? event.target : null;
+  const deleted = target?.closest<HTMLElement>(".cm-gitDeletedLine");
+  if (deleted && view.dom.contains(deleted)) {
+    const oldNumber = Number(deleted.dataset.oldLine);
+    if (Number.isFinite(oldNumber)) {
+      return {
+        kind: "del",
+        text:
+          deleted.textContent === "\u00a0" ? "" : (deleted.textContent ?? ""),
+        oldNumber,
+        newNumber: null,
+      };
+    }
+  }
+
+  const doc = view.state.doc;
+  if (chunk.fromB !== chunk.toB) {
+    const content = view.contentDOM.getBoundingClientRect();
+    const pos = view.posAtCoords(
+      { x: content.left + 2, y: event.clientY },
+      false,
+    );
+    if (pos != null) {
+      const line = doc.lineAt(pos);
+      const start = doc.lineAt(Math.min(chunk.fromB, doc.length)).number;
+      const lastPos = Math.max(
+        Math.min(chunk.fromB, doc.length),
+        Math.min(chunk.endB, doc.length) - 1,
+      );
+      const end = doc.lineAt(lastPos).number;
+      if (line.number >= start && line.number <= end) {
+        return {
+          kind: "add",
+          text: line.text,
+          oldNumber: null,
+          newNumber: line.number,
+        };
+      }
+    }
+  }
+
+  if (original && chunk.fromA !== chunk.toA) {
+    const line = original.lineAt(Math.min(chunk.fromA, original.length));
+    return {
+      kind: "del",
+      text: line.text,
+      oldNumber: line.number,
+      newNumber: null,
+    };
+  }
+  return null;
 }
 
 const gitTheme = EditorView.theme({
@@ -1047,3 +1149,6 @@ const UNDO_SVG =
 
 const PLUS_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>';
+
+const COMMENT_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M12 8v6"/><path d="M9 11h6"/></svg>';

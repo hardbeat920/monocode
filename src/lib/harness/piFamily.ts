@@ -1,4 +1,5 @@
 import { nativeModelId } from "../models";
+import { taskListFromToolInput } from "../taskList";
 import {
   killChild,
   spawnChild,
@@ -44,7 +45,14 @@ import {
   turnErrorFromEvent,
   type PiExtensionUiRequest,
 } from "./piProtocol";
-import type { ApprovalDecision, HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  CompactContextInput,
+  HarnessEvent,
+  HarnessSessionInput,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 type PendingApproval = {
   request: PiExtensionUiRequest;
@@ -66,6 +74,7 @@ type Live = {
   contextWindow?: number;
   nativeModel: string;
   thinking: string;
+  planning: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   nextApprovalUiId: number;
@@ -95,6 +104,7 @@ type Resume = {
 
 const INIT_TIMEOUT_MS = 45_000;
 const STATS_TIMEOUT_MS = 4_000;
+const COMPACT_TIMEOUT_MS = 30 * 60_000;
 
 type FlavorState = {
   liveByThread: Map<string, Live>;
@@ -151,16 +161,55 @@ export async function sendTurn(
   if (cancelledThreads.delete(input.sessionId)) return;
 
   live.onEvent = input.onEvent;
-  live.turns = live.turns.catch(() => undefined).then(async () => {
-    live.cancelled = false;
-    live.muteUpdates = false;
-    try {
-      await runTurn(live, input);
-    } catch (error) {
-      if (live.cancelled) return;
-      throw error;
-    }
-  });
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      try {
+        await runTurn(live, input);
+      } catch (error) {
+        if (live.cancelled) return;
+        throw error;
+      }
+    });
+  await live.turns;
+}
+
+export async function compactContext(
+  flavor: PiFlavor,
+  input: CompactContextInput,
+): Promise<void> {
+  const state = stateFor(flavor);
+  let live = state.liveByThread.get(input.sessionId);
+  if (!live || live.cwd !== input.cwd) {
+    live = await ensureLive(flavor, input);
+  } else {
+    live.onEvent = input.onEvent;
+    await applyModel(live, input);
+  }
+  if (state.cancelledThreads.delete(input.sessionId)) return;
+
+  live.onEvent = input.onEvent;
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      const response = await live.rpc.request(
+        { type: "compact" },
+        COMPACT_TIMEOUT_MS,
+      );
+      const data = asRecord(response.data);
+      const used = data?.estimatedTokensAfter;
+      if (typeof used === "number" && Number.isFinite(used) && used > 0) {
+        live.onEvent({
+          type: "context",
+          used,
+          ...(live.contextWindow ? { window: live.contextWindow } : {}),
+        });
+      }
+    });
   await live.turns;
 }
 
@@ -257,17 +306,22 @@ export function bindSession(
 
 async function ensureLive(
   flavor: PiFlavor,
-  input: SendTurnInput,
+  input: HarnessSessionInput,
 ): Promise<Live> {
   const { liveByThread, resumeByThread } = stateFor(flavor);
   const existing = liveByThread.get(input.sessionId);
-  if (existing && existing.cwd === input.cwd) {
+  const wantPlanning = input.intent === "plan";
+  if (
+    existing &&
+    existing.cwd === input.cwd &&
+    existing.planning === wantPlanning
+  ) {
     existing.onEvent = input.onEvent;
     await applyModel(existing, input);
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
+    if (existing.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
     await stopSession(flavor, input.sessionId);
   }
 
@@ -293,7 +347,7 @@ async function ensureLive(
 
 async function startLive(
   flavor: PiFlavor,
-  input: SendTurnInput,
+  input: HarnessSessionInput,
   resume: string | undefined,
 ): Promise<Live> {
   const state = stateFor(flavor);
@@ -303,11 +357,15 @@ async function startLive(
   const modelRef = parsePiModelRef(native);
   const liveRef: { current: Live | null } = { current: null };
 
-  const rpc = new PiRpc(input.sessionId, (rec) => {
-    const current = liveRef.current;
-    if (!current) return;
-    handleFrame(flavor, input.sessionId, current, rec);
-  }, flavor.label);
+  const rpc = new PiRpc(
+    input.sessionId,
+    (rec) => {
+      const current = liveRef.current;
+      if (!current) return;
+      handleFrame(flavor, input.sessionId, current, rec);
+    },
+    flavor.label,
+  );
 
   const live: Live = {
     rpc,
@@ -315,6 +373,7 @@ async function startLive(
     providerSessionId: resume ?? "",
     nativeModel: native,
     thinking: input.modelSettings?.thinking ?? "",
+    planning: input.intent === "plan",
     onEvent: input.onEvent,
     approvals: new Map(),
     nextApprovalUiId: 1,
@@ -362,6 +421,7 @@ async function startLive(
     buildPiSpawnArgs(flavor, {
       resume,
       model: modelRef ? native : undefined,
+      plan: input.intent === "plan",
     }),
     input.cwd,
   );
@@ -625,7 +685,10 @@ async function handleExtensionUi(
   ).catch(() => undefined);
 }
 
-async function applyModel(live: Live, input: SendTurnInput): Promise<void> {
+async function applyModel(
+  live: Live,
+  input: HarnessSessionInput,
+): Promise<void> {
   const native = nativeModelId(input.model);
   const ref = parsePiModelRef(native);
   if (ref && native !== live.nativeModel) {
@@ -636,9 +699,10 @@ async function applyModel(live: Live, input: SendTurnInput): Promise<void> {
     });
     live.nativeModel = native;
     const model = asRecord(result.data);
-    const window = model && typeof model.contextWindow === "number"
-      ? model.contextWindow
-      : undefined;
+    const window =
+      model && typeof model.contextWindow === "number"
+        ? model.contextWindow
+        : undefined;
     if (window && window > 0) live.contextWindow = window;
   } else if (ref) {
     live.nativeModel = native;
@@ -702,6 +766,7 @@ function upsertTool(
       status: "pending",
       preview: previewFromTool(name, input),
     });
+    emitTaskListIfNeeded(live, tool);
   } else if (Object.keys(input).length > 0) {
     updateTool(live, tool, input);
   }
@@ -724,6 +789,12 @@ function updateTool(
     detail: summarizeToolRequest(tool.name, tool.input),
     preview: previewFromTool(tool.name, tool.input),
   });
+  emitTaskListIfNeeded(live, tool);
+}
+
+function emitTaskListIfNeeded(live: Live, tool: InFlightTool): void {
+  const items = taskListFromToolInput(tool.name, tool.input);
+  if (items) live.onEvent({ type: "tasks.updated", items });
 }
 
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {

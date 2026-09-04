@@ -4,9 +4,11 @@ import { useLayoutEffect, useRef } from "react";
 import { basename } from "../lib/fs";
 import {
   isChangesTab,
+  isCommitTab,
   isPlanTab,
   isReleaseNotesTab,
   isReviewTab,
+  isSessionChangesTab,
   isTerminalTab,
   type FilePaneTab,
 } from "../lib/layout";
@@ -58,6 +60,25 @@ export function surfaceTabPresentation(
     };
   }
 
+  if (isSessionChangesTab(file)) {
+    return {
+      name: "Session Changes",
+      label: "Session Changes",
+      iconName: "CHANGES",
+      tooltip: "Changes captured for this session only",
+    };
+  }
+
+  if (isCommitTab(file)) {
+    const name = file.commit.subject.trim() || file.commit.shortSha;
+    return {
+      name,
+      label: name,
+      iconName: "CHANGES",
+      tooltip: `${file.commit.shortSha} — ${file.commit.subject}`,
+    };
+  }
+
   const review = isReviewTab(file);
   const terminal = isTerminalTab(file);
   const name = isPlanTab(file)
@@ -79,7 +100,7 @@ export function surfaceTabPresentation(
   };
 }
 
-/** Mirrors the VS Code tab tooltip: the path, then what is wrong with it. */
+/** Tab tooltip: the path, then what is wrong with it. */
 export function appendProblems(title: string, errors: number): string {
   if (!errors) return title;
   return `${title} — ${errors} ${errors === 1 ? "problem" : "problems"}`;
@@ -141,6 +162,7 @@ export function SurfaceTabs({
         const dirty = dirtyFileIds.has(file.id);
         const errors = fileErrorCounts.get(file.id) ?? 0;
         const changes = isChangesTab(file);
+        const commit = isCommitTab(file);
         const review = isReviewTab(file) && !changes;
         const terminal = isTerminalTab(file);
         const { label, iconName, tooltip } = surfaceTabPresentation(file);
@@ -201,7 +223,7 @@ export function SurfaceTabs({
             >
               {terminal ? (
                 <Terminal className="size-3.5 shrink-0" strokeWidth={1.75} />
-              ) : changes ? (
+              ) : changes || commit ? (
                 <GitCompare className="size-3.5 shrink-0" strokeWidth={1.75} />
               ) : (
                 <FileTypeIcon name={iconName} isDir={false} size={15} />

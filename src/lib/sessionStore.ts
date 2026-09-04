@@ -10,6 +10,8 @@ import type {
   RuntimeMode,
   SecondOpinionMeta,
   Session,
+  TaskListMeta,
+  PlanBlockMeta,
 } from "./session";
 import { HARNESSES, RUNTIME_MODES } from "./session";
 
@@ -318,6 +320,14 @@ function sanitizeBlock(block: Block): Block | null {
     // Drop stale live approval prompts; request ids don't survive restarts.
     if (block.role === "approval") return null;
   }
+  const taskList = sanitizeTaskList(block.taskList);
+  if (taskList) next.taskList = taskList;
+  else if (block.role === "tasks") return null;
+  const plan = sanitizePlan(block.plan, block.text);
+  if (plan) next.plan = plan;
+  else if (block.role === "plan") {
+    next.plan = { status: "ready", originalText: block.text };
+  }
   const handoff = sanitizeHandoff(block.handoff);
   if (handoff) next.handoff = handoff;
   else if (block.role === "handoff") return null;
@@ -326,6 +336,72 @@ function sanitizeBlock(block: Block): Block | null {
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
   return next;
+}
+
+function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const status = record.status;
+  if (
+    status !== "streaming" &&
+    status !== "ready" &&
+    status !== "building" &&
+    status !== "built"
+  ) {
+    return null;
+  }
+  const key = typeof record.key === "string" ? record.key.trim() : "";
+  const originalText =
+    typeof record.originalText === "string" ? record.originalText : text;
+  const approvedText =
+    typeof record.approvedText === "string" ? record.approvedText : "";
+  return {
+    ...(key ? { key } : {}),
+    // A restarted app cannot still be executing this approval.
+    status: status === "streaming" || status === "building" ? "ready" : status,
+    ...(originalText ? { originalText } : {}),
+    ...(approvedText ? { approvedText } : {}),
+    ...(record.edited === true ? { edited: true } : {}),
+  };
+}
+
+function sanitizeTaskList(value: unknown): TaskListMeta | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.items)) return null;
+  const items = record.items.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    const text = typeof row.text === "string" ? row.text.trim() : "";
+    const status = row.status;
+    if (
+      !text ||
+      (status !== "pending" &&
+        status !== "in_progress" &&
+        status !== "completed" &&
+        status !== "cancelled")
+    ) {
+      return [];
+    }
+    const id =
+      typeof row.id === "string"
+        ? row.id.trim()
+        : typeof row.id === "number" && Number.isFinite(row.id)
+          ? String(row.id)
+          : "";
+    return [
+      { ...(id ? { id } : {}), text, status },
+    ] satisfies TaskListMeta["items"];
+  });
+  if (items.length === 0) return null;
+  const key = typeof record.key === "string" ? record.key.trim() : "";
+  const explanation =
+    typeof record.explanation === "string" ? record.explanation.trim() : "";
+  return {
+    ...(key ? { key } : {}),
+    ...(explanation ? { explanation } : {}),
+    items,
+  };
 }
 
 function normalizeSummary(summary: SessionSummary): SessionSummary {

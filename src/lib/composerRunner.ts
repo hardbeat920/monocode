@@ -375,12 +375,12 @@ export type RunnerTrack = {
   width: number;
 };
 
-/** Prefer the session-review bar's top edge when it is sitting on the composer. */
-export function runnerTrack(box: Rect, review: Rect | null): RunnerTrack {
-  const reviewWidth = review
-    ? (review.width ?? review.right - review.left)
+/** Prefer the top edge of a control stacked on the composer. */
+export function runnerTrack(box: Rect, ledge: Rect | null): RunnerTrack {
+  const ledgeWidth = ledge
+    ? (ledge.width ?? ledge.right - ledge.left)
     : 0;
-  if (!review || reviewWidth <= 0) {
+  if (!ledge || ledgeWidth <= 0) {
     return {
       left: box.left,
       top: box.top,
@@ -388,8 +388,8 @@ export function runnerTrack(box: Rect, review: Rect | null): RunnerTrack {
     };
   }
   return {
-    left: review.left,
-    top: review.top,
-    width: reviewWidth,
+    left: ledge.left,
+    top: ledge.top,
+    width: ledgeWidth,
   };
 }

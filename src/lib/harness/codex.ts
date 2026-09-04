@@ -20,7 +20,14 @@ import {
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "./jsonRpc";
 import { joinStreamText, snapshotRemainder } from "./streamText";
-import type { ApprovalDecision, HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  CompactContextInput,
+  HarnessEvent,
+  HarnessSessionInput,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 type PendingApproval = {
   rpcId: JsonRpcId;
@@ -33,6 +40,7 @@ type Live = {
   threadId: string;
   cwd: string;
   runtimeMode: RuntimeMode;
+  planning: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   nextApprovalUiId: number;
@@ -58,7 +66,8 @@ const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 
-let resolveCodexBinaryImpl: () => Promise<{ path: string }> = resolveCodexBinary;
+let resolveCodexBinaryImpl: () => Promise<{ path: string }> =
+  resolveCodexBinary;
 
 /** Test seam. */
 export function setCodexBinaryResolver(
@@ -79,16 +88,47 @@ export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
-  live.turns = live.turns.catch(() => undefined).then(async () => {
-    live.cancelled = false;
-    live.muteUpdates = false;
-    try {
-      await runTurn(live, input);
-    } catch (error) {
-      if (live.cancelled) return;
-      throw error;
-    }
-  });
+  live.planning = input.intent === "plan";
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      try {
+        await runTurn(live, input);
+      } catch (error) {
+        if (live.cancelled) return;
+        throw error;
+      }
+    });
+  await live.turns;
+}
+
+export async function compactCodexContext(
+  input: CompactContextInput,
+): Promise<void> {
+  let live: Live;
+  try {
+    live = await ensureLive(input);
+  } catch (error) {
+    cancelledThreads.delete(input.sessionId);
+    throw error;
+  }
+  if (cancelledThreads.delete(input.sessionId)) return;
+
+  live.onEvent = input.onEvent;
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      live.cancelled = false;
+      live.muteUpdates = false;
+      try {
+        await runCompaction(live);
+      } catch (error) {
+        if (live.cancelled) return;
+        throw error;
+      }
+    });
   await live.turns;
 }
 
@@ -183,7 +223,7 @@ export function bindCodexSession(
   resumeByThread.set(threadId, { threadId: providerThreadId, cwd });
 }
 
-async function ensureLive(input: SendTurnInput): Promise<Live> {
+async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   if (existing && existing.cwd === input.cwd) {
     existing.onEvent = input.onEvent;
@@ -304,6 +344,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       threadId,
       cwd: input.cwd,
       runtimeMode: input.runtimeMode,
+      planning: input.intent === "plan",
       onEvent: input.onEvent,
       approvals: new Map(),
       nextApprovalUiId: 1,
@@ -350,6 +391,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     model,
     effort,
     serviceTier,
+    intent: input.intent,
   });
 
   if (
@@ -394,11 +436,28 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   }
 }
 
-function handleNotification(
-  live: Live,
-  method: string,
-  params: unknown,
-): void {
+async function runCompaction(live: Live): Promise<void> {
+  live.emittedAssistant = "";
+  live.emittedReasoning = "";
+  const turnPromise = new Promise<void>((resolve, reject) => {
+    live.turnDone = resolve;
+    live.turnFailed = reject;
+  });
+  settlePendingTurn(live);
+
+  try {
+    await live.rpc.request("thread/compact/start", {
+      threadId: live.threadId,
+    });
+    settlePendingTurn(live);
+    await turnPromise;
+  } finally {
+    live.turnDone = null;
+    live.turnFailed = null;
+  }
+}
+
+function handleNotification(live: Live, method: string, params: unknown): void {
   // A Codex turn is a sequence of items. Completing an agentMessage does not
   // mean the turn is over — more tools and messages can still arrive. Only
   // turn/completed (and turn/aborted) settle sendCodexTurn, which is what the
@@ -495,6 +554,22 @@ async function handleServerRequest(
       return;
     }
     await live.rpc.respond(id, {}).catch(() => undefined);
+    return;
+  }
+
+  if (live.planning) {
+    // Plan turns run in a non-escalating read-only sandbox. If an older
+    // app-server still asks for broader access, deny it silently instead of
+    // leaking a Supervised approval prompt into the user's selected mode.
+    if (method === "item/permissions/requestApproval") {
+      await live.rpc.respond(id, { permissions: {} }).catch(() => undefined);
+    } else {
+      await live.rpc
+        .respond(id, {
+          decision: toCodexApprovalDecision("deny", mapped.kind),
+        })
+        .catch(() => undefined);
+    }
     return;
   }
 

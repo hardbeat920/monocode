@@ -2,7 +2,12 @@ import type { HarnessId } from "../session";
 import type { PrContent } from "../gitText";
 import { hasLiveCatalog } from "../models";
 import type { UserQuestionReply } from "../userQuestion";
-import type { ApprovalDecision, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  CompactContextInput,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 export type TitleInput = {
   sessionId: string;
@@ -21,6 +26,8 @@ export type HarnessAdapter = {
   /** False when the harness cannot accept a follow-up while a turn is running. Default: same as live. */
   canSteer?: boolean;
   sendTurn(input: SendTurnInput): Promise<void>;
+  /** Trigger provider-owned compaction outside MonoCode's normal user-turn path. */
+  compactContext?(input: CompactContextInput): Promise<void>;
   steerTurn(input: SteerTurnInput): Promise<void>;
   cancelTurn(sessionId: string): Promise<void>;
   respondApproval(
@@ -38,11 +45,7 @@ export type HarnessAdapter = {
   /** Drop resume state and kill the child (delete, harness switch, idle detach). */
   forgetSession(sessionId: string): Promise<void>;
   /** Seed resume state from a restored MonoCode session. */
-  bindSession(
-    threadId: string,
-    providerSessionId: string,
-    cwd: string,
-  ): void;
+  bindSession(threadId: string, providerSessionId: string, cwd: string): void;
   /** Refresh the model catalog overlay when supported. */
   refreshCatalog?(): Promise<void>;
   /** Optional LLM tab title for the first turn. */
@@ -115,7 +118,9 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
-export async function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
+export async function sendHarnessTurn(
+  input: SendTurnInput & { harness: HarnessId },
+) {
   const adapter = requireHarness(input.harness);
   if (!adapter.live) {
     throw new Error(`${input.harness} is not connected yet`);
@@ -123,6 +128,29 @@ export async function sendHarnessTurn(input: SendTurnInput & { harness: HarnessI
   cancelIdlePark(input.sessionId);
   try {
     await adapter.sendTurn(input);
+  } finally {
+    scheduleIdlePark(input.harness, input.sessionId);
+  }
+}
+
+export function canCompactHarnessContext(id: HarnessId): boolean {
+  const adapter = adapters.get(id);
+  return adapter?.live === true && adapter.compactContext != null;
+}
+
+export async function compactHarnessContext(
+  input: CompactContextInput & { harness: HarnessId },
+): Promise<void> {
+  const adapter = requireHarness(input.harness);
+  if (!adapter.live) {
+    throw new Error(`${input.harness} is not connected yet`);
+  }
+  if (!adapter.compactContext) {
+    throw new Error(`${input.harness} does not support manual compaction`);
+  }
+  cancelIdlePark(input.sessionId);
+  try {
+    await adapter.compactContext(input);
   } finally {
     scheduleIdlePark(input.harness, input.sessionId);
   }

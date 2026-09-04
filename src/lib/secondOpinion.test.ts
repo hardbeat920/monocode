@@ -140,6 +140,17 @@ describe("secondOpinionTargets", () => {
       }),
     ).toEqual(["codex", "cursor"]);
   });
+
+  it("can include the current provider for choosing another model", () => {
+    expect(
+      secondOpinionTargets("codex", {
+        installed,
+        visible,
+        probed: true,
+        includeCurrent: true,
+      }),
+    ).toEqual(["codex", "claude"]);
+  });
 });
 
 describe("buildSecondOpinionPrompt", () => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { newChangesTab, newReleaseNotesWorkspaceTab } from "../lib/layout";
+import {
+  newChangesTab,
+  newCommitTab,
+  newReleaseNotesWorkspaceTab,
+  newSessionChangesTab,
+} from "../lib/layout";
 import { releaseNotesTitle } from "../lib/releaseNotes";
 import { appendProblems, surfaceTabPresentation } from "./SurfaceTabs";
 
@@ -23,6 +28,36 @@ describe("surfaceTabPresentation", () => {
       label: "Changes",
       iconName: "CHANGES",
       tooltip: "Working tree changes",
+    });
+  });
+
+  it("labels a session-scoped review distinctly", () => {
+    expect(
+      surfaceTabPresentation(
+        newSessionChangesTab("/repo", "session-a", "/repo/App.tsx"),
+      ),
+    ).toEqual({
+      name: "Session Changes",
+      label: "Session Changes",
+      iconName: "CHANGES",
+      tooltip: "Changes captured for this session only",
+    });
+  });
+
+  it("labels a commit tab from the subject", () => {
+    expect(
+      surfaceTabPresentation(
+        newCommitTab("/repo", {
+          sha: "abc1234deadbeef",
+          shortSha: "abc1234",
+          subject: "Fix the graph",
+        }),
+      ),
+    ).toEqual({
+      name: "Fix the graph",
+      label: "Fix the graph",
+      iconName: "CHANGES",
+      tooltip: "abc1234 — Fix the graph",
     });
   });
 });

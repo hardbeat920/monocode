@@ -1,4 +1,10 @@
-import type { Attachment, RuntimeMode, ToolPreview } from "../session";
+import type {
+  Attachment,
+  RuntimeMode,
+  TaskListItem,
+  ToolPreview,
+} from "../session";
+import { isTaskListToolName, taskListFromToolInput } from "../taskList";
 import {
   questionPromptTitle,
   questionsFromUnknown,
@@ -29,7 +35,7 @@ export const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
 ]);
 
 export type ClaudePermissionMode =
-  "default" | "acceptEdits" | "auto" | "bypassPermissions";
+  "default" | "plan" | "acceptEdits" | "auto" | "bypassPermissions";
 
 export type ClaudeControlRequest = {
   requestId: string;
@@ -334,9 +340,7 @@ export function listModelsFromControlResponse(
 export function isClaudeInitMessage(rec: Record<string, unknown>): boolean {
   const type = stringField(rec, "type");
   const subtype = stringField(rec, "subtype");
-  return (
-    type === "system" && (subtype === "init" || subtype === "initialized")
-  );
+  return type === "system" && (subtype === "init" || subtype === "initialized");
 }
 
 export function toClaudePermissionResult(
@@ -850,29 +854,19 @@ export function tryParseJsonRecord(
   }
 }
 
-export function planTextFromTodos(
+export function taskListFromTodos(
   input: Record<string, unknown>,
-): string | null {
-  const todos = input.todos;
-  if (!Array.isArray(todos) || todos.length === 0) return null;
-  const lines = todos.flatMap((todo) => {
-    const rec = asRecord(todo);
-    const step =
-      stringField(rec, "content") ?? stringField(rec, "activeForm") ?? "Task";
-    const status = stringField(rec, "status") ?? "pending";
-    const mark =
-      status === "completed" ? "[x]" : status === "in_progress" ? "[~]" : "[ ]";
-    return [`${mark} ${step}`];
-  });
-  return lines.length > 0 ? lines.join("\n") : null;
+): TaskListItem[] | null {
+  return taskListFromToolInput("TodoWrite", input);
 }
 
 export function isTodoTool(toolName: string): boolean {
-  return toolName.toLowerCase().includes("todowrite");
+  return isTaskListToolName(toolName);
 }
 
 export function toolKindFromName(toolName: string): string {
   const normalized = toolName.toLowerCase();
+  if (isTodoTool(toolName)) return "tasks";
   if (
     normalized.includes("bash") ||
     normalized.includes("command") ||

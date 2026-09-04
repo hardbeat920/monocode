@@ -818,7 +818,7 @@ fn block_hits(blocks: &Value, needle: &str) -> Vec<(String, String, String)> {
             .get("role")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(role, "user" | "assistant" | "tool" | "plan") {
+        if !matches!(role, "user" | "assistant" | "tool" | "tasks" | "plan") {
             continue;
         }
         let id = block

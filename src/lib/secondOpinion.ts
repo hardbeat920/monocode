@@ -42,7 +42,12 @@ export function turnUserRequest(blocks: Block[]): string {
 
 export function turnReport(blocks: Block[]): string {
   return blocks
-    .filter((block) => block.role === "assistant" || block.role === "plan")
+    .filter(
+      (block) =>
+        block.role === "assistant" ||
+        block.role === "tasks" ||
+        block.role === "plan",
+    )
     .map((block) => block.text.replace(/\r\n?/g, "\n").trim())
     .filter(Boolean)
     .join("\n\n");
@@ -77,14 +82,19 @@ export function secondOpinionTargets(
     installed: (id: HarnessId) => boolean;
     visible: (id: HarnessId) => boolean;
     probed: boolean;
+    includeCurrent?: boolean;
   },
 ): HarnessId[] {
-  return HARNESSES.filter((id) => {
+  const others = HARNESSES.filter((id) => {
     if (id === from) return false;
     if (!options.visible(id)) return false;
     if (!options.probed) return true;
     return options.installed(id);
   });
+  if (options.includeCurrent && (!options.probed || options.installed(from))) {
+    return [from, ...others];
+  }
+  return others;
 }
 
 export function buildSecondOpinionPrompt(input: {

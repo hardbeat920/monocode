@@ -133,6 +133,59 @@ describe("sanitizeSessionForPersist", () => {
       },
     });
   });
+
+  it("keeps edited and approved plan metadata", () => {
+    const session = newSession("codex", "/tmp/project");
+    session.blocks = [
+      { id: "u1", role: "user", text: "plan this" },
+      {
+        id: "p1",
+        role: "plan",
+        text: "# Edited plan",
+        plan: {
+          key: "turn:1",
+          status: "built",
+          originalText: "# Original plan",
+          approvedText: "# Edited plan",
+          edited: true,
+        },
+      },
+    ];
+    expect(sanitizeSessionForPersist(session).blocks[1]).toMatchObject({
+      role: "plan",
+      text: "# Edited plan",
+      plan: {
+        key: "turn:1",
+        status: "built",
+        originalText: "# Original plan",
+        approvedText: "# Edited plan",
+        edited: true,
+      },
+    });
+  });
+
+  it("keeps structured task lists", () => {
+    const session = newSession("codex", "/tmp/project");
+    session.blocks = [
+      { id: "u1", role: "user", text: "fix it" },
+      {
+        id: "tasks1",
+        role: "tasks",
+        text: "[x] Inspect\n[~] Implement",
+        taskList: {
+          key: "turn_1",
+          explanation: "Inspection complete.",
+          items: [
+            { id: "1", text: "Inspect", status: "completed" },
+            { id: "2", text: "Implement", status: "in_progress" },
+          ],
+        },
+      },
+    ];
+    expect(sanitizeSessionForPersist(session).blocks[1]).toEqual(
+      session.blocks[1],
+    );
+  });
 });
 
 describe("persistFingerprint", () => {

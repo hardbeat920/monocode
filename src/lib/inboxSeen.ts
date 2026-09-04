@@ -111,6 +111,14 @@ export function markInboxItemSeen(entry: InboxSeenEntry) {
   });
 }
 
+export function markInboxItemsSeen(entries: readonly InboxSeenEntry[]) {
+  const store = loadInboxSeenStore();
+  saveInboxSeenStore({
+    ...store,
+    items: entries.reduce(mergeSeen, store.items),
+  });
+}
+
 /** First snapshot of the list is remembered so existing items do not badge. */
 export function seedInboxSeenIfNeeded(items: readonly InboxSeenEntry[]) {
   const store = loadInboxSeenStore();

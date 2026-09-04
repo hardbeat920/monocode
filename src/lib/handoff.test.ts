@@ -129,6 +129,18 @@ describe("deterministic handoff", () => {
     expect(brief).not.toContain("CHANGELOG.md");
   });
 
+  it("labels live task progress separately from an authored plan", () => {
+    const brief = buildDeterministicHandoff(
+      sessionWith([
+        { id: "u1", role: "user", text: "fix it" },
+        { id: "tasks", role: "tasks", text: "[x] Inspect\n[~] Implement" },
+        { id: "plan", role: "plan", text: "Use two layers." },
+      ]),
+    );
+    expect(brief).toContain("## Plan\nUse two layers.");
+    expect(brief).toContain("## Current tasks\n[x] Inspect\n[~] Implement");
+  });
+
   it("keeps a short recent recap instead of the whole transcript", () => {
     const brief = buildDeterministicHandoff(
       sessionWith([

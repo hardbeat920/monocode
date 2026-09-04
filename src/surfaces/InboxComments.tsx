@@ -329,6 +329,7 @@ function InboxComment({
             className="inbox-comment-md"
             text={comment.body}
             cwd={cwd}
+            allowRemoteMedia
           />
         </div>
       ) : null}

@@ -1,6 +1,7 @@
 import {
   bindOmpSession,
   cancelOmpTurn,
+  compactOmpContext,
   forgetOmpSession,
   respondOmpApproval,
   sendOmpTurn,
@@ -16,6 +17,7 @@ export const ompAdapter: HarnessAdapter = {
   id: "omp",
   live: true,
   sendTurn: sendOmpTurn,
+  compactContext: compactOmpContext,
   steerTurn: steerOmpTurn,
   cancelTurn: cancelOmpTurn,
   respondApproval: respondOmpApproval,

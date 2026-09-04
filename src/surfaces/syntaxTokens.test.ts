@@ -50,6 +50,23 @@ describe("highlightDiffFile", () => {
       KEYWORD_DARK,
     );
   });
+
+  it("skips decorative parsing for a very large diff", async () => {
+    const line = {
+      kind: "add" as const,
+      text: "x".repeat(250_001),
+      oldNumber: null,
+      newNumber: 1,
+    };
+    const tokens = await highlightDiffFile(
+      {
+        path: "large.ts",
+        blocks: [{ kind: "hunk", lines: [line] }],
+      },
+      "dark",
+    );
+    expect(tokens.size).toBe(0);
+  });
 });
 
 function token(line: { text: string; color?: string }[] | undefined, text: string) {

@@ -1,3 +1,4 @@
+
 <p align="center">
   <img src="public/monocode.png" alt="MonoCode" width="88" />
 </p>
@@ -9,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.jpg" alt="MonoCode with sessions, agent chat, diffs, terminal, and editor" width="920" />
+  <img width="1680" height="1050" alt="Screenshot 2026-09-04 at 06 34 00" src="https://github.com/user-attachments/assets/2cd4a6ec-eb1e-4b45-8627-a76442ea3874" />
 </p>
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Pi, omp, and fx. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.

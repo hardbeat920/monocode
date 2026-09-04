@@ -541,7 +541,7 @@ function TitleBarComponent({
     el.scrollBy({ left: direction * amount, behavior: "smooth" });
   }, []);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
-  const closable = tabs.length > 1;
+  const closable = tabs.length > 0;
   const canDrag = tabs.length > 1;
 
   useEffect(() => {

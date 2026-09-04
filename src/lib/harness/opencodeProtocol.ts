@@ -1,4 +1,5 @@
 import type { Attachment, RuntimeMode, ToolPreview } from "../session";
+import { isTaskListToolName } from "../taskList";
 import { extractToolPreview } from "./preview";
 import type { HarnessEvent } from "./types";
 
@@ -244,6 +245,7 @@ export function inferDefaultAgent(agents: Array<{ name: string }>): string | und
 
 export function toolKindFromName(toolName: string): string {
   const normalized = toolName.toLowerCase();
+  if (isTaskListToolName(toolName)) return "tasks";
   if (normalized.includes("bash") || normalized.includes("command") || normalized.includes("shell")) {
     return "shell";
   }

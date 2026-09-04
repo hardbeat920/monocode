@@ -1,6 +1,7 @@
 import {
   bindPiSession,
   cancelPiTurn,
+  compactPiContext,
   forgetPiSession,
   respondPiApproval,
   sendPiTurn,
@@ -16,6 +17,7 @@ export const piAdapter: HarnessAdapter = {
   id: "pi",
   live: true,
   sendTurn: sendPiTurn,
+  compactContext: compactPiContext,
   steerTurn: steerPiTurn,
   cancelTurn: cancelPiTurn,
   respondApproval: respondPiApproval,

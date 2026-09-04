@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   MessageMultiple,
   Replace,
@@ -39,12 +40,16 @@ import { Popover } from "./Popover";
 
 type Props = {
   from: HarnessId;
+  fromModel?: string;
   onPick: (harness: HarnessId, model: string) => void;
   icon?: IconComponent;
   title?: string;
   disabledTitle?: string;
   description?: string;
   menuLabel?: string;
+  includeCurrent?: boolean;
+  disabled?: boolean;
+  triggerClassName?: string;
 };
 
 const MENU_WIDTH = 240;
@@ -55,7 +60,10 @@ const SUBMENU_OVERLAP = -4;
 /** Neither menu is inside the other, so a click in one is not a click away. */
 const SELF = "[data-provider-target]";
 
-export function HandoffButton({ from, onPick }: Pick<Props, "from" | "onPick">) {
+export function HandoffButton({
+  from,
+  onPick,
+}: Pick<Props, "from" | "onPick">) {
   return (
     <SecondOpinionButton
       from={from}
@@ -69,14 +77,46 @@ export function HandoffButton({ from, onPick }: Pick<Props, "from" | "onPick">) 
   );
 }
 
+export function BuildTargetButton({
+  from,
+  model,
+  disabled,
+  onPick,
+}: {
+  from: HarnessId;
+  model?: string;
+  disabled?: boolean;
+  onPick: (harness: HarnessId, model: string) => void;
+}) {
+  return (
+    <SecondOpinionButton
+      from={from}
+      fromModel={model}
+      onPick={onPick}
+      icon={ChevronDown}
+      title="Build with another model"
+      disabledTitle="No build providers are available"
+      description="Choose the model and provider that should build this plan."
+      menuLabel="Build this plan with another model or provider"
+      includeCurrent
+      disabled={disabled}
+      triggerClassName="flex h-6 w-6 shrink-0 items-center justify-center rounded-r-md border-l border-background-base/20 bg-content text-background-base hover:bg-content/90 disabled:pointer-events-none disabled:opacity-40"
+    />
+  );
+}
+
 export function SecondOpinionButton({
   from,
+  fromModel,
   onPick,
   icon: Icon = MessageMultiple,
   title = "Second opinion",
   disabledTitle = "Install another provider for a second opinion",
   description = "Send this turn to another agent to review the work.",
   menuLabel = "Send this turn to another agent",
+  includeCurrent = false,
+  disabled: disabledByCaller = false,
+  triggerClassName,
 }: Props) {
   const availabilityVersion = useSyncExternalStore(
     subscribeHarnessAvailability,
@@ -98,7 +138,7 @@ export function SecondOpinionButton({
   const [modelActive, setModelActive] = useState(0);
   const [inSubmenu, setInSubmenu] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
-  const activeRow = useRef<HTMLButtonElement>(null);
+  const [activeRow, setActiveRow] = useState<HTMLButtonElement | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
 
   const probed = hasProbedHarnessAvailability();
@@ -109,8 +149,9 @@ export function SecondOpinionButton({
       installed: isHarnessAvailable,
       visible: isPickerProviderVisible,
       probed,
+      includeCurrent,
     });
-  }, [from, probed, availabilityVersion, visibilityVersion]);
+  }, [from, includeCurrent, probed, availabilityVersion, visibilityVersion]);
 
   const activeHarness = targets[active];
   const models = useMemo(() => {
@@ -118,7 +159,11 @@ export function SecondOpinionButton({
     return activeHarness ? modelsFor(activeHarness) : [];
   }, [activeHarness, catalogVersion]);
   const preferred =
-    activeHarness != null ? preferredModelId(activeHarness) : undefined;
+    activeHarness != null
+      ? activeHarness === from && fromModel
+        ? fromModel
+        : preferredModelId(activeHarness)
+      : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -156,8 +201,9 @@ export function SecondOpinionButton({
     if (restoreFocus) button.current?.focus();
   };
 
-  const disabled = targets.length === 0;
-  const label = disabled ? disabledTitle : title;
+  const noTargets = targets.length === 0;
+  const disabled = disabledByCaller || noTargets;
+  const label = noTargets ? disabledTitle : title;
 
   const pick = (harness: HarnessId, model: string) => {
     setOpen(false);
@@ -165,7 +211,10 @@ export function SecondOpinionButton({
   };
 
   const pickPreferred = (harness: HarnessId) => {
-    pick(harness, preferredModelId(harness));
+    pick(
+      harness,
+      harness === from && fromModel ? fromModel : preferredModelId(harness),
+    );
   };
 
   const moveHarness = (dir: 1 | -1) => {
@@ -214,7 +263,13 @@ export function SecondOpinionButton({
     }
   };
 
-  const showSubmenu = open && activeHarness != null && models.length > 0;
+  const showSubmenu =
+    open &&
+    inSubmenu &&
+    activeRow != null &&
+    activeRow.dataset.providerIndex === String(active) &&
+    activeHarness != null &&
+    models.length > 0;
 
   return (
     <>
@@ -226,11 +281,14 @@ export function SecondOpinionButton({
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
-        className={`rounded-md p-1 disabled:pointer-events-none disabled:opacity-40 ${
-          open
-            ? "bg-content/8 text-content/70"
-            : "text-content/40 hover:bg-content/8 hover:text-content/70"
-        }`}
+        className={
+          triggerClassName ??
+          `rounded-md p-1 disabled:pointer-events-none disabled:opacity-40 ${
+            open
+              ? "bg-content/8 text-content/70"
+              : "text-content/40 hover:bg-content/8 hover:text-content/70"
+          }`
+        }
         onClick={() => {
           if (disabled) return;
           setOpen((value) => !value);
@@ -272,18 +330,19 @@ export function SecondOpinionButton({
                 return (
                   <button
                     key={harness}
-                    ref={highlighted ? activeRow : undefined}
+                    ref={highlighted ? setActiveRow : undefined}
+                    data-provider-index={index}
                     type="button"
                     role="menuitem"
                     aria-haspopup={
                       modelsFor(harness).length > 0 ? "menu" : undefined
                     }
-                    aria-expanded={highlighted && models.length > 0}
+                    aria-expanded={highlighted && showSubmenu}
                     disabled={!available && probed}
                     onMouseDown={(event) => event.preventDefault()}
                     onMouseEnter={() => {
                       setActive(index);
-                      setInSubmenu(false);
+                      setInSubmenu(true);
                     }}
                     onClick={() => {
                       if (!available && probed) return;

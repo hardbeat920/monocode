@@ -128,7 +128,7 @@ function SkillList({
   if (skills.length === 0) {
     return (
       <p className="px-3 py-2.5 text-[12px] text-content/50">
-        {query.trim() ? "No matching skills" : "No skills yet"}
+        {query.trim() ? "No matching commands or skills" : "No commands yet"}
       </p>
     );
   }
@@ -137,7 +137,7 @@ function SkillList({
     <div
       ref={lockOverscroll}
       role="listbox"
-      aria-label="Skills"
+      aria-label="Commands and skills"
       onMouseMove={onListMouseMove}
       className="max-h-[min(240px,40vh)] overflow-y-auto overscroll-none px-1 py-1"
     >

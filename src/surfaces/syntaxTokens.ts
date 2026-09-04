@@ -23,6 +23,9 @@ export type SyntaxToken = {
   color?: string;
 };
 
+const MAX_DIFF_HIGHLIGHT_CHARS = 250_000;
+const SYNTAX_TREE_BUDGET_MS = 100;
+
 export function highlightSource(
   text: string,
   language: Extension | null,
@@ -37,7 +40,8 @@ export function highlightSource(
   });
   const code = state.doc.toString();
   const tree =
-    ensureSyntaxTree(state, state.doc.length, 1000) ?? syntaxTree(state);
+    ensureSyntaxTree(state, state.doc.length, SYNTAX_TREE_BUDGET_MS) ??
+    syntaxTree(state);
   const highlighter = syntaxTagHighlighter(scheme);
   const lines: SyntaxToken[][] = [[]];
   highlightCode(
@@ -65,16 +69,32 @@ export async function highlightDiffFile(
   const map = new Map<UnifiedLine, SyntaxToken[]>();
   if (file.binary || file.tooLarge) return map;
 
-  const language = await languageForPath(file.path);
   const original: UnifiedLine[] = [];
   const current: UnifiedLine[] = [];
+  let originalChars = 0;
+  let currentChars = 0;
   for (const block of file.blocks) {
     for (const line of block.lines) {
       if (line.kind === "hunk") continue;
-      if (line.kind !== "add") original.push(line);
-      if (line.kind !== "del") current.push(line);
+      if (line.kind !== "add") {
+        original.push(line);
+        originalChars += line.text.length + 1;
+      }
+      if (line.kind !== "del") {
+        current.push(line);
+        currentChars += line.text.length + 1;
+      }
+      // Rendering remains complete; only decorative parsing is skipped.
+      if (
+        originalChars > MAX_DIFF_HIGHLIGHT_CHARS ||
+        currentChars > MAX_DIFF_HIGHLIGHT_CHARS
+      ) {
+        return map;
+      }
     }
   }
+
+  const language = await languageForPath(file.path);
 
   const originalTokens = highlightSource(
     original.map((line) => line.text).join("\n"),
@@ -86,7 +106,12 @@ export async function highlightDiffFile(
     language,
     scheme,
   );
-  assignLineTokens(map, original, originalTokens, (line) => line.kind === "del");
+  assignLineTokens(
+    map,
+    original,
+    originalTokens,
+    (line) => line.kind === "del",
+  );
   assignLineTokens(map, current, currentTokens, (line) => line.kind !== "del");
   return map;
 }
@@ -103,9 +128,7 @@ function assignLineTokens(
     const pieces = tokens[index];
     map.set(
       line,
-      pieces && joinText(pieces) === line.text
-        ? pieces
-        : [{ text: line.text }],
+      pieces && joinText(pieces) === line.text ? pieces : [{ text: line.text }],
     );
   }
 }

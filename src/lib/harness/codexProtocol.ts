@@ -1,4 +1,10 @@
-import type { RuntimeMode, ToolPreview } from "../session";
+import type {
+  RuntimeMode,
+  TaskListItem,
+  ToolPreview,
+  TurnIntent,
+} from "../session";
+import { normalizeTaskListStatus } from "../taskList";
 import {
   composeToolTitle,
   extractToolPreview,
@@ -98,8 +104,18 @@ export function buildTurnStartParams(input: {
   model?: string;
   effort?: string;
   serviceTier?: string;
+  intent?: TurnIntent;
 }): Record<string, unknown> {
-  const config = runtimeModeToCodexConfig(input.runtimeMode);
+  const runtimeConfig = runtimeModeToCodexConfig(input.runtimeMode);
+  const config: CodexThreadConfig =
+    input.intent === "plan"
+      ? {
+          approvalPolicy: "never",
+          sandbox: "read-only",
+          approvalsReviewer: "auto_review",
+          sandboxPolicy: { type: "readOnly" },
+        }
+      : runtimeConfig;
   const turnInput: Array<Record<string, unknown>> = [];
   if (input.prompt) {
     turnInput.push({ type: "text", text: input.prompt });
@@ -113,6 +129,14 @@ export function buildTurnStartParams(input: {
     approvalPolicy: config.approvalPolicy,
     approvalsReviewer: config.approvalsReviewer,
     sandboxPolicy: config.sandboxPolicy,
+    collaborationMode: {
+      mode: input.intent === "plan" ? "plan" : "default",
+      settings: {
+        model: input.model ?? null,
+        reasoning_effort: input.effort ?? null,
+        developer_instructions: null,
+      },
+    },
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.serviceTier && input.serviceTier !== "default"
@@ -163,10 +187,7 @@ function numberField(
 export type CodexApprovalKind = "command" | "file-change" | "permissions";
 
 export type CodexApprovalDecisionWire =
-  | "accept"
-  | "acceptForSession"
-  | "decline"
-  | "cancel";
+  "accept" | "acceptForSession" | "decline" | "cancel";
 
 export function toCodexApprovalDecision(
   decision: "allow" | "deny",
@@ -220,23 +241,45 @@ export function mapCodexNotification(
   if (method === "item/plan/delta") {
     const delta = streamTextDelta(rec.delta);
     if (!delta) return { events: [] };
-    return { events: [{ type: "plan", text: delta }] };
+    return {
+      events: [
+        {
+          type: "plan",
+          text: delta,
+          key: stringField(rec, "itemId"),
+          append: true,
+          streaming: true,
+        },
+      ],
+    };
   }
 
   if (method === "turn/plan/updated") {
     const plan = rec.plan;
     if (!Array.isArray(plan)) return { events: [] };
-    const text = plan
-      .map((step) => {
-        const row = asRecord(step);
-        const status = stringField(row, "status") ?? "pending";
-        const body = stringField(row, "step") ?? "";
-        return `${statusMark(status)} ${body}`.trim();
-      })
-      .filter(Boolean)
-      .join("\n");
-    if (!text) return { events: [] };
-    return { events: [{ type: "plan", text }] };
+    const items = plan.flatMap((step): TaskListItem[] => {
+      const row = asRecord(step);
+      const body = stringField(row, "step") ?? "";
+      if (!body) return [];
+      return [
+        {
+          text: body,
+          status: normalizeTaskListStatus(stringField(row, "status")),
+        },
+      ];
+    });
+    const key = stringField(rec, "turnId");
+    const explanation = stringField(rec, "explanation");
+    return {
+      events: [
+        {
+          type: "tasks.updated",
+          items,
+          ...(key ? { key } : {}),
+          ...(explanation ? { explanation } : {}),
+        },
+      ],
+    };
   }
 
   if (method === "item/started" || method === "item/completed") {
@@ -443,7 +486,18 @@ function mapItemLifecycle(
 
   if (itemType === "plan") {
     const text = stringField(item, "text");
-    if (text) return { events: [{ type: "plan", text }] };
+    if (text) {
+      return {
+        events: [
+          {
+            type: "plan",
+            text,
+            key: stringField(item, "id"),
+            streaming: false,
+          },
+        ],
+      };
+    }
     return { events: [] };
   }
 
@@ -463,8 +517,7 @@ function mapToolItem(
     const command = stringField(item, "command") ?? "Shell";
     const status = mapItemStatus(stringField(item, "status"), completed);
     const output =
-      stringField(item, "aggregatedOutput") ??
-      stringField(item, "output");
+      stringField(item, "aggregatedOutput") ?? stringField(item, "output");
     const preview: ToolPreview | undefined = undefined;
     const eventType = completed ? "tool.updated" : "tool.started";
     if (eventType === "tool.started") {
@@ -611,6 +664,9 @@ function mapFileChangeItem(
   completed: boolean,
 ): HarnessEvent {
   const changes = Array.isArray(item.changes) ? item.changes : [];
+  const paths = changes
+    .map((change) => stringField(asRecord(change), "path"))
+    .filter((path): path is string => Boolean(path));
   const first = asRecord(changes[0]);
   const path = stringField(first, "path");
   const diff = stringField(first, "diff");
@@ -631,6 +687,7 @@ function mapFileChangeItem(
       kind: "edit",
       status,
       preview,
+      ...(paths.length ? { paths } : {}),
     };
   }
   return {
@@ -640,6 +697,7 @@ function mapFileChangeItem(
     kind: "edit",
     status,
     preview,
+    ...(paths.length ? { paths } : {}),
   };
 }
 
@@ -649,6 +707,9 @@ function mapFileChangePatch(
   const itemId = stringField(rec, "itemId") ?? "";
   if (!itemId) return { events: [] };
   const changes = Array.isArray(rec.changes) ? rec.changes : [];
+  const paths = changes
+    .map((change) => stringField(asRecord(change), "path"))
+    .filter((path): path is string => Boolean(path));
   const first = asRecord(changes[0]);
   const path = stringField(first, "path");
   const diff = stringField(first, "diff") ?? stringField(rec, "diff");
@@ -669,6 +730,7 @@ function mapFileChangePatch(
         kind: "edit",
         status: "in_progress",
         preview,
+        ...(paths.length ? { paths } : {}),
       },
     ],
   };
@@ -697,22 +759,12 @@ function buildDiffPreview(
   );
 }
 
-function mapItemStatus(
-  status: string | undefined,
-  completed: boolean,
-): string {
+function mapItemStatus(status: string | undefined, completed: boolean): string {
   if (status === "completed" || status === "failed" || status === "declined") {
     return status === "declined" ? "failed" : status;
   }
   if (status === "inProgress") return "in_progress";
   return completed ? "completed" : "in_progress";
-}
-
-function statusMark(status: string): string {
-  if (status === "completed") return "[x]";
-  if (status === "inProgress" || status === "in_progress") return "[…]";
-  if (status === "cancelled") return "[-]";
-  return "[ ]";
 }
 
 export function mapApprovalRequest(

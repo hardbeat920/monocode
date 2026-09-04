@@ -16,6 +16,8 @@ export type PiFlavor = {
   resumeFlag: string;
   /** Flags that strip tools, skills, and project context for one-shot jobs. */
   isolateFlags: readonly string[];
+  /** Read-only tools exposed while the shared composer is in Plan mode. */
+  planTools: readonly string[];
   /** Child id for the shared catalog probe. */
   probeChildId: string;
   /** Child id for the shared one-shot text generator. */
@@ -28,6 +30,7 @@ export const PI_FLAVOR: PiFlavor = {
   resolveBinary: resolvePiBinary,
   resumeFlag: "--session",
   isolateFlags: ["--no-tools", "--no-skills", "--no-context-files"],
+  planTools: ["read", "grep", "find", "ls"],
   probeChildId: "monocode-pi-probe",
   textChildId: "monocode-pi-text",
 };
@@ -43,6 +46,7 @@ export const OMP_FLAVOR: PiFlavor = {
   resolveBinary: resolveOmpBinary,
   resumeFlag: "--resume",
   isolateFlags: ["--no-tools", "--no-skills", "--no-rules"],
+  planTools: ["read", "grep", "glob", "lsp"],
   probeChildId: "monocode-omp-probe",
   textChildId: "monocode-omp-text",
 };

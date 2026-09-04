@@ -3,10 +3,12 @@ import {
   isTerminalTab,
   leafIds,
   newTab,
+  type CommitTabSource,
   type EditorPane,
   type FilePaneTab,
   type LayoutNode,
   type PlanTabSource,
+  type SessionChangesSource,
   type WorkspaceTab,
 } from "./layout";
 import type { ReleaseNotesTabSource } from "./releaseNotes";
@@ -370,12 +372,40 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
   const plan = sanitizePlan(value.plan);
   const hasReleaseNotes = "releaseNotes" in value;
   const releaseNotes = sanitizeReleaseNotes(value.releaseNotes);
+  const hasCommit = "commit" in value;
+  const commit = sanitizeCommit(value.commit);
+  const hasSessionChanges = "sessionChanges" in value;
+  const sessionChanges = sanitizeSessionChanges(value.sessionChanges);
   if (hasReleaseNotes && !releaseNotes) return null;
+  if (hasCommit && !commit) return null;
+  if (hasSessionChanges && !sessionChanges) return null;
+  if (
+    sessionChanges &&
+    (value.plan != null ||
+      releaseNotes != null ||
+      commit != null ||
+      value.changes === true ||
+      value.terminal === true)
+  ) {
+    return null;
+  }
   if (
     releaseNotes &&
     (value.plan != null ||
       value.review === true ||
       value.changes === true ||
+      sessionChanges != null ||
+      value.terminal === true ||
+      commit != null)
+  ) {
+    return null;
+  }
+  if (
+    commit &&
+    (value.plan != null ||
+      value.review === true ||
+      value.changes === true ||
+      sessionChanges != null ||
       value.terminal === true)
   ) {
     return null;
@@ -386,9 +416,36 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
     cwd: value.cwd,
     ...(plan ? { plan } : {}),
     ...(releaseNotes ? { releaseNotes } : {}),
+    ...(commit ? { commit } : {}),
+    ...(sessionChanges ? { sessionChanges, review: true } : {}),
     ...(value.review === true ? { review: true } : {}),
     ...(value.changes === true ? { changes: true, review: true } : {}),
     ...(value.terminal === true ? { terminal: true } : {}),
+  };
+}
+
+function sanitizeSessionChanges(
+  raw: unknown,
+): SessionChangesSource | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const sessionId = (raw as Record<string, unknown>).sessionId;
+  return typeof sessionId === "string" && sessionId.trim()
+    ? { sessionId: sessionId.trim() }
+    : undefined;
+}
+
+function sanitizeCommit(raw: unknown): CommitTabSource | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.sha !== "string" || !value.sha.trim()) return undefined;
+  if (typeof value.shortSha !== "string" || !value.shortSha.trim()) {
+    return undefined;
+  }
+  if (typeof value.subject !== "string") return undefined;
+  return {
+    sha: value.sha.trim(),
+    shortSha: value.shortSha.trim(),
+    subject: value.subject,
   };
 }
 

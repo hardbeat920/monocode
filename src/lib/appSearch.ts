@@ -434,7 +434,13 @@ export function groupedCount(grouped: GroupedHits): number {
 }
 
 function isSearchableRole(role: Block["role"]): boolean {
-  return role === "user" || role === "assistant" || role === "tool" || role === "plan";
+  return (
+    role === "user" ||
+    role === "assistant" ||
+    role === "tool" ||
+    role === "tasks" ||
+    role === "plan"
+  );
 }
 
 function blockSearchText(block: Block): string {

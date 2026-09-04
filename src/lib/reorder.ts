@@ -32,3 +32,20 @@ export function orderByIds<T extends { id: string }>(
   }
   return next;
 }
+
+/** Replace only the slots occupied by a reordered subset, preserving other items. */
+export function mergeOrderedSubset<T extends { id: string }>(
+  items: T[],
+  orderedSubset: T[],
+): T[] {
+  const subsetIds = new Set(orderedSubset.map((item) => item.id));
+  if (subsetIds.size !== orderedSubset.length) return items;
+
+  const itemIds = new Set(items.map((item) => item.id));
+  if (orderedSubset.some((item) => !itemIds.has(item.id))) return items;
+
+  let subsetIndex = 0;
+  return items.map((item) =>
+    subsetIds.has(item.id) ? orderedSubset[subsetIndex++] : item,
+  );
+}

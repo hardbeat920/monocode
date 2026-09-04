@@ -253,6 +253,7 @@ export function buildDeterministicHandoff(
   const current = request?.trim() ?? "";
   const users: string[] = [];
   let lastAssistant = "";
+  let lastTasks = "";
   let lastPlan = "";
   const files = new Map<string, string>();
 
@@ -271,6 +272,11 @@ export function buildDeterministicHandoff(
     if (block.role === "plan") {
       const text = block.text.trim();
       if (text) lastPlan = text;
+      continue;
+    }
+    if (block.role === "tasks") {
+      const text = block.text.trim();
+      if (text) lastTasks = text;
       continue;
     }
     if (block.role === "tool" || block.role === "approval") {
@@ -320,6 +326,9 @@ export function buildDeterministicHandoff(
   }
   if (lastPlan) {
     sections.push(`## Plan\n${limitSection(lastPlan, PLAN_LIMIT)}`);
+  }
+  if (lastTasks) {
+    sections.push(`## Current tasks\n${limitSection(lastTasks, PLAN_LIMIT)}`);
   }
 
   return limitSection(sections.join("\n\n").trim(), BRIEF_LIMIT);

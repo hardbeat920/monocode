@@ -177,10 +177,26 @@ input,
   margin-bottom: 0;
 }
 
+.agent-markdown [data-streamdown="blockquote"] {
+  padding-left: 0;
+  padding-inline-start: 1rem;
+  border-left: 0;
+  border-inline-start: 4px solid
+    color-mix(in srgb, var(--color-content) 20%, transparent);
+}
+
+.agent-markdown li > [data-streamdown="ordered-list"],
+.agent-markdown li > [data-streamdown="unordered-list"] {
+  padding-left: 0;
+  padding-inline-start: 1.5rem;
+}
+
 .inbox-comment-md.agent-markdown blockquote {
   margin: 0.4em 0;
-  padding: 0.15em 0 0.15em 0.75em;
-  border-left: 2px solid
+  padding: 0.15em 0;
+  padding-inline-start: 0.75em;
+  border: 0;
+  border-inline-start: 2px solid
     color-mix(in srgb, var(--color-content) 16%, transparent);
   color: color-mix(in srgb, var(--color-content) 55%, transparent);
 }
@@ -317,10 +333,100 @@ header[data-tauri-drag-region] button {
   margin-block: 16px;
   min-width: 0;
   max-width: 100%;
+  unicode-bidi: isolate;
+}
+
+.agent-markdown a[dir],
+.agent-markdown code[dir] {
+  unicode-bidi: isolate;
 }
 
 .agent-markdown .markdown-code-shell [data-streamdown="code-block"] {
   margin-block: 0;
+}
+
+.agent-markdown .markdown-code-copy {
+  appearance: none;
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  right: 8px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  color: color-mix(in srgb, var(--color-content) 45%, transparent);
+  transition:
+    color 160ms ease,
+    background-color 160ms ease;
+}
+
+.agent-markdown .markdown-code-copy:hover {
+  background: color-mix(in srgb, var(--color-content) 10%, transparent);
+  color: var(--color-content);
+}
+
+.agent-markdown .markdown-code-copy:focus-visible {
+  background: color-mix(in srgb, var(--color-content) 10%, transparent);
+  color: var(--color-content);
+}
+
+.agent-markdown .markdown-code-copy svg {
+  width: 15px;
+  height: 15px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.agent-markdown .markdown-code-copy-pages,
+.agent-markdown .markdown-code-copy-check {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.agent-markdown .markdown-code-copy-pages {
+  transition:
+    opacity 120ms ease 100ms,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-markdown .markdown-code-copy-check {
+  opacity: 0;
+  stroke-dasharray: 16;
+  stroke-dashoffset: 16;
+  transform: scale(0.65) rotate(-12deg);
+  transition:
+    opacity 80ms ease 180ms,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke-dashoffset 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-markdown .markdown-code-copy.is-copied .markdown-code-copy-pages {
+  opacity: 0;
+  transform: scale(0.55) rotate(12deg);
+  transition:
+    opacity 120ms ease,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-markdown .markdown-code-copy.is-copied .markdown-code-copy-check {
+  opacity: 1;
+  stroke-dashoffset: 0;
+  transform: scale(1) rotate(0);
+  transition:
+    opacity 80ms ease,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke-dashoffset 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .agent-markdown .markdown-code-icon {
@@ -347,6 +453,12 @@ header[data-tauri-drag-region] button {
   font-weight: 500;
   color: color-mix(in srgb, var(--color-content) 65%, transparent);
   pointer-events: none;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-copy)
+  .markdown-code-path {
+  right: 42px;
 }
 
 .agent-markdown .markdown-code-path-link {
@@ -416,6 +528,19 @@ header[data-tauri-drag-region] button {
 
 .agent-markdown [data-streamdown="code-block-header"]:has(span:empty) {
   display: none;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-copy)
+  [data-streamdown="code-block-header"]:has(span:empty) {
+  display: flex;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-markdown .markdown-code-copy-pages,
+  .agent-markdown .markdown-code-copy-check {
+    transition: none;
+  }
 }
 
 .agent-markdown [data-streamdown="code-block-body"] {
@@ -521,6 +646,15 @@ header[data-tauri-drag-region] button {
   max-width: 100%;
   height: auto;
   margin-inline: auto;
+}
+
+.agent-markdown .inbox-media {
+  vertical-align: middle;
+}
+
+.agent-markdown .inbox-media img,
+.agent-markdown .inbox-media video {
+  vertical-align: middle;
 }
 
 @keyframes approval-toast-in {
@@ -824,25 +958,26 @@ header[data-tauri-drag-region] button {
   }
 }
 
-/* Popovers grow in from the edge they hang off, sliding the last few pixels
-   out of their trigger. The travel carries the animation rather than the fade:
-   WebKit composites `backdrop-filter` on its own layer, so a short opacity
-   ramp over the glass is nearly invisible. Still brief — a menu that takes its
-   time reads as lag rather than polish. */
+/* Popover contents grow in from the edge they hang off, sliding the last few
+   pixels out of their trigger. The glass frame stays still: WebKit composites
+   `backdrop-filter` on its own layer and can flash a stale backdrop if that
+   same layer moves and a menu-item hover invalidates it. Still brief — a menu
+   that takes its time reads as lag rather than polish. */
 @keyframes popover-open {
   from {
     opacity: 0;
-    transform: translate(var(--popover-shift, 0), var(--popover-lift, 0))
+    transform: translate3d(var(--popover-shift, 0), var(--popover-lift, 0), 0)
       scale(0.94);
   }
   to {
     opacity: 1;
-    transform: none;
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
 .popover-open {
   animation: popover-open 170ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  backface-visibility: hidden;
 }
 
 .popover-open[data-popover-side="bottom"] {
@@ -975,4 +1110,54 @@ header[data-tauri-drag-region] button {
     animation: none;
     opacity: 0.7;
   }
+}
+
+[data-session-review-shell]
+  + [data-message-queue]
+  [data-message-queue-card] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Graph node cutouts so lane strokes do not show through the circles. */
+.git-history-item svg {
+  display: block;
+  overflow: visible;
+}
+.git-history-item svg circle {
+  stroke: var(--color-background-base);
+}
+.git-history-item:hover svg circle:first-of-type {
+  stroke: transparent;
+}
+.git-history-item:hover svg circle:nth-of-type(2) {
+  stroke: color-mix(
+    in srgb,
+    var(--color-content) 5%,
+    var(--color-background-base)
+  );
+}
+.git-history-item.is-selected svg circle:nth-of-type(2) {
+  stroke: color-mix(
+    in srgb,
+    var(--color-content) 10%,
+    var(--color-background-base)
+  );
+}
+.git-history-item.is-head svg circle:last-child {
+  fill: var(--color-background-base);
+}
+.git-history-item.is-head:hover svg circle:last-child {
+  fill: color-mix(
+    in srgb,
+    var(--color-content) 5%,
+    var(--color-background-base)
+  );
+}
+.git-history-item.is-head.is-selected svg circle:last-child {
+  fill: color-mix(
+    in srgb,
+    var(--color-content) 10%,
+    var(--color-background-base)
+  );
 }

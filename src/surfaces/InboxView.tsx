@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  CheckCheck,
   ChevronDown,
   CircleDot,
   CircleX,
@@ -79,6 +80,7 @@ import { sameProjectPath, type RecentProject } from "../lib/recents";
 import {
   isInboxEntryUnseen,
   markInboxItemSeen,
+  markInboxItemsSeen,
   useInboxSeenTick,
 } from "../lib/inboxSeen";
 import {
@@ -402,6 +404,21 @@ export function InboxView({
       applyInboxFilters(items, activeFilters, searchInput, Date.now(), source),
     [activeFilters, items, searchInput, source],
   );
+  const inboxSeenTick = useInboxSeenTick();
+  const sourceEntries = useMemo(
+    () =>
+      items
+        .filter((item) => item.provider === source)
+        .map((item) => ({
+          key: inboxItemKey(item),
+          updatedAt: item.updatedAt,
+        })),
+    [items, source],
+  );
+  const sourceHasUnseen = useMemo(
+    () => sourceEntries.some(isInboxEntryUnseen),
+    [inboxSeenTick, sourceEntries],
+  );
 
   const searchNarrowed = searchInput.trim().length > 0;
   const narrowedByUser = searchNarrowed || filtersActive;
@@ -493,6 +510,16 @@ export function InboxView({
           }`}
         >
           <ListFilter className="size-3" strokeWidth={1.75} />
+        </button>
+        <button
+          type="button"
+          title="Mark all as read"
+          aria-label="Mark all as read"
+          disabled={!sourceHasUnseen}
+          onClick={() => markInboxItemsSeen(sourceEntries)}
+          className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
+        >
+          <CheckCheck className="size-3.5" strokeWidth={1.75} />
         </button>
         <button
           type="button"
@@ -1001,7 +1028,7 @@ function InboxDetail({
   }, [githubKind, item.id, item.number, item.projectPath, linear, revision]);
 
   useEffect(() => {
-    if (!isPr) return;
+    if (!isPr || tab !== "code") return;
     let cancelled = false;
     const cachedDiff = peekGithubPrDiff(item.projectPath, item.number);
     if (cachedDiff) {
@@ -1030,7 +1057,7 @@ function InboxDetail({
     return () => {
       cancelled = true;
     };
-  }, [isPr, item.number, item.projectPath, revision]);
+  }, [isPr, item.number, item.projectPath, revision, tab]);
 
   const postComment = async (body: string) => {
     setPosting(true);
@@ -1269,7 +1296,11 @@ function InboxDetail({
       ) : (
         <>
           {details?.body.trim() ? (
-            <AgentMarkdown text={details.body} cwd={markdownCwd} />
+            <AgentMarkdown
+              text={details.body}
+              cwd={markdownCwd}
+              allowRemoteMedia
+            />
           ) : (
             <p className="text-[13px] text-content/45">No description</p>
           )}

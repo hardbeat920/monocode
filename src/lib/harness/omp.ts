@@ -1,6 +1,7 @@
 import {
   bindSession,
   cancelTurn,
+  compactContext,
   forgetSession,
   respondApproval,
   sendTurn,
@@ -9,7 +10,12 @@ import {
   stopSession,
 } from "./piFamily";
 import { OMP_FLAVOR } from "./piFlavor";
-import type { ApprovalDecision, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  CompactContextInput,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 /**
  * Live omp (oh-my-pi) adapter. Spawns `omp --mode rpc` with the user's config
@@ -19,6 +25,10 @@ import type { ApprovalDecision, SendTurnInput, SteerTurnInput } from "./types";
  */
 export function sendOmpTurn(input: SendTurnInput): Promise<void> {
   return sendTurn(OMP_FLAVOR, input);
+}
+
+export function compactOmpContext(input: CompactContextInput): Promise<void> {
+  return compactContext(OMP_FLAVOR, input);
 }
 
 export function steerOmpTurn(input: SteerTurnInput): Promise<void> {

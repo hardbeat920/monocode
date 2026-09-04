@@ -1,4 +1,10 @@
-import type { Attachment, RuntimeMode, ToolPreview } from "../session";
+import type {
+  Attachment,
+  RuntimeMode,
+  TaskListItem,
+  ToolPreview,
+  TurnIntent,
+} from "../session";
 import type { UserQuestion } from "../userQuestion";
 
 export type HarnessEvent =
@@ -18,6 +24,8 @@ export type HarnessEvent =
       kind?: string;
       status?: string;
       preview?: ToolPreview;
+      /** Every path affected when one structured edit changes multiple files. */
+      paths?: string[];
     }
   | {
       type: "tool.updated";
@@ -27,6 +35,8 @@ export type HarnessEvent =
       status?: string;
       detail?: string;
       preview?: ToolPreview;
+      /** Every path affected when one structured edit changes multiple files. */
+      paths?: string[];
     }
   | {
       type: "approval.requested";
@@ -54,22 +64,45 @@ export type HarnessEvent =
       requestId: number;
       decision: "answered" | "skipped" | "cancelled";
     }
-  | { type: "plan"; text: string }
+  | {
+      type: "tasks.updated";
+      key?: string;
+      explanation?: string;
+      /** Merge changed items into the existing list instead of replacing it. */
+      merge?: boolean;
+      items: TaskListItem[];
+    }
+  | {
+      type: "plan";
+      text: string;
+      /** Merge identity for deltas and the authoritative completed item. */
+      key?: string;
+      /** Append a stream delta instead of replacing the current snapshot. */
+      append?: boolean;
+      /** False marks the plan ready for review. */
+      streaming?: boolean;
+    }
   /** Context-window level after the harness's latest request. */
   | { type: "context"; used?: number; window?: number };
 
 export type ApprovalDecision = "allow" | "deny";
 
-export type SendTurnInput = {
+export type HarnessSessionInput = {
   sessionId: string;
   cwd: string;
   model: string;
   modelSettings?: Record<string, string>;
   runtimeMode: RuntimeMode;
-  text: string;
-  attachments?: Attachment[];
+  intent?: TurnIntent;
   onEvent: (event: HarnessEvent) => void;
 };
+
+export type SendTurnInput = HarnessSessionInput & {
+  text: string;
+  attachments?: Attachment[];
+};
+
+export type CompactContextInput = HarnessSessionInput;
 
 export type SteerTurnInput = {
   sessionId: string;

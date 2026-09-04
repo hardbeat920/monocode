@@ -13,10 +13,7 @@ export type QuoteRequest = {
   mode?: AddToChatMode;
 };
 
-export function requestAddToChat(
-  text: string,
-  mode: AddToChatMode = "quote",
-) {
+export function requestAddToChat(text: string, mode: AddToChatMode = "quote") {
   if (typeof window === "undefined") return;
   const value = text.replace(/\r\n?/g, "\n").trim();
   if (!value) return;

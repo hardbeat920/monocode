@@ -1,5 +1,11 @@
 export { startHarnessBridge, killAllChildren } from "./child";
-export { applyHarnessEvent, appendUser, appendSteerUser, stopStreaming } from "./apply";
+export {
+  applyHarnessEvent,
+  appendUser,
+  appendSteerUser,
+  promoteLastAssistantToPlan,
+  stopStreaming,
+} from "./apply";
 export {
   sendCursorTurn,
   cancelCursorTurn,
@@ -10,6 +16,7 @@ export {
 } from "./cursor";
 export {
   sendCodexTurn,
+  compactCodexContext,
   cancelCodexTurn,
   respondCodexApproval,
   stopCodexSession,
@@ -18,6 +25,7 @@ export {
 } from "./codex";
 export {
   sendOpenCodeTurn,
+  compactOpenCodeContext,
   cancelOpenCodeTurn,
   respondOpenCodeApproval,
   stopOpenCodeSession,
@@ -26,6 +34,7 @@ export {
 } from "./opencode";
 export {
   sendClaudeTurn,
+  compactClaudeContext,
   cancelClaudeTurn,
   respondClaudeApproval,
   stopClaudeSession,
@@ -34,6 +43,7 @@ export {
 } from "./claude";
 export {
   sendPiTurn,
+  compactPiContext,
   cancelPiTurn,
   respondPiApproval,
   stopPiSession,
@@ -42,6 +52,7 @@ export {
 } from "./pi";
 export {
   sendOmpTurn,
+  compactOmpContext,
   cancelOmpTurn,
   respondOmpApproval,
   stopOmpSession,
@@ -58,6 +69,7 @@ export {
 } from "./fx";
 export {
   sendGrokTurn,
+  compactGrokContext,
   cancelGrokTurn,
   respondGrokApproval,
   stopGrokSession,
@@ -75,10 +87,7 @@ export {
   generateCursorPrContent,
   stopCursorGitText,
 } from "./cursorGit";
-export {
-  generateCodexCommitMessage,
-  generateCodexPrContent,
-} from "./codexGit";
+export { generateCodexCommitMessage, generateCodexPrContent } from "./codexGit";
 export {
   generateOpenCodeCommitMessage,
   generateOpenCodePrContent,
@@ -87,10 +96,7 @@ export {
   generateClaudeCommitMessage,
   generateClaudePrContent,
 } from "./claudeGit";
-export {
-  generateGrokCommitMessage,
-  generateGrokPrContent,
-} from "./grokGit";
+export { generateGrokCommitMessage, generateGrokPrContent } from "./grokGit";
 export {
   generateCommitMessage,
   generatePrContent,
@@ -123,6 +129,8 @@ export {
   requireHarness,
   isLiveHarness,
   sendHarnessTurn,
+  compactHarnessContext,
+  canCompactHarnessContext,
   steerHarnessTurn,
   canSteerHarness,
   cancelHarnessTurn,
@@ -136,6 +144,15 @@ export {
   generateHarnessCommitMessage,
   generateHarnessPrContent,
 } from "./registry";
-export type { ApprovalDecision, HarnessEvent, SteerTurnInput } from "./types";
-export type { UserQuestion, UserQuestionPrompt, UserQuestionReply } from "../userQuestion";
+export type {
+  ApprovalDecision,
+  CompactContextInput,
+  HarnessEvent,
+  SteerTurnInput,
+} from "./types";
+export type {
+  UserQuestion,
+  UserQuestionPrompt,
+  UserQuestionReply,
+} from "../userQuestion";
 export type { HarnessAdapter } from "./registry";

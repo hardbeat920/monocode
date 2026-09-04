@@ -3,8 +3,10 @@ import { INTERRUPT_MESSAGE } from "./inFlight";
 import {
   leaf,
   newChangesTab,
+  newCommitTab,
   newFileTab,
   newReleaseNotesWorkspaceTab,
+  newSessionChangesTab,
   newTab,
   newTerminalFile,
 } from "./layout";
@@ -63,6 +65,46 @@ describe("collectWorkspaceSnapshot", () => {
     expect(restored?.changes).toBe(true);
     expect(restored?.review).toBe(true);
     expect(restored?.path).toBe("/tmp/a/src/lib.rs");
+  });
+
+  it("round-trips a session-scoped Changes tab", () => {
+    const file = newSessionChangesTab(
+      "/tmp/a",
+      "session-a",
+      "/tmp/a/src/lib.rs",
+    );
+    const tab = {
+      ...newTab("s1"),
+      id: "t1",
+      editorPanes: [{ id: "e1", files: [file], activeFileId: file.id }],
+    };
+    const snapshot = collectWorkspaceSnapshot([tab], [], "t1", "/tmp/a");
+    const restored = hydrateWorkspaceSnapshot(snapshot, new Map())?.tabs[0]
+      ?.editorPanes[0]?.files[0];
+    expect(restored?.sessionChanges).toEqual({ sessionId: "session-a" });
+    expect(restored?.review).toBe(true);
+    expect(restored?.path).toBe("/tmp/a/src/lib.rs");
+  });
+
+  it("round-trips a commit review tab", () => {
+    const file = newCommitTab("/tmp/a", {
+      sha: "abc1234deadbeef",
+      shortSha: "abc1234",
+      subject: "Fix the graph",
+    });
+    const tab = {
+      ...newTab("s1"),
+      id: "t1",
+      editorPanes: [{ id: "e1", files: [file], activeFileId: file.id }],
+    };
+    const snapshot = collectWorkspaceSnapshot([tab], [], "t1", "/tmp/a");
+    const workspace = hydrateWorkspaceSnapshot(snapshot, new Map());
+    const restored = workspace?.tabs[0]?.editorPanes[0]?.files[0];
+    expect(restored?.commit).toEqual({
+      sha: "abc1234deadbeef",
+      shortSha: "abc1234",
+      subject: "Fix the graph",
+    });
   });
 
   it("round-trips a release-note descriptor", () => {
@@ -135,6 +177,10 @@ describe("parseWorkspaceSnapshot", () => {
     { releaseNotes: { version: "0.1.22" }, review: true },
     { releaseNotes: { version: "0.1.22" }, changes: true },
     { releaseNotes: { version: "0.1.22" }, terminal: true },
+    {
+      releaseNotes: { version: "0.1.22" },
+      commit: { sha: "abc", shortSha: "abc", subject: "x" },
+    },
   ])("rejects a tab whose release pane is invalid: %j", (descriptor) => {
     const valid = { ...newTab("session-a"), id: "valid-tab" };
     const invalidPaneId = "invalid-release-pane";

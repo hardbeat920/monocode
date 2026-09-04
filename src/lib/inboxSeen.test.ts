@@ -4,6 +4,7 @@ import {
   inboxSeenIsSeeded,
   isInboxEntryUnseen,
   markInboxItemSeen,
+  markInboxItemsSeen,
   seedInboxSeenIfNeeded,
 } from "./inboxSeen";
 
@@ -106,6 +107,17 @@ describe("inbox seen items", () => {
     markInboxItemSeen(next[1]!);
     expect(inboxHasUnseenItems(next)).toBe(true);
     markInboxItemSeen(next[2]!);
+    expect(inboxHasUnseenItems(next)).toBe(false);
+  });
+
+  it("marks all supplied items as seen", () => {
+    seedInboxSeenIfNeeded([entry("linear:ENG-1", "2026-08-27T10:00:00Z")]);
+    const next = [
+      entry("linear:ENG-2", "2026-08-27T10:01:00Z"),
+      entry("linear:ENG-3", "2026-08-27T10:02:00Z"),
+    ];
+    expect(inboxHasUnseenItems(next)).toBe(true);
+    markInboxItemsSeen(next);
     expect(inboxHasUnseenItems(next)).toBe(false);
   });
 

@@ -1,6 +1,7 @@
 import {
   bindSession,
   cancelTurn,
+  compactContext,
   forgetSession,
   respondApproval,
   sendTurn,
@@ -9,7 +10,12 @@ import {
   stopSession,
 } from "./piFamily";
 import { PI_FLAVOR } from "./piFlavor";
-import type { ApprovalDecision, SendTurnInput, SteerTurnInput } from "./types";
+import type {
+  ApprovalDecision,
+  CompactContextInput,
+  SendTurnInput,
+  SteerTurnInput,
+} from "./types";
 
 /**
  * Live Pi adapter. Spawns `pi --mode rpc` with the user's config and extensions
@@ -18,6 +24,10 @@ import type { ApprovalDecision, SendTurnInput, SteerTurnInput } from "./types";
  */
 export function sendPiTurn(input: SendTurnInput): Promise<void> {
   return sendTurn(PI_FLAVOR, input);
+}
+
+export function compactPiContext(input: CompactContextInput): Promise<void> {
+  return compactContext(PI_FLAVOR, input);
 }
 
 export function steerPiTurn(input: SteerTurnInput): Promise<void> {
@@ -53,8 +63,6 @@ export function bindPiSession(
 }
 
 /** Test seam. */
-export function setPiBinaryResolver(
-  fn: () => Promise<{ path: string }>,
-): void {
+export function setPiBinaryResolver(fn: () => Promise<{ path: string }>): void {
   setFlavorBinaryResolver(PI_FLAVOR, fn);
 }

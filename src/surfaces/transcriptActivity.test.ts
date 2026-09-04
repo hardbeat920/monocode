@@ -8,6 +8,7 @@ import {
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
+  initialThinkingIndex,
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
@@ -120,6 +121,43 @@ describe("groupTurnItems", () => {
     expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "b", "c"]);
   });
 
+  it("hides provider todo calls in favor of the shared tasks block", () => {
+    const tasks: Block = {
+      id: "tasks",
+      role: "tasks",
+      text: "[~] Implement",
+      taskList: {
+        items: [{ text: "Implement", status: "in_progress" }],
+      },
+    };
+    expect(
+      groupTurnItems([
+        {
+          id: "todo-tool",
+          role: "tool",
+          text: "Update TODOs",
+          tool: {
+            kind: "tasks",
+            title: "Update TODOs",
+            status: "completed",
+          },
+        },
+        tasks,
+      ]),
+    ).toEqual([{ type: "block", block: tasks }]);
+    expect(
+      activityStillRunning([
+        {
+          id: "todo-tool",
+          role: "tool",
+          text: "Update TODOs",
+          streaming: true,
+          tool: { kind: "tasks", status: "pending" },
+        },
+      ]),
+    ).toBe(false);
+  });
+
   it("folds edits into the activity stack", () => {
     const items = groupTurnItems([shell("a"), edit("b"), shell("c")]);
     expect(items).toHaveLength(1);
@@ -136,7 +174,7 @@ describe("groupTurnItems", () => {
     expect(items.map((item) => item.type)).toEqual(["activity", "block"]);
   });
 
-  it("folds prose between tool calls in and leaves the final answer out", () => {
+  it("keeps all assistant prose outside reasoning and tool activity", () => {
     const items = groupTurnItems([
       { id: "u", role: "user", text: "cut the release" },
       { id: "a1", role: "assistant", text: "Running the checks first." },
@@ -147,17 +185,17 @@ describe("groupTurnItems", () => {
     ]);
     expect(items.map((item) => item.type)).toEqual([
       "block",
+      "block",
+      "activity",
+      "block",
       "activity",
       "block",
     ]);
-    if (items[1]?.type !== "activity") return;
-    expect(items[1].blocks.map((block) => block.id)).toEqual([
-      "a1",
-      "a",
-      "a2",
-      "b",
-    ]);
-    expect(items[2]).toMatchObject({ type: "block", block: { id: "a3" } });
+    expect(items[1]).toMatchObject({ type: "block", block: { id: "a1" } });
+    expect(items[2]).toMatchObject({ type: "activity", blocks: [{ id: "a" }] });
+    expect(items[3]).toMatchObject({ type: "block", block: { id: "a2" } });
+    expect(items[4]).toMatchObject({ type: "activity", blocks: [{ id: "b" }] });
+    expect(items[5]).toMatchObject({ type: "block", block: { id: "a3" } });
   });
 
   it("keeps the trailing run of prose blocks out of the stack", () => {
@@ -173,13 +211,15 @@ describe("groupTurnItems", () => {
     ]);
   });
 
-  it("folds every paragraph when the turn ends on a tool call", () => {
+  it("keeps prose standalone when the turn ends on a tool call", () => {
     const items = groupTurnItems([
       { id: "a1", role: "assistant", text: "Looking now." },
       shell("a"),
     ]);
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ type: "activity" });
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "a1" } },
+      { type: "activity", blocks: [{ id: "a" }] },
+    ]);
   });
 
   it("keeps thinking in the stack so a long think is visible", () => {
@@ -192,6 +232,56 @@ describe("groupTurnItems", () => {
     if (items[0]?.type !== "activity") return;
     expect(items[0].blocks.map((block) => block.id)).toEqual(["r", "a"]);
   });
+
+  it("uses assistant prose as boundaries between reasoning and tool groups", () => {
+    const items = groupTurnItems([
+      note("a1", "I’ll inspect the config first."),
+      thought("r1"),
+      read("t1"),
+      note("a2", "The config is healthy. I’m checking the build next."),
+      thought("r2"),
+      shell("t2"),
+    ]);
+
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "a1" } },
+      { type: "activity", blocks: [{ id: "r1" }, { id: "t1" }] },
+      { type: "block", block: { id: "a2" } },
+      { type: "activity", blocks: [{ id: "r2" }, { id: "t2" }] },
+    ]);
+  });
+
+  it("replaces leading reasoning with the first assistant prose", () => {
+    const items = groupTurnItems([
+      { id: "u", role: "user", text: "Investigate it" },
+      thought("r1", "I should inspect the current changes."),
+      thought("r2", "I need a structured checklist."),
+      note("a1", "I’ll investigate the current changes."),
+      read("t1"),
+    ]);
+
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "u" } },
+      { type: "block", block: { id: "a1" } },
+      { type: "activity", blocks: [{ id: "t1" }] },
+    ]);
+  });
+
+  it("identifies leading reasoning while the first prose is pending", () => {
+    const thinking = groupTurnItems([
+      { id: "u", role: "user", text: "Investigate it" },
+      thought("r1"),
+      thought("r2"),
+    ]);
+    expect(initialThinkingIndex(thinking)).toBe(1);
+
+    const toolActivity = groupTurnItems([
+      { id: "u", role: "user", text: "Investigate it" },
+      thought("r1"),
+      read("t1"),
+    ]);
+    expect(initialThinkingIndex(toolActivity)).toBe(-1);
+  });
 });
 
 describe("turnCopyText", () => {
@@ -202,12 +292,23 @@ describe("turnCopyText", () => {
         { id: "a1", role: "assistant", text: "I'll inspect the file." },
         shell("t"),
         { id: "r", role: "reasoning", text: "thinking" },
+        {
+          id: "tasks",
+          role: "tasks",
+          text: "[x] inspect\n[~] implement",
+          taskList: {
+            items: [
+              { text: "inspect", status: "completed" },
+              { text: "implement", status: "in_progress" },
+            ],
+          },
+        },
         { id: "p", role: "plan", text: "## Plan\n\n- edit App.tsx" },
         { id: "a2", role: "assistant", text: "Done.\n\n```ts\nfixed\n```" },
         { id: "s", role: "system", text: "session error" },
       ]),
     ).toBe(
-      "I'll inspect the file.\n\n## Plan\n\n- edit App.tsx\n\nDone.\n\n```ts\nfixed\n```",
+      "I'll inspect the file.\n\n[x] inspect\n[~] implement\n\n## Plan\n\n- edit App.tsx\n\nDone.\n\n```ts\nfixed\n```",
     );
   });
 

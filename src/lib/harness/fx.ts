@@ -43,6 +43,7 @@ type Live = {
   muteUpdates: boolean;
   cancelled: boolean;
   runtimeMode: RuntimeMode;
+  planning: boolean;
   onEvent: (event: HarnessEvent) => void;
   turns: Promise<void>;
 };
@@ -104,6 +105,7 @@ export async function sendFxTurn(input: SendTurnInput): Promise<void> {
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
+  live.planning = input.intent === "plan";
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
@@ -112,7 +114,11 @@ export async function sendFxTurn(input: SendTurnInput): Promise<void> {
       try {
         await applyModelSelection(live, input);
         if (live.cancelled) return;
-        await applyRuntimeMode(live, input.runtimeMode);
+        await applyRuntimeMode(
+          live,
+          input.runtimeMode,
+          input.intent === "plan",
+        );
         if (live.cancelled) return;
         await prompt(live, input);
       } catch (error) {
@@ -326,6 +332,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       muteUpdates: didLoad,
       cancelled: false,
       runtimeMode: input.runtimeMode,
+      planning: input.intent === "plan",
       onEvent: input.onEvent,
       turns: Promise.resolve(),
     };
@@ -378,6 +385,7 @@ async function applyModelSelection(
 async function applyRuntimeMode(
   live: Live,
   runtimeMode: RuntimeMode,
+  planning = false,
 ): Promise<void> {
   // Unsupported mode control is non-fatal because handlePermission remains a
   // backstop. Transport failures and timeouts are rethrown so the wedged child
@@ -387,7 +395,7 @@ async function applyRuntimeMode(
       "session/set_mode",
       {
         sessionId: live.acpSessionId,
-        modeId: fxModeId(runtimeMode),
+        modeId: planning ? "ask" : fxModeId(runtimeMode),
       },
       CONTROL_TIMEOUT_MS,
     )
@@ -500,9 +508,13 @@ async function handlePermission(live: Live, id: number, params: unknown) {
       preview: request.preview,
     });
   }
-  const optionId =
-    autoPermissionOption(live.runtimeMode, request.optionIds) ??
-    permissionOptionId("allow", request.optionIds);
+  const optionId = live.planning
+    ? permissionOptionId(
+        request.kind === "read" || request.kind === "search" ? "allow" : "deny",
+        request.optionIds,
+      )
+    : (autoPermissionOption(live.runtimeMode, request.optionIds) ??
+      permissionOptionId("allow", request.optionIds));
   await live.acp.respond(id, {
     outcome: { outcome: "selected", optionId },
   });

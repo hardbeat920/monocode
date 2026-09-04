@@ -1,6 +1,7 @@
 import {
   bindCodexSession,
   cancelCodexTurn,
+  compactCodexContext,
   forgetCodexSession,
   respondCodexApproval,
   sendCodexTurn,
@@ -21,6 +22,7 @@ export const codexAdapter: HarnessAdapter = {
   id: "codex",
   live: true,
   sendTurn: sendCodexTurn,
+  compactContext: compactCodexContext,
   steerTurn: steerCodexTurn,
   cancelTurn: cancelCodexTurn,
   respondApproval: respondCodexApproval,

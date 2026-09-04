@@ -17,6 +17,7 @@ import {
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
   toOpenCodePermissionReply,
+  toolKindFromName,
 } from "./opencodeProtocol";
 
 describe("parseOpenCodeModelSlug", () => {
@@ -31,6 +32,12 @@ describe("parseOpenCodeModelSlug", () => {
     expect(parseOpenCodeModelSlug("glm-5")).toBeNull();
     expect(parseOpenCodeModelSlug("/model")).toBeNull();
     expect(parseOpenCodeModelSlug("provider/")).toBeNull();
+  });
+});
+
+describe("tool kinds", () => {
+  it("classifies todo writes as internal task activity", () => {
+    expect(toolKindFromName("todowrite")).toBe("tasks");
   });
 });
 

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Loader } from "../chrome/icons";
 import {
-  gitDiffIndex,
+  gitDiffFiles,
   gitDiscardFile,
   gitFileDiff,
   gitStageContents,
@@ -10,12 +10,10 @@ import {
   subscribeGitChanged,
   type GitChangedFile,
 } from "../lib/fs";
-import { buildUnifiedFile } from "../lib/unifiedDiff";
+import { forEachConcurrent } from "../lib/concurrent";
+import { buildUnifiedFile, type UnifiedFileDiff } from "../lib/unifiedDiff";
 import { stageChunkText } from "./editorGit";
-import {
-  UnifiedDiffView,
-  type UnifiedDiffFileModel,
-} from "./UnifiedDiffView";
+import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
 
 type Props = {
   cwd: string;
@@ -23,11 +21,20 @@ type Props = {
 };
 
 type LoadedDiff = {
-  file: GitChangedFile;
   binary: boolean;
   tooLarge: boolean;
   original: string;
   current: string;
+  unified: UnifiedFileDiff | null;
+  error?: string;
+};
+
+const DIFF_LOAD_CONCURRENCY = 4;
+const EMPTY_UNIFIED_DIFF: UnifiedFileDiff = {
+  additions: 0,
+  deletions: 0,
+  lines: [],
+  blocks: [],
 };
 
 export function WorkingTreeDiff({ cwd, focusPath }: Props) {
@@ -36,6 +43,8 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [totals, setTotals] = useState({ additions: 0, deletions: 0 });
+  const diffsRef = useRef(diffs);
+  diffsRef.current = diffs;
 
   useEffect(() => {
     if (!cwd || cwd === "~") {
@@ -46,10 +55,12 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
 
     let disposed = false;
     let generation = 0;
+    setFiles(null);
+    setDiffs(new Map());
 
     const run = () => {
       const current = ++generation;
-      void gitDiffIndex(cwd)
+      void gitDiffFiles(cwd)
         .then(async (index) => {
           if (disposed || current !== generation) return;
           setTotals({
@@ -57,37 +68,57 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
             deletions: index.deletions,
           });
           setFiles(index.files);
+          setDiffs(new Map());
           setError(null);
-          const entries = await Promise.all(
-            index.files.map(async (file) => {
-              try {
-                const diff = await gitFileDiff(cwd, file.relative);
-                return [
-                  file.relative,
-                  {
-                    file,
+          const loadOrder = prioritizeFile(index.files, focusPath);
+          await forEachConcurrent(
+            loadOrder,
+            DIFF_LOAD_CONCURRENCY,
+            async (file) => {
+              let loaded: LoadedDiff;
+              if (!file.unstaged) {
+                loaded = {
+                  binary: false,
+                  tooLarge: false,
+                  original: "",
+                  current: "",
+                  unified: EMPTY_UNIFIED_DIFF,
+                };
+              } else {
+                try {
+                  const diff = await gitFileDiff(cwd, file.relative);
+                  const unified =
+                    !diff.binary && !diff.tooLarge
+                      ? buildUnifiedFile(diff.original, diff.current)
+                      : null;
+                  loaded = {
                     binary: diff.binary,
                     tooLarge: diff.tooLarge,
                     original: diff.original,
                     current: diff.current,
-                  } satisfies LoadedDiff,
-                ] as const;
-              } catch {
-                return [
-                  file.relative,
-                  {
-                    file,
+                    unified,
+                  };
+                } catch (caught: unknown) {
+                  loaded = {
                     binary: false,
                     tooLarge: false,
                     original: "",
                     current: "",
-                  } satisfies LoadedDiff,
-                ] as const;
+                    unified: null,
+                    error:
+                      caught instanceof Error ? caught.message : String(caught),
+                  };
+                }
               }
-            }),
+              if (disposed || current !== generation) return;
+              setDiffs((existing) => {
+                const next = new Map(existing);
+                next.set(file.relative, loaded);
+                return next;
+              });
+            },
+            () => !disposed && current === generation,
           );
-          if (disposed || current !== generation) return;
-          setDiffs(new Map(entries));
         })
         .catch((caught: unknown) => {
           if (disposed || current !== generation) return;
@@ -97,14 +128,23 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
     };
 
     run();
-    const unsub = subscribeGitChanged(run);
+    let refreshFrame = 0;
+    const scheduleRun = () => {
+      if (refreshFrame) return;
+      refreshFrame = window.requestAnimationFrame(() => {
+        refreshFrame = 0;
+        run();
+      });
+    };
+    const unsub = subscribeGitChanged(scheduleRun);
     const onFocus = () => {
-      if (!document.hidden) run();
+      if (!document.hidden) scheduleRun();
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
     return () => {
       disposed = true;
+      if (refreshFrame) window.cancelAnimationFrame(refreshFrame);
       unsub();
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
@@ -115,10 +155,7 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
     if (!files) return [];
     return files.map((file) => {
       const loaded = diffs.get(file.relative);
-      const unified =
-        loaded && !loaded.binary && !loaded.tooLarge
-          ? buildUnifiedFile(loaded.original, loaded.current)
-          : null;
+      const unified = loaded?.unified ?? null;
       const unchanged =
         unified != null &&
         unified.additions === 0 &&
@@ -130,13 +167,16 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
         label: file.relative,
         binary: loaded?.binary,
         tooLarge: loaded?.tooLarge,
-        emptyMessage: unchanged
-          ? file.staged
-            ? "Staged — no unstaged changes"
-            : "No unstaged changes"
-          : loaded == null
+        emptyMessage:
+          loaded == null
             ? "Loading…"
-            : undefined,
+            : loaded.error
+              ? `Couldn’t load diff: ${loaded.error}`
+              : unchanged
+                ? file.staged
+                  ? "Staged — no unstaged changes"
+                  : "No unstaged changes"
+                : undefined,
         additions: unified?.additions ?? file.additions,
         deletions: unified?.deletions ?? file.deletions,
         blocks: unchanged ? [] : (unified?.blocks ?? []),
@@ -147,39 +187,48 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
     });
   }, [diffs, files]);
 
-  const onStageFile = async (id: string) => {
-    setBusyId(id);
-    try {
-      await gitStageFile(cwd, id);
-      notifyGitChanged();
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const onStageFile = useCallback(
+    async (id: string) => {
+      setBusyId(id);
+      try {
+        await gitStageFile(cwd, id);
+        notifyGitChanged();
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [cwd],
+  );
 
-  const onDiscardFile = async (id: string) => {
-    setBusyId(id);
-    try {
-      await gitDiscardFile(cwd, id);
-      notifyGitChanged();
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const onDiscardFile = useCallback(
+    async (id: string) => {
+      setBusyId(id);
+      try {
+        await gitDiscardFile(cwd, id);
+        notifyGitChanged();
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [cwd],
+  );
 
-  const onStageHunk = async (id: string, pos: number) => {
-    const loaded = diffs.get(id);
-    if (!loaded) return;
-    const next = stageChunkText(loaded.original, loaded.current, pos);
-    if (next == null) return;
-    setBusyId(id);
-    try {
-      await gitStageContents(cwd, id, next);
-      notifyGitChanged();
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const onStageHunk = useCallback(
+    async (id: string, pos: number) => {
+      const loaded = diffsRef.current.get(id);
+      if (!loaded) return;
+      const next = stageChunkText(loaded.original, loaded.current, pos);
+      if (next == null) return;
+      setBusyId(id);
+      try {
+        await gitStageContents(cwd, id, next);
+        notifyGitChanged();
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [cwd],
+  );
 
   if (!cwd || cwd === "~") {
     return (
@@ -216,4 +265,16 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
       onStageHunk={onStageHunk}
     />
   );
+}
+
+function prioritizeFile(
+  files: readonly GitChangedFile[],
+  focusPath: string | undefined,
+): GitChangedFile[] {
+  if (!focusPath) return [...files];
+  const focused = files.find(
+    (file) => file.path === focusPath || file.relative === focusPath,
+  );
+  if (!focused) return [...files];
+  return [focused, ...files.filter((file) => file !== focused)];
 }

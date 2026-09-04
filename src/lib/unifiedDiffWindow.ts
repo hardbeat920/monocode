@@ -21,6 +21,12 @@ export type RowWindow = {
   padBottom: number;
 };
 
+export type RowLayout = {
+  /** Cumulative row positions. `offsets[index]` is the top of that row. */
+  offsets: number[];
+  totalHeight: number;
+};
+
 export function flattenVisibleRows(
   blocks: readonly UnifiedBlock[],
   revealFor: (foldId: string) => FoldReveal | undefined,
@@ -48,17 +54,15 @@ export function flattenVisibleRows(
       }
       continue;
     }
-    let staged = false;
     for (const line of block.lines) {
+      const pos = line.pos ?? block.pos;
       const stage =
         canStageHunk &&
-        !staged &&
         (line.kind === "add" || line.kind === "del") &&
-        block.pos != null;
-      if (stage) staged = true;
+        pos != null;
       rows.push({
         type: "line",
-        line,
+        line: stage && line.pos == null && pos != null ? { ...line, pos } : line,
         stage,
         height: line.kind === "hunk" ? UNIFIED_HUNK_PX : UNIFIED_LINE_PX,
       });
@@ -73,13 +77,23 @@ export function rowsHeight(rows: readonly DiffViewRow[]): number {
   return height;
 }
 
+export function layoutRows(rows: readonly DiffViewRow[]): RowLayout {
+  const offsets = new Array<number>(rows.length + 1);
+  offsets[0] = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    offsets[index + 1] = offsets[index] + rows[index].height;
+  }
+  return { offsets, totalHeight: offsets[rows.length] ?? 0 };
+}
+
 export function windowRows(
   rows: readonly DiffViewRow[],
   viewTop: number,
   viewBottom: number,
   overscan = UNIFIED_OVERSCAN_PX,
+  layout = layoutRows(rows),
 ): RowWindow {
-  const total = rowsHeight(rows);
+  const total = layout.totalHeight;
   if (rows.length === 0) {
     return { start: 0, end: 0, padTop: 0, padBottom: 0 };
   }
@@ -89,42 +103,50 @@ export function windowRows(
     return { start: 0, end: 0, padTop: 0, padBottom: total };
   }
   if (from >= total) {
-    return { start: rows.length, end: rows.length, padTop: total, padBottom: 0 };
+    return {
+      start: rows.length,
+      end: rows.length,
+      padTop: total,
+      padBottom: 0,
+    };
   }
 
-  let y = 0;
-  let start = 0;
-  let padTop = 0;
-  let found = false;
-  for (let index = 0; index < rows.length; index += 1) {
-    const next = y + rows[index].height;
-    if (next > from) {
-      start = index;
-      padTop = y;
-      found = true;
-      break;
-    }
-    y = next;
-  }
-  if (!found) {
-    return { start: rows.length, end: rows.length, padTop: total, padBottom: 0 };
-  }
-
-  let end = rows.length;
-  y = padTop;
-  for (let index = start; index < rows.length; index += 1) {
-    y += rows[index].height;
-    if (y >= to) {
-      end = index + 1;
-      break;
-    }
-  }
+  const start = Math.max(
+    0,
+    Math.min(rows.length, upperBound(layout.offsets, from) - 1),
+  );
+  const end = Math.max(
+    start,
+    Math.min(rows.length, lowerBound(layout.offsets, to)),
+  );
   return {
     start,
     end,
-    padTop,
-    padBottom: total - padTop - rowsHeight(rows.slice(start, end)),
+    padTop: layout.offsets[start] ?? total,
+    padBottom: total - (layout.offsets[end] ?? total),
   };
+}
+
+function lowerBound(values: readonly number[], target: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (values[middle] < target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function upperBound(values: readonly number[], target: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (values[middle] <= target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }
 
 function pushLines(
@@ -132,10 +154,9 @@ function pushLines(
   lines: readonly UnifiedLine[],
   canStage: boolean,
 ) {
-  let staged = false;
   for (const line of lines) {
-    const stage = canStage && !staged && (line.kind === "add" || line.kind === "del");
-    if (stage) staged = true;
+    const stage =
+      canStage && (line.kind === "add" || line.kind === "del") && line.pos != null;
     rows.push({
       type: "line",
       line,

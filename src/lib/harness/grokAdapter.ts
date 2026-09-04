@@ -1,6 +1,7 @@
 import {
   bindGrokSession,
   cancelGrokTurn,
+  compactGrokContext,
   forgetGrokSession,
   respondGrokApproval,
   respondGrokQuestion,
@@ -23,6 +24,7 @@ export const grokAdapter: HarnessAdapter = {
   live: true,
   canSteer: false,
   sendTurn: sendGrokTurn,
+  compactContext: compactGrokContext,
   steerTurn: steerGrokTurn,
   cancelTurn: cancelGrokTurn,
   respondApproval: respondGrokApproval,
