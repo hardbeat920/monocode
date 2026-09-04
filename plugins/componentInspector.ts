@@ -45,6 +45,14 @@ export function cursorInspectorBabelPlugin({ types: t }: any) {
             comp = base;
           }
         }
+        // Idempotency guard: the plugin may be registered more than once
+        // (or see already-instrumented code on re-transform). Never emit a
+        // second set of attributes — esbuild warns on every duplicate.
+        const alreadyTagged = path.node.attributes.some(
+          (attr: { name?: { name?: string } }) =>
+            attr?.name?.name === "data-insp-file"
+        );
+        if (alreadyTagged) return;
 
         const nameNode = path.node.name;
         const tagName = t.isJSXIdentifier(nameNode) ? nameNode.name : "";
@@ -101,7 +109,12 @@ export function componentInspector(
       reactBabel(babelConfig: any) {
         if (!enabled) return;
         babelConfig.plugins = babelConfig.plugins || [];
-        babelConfig.plugins.push(cursorInspectorBabelPlugin);
+        // reactBabel can run against a shared config object; pushing
+        // unconditionally stacks N copies of the visitor and emits N sets
+        // of data-insp-* attributes per element.
+        if (!babelConfig.plugins.includes(cursorInspectorBabelPlugin)) {
+          babelConfig.plugins.push(cursorInspectorBabelPlugin);
+        }
       },
     },
     transformIndexHtml() {
