@@ -152,7 +152,7 @@ export function GitChangesPanel({
 
   return (
     <div ref={paneRef} className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-content/10 px-3">
+      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-content/10 px-2">
         <ChangesViewToggle view={view} onChange={changeView} />
         {index?.branch ? (
           <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-content/50">
