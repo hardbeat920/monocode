@@ -58,8 +58,6 @@ export type Tab = {
   fileFocused?: boolean;
   /** A session in this tab waits for approval (SessionCard amber). */
   needsApproval?: boolean;
-  /** A session in this tab has an in-flight turn (SessionCard accent). */
-  busy?: boolean;
   /** A session in this tab finished while unseen (SessionCard emerald). */
   done?: boolean;
   /** Explicit tab group; absent means ungrouped. */
@@ -207,14 +205,13 @@ function TabHarnesses({
     </span>
   );
 }
-/** Unread attention on a tab, highest priority first. Mirrors the SessionCard
- * status order: needs approval (amber) beats working (accent) beats unseen
- * done (emerald). */
-export type TabAttention = "approval" | "working" | "done";
+/** Unread attention on a tab. Mirrors the SessionCard status colors that have
+ * no other tab affordance: needs approval (amber) beats unseen done
+ * (emerald). Working already spins the harness icon, so it gets no dot. */
+export type TabAttention = "approval" | "done";
 
 export function tabAttention(tab: Tab): TabAttention | null {
   if (tab.needsApproval) return "approval";
-  if (tab.busy) return "working";
   if (tab.done) return "done";
   return null;
 }
@@ -222,7 +219,6 @@ export function tabAttention(tab: Tab): TabAttention | null {
 /** Dot fill matching the SessionCard status text color for each attention. */
 const ATTENTION_DOT: Record<TabAttention, string> = {
   approval: "bg-amber-400",
-  working: "bg-accent",
   done: "bg-emerald-400",
 };
 

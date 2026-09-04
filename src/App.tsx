@@ -419,7 +419,6 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
       tab.multiPane === other.multiPane &&
       tab.fileFocused === other.fileFocused &&
       tab.needsApproval === other.needsApproval &&
-      tab.busy === other.busy &&
       tab.done === other.done &&
       tab.terminal === other.terminal &&
       tab.groupId === other.groupId
@@ -3870,7 +3869,6 @@ export default function App({
   const nextTitleTabs: TitleTab[] = deckProjectTabs.map((tab) =>
     toTitleTab(tab, sessions, dirtyFiles, {
       approvalIds: approvalSessionIds,
-      busyIds: busySessionIds,
       unseenIds: unseenFinishedIds,
     }),
   );
@@ -4720,7 +4718,6 @@ function toTitleTab(
   dirtyFiles: Set<string>,
   status?: {
     approvalIds: ReadonlySet<string>;
-    busyIds: ReadonlySet<string>;
     unseenIds: ReadonlySet<string>;
   },
 ): TitleTab {
@@ -4821,7 +4818,6 @@ function toTitleTab(
     harnesses,
     busyHarnesses,
     needsApproval: tabSessions.some((session) => status?.approvalIds.has(session.id) ?? false),
-    busy: tabSessions.some((session) => status?.busyIds.has(session.id) ?? false),
     done: tabSessions.some((session) => status?.unseenIds.has(session.id) ?? false),
     files,
     multiPane,

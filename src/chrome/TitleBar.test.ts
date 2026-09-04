@@ -126,14 +126,10 @@ describe("tabAttention", () => {
     expect(tabAttention(tab())).toBeNull();
   });
 
-  it("prefers approval over working and done", () => {
-    expect(
-      tabAttention(tab({ needsApproval: true, busy: true, done: true })),
-    ).toBe("approval");
-  });
-
-  it("prefers working over done", () => {
-    expect(tabAttention(tab({ busy: true, done: true }))).toBe("working");
+  it("prefers approval over done", () => {
+    expect(tabAttention(tab({ needsApproval: true, done: true }))).toBe(
+      "approval",
+    );
   });
 
   it("reports unseen done", () => {
