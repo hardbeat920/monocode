@@ -40,6 +40,7 @@ import {
   loadProjectFiles,
   peekProjectFiles,
   recentOpenedFiles,
+  subscribeProjectFiles,
 } from "../lib/fileIndex";
 import {
   buildMentionIndex,
@@ -601,13 +602,21 @@ export function Composer({
 
   useEffect(() => {
     let cancelled = false;
+    const apply = (next: ProjectFile[]) => {
+      if (!cancelled) setFiles(next);
+    };
+    const cached = peekProjectFiles(cwd);
+    if (cached) apply(cached);
     void loadProjectFiles(cwd, mentionOpen)
-      .then((next) => {
-        if (!cancelled) setFiles(next);
-      })
+      .then(apply)
       .catch(() => undefined);
+    const unsub = subscribeProjectFiles(() => {
+      const next = peekProjectFiles(cwd);
+      if (next) apply(next);
+    });
     return () => {
       cancelled = true;
+      unsub();
     };
   }, [cwd, mentionOpen]);
 

@@ -1,4 +1,5 @@
 import { listProjectFiles, type ProjectFile } from "./fs";
+import { subscribeDirsChanged } from "./fileTree";
 import { scorePath, type FuzzyHit } from "./fuzzy";
 import { resolveWorkspacePath } from "./paths";
 import { looksLikeProject } from "./recents";
@@ -6,19 +7,38 @@ import { normalizeEditorPath } from "./search";
 
 const MAX_RECENTS = 30;
 const MAX_RESULTS = 80;
+const REFRESH_MS = 150;
 
 type Cache = {
   cwd: string;
   files: ProjectFile[];
 };
 
+type Listener = () => void;
+
 let cache: Cache | null = null;
 let inflight: { cwd: string; promise: Promise<ProjectFile[]> } | null = null;
+let lastCwd: string | null = null;
 let epoch = 0;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let refreshing = false;
+let refreshAgain = false;
+const listeners = new Set<Listener>();
 const recentsByCwd = new Map<string, string[]>();
 
 function normCwd(cwd: string): string {
   return cwd.replace(/\/+$/, "") || "/";
+}
+
+function notifyProjectFilesChanged() {
+  for (const listener of listeners) listener();
+}
+
+export function subscribeProjectFiles(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function peekProjectFiles(cwd: string): ProjectFile[] | null {
@@ -26,7 +46,51 @@ export function peekProjectFiles(cwd: string): ProjectFile[] | null {
 }
 
 export function invalidateProjectFiles(cwd?: string) {
+  if (cwd && cache?.cwd !== cwd && inflight?.cwd !== cwd) return;
   if (!cwd || cache?.cwd === cwd) cache = null;
+  if (!cwd || inflight?.cwd === cwd) {
+    inflight = null;
+    epoch += 1;
+  }
+  if (!cwd) {
+    lastCwd = null;
+    if (refreshTimer != null) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
+  }
+  notifyProjectFilesChanged();
+}
+
+function scheduleIndexRefresh() {
+  if (!lastCwd) return;
+  if (typeof document !== "undefined" && document.hidden) return;
+  if (refreshTimer != null) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    void runIndexRefresh();
+  }, REFRESH_MS);
+}
+
+async function runIndexRefresh() {
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
+  const cwd = lastCwd;
+  if (!cwd) return;
+  refreshing = true;
+  try {
+    await loadProjectFiles(cwd, true);
+  } catch {
+    /* next focus / dir change will retry */
+  } finally {
+    refreshing = false;
+    if (refreshAgain) {
+      refreshAgain = false;
+      scheduleIndexRefresh();
+    }
+  }
 }
 
 export function rememberOpenedFile(cwd: string, path: string) {
@@ -53,17 +117,20 @@ export function loadProjectFiles(
   refresh = false,
 ): Promise<ProjectFile[]> {
   if (!looksLikeProject(cwd)) return Promise.resolve([]);
+  lastCwd = cwd;
   if (!refresh && cache?.cwd === cwd) return Promise.resolve(cache.files);
-  if (inflight?.cwd === cwd) return inflight.promise;
+  if (!refresh && inflight?.cwd === cwd) return inflight.promise;
 
   const id = ++epoch;
   const promise = listProjectFiles(cwd)
     .then((files) => {
-      if (id === epoch) cache = { cwd, files };
+      if (id !== epoch) return files;
+      cache = { cwd, files };
+      notifyProjectFilesChanged();
       return files;
     })
     .finally(() => {
-      if (inflight?.cwd === cwd) inflight = null;
+      if (inflight?.promise === promise) inflight = null;
     });
   inflight = { cwd, promise };
   return promise;
@@ -205,4 +272,15 @@ function pickOpenableFile(
   }
 
   return candidates.sort((a, b) => a.relative.length - b.relative.length)[0];
+}
+
+subscribeDirsChanged(scheduleIndexRefresh);
+
+if (typeof document !== "undefined") {
+  window.addEventListener("focus", () => {
+    if (!document.hidden) scheduleIndexRefresh();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) scheduleIndexRefresh();
+  });
 }
