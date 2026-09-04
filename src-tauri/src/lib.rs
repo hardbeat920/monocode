@@ -300,6 +300,8 @@ pub fn run() {
                 macos::request_badge_authorization();
                 #[cfg(debug_assertions)]
                 macos::prefer_bundle_dock_icon();
+                #[cfg(debug_assertions)]
+                macos::mark_dev_dock_tile();
             }
             window::ensure_launch_window_visible(handle);
         }

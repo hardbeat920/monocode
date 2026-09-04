@@ -116,22 +116,43 @@ fn paint_window_badge(label: &str, count: u32) {
 
     let ns_app = NSApplication::sharedApplication(mtm);
     let tile = ns_app.dockTile();
-    tile.setShowsApplicationBadge(total > 0);
-    if total == 0 {
-        tile.setBadgeLabel(None);
+    // Dev builds keep the release artwork pixel-identical (brand logo is
+    // immutable), so the idle Dock tile carries a "DEV" badge instead.
+    // Pending-approval counts still take precedence when nonzero.
+    #[cfg(debug_assertions)]
+    let text: Option<String> = if total == 0 {
+        Some("DEV".to_string())
+    } else if total > 99 {
+        Some("99+".to_string())
     } else {
-        let text = if total > 99 {
-            "99+".to_string()
-        } else {
-            total.to_string()
-        };
-        tile.setBadgeLabel(Some(&NSString::from_str(&text)));
+        Some(total.to_string())
+    };
+    #[cfg(not(debug_assertions))]
+    let text: Option<String> = if total == 0 {
+        None
+    } else if total > 99 {
+        Some("99+".to_string())
+    } else {
+        Some(total.to_string())
+    };
+    tile.setShowsApplicationBadge(text.is_some());
+    if let Some(text) = text.as_deref() {
+        tile.setBadgeLabel(Some(&NSString::from_str(text)));
+    } else {
+        tile.setBadgeLabel(None);
     }
     tile.display();
 
     if total > previous && !ns_app.isActive() {
         ns_app.requestUserAttention(NSRequestUserAttentionType::InformationalRequest);
     }
+}
+/// Paint the idle "DEV" badge on the Dock tile. Debug builds only; call once
+/// the event loop is ready so `tauri dev` is labeled from launch. Routing
+/// through `paint_window_badge` keeps pending-approval counts authoritative.
+#[cfg(debug_assertions)]
+pub(crate) fn mark_dev_dock_tile() {
+    paint_window_badge("__dev__", 0);
 }
 
 pub fn set_visible(window: &WebviewWindow, visible: bool) {
@@ -525,6 +546,10 @@ fn write_dev_bundle_icons(app: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Dev bundle identity. Separate name + identifier so the Dock, Cmd-Tab, and
+/// Mission Control distinguish `tauri dev` from a release MonoCode. The icon
+/// artwork stays pixel-identical to release (brand logo never changes); only
+/// the bundle name/identifier and the Dock badge differ.
 #[cfg(debug_assertions)]
 const DEV_ICNS: &[u8] = include_bytes!("../icons/icon.icns");
 #[cfg(debug_assertions)]
@@ -537,25 +562,23 @@ const DEV_BUNDLE_PLIST: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>MonoCode</string>
+	<string>MonoCode Dev</string>
 	<key>CFBundleExecutable</key>
 	<string>monocode</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
-	<key>CFBundleIconName</key>
-	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.monocode.desktop</string>
+	<string>com.monocode.desktop.dev</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>MonoCode</string>
+	<string>MonoCode Dev</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.75</string>
+	<string>0.1.31</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.75.5</string>
+	<string>0.1.31</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>

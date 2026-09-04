@@ -735,13 +735,15 @@ function TitleBarComponent({
         : activeTab.project
       : "";
     const project = cwd ? basename(cwd) : "";
-    if (activeName && project && activeName !== project) {
-      return `${activeName} — ${project} — MonoCode`;
-    }
-    if (project) {
-      return `${project} — MonoCode`;
-    }
-    return "MonoCode";
+    const base =
+      activeName && project && activeName !== project
+        ? `${activeName} — ${project} — MonoCode`
+        : project
+          ? `${project} — MonoCode`
+          : "MonoCode";
+    // Dev runs share the Dock and window switcher with release builds.
+    // Prefix so Mission Control / Cmd-Tab / Dock menus tell them apart.
+    return import.meta.env.DEV ? `[DEV] ${base}` : base;
   }, [activeTab, cwd]);
 
   useEffect(() => {
