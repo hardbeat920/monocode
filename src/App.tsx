@@ -338,6 +338,7 @@ import {
 import type { InstalledUpdate } from "./lib/updateNotice";
 import {
   bindResumedSessions,
+  handleQuitRequested,
   hasInFlightSessions,
   hideCurrentWindow,
   closeCurrentWindow,
@@ -978,6 +979,10 @@ export default function App({
         event.preventDefault();
         if (hasInFlightSessions(sessionsRef.current)) {
           flushHarnessEvents();
+          if (!IS_MAC) {
+            void handleQuitRequested();
+            return;
+          }
           void persistLiveTranscripts(sessionsRef.current);
           void hideCurrentWindow();
           return;

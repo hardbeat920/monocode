@@ -1292,7 +1292,7 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
         seen.insert(relative.clone());
         let status = statuses.get(&relative).copied().unwrap_or("modified");
         out.push(GitChangedFile {
-            path: root.join(&relative).to_string_lossy().into_owned(),
+            path: path_to_js(&root.join(&relative)),
             relative,
             status: status.to_string(),
             additions: acc.additions,
@@ -1306,7 +1306,7 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
             continue;
         }
         out.push(GitChangedFile {
-            path: root.join(&relative).to_string_lossy().into_owned(),
+            path: path_to_js(&root.join(&relative)),
             relative,
             status: status.to_string(),
             additions: 0,
@@ -1350,7 +1350,7 @@ fn git_commit_file_diff_for(root: &Path, sha: &str, relative: &str) -> Result<Gi
         )
     };
     Ok(GitFileDiff {
-        path: root.join(&relative).to_string_lossy().into_owned(),
+        path: path_to_js(&root.join(&relative)),
         relative,
         status: status.to_string(),
         original,
@@ -4415,11 +4415,13 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].relative, "a.txt");
         assert_eq!(files[0].status, "modified");
+        assert_eq!(files[0].path, path_to_js(&dir.0.join("a.txt")));
 
         let diff = git_commit_file_diff_for(&dir.0, sha, "a.txt").unwrap();
         assert_eq!(diff.original, "alpha\n");
         assert_eq!(diff.current, "beta\n");
         assert_eq!(diff.status, "modified");
+        assert_eq!(diff.path, path_to_js(&dir.0.join("a.txt")));
     }
 
     #[test]
