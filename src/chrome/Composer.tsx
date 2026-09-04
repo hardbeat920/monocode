@@ -34,11 +34,7 @@ import {
   revokeAttachment,
 } from "../lib/attachments";
 import { contextRatio, type ContextUsage } from "../lib/contextUsage";
-import {
-  loadProjectFiles,
-  peekProjectFiles,
-  recentOpenedFiles,
-} from "../lib/fileIndex";
+import { loadProjectFiles, peekProjectFiles, recentOpenedFiles } from "../lib/fileIndex";
 import {
   buildMentionIndex,
   fileMentionParts,
@@ -50,10 +46,7 @@ import {
   type MentionToken,
 } from "../lib/fileMentions";
 import type { ProjectFile } from "../lib/fs";
-import {
-  composeInboxMessage,
-  type InboxComposerCard,
-} from "../lib/githubTasks";
+import { composeInboxMessage, type InboxComposerCard } from "../lib/githubTasks";
 import type { HandoffComposerCard } from "../lib/handoff";
 import { looksLikeProject, type RecentProject } from "../lib/recents";
 import type {
@@ -245,9 +238,7 @@ function MessageQueue({
         {paused ? (
           <div className="flex h-7 items-center gap-2 border-b border-content/10 text-[12px]">
             <Pause className="size-3.5" />
-            <span className="min-w-0 flex-1 truncate">
-              Queue paused because you interrupted
-            </span>
+            <span className="min-w-0 flex-1 truncate">Queue paused because you interrupted</span>
             <button
               type="button"
               onClick={onResume}
@@ -294,9 +285,7 @@ function MessageQueue({
                     type="button"
                     title="Save queued message"
                     aria-label="Save queued message"
-                    disabled={
-                      !editDraft.trim() && message.attachments.length === 0
-                    }
+                    disabled={!editDraft.trim() && message.attachments.length === 0}
                     onClick={() => saveEdit(message)}
                     className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content disabled:opacity-30"
                   >
@@ -314,9 +303,7 @@ function MessageQueue({
                 </>
               ) : (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-content/80">
-                    {label}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate text-content/80">{label}</span>
                   <button
                     type="button"
                     onClick={() => onSteer?.(message.id)}
@@ -410,11 +397,7 @@ export function Composer({
   const mentionDismissedRef = useRef<{ text: string; cursor: number } | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
   const [hasValue, setHasValue] = useState(
-    () =>
-      (initialDraft ?? "").trim().length > 0 ||
-      !!inboxCard ||
-      !!noteCard ||
-      !!handoffCard,
+    () => (initialDraft ?? "").trim().length > 0 || !!inboxCard || !!noteCard || !!handoffCard,
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [fileDrag, setFileDrag] = useState(false);
@@ -423,21 +406,13 @@ export function Composer({
   const [creatingSkill, setCreatingSkill] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createBusy, setCreateBusy] = useState(false);
-  const [files, setFiles] = useState<ProjectFile[]>(
-    () => peekProjectFiles(cwd) ?? [],
-  );
-  const notesEnabled = useSyncExternalStore(
-    subscribeNotesEnabled,
-    loadNotesEnabled,
-    () => true,
-  );
+  const [files, setFiles] = useState<ProjectFile[]>(() => peekProjectFiles(cwd) ?? []);
+  const notesEnabled = useSyncExternalStore(subscribeNotesEnabled, loadNotesEnabled, () => true);
   const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
   const [runnerEnabled, setRunnerEnabled] = useState(loadComposerRunner);
-  const [runnerLive, setRunnerLive] = useState(
-    () => busy && loadComposerRunner(),
-  );
+  const [runnerLive, setRunnerLive] = useState(() => busy && loadComposerRunner());
   const groupLogos = useTabGroupLogos();
   const projectLogoPath = resolveTabGroupLogo(projectName(cwd), groupLogos);
 
@@ -446,8 +421,7 @@ export function Composer({
 
   attachmentsRef.current = attachments;
 
-  const mentionOpen =
-    mention !== null && (looksLikeProject(cwd) || notesEnabled);
+  const mentionOpen = mention !== null && (looksLikeProject(cwd) || notesEnabled);
   const pickerOpen = creatingSkill || slash !== null;
   const skillCatalog = useComposerSkills({
     harness,
@@ -455,27 +429,15 @@ export function Composer({
     pickerOpen,
   });
   const skills = skillCatalog.skills;
-  const skillLimit =
-    harness === "pi" ? Number.POSITIVE_INFINITY : undefined;
-  const rankedSkills = rankSkills(
-    skills,
-    slash?.query ?? "",
-    skillLimit,
-  );
+  const skillLimit = harness === "pi" ? Number.POSITIVE_INFINITY : undefined;
+  const rankedSkills = rankSkills(skills, slash?.query ?? "", skillLimit);
   const attachmentsSupported = harnessSupportsAttachments(harness);
-  const skillNames = useMemo(
-    () => new Set(skills.map((skill) => skill.invocation)),
-    [skills],
-  );
+  const skillNames = useMemo(() => new Set(skills.map((skill) => skill.invocation)), [skills]);
   const mentionFiles = useMemo(
-    () =>
-      notesEnabled ? [...files, ...notesAsProjectFiles(notes)] : files,
+    () => (notesEnabled ? [...files, ...notesAsProjectFiles(notes)] : files),
     [files, notes, notesEnabled],
   );
-  const mentionIndex = useMemo(
-    () => buildMentionIndex(mentionFiles),
-    [mentionFiles],
-  );
+  const mentionIndex = useMemo(() => buildMentionIndex(mentionFiles), [mentionFiles]);
   const mentionIndexRef = useRef<MentionIndex>(mentionIndex);
   mentionIndexRef.current = mentionIndex;
   const rankedFiles = useMemo(() => {
@@ -483,9 +445,7 @@ export function Composer({
     const fileHits = looksLikeProject(cwd)
       ? rankMentionFiles(files, mention?.query ?? "", recentOpenedFiles(cwd))
       : [];
-    const noteHits = notesEnabled
-      ? rankNoteFiles(notes, mention?.query ?? "")
-      : [];
+    const noteHits = notesEnabled ? rankNoteFiles(notes, mention?.query ?? "") : [];
     const seen = new Set(noteHits.map((file) => file.path));
     return [...noteHits, ...fileHits.filter((file) => !seen.has(file.path))];
   }, [cwd, files, mention?.query, mentionOpen, notes, notesEnabled]);
@@ -493,11 +453,7 @@ export function Composer({
   const syncHasValue = useCallback(
     (text: string, files: Attachment[]) => {
       setHasValue(
-        text.trim().length > 0 ||
-          files.length > 0 ||
-          !!inboxCard ||
-          !!noteCard ||
-          !!handoffCard,
+        text.trim().length > 0 || files.length > 0 || !!inboxCard || !!noteCard || !!handoffCard,
       );
     },
     [inboxCard, noteCard, handoffCard],
@@ -553,8 +509,7 @@ export function Composer({
   useEffect(() => {
     const refresh = () => setRunnerEnabled(loadComposerRunner());
     window.addEventListener(COMPOSER_RUNNER_CHANGE_EVENT, refresh);
-    return () =>
-      window.removeEventListener(COMPOSER_RUNNER_CHANGE_EVENT, refresh);
+    return () => window.removeEventListener(COMPOSER_RUNNER_CHANGE_EVENT, refresh);
   }, []);
 
   useEffect(() => {
@@ -636,11 +591,18 @@ export function Composer({
       slashDismissedRef.current = null;
     }
     const mentionDismissed = mentionDismissedRef.current;
-    if (mentionDismissed && (mentionDismissed.text !== text || mentionDismissed.cursor !== cursor)) {
+    if (
+      mentionDismissed &&
+      (mentionDismissed.text !== text || mentionDismissed.cursor !== cursor)
+    ) {
       mentionDismissedRef.current = null;
     }
     const token = slashTokenAt(text, cursor);
-    if (token && slashDismissedRef.current?.text === text && slashDismissedRef.current?.cursor === cursor) {
+    if (
+      token &&
+      slashDismissedRef.current?.text === text &&
+      slashDismissedRef.current?.cursor === cursor
+    ) {
       setSlash(null);
     } else {
       if (!token) slashDismissedRef.current = null;
@@ -652,7 +614,11 @@ export function Composer({
       return;
     }
     const mentionToken = mentionTokenAt(text, cursor);
-    if (mentionToken && mentionDismissedRef.current?.text === text && mentionDismissedRef.current?.cursor === cursor) {
+    if (
+      mentionToken &&
+      mentionDismissedRef.current?.text === text &&
+      mentionDismissedRef.current?.cursor === cursor
+    ) {
       setMention(null);
     } else {
       if (!mentionToken) mentionDismissedRef.current = null;
@@ -664,11 +630,7 @@ export function Composer({
     const el = ref.current;
     if (!el || !quoteRequest) return;
 
-    const result = consumeQuoteRequest(
-      el.value,
-      consumedQuoteId.current,
-      quoteRequest,
-    );
+    const result = consumeQuoteRequest(el.value, consumedQuoteId.current, quoteRequest);
     consumedQuoteId.current = result.consumedId;
     if (result.changed) {
       el.value = result.draft;
@@ -756,8 +718,7 @@ export function Composer({
       setFileDrag(false);
       return;
     }
-    const dropRoot = () =>
-      boxRef.current?.closest("[data-session-drop]") as HTMLElement | null;
+    const dropRoot = () => boxRef.current?.closest("[data-session-drop]") as HTMLElement | null;
     let nativeDropAt = 0;
 
     const toClientPoint = (x: number, y: number) => {
@@ -888,9 +849,7 @@ export function Composer({
       if (e.key === "ArrowUp") {
         e.preventDefault();
         if (rankedFiles.length === 0) return;
-        setMentionActive(
-          (index) => (index - 1 + rankedFiles.length) % rankedFiles.length,
-        );
+        setMentionActive((index) => (index - 1 + rankedFiles.length) % rankedFiles.length);
         return;
       }
       if (e.key === "Escape") {
@@ -927,9 +886,7 @@ export function Composer({
       if (e.key === "ArrowUp") {
         e.preventDefault();
         if (rankedSkills.length === 0) return;
-        setSkillActive(
-          (index) => (index - 1 + rankedSkills.length) % rankedSkills.length,
-        );
+        setSkillActive((index) => (index - 1 + rankedSkills.length) % rankedSkills.length);
         return;
       }
       if (e.key === "Escape") {
@@ -1044,16 +1001,12 @@ export function Composer({
                     setCreatingSkill(false);
                     setSlash(null);
                     setCreateError(null);
-                    void skillCatalog
-                      .refresh({ refresh: true })
-                      .catch(() => undefined);
+                    void skillCatalog.refresh({ refresh: true }).catch(() => undefined);
                     onOpenFile?.(path);
                     el?.focus();
                   })
                   .catch((err: unknown) => {
-                    setCreateError(
-                      err instanceof Error ? err.message : String(err),
-                    );
+                    setCreateError(err instanceof Error ? err.message : String(err));
                   })
                   .finally(() => setCreateBusy(false));
               }}
@@ -1066,9 +1019,7 @@ export function Composer({
               files={rankedFiles}
               query={mention?.query ?? ""}
               active={mentionActive}
-              loading={
-                looksLikeProject(cwd) && peekProjectFiles(cwd) == null
-              }
+              loading={looksLikeProject(cwd) && peekProjectFiles(cwd) == null}
               includeNotes={notesEnabled}
               onActive={setMentionActive}
               onPick={pickMention}
@@ -1079,9 +1030,7 @@ export function Composer({
           ref={boxRef}
           data-composer-box
           className={`relative z-10 rounded-lg border bg-content/3 ${
-            fileDrag
-              ? "border-accent/60"
-              : "border-content/10 has-focus:border-content/20"
+            fileDrag ? "border-accent/60" : "border-content/10 has-focus:border-content/20"
           }`}
         >
           {fileDrag ? (
@@ -1117,32 +1066,23 @@ export function Composer({
             </div>
           ) : null}
 
-          {inboxCard ? (
-            <InboxMiniCard card={inboxCard} onDismiss={onInboxCardDismiss} />
-          ) : null}
+          {inboxCard ? <InboxMiniCard card={inboxCard} onDismiss={onInboxCardDismiss} /> : null}
 
-          {noteCard ? (
-            <NoteMiniCard card={noteCard} onDismiss={onNoteCardDismiss} />
-          ) : null}
+          {noteCard ? <NoteMiniCard card={noteCard} onDismiss={onNoteCardDismiss} /> : null}
 
           {handoffCard ? (
-            <HandoffMiniCard
-              card={handoffCard}
-              onDismiss={onHandoffCardDismiss}
-            />
+            <HandoffMiniCard card={handoffCard} onDismiss={onHandoffCardDismiss} />
           ) : null}
 
           <div className="relative">
             <div
               ref={highlightRef}
               aria-hidden
-              className="composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap break-words px-3 pt-2 pb-2 text-sm leading-5.5 text-content font-sans"
+              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 text-content font-sans ${
+                shell ? "min-h-[90px] py-2" : "min-h-[56px] py-2"
+              }`}
             >
-              <ComposerHighlight
-                text={draft}
-                names={skillNames}
-                mentions={mentionIndex.labels}
-              />
+              <ComposerHighlight text={draft} names={skillNames} mentions={mentionIndex.labels} />
             </div>
             <textarea
               ref={ref}
@@ -1161,7 +1101,7 @@ export function Composer({
                         : "Ask, build, / for skills, @ for references... "
               }
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
-                shell ? "min-h-[90px] py-4" : "min-h-[56px] py-3"
+                shell ? "min-h-[90px] py-2" : "min-h-[56px] py-2"
               }`}
               onFocus={onFocus}
               onKeyDown={onKeyDown}
@@ -1318,11 +1258,7 @@ function MentionRuns({
                 {part.file && isNoteMentionPath(part.file.path) ? (
                   <StickyNote className="size-3.5" strokeWidth={1.75} />
                 ) : (
-                  <FileTypeIcon
-                    name={part.file.name}
-                    isDir={Boolean(part.file.isDir)}
-                    size={13}
-                  />
+                  <FileTypeIcon name={part.file.name} isDir={Boolean(part.file.isDir)} size={13} />
                 )}
               </span>
             </span>
@@ -1390,7 +1326,5 @@ function ComposerAction({
 
 function hasFiles(data: DataTransfer | null): data is DataTransfer {
   if (!data) return false;
-  return [...data.types].some(
-    (type) => type === "Files" || type === "application/x-moz-file",
-  );
+  return [...data.types].some((type) => type === "Files" || type === "application/x-moz-file");
 }

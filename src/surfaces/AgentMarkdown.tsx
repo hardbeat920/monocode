@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { harden } from "rehype-harden";
@@ -20,9 +21,12 @@ import {
   type Components,
 } from "streamdown";
 import type { PluggableList } from "unified";
+import { ExplorerMenu } from "../chrome/ExplorerMenu";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { createLazyMermaidPlugin } from "./mermaidPlugin";
-import { resolveWorkspacePath } from "../lib/paths";
+import { revealPath } from "../lib/fs";
+import { displayPath, resolveWorkspacePath } from "../lib/paths";
+import { IS_MAC } from "../lib/platform";
 import { isAtxHeadingLine } from "../lib/markdownSource";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -80,6 +84,64 @@ const FileOpenContext = createContext<{
 }>({});
 
 const RemoteMediaContext = createContext(false);
+
+const REVEAL_LABEL = IS_MAC
+  ? "Reveal in Finder"
+  : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
+    ? "Reveal in File Explorer"
+    : "Open Containing Folder";
+
+/** Right-click menu for a resolved workspace file: open, reveal, copy. */
+function useMarkdownFileMenu(filePath: string | undefined) {
+  const { cwd, onOpenFile } = useContext(FileOpenContext);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // Right-press would otherwise select the word under the cursor, and the
+  // transcript selection menu would pop in next to ours. Kill the default
+  // selection; left-press selection (Add to chat) keeps working.
+  const onMouseDown = (event: ReactMouseEvent) => {
+    if (filePath && event.button === 2) event.preventDefault();
+  };
+  const onContextMenu = (event: ReactMouseEvent) => {
+    if (!filePath) return;
+    event.preventDefault();
+    event.stopPropagation();
+    // Drop a stale selection (e.g. selected elsewhere before right-clicking
+    // the chip) so its menu never stacks under ours.
+    window.getSelection()?.removeAllRanges();
+    setMenu({ x: event.clientX, y: event.clientY });
+  };
+  const node =
+    menu && filePath ? (
+      <ExplorerMenu
+        x={menu.x}
+        y={menu.y}
+        ariaLabel="File actions"
+        items={[
+          ...(onOpenFile
+            ? [{ kind: "item" as const, id: "open", label: "Open" }]
+            : []),
+          { kind: "item" as const, id: "reveal", label: REVEAL_LABEL },
+          { kind: "sep" as const },
+          { kind: "item" as const, id: "copy-path", label: "Copy Path" },
+          {
+            kind: "item" as const,
+            id: "copy-relative",
+            label: "Copy Relative Path",
+          },
+        ]}
+        onPick={(id) => {
+          setMenu(null);
+          if (id === "open") onOpenFile?.(filePath);
+          else if (id === "reveal") void revealPath(filePath).catch(() => {});
+          else if (id === "copy-path") void copyText(filePath).catch(() => {});
+          else if (id === "copy-relative")
+            void copyText(displayPath(filePath, cwd)).catch(() => {});
+        }}
+        onClose={() => setMenu(null)}
+      />
+    ) : null;
+  return { onContextMenu, onMouseDown, menu: node };
+}
 
 const LANGUAGE_FROM_EXT: Record<string, string> = {
   sh: "bash",
@@ -146,31 +208,37 @@ function MarkdownLink({
   const allowRemoteMedia = useContext(RemoteMediaContext);
   const { cwd, onOpenFile } = useContext(FileOpenContext);
   const filePath = href ? resolveWorkspacePath(href, cwd) : undefined;
+  const { onContextMenu, onMouseDown, menu } = useMarkdownFileMenu(filePath);
   const label = textContent(children);
   if (allowRemoteMedia && href && isInboxMediaUrl(href)) {
     return <InboxMedia src={href} alt={label} />;
   }
 
   return (
-    <a
-      href={href}
-      className={`text-sky-400/90 hover:text-sky-300 hover:underline ${className ?? ""}`}
-      {...props}
-      onClick={(event) => {
-        onClick?.(event);
-        if (event.defaultPrevented) return;
-        if (filePath && onOpenFile) {
-          event.preventDefault();
-          onOpenFile(filePath);
-          return;
-        }
-        if (!href || !/^https?:\/\//i.test(href)) {
-          event.preventDefault();
-        }
-      }}
-    >
-      {children}
-    </a>
+    <>
+      <a
+        href={href}
+        className={`text-sky-400/90 hover:text-sky-300 hover:underline ${className ?? ""}`}
+        {...props}
+        onContextMenu={filePath ? onContextMenu : undefined}
+        onMouseDown={filePath ? onMouseDown : undefined}
+        onClick={(event) => {
+          onClick?.(event);
+          if (event.defaultPrevented) return;
+          if (filePath && onOpenFile) {
+            event.preventDefault();
+            onOpenFile(filePath);
+            return;
+          }
+          if (!href || !/^https?:\/\//i.test(href)) {
+            event.preventDefault();
+          }
+        }}
+      >
+        {children}
+      </a>
+      {menu}
+    </>
   );
 }
 
@@ -183,41 +251,51 @@ function MarkdownCode({
   ...props
 }: MarkdownCodeProps) {
   const incomplete = useIsCodeFenceIncomplete();
+  const { cwd, onOpenFile } = useContext(FileOpenContext);
   const block = Object.prototype.hasOwnProperty.call(props, "data-block");
+  const inlineText = block ? "" : textContent(children);
+  const inlineName = block ? undefined : inlineFileName(inlineText);
+  const inlineFilePath =
+    inlineName != null ? resolveWorkspacePath(inlineText, cwd) : undefined;
+  const { onContextMenu, onMouseDown, menu } =
+    useMarkdownFileMenu(inlineFilePath);
   if (!block) {
-    const text = textContent(children);
-    const fileName = inlineFileName(text);
-    const { cwd, onOpenFile } = useContext(FileOpenContext);
-    const filePath = fileName ? resolveWorkspacePath(text, cwd) : undefined;
+    const fileName = inlineName;
+    const filePath = inlineFilePath;
     const open =
       filePath && onOpenFile ? () => onOpenFile(filePath) : undefined;
     return (
-      <code
-        {...props}
-        className={`inline-flex items-center gap-1 rounded-md bg-content/8 px-1.5 h-6 align-baseline font-mono text-[0.8em] text-content ${
-          open ? "cursor-pointer hover:text-sky-300 hover:underline" : ""
-        } ${className ?? ""}`}
-        role={open ? "link" : undefined}
-        tabIndex={open ? 0 : undefined}
-        onClick={open}
-        onKeyDown={
-          open
-            ? (event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  open();
+      <>
+        <code
+          {...props}
+          className={`inline-flex items-center gap-1 rounded-md bg-content/8 px-1.5 h-6 align-baseline font-mono text-[0.8em] text-content ${
+            open ? "cursor-pointer hover:text-sky-300 hover:underline" : ""
+          } ${className ?? ""}`}
+          role={open ? "link" : undefined}
+          tabIndex={open ? 0 : undefined}
+          onClick={open}
+          onContextMenu={filePath ? onContextMenu : undefined}
+          onMouseDown={filePath ? onMouseDown : undefined}
+          onKeyDown={
+            open
+              ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    open();
+                  }
                 }
-              }
-            : undefined
-        }
-      >
-        {fileName ? (
-          <span aria-hidden="true">
-            <FileTypeIcon name={fileName} isDir={false} size={14} />
-          </span>
-        ) : null}
-        {children}
-      </code>
+              : undefined
+          }
+        >
+          {fileName ? (
+            <span aria-hidden="true">
+              <FileTypeIcon name={fileName} isDir={false} size={14} />
+            </span>
+          ) : null}
+          {children}
+        </code>
+        {menu}
+      </>
     );
   }
 
@@ -569,18 +647,39 @@ function parseCodeFence(
 function MarkdownCodePath({ path }: { path: string }) {
   const { cwd, onOpenFile } = useContext(FileOpenContext);
   const filePath = resolveWorkspacePath(path, cwd);
-  if (!filePath || !onOpenFile) {
+  const { onContextMenu, onMouseDown, menu } = useMarkdownFileMenu(filePath);
+  if (!filePath) {
     return <span className="markdown-code-path">{path}</span>;
   }
+  if (!onOpenFile) {
+    return (
+      <>
+        <span
+          className="markdown-code-path"
+          title={filePath}
+          onContextMenu={onContextMenu}
+          onMouseDown={onMouseDown}
+        >
+          {path}
+        </span>
+        {menu}
+      </>
+    );
+  }
   return (
-    <button
-      type="button"
-      className="markdown-code-path markdown-code-path-link"
-      title={filePath}
-      onClick={() => onOpenFile(filePath)}
-    >
-      {path}
-    </button>
+    <>
+      <button
+        type="button"
+        className="markdown-code-path markdown-code-path-link"
+        title={filePath}
+        onClick={() => onOpenFile(filePath)}
+        onContextMenu={onContextMenu}
+        onMouseDown={onMouseDown}
+      >
+        {path}
+      </button>
+      {menu}
+    </>
   );
 }
 
