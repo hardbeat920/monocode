@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Diff reviews can be annotated line by line in both Unified and Editor views. Use the comment action on a changed line to write a note and add its file, line number, and code context to the active composer; collect multiple comments and send them to the agent in one prompt.
+- Settings: Notifications, off by default. With it on, a system notification appears when a turn finishes or an agent waits on an approval or question in a session that is not on screen, whether MonoCode is in the background or another session is open; clicking it jumps to that session. Turning it on asks macOS for permission, and a blocked state links to System Settings. The Sounds setting decides whether the notification plays a sound, and the in-app cue is skipped when the banner fires.
 
 ## [0.1.32] - 2026-09-04
 

@@ -137,6 +137,15 @@ import {
 } from "../lib/settings";
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../lib/sounds";
 import {
+  cachedNotificationPermission,
+  loadNotificationsEnabled,
+  openNotificationSettings,
+  probeNotificationPermission,
+  requestNotificationPermission,
+  saveNotificationsEnabled,
+  type NotificationPermission,
+} from "../lib/notifications";
+import {
   installPendingUpdate,
   readAppVersion,
   runUpdateFlow,
@@ -276,7 +285,24 @@ function GeneralPage({
     loadLiveAgentsEnabled,
   );
   const [soundsEnabled, setSoundsEnabled] = useState(loadSoundsEnabled);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    loadNotificationsEnabled,
+  );
+  const [notificationPermission, setNotificationPermission] =
+    useState<NotificationPermission>(cachedNotificationPermission);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+
+  // The user may flip the switch in System Settings and come back: re-read
+  // the OS state whenever the window regains focus while the toggle is on.
+  useEffect(() => {
+    if (!notificationsEnabled) return;
+    const refresh = () => {
+      void probeNotificationPermission().then(setNotificationPermission);
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [notificationsEnabled]);
 
   useEffect(() => {
     const onAnchor = (event: Event) => {
@@ -331,6 +357,13 @@ function GeneralPage({
   const onSoundsEnabled = (next: boolean) => {
     saveSoundsEnabled(next);
     setSoundsEnabled(next);
+  };
+
+  const onNotificationsEnabled = (next: boolean) => {
+    saveNotificationsEnabled(next);
+    setNotificationsEnabled(next);
+    if (!next) return;
+    void requestNotificationPermission().then(setNotificationPermission);
   };
 
   const onClaudeHooks = (next: boolean) => {
@@ -433,6 +466,24 @@ function GeneralPage({
         description="Short cues when a turn finishes, a new inbox item appears on the project rail, or an update is available. Switches and Copy on a finished turn also play."
       >
         <Toggle label="Sounds" on={soundsEnabled} onChange={onSoundsEnabled} />
+      </Row>
+      <Row
+        label="Notifications"
+        description="Notify when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session."
+      >
+        {notificationsEnabled && notificationPermission === "denied" ? (
+          <NotificationsBlocked />
+        ) : null}
+        {notificationsEnabled && notificationPermission === "unsupported" ? (
+          <span className="text-[12px] text-content/45">
+            Not available on this platform
+          </span>
+        ) : null}
+        <Toggle
+          label="Notifications"
+          on={notificationsEnabled}
+          onChange={onNotificationsEnabled}
+        />
       </Row>
       <Row
         label="Claude Code hooks"
@@ -1351,6 +1402,26 @@ function Slider({
         {display}
       </span>
     </div>
+  );
+}
+
+/** macOS keeps the decision after the first prompt; only System Settings can flip it. */
+function NotificationsBlocked() {
+  return (
+    <span className="flex items-center gap-2 text-[12px] text-content/45">
+      Permission needed
+      {IS_MAC ? (
+        <button
+          type="button"
+          onClick={() => {
+            void openNotificationSettings().catch(() => {});
+          }}
+          className="rounded-md border border-content/10 px-2 py-1 text-content/70 hover:bg-content/10 hover:text-content"
+        >
+          Open System Settings
+        </button>
+      ) : null}
+    </span>
   );
 }
 
