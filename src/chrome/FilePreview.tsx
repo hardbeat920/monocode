@@ -3,6 +3,7 @@ import { MAX_PREVIEW_LINES } from "../lib/harness/preview";
 import { displayPath, resolveWorkspacePath } from "../lib/paths";
 import type { ToolPreview, ToolPreviewLine } from "../lib/session";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { useFileContextMenu } from "./FileContextMenu";
 
 type Status = "pending" | "accepted" | "rejected";
 
@@ -65,6 +66,11 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
   const path = preview.path;
   const filePath = path ? (resolveWorkspacePath(path, cwd) ?? path) : undefined;
   const fileName = preview.fileName || fileNameOf(path);
+  const { onContextMenu, onMouseDown, menu } = useFileContextMenu({
+    filePath,
+    cwd,
+    onOpenFile,
+  });
   const lines = (preview.lines ?? [])
     .filter(
       (line) =>
@@ -81,6 +87,7 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
     : fileName || preview.title || "File";
 
   return (
+    <>
     <div className="overflow-hidden rounded-[10px] border border-content/10 bg-content/6">
       <div className="flex items-center gap-2 px-2.5 py-2">
         <FileTypeIcon name={fileName || "file"} isDir={false} />
@@ -90,6 +97,8 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
             className="min-w-0 flex-1 truncate text-left font-mono text-[12px] font-medium text-content/85 hover:text-sky-300 hover:underline"
             title={path}
             onClick={() => onOpenFile(filePath)}
+            onContextMenu={onContextMenu}
+            onMouseDown={onMouseDown}
           >
             {label}
           </button>
@@ -97,6 +106,8 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
           <span
             className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium text-content/85"
             title={path}
+            onContextMenu={filePath ? onContextMenu : undefined}
+            onMouseDown={filePath ? onMouseDown : undefined}
           >
             {label}
           </span>
@@ -130,6 +141,8 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
         </>
       ) : null}
     </div>
+    {menu}
+    </>
   );
 }
 

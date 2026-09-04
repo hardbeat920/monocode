@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 import { AttachmentChip } from "../chrome/AttachmentChip";
+import { useFileContextMenu } from "../chrome/FileContextMenu";
 import { FilePreview } from "../chrome/FilePreview";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { PlanPreview } from "../chrome/PlanPreview";
@@ -1624,6 +1625,17 @@ function ToolCallSummary({
       : action === "Find"
         ? preview?.query
         : undefined);
+  const menuIsFile =
+    action !== undefined && action !== "Find" && action !== "Skill";
+  const menuFilePath =
+    action && target && menuIsFile
+      ? resolveWorkspacePath(preview?.path || target, cwd)
+      : undefined;
+  const { onContextMenu, onMouseDown, menu } = useFileContextMenu({
+    filePath: menuFilePath,
+    cwd,
+    onOpenFile,
+  });
   if (!action || !target) {
     return (
       <span
@@ -1635,7 +1647,7 @@ function ToolCallSummary({
       </span>
     );
   }
-  const isFile = action !== "Find" && action !== "Skill";
+  const isFile = menuIsFile;
   const fileName =
     preview?.fileName ||
     target
@@ -1644,7 +1656,7 @@ function ToolCallSummary({
       .filter(Boolean)
       .pop() ||
     "file";
-  const filePath = resolveWorkspacePath(preview?.path || target, cwd);
+  const filePath = menuFilePath;
   const canOpen = interactive && !!onOpenFile && !!filePath;
   const actionTone = failed ? "text-red-400" : "text-content/50";
   const targetTone = failed
@@ -1654,6 +1666,7 @@ function ToolCallSummary({
       : "text-content/85";
 
   return (
+    <>
     <span className="flex min-w-0 flex-1 items-center gap-1.5 font-mono text-[13px]">
       <span className={`shrink-0 font-sans text-sm ${actionTone}`}>
         {action}
@@ -1672,6 +1685,8 @@ function ToolCallSummary({
               event.stopPropagation();
               onOpenFile?.(filePath);
             }}
+            onContextMenu={menuFilePath ? onContextMenu : undefined}
+            onMouseDown={menuFilePath ? onMouseDown : undefined}
           >
             <FileTypeIcon name={fileName} isDir={action === "List"} />
             <span className="min-w-0 truncate">{target}</span>
@@ -1684,6 +1699,8 @@ function ToolCallSummary({
                 : `flex-1 ${targetTone}`
             }`}
             title={preview?.path || target}
+            onContextMenu={menuFilePath ? onContextMenu : undefined}
+            onMouseDown={menuFilePath ? onMouseDown : undefined}
           >
             <FileTypeIcon name={fileName} isDir={action === "List"} />
             <span className="min-w-0 truncate">{target}</span>
@@ -1698,6 +1715,8 @@ function ToolCallSummary({
         </span>
       )}
     </span>
+    {menu}
+    </>
   );
 }
 
