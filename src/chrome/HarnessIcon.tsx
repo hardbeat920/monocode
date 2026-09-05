@@ -119,23 +119,14 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
-  if (MONOCHROME_HARNESSES.has(harness)) {
-    const icon = HARNESS_ICONS[harness];
+  if (harness === "opencode") {
     return (
-      <span
-        aria-hidden
-        className={`block shrink-0 bg-current ${className}`}
-        style={{
-          maskImage: `url(${icon})`,
-          maskRepeat: "no-repeat",
-          maskPosition: "center",
-          maskSize: "contain",
-          WebkitMaskImage: `url(${icon})`,
-          WebkitMaskRepeat: "no-repeat",
-          WebkitMaskPosition: "center",
-          WebkitMaskSize: "contain",
-        }}
-      />
+      <MonoIcon className={className}>
+        <path
+          fillRule="evenodd"
+          d="M20.4 5.8H8.8V23.2H20.4V5.8ZM26.2 29H3V0H26.2V29Z"
+        />
+      </MonoIcon>
     );
   }
   return (
