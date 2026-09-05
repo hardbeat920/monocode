@@ -272,6 +272,8 @@ function isRetiredModel(nativeId: string): boolean {
     "nvidia/deepseek-ai/deepseek-v4-pro",
     "nvidia/z-ai/glm-5.2",
     "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/nvidia/nvidia-nemotron-nano-9b-v2",
+    "nvidia/nvidia/nemotron-nano-12b-v2-vl",
   ]).has(nativeId);
 }
 
