@@ -119,10 +119,10 @@ async function discoverOpenRouterModels(): Promise<AgentModel[]> {
         const nativeId = model.id?.trim();
         if (!nativeId) return [];
         return [{
-          id: `openrouter:${nativeId}`,
+          id: `openrouter:openrouter/${nativeId}`,
           harness: "openrouter" as const,
           name: model.name?.trim() || nativeId,
-          nativeId,
+          nativeId: `openrouter/${nativeId}`,
           ...(model.context_length && model.context_length > 0
             ? { contextWindow: model.context_length }
             : {}),
@@ -235,10 +235,7 @@ export function flattenOpenCodeModels(
     if (!connected.has(provider.id)) continue;
     for (const [modelId, model] of Object.entries(provider.models)) {
       const name = model.name?.trim() || titleCaseSlug(modelId);
-      const nativeId =
-        provider.id === "openrouter"
-          ? (model.id ?? modelId)
-          : `${provider.id}/${model.id ?? modelId}`;
+      const nativeId = `${provider.id}/${model.id ?? modelId}`;
       if (isRetiredModel(nativeId)) continue;
       const harness = providerHarness(provider.id);
       const contextWindow = model.limit?.context;

@@ -198,7 +198,7 @@ export const MODELS: AgentModel[] = [
     id: "openrouter:deepseek/deepseek-chat-v3.1",
     harness: "openrouter",
     name: "DeepSeek Chat V3.1",
-    nativeId: "deepseek/deepseek-chat-v3.1",
+    nativeId: "openrouter/deepseek/deepseek-chat-v3.1",
   },
   {
     id: "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1.5",
