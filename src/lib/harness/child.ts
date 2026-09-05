@@ -289,6 +289,10 @@ export function resolveCodexBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_codex");
 }
 
+export function installCodexBinary(): Promise<{ path: string }> {
+  return invoke("harness_install_codex");
+}
+
 export function resolveOpenCodeBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_opencode");
 }
