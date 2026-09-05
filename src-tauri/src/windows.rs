@@ -136,8 +136,9 @@ fn resume_child(pid: u32) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, OpenProcess, TerminateProcess, WaitForSingleObject,
         PROCESS_QUERY_INFORMATION,
@@ -200,8 +201,6 @@ mod tests {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             let child = spawn_managed(&mut command).unwrap();
-            crate::hide_window_console(&mut command);
-            let external = command.spawn().unwrap();
             let pair = portable_pty::native_pty_system()
                 .openpty(portable_pty::PtySize::default())
                 .unwrap();
@@ -218,11 +217,37 @@ mod tests {
             ]);
             terminal.env(MARKER, "terminal");
             terminal.env(PID_FILE, &pid_file);
-            // Drain output even when no UI is present; ConPTY shutdown on older
-            // Windows versions can otherwise wait for its output pipe forever.
+            // Act as the missing terminal UI: answer ConPTY's cursor query and
+            // drain output so startup and shutdown cannot block on these pipes.
             let mut reader = pair.master.try_clone_reader().unwrap();
+            let mut writer = pair.master.take_writer().unwrap();
+            let terminal_output = Arc::new(Mutex::new(Vec::new()));
+            let captured = terminal_output.clone();
             std::thread::spawn(move || {
-                let _ = std::io::copy(&mut reader, &mut std::io::sink());
+                let mut buf = [0_u8; 1024];
+                let query = b"\x1b[6n";
+                let mut matched = 0;
+                while let Ok(n) = reader.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let mut output = captured.lock().unwrap();
+                    if output.len() < 16 * 1024 {
+                        output.extend_from_slice(&buf[..n]);
+                    }
+                    drop(output);
+                    for &byte in &buf[..n] {
+                        matched = if byte == query[matched] {
+                            matched + 1
+                        } else {
+                            usize::from(byte == query[0])
+                        };
+                        if matched == query.len() {
+                            let _ = writer.write_all(b"\x1b[1;1R");
+                            matched = 0;
+                        }
+                    }
+                }
             });
             let terminal = spawn_pty(pair.slave.as_ref(), terminal).unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -235,7 +260,8 @@ mod tests {
                 }
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "terminal startup timed out"
+                    "terminal startup timed out; output: {:?}",
+                    String::from_utf8_lossy(&terminal_output.lock().unwrap())
                 );
                 std::thread::sleep(std::time::Duration::from_millis(10));
             };
@@ -256,6 +282,8 @@ mod tests {
                 );
                 assert_ne!(in_job, 0, "startup descendant escaped the managed job");
             }
+            crate::hide_window_console(&mut command);
+            let external = command.spawn().unwrap();
             println!("CHILD_PID={}", child.id());
             println!("TERMINAL_PID={}", terminal.process_id().unwrap());
             println!("DESCENDANT_PID={descendant_pid}");
