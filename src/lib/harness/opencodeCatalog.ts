@@ -45,7 +45,15 @@ export function refreshOpenCodeCatalog(): Promise<void> {
   if (inflight) return inflight;
   inflight = discoverOpenCodeModels()
     .then((models) => {
-      if (models.length > 0) setHarnessModels("opencode", models);
+      const byHarness = new Map<AgentModel["harness"], AgentModel[]>();
+      for (const model of models) {
+        const entries = byHarness.get(model.harness) ?? [];
+        entries.push(model);
+        byHarness.set(model.harness, entries);
+      }
+      for (const [harness, entries] of byHarness) {
+        if (entries.length > 0) setHarnessModels(harness, entries);
+      }
     })
     .catch((error: unknown) => {
       console.debug("[monocode] opencode catalog", error);
@@ -185,10 +193,11 @@ export function flattenOpenCodeModels(
     for (const [modelId, model] of Object.entries(provider.models)) {
       const name = model.name?.trim() || titleCaseSlug(modelId);
       const nativeId = `${provider.id}/${model.id ?? modelId}`;
+      const harness = providerHarness(provider.id, model.id ?? modelId);
       const contextWindow = model.limit?.context;
       models.push({
-        id: `opencode:${nativeId}`,
-        harness: "opencode",
+        id: `${harness}:${nativeId}`,
+        harness,
         name,
         nativeId,
         settings: openCodeModelSettings(provider.id, model, primaryAgents),
@@ -201,12 +210,31 @@ export function flattenOpenCodeModels(
   // entries above replace these fallback entries by their complete metadata.
   const seen = new Set(models.map((model) => model.nativeId));
   for (const model of MODELS) {
-    if (model.harness !== "opencode" || !model.nativeId || seen.has(model.nativeId)) {
+    if (
+      !["opencode", "zai", "mimo", "openrouter", "nvidia"].includes(model.harness) ||
+      !model.nativeId ||
+      seen.has(model.nativeId)
+    ) {
       continue;
     }
     models.push(model);
   }
   return models.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function providerHarness(
+  providerID: string,
+  modelID: string,
+): AgentModel["harness"] {
+  if (providerID === "zai" || (providerID === "opencode-go" && modelID.startsWith("glm-"))) {
+    return "zai";
+  }
+  if (providerID === "mimo" || (providerID === "opencode-go" && modelID.startsWith("mimo-"))) {
+    return "mimo";
+  }
+  if (providerID === "openrouter") return "openrouter";
+  if (providerID === "nvidia") return "nvidia";
+  return "opencode";
 }
 
 function openCodeModelSettings(

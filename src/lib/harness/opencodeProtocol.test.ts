@@ -105,12 +105,17 @@ describe("OpenCode CLI inventory parsers", () => {
     ]);
     expect(models.map((model) => model.nativeId)).toEqual([
       "anthropic/claude-sonnet-4-6",
+      "openrouter/deepseek/deepseek-chat-v3.1",
       "opencode/glm-5",
-      "mimo/mimo-v2.5-pro",
-      "opencode-zen/big-pickle",
-      "zai/glm-5.2",
+      "opencode-go/glm-5.1",
+      "opencode-go/glm-5.2",
+      "opencode-go/glm-5.3",
+      "opencode-go/glm-5.3-flash",
+      "opencode-go/mimo-v2.5",
+      "opencode-go/mimo-v2.5-pro",
+      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
     ]);
-    expect(models[1].settings?.some((setting) => setting.id === "variant")).toBe(
+    expect(models[2].settings?.some((setting) => setting.id === "variant")).toBe(
       true,
     );
     expect(models[0].settings?.find((setting) => setting.id === "agent")?.value).toBe(
@@ -124,9 +129,14 @@ describe("OpenCode CLI inventory parsers", () => {
       [],
     );
     expect(models.map((model) => model.nativeId)).toEqual([
-      "mimo/mimo-v2.5-pro",
-      "opencode-zen/big-pickle",
-      "zai/glm-5.2",
+      "openrouter/deepseek/deepseek-chat-v3.1",
+      "opencode-go/glm-5.1",
+      "opencode-go/glm-5.2",
+      "opencode-go/glm-5.3",
+      "opencode-go/glm-5.3-flash",
+      "opencode-go/mimo-v2.5",
+      "opencode-go/mimo-v2.5-pro",
+      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
     ]);
   });
 

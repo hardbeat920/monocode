@@ -6,6 +6,10 @@ import fx from "../assets/providers/fx.svg";
 import grok from "../assets/providers/grok.svg";
 import omp from "../assets/providers/omp.svg";
 import opencode from "../assets/providers/opencode.svg";
+import zai from "../assets/providers/zai.svg";
+import mimo from "../assets/providers/mimo.svg";
+import openrouter from "../assets/providers/openrouter.svg";
+import nvidia from "../assets/providers/nvidia.svg";
 import pi from "../assets/providers/pi.svg";
 import type { HarnessId } from "../lib/session";
 
@@ -15,10 +19,10 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   cursor,
   grok,
   opencode,
-  zai: opencode,
-  mimo: opencode,
-  openrouter: opencode,
-  nvidia: opencode,
+  zai,
+  mimo,
+  openrouter,
+  nvidia,
   pi,
   omp,
   fx,
