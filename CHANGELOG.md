@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Finished turns fold thinking and tool activity into one expandable summary above the final answer. The behavior is enabled by default and can be changed under Settings → General; failed or rejected calls remain counted in the folded header. In #79.
+
 ## [0.1.34] - 2026-09-05
 
 ### Added

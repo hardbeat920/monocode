@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "../lib/session";
 import {
+  activitySummary,
   activityPhaseTitle,
   activityStillRunning,
   buildActivityPhases,
@@ -81,6 +82,27 @@ function note(id: string, text: string): Block {
 function thought(id: string, text = "Weighing the options."): Block {
   return { id, role: "reasoning", text };
 }
+
+describe("activitySummary", () => {
+  it("summarizes tool calls and unique edited files", () => {
+    expect(
+      activitySummary([
+        thought("thinking"),
+        read("read"),
+        edit("edit-a"),
+        edit("edit-a-again"),
+        edit("edit-b", "src/index.css"),
+      ]),
+    ).toBe("4 tool calls · 2 files edited");
+  });
+
+  it("keeps failed activity visible in the folded summary", () => {
+    expect(activitySummary([shell("failed", "failed")])).toBe(
+      "1 tool call · 1 failed/rejected",
+    );
+    expect(activitySummary([thought("thinking")])).toBe("Thought");
+  });
+});
 
 describe("groupTurnItems", () => {
   it("keeps consecutive shell calls in one activity stack", () => {

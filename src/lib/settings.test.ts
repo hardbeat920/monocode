@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AUTO_COLLAPSE_ACTIVITY_DEFAULT,
   COMPOSER_RUNNER_DEFAULT,
   DIFF_VIEWER_DEFAULT,
   FOLLOW_UP_BEHAVIOR_DEFAULT,
@@ -7,6 +8,7 @@ import {
   KEYBINDINGS,
   LIVE_AGENTS_ENABLED_DEFAULT,
   loadComposerRunner,
+  loadAutoCollapseActivity,
   loadDiffViewer,
   loadFollowUpBehavior,
   loadGridArcadeEnabled,
@@ -14,6 +16,7 @@ import {
   loadNotesEnabled,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
+  saveAutoCollapseActivity,
   saveDiffViewer,
   saveFollowUpBehavior,
   saveGridArcadeEnabled,
@@ -27,6 +30,22 @@ const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+const AUTO_COLLAPSE_ACTIVITY_KEY = "monocode.autoCollapseActivity";
+
+describe("auto-collapse activity setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(AUTO_COLLAPSE_ACTIVITY_KEY);
+  });
+
+  it("defaults to on and persists an off switch", () => {
+    expect(AUTO_COLLAPSE_ACTIVITY_DEFAULT).toBe(true);
+    expect(loadAutoCollapseActivity()).toBe(true);
+    saveAutoCollapseActivity(false);
+    expect(localStorage.getItem(AUTO_COLLAPSE_ACTIVITY_KEY)).toBe("0");
+    expect(loadAutoCollapseActivity()).toBe(false);
+  });
+});
 
 describe("follow-up behavior setting", () => {
   beforeEach(mockLocalStorage);

@@ -115,6 +115,7 @@ import { loadTabGroupLabels, resolveTabGroupLabel } from "../lib/tabGroups";
 import {
   filterKeybindings,
   KEYBINDINGS,
+  loadAutoCollapseActivity,
   loadClaudeHooks,
   loadComposerRunner,
   loadDiffViewer,
@@ -123,6 +124,7 @@ import {
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   saveClaudeHooks,
+  saveAutoCollapseActivity,
   saveComposerRunner,
   saveDiffViewer,
   saveFollowUpBehavior,
@@ -264,6 +266,9 @@ function GeneralPage({
     useState<TranscriptLayout>(loadTranscriptLayout);
   const [transcriptAnchor, setTranscriptAnchor] =
     useState(loadTranscriptAnchor);
+  const [autoCollapseActivity, setAutoCollapseActivity] = useState(
+    loadAutoCollapseActivity,
+  );
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
   const [followUpBehavior, setFollowUpBehavior] =
     useState<FollowUpBehavior>(loadFollowUpBehavior);
@@ -296,6 +301,11 @@ function GeneralPage({
   const onTranscriptAnchor = (next: boolean) => {
     saveTranscriptAnchor(next);
     setTranscriptAnchor(next);
+  };
+
+  const onAutoCollapseActivity = (next: boolean) => {
+    saveAutoCollapseActivity(next);
+    setAutoCollapseActivity(next);
   };
 
   const onDiffViewer = (next: DiffViewer) => {
@@ -380,6 +390,16 @@ function GeneralPage({
             { value: "steer", label: "Steer" },
           ]}
           onChange={onFollowUpBehavior}
+        />
+      </Row>
+      <Row
+        label="Auto-collapse activity"
+        description="Keep thinking and tool activity open while a turn runs, then fold it into one summary above the final answer. Click the summary to read the full trail."
+      >
+        <Toggle
+          label="Auto-collapse activity"
+          on={autoCollapseActivity}
+          onChange={onAutoCollapseActivity}
         />
       </Row>
       <Row

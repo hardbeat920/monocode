@@ -512,6 +512,40 @@ function fileLabel(paths: Set<string>): string {
   return `${paths.size} files`;
 }
 
+/** One-line tally for a settled turn's folded thinking and tool activity. */
+export function activitySummary(blocks: Block[]): string {
+  const tools = blocks.filter(isToolBlock);
+  if (tools.length === 0) return "Thought";
+
+  const edits = new Set<string>();
+  let problems = 0;
+  for (const block of tools) {
+    if (
+      isEditTool(
+        block.tool?.kind,
+        block.text || block.tool?.title,
+        block.tool?.preview,
+      )
+    ) {
+      edits.add(
+        block.tool?.preview?.path ?? block.tool?.preview?.fileName ?? block.id,
+      );
+    }
+    if (toolCallState(block) === "rejected") problems += 1;
+  }
+
+  const parts = [
+    `${tools.length} tool ${tools.length === 1 ? "call" : "calls"}`,
+  ];
+  if (edits.size > 0) {
+    parts.push(`${edits.size} ${edits.size === 1 ? "file" : "files"} edited`);
+  }
+  if (problems > 0) {
+    parts.push(`${problems} failed/rejected`);
+  }
+  return parts.join(" · ");
+}
+
 /**
  * The group's header. The agent's own line if it wrote one, otherwise what the
  * calls add up to — in the present tense while the group is still running, so
