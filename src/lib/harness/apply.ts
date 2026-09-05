@@ -2,6 +2,7 @@ import type {
   Attachment,
   Block,
   Session,
+  SubagentMeta,
   TaskListItem,
   ToolPreview,
 } from "../session";
@@ -99,9 +100,141 @@ export function applyHarnessEvent(
       return { ...session, providerSessionId: event.providerSessionId };
     case "status":
       return appendStatus(session, event.text);
+    case "subagent.updated":
+      return updateSubagent(session, event);
+    case "subagent.event":
+      return applySubagentEvent(session, event);
     default:
       return session;
   }
+}
+
+/** Nested transcripts are capped; a runaway subagent keeps its latest work. */
+const MAX_SUBAGENT_BLOCKS = 600;
+
+/** The Agent call sits near the tail of a live transcript; scan from there. */
+function lastToolIndex(blocks: Block[], callId: string): number {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (blocks[index].tool?.callId === callId) return index;
+  }
+  return -1;
+}
+
+/**
+ * Patch the subagent hung off an Agent call. The call's block is created on
+ * the spot when the subagent's first event lands before the parent's own tool
+ * row did.
+ */
+function patchSubagent(
+  session: Session,
+  callId: string,
+  patch: (current: SubagentMeta, block: Block) => SubagentMeta,
+): Session {
+  let withBlock = session;
+  let index = lastToolIndex(session.blocks, callId);
+  if (index < 0) {
+    withBlock = upsertTool(session, {
+      callId,
+      kind: "agent",
+      status: "in_progress",
+      streaming: true,
+    });
+    index = withBlock.blocks.length - 1;
+  }
+  const prev = withBlock.blocks[index];
+  const current: SubagentMeta = prev.subagent ?? {
+    startedAt: Date.now(),
+    blocks: [],
+  };
+  const next = patch(current, prev);
+  if (next === prev.subagent) return withBlock;
+  const blocks = withBlock.blocks.slice();
+  blocks[index] = { ...prev, subagent: next };
+  return { ...withBlock, blocks };
+}
+
+function updateSubagent(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "subagent.updated" }>,
+): Session {
+  return patchSubagent(session, event.callId, (current, block) => {
+    const agentType = event.agentType?.trim() || current.agentType;
+    const prompt = event.prompt?.trim() || current.prompt;
+    const model = event.model?.trim() || current.model;
+    const background = event.background ?? current.background;
+    if (
+      block.subagent &&
+      agentType === current.agentType &&
+      prompt === current.prompt &&
+      model === current.model &&
+      background === current.background
+    ) {
+      return block.subagent;
+    }
+    return {
+      ...current,
+      ...(agentType ? { agentType } : {}),
+      ...(prompt ? { prompt } : {}),
+      ...(model ? { model } : {}),
+      ...(background !== undefined ? { background } : {}),
+    };
+  });
+}
+
+/**
+ * A subagent's event runs through the same reducer as the parent's, over a
+ * session whose blocks are the subagent's own. Whatever the transcript can
+ * show for the parent it can show for the child, with no second code path.
+ */
+function applySubagentEvent(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "subagent.event" }>,
+): Session {
+  if (
+    event.event.type === "subagent.event" ||
+    event.event.type === "subagent.updated"
+  ) {
+    return session;
+  }
+  return patchSubagent(session, event.callId, (current) => {
+    const inner = applyHarnessEvent(
+      { ...session, blocks: current.blocks },
+      event.event,
+    );
+    if (inner.blocks === current.blocks) return current;
+    const blocks =
+      inner.blocks.length > MAX_SUBAGENT_BLOCKS
+        ? inner.blocks.slice(inner.blocks.length - MAX_SUBAGENT_BLOCKS)
+        : inner.blocks;
+    return { ...current, blocks };
+  });
+}
+
+/** The subagent is done: nothing in it streams any more, and the clock stops. */
+function settleSubagent(meta: SubagentMeta, finishedAt: number): SubagentMeta {
+  const blocks = meta.blocks.some((block) => block.streaming)
+    ? meta.blocks.map((block) =>
+        block.streaming ? { ...block, streaming: false } : block,
+      )
+    : meta.blocks;
+  if (blocks === meta.blocks && meta.finishedAt != null) return meta;
+  return {
+    ...meta,
+    blocks,
+    finishedAt: meta.finishedAt ?? finishedAt,
+  };
+}
+
+function isTerminalToolStatus(status: string | undefined): boolean {
+  const key = status?.toLowerCase() ?? "";
+  return (
+    key === "completed" ||
+    key === "success" ||
+    key === "failed" ||
+    key === "error" ||
+    key === "cancelled" ||
+    key === "canceled"
+  );
 }
 
 function upsertPlan(
@@ -389,6 +522,17 @@ export function promoteLastAssistantToPlan(
 
 function stopBlockProgress(block: Block): Block {
   let stopped = block.streaming ? { ...block, streaming: false } : block;
+  // The turn ending is the end of any subagent still open under it, whether
+  // or not its last block was mid-stream.
+  if (
+    stopped.subagent &&
+    stopped.tool?.status &&
+    !isTerminalToolStatus(stopped.tool.status)
+  ) {
+    const settled = settleSubagent(stopped.subagent, Date.now());
+    if (settled !== stopped.subagent)
+      stopped = { ...stopped, subagent: settled };
+  }
   if (stopped.role === "plan" && stopped.plan?.status === "streaming") {
     stopped = {
       ...stopped,
@@ -648,6 +792,9 @@ function upsertTool(
       ...(detail ? { detail } : {}),
       ...(preview ? { preview } : {}),
     },
+    ...(prev.subagent && isTerminalToolStatus(status)
+      ? { subagent: settleSubagent(prev.subagent, Date.now()) }
+      : {}),
   };
   return { ...session, blocks };
 }

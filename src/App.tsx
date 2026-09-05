@@ -43,6 +43,7 @@ import {
 } from "./lib/fileIndex";
 import {
   closeLeaf,
+  editorTabKey,
   findSurfacePane,
   firstLeafId,
   focusedFileTab,
@@ -56,6 +57,7 @@ import {
   neighborLeafId,
   newFileTab,
   newPlanTab,
+  newSubagentTab,
   newTab,
   newTerminalFile,
   newTerminalWorkspaceTab,
@@ -213,6 +215,7 @@ import {
   workspaceTabCwd,
 } from "./lib/workspaceTabGroups";
 import {
+  findBlockDeep,
   HARNESS_LABEL,
   HARNESS_TITLE,
   canReplaceSessionTitle,
@@ -3008,6 +3011,33 @@ export default function App({
     [activeTabId],
   );
 
+  const onOpenSubagent = useCallback(
+    (sessionId: string, blockId: string) => {
+      const tab = tabsRef.current.find((entry) => entry.id === activeTabId);
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      // A subagent's own subagent sits inside its parent's nested transcript.
+      const block = session
+        ? findBlockDeep(session.blocks, blockId)
+        : undefined;
+      if (!tab || !session || !block) return;
+      const file = newSubagentTab(
+        session.id,
+        block.id,
+        block.text || block.tool?.title || "Subagent",
+        session.cwd,
+      );
+      setTabs((prev) =>
+        prev.map((entry) =>
+          entry.id === tab.id ? openEditorTab(entry, file) : entry,
+        ),
+      );
+      setComposerFocused(false);
+    },
+    [activeTabId],
+  );
+
   const onFileDirtyChange = useCallback((fileId: string, dirty: boolean) => {
     setDirtyFiles((prev) => {
       if (prev.has(fileId) === dirty) return prev;
@@ -4845,6 +4875,7 @@ export default function App({
                           editorNavigation={editorNavigation}
                           onOpenDiff={onOpenDiff}
                           onOpenPlan={onOpenPlan}
+                          onOpenSubagent={onOpenSubagent}
                           onUpdatePlan={onUpdatePlan}
                           onBuildPlan={onBuildPlan}
                           onSecondOpinion={onSecondOpinion}
@@ -5039,17 +5070,12 @@ function toTitleTab(
   const files: string[] = [];
   const seenKeys = new Set<string>();
   const pushFile = (file: FilePaneTab) => {
-    const key = file.terminal
-      ? `terminal:${file.id}`
-      : file.plan
-        ? `plan:${file.plan.blockId}`
-        : file.releaseNotes
-          ? `release-notes:${file.releaseNotes.version}`
-          : file.path;
+    const key = editorTabKey(file);
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
     files.push(
       file.plan?.title?.trim() ||
+        file.subagent?.title?.trim() ||
         (file.releaseNotes
           ? releaseNotesTitle(file.releaseNotes.version)
           : file.terminal

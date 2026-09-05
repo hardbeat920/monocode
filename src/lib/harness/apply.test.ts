@@ -554,3 +554,154 @@ describe("clarifying questions", () => {
     expect(session.pendingQuestion).toBeUndefined();
   });
 });
+
+describe("subagent transcripts", () => {
+  const agentStart = {
+    type: "tool.started" as const,
+    callId: "toolu_agent",
+    title: "Explore the auth module",
+    kind: "agent",
+    status: "in_progress",
+  };
+
+  it("hangs subagent metadata off the Agent tool call", () => {
+    now = 5_000;
+    let session = applyHarnessEvent(newSession("claude", "/repo"), agentStart);
+    session = applyHarnessEvent(session, {
+      type: "subagent.updated",
+      callId: "toolu_agent",
+      agentType: "explore",
+      prompt: "Find where tokens are refreshed",
+    });
+    const block = session.blocks[0];
+    expect(block.tool?.kind).toBe("agent");
+    expect(block.subagent).toMatchObject({
+      agentType: "explore",
+      prompt: "Find where tokens are refreshed",
+      startedAt: 5_000,
+      blocks: [],
+    });
+  });
+
+  it("creates the Agent row when the subagent speaks before its call lands", () => {
+    const session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "subagent.updated",
+      callId: "toolu_late",
+      model: "claude-sonnet-5",
+    });
+    expect(session.blocks).toHaveLength(1);
+    expect(session.blocks[0].tool?.callId).toBe("toolu_late");
+    expect(session.blocks[0].tool?.kind).toBe("agent");
+    expect(session.blocks[0].subagent?.model).toBe("claude-sonnet-5");
+  });
+
+  it("nests the subagent's own tool calls and text under its call", () => {
+    let session = applyHarnessEvent(newSession("claude", "/repo"), agentStart);
+    session = applyHarnessEvent(session, {
+      type: "subagent.event",
+      callId: "toolu_agent",
+      event: {
+        type: "tool.started",
+        callId: "toolu_read",
+        title: "Read /repo/src/auth.ts",
+        kind: "read",
+        status: "pending",
+        preview: {
+          kind: "read",
+          path: "/repo/src/auth.ts",
+          fileName: "auth.ts",
+        },
+      },
+    });
+    session = applyHarnessEvent(session, {
+      type: "subagent.event",
+      callId: "toolu_agent",
+      event: { type: "message.delta", text: "Tokens refresh in " },
+    });
+    session = applyHarnessEvent(session, {
+      type: "subagent.event",
+      callId: "toolu_agent",
+      event: { type: "message.delta", text: "auth.ts." },
+    });
+    expect(session.blocks).toHaveLength(1);
+    const nested = session.blocks[0].subagent?.blocks ?? [];
+    expect(nested.map((block) => block.role)).toEqual(["tool", "assistant"]);
+    expect(nested[0].tool?.preview?.fileName).toBe("auth.ts");
+    expect(nested[1].text).toBe("Tokens refresh in auth.ts.");
+    expect(nested[1].streaming).toBe(true);
+  });
+
+  it("settles the nested transcript when the Agent call completes", () => {
+    now = 1_000;
+    let session = applyHarnessEvent(newSession("claude", "/repo"), agentStart);
+    session = applyHarnessEvent(session, {
+      type: "subagent.event",
+      callId: "toolu_agent",
+      event: { type: "message.delta", text: "Looking…" },
+    });
+    now = 9_000;
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "toolu_agent",
+      kind: "agent",
+      status: "completed",
+      detail: "Tokens refresh in auth.ts.",
+    });
+    const block = session.blocks[0];
+    expect(block.tool?.status).toBe("completed");
+    expect(block.subagent?.finishedAt).toBe(9_000);
+    expect(block.subagent?.blocks[0].streaming).toBe(false);
+  });
+
+  it("seals nested streams when the turn stops", () => {
+    let session = appendUser(newSession("claude", "/repo"), "go");
+    session = applyHarnessEvent(session, agentStart);
+    session = applyHarnessEvent(session, {
+      type: "subagent.event",
+      callId: "toolu_agent",
+      event: { type: "reasoning.delta", text: "hmm" },
+    });
+    session = stopStreaming(session);
+    const nested = session.blocks[1].subagent?.blocks ?? [];
+    expect(nested[0].streaming).toBe(false);
+    expect(session.blocks[1].subagent?.finishedAt).toBeDefined();
+  });
+
+  it("stamps finishedAt at turn end even when nothing in it was streaming", () => {
+    now = 1_000;
+    let session = appendUser(newSession("claude", "/repo"), "go");
+    session = applyHarnessEvent(session, agentStart);
+    session = applyHarnessEvent(session, {
+      type: "subagent.event",
+      callId: "toolu_agent",
+      event: {
+        type: "tool.updated",
+        callId: "toolu_read",
+        title: "Read /repo/a.ts",
+        kind: "read",
+        status: "completed",
+      },
+    });
+    now = 4_000;
+    session = stopStreaming(session);
+    expect(session.blocks[1].subagent?.finishedAt).toBe(4_000);
+    // Already settled: stopping again does not touch it.
+    const again = stopStreaming(session);
+    expect(again.blocks[1].subagent).toBe(session.blocks[1].subagent);
+  });
+
+  it("ignores a subagent event that tries to nest another level of wrapper", () => {
+    let session = applyHarnessEvent(newSession("claude", "/repo"), agentStart);
+    const before = session;
+    session = applyHarnessEvent(session, {
+      type: "subagent.event",
+      callId: "toolu_agent",
+      event: {
+        type: "subagent.updated",
+        callId: "toolu_agent",
+        agentType: "x",
+      },
+    });
+    expect(session).toBe(before);
+  });
+});

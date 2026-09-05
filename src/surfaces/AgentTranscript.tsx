@@ -6,6 +6,7 @@ import {
   FilePlusCorner,
   Minus,
   Bot,
+  PanelRight,
   PenLine,
   Search,
   Terminal,
@@ -32,6 +33,7 @@ import {
 } from "../chrome/SecondOpinionButton";
 import { SecondOpinionCard } from "../chrome/SecondOpinionCard";
 import { NoteMiniCard } from "../chrome/NoteMiniCard";
+import { ProjectMascot } from "../chrome/ProjectMascot";
 import { TerminalSpinner } from "../chrome/TerminalSpinner";
 import type { ApprovalDecision } from "../lib/harness";
 import {
@@ -73,12 +75,17 @@ import {
   hasRunningSubagent,
   initialThinkingIndex,
   isIncompleteTool,
+  isSubagentBlock,
   isThinkingBlock,
   lastActivityIndex,
   isProseBlock,
   needsApproval,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  subagentActivity,
+  subagentStatus,
+  subagentTrail,
+  subagentTypeLabel,
   toolCallLabel,
   toolCallState,
   turnCopyText,
@@ -104,6 +111,7 @@ type Props = {
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
+  onOpenSubagent?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
   onSecondOpinion?: (harness: HarnessId, turn: Block[], model: string) => void;
   onHandoff?: (harness: HarnessId, turn: Block[], model: string) => void;
@@ -126,6 +134,7 @@ export function AgentTranscript({
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
+  onOpenSubagent,
   onBuildPlan,
   onSecondOpinion,
   onHandoff,
@@ -369,9 +378,11 @@ export function AgentTranscript({
                         itemIndex < foldedAt ||
                         (answering && !workStillRunning)
                       }
+                      settled={settled}
                       onApproval={onApproval}
                       onOpenFile={onOpenFile}
                       onOpenDiff={onOpenDiff}
+                      onOpenSubagent={onOpenSubagent}
                     />
                   )
                 ) : (
@@ -908,30 +919,40 @@ function ActivityPhases({
   blocks,
   cwd,
   done,
+  settled = !!done,
+  nested = false,
   onApproval,
   onOpenFile,
   onOpenDiff,
+  onOpenSubagent,
 }: {
   blocks: Block[];
   cwd?: string;
   done?: boolean;
+  /** The whole turn is over, not just this group of it. */
+  settled?: boolean;
+  /** Inside a subagent row: the rail is already drawn around us. */
+  nested?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
+  onOpenSubagent?: (blockId: string) => void;
 }) {
   const phases = useMemo(() => buildActivityPhases(blocks), [blocks]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-1 px-4">
+    <div className={`flex min-w-0 flex-col gap-1 ${nested ? "" : "px-4"}`}>
       {phases.map((phase, index) => (
         <ActivityPhaseGroup
           key={phase.id}
           phase={phase}
           cwd={cwd}
           active={!done && index === phases.length - 1}
+          settled={settled}
           onApproval={onApproval}
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
+          onOpenSubagent={onOpenSubagent}
         />
       ))}
     </div>
@@ -1005,16 +1026,20 @@ function ActivityPhaseGroup({
   phase,
   cwd,
   active,
+  settled,
   onApproval,
   onOpenFile,
   onOpenDiff,
+  onOpenSubagent,
 }: {
   phase: ActivityPhase;
   cwd?: string;
   active: boolean;
+  settled: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
+  onOpenSubagent?: (blockId: string) => void;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const waiting = phase.steps.some(needsApproval);
@@ -1034,17 +1059,25 @@ function ActivityPhaseGroup({
   // A lone call the agent never introduced is not a group: a header repeating
   // the single row under it says nothing twice.
   if (!phase.headline && phase.steps.length === 1) {
+    const lone = phase.steps[0];
+    // A subagent row leads with its own mascot; a bot icon beside it would be
+    // two faces for one agent.
+    const leadsItself = isSubagentBlock(lone);
     return (
       <div className="flex min-w-0 items-start gap-1.5">
-        <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        {leadsItself ? null : (
+          <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        )}
         <div className="min-w-0 flex-1">
           <ActivityRow
-            block={phase.steps[0]}
+            block={lone}
             cwd={cwd}
             live={active}
+            settled={settled}
             onApproval={onApproval}
             onOpenFile={onOpenFile}
             onOpenDiff={onOpenDiff}
+            onOpenSubagent={onOpenSubagent}
           />
         </div>
       </div>
@@ -1134,9 +1167,11 @@ function ActivityPhaseGroup({
                   block={block}
                   cwd={cwd}
                   live={active}
+                  settled={settled}
                   onApproval={onApproval}
                   onOpenFile={onOpenFile}
                   onOpenDiff={onOpenDiff}
+                  onOpenSubagent={onOpenSubagent}
                 />
               </div>
             ))}
@@ -1183,17 +1218,34 @@ function ActivityRow({
   block,
   cwd,
   live = false,
+  settled = !live,
   onApproval,
   onOpenFile,
   onOpenDiff,
+  onOpenSubagent,
 }: {
   block: Block;
   cwd?: string;
   live?: boolean;
+  settled?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
+  onOpenSubagent?: (blockId: string) => void;
 }) {
+  if (isSubagentBlock(block)) {
+    return (
+      <SubagentRow
+        block={block}
+        cwd={cwd}
+        settled={settled}
+        onApproval={onApproval}
+        onOpenFile={onOpenFile}
+        onOpenDiff={onOpenDiff}
+        onOpenSubagent={onOpenSubagent}
+      />
+    );
+  }
   if (isThinkingBlock(block)) {
     return (
       <ActivityThinkingRow
@@ -1226,6 +1278,139 @@ function ActivityRow({
       onOpenFile={onOpenFile}
       onOpenDiff={onOpenDiff}
     />
+  );
+}
+
+/**
+ * A subagent on the rail: its pixel mascot, hopping while it runs, the brief
+ * it was given, and under that the newest thing it did. Click to unfold the
+ * steps it took right here, on their own rail; the pane button opens the
+ * whole transcript beside the chat.
+ */
+function SubagentRow({
+  block,
+  cwd,
+  settled,
+  onApproval,
+  onOpenFile,
+  onOpenDiff,
+  onOpenSubagent,
+}: {
+  block: Block;
+  cwd?: string;
+  settled: boolean;
+  onApproval?: (requestId: number, decision: ApprovalDecision) => void;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+  onOpenSubagent?: (blockId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const status = subagentStatus(block, !settled);
+  const running = status === "running";
+  const label = toolCallLabel(block, cwd);
+  const type = subagentTypeLabel(block);
+  const trail = subagentTrail(block, status, cwd);
+  const steps = useMemo(() => subagentActivity(block), [block]);
+  const unfoldable = steps.length > 0;
+
+  return (
+    <div className="group/subagent flex min-w-0 flex-col">
+      <div className="flex min-w-0 items-center gap-1.5 py-1">
+        <button
+          type="button"
+          aria-expanded={unfoldable ? open : undefined}
+          aria-label={
+            unfoldable
+              ? open
+                ? `Hide what the ${label} subagent did`
+                : `Show what the ${label} subagent did`
+              : `Subagent: ${label}`
+          }
+          disabled={!unfoldable}
+          onClick={() => setOpen((value) => !value)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
+        >
+          {/*
+           * Most mascots leave their bottom pixel row empty, so a centred
+           * sprite reads as sitting high. A pixel down squares it with the
+           * text.
+           */}
+          <ProjectMascot
+            project={block.id}
+            active={running}
+            className={`mt-px size-3.5 shrink-0 ${
+              status === "failed" ? "text-red-400" : "text-content/70"
+            }`}
+          />
+          {/*
+           * The text runs at two sizes. Aligned on the baseline they read as
+           * one line; centred, the smaller run floats a pixel or two above.
+           */}
+          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span
+              className={`min-w-0 shrink truncate font-sans text-sm ${
+                status === "failed" ? "text-red-400" : "text-content/80"
+              }`}
+              title={label}
+            >
+              {label}
+            </span>
+            {type ? (
+              <span className="shrink-0 font-sans text-[12px] text-content/40">
+                {type}
+              </span>
+            ) : null}
+            {/*
+             * The shimmer is an inline-block; clipping it moves its baseline
+             * to its bottom edge and the text floats up. The span around it
+             * does the truncating instead.
+             */}
+            <span
+              className="min-w-0 flex-1 truncate font-sans text-[12px] text-content/45"
+              title={trail}
+            >
+              {running ? <Shimmer duration={1.6}>{trail}</Shimmer> : trail}
+            </span>
+          </span>
+        </button>
+        {status === "failed" ? (
+          <X className="size-3.5 shrink-0 text-red-400" strokeWidth={2} />
+        ) : null}
+        {onOpenSubagent ? (
+          <button
+            type="button"
+            title="Open subagent in pane"
+            aria-label={`Open the ${label} subagent in a pane`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenSubagent(block.id);
+            }}
+            className="-my-0.5 grid size-5 shrink-0 place-items-center rounded text-content/40 opacity-0 transition-opacity hover:bg-content/8 hover:text-content/80 focus-visible:opacity-100 group-hover/subagent:opacity-100"
+          >
+            <PanelRight className="size-3" strokeWidth={1.75} />
+          </button>
+        ) : null}
+      </div>
+      {unfoldable ? (
+        <div className="zen-phase-body" data-open={open}>
+          <div>
+            <div className="pb-1 pl-5">
+              <ActivityPhases
+                blocks={steps}
+                cwd={cwd}
+                nested
+                done={!running}
+                settled={!running}
+                onApproval={onApproval}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+                onOpenSubagent={onOpenSubagent}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

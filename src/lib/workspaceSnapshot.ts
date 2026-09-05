@@ -7,7 +7,7 @@ import {
   type EditorPane,
   type FilePaneTab,
   type LayoutNode,
-  type PlanTabSource,
+  type BlockTabSource,
   type SessionChangesSource,
   type WorkspaceTab,
 } from "./layout";
@@ -369,7 +369,8 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
   if (typeof value.id !== "string" || !value.id) return null;
   if (typeof value.path !== "string" || !value.path) return null;
   if (typeof value.cwd !== "string" || !value.cwd) return null;
-  const plan = sanitizePlan(value.plan);
+  const plan = sanitizeBlockSource(value.plan);
+  const subagent = sanitizeBlockSource(value.subagent);
   const hasReleaseNotes = "releaseNotes" in value;
   const releaseNotes = sanitizeReleaseNotes(value.releaseNotes);
   const hasCommit = "commit" in value;
@@ -415,6 +416,7 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
     path: value.path,
     cwd: value.cwd,
     ...(plan ? { plan } : {}),
+    ...(subagent && !plan ? { subagent } : {}),
     ...(releaseNotes ? { releaseNotes } : {}),
     ...(commit ? { commit } : {}),
     ...(sessionChanges ? { sessionChanges, review: true } : {}),
@@ -481,7 +483,7 @@ function sanitizeProjectTerminal(raw: unknown): ProjectTerminalDock | null {
   };
 }
 
-function sanitizePlan(raw: unknown): PlanTabSource | undefined {
+function sanitizeBlockSource(raw: unknown): BlockTabSource | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const value = raw as Record<string, unknown>;
   if (typeof value.sessionId !== "string" || !value.sessionId) return undefined;

@@ -116,6 +116,28 @@ export type ToolPreview = {
   output?: string;
 };
 
+/**
+ * A subagent's own transcript, hung off the Agent tool call that spawned it.
+ * The blocks reuse the transcript's own shape, so a subagent's reads, edits,
+ * thinking, and answer render with the same pieces as the parent's.
+ */
+export type SubagentMeta = {
+  /** Provider-side agent type ("Explore", "general-purpose"). */
+  agentType?: string;
+  /** The brief the parent handed it. */
+  prompt?: string;
+  /** Model the subagent ran on, when the harness said. */
+  model?: string;
+  /** Epoch ms when the subagent started. */
+  startedAt?: number;
+  /** Epoch ms when it finished, whichever way. */
+  finishedAt?: number;
+  /** Left running in the background while the parent carried on. */
+  background?: boolean;
+  /** Its own tool calls, reasoning, and text, in order. */
+  blocks: Block[];
+};
+
 export type AttachmentKind = "image" | "audio" | "file";
 
 export type Attachment = {
@@ -165,6 +187,8 @@ export type Block = {
     requestId: number;
     decided?: "allow" | "deny" | "cancelled";
   };
+  /** Nested transcript of the subagent this Agent tool call spawned. */
+  subagent?: SubagentMeta;
   taskList?: TaskListMeta;
   plan?: PlanBlockMeta;
   handoff?: HandoffMeta;
@@ -350,6 +374,24 @@ export function canReplaceSessionTitle(
     current === HARNESS_LABEL[harness] ||
     current === HARNESS_TITLE[harness]
   );
+}
+
+/**
+ * A block by id, looking inside subagent transcripts too. A subagent's own
+ * subagents nest further, so the search follows the tree down.
+ */
+export function findBlockDeep(blocks: Block[], id: string): Block | undefined {
+  // Top-level first: that is where almost every Agent call lives, and it
+  // avoids walking earlier subagents' transcripts to reach a later block.
+  for (const block of blocks) {
+    if (block.id === id) return block;
+  }
+  for (const block of blocks) {
+    if (!block.subagent?.blocks.length) continue;
+    const nested = findBlockDeep(block.subagent.blocks, id);
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 export function hasPendingApproval(blocks: Block[]): boolean {

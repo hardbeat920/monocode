@@ -10,6 +10,7 @@ import type {
   RuntimeMode,
   SecondOpinionMeta,
   Session,
+  SubagentMeta,
   TaskListMeta,
   PlanBlockMeta,
 } from "./session";
@@ -311,6 +312,8 @@ function sanitizeBlock(block: Block): Block | null {
   if (block.startedAt != null) next.startedAt = block.startedAt;
   if (block.durationMs != null) next.durationMs = block.durationMs;
   if (block.tool) next.tool = block.tool;
+  const subagent = sanitizeSubagent(block.subagent);
+  if (subagent) next.subagent = subagent;
   if (block.approval?.decided) {
     next.approval = {
       requestId: block.approval.requestId,
@@ -362,6 +365,46 @@ function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {
     ...(originalText ? { originalText } : {}),
     ...(approvedText ? { approvedText } : {}),
     ...(record.edited === true ? { edited: true } : {}),
+  };
+}
+
+/**
+ * Nested tool output is capped tighter than the parent's: a subagent can make
+ * hundreds of calls, and every persist re-serializes the whole transcript.
+ */
+const MAX_NESTED_TOOL_DETAIL_CHARS = 2_000;
+
+/** A subagent's transcript, sanitized the same way as the parent's. */
+function sanitizeSubagent(
+  value: SubagentMeta | undefined,
+): SubagentMeta | undefined {
+  if (!value) return undefined;
+  const blocks = value.blocks
+    .map(sanitizeBlock)
+    .filter((block): block is Block => block != null)
+    .map(capNestedToolDetail);
+  return {
+    ...(value.agentType ? { agentType: value.agentType } : {}),
+    ...(value.prompt ? { prompt: value.prompt } : {}),
+    ...(value.model ? { model: value.model } : {}),
+    ...(value.startedAt != null ? { startedAt: value.startedAt } : {}),
+    ...(value.finishedAt != null ? { finishedAt: value.finishedAt } : {}),
+    ...(value.background ? { background: true } : {}),
+    blocks,
+  };
+}
+
+function capNestedToolDetail(block: Block): Block {
+  const detail = block.tool?.detail;
+  if (!block.tool || !detail || detail.length <= MAX_NESTED_TOOL_DETAIL_CHARS) {
+    return block;
+  }
+  return {
+    ...block,
+    tool: {
+      ...block.tool,
+      detail: `${detail.slice(0, MAX_NESTED_TOOL_DETAIL_CHARS)}\n…`,
+    },
   };
 }
 

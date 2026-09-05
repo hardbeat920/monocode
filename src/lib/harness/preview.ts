@@ -255,6 +255,34 @@ export function agentToolTitle(
   return "Subagent";
 }
 
+/**
+ * What an Agent call's input says about the subagent it spawns: its type, the
+ * brief it was handed, and whether it was sent to the background.
+ */
+export function subagentMetaFromInput(
+  value: unknown,
+): { agentType?: string; prompt?: string; background?: boolean } | undefined {
+  const input = asRecord(value);
+  if (!input) return undefined;
+  const agentType =
+    coerceString(input.subagent_type) ??
+    coerceString(input.subagentType) ??
+    coerceString(input.agent_type) ??
+    coerceString(input.agentType);
+  const prompt =
+    typeof input.prompt === "string" && input.prompt.trim()
+      ? input.prompt.trim()
+      : undefined;
+  const background =
+    input.run_in_background === true || input.runInBackground === true;
+  if (!agentType && !prompt && !background) return undefined;
+  return {
+    ...(agentType ? { agentType } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(background ? { background } : {}),
+  };
+}
+
 export function formatAgentType(value: string): string {
   const text = value.trim().replace(/[_-]+/g, " ");
   if (!text) return "Subagent";

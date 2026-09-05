@@ -8,7 +8,9 @@ import {
   isReleaseNotesTab,
   isReviewTab,
   isSessionChangesTab,
+  isSubagentTab,
   isTerminalTab,
+  isVirtualDocumentTab,
   layoutLeaves,
   layoutSashes,
   leaf,
@@ -16,6 +18,7 @@ import {
   newCommitTab,
   newFileTab,
   newPlanTab,
+  newSubagentTab,
   newReleaseNotesWorkspaceTab,
   newSessionChangesTab,
   newTab,
@@ -112,6 +115,11 @@ describe("editorTabKey", () => {
       ),
     ).toBe(`commit:${cwd}:abc1234deadbeef`);
     expect(editorTabKey(newPlanTab("s", "b", "Plan", cwd))).toBe("plan:b");
+    const subagent = newSubagentTab("s", "b", "Explore", cwd);
+    expect(editorTabKey(subagent)).toBe("subagent:b");
+    expect(isSubagentTab(subagent)).toBe(true);
+    expect(isVirtualDocumentTab(subagent)).toBe(true);
+    expect(isFilesystemTab(subagent)).toBe(false);
     const terminal = newTerminalFile(cwd);
     expect(editorTabKey(terminal)).toBe(`terminal:${terminal.id}`);
     expect(isTerminalTab(terminal)).toBe(true);
@@ -176,9 +184,9 @@ describe("openChangesTab", () => {
     );
     const next = openChangesTab(withReview, cwd, "/repo/b.ts");
     const files = next.editorPanes[0]?.files ?? [];
-    expect(files.some((file) => editorTabKey(file) === `review:${cwd}/a.ts`)).toBe(
-      false,
-    );
+    expect(
+      files.some((file) => editorTabKey(file) === `review:${cwd}/a.ts`),
+    ).toBe(false);
     expect(files.filter(isChangesTab)).toHaveLength(1);
   });
 

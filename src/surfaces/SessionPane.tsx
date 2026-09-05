@@ -95,6 +95,7 @@ type Props = {
     session?: { sessionId: string; cwd: string },
   ) => void;
   onOpenPlan: (sessionId: string, blockId: string) => void;
+  onOpenSubagent: (sessionId: string, blockId: string) => void;
   onBuildPlan: (
     sessionId: string,
     blockId: string,
@@ -149,6 +150,7 @@ export const SessionPane = memo(function SessionPane({
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
+  onOpenSubagent,
   onBuildPlan,
   onSecondOpinion,
   onHandoff,
@@ -169,6 +171,10 @@ export const SessionPane = memo(function SessionPane({
   const openPlan = useCallback(
     (blockId: string) => onOpenPlan(session.id, blockId),
     [onOpenPlan, session.id],
+  );
+  const openSubagent = useCallback(
+    (blockId: string) => onOpenSubagent(session.id, blockId),
+    [onOpenSubagent, session.id],
   );
   const buildPlan = useCallback(
     (blockId: string, target?: PlanBuildTarget) =>
@@ -378,6 +384,7 @@ export const SessionPane = memo(function SessionPane({
               onOpenFile={onOpenFile}
               onOpenDiff={onOpenDiff}
               onOpenPlan={openPlan}
+              onOpenSubagent={openSubagent}
               onBuildPlan={buildPlan}
               onSecondOpinion={
                 onSecondOpinion

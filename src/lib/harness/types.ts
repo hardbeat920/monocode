@@ -83,7 +83,18 @@ export type HarnessEvent =
       streaming?: boolean;
     }
   /** Context-window level after the harness's latest request. */
-  | { type: "context"; used?: number; window?: number };
+  | { type: "context"; used?: number; window?: number }
+  /** What the harness knows about a spawned subagent, keyed by its Agent call. */
+  | {
+      type: "subagent.updated";
+      callId: string;
+      agentType?: string;
+      prompt?: string;
+      model?: string;
+      background?: boolean;
+    }
+  /** Something the subagent did, applied to its own nested transcript. */
+  | { type: "subagent.event"; callId: string; event: HarnessEvent };
 
 export type ApprovalDecision = "allow" | "deny";
 

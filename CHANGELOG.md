@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Subagents have their own viewer. An Agent call in the transcript shows the subagent as a pixel mascot that hops while it runs, with the brief it was given and the newest thing it did; unfold it to see its steps on their own rail, or open it in a pane to read its full transcript — prompt, reads, edits, thinking, and answer — rendered exactly like the parent's. Claude Code subagent streams are captured live; Cursor and Codex subagents show type, background state, and result.
 - Diff reviews can be annotated line by line in both Unified and Editor views. Use the comment action on a changed line to write a note and add its file, line number, and code context to the active composer; collect multiple comments and send them to the agent in one prompt.
 
 ## [0.1.32] - 2026-09-04

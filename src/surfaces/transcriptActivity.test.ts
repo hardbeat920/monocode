@@ -5,6 +5,7 @@ import {
   activityStillRunning,
   buildActivityPhases,
   editVerb,
+  formatElapsed,
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
@@ -12,6 +13,15 @@ import {
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  isSubagentBlock,
+  subagentActivity,
+  subagentLatestStep,
+  subagentReport,
+  subagentStatus,
+  subagentSteps,
+  subagentSummary,
+  subagentTrail,
+  subagentTypeLabel,
   toolCallLabel,
   turnCopyText,
 } from "./transcriptActivity";
@@ -524,10 +534,7 @@ describe("activityPhaseTitle", () => {
 });
 
 describe("running subagents", () => {
-  const agent = (
-    id: string,
-    status = "in_progress",
-  ): Block => ({
+  const agent = (id: string, status = "in_progress"): Block => ({
     id,
     role: "tool",
     text: "Explore the auth module",
@@ -673,5 +680,130 @@ describe("proseSummary", () => {
     expect(
       proseSummary("```ts\nconst a = 1;\n```\n\n- Ran [checks](x.md)"),
     ).toBe("Ran checks");
+  });
+});
+
+describe("subagent rows", () => {
+  const spawn = (
+    status: string,
+    subagent?: Block["subagent"],
+    streaming?: boolean,
+  ): Block => ({
+    id: "ag",
+    role: "tool",
+    text: "Explore the auth module",
+    ...(streaming !== undefined ? { streaming } : {}),
+    tool: {
+      callId: "toolu_agent",
+      kind: "agent",
+      title: "Explore the auth module",
+      status,
+    },
+    ...(subagent ? { subagent } : {}),
+  });
+
+  it("recognises an Agent call with or without a nested transcript", () => {
+    expect(isSubagentBlock(spawn("in_progress"))).toBe(true);
+    expect(
+      isSubagentBlock({
+        id: "x",
+        role: "tool",
+        text: "Weird",
+        tool: { kind: "other", title: "Weird" },
+        subagent: { blocks: [] },
+      }),
+    ).toBe(true);
+    expect(isSubagentBlock(read("r1"))).toBe(false);
+    expect(isSubagentBlock(note("p1", "hi"))).toBe(false);
+  });
+
+  it("reads status from the call, and only counts as running in a live turn", () => {
+    expect(subagentStatus(spawn("in_progress"), true)).toBe("running");
+    expect(subagentStatus(spawn("in_progress"), false)).toBe("stopped");
+    expect(subagentStatus(spawn("completed"), false)).toBe("completed");
+    expect(subagentStatus(spawn("failed"), true)).toBe("failed");
+  });
+
+  it("labels the agent type for people", () => {
+    expect(
+      subagentTypeLabel(
+        spawn("in_progress", { agentType: "general-purpose", blocks: [] }),
+      ),
+    ).toBe("General Purpose");
+    expect(subagentTypeLabel(spawn("in_progress"))).toBeUndefined();
+  });
+
+  it("shows the newest step from the nested transcript", () => {
+    const block = spawn("in_progress", {
+      blocks: [
+        thought("t1", "Need to find the provider"),
+        read("r1", "src/auth.ts"),
+        note("p1", "Found it in the provider"),
+      ],
+    });
+    expect(subagentLatestStep(block)).toBe("Found it in the provider");
+    expect(subagentSteps(block).map((step) => step.id)).toEqual(["r1"]);
+    expect(subagentActivity(block).map((step) => step.id)).toEqual([
+      "t1",
+      "r1",
+      "p1",
+    ]);
+  });
+
+  it("formats run time in seconds and minutes, and hides sub-second runs", () => {
+    expect(formatElapsed(undefined)).toBeNull();
+    expect(formatElapsed(400)).toBeNull();
+    expect(formatElapsed(12_400)).toBe("12s");
+    expect(formatElapsed(60_000)).toBe("1m");
+    expect(formatElapsed(125_000)).toBe("2m 5s");
+  });
+
+  it("falls back to the call's detail when the harness sent no stream", () => {
+    const block = spawn("in_progress");
+    block.tool!.detail = "Read src/auth.ts\nand more";
+    expect(subagentLatestStep(block)).toBe("Read src/auth.ts");
+  });
+
+  it("reports the last full reply, else the result the parent received", () => {
+    const streamed = spawn("completed", {
+      blocks: [read("r1"), note("p1", "The auth module uses JWT.")],
+    });
+    expect(subagentReport(streamed)).toBe("The auth module uses JWT.");
+
+    const resultOnly = spawn("completed", { blocks: [] });
+    resultOnly.tool!.detail = "Done: JWT everywhere.";
+    expect(subagentReport(resultOnly)).toBe("Done: JWT everywhere.");
+
+    const running = spawn("in_progress", { blocks: [] });
+    running.tool!.detail = "Read src/auth.ts";
+    expect(subagentReport(running)).toBeUndefined();
+  });
+
+  it("writes the trail line for each state", () => {
+    const running = spawn("in_progress", { blocks: [read("r1", "src/a.ts")] });
+    expect(subagentTrail(running, "running")).toBe("Read src/a.ts");
+    expect(subagentTrail(spawn("in_progress"), "running")).toBe("Warming up");
+    expect(subagentTrail(spawn("failed"), "failed")).toBe("Failed");
+    expect(subagentTrail(spawn("in_progress"), "stopped")).toBe("Stopped");
+    const done = spawn("completed", {
+      background: true,
+      startedAt: 0,
+      finishedAt: 5_000,
+      blocks: [read("r1")],
+    });
+    expect(subagentTrail(done, "completed")).toBe("background · 1 step · 5s");
+    expect(subagentTrail(spawn("completed", { blocks: [] }), "completed")).toBe(
+      "Done",
+    );
+  });
+
+  it("sums the folded summary from steps and duration", () => {
+    const block = spawn("completed", {
+      startedAt: 1_000,
+      finishedAt: 13_500,
+      blocks: [read("r1"), read("r2", "src/b.ts"), edit("e1")],
+    });
+    expect(subagentSummary(block)).toBe("3 steps · 13s");
+    expect(subagentSummary(spawn("completed", { blocks: [] }))).toBe("");
   });
 });

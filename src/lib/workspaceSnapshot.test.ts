@@ -7,6 +7,7 @@ import {
   newFileTab,
   newReleaseNotesWorkspaceTab,
   newSessionChangesTab,
+  newSubagentTab,
   newTab,
   newTerminalFile,
 } from "./layout";
@@ -140,6 +141,32 @@ describe("collectWorkspaceSnapshot", () => {
 });
 
 describe("parseWorkspaceSnapshot", () => {
+  it("keeps a subagent pane pointed at its call", () => {
+    const file = newSubagentTab(
+      "s1",
+      "b1",
+      "Explore the auth module",
+      "/tmp/a",
+    );
+    const tab = {
+      ...newTab("s1"),
+      id: "t1",
+      editorPanes: [{ id: "e1", files: [file], activeFileId: file.id }],
+    };
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [chat("s1", "/tmp/a")],
+      "t1",
+      "/tmp/a",
+    );
+    const parsed = parseWorkspaceSnapshot(JSON.parse(JSON.stringify(snapshot)));
+    expect(parsed?.tabs[0]?.editorPanes[0]?.files[0]?.subagent).toEqual({
+      sessionId: "s1",
+      blockId: "b1",
+      title: "Explore the auth module",
+    });
+  });
+
   it("returns null for empty or invalid payloads", () => {
     expect(parseWorkspaceSnapshot(null)).toBeNull();
     expect(parseWorkspaceSnapshot({ tabs: [], activeTabId: "t1" })).toBeNull();

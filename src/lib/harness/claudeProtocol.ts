@@ -560,6 +560,8 @@ export type ClaudeAgentTaskStarted = {
   taskType: string;
   backgrounded: boolean;
   ambient: boolean;
+  subagentType?: string;
+  prompt?: string;
 };
 
 export function parseTaskStarted(
@@ -580,6 +582,8 @@ export function parseTaskStarted(
     taskType: stringField(rec, "task_type") ?? "",
     backgrounded: rec.is_backgrounded === true,
     ambient: rec.ambient === true,
+    subagentType: stringField(rec, "subagent_type"),
+    prompt: stringField(rec, "prompt"),
   };
 }
 
@@ -730,6 +734,19 @@ export function parseToolProgress(
   };
 }
 
+/**
+ * The tool result an Agent call gets back the moment it spawns asynchronously:
+ * a launch receipt, not the subagent's answer. Claude Code runs agents in the
+ * background by default in interactive sessions; the real answer comes later
+ * through `task_notification`.
+ */
+export function isAsyncAgentLaunch(text: string): boolean {
+  return (
+    /\basync agent launched\b/i.test(text) ||
+    /\bagent is working in the background\b/i.test(text)
+  );
+}
+
 export function isTerminalAgentTaskStatus(status: string | undefined): boolean {
   const key = (status ?? "").toLowerCase();
   return (
@@ -738,6 +755,13 @@ export function isTerminalAgentTaskStatus(status: string | undefined): boolean {
     key === "killed" ||
     key === "stopped"
   );
+}
+
+/** The model an `assistant` message came from, when the CLI includes it. */
+export function assistantModel(
+  rec: Record<string, unknown>,
+): string | undefined {
+  return stringField(asRecord(rec.message), "model");
 }
 
 export function assistantTextBlocks(rec: Record<string, unknown>): string[] {

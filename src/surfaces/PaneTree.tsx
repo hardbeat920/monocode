@@ -98,6 +98,7 @@ type Shared = {
     session?: { sessionId: string; cwd: string },
   ) => void;
   onOpenPlan: (sessionId: string, blockId: string) => void;
+  onOpenSubagent: (sessionId: string, blockId: string) => void;
   onUpdatePlan: (sessionId: string, blockId: string, text: string) => void;
   onBuildPlan: (
     sessionId: string,
@@ -173,6 +174,7 @@ function PaneTreeComponent({
   editorNavigation,
   onOpenDiff,
   onOpenPlan,
+  onOpenSubagent,
   onUpdatePlan,
   onBuildPlan,
   onSecondOpinion,
@@ -329,6 +331,7 @@ function PaneTreeComponent({
                 onDirtyChange={onFileDirtyChange}
                 onErrorCountChange={onFileErrorCountChange}
                 onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
                 onUpdatePlan={onUpdatePlan}
                 onBuildPlan={onBuildPlan}
                 editorNavigation={editorNavigation}
@@ -377,6 +380,7 @@ function PaneTreeComponent({
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
+                onOpenSubagent={onOpenSubagent}
                 onBuildPlan={onBuildPlan}
                 onSecondOpinion={onSecondOpinion}
                 onHandoff={onHandoff}

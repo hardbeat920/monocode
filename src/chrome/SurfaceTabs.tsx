@@ -9,6 +9,7 @@ import {
   isReleaseNotesTab,
   isReviewTab,
   isSessionChangesTab,
+  isSubagentTab,
   isTerminalTab,
   type FilePaneTab,
 } from "../lib/layout";
@@ -17,6 +18,7 @@ import { terminalTabLabel } from "../lib/terminalTab";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useSortable } from "../hooks/useSortable";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { ProjectMascot } from "./ProjectMascot";
 
 type Props = {
   files: FilePaneTab[];
@@ -76,6 +78,16 @@ export function surfaceTabPresentation(
       label: name,
       iconName: "CHANGES",
       tooltip: `${file.commit.shortSha} — ${file.commit.subject}`,
+    };
+  }
+
+  if (isSubagentTab(file)) {
+    const name = file.subagent.title.trim() || "Subagent";
+    return {
+      name,
+      label: name,
+      iconName: "subagent",
+      tooltip: `${name} — subagent`,
     };
   }
 
@@ -223,6 +235,11 @@ export function SurfaceTabs({
             >
               {terminal ? (
                 <Terminal className="size-3.5 shrink-0" strokeWidth={1.75} />
+              ) : isSubagentTab(file) ? (
+                <ProjectMascot
+                  project={file.subagent.blockId}
+                  className="size-3 shrink-0"
+                />
               ) : changes || commit ? (
                 <GitCompare className="size-3.5 shrink-0" strokeWidth={1.75} />
               ) : (

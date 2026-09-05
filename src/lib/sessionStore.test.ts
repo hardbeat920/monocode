@@ -188,6 +188,56 @@ describe("sanitizeSessionForPersist", () => {
   });
 });
 
+describe("sanitizeSessionForPersist subagents", () => {
+  it("keeps a subagent's transcript and settles its streams", () => {
+    const session = newSession("claude", "/tmp/project");
+    session.blocks = [
+      { id: "u1", role: "user", text: "go" },
+      {
+        id: "ag",
+        role: "tool",
+        text: "Explore",
+        tool: { callId: "toolu_agent", kind: "agent", status: "completed" },
+        subagent: {
+          agentType: "explore",
+          prompt: "Find the token path",
+          model: "claude-haiku-4-5-20251001",
+          startedAt: 1_000,
+          finishedAt: 9_000,
+          blocks: [
+            {
+              id: "r1",
+              role: "tool",
+              text: "Read src/auth.ts",
+              streaming: true,
+              tool: {
+                callId: "toolu_read",
+                kind: "read",
+                status: "completed",
+                detail: "x".repeat(5_000),
+              },
+            },
+            { id: "a1", role: "assistant", text: "Found it.", streaming: true },
+          ],
+        },
+      },
+    ];
+    const persisted = sanitizeSessionForPersist(session).blocks[1];
+    expect(persisted.subagent).toMatchObject({
+      agentType: "explore",
+      prompt: "Find the token path",
+      model: "claude-haiku-4-5-20251001",
+      startedAt: 1_000,
+      finishedAt: 9_000,
+    });
+    const nested = persisted.subagent?.blocks ?? [];
+    expect(nested.map((block) => block.id)).toEqual(["r1", "a1"]);
+    expect(nested[0].streaming).toBeUndefined();
+    expect(nested[0].tool?.detail?.length).toBeLessThan(2_100);
+    expect(nested[1].text).toBe("Found it.");
+  });
+});
+
 describe("persistFingerprint", () => {
   const user: Block = { id: "u1", role: "user", text: "hi" };
   const answer: Block = { id: "a1", role: "assistant", text: "done" };

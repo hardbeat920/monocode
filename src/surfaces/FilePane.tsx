@@ -12,6 +12,7 @@ import {
   isReleaseNotesTab,
   isReviewTab,
   isSessionChangesTab,
+  isSubagentTab,
   isTerminalTab,
   type EditorPane,
   type FilePaneTab,
@@ -30,6 +31,7 @@ import { CommitDiff } from "./CommitDiff";
 import { FileEditor } from "./FileEditor";
 import { ReleaseNotesSurface } from "./ReleaseNotesSurface";
 import { SessionChangesDiff } from "./SessionChangesDiff";
+import { SubagentSurface } from "./SubagentSurface";
 import { TerminalView } from "./TerminalView";
 import { WorkingTreeDiff } from "./WorkingTreeDiff";
 
@@ -46,6 +48,7 @@ type Props = {
   onErrorCountChange: (fileId: string, count: number) => void;
   onReorderFiles: (paneId: string, ids: string[]) => void;
   onOpenFile: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
   onUpdatePlan: (sessionId: string, blockId: string, text: string) => void;
   onBuildPlan: (
     sessionId: string,
@@ -70,6 +73,7 @@ function FilePaneComponent({
   onErrorCountChange,
   onReorderFiles,
   onOpenFile,
+  onOpenDiff,
   onUpdatePlan,
   onBuildPlan,
   editorNavigation,
@@ -150,6 +154,14 @@ function FilePaneComponent({
                   onUpdatePlan={onUpdatePlan}
                   onBuildPlan={onBuildPlan}
                 />
+              ) : isSubagentTab(file) ? (
+                <SubagentSurface
+                  file={file}
+                  sessions={sessions}
+                  visible={file.id === pane.activeFileId}
+                  onOpenFile={onOpenFile}
+                  onOpenDiff={onOpenDiff}
+                />
               ) : isReleaseNotesTab(file) ? (
                 <ReleaseNotesSurface source={file.releaseNotes} />
               ) : isTerminalTab(file) ? (
@@ -205,6 +217,7 @@ export const FilePane = memo(FilePaneComponent, (previous, next) => {
     previous.onErrorCountChange !== next.onErrorCountChange ||
     previous.onReorderFiles !== next.onReorderFiles ||
     previous.onOpenFile !== next.onOpenFile ||
+    previous.onOpenDiff !== next.onOpenDiff ||
     previous.onUpdatePlan !== next.onUpdatePlan ||
     previous.onBuildPlan !== next.onBuildPlan ||
     previous.editorNavigation !== next.editorNavigation ||
@@ -215,7 +228,7 @@ export const FilePane = memo(FilePaneComponent, (previous, next) => {
   }
 
   for (const file of next.pane.files) {
-    const sessionId = file.plan?.sessionId;
+    const sessionId = file.plan?.sessionId ?? file.subagent?.sessionId;
     if (!sessionId) continue;
     const before = previous.sessions.find(
       (session) => session.id === sessionId,

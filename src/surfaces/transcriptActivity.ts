@@ -1,5 +1,6 @@
 import {
   composeToolTitle,
+  formatAgentType,
   isAgentTool,
   isEditTool,
   isExecuteTool,
@@ -569,4 +570,143 @@ export function nestedScrollAbsorbsWheel(
   const atTop = el.scrollTop <= 0;
   const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
   return (deltaY < 0 && !atTop) || (deltaY > 0 && !atBottom);
+}
+
+/**
+ * Where a subagent is. Its parent Agent call carries the status; `live` is
+ * whether the turn that spawned it is still running, since a stopped turn
+ * leaves the call pending forever and that is not the same as running.
+ */
+export type SubagentStatus = "running" | "completed" | "failed" | "stopped";
+
+export function isSubagentBlock(block: Block): boolean {
+  return (
+    isToolBlock(block) &&
+    (!!block.subagent ||
+      isAgentTool(block.tool?.kind, block.text || block.tool?.title))
+  );
+}
+
+export function subagentStatus(block: Block, live = true): SubagentStatus {
+  const state = toolCallState(block);
+  if (state === "rejected") return "failed";
+  if (state === "accepted") return "completed";
+  return live ? "running" : "stopped";
+}
+
+/** The agent type as a label: "Explore", "General Purpose". */
+export function subagentTypeLabel(block: Block): string | undefined {
+  const type = block.subagent?.agentType?.trim();
+  if (!type) return undefined;
+  return formatAgentType(type);
+}
+
+/** The subagent's own steps: its tool calls, minus the ones the rail hides. */
+export function subagentSteps(block: Block): Block[] {
+  return (block.subagent?.blocks ?? []).filter(
+    (child) => isToolBlock(child) && !isHiddenTool(child),
+  );
+}
+
+/**
+ * Everything the unfolded rail shows: the steps, plus the thinking and prose
+ * between them, in order.
+ */
+export function subagentActivity(block: Block): Block[] {
+  return (block.subagent?.blocks ?? []).filter(
+    (child) =>
+      isThinkingBlock(child) ||
+      isProseBlock(child) ||
+      (isToolBlock(child) && !isHiddenTool(child)),
+  );
+}
+
+/**
+ * The newest thing the subagent did, for the one-line live view under its
+ * name. Falls back to what the harness put in the call's detail, which is how
+ * harnesses without a nested stream report the latest step.
+ */
+export function subagentLatestStep(
+  block: Block,
+  cwd?: string,
+): string | undefined {
+  const blocks = block.subagent?.blocks ?? [];
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const child = blocks[index];
+    if (isToolBlock(child) && !isHiddenTool(child)) {
+      return toolCallLabel(child, cwd);
+    }
+    if (isProseBlock(child)) return proseSummary(child.text);
+    if (isThinkingBlock(child)) return "Thinking";
+  }
+  const detail = block.tool?.detail?.trim();
+  if (!detail) return undefined;
+  const line = detail.split(/\r?\n/)[0]?.trim() ?? "";
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+}
+
+/**
+ * What the subagent came back with: its last full reply, else the result the
+ * harness handed the parent.
+ */
+export function subagentReport(block: Block): string | undefined {
+  const blocks = block.subagent?.blocks ?? [];
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const child = blocks[index];
+    if (isProseBlock(child) && !child.streaming) return child.text;
+    if (isToolBlock(child)) break;
+  }
+  if (subagentStatus(block, false) !== "completed") return undefined;
+  const detail = block.tool?.detail?.trim();
+  return detail || undefined;
+}
+
+export function subagentDurationMs(
+  block: Block,
+  now = Date.now(),
+): number | undefined {
+  const startedAt = block.subagent?.startedAt;
+  if (startedAt == null) return undefined;
+  const end = block.subagent?.finishedAt ?? now;
+  return Math.max(0, end - startedAt);
+}
+
+/** "12s", "2m 5s": a subagent's run time; null under a second, when it would only look like noise. */
+export function formatElapsed(ms?: number): string | null {
+  if (ms == null || ms < 1000) return null;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+/**
+ * The line under a subagent's name on the rail: the newest step while it
+ * runs, how it ended otherwise. "background" only matters once it is over;
+ * while it runs, the live step already says it is off doing its own thing.
+ */
+export function subagentTrail(
+  block: Block,
+  status: SubagentStatus,
+  cwd?: string,
+): string {
+  if (status === "running") {
+    return subagentLatestStep(block, cwd) ?? "Warming up";
+  }
+  if (status === "failed") return "Failed";
+  if (status === "stopped") return "Stopped";
+  const summary =
+    subagentSummary(block) || subagentLatestStep(block, cwd) || "Done";
+  return block.subagent?.background ? `background · ${summary}` : summary;
+}
+
+/** "3 steps · 12s": the folded summary of a settled subagent. */
+export function subagentSummary(block: Block, now = Date.now()): string {
+  const parts: string[] = [];
+  const steps = subagentSteps(block).length;
+  if (steps > 0) parts.push(`${steps} ${steps === 1 ? "step" : "steps"}`);
+  const elapsed = formatElapsed(subagentDurationMs(block, now));
+  if (elapsed) parts.push(elapsed);
+  return parts.join(" · ");
 }

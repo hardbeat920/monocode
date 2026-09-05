@@ -37,6 +37,7 @@ import {
   extractToolPreview,
   isAgentTool,
   isAgentToolName,
+  subagentMetaFromInput,
   isWeakToolTitle,
   mergeToolPreview,
 } from "./preview";
@@ -536,6 +537,13 @@ function handleCursorTask(live: Live, params: unknown): void {
     status: "in_progress",
     detail: cursorSubagentDetail(task),
   });
+  const agentType = cursorSubagentType(task);
+  live.onEvent({
+    type: "subagent.updated",
+    callId,
+    background: true,
+    ...(agentType ? { agentType } : {}),
+  });
 }
 
 async function handleAskQuestion(live: Live, id: number, params: unknown) {
@@ -809,6 +817,17 @@ function handleSessionUpdate(live: Live, params: unknown) {
       status === "completed" &&
       cursorToolOutputIsBackground(update, tool);
     if (background) live.backgroundAgentTools.add(callId);
+    if (agent) {
+      const meta = subagentMetaFromInput(rawInput);
+      if (meta || background) {
+        live.onEvent({
+          type: "subagent.updated",
+          callId,
+          ...meta,
+          ...(background ? { background: true } : {}),
+        });
+      }
+    }
     const displayedStatus = background ? "in_progress" : status;
     if (displayedStatus) live.toolStatuses.set(callId, displayedStatus);
     live.onEvent({
@@ -890,18 +909,20 @@ function cursorToolOutputIsBackground(
   return false;
 }
 
+function cursorSubagentType(task: Record<string, unknown>): string | undefined {
+  const type = task.subagentType ?? task.subagent_type;
+  if (typeof type === "string" && type && type !== "unspecified") return type;
+  const custom = asRecord(type)?.custom;
+  return typeof custom === "string" && custom.trim()
+    ? custom.trim()
+    : undefined;
+}
+
 function cursorSubagentDetail(
   task: Record<string, unknown>,
 ): string | undefined {
-  const type = task.subagentType ?? task.subagent_type;
-  if (typeof type === "string" && type && type !== "unspecified") {
-    return `${type.replace(/[_-]+/g, " ")} subagent`;
-  }
-  const custom = asRecord(type)?.custom;
-  if (typeof custom === "string" && custom.trim()) {
-    return `${custom.trim().replace(/[_-]+/g, " ")} subagent`;
-  }
-  return undefined;
+  const type = cursorSubagentType(task);
+  return type ? `${type.replace(/[_-]+/g, " ")} subagent` : undefined;
 }
 
 function settleCursorBackgroundAgents(
