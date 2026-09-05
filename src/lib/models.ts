@@ -201,10 +201,10 @@ export const MODELS: AgentModel[] = [
     nativeId: "openrouter/deepseek/deepseek-chat-v3.1",
   },
   {
-    id: "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1",
+    id: "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1.5",
     harness: "nvidia",
-    name: "NVIDIA Nemotron Super",
-    nativeId: "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
+    name: "NVIDIA Nemotron Super 49B v1.5",
+    nativeId: "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5",
   },
   {
     id: "pi:default",
@@ -235,7 +235,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   zai: "zai:glm-5.2",
   mimo: "mimo:mimo-v2.5-pro",
   openrouter: "openrouter:deepseek/deepseek-chat-v3.1",
-  nvidia: "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1",
+  nvidia: "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1.5",
   pi: "pi:default",
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",

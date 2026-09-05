@@ -113,7 +113,7 @@ describe("OpenCode CLI inventory parsers", () => {
       "zai-coding-plan/glm-5.3-flash",
       "xiaomi-token-plan-ams/mimo-v2.5",
       "xiaomi-token-plan-ams/mimo-v2.5-pro",
-      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
+      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5",
     ]);
     expect(models[2].settings?.some((setting) => setting.id === "variant")).toBe(
       true,
@@ -136,7 +136,7 @@ describe("OpenCode CLI inventory parsers", () => {
       "zai-coding-plan/glm-5.3-flash",
       "xiaomi-token-plan-ams/mimo-v2.5",
       "xiaomi-token-plan-ams/mimo-v2.5-pro",
-      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
+      "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5",
     ]);
   });
 

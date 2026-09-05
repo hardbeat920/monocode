@@ -55,7 +55,7 @@ export function ensureOpenCodeRegistered(): void {
  */
 export function ensureOpenCodeProviderRegistered(id: Exclude<HarnessId, "opencode">): void {
   if (registeredProviders.has(id)) return;
-  registerHarness({ ...openCodeAdapter, id, refreshCatalog: undefined });
+  registerHarness({ ...openCodeAdapter, id, refreshCatalog: refreshOpenCodeCatalog });
   registeredProviders.add(id);
 }
 

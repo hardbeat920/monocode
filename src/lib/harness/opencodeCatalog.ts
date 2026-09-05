@@ -27,6 +27,16 @@ type OpenCodeModelJson = {
   limit?: { context?: number; input?: number; output?: number };
 };
 
+type OpenRouterModelJson = {
+  id?: string;
+  name?: string;
+  context_length?: number;
+  architecture?: {
+    input_modalities?: string[];
+    output_modalities?: string[];
+  };
+};
+
 type ParsedProvider = {
   id: string;
   name: string;
@@ -89,7 +99,40 @@ async function discoverOpenCodeModels(): Promise<AgentModel[]> {
   } catch (error) {
     console.debug("[monocode] opencode agents", error);
   }
-  return flattenOpenCodeModels(parsed, agents);
+  const models = flattenOpenCodeModels(parsed, agents);
+  const openRouterModels = await discoverOpenRouterModels();
+  return [...models, ...openRouterModels];
+}
+
+async function discoverOpenRouterModels(): Promise<AgentModel[]> {
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/models");
+    if (!response.ok) throw new Error(`OpenRouter models HTTP ${response.status}`);
+    const payload = (await response.json()) as { data?: OpenRouterModelJson[] };
+    return (payload.data ?? [])
+      .filter((model) => {
+        const input = model.architecture?.input_modalities ?? ["text"];
+        const output = model.architecture?.output_modalities ?? ["text"];
+        return input.includes("text") && output.includes("text");
+      })
+      .flatMap((model) => {
+        const nativeId = model.id?.trim();
+        if (!nativeId) return [];
+        return [{
+          id: `openrouter:openrouter/${nativeId}`,
+          harness: "openrouter" as const,
+          name: model.name?.trim() || nativeId,
+          nativeId: `openrouter/${nativeId}`,
+          ...(model.context_length && model.context_length > 0
+            ? { contextWindow: model.context_length }
+            : {}),
+        }];
+      })
+      .sort((left, right) => left.name.localeCompare(right.name));
+  } catch (error) {
+    console.debug("[monocode] openrouter public catalog", error);
+    return [];
+  }
 }
 
 export function parseModelsCliOutput(stdout: string): {
@@ -193,6 +236,7 @@ export function flattenOpenCodeModels(
     for (const [modelId, model] of Object.entries(provider.models)) {
       const name = model.name?.trim() || titleCaseSlug(modelId);
       const nativeId = `${provider.id}/${model.id ?? modelId}`;
+      if (isRetiredModel(nativeId)) continue;
       const harness = providerHarness(provider.id);
       const contextWindow = model.limit?.context;
       models.push({
@@ -213,13 +257,18 @@ export function flattenOpenCodeModels(
     if (
       !["opencode", "zai", "mimo", "openrouter", "nvidia"].includes(model.harness) ||
       !model.nativeId ||
-      seen.has(model.nativeId)
+      seen.has(model.nativeId) ||
+      isRetiredModel(model.nativeId)
     ) {
       continue;
     }
     models.push(model);
   }
   return models.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function isRetiredModel(nativeId: string): boolean {
+  return nativeId === "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1";
 }
 
 function providerHarness(providerID: string): AgentModel["harness"] {
