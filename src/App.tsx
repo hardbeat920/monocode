@@ -211,7 +211,7 @@ import {
   planWorkspaceTabClose,
   workspaceTabCwd,
 } from "./lib/workspaceTabGroups";
-import { removeSessionFromWorkspace } from "./lib/sessionWorkspaceLifecycle";
+import { runSessionRemoval } from "./lib/sessionRemoval";
 import {
   HARNESS_LABEL,
   HARNESS_TITLE,
@@ -668,6 +668,7 @@ export default function App({
   const workspaceSyncKey = useRef<string | null>(null);
   const observedSessions = useRef(new Map<string, Session>());
   const pendingPersist = useRef(new Map<string, Session>());
+  const removingSessionIds = useRef(new Set<string>());
   // Tokens arrive many times per frame; apply them once so React/markdown aren't
   // recomputed for every delta.
   const harnessQueued = useRef(new Map<string, HarnessEvent[]>());
@@ -1064,7 +1065,11 @@ export default function App({
   }, [sidebarCwd]);
 
   const persistSession = useCallback((session: Session | undefined) => {
-    if (!session || !shouldPersistSession(session)) return;
+    if (
+      !session ||
+      !shouldPersistSession(session) ||
+      removingSessionIds.current.has(session.id)
+    ) return;
     const fingerprint = persistFingerprint(session);
     void upsertSession(session)
       .then((summary) => {
@@ -1081,6 +1086,7 @@ export default function App({
     const liveIds = new Set(sessions.map((session) => session.id));
     const visibleIds = openSessionIds(tabsRef.current);
     for (const session of sessions) {
+      if (removingSessionIds.current.has(session.id)) continue;
       if (observedSessions.current.get(session.id) === session) continue;
       observedSessions.current.set(session.id, session);
       const parked = !visibleIds.has(session.id);
@@ -1123,6 +1129,7 @@ export default function App({
       pendingPersist.current.clear();
       void Promise.all(
         dirty.map(async (session) => {
+          if (removingSessionIds.current.has(session.id)) return;
           const fingerprint = persistFingerprint(session);
           if (lastPersisted.current.get(session.id) === fingerprint) return;
           const summary = await upsertSession(session).catch(() => null);
@@ -2518,103 +2525,175 @@ export default function App({
     [persistSession, refreshHistory, sidebarCwd],
   );
 
-  const onArchiveHistorySession = useCallback(
-    async (sessionId: string, archived: boolean) => {
+  const onRemoveHistorySession = useCallback(
+    async (sessionId: string, mode: "archive" | "delete") => {
+      if (removingSessionIds.current.has(sessionId)) return;
       const open = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
-      if (!archived) {
-        await setSessionArchived(sessionId, false).catch(() => undefined);
+      const summary = history.find((entry) => entry.id === sessionId);
+      const seed = open ?? summary;
+      const label = seed
+        ? sessionDisplayTitle(seed.title, seed.harness)
+        : "this session";
+      if (mode === "delete" && !window.confirm(`Delete “${label}”?`)) return;
+
+      removingSessionIds.current.add(sessionId);
+      pendingPersist.current.delete(sessionId);
+      let savedSummary: SessionSummary | undefined;
+      try {
+        await runSessionRemoval({
+          sessionId,
+          scope: tabCloseScope,
+          readWorkspace: () => ({
+            tabs: tabsRef.current,
+            sessions: sessionsRef.current,
+            activeTabId: activeTabIdRef.current,
+            dirtyFiles: dirtyFilesRef.current,
+          }),
+          createReplacement: (latest) =>
+            newSession(
+              latest?.harness ?? seed?.harness ?? "cursor",
+              latest?.cwd ?? seed?.cwd ?? sidebarCwd,
+              latest?.model ?? seed?.model,
+              latest?.runtimeMode ?? seed?.runtimeMode,
+              latest?.modelSettings ?? open?.modelSettings,
+            ),
+          confirmClose: async (closedTabs) => {
+            const files = filesInWorkspaceTabs(closedTabs);
+            const unsaved = files.some(
+              (file) =>
+                isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
+            );
+            if (
+              unsaved &&
+              !(await confirmDiscardUnsaved(
+                `${mode === "archive" ? "Archive" : "Delete"} this conversation with unsaved files?`,
+              ))
+            )
+              return false;
+            const terminals = files.filter((file) => file.terminal);
+            return (
+              terminals.length === 0 || (await confirmCloseTerminals(terminals))
+            );
+          },
+          stop: async () => {
+            await stopSessionForRemoval(sessionId);
+          },
+          updateSession: (stopped) => {
+            const next = sessionsRef.current.map((session) =>
+              session.id === sessionId ? stopped : session,
+            );
+            sessionsRef.current = next;
+            setSessions(next);
+          },
+          persist: async (latest) => {
+            if (latest) await flushSessionCheckpoint(sessionId);
+            if (mode === "delete") {
+              await deleteSession(sessionId);
+              return;
+            }
+            if (latest && shouldPersistSession(latest)) {
+              const saved = await upsertSession(latest);
+              if (!saved)
+                throw new Error("The conversation could not be saved.");
+              savedSummary = saved;
+            }
+            await setSessionArchived(sessionId, true);
+          },
+          commit: (removal) => {
+            const latest = sessionsRef.current.find(
+              (session) => session.id === sessionId,
+            );
+            const harnesses: HarnessId[] = latest
+              ? sessionChildHarnesses(latest)
+              : [seed?.harness ?? "cursor"];
+            for (const harness of harnesses) {
+              void forgetHarnessSession(harness, sessionId);
+            }
+            lastPersisted.current.delete(sessionId);
+            pendingPersist.current.delete(sessionId);
+            const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
+            setDirtyFiles((current) => {
+              const next = new Set(current);
+              for (const file of closingFiles) next.delete(file.id);
+              return next;
+            });
+            sessionsRef.current = removal.sessions;
+            tabsRef.current = removal.tabs;
+            setSessions(removal.sessions);
+            setTabs(removal.tabs);
+            if (removal.activeTabId !== activeTabIdRef.current) {
+              activateTab(removal.activeTabId);
+            }
+            const activeTab = removal.tabs.find(
+              (tab) => tab.id === removal.activeTabId,
+            );
+            setComposerFocused(
+              removal.sessions.some(
+                (session) => session.id === activeTab?.focusedId,
+              ),
+            );
+            if (mode === "archive") {
+              const archived =
+                savedSummary ??
+                summary ??
+                (latest && summaryFromSession(latest));
+              if (archived) {
+                setHistory((current) =>
+                  mergeHistorySummary(current, { ...archived, archived: true }),
+                );
+              }
+            } else {
+              setHistory((current) =>
+                current.filter((entry) => entry.id !== sessionId),
+              );
+              void refreshHistory(sidebarCwd);
+            }
+          },
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        void message(`Could not ${mode} this conversation.\n\n${detail}`, {
+          title: "MonoCode",
+          kind: "error",
+        });
+      } finally {
+        removingSessionIds.current.delete(sessionId);
+      }
+    },
+    [
+      activateTab,
+      history,
+      refreshHistory,
+      sidebarCwd,
+      stopSessionForRemoval,
+      tabCloseScope,
+    ],
+  );
+
+  const onArchiveHistorySession = useCallback(
+    async (sessionId: string, archived: boolean) => {
+      if (archived) return onRemoveHistorySession(sessionId, "archive");
+      if (removingSessionIds.current.has(sessionId)) return;
+      try {
+        await setSessionArchived(sessionId, false);
         setHistory((current) =>
           current.map((entry) =>
             entry.id === sessionId ? { ...entry, archived: false } : entry,
           ),
         );
-        return;
-      }
-
-      const removal = removeSessionFromWorkspace({
-        tabs: tabsRef.current,
-        sessions: sessionsRef.current,
-        sessionId,
-        activeTabId: activeTabIdRef.current,
-        scope: tabCloseScope,
-        createReplacement: (seed) =>
-          newSession(
-            seed?.harness ?? open?.harness ?? "cursor",
-            seed?.cwd ?? open?.cwd ?? sidebarCwd,
-            seed?.model ?? open?.model,
-            seed?.runtimeMode ?? open?.runtimeMode,
-            seed?.modelSettings ?? open?.modelSettings,
-          ),
-      });
-      const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
-      const unsaved = closingFiles.filter(
-        (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
-      );
-      const terminals = closingFiles.filter((file) => file.terminal);
-      if (unsaved.length > 0) {
-        const ok = await confirmDiscardUnsaved(
-          "Archive this conversation with unsaved files?",
+      } catch (error) {
+        void message(
+          `Could not unarchive this conversation.\n\n${String(error)}`,
+          {
+            title: "MonoCode",
+            kind: "error",
+          },
         );
-        if (!ok) return;
       }
-      if (terminals.length > 0 && !(await confirmCloseTerminals(terminals))) {
-        return;
-      }
-
-      const latest = await stopSessionForRemoval(sessionId);
-      if (latest && shouldPersistSession(latest)) {
-        try {
-          if (!(await upsertSession(latest))) return;
-        } catch {
-          return;
-        }
-      }
-      try {
-        await setSessionArchived(sessionId, true);
-      } catch {
-        return;
-      }
-      if (latest) {
-        for (const id of sessionChildHarnesses(latest)) {
-          void forgetHarnessSession(id, sessionId);
-        }
-      }
-      lastPersisted.current.delete(sessionId);
-      setDirtyFiles((current) => {
-        const next = new Set(current);
-        for (const file of closingFiles) next.delete(file.id);
-        return next;
-      });
-      setSessions(removal.sessions);
-      setTabs(removal.tabs);
-      if (removal.activeTabId !== activeTabIdRef.current) {
-        activateTab(removal.activeTabId);
-      }
-      setComposerFocused(
-        removal.sessions.some((session) => {
-          const tab = removal.tabs.find(
-            (entry) => entry.id === removal.activeTabId,
-          );
-          return !!tab && session.id === tab.focusedId;
-        }),
-      );
-      setHistory((current) => {
-        const existing = current.find((entry) => entry.id === sessionId);
-        if (existing) {
-          return current.map((entry) =>
-            entry.id === sessionId ? { ...entry, archived: true } : entry,
-          );
-        }
-        if (!open) return current;
-        return mergeHistorySummary(current, {
-          ...summaryFromSession(latest ?? open),
-          archived: true,
-        });
-      });
     },
-    [activateTab, sidebarCwd, stopSessionForRemoval, tabCloseScope],
+    [onRemoveHistorySession],
   );
 
   const onPinHistorySession = useCallback(
@@ -2642,91 +2721,8 @@ export default function App({
   );
 
   const onDeleteHistorySession = useCallback(
-    async (sessionId: string) => {
-      const open = sessionsRef.current.find(
-        (session) => session.id === sessionId,
-      );
-      const summary =
-        history.find((entry) => entry.id === sessionId) ?? open ?? null;
-      const label = summary
-        ? sessionDisplayTitle(summary.title, summary.harness)
-        : "this session";
-
-      if (!window.confirm(`Delete “${label}”?`)) return;
-
-      const harness = open?.harness ?? summary?.harness ?? "cursor";
-      const removal = removeSessionFromWorkspace({
-        tabs: tabsRef.current,
-        sessions: sessionsRef.current,
-        sessionId,
-        activeTabId: activeTabIdRef.current,
-        scope: tabCloseScope,
-        createReplacement: (seed) =>
-          newSession(
-            seed?.harness ?? harness,
-            seed?.cwd ?? summary?.cwd ?? sidebarCwd,
-            seed?.model ?? summary?.model,
-            seed?.runtimeMode ?? summary?.runtimeMode,
-            seed?.modelSettings,
-          ),
-      });
-      const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
-      const unsaved = closingFiles.filter(
-        (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
-      );
-      if (unsaved.length > 0) {
-        const ok = await confirmDiscardUnsaved(
-          "Delete this conversation with unsaved files?",
-        );
-        if (!ok) return;
-      }
-      const terminals = closingFiles.filter((file) => file.terminal);
-      if (terminals.length > 0 && !(await confirmCloseTerminals(terminals))) {
-        return;
-      }
-
-      const latest = await stopSessionForRemoval(sessionId);
-      lastPersisted.current.delete(sessionId);
-      try {
-        await deleteSession(sessionId);
-      } catch {
-        return;
-      }
-      if (latest) {
-        for (const id of sessionChildHarnesses(latest)) {
-          void forgetHarnessSession(id, sessionId);
-        }
-      } else {
-        void forgetHarnessSession(harness, sessionId);
-      }
-      setDirtyFiles((current) => {
-        const next = new Set(current);
-        for (const file of closingFiles) next.delete(file.id);
-        return next;
-      });
-      setSessions(removal.sessions);
-      setTabs(removal.tabs);
-      if (removal.activeTabId !== activeTabIdRef.current) {
-        activateTab(removal.activeTabId);
-      }
-      setComposerFocused(
-        removal.sessions.some((session) => {
-          const tab = removal.tabs.find(
-            (entry) => entry.id === removal.activeTabId,
-          );
-          return !!tab && session.id === tab.focusedId;
-        }),
-      );
-      void refreshHistory(sidebarCwd);
-    },
-    [
-      activateTab,
-      history,
-      refreshHistory,
-      sidebarCwd,
-      stopSessionForRemoval,
-      tabCloseScope,
-    ],
+    (sessionId: string) => onRemoveHistorySession(sessionId, "delete"),
+    [onRemoveHistorySession],
   );
 
   const onFocusDir = useCallback(
@@ -3241,6 +3237,7 @@ export default function App({
         buildTarget?: PlanBuildTarget;
       },
     ) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
       if (!storedCurrent) return;
       const current = options?.buildTarget

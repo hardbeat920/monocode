@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { leaf, newFileTab, newTab, type WorkspaceTab } from "./layout";
+import {
+  leaf,
+  leafIds,
+  newFileTab,
+  newPlanTab,
+  newTab,
+  openEditorTab,
+  type WorkspaceTab,
+} from "./layout";
 import { newSession, type Session } from "./session";
 import {
   removeSessionFromWorkspace,
@@ -30,7 +38,10 @@ function remove(input: {
 
 describe("removeSessionFromWorkspace", () => {
   it("closes the sole-session tab with its files instead of promoting them", () => {
-    const file = newFileTab("/projects/monocode/README.md", "/projects/monocode");
+    const file = newFileTab(
+      "/projects/monocode/README.md",
+      "/projects/monocode",
+    );
     const closing = {
       ...tab("closing", "s1"),
       layout: {
@@ -57,7 +68,10 @@ describe("removeSessionFromWorkspace", () => {
   });
 
   it("retains file panes and another conversation in a shared workspace", () => {
-    const file = newFileTab("/projects/monocode/README.md", "/projects/monocode");
+    const file = newFileTab(
+      "/projects/monocode/README.md",
+      "/projects/monocode",
+    );
     const shared: WorkspaceTab = {
       ...tab("shared", "s1"),
       layout: {
@@ -107,7 +121,10 @@ describe("removeSessionFromWorkspace", () => {
       review: true,
       sessionChanges: { sessionId: "s1" },
     };
-    const readme = newFileTab("/projects/monocode/README.md", "/projects/monocode");
+    const readme = newFileTab(
+      "/projects/monocode/README.md",
+      "/projects/monocode",
+    );
     const shared: WorkspaceTab = {
       ...tab("shared", "s1"),
       layout: {
@@ -119,7 +136,11 @@ describe("removeSessionFromWorkspace", () => {
       },
       focusedId: "s1",
       editorPanes: [
-        { id: "editor", files: [sessionChanges, readme], activeFileId: sessionChanges.id },
+        {
+          id: "editor",
+          files: [sessionChanges, readme],
+          activeFileId: sessionChanges.id,
+        },
       ],
     };
     const result = remove({
@@ -160,5 +181,64 @@ describe("removeSessionFromWorkspace", () => {
     expect(result.tabs.map((entry) => entry.id)).toEqual(["ruler", "monocode"]);
     expect(result.activeTabId).toBe("monocode");
     expect(result.tabs[1]?.focusedId).toBe("replacement");
+  });
+  it("removes only the archived session's plans in a shared workspace", () => {
+    const own = newPlanTab("s1", "p1", "Own plan", "/projects/monocode");
+    const other = newPlanTab("s2", "p2", "Other plan", "/projects/monocode");
+    const readme = newFileTab(
+      "/projects/monocode/README.md",
+      "/projects/monocode",
+    );
+    const shared: WorkspaceTab = {
+      ...tab("shared", "s1"),
+      layout: {
+        type: "split",
+        id: "split",
+        dir: "right",
+        children: [leaf("s1"), leaf("s2")],
+        sizes: [0.5, 0.5],
+      },
+    };
+    const withFiles = [own, other, readme].reduce(openEditorTab, shared);
+    const result = remove({
+      tabs: [withFiles],
+      sessions: [session("s1"), session("s2")],
+      sessionId: "s1",
+      activeTabId: "shared",
+    });
+    expect(result.tabs[0].editorPanes[0].files).toEqual([other, readme]);
+    expect(leafIds(result.tabs[0].layout)).not.toContain("s1");
+  });
+
+  it("removes plan panes even after their conversation moved to another tab", () => {
+    const plan = newPlanTab("s1", "p1", "Plan", "/projects/monocode");
+    const other = openEditorTab(tab("other", "s2"), plan);
+    const result = remove({
+      tabs: [tab("own", "s1"), other],
+      sessions: [session("s1"), session("s2")],
+      sessionId: "s1",
+      activeTabId: "other",
+    });
+    expect(result.tabs).toHaveLength(1);
+    expect(result.tabs[0].editorPanes).toEqual([]);
+    expect(result.tabs[0].focusedId).toBe("s2");
+    expect(result.tabs[0].layout).toEqual(leaf("s2"));
+  });
+
+  it("replaces a standalone plan pane without leaving a dangling layout leaf", () => {
+    const plan = newPlanTab("s1", "p1", "Plan", "/projects/monocode");
+    const only: WorkspaceTab = {
+      ...tab("only", "editor"),
+      editorPanes: [{ id: "editor", files: [plan], activeFileId: plan.id }],
+    };
+    const result = remove({
+      tabs: [only],
+      sessions: [session("s1")],
+      sessionId: "s1",
+      activeTabId: "only",
+    });
+    expect(result.tabs[0].editorPanes).toEqual([]);
+    expect(result.tabs[0].layout).toEqual(leaf("replacement"));
+    expect(result.sessions.map((s) => s.id)).toEqual(["replacement"]);
   });
 });
