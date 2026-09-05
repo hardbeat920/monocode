@@ -134,7 +134,9 @@ export function HarnessIcon({
       src={HARNESS_ICONS[harness]}
       alt=""
       draggable={false}
-      className={`block object-contain ${className}`}
+      className={`block object-contain ${
+        MONOCHROME_HARNESSES.has(harness) ? "provider-icon-monochrome" : ""
+      } ${className}`}
     />
   );
 }

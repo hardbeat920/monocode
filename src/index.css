@@ -47,6 +47,12 @@ html.theme-light {
   color-scheme: light;
 }
 
+/* CodexBar's monochrome provider marks are white SVGs. Keep them visible on
+   the light theme without altering the colored NVIDIA mark. */
+html.theme-light .provider-icon-monochrome {
+  filter: invert(1);
+}
+
 html,
 body,
 #root {
