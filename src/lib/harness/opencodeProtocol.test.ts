@@ -105,7 +105,7 @@ describe("OpenCode CLI inventory parsers", () => {
     ]);
     expect(models.map((model) => model.nativeId)).toEqual([
       "anthropic/claude-sonnet-4-6",
-      "openrouter/deepseek/deepseek-chat-v3.1",
+      "deepseek/deepseek-chat-v3.1",
       "opencode/glm-5",
       "zai-coding-plan/glm-5.1",
       "zai-coding-plan/glm-5.2",
@@ -129,7 +129,7 @@ describe("OpenCode CLI inventory parsers", () => {
       [],
     );
     expect(models.map((model) => model.nativeId)).toEqual([
-      "openrouter/deepseek/deepseek-chat-v3.1",
+      "deepseek/deepseek-chat-v3.1",
       "zai-coding-plan/glm-5.1",
       "zai-coding-plan/glm-5.2",
       "zai-coding-plan/glm-5.3",
