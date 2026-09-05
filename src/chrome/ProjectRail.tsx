@@ -12,6 +12,7 @@ import {
   File,
   Plus,
   Search,
+  Settings,
   Trash2,
 } from "./icons";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
@@ -470,8 +471,16 @@ export function ProjectRail({
             update={updateNotice}
             onOpenWhatsNew={onOpenWhatsNew}
             onDismissUpdate={onDismissUpdate}
-            onOpenSettings={onOpenSettings}
           />
+          <div className="flex shrink-0 flex-col gap-px p-2 pt-0">
+            <RailAction
+              label="Settings"
+              icon={Settings}
+              onClick={onOpenSettings}
+              shortcut={`${MOD},`}
+              ariaLabel={`Settings (${MOD},)`}
+            />
+          </div>
         </>
       )}
       {projectMenu ? (

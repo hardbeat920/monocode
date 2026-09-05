@@ -10,6 +10,7 @@ import {
   Pin,
   Plus,
   Search,
+  Settings,
   StickyNote,
 } from "./icons";
 import {
@@ -110,6 +111,7 @@ import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTree } from "./FileTree";
 import { HarnessIcon } from "./HarnessIcon";
 import { ProjectRail } from "./ProjectRail";
+import { RailAction } from "./RailAction";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
 import { ProjectSearch } from "./ProjectSearch";
@@ -1255,8 +1257,16 @@ function SidebarComponent({
               update={updateNotice}
               onOpenWhatsNew={onOpenWhatsNew}
               onDismissUpdate={onDismissUpdate}
-              onOpenSettings={onOpenSettings}
             />
+            <div className="flex shrink-0 flex-col gap-px p-2 pt-0">
+              <RailAction
+                label="Settings"
+                icon={Settings}
+                onClick={onOpenSettings}
+                shortcut={`${MOD},`}
+                ariaLabel={`Settings (${MOD},)`}
+              />
+            </div>
           </>
         ) : null}
       </>

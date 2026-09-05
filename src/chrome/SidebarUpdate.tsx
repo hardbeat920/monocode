@@ -1,4 +1,4 @@
-import { ArrowDownCircle, Loader, RefreshCw, Settings } from "./icons";
+import { ArrowDownCircle, Loader, RefreshCw } from "./icons";
 import { useCallback, useEffect, useState } from "react";
 import {
   installPendingUpdate,
@@ -8,20 +8,16 @@ import {
   type UpdaterSnapshot,
 } from "../lib/updater";
 import type { InstalledUpdate } from "../lib/updateNotice";
-import { MOD } from "../lib/platform";
-import { RailAction } from "./RailAction";
 import { UpdateRailCard } from "./UpdateRailCard";
 
 export function SidebarUpdateFooter({
   update,
   onOpenWhatsNew,
   onDismissUpdate,
-  onOpenSettings,
 }: {
   update?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
-  onOpenSettings?: () => void;
 }) {
   return (
     <div className="flex flex-col gap-1.5 p-2 pb-1">
@@ -32,16 +28,7 @@ export function SidebarUpdateFooter({
           onDismiss={onDismissUpdate}
         />
       ) : null}
-      <div className="flex items-center gap-1">
-        <RailAction
-          label="Settings"
-          icon={Settings}
-          onClick={onOpenSettings}
-          shortcut={`${MOD},`}
-          ariaLabel={`Settings (${MOD},)`}
-        />
-        <SidebarUpdate />
-      </div>
+      <SidebarUpdate />
     </div>
   );
 }
@@ -106,32 +93,39 @@ export function SidebarUpdate() {
         ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
         : "Checking…"
       : "Check for updates";
-  const title = `${label} · v${snapshot.currentVersion}`;
 
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={busy}
-      title={title}
-      aria-label={title}
-      className={`grid size-8 shrink-0 place-items-center rounded-md transition-colors ${
+      className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors ${
         hasUpdate
           ? "bg-accent/15 text-content hover:bg-accent/20"
-          : "text-content/50 hover:bg-content/10 hover:text-content"
+          : "bg-content/5 text-content/75 hover:bg-content/10 hover:text-content"
       } disabled:cursor-default disabled:opacity-70`}
     >
-      {busy ? (
-        <Loader className="size-4 animate-spin opacity-70" aria-hidden />
-      ) : hasUpdate ? (
-        <ArrowDownCircle className="size-4 text-accent" aria-hidden />
-      ) : (
-        <RefreshCw
-          className="size-4 opacity-70"
-          strokeWidth={1.75}
-          aria-hidden
-        />
-      )}
+      <span className="grid size-[18px] shrink-0 place-items-center">
+        {busy ? (
+          <Loader className="size-4 animate-spin opacity-70" aria-hidden />
+        ) : hasUpdate ? (
+          <ArrowDownCircle className="size-4 text-accent" aria-hidden />
+        ) : (
+          <RefreshCw
+            className="size-4 opacity-70"
+            strokeWidth={1.75}
+            aria-hidden
+          />
+        )}
+      </span>
+      <span className="min-w-0 flex-1 flex items-center">
+        <span className="block truncate text-[12px] font-medium leading-tight">
+          {label}
+        </span>
+        <span className="ml-auto block text-[11px] text-content/40">
+          v{snapshot.currentVersion}
+        </span>
+      </span>
     </button>
   );
 }
