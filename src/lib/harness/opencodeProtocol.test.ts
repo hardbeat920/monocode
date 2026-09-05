@@ -107,12 +107,12 @@ describe("OpenCode CLI inventory parsers", () => {
       "anthropic/claude-sonnet-4-6",
       "openrouter/deepseek/deepseek-chat-v3.1",
       "opencode/glm-5",
-      "opencode-go/glm-5.1",
-      "opencode-go/glm-5.2",
-      "opencode-go/glm-5.3",
-      "opencode-go/glm-5.3-flash",
-      "opencode-go/mimo-v2.5",
-      "opencode-go/mimo-v2.5-pro",
+      "zai-coding-plan/glm-5.1",
+      "zai-coding-plan/glm-5.2",
+      "zai-coding-plan/glm-5.3",
+      "zai-coding-plan/glm-5.3-flash",
+      "xiaomi-token-plan-ams/mimo-v2.5",
+      "xiaomi-token-plan-ams/mimo-v2.5-pro",
       "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
     ]);
     expect(models[2].settings?.some((setting) => setting.id === "variant")).toBe(
@@ -130,12 +130,12 @@ describe("OpenCode CLI inventory parsers", () => {
     );
     expect(models.map((model) => model.nativeId)).toEqual([
       "openrouter/deepseek/deepseek-chat-v3.1",
-      "opencode-go/glm-5.1",
-      "opencode-go/glm-5.2",
-      "opencode-go/glm-5.3",
-      "opencode-go/glm-5.3-flash",
-      "opencode-go/mimo-v2.5",
-      "opencode-go/mimo-v2.5-pro",
+      "zai-coding-plan/glm-5.1",
+      "zai-coding-plan/glm-5.2",
+      "zai-coding-plan/glm-5.3",
+      "zai-coding-plan/glm-5.3-flash",
+      "xiaomi-token-plan-ams/mimo-v2.5",
+      "xiaomi-token-plan-ams/mimo-v2.5-pro",
       "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
     ]);
   });

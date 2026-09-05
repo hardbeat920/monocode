@@ -193,7 +193,7 @@ export function flattenOpenCodeModels(
     for (const [modelId, model] of Object.entries(provider.models)) {
       const name = model.name?.trim() || titleCaseSlug(modelId);
       const nativeId = `${provider.id}/${model.id ?? modelId}`;
-      const harness = providerHarness(provider.id, model.id ?? modelId);
+      const harness = providerHarness(provider.id);
       const contextWindow = model.limit?.context;
       models.push({
         id: `${harness}:${nativeId}`,
@@ -222,14 +222,17 @@ export function flattenOpenCodeModels(
   return models.sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function providerHarness(
-  providerID: string,
-  modelID: string,
-): AgentModel["harness"] {
-  if (providerID === "zai" || (providerID === "opencode-go" && modelID.startsWith("glm-"))) {
+function providerHarness(providerID: string): AgentModel["harness"] {
+  if (
+    providerID === "zai" ||
+    providerID === "zai-coding-plan"
+  ) {
     return "zai";
   }
-  if (providerID === "mimo" || (providerID === "opencode-go" && modelID.startsWith("mimo-"))) {
+  if (
+    providerID === "mimo" ||
+    providerID.startsWith("xiaomi-token-plan-")
+  ) {
     return "mimo";
   }
   if (providerID === "openrouter") return "openrouter";
