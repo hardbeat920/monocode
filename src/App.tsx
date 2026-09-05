@@ -708,6 +708,27 @@ export default function App({
     setSessions(next);
   }, []);
 
+  const stopSessionForRemoval = useCallback(
+    async (sessionId: string): Promise<Session | undefined> => {
+      const open = sessionsRef.current.find((session) => session.id === sessionId);
+      if (!open?.busy) return open;
+
+      turnGen.current.set(
+        sessionId,
+        (turnGen.current.get(sessionId) ?? 0) + 1,
+      );
+      flushHarnessEvents();
+      await Promise.all(
+        sessionChildHarnesses(open).map((harness) =>
+          cancelHarnessTurn(harness, sessionId).catch(() => undefined),
+        ),
+      );
+      flushHarnessEvents();
+      return sessionsRef.current.find((session) => session.id === sessionId);
+    },
+    [flushHarnessEvents],
+  );
+
   const applyApprovalEvent = useCallback(
     (sessionId: string, event: HarnessEvent) => {
       const queued = harnessQueued.current.get(sessionId) ?? [];
@@ -2542,25 +2563,21 @@ export default function App({
         return;
       }
 
-      if (open && shouldPersistSession(open)) {
-        await upsertSession(open).catch(() => undefined);
+      const latest = await stopSessionForRemoval(sessionId);
+      if (latest && shouldPersistSession(latest)) {
+        try {
+          if (!(await upsertSession(latest))) return;
+        } catch {
+          return;
+        }
       }
       try {
         await setSessionArchived(sessionId, true);
       } catch {
         return;
       }
-      if (open?.busy) {
-        turnGen.current.set(
-          sessionId,
-          (turnGen.current.get(sessionId) ?? 0) + 1,
-        );
-        for (const id of sessionChildHarnesses(open)) {
-          void cancelHarnessTurn(id, sessionId);
-        }
-      }
-      if (open) {
-        for (const id of sessionChildHarnesses(open)) {
+      if (latest) {
+        for (const id of sessionChildHarnesses(latest)) {
           void forgetHarnessSession(id, sessionId);
         }
       }
@@ -2592,12 +2609,12 @@ export default function App({
         }
         if (!open) return current;
         return mergeHistorySummary(current, {
-          ...summaryFromSession(open),
+          ...summaryFromSession(latest ?? open),
           archived: true,
         });
       });
     },
-    [activateTab, sidebarCwd, tabCloseScope],
+    [activateTab, sidebarCwd, stopSessionForRemoval, tabCloseScope],
   );
 
   const onPinHistorySession = useCallback(
@@ -2668,23 +2685,15 @@ export default function App({
         return;
       }
 
+      const latest = await stopSessionForRemoval(sessionId);
       lastPersisted.current.delete(sessionId);
       try {
         await deleteSession(sessionId);
       } catch {
         return;
       }
-      if (open?.busy) {
-        turnGen.current.set(
-          sessionId,
-          (turnGen.current.get(sessionId) ?? 0) + 1,
-        );
-        for (const id of sessionChildHarnesses(open)) {
-          void cancelHarnessTurn(id, sessionId);
-        }
-      }
-      if (open) {
-        for (const id of sessionChildHarnesses(open)) {
+      if (latest) {
+        for (const id of sessionChildHarnesses(latest)) {
           void forgetHarnessSession(id, sessionId);
         }
       } else {
@@ -2710,7 +2719,14 @@ export default function App({
       );
       void refreshHistory(sidebarCwd);
     },
-    [activateTab, history, refreshHistory, sidebarCwd, tabCloseScope],
+    [
+      activateTab,
+      history,
+      refreshHistory,
+      sidebarCwd,
+      stopSessionForRemoval,
+      tabCloseScope,
+    ],
   );
 
   const onFocusDir = useCallback(

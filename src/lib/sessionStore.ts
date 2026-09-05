@@ -119,23 +119,40 @@ export function sanitizeSessionForPersist(
  * overwrite a newer one. Chain them per session; different sessions still
  * write concurrently.
  */
-const upsertQueues = new Map<string, Promise<unknown>>();
+const sessionWriteQueues = new Map<string, Promise<unknown>>();
+const deletedSessionIds = new Set<string>();
+
+function enqueueSessionWrite<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionWriteQueues.get(sessionId) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(operation);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionWriteQueues.set(sessionId, tail);
+  void tail.then(() => {
+    if (sessionWriteQueues.get(sessionId) === tail) {
+      sessionWriteQueues.delete(sessionId);
+    }
+  });
+  return run;
+}
 
 export async function upsertSession(
   session: Session,
 ): Promise<SessionSummary | null> {
-  if (!shouldPersistSession(session)) return null;
-  const payload = sanitizeSessionForPersist(session);
-  const previous = upsertQueues.get(session.id) ?? Promise.resolve();
-  const run = previous
-    .catch(() => undefined)
-    .then(() => invoke<SessionSummary>("session_upsert", { session: payload }));
-  upsertQueues.set(session.id, run);
-  try {
-    return normalizeSummary(await run);
-  } finally {
-    if (upsertQueues.get(session.id) === run) upsertQueues.delete(session.id);
+  if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
+    return null;
   }
+  const payload = sanitizeSessionForPersist(session);
+  const summary = await enqueueSessionWrite(session.id, async () => {
+    if (deletedSessionIds.has(session.id)) return null;
+    return invoke<SessionSummary>("session_upsert", { session: payload });
+  });
+  return summary ? normalizeSummary(summary) : null;
 }
 
 /**
@@ -220,14 +237,24 @@ export async function getSession(sessionId: string): Promise<Session | null> {
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  await invoke<void>("session_delete", { sessionId });
+  deletedSessionIds.add(sessionId);
+  try {
+    await enqueueSessionWrite(sessionId, () =>
+      invoke<void>("session_delete", { sessionId }),
+    );
+  } catch (error) {
+    deletedSessionIds.delete(sessionId);
+    throw error;
+  }
 }
 
 export async function setSessionArchived(
   sessionId: string,
   archived: boolean,
 ): Promise<void> {
-  await invoke<void>("session_set_archived", { sessionId, archived });
+  await enqueueSessionWrite(sessionId, () =>
+    invoke<void>("session_set_archived", { sessionId, archived }),
+  );
 }
 
 export async function setSessionPinned(
