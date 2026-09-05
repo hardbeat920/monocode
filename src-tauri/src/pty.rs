@@ -396,19 +396,8 @@ fn spawn_windows(
     }
     cmd.env("PWD", workdir.to_string_lossy().as_ref());
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
+    let mut child = crate::windows::spawn_pty(pair.slave.as_ref(), cmd)
         .map_err(|err| format!("Failed to start {shell}: {err}"))?;
-    let registered = child
-        .as_raw_handle()
-        .ok_or_else(|| std::io::Error::other("Terminal has no process handle"))
-        .and_then(crate::windows::assign_child);
-    if let Err(err) = registered {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!("Failed to supervise terminal: {err}"));
-    }
     let pid = child.process_id().unwrap_or(0);
     let mut reader = pair
         .master

@@ -1,5 +1,5 @@
 use std::io;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::OnceLock;
 use windows_sys::Win32::System::{
     JobObjects::{
@@ -66,6 +66,16 @@ pub(crate) fn assign_child(process: RawHandle) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn spawn_pty(
+    slave: &dyn portable_pty::SlavePty,
+    command: portable_pty::CommandBuilder,
+) -> Result<Box<dyn portable_pty::Child + Send + Sync>, String> {
+    let job = managed_job().map_err(|err| err.to_string())?;
+    slave
+        .spawn_command_in_job(command, job.as_handle())
+        .map_err(|err| err.to_string())
+}
+
 pub(crate) fn spawn_managed(
     command: &mut std::process::Command,
 ) -> io::Result<std::process::Child> {
@@ -130,6 +140,7 @@ mod tests {
     use std::process::{Command, Stdio};
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, OpenProcess, TerminateProcess, WaitForSingleObject,
+        PROCESS_QUERY_INFORMATION,
     };
 
     #[test]
@@ -143,10 +154,43 @@ mod tests {
     }
 
     #[test]
+    fn pty_rejects_an_invalid_job_without_unprotected_fallback() {
+        initialize().unwrap();
+        let pair = portable_pty::native_pty_system()
+            .openpty(portable_pty::PtySize::default())
+            .unwrap();
+        // A valid handle of the wrong object type must fail process creation.
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        let mut command = portable_pty::CommandBuilder::new("cmd.exe");
+        command.args(["/D", "/C", "exit", "7"]);
+        assert!(pair
+            .slave
+            .spawn_command_in_job(command, file.as_handle())
+            .is_err());
+    }
+
+    #[test]
     // This subprocess deliberately dies before it can wait; the parent verifies cleanup.
     #[allow(clippy::zombie_processes)]
     fn abrupt_exit_kills_children() {
         const MARKER: &str = "MONOCODE_JOB_TEST_CHILD";
+        const PID_FILE: &str = "MONOCODE_JOB_TEST_DESCENDANT_FILE";
+        if std::env::var(MARKER).as_deref() == Ok("terminal") {
+            // This is the terminal's startup code. Launch a detached child
+            // immediately, before the supervisor can do any post-spawn work.
+            let mut command = Command::new("ping.exe");
+            crate::hide_window_console(&mut command);
+            let mut child = command
+                .args(["-n", "60", "127.0.0.1"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            std::fs::write(std::env::var_os(PID_FILE).unwrap(), child.id().to_string()).unwrap();
+            let _ = child.wait();
+            return;
+        }
         if std::env::var_os(MARKER).is_some() {
             initialize().unwrap();
             let mut command = Command::new("ping.exe");
@@ -161,12 +205,60 @@ mod tests {
             let pair = portable_pty::native_pty_system()
                 .openpty(portable_pty::PtySize::default())
                 .unwrap();
-            let mut terminal = portable_pty::CommandBuilder::new("cmd.exe");
-            terminal.arg("/D");
-            let terminal = pair.slave.spawn_command(terminal).unwrap();
-            assign_child(terminal.as_raw_handle().unwrap()).unwrap();
+            let pid_file = std::env::temp_dir().join(format!(
+                "monocode-pty-descendant-{}.pid",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&pid_file);
+            let mut terminal = portable_pty::CommandBuilder::new(std::env::current_exe().unwrap());
+            terminal.args([
+                "--exact",
+                "windows::tests::abrupt_exit_kills_children",
+                "--nocapture",
+            ]);
+            terminal.env(MARKER, "terminal");
+            terminal.env(PID_FILE, &pid_file);
+            // Drain output even when no UI is present; ConPTY shutdown on older
+            // Windows versions can otherwise wait for its output pipe forever.
+            let mut reader = pair.master.try_clone_reader().unwrap();
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut reader, &mut std::io::sink());
+            });
+            let terminal = spawn_pty(pair.slave.as_ref(), terminal).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let descendant_pid: u32 = loop {
+                if let Some(pid) = std::fs::read_to_string(&pid_file)
+                    .ok()
+                    .and_then(|text| text.parse().ok())
+                {
+                    break pid;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "terminal startup timed out"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            std::fs::remove_file(pid_file).unwrap();
+            unsafe {
+                // Check our specific job, since CI may already have its own job.
+                let raw = OpenProcess(PROCESS_QUERY_INFORMATION, 0, descendant_pid);
+                assert!(!raw.is_null());
+                let descendant = OwnedHandle::from_raw_handle(raw);
+                let mut in_job = 0;
+                assert_ne!(
+                    windows_sys::Win32::System::JobObjects::IsProcessInJob(
+                        descendant.as_raw_handle(),
+                        managed_job().unwrap().as_raw_handle(),
+                        &mut in_job,
+                    ),
+                    0
+                );
+                assert_ne!(in_job, 0, "startup descendant escaped the managed job");
+            }
             println!("CHILD_PID={}", child.id());
             println!("TERMINAL_PID={}", terminal.process_id().unwrap());
+            println!("DESCENDANT_PID={descendant_pid}");
             println!("EXTERNAL_PID={}", external.id());
             std::io::stdout().flush().unwrap();
             // Skip every Rust destructor, as a forced termination would.
@@ -213,7 +305,7 @@ mod tests {
             WaitForSingleObject(external.as_raw_handle(), 5000);
             assert_eq!(status, 258); // WAIT_TIMEOUT: still running
         }
-        for prefix in ["CHILD_PID=", "TERMINAL_PID="] {
+        for prefix in ["CHILD_PID=", "TERMINAL_PID=", "DESCENDANT_PID="] {
             let pid: u32 = stdout
                 .lines()
                 .find_map(|line| line.strip_prefix(prefix))
