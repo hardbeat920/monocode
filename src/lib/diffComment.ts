@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { UnifiedLine } from "./unifiedDiff";
 
 export type DiffCommentTarget = {
@@ -19,11 +20,11 @@ export function formatDiffComment(
 
   const marker =
     target.line.kind === "add" ? "+" : target.line.kind === "del" ? "-" : " ";
-  const deleted = target.line.kind === "del" ? " (deleted line)" : "";
+  const deleted = target.line.kind === "del" ? ` (${t("deleted line")})` : "";
   const location = diffCommentLocation(target).replace(/`/g, "\\`");
 
   return [
-    `Diff comment on \`${location}\`${deleted}:`,
+    t("Diff comment on") + ` \`${location}\`${deleted}:`,
     "",
     `> ${marker}${target.line.text}`,
     "",

@@ -1,4 +1,5 @@
 import { basename } from "./fs";
+import { t } from "./i18n";
 import type { FilePaneTab } from "./layout";
 
 export type TerminalMetaPatch = {
@@ -18,7 +19,7 @@ export type RunningTerminal = {
 /** Default tab label from the working directory. */
 export function defaultTerminalTitle(cwd: string): string {
   const name = basename(cwd);
-  if (!name || name === "/") return "Terminal";
+  if (!name || name === "/") return t("Terminal");
   return name;
 }
 

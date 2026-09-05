@@ -215,7 +215,7 @@ import {
 import { runSessionRemoval } from "./lib/sessionRemoval";
 import {
   HARNESS_LABEL,
-  HARNESS_TITLE,
+  getHarnessTitle,
   canReplaceSessionTitle,
   formatSessionTitle,
   sessionNeedsInput,
@@ -351,6 +351,7 @@ import {
   setQuitWorkspace,
   type ResumedWorkspace,
 } from "./lib/appLifecycle";
+import { t } from "./lib/i18n";
 
 function withPlanStatus(
   session: Session,
@@ -487,7 +488,7 @@ function filesInWorkspaceTabs(tabs: readonly WorkspaceTab[]): FilePaneTab[] {
 
 /** Native sheet. `window.confirm` is swallowed when a macOS menu accelerator fires. */
 function confirmDiscardUnsaved(message: string): Promise<boolean> {
-  return ask(message, { title: "MonoCode", kind: "warning" });
+  return ask(message, { title: t("MonoCode"), kind: "warning" });
 }
 
 function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
@@ -1320,8 +1321,8 @@ export default function App({
     const document = releaseNotesForVersion(version);
     if (!document) {
       void message(
-        "Release notes for this version are not available in this build.",
-        { title: "MonoCode" },
+        t("Release notes for this version are not available in this build."),
+        { title: t("MonoCode") },
       );
       return;
     }
@@ -1813,7 +1814,7 @@ export default function App({
       void (async () => {
         if (unsaved.length > 0) {
           const ok = await confirmDiscardUnsaved(
-            "Close this tab with unsaved files?",
+            t("Close this tab with unsaved files?"),
           );
           if (!ok) return;
         }
@@ -1872,7 +1873,7 @@ export default function App({
     void (async () => {
       if (unsaved.length > 0) {
         const ok = await confirmDiscardUnsaved(
-          "Close other tabs with unsaved files?",
+          t("Close other tabs with unsaved files?"),
         );
         if (!ok) return;
       }
@@ -2000,7 +2001,7 @@ export default function App({
       void (async () => {
         if (needsUnsavedConfirm) {
           const ok = await confirmDiscardUnsaved(
-            `Close ${basename(file.path)} without saving?`,
+            t("Close {0} without saving?", [basename(file.path)]),
           );
           if (!ok) return;
         }
@@ -2076,7 +2077,7 @@ export default function App({
         return;
       }
       void confirmDiscardUnsaved(
-        "Close this conversation with unsaved files?",
+        t("Close this conversation with unsaved files?"),
       ).then((ok) => ok && finishClear());
     },
     [tabs, persistSession, refreshHistory, sidebarCwd],
@@ -2565,8 +2566,8 @@ export default function App({
       const seed = open ?? summary;
       const label = seed
         ? sessionDisplayTitle(seed.title, seed.harness)
-        : "this session";
-      if (mode === "delete" && !window.confirm(`Delete “${label}”?`)) return;
+        : t("this session");
+      if (mode === "delete" && !window.confirm(t("Delete \"{0}\"?", [label]))) return;
 
       removingSessionIds.current.add(sessionId);
       pendingPersist.current.delete(sessionId);
@@ -2598,7 +2599,9 @@ export default function App({
             if (
               unsaved &&
               !(await confirmDiscardUnsaved(
-                `${mode === "archive" ? "Archive" : "Delete"} this conversation with unsaved files?`,
+                mode === "archive"
+                  ? t("Archive this conversation with unsaved files?")
+                  : t("Delete this conversation with unsaved files?"),
               ))
             )
               return false;
@@ -2684,8 +2687,8 @@ export default function App({
         });
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        void message(`Could not ${mode} this conversation.\n\n${detail}`, {
-          title: "MonoCode",
+        void message(t("Could not {0} this conversation.\n\n{1}", [mode, detail]), {
+          title: t("MonoCode"),
           kind: "error",
         });
       } finally {
@@ -2715,9 +2718,9 @@ export default function App({
         );
       } catch (error) {
         void message(
-          `Could not unarchive this conversation.\n\n${String(error)}`,
+          t("Could not unarchive this conversation.\n\n{0}", [String(error)]),
           {
-            title: "MonoCode",
+            title: t("MonoCode"),
             kind: "error",
           },
         );
@@ -3304,7 +3307,7 @@ export default function App({
       }
       if (isPreparingHandoff(current)) return;
       const workCwd = sessionWorkCwd(current);
-      const submittedText = intent === "build" ? "Build approved plan" : text;
+      const submittedText = intent === "build" ? t("Build approved plan") : text;
       const rawCommand = isNativeCommandPrompt(submittedText, current.harness);
       const harnessText = rawCommand
         ? submittedText
@@ -3781,7 +3784,7 @@ export default function App({
       if (target && session.modelSettings) {
         saveLastModelSettings(session.modelSettings, "fill");
       }
-      onSubmit(sessionId, "Build approved plan", [], {
+      onSubmit(sessionId, t("Build approved plan"), [], {
         intent: "build",
         planBlockId: blockId,
         buildTarget: target,
@@ -4082,7 +4085,7 @@ export default function App({
           session.id === sessionId
             ? applyHarnessEvent(session, {
                 type: "status",
-                text: `${HARNESS_TITLE[current.harness]} does not support manual context compaction.`,
+                text: `${getHarnessTitle()[current.harness]} does not support manual context compaction.`,
               })
             : session,
         );
@@ -4099,7 +4102,7 @@ export default function App({
         session.id === sessionId
           ? applyHarnessEvent(
               { ...session, busy: true },
-              { type: "status", text: "Compacting context…" },
+              { type: "status", text: t("Compacting context…") },
             )
           : session,
       );
@@ -4124,7 +4127,7 @@ export default function App({
           if (turnGen.current.get(sessionId) !== gen) return;
           enqueueHarnessEvent(sessionId, {
             type: "status",
-            text: "Compacted context",
+            text: t("Compacted context"),
           });
         } catch (error: unknown) {
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -4133,7 +4136,7 @@ export default function App({
             message:
               error instanceof Error
                 ? error.message
-                : `${current.harness} could not compact this context`,
+                : t("{0} could not compact this context", [current.harness]),
           });
         } finally {
           if (turnGen.current.get(sessionId) !== gen) return;

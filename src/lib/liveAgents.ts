@@ -1,5 +1,6 @@
 import { composeToolTitle } from "./harness/preview";
 import { isInFlightSession } from "./inFlight";
+import { t } from "./i18n";
 import { displayPath } from "./paths";
 import {
   sessionDisplayTitle,
@@ -59,11 +60,11 @@ function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
     title: sessionDisplayTitle(session.title, session.harness),
     harness: session.harness,
     activity: done
-      ? "Done"
+      ? t("Done")
       : pendingQuestion
         ? pendingQuestion.title ||
           pendingQuestion.questions[0]?.prompt ||
-          "Question"
+          t("Question")
         : activityLabel(activityBlock, session.cwd),
     startedAt: turnStartedAt(session.blocks),
     durationMs: done ? turnDurationMs(session.blocks) : undefined,
@@ -107,9 +108,9 @@ function turnDurationMs(blocks: Block[]): number | undefined {
 }
 
 function activityLabel(block: Block | undefined, cwd: string): string {
-  if (!block) return "Working";
+  if (!block) return t("Working");
   if (block.role === "handoff" && block.handoff?.status === "preparing") {
-    return "Preparing a handoff";
+    return t("Preparing a handoff");
   }
   const preview = block.tool?.preview;
   const path = preview?.path
@@ -123,6 +124,6 @@ function activityLabel(block: Block | undefined, cwd: string): string {
       query: preview?.query,
       previewKind: preview?.kind,
       cwd,
-    }) || "Working"
+    }) || t("Working")
   );
 }

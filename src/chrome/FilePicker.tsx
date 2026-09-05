@@ -20,6 +20,7 @@ import { looksLikeProject } from "../lib/recents";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { MatchText } from "./MatchText";
+import { t } from "../lib/i18n";
 
 type Props = {
   open: boolean;
@@ -161,7 +162,7 @@ export function FilePicker({
       <div className="absolute inset-0" onMouseDown={onClose} />
       <div
         role="dialog"
-        aria-label="Go to File"
+        aria-label={t("Go to File")}
         data-file-picker
         onMouseDown={(e) => e.stopPropagation()}
         className="absolute left-1/2 top-[12%] flex w-[min(560px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-content/10 bg-content/5 backdrop-blur-xl"
@@ -173,8 +174,8 @@ export function FilePicker({
               ref={search}
               type="text"
               value={query}
-              placeholder="Go to File"
-              aria-label="Go to File"
+              placeholder={t("Go to File")}
+              aria-label={t("Go to File")}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
@@ -221,11 +222,11 @@ function emptyLabel({
   matchCount: number;
 }): string | null {
   if (error && fileCount === 0) return error;
-  if (!looksLikeProject(cwd)) return "Open a project to search files";
-  if (loading && fileCount === 0) return "Indexing files…";
-  if (fileCount === 0) return "No files found";
+  if (!looksLikeProject(cwd)) return t("Open a project to search files");
+  if (loading && fileCount === 0) return t("Indexing files\u2026");
+  if (fileCount === 0) return t("No files found");
   if (matchCount === 0) {
-    return query.trim() ? "No matching files" : "Type a file name to search";
+    return query.trim() ? t("No matching files") : t("Type a file name to search");
   }
   return null;
 }
@@ -278,7 +279,7 @@ function FileList({
     <div
       ref={lockOverscroll}
       role="listbox"
-      aria-label="Files"
+      aria-label={t("Files")}
       onMouseMove={onListMouseMove}
       className="max-h-[min(380px,50vh)] overflow-y-auto overscroll-none px-1.5 pb-1.5"
     >

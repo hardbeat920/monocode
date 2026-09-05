@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { ALT, MOD, SHIFT } from "../lib/platform";
 import { runUpdateFlow } from "../lib/updater";
+import { t } from "../lib/i18n";
 
 type MenuKey = "file" | "view" | "terminal";
 
@@ -171,40 +172,40 @@ export function MenuBar({
     switch (key) {
       case "file":
         return [
-          { kind: "item", id: "new_tab", label: "New Tab", shortcut: `${MOD}T` },
-          { kind: "item", id: "new_terminal", label: "New Terminal", shortcut: `${MOD}\`` },
-          { kind: "item", id: "new_window", label: "New Window", shortcut: `${MOD}${SHIFT}N` },
+          { kind: "item", id: "new_tab", label: t("New Tab"), shortcut: `${MOD}T` },
+          { kind: "item", id: "new_terminal", label: t("New Terminal"), shortcut: `${MOD}\`` },
+          { kind: "item", id: "new_window", label: t("New Window"), shortcut: `${MOD}${SHIFT}N` },
           { kind: "sep" },
-          { kind: "item", id: "open_project", label: "Open Project…", shortcut: `${MOD}O` },
-          { kind: "item", id: "open_search", label: "Search…", shortcut: `${MOD}K` },
-          { kind: "item", id: "go_to_file", label: "Go to File…", shortcut: `${MOD}P` },
-          { kind: "item", id: "find_in_project", label: "Find in Files…", shortcut: `${MOD}${SHIFT}F` },
+          { kind: "item", id: "open_project", label: t("Open Project…"), shortcut: `${MOD}O` },
+          { kind: "item", id: "open_search", label: t("Search…"), shortcut: `${MOD}K` },
+          { kind: "item", id: "go_to_file", label: t("Go to File…"), shortcut: `${MOD}P` },
+          { kind: "item", id: "find_in_project", label: t("Find in Files…"), shortcut: `${MOD}${SHIFT}F` },
           { kind: "sep" },
-          { kind: "item", id: "close_tab", label: "Close Pane", shortcut: `${MOD}W` },
+          { kind: "item", id: "close_tab", label: t("Close Pane"), shortcut: `${MOD}W` },
           {
             kind: "item",
             id: "close_other_tabs",
-            label: "Close Other Tabs",
+            label: t("Close Other Tabs"),
             shortcut: `${MOD}${ALT}T`,
           },
           { kind: "sep" },
-          { kind: "item", id: "check_for_updates", label: "Check for Updates…" },
+          { kind: "item", id: "check_for_updates", label: t("Check for Updates…") },
         ];
       case "view":
         return [
-          { kind: "item", id: "toggle_sidebar", label: "Toggle Sidebar", shortcut: `${MOD}B` },
-          { kind: "item", id: "open_inbox", label: "Inbox" },
+          { kind: "item", id: "toggle_sidebar", label: t("Toggle Sidebar"), shortcut: `${MOD}B` },
+          { kind: "item", id: "open_inbox", label: t("Inbox") },
           ...(onOpenNotes
-            ? [{ kind: "item" as const, id: "open_notes", label: "Notes" }]
+            ? [{ kind: "item" as const, id: "open_notes", label: t("Notes") }]
             : []),
-          { kind: "item", id: "toggle_terminal", label: "Toggle Terminal", shortcut: `${MOD}J` },
-          { kind: "item", id: "open_model_picker", label: "Switch Model…", shortcut: `${MOD}.` },
-          { kind: "item", id: "toggle_diff", label: "Toggle Changes" },
+          { kind: "item", id: "toggle_terminal", label: t("Toggle Terminal"), shortcut: `${MOD}J` },
+          { kind: "item", id: "open_model_picker", label: t("Switch Model…"), shortcut: `${MOD}.` },
+          { kind: "item", id: "toggle_diff", label: t("Toggle Changes") },
         ];
       case "terminal":
         return [
-          { kind: "item", id: "new_terminal", label: "New Terminal", shortcut: `${MOD}\`` },
-          { kind: "item", id: "toggle_terminal", label: "Toggle Terminal", shortcut: `${MOD}J` },
+          { kind: "item", id: "new_terminal", label: t("New Terminal"), shortcut: `${MOD}\`` },
+          { kind: "item", id: "toggle_terminal", label: t("Toggle Terminal"), shortcut: `${MOD}J` },
         ];
     }
   };
@@ -214,9 +215,9 @@ export function MenuBar({
   }
 
   const MENUS: { key: MenuKey; label: string }[] = [
-    { key: "file", label: "File" },
-    { key: "view", label: "View" },
-    { key: "terminal", label: "Terminal" },
+    { key: "file", label: t("File") },
+    { key: "view", label: t("View") },
+    { key: "terminal", label: t("Terminal") },
   ];
 
   return (
@@ -260,7 +261,7 @@ export function MenuBar({
           x={menuAnchor.x}
           y={menuAnchor.y}
           items={getMenuItems(activeMenu)}
-          ariaLabel={`${activeMenu} menu`}
+          ariaLabel={`${t(activeMenu)} ${t("menu")}`}
           onPick={handlePick}
           onClose={closeMenu}
         />

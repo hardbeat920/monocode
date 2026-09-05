@@ -55,6 +55,7 @@ import type { GitStatusMap } from "../hooks/useGitFileStatuses";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { t } from "../lib/i18n";
 
 const GIT_STATUS_COLOR: Record<string, string> = {
   modified: "text-amber-400",
@@ -81,10 +82,10 @@ type MenuTarget = { path: string; isDir: boolean; isRoot: boolean };
 type MenuState = { x: number; y: number; target: MenuTarget };
 
 const REVEAL_LABEL = IS_MAC
-  ? "Reveal in Finder"
+  ? t("Reveal in Finder")
   : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
-    ? "Reveal in File Explorer"
-    : "Open Containing Folder";
+    ? t("Reveal in File Explorer")
+    : t("Open Containing Folder");
 
 type TreeCtxValue = {
   expanded: Set<string>;
@@ -149,51 +150,51 @@ function explorerItems(
     (clip.isDir &&
       (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`)));
   return [
-    { kind: "item", id: "new-file", label: "New File" },
-    { kind: "item", id: "new-folder", label: "New Folder" },
+    { kind: "item", id: "new-file", label: t("New File") },
+    { kind: "item", id: "new-folder", label: t("New Folder") },
     { kind: "sep" },
     {
       kind: "item",
       id: "cut",
-      label: "Cut",
+      label: t("Cut"),
       shortcut: `${MOD}X`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "copy",
-      label: "Copy",
+      label: t("Copy"),
       shortcut: `${MOD}C`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "paste",
-      label: "Paste",
+      label: t("Paste"),
       shortcut: `${MOD}V`,
       disabled: pasteBlocked,
     },
     {
       kind: "item",
       id: "duplicate",
-      label: "Duplicate",
+      label: t("Duplicate"),
       disabled: target.isRoot,
     },
     { kind: "sep" },
-    { kind: "item", id: "copy-path", label: "Copy Path" },
-    { kind: "item", id: "copy-relative-path", label: "Copy Relative Path" },
+    { kind: "item", id: "copy-path", label: t("Copy Path") },
+    { kind: "item", id: "copy-relative-path", label: t("Copy Relative Path") },
     { kind: "sep" },
     {
       kind: "item",
       id: "rename",
-      label: "Rename",
+      label: t("Rename"),
       shortcut: "F2",
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "delete",
-      label: "Delete",
+      label: t("Delete"),
       shortcut: "⌫",
       disabled: target.isRoot,
       danger: true,
@@ -204,7 +205,7 @@ function explorerItems(
           {
             kind: "item" as const,
             id: "open-terminal",
-            label: "Open in Terminal",
+            label: t("Open in Terminal"),
           },
         ]
       : []),
@@ -355,8 +356,8 @@ export function FileTree({
     const label = basename(path);
     const ok = window.confirm(
       isDir
-        ? `Delete folder “${label}” and everything inside it?`
-        : `Delete “${label}”?`,
+        ? t("Delete folder \"{0}\" and everything inside it?", [label])
+        : t("Delete \"{0}\"?", [label]),
     );
     if (!ok) return;
     await deletePath(path);
@@ -384,7 +385,7 @@ export function FileTree({
       clip.isDir &&
       (destParent === clip.path || destParent.startsWith(`${clip.path}/`))
     ) {
-      throw new Error("Cannot paste a folder into itself.");
+      throw new Error(t("Cannot paste a folder into itself."));
     }
     const from = clip.path;
     const mode = clip.mode;
@@ -620,14 +621,14 @@ export function FileTree({
           className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-content/10 px-2"
           onContextMenu={(e) => e.stopPropagation()}
         >
-          <HeaderIcon label="New File" onClick={() => startCreate(false)}>
+          <HeaderIcon label={t("New File")} onClick={() => startCreate(false)}>
             <FilePlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
-          <HeaderIcon label="New Folder" onClick={() => startCreate(true)}>
+          <HeaderIcon label={t("New Folder")} onClick={() => startCreate(true)}>
             <FolderPlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
           <HeaderIcon
-            label="Collapse All"
+            label={t("Collapse All")}
             onClick={() => {
               setCreating(null);
               setRenaming(null);
@@ -640,7 +641,7 @@ export function FileTree({
           </HeaderIcon>
           {onSearch ? (
             <HeaderIcon
-              label={`Search in files (${MOD}Shift+F)`}
+              label={t("Search in files ({0}Shift+F)", [MOD])}
               onClick={onSearch}
             >
               <Search className="size-3.5" strokeWidth={1.75} />
@@ -696,7 +697,7 @@ export function FileTree({
             </p>
           ) : null}
           {rootOpen ? (
-            <div role="tree" aria-label={`${name} files`}>
+            <div role="tree" aria-label={t("{0} files", [name])}>
               <TreeChildren
                 parent={cwd}
                 depth={0}
@@ -772,10 +773,10 @@ function FileTreeDiffButton({
   const empty = files <= 0 && additions <= 0 && deletions <= 0;
   const label = empty
     ? active
-      ? "Hide changes"
-      : "Show changes"
+      ? t("Hide changes")
+      : t("Show changes")
     : [
-        `${files} ${files === 1 ? "file" : "files"} changed`,
+        `${files} ${files === 1 ? t("file") : t("files")} ${t("changed")}`,
         additions > 0 ? `+${additions}` : "",
         deletions > 0 ? `-${deletions}` : "",
       ]
@@ -1077,7 +1078,7 @@ function NameRow({
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          aria-label="Type file name. Press Enter to confirm or Escape to cancel."
+          aria-label={t("Type file name. Press Enter to confirm or Escape to cancel.")}
           onChange={(e) => {
             setValue(e.target.value);
             setSubmitError(null);
@@ -1120,30 +1121,20 @@ function NameIssueView({
   } else if (issue) {
     switch (issue.kind) {
       case "empty":
-        body = "A file or folder name must be provided.";
+        body = t("A file or folder name must be provided.");
         break;
       case "slash":
-        body = "A file or folder name cannot start with a slash.";
+        body = t("A file or folder name cannot start with a slash.");
         break;
       case "exists":
-        body = (
-          <>
-            A file or folder <span className="font-semibold">{issue.name}</span>{" "}
-            already exists at this location. Please choose a different name.
-          </>
-        );
+        body = t("A file or folder {0} already exists at this location. Please choose a different name.", [issue.name]);
         break;
       case "invalid":
-        body = (
-          <>
-            The name <span className="font-semibold">{issue.name}</span> is not
-            valid as a file or folder name. Please choose a different name.
-          </>
-        );
+        body = t("The name {0} is not valid as a file or folder name. Please choose a different name.", [issue.name]);
         break;
       case "whitespace":
         body =
-          "Leading or trailing whitespace detected in file or folder name.";
+          t("Leading or trailing whitespace detected in file or folder name.");
         break;
     }
   }

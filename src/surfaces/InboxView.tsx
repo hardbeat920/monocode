@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { t } from "../lib/i18n";
 import {
   CheckCheck,
   ChevronDown,
@@ -194,7 +195,7 @@ function InboxSourceTab({
   selected: boolean;
   onSelect: (source: InboxSource) => void;
 }) {
-  const label = source === "linear" ? "Linear" : "GitHub";
+  const label = source === "linear" ? t("Linear") : t("GitHub");
   return (
     <button
       type="button"
@@ -471,7 +472,7 @@ export function InboxView({
     >
       <div
         role="tablist"
-        aria-label="Inbox source"
+        aria-label={t("Inbox source")}
         className="flex h-9 shrink-0 items-center gap-px border-b border-content/10 px-2"
       >
         <InboxSourceTab
@@ -491,8 +492,8 @@ export function InboxView({
           <input
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
-            placeholder="Filter inbox"
-            aria-label="Filter inbox"
+            placeholder={t("Filter inbox")}
+            aria-label={t("Filter inbox")}
             spellCheck={false}
             autoComplete="off"
             className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
@@ -500,8 +501,8 @@ export function InboxView({
         </div>
         <button
           type="button"
-          title="Filter inbox"
-          aria-label="Filter inbox"
+          title={t("Filter inbox")}
+          aria-label={t("Filter inbox")}
           aria-expanded={!!filterMenu}
           aria-haspopup="menu"
           onClick={onFilterButtonClick}
@@ -513,8 +514,8 @@ export function InboxView({
         </button>
         <button
           type="button"
-          title="Mark all as read"
-          aria-label="Mark all as read"
+          title={t("Mark all as read")}
+          aria-label={t("Mark all as read")}
           disabled={!sourceHasUnseen}
           onClick={() => markInboxItemsSeen(sourceEntries)}
           className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
@@ -523,7 +524,7 @@ export function InboxView({
         </button>
         <button
           type="button"
-          aria-label="Refresh"
+          aria-label={t("Refresh")}
           onClick={() => setRefresh((value) => value + 1)}
           className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
         >
@@ -552,16 +553,16 @@ export function InboxView({
             {narrowedByUser
               ? searchNarrowed
                 ? source === "linear"
-                  ? "No matching Linear issues"
-                  : "No matching issues or pull requests"
+                  ? t("No matching Linear issues")
+                  : t("No matching issues or pull requests")
                 : source === "linear"
-                  ? "No Linear issues match these filters"
-                  : "No issues or pull requests match these filters"
+                  ? t("No Linear issues match these filters")
+                  : t("No issues or pull requests match these filters")
               : source === "linear"
-                ? "No Linear issues"
+                ? t("No Linear issues")
                 : projects.length === 0
-                  ? "Open a project to fill the inbox"
-                  : "No matching issues or pull requests"}
+                  ? t("Open a project to fill the inbox")
+                  : t("No matching issues or pull requests")}
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5 p-1.5">
@@ -598,7 +599,7 @@ export function InboxView({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize inbox list"
+        aria-label={t("Resize inbox list")}
         className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
           resize.dragging ? "bg-content/15" : "hover:bg-content/10"
         }`}
@@ -623,7 +624,7 @@ export function InboxView({
   return (
     <div
       role="region"
-      aria-label="Inbox"
+      aria-label={t("Inbox")}
       data-app-inbox
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -640,7 +641,7 @@ export function InboxView({
             className="size-3.5 shrink-0 text-content/45"
             strokeWidth={1.75}
           />
-          <span className="min-w-0 truncate text-content">Inbox</span>
+          <span className="min-w-0 truncate text-content">{t("Inbox")}</span>
         </div>
         {IS_MAC ? null : <WindowControls />}
       </div>
@@ -683,7 +684,7 @@ function InboxDetailBody({
       <div className="flex h-full flex-col items-center justify-center px-6 text-center">
         <Inbox className="mb-3 size-6 text-content/30" strokeWidth={1.75} />
         <p className="text-[13px] text-content/45">
-          Select an issue or pull request
+          {t("Select an issue or pull request")}
         </p>
       </div>
     );
@@ -751,7 +752,7 @@ function InboxCard({
 }) {
   useInboxSeenTick();
   const status = inboxStatusMark(item);
-  const kindLabel = item.kind === "pr" ? "Pull request" : "Issue";
+  const kindLabel = item.kind === "pr" ? t("Pull request") : t("Issue");
   const time = formatRelativeTime(item.updatedAt);
   const name = projectName(item.projectPath);
   const linear = item.provider === "linear";
@@ -1110,7 +1111,7 @@ function InboxDetail({
       <header className="flex flex-col gap-3">
         <div className="flex items-center gap-2 text-[12px] text-content/50">
           <InboxProviderMark provider={item.provider} className="size-3.5" />
-          <span>{item.kind === "pr" ? "Pull request" : "Issue"}</span>
+          <span>{item.kind === "pr" ? t("Pull request") : t("Issue")}</span>
           <span className="tabular-nums">{inboxItemRef(item)}</span>
           <span className={`flex items-center gap-1 ${statusMark.className}`}>
             <statusMark.Icon className="size-3.5" strokeWidth={1.75} />
@@ -1152,7 +1153,7 @@ function InboxDetail({
                   ))}
                 </span>
               ) : (
-                <span>Unassigned</span>
+                <span>{t("Unassigned")}</span>
               )}
             </>
           ) : null}
@@ -1165,7 +1166,7 @@ function InboxDetail({
           {formatRelativeTime(item.updatedAt) ? (
             <>
               <span aria-hidden>·</span>
-              <span>Updated {formatRelativeTime(item.updatedAt)}</span>
+              <span>{t("Updated {0}", [formatRelativeTime(item.updatedAt)])}</span>
             </>
           ) : null}
           {baseRef && headRef ? (
@@ -1220,7 +1221,7 @@ function InboxDetail({
                 }}
                 className="inline-flex items-center gap-1 rounded-md bg-content px-3 h-6.5 text-[12px] text-background-base hover:bg-content/80 disabled:cursor-default disabled:opacity-40"
               >
-                {starting ? "Sending..." : "Send to agent"}
+                {starting ? t("Sending...") : t("Send to agent")}
               </button>
               {linear ? (
                 <InboxProjectPicker
@@ -1242,10 +1243,10 @@ function InboxDetail({
           >
             <ExternalLink className="size-3.5" strokeWidth={1.75} />
             {item.kind === "pr"
-              ? "Review on GitHub"
+              ? t("Review on GitHub")
               : linear
-                ? "Open in Linear"
-                : "Open on GitHub"}
+                ? t("Open in Linear")
+                : t("Open on GitHub")}
           </button>
         </div>
         {startError ? (
@@ -1255,16 +1256,16 @@ function InboxDetail({
       {isPr ? (
         <div
           role="tablist"
-          aria-label="Pull request sections"
+          aria-label={t("Pull request sections")}
           className="flex h-9 gap-4 items-stretch border-b border-content/10"
         >
           <InboxDetailTab
-            label="Summary"
+            label={t("Summary")}
             selected={tab === "summary"}
             onSelect={() => setTab("summary")}
           />
           <InboxDetailTab
-            label="Code"
+            label={t("Code")}
             selected={tab === "code"}
             onSelect={() => setTab("code")}
           />
@@ -1285,7 +1286,7 @@ function InboxDetail({
             diff={prDiff}
           />
         ) : (
-          <p className="text-[13px] text-content/45">No file changes</p>
+          <p className="text-[13px] text-content/45">{t("No file changes")}</p>
         )
       ) : loading ? (
         <div className="flex justify-center py-10 text-content/40">
@@ -1302,7 +1303,7 @@ function InboxDetail({
               allowRemoteMedia
             />
           ) : (
-            <p className="text-[13px] text-content/45">No description</p>
+            <p className="text-[13px] text-content/45">{t("No description")}</p>
           )}
           <InboxComments
             thread={thread}
@@ -1429,7 +1430,7 @@ function InboxProjectPicker({
       >
         {selected ? <InboxProjectMark project={selected} /> : null}
         <span className="min-w-0 truncate">
-          {selected?.name ?? "Choose project"}
+          {selected?.name ?? t("Choose project")}
         </span>
         <ChevronDown
           className="size-3 shrink-0 text-content/45"

@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { t } from "../lib/i18n";
 import {
   useEffect,
   useRef,
@@ -78,7 +79,7 @@ export function InboxComments({
     (total, comment) => total + 1 + comment.replies.length,
     0,
   );
-  const label = count === 1 ? "1 comment" : `${count} comments`;
+  const label = count === 1 ? t("1 comment") : t("{0} comments", [count]);
   const moreOn = provider === "linear" ? "Linear" : "GitHub";
 
   return (
@@ -86,7 +87,7 @@ export function InboxComments({
       <div className="flex items-center gap-2 text-[12px] text-content/50">
         <h2 className="text-content/70">{label}</h2>
         {thread.truncated ? (
-          <span>Latest comments · more on {moreOn}</span>
+          <span>{t("Latest comments · more on {0}", [moreOn])}</span>
         ) : null}
         {loading ? (
           <LoaderCircle
@@ -172,12 +173,12 @@ export function InboxCommentForm({
       {replyTo ? (
         <div className="flex items-center gap-2 text-[12px] text-content/50">
           <span className="min-w-0 truncate">
-            Replying to {replyTo.author || "comment"}
+            {t("Replying to {0}", [replyTo.author || t("comment")])}
           </span>
           <button
             type="button"
-            title="Cancel reply"
-            aria-label="Cancel reply"
+            title={t("Cancel reply")}
+            aria-label={t("Cancel reply")}
             onClick={onCancelReply}
             className="grid size-5 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -192,7 +193,7 @@ export function InboxCommentForm({
           value={draft}
           disabled={posting}
           placeholder={
-            replyTo ? `Write a reply (${MOD}↩)` : `Leave a comment (${MOD}↩)`
+            replyTo ? t("Write a reply ({0})", [`${MOD}↩`]) : t("Leave a comment ({0})", [`${MOD}↩`])
           }
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
@@ -204,7 +205,7 @@ export function InboxCommentForm({
             disabled={!canPost}
             className="inline-flex h-7 items-center rounded-md bg-content px-3 text-[12px] text-background-base hover:bg-content/80 disabled:cursor-default disabled:opacity-40"
           >
-            {posting ? "Posting..." : replyTo ? "Reply" : "Comment"}
+            {posting ? t("Posting...") : replyTo ? t("Reply") : t("Comment")}
           </button>
         </div>
       </div>
@@ -219,7 +220,7 @@ function CommentsPending() {
   return (
     <div className="flex items-center gap-2 border-t border-content/10 pt-5 text-[12px] text-content/45">
       <LoaderCircle className="size-3.5 animate-spin" strokeWidth={1.75} />
-      Loading comments
+      {t("Loading comments")}
     </div>
   );
 }
@@ -245,7 +246,7 @@ function InboxComment({
   const meta = [
     review,
     location,
-    comment.resolved ? "Resolved" : "",
+    comment.resolved ? t("Resolved") : "",
     time,
   ].filter((part) => part.length > 0);
   const hasBody = comment.body.trim().length > 0;
@@ -280,7 +281,7 @@ function InboxComment({
               <button
                 type="button"
                 title={
-                  provider === "linear" ? "Open in Linear" : "Open on GitHub"
+                  provider === "linear" ? t("Open in Linear") : t("Open on GitHub")
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"
@@ -294,7 +295,7 @@ function InboxComment({
                     ? "text-emerald-400/90"
                     : comment.state === "CHANGES_REQUESTED"
                       ? "text-rose-400/90"
-                      : comment.resolved && part === "Resolved"
+                      : comment.resolved && part === t("Resolved")
                         ? "text-emerald-400/80"
                         : "min-w-0 truncate"
                 }
@@ -318,7 +319,7 @@ function InboxComment({
               }
               className="hover:text-content"
             >
-              Reply
+              {t("Reply")}
             </button>
           </span>
         ) : null}

@@ -1,5 +1,6 @@
 import type { HarnessId } from "./session";
 import { HARNESSES } from "./session";
+import { t } from "./i18n";
 
 export type ModelSettingChoice = {
   value: string;
@@ -103,14 +104,14 @@ export const MODELS: AgentModel[] = [
     settings: [
       {
         id: "effort",
-        label: "Reasoning",
+        label: t("Reasoning"),
         kind: "select",
         value: "high",
         options: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High" },
-          { value: "medium", label: "Medium" },
-          { value: "low", label: "Low" },
+          { value: "xhigh", label: t("Extra High") },
+          { value: "high", label: t("High") },
+          { value: "medium", label: t("Medium") },
+          { value: "low", label: t("Low") },
         ],
       },
     ],
@@ -124,13 +125,13 @@ export const MODELS: AgentModel[] = [
     settings: [
       {
         id: "effort",
-        label: "Reasoning",
+        label: t("Reasoning"),
         kind: "select",
         value: "high",
         options: [
-          { value: "high", label: "High" },
-          { value: "medium", label: "Medium" },
-          { value: "low", label: "Low" },
+          { value: "high", label: t("High") },
+          { value: "medium", label: t("Medium") },
+          { value: "low", label: t("Low") },
         ],
       },
     ],
@@ -155,13 +156,13 @@ export const MODELS: AgentModel[] = [
   {
     id: "pi:default",
     harness: "pi",
-    name: "Default",
+    name: t("Default"),
     nativeId: "",
   },
   {
     id: "omp:default",
     harness: "omp",
-    name: "Default",
+    name: t("Default"),
     nativeId: "",
   },
   {

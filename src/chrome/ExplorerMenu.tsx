@@ -6,6 +6,7 @@ import {
 } from "react";
 import { Check } from "./icons";
 import { Popover } from "./Popover";
+import { t } from "../lib/i18n";
 
 export type ExplorerMenuItem =
   | { kind: "sep" }
@@ -46,7 +47,7 @@ export function ExplorerMenu({
   x,
   y,
   items,
-  ariaLabel = "File actions",
+  ariaLabel = t("File actions"),
   header,
   width = MENU_WIDTH,
   onPick,

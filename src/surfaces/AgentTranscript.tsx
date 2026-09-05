@@ -48,8 +48,8 @@ import { resolveModel } from "../lib/models";
 import { harnessForTurn } from "../lib/secondOpinion";
 import { Shimmer } from "./Shimmer";
 import {
+  getHarnessTitle,
   hasPendingApproval,
-  HARNESS_TITLE,
   type Block,
   type HarnessId,
   type PlanBuildTarget,
@@ -61,6 +61,7 @@ import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../lib/appearance";
+import { t } from "../lib/i18n";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
 import {
@@ -315,7 +316,7 @@ export function AgentTranscript({
               className="rounded-md bg-content/8 px-2.5 py-1.5 font-sans text-[12px] text-content/60 hover:bg-content/12 hover:text-content"
               onClick={loadEarlier}
             >
-              Load earlier messages
+              {t("Load earlier messages")}
             </button>
           </div>
         ) : null}
@@ -426,7 +427,7 @@ export function AgentTranscript({
                   startedAt={liveStartedAt}
                   paused={waitingForApproval}
                   waitingLabel={
-                    pendingQuestion ? "Waiting for answers" : undefined
+                    pendingQuestion ? t("Waiting for answers") : undefined
                   }
                   subagent={hasRunningSubagent(turn)}
                   modelName={modelName}
@@ -452,7 +453,7 @@ export function AgentTranscript({
 function InitialThinking({ live }: { live: boolean }) {
   return (
     <div className="min-w-0 px-4 pt-3 pb-1 font-sans text-sm text-content/50">
-      {live ? <Shimmer duration={1.6}>Thinking…</Shimmer> : "Thinking…"}
+      {live ? <Shimmer duration={1.6}>{t("Thinking…")}</Shimmer> : t("Thinking…")}
     </div>
   );
 }
@@ -518,7 +519,7 @@ function TurnDuration({
   onHandoff?: (harness: HarnessId, model: string) => void;
 }) {
   const label = waiting
-    ? (waitingLabel ?? "Waiting for approval")
+    ? (waitingLabel ?? t("Waiting for approval"))
     : formatWorkingDuration(elapsedMs, done, subagent, modelName);
   const dot = (
     <span
@@ -536,11 +537,11 @@ function TurnDuration({
           : live
             ? subagent
               ? modelName
-                ? `${modelName} subagent is running`
-                : "Subagent is running"
+                ? t("{0} subagent is running", [modelName])
+                : t("Subagent is running")
               : modelName
-                ? `${modelName} is working`
-                : "Agent is working"
+                ? t("{0} is working", [modelName])
+                : t("Agent is working")
             : label
       }
       className="flex min-w-0 items-center gap-2.5 px-4 pt-1 pb-3 font-sans text-sm text-content/40"
@@ -619,8 +620,8 @@ function CopyTurnButton({ text }: { text: string }) {
   return (
     <button
       type="button"
-      title={copied ? "Copied" : "Copy response"}
-      aria-label={copied ? "Copied" : "Copy response"}
+      title={copied ? t("Copied") : t("Copy response")}
+      aria-label={copied ? t("Copied") : t("Copy response")}
       className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
       onClick={() => {
         playCue("copy");
@@ -663,8 +664,8 @@ function SaveNoteButton({
   return (
     <button
       type="button"
-      title={saved ? "Saved to Notes" : "Save as note"}
-      aria-label={saved ? "Saved to Notes" : "Save as note"}
+      title={saved ? t("Saved to Notes") : t("Save as note")}
+      aria-label={saved ? t("Saved to Notes") : t("Save as note")}
       className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
       onClick={() => {
         playCue("copy");
@@ -1082,7 +1083,7 @@ function ActivityPhaseGroup({
         type="button"
         aria-expanded={open}
         aria-label={
-          open ? `Hide the steps for ${title}` : `Show the steps for ${title}`
+          open ? t("Hide the steps for {0}", [title]) : t("Show the steps for {0}", [title])
         }
         onClick={() => setOverride(!open)}
         className="group flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
@@ -1248,7 +1249,7 @@ function ActivityThinkingRow({
   onOpenFile?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const text = proseSummary(block.text) || "Thinking";
+  const text = proseSummary(block.text) || t("Thinking");
   // In a group the rail is the bullet, so there is nothing to breathe while
   // reasoning streams in — the line itself does.
   const pulse = block.streaming ? "zen-thinking-pulse" : "";
@@ -1271,7 +1272,7 @@ function ActivityThinkingRow({
   if (!expandable) {
     return (
       <div
-        aria-label={`Thinking: ${text}`}
+        aria-label={t("Thinking: {0}", [text])}
         className="flex min-w-0 items-center gap-1.5 py-1"
       >
         {icon}
@@ -1285,7 +1286,7 @@ function ActivityThinkingRow({
       <button
         type="button"
         aria-expanded={open}
-        aria-label={open ? "Hide thinking" : `Show thinking: ${text}`}
+        aria-label={open ? t("Hide thinking") : t("Show thinking: {0}", [text])}
         onClick={() => setOpen((value) => !value)}
         className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
       >
@@ -1338,7 +1339,7 @@ function ActivityNoteRow({
   if (!expandable) {
     return (
       <div
-        aria-label={`Agent said: ${text}`}
+        aria-label={t("Agent said: {0}", [text])}
         className="flex min-w-0 items-center gap-1.5 py-1"
       >
         {icon}
@@ -1354,7 +1355,7 @@ function ActivityNoteRow({
       <button
         type="button"
         aria-expanded={open}
-        aria-label={open ? "Hide the full note" : `Agent said: ${text}`}
+        aria-label={open ? t("Hide the full note") : t("Agent said: {0}", [text])}
         onClick={() => setOpen((value) => !value)}
         className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
       >
@@ -1403,7 +1404,7 @@ function ActivityToolRow({
   return (
     <div className="flex min-w-0 flex-col">
       <div
-        aria-label={`Tool call: ${label}`}
+        aria-label={t("Tool call: {0}", [label])}
         className="flex min-w-0 items-center gap-1.5 py-1"
       >
         {bare ? null : <ActivityToolIcon state={state} live={live} />}
@@ -1515,9 +1516,9 @@ function workingVerb(
   subagent: boolean,
   capitalized: boolean,
 ): string {
-  if (done) return capitalized ? "Worked" : "worked";
-  if (subagent) return capitalized ? "Subagent running" : "subagent running";
-  return capitalized ? "Working" : "working";
+  if (done) return capitalized ? t("Worked") : t("worked");
+  if (subagent) return capitalized ? t("Subagent running") : t("subagent running");
+  return capitalized ? t("Working") : t("working");
 }
 
 function formatElapsed(elapsedMs: number | null): string | null {
@@ -1552,10 +1553,10 @@ function ToolCall({
   const state = toolCallState(block);
   const stateLabel =
     state === "accepted"
-      ? "Accepted"
+      ? t("Accepted")
       : state === "rejected"
-        ? "Rejected"
-        : "Pending";
+        ? t("Rejected")
+        : t("Pending");
   const editTool = isEditTool(
     block.tool?.kind,
     block.text || block.tool?.title,
@@ -1590,7 +1591,7 @@ function ToolCall({
         <button
           type="button"
           aria-expanded={open}
-          aria-label={`${stateLabel} tool call: ${label}`}
+          aria-label={t("{0} tool call: {1}", [stateLabel, label])}
           onClick={() => setOpen((value) => !value)}
           className="flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 text-left"
         >
@@ -1609,7 +1610,7 @@ function ToolCall({
         </button>
       ) : (
         <div
-          aria-label={`${stateLabel} tool call: ${label}`}
+          aria-label={t("{0} tool call: {1}", [stateLabel, label])}
           className="flex w-full min-w-0 items-center gap-2"
         >
           <ToolCallIcon state={state} />
@@ -1792,14 +1793,14 @@ function ApprovalControls({
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
         onClick={() => onApproval?.(approval.requestId, "allow")}
       >
-        Allow
+        {t("Allow")}
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
         onClick={() => onApproval?.(approval.requestId, "deny")}
       >
-        Deny
+        {t("Deny")}
       </button>
     </div>
   );
@@ -1810,7 +1811,7 @@ function HandoffDivider({ block }: { block: Block }) {
   if (!meta) return null;
 
   const preparing = meta.status === "preparing";
-  const label = preparing ? "Preparing a handoff" : HARNESS_TITLE[meta.to];
+  const label = preparing ? t("Preparing a handoff") : getHarnessTitle()[meta.to];
 
   return (
     <div className="px-4 py-5">
@@ -1820,8 +1821,8 @@ function HandoffDivider({ block }: { block: Block }) {
           role="separator"
           aria-label={
             preparing
-              ? `Preparing a handoff to ${HARNESS_TITLE[meta.to]}`
-              : `Continued with ${label}`
+              ? t("Preparing a handoff to {0}", [getHarnessTitle()[meta.to]])
+              : t("Continued with {0}", [label])
           }
           className="flex max-w-[min(100%,20rem)] items-center gap-1.5 px-1.5 font-sans text-[12px] text-content/55"
         >

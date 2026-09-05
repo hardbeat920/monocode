@@ -7,6 +7,7 @@ import {
 } from "react";
 import { hexToHsv, hsvToHex, normalizeHex, type Hsv } from "../lib/colorUtils";
 import { Pipette } from "./icons";
+import { t } from "../lib/i18n";
 
 type Props = {
   value: string;
@@ -41,8 +42,8 @@ export function ColorSwatchRow({
           <button
             key={color}
             type="button"
-            title={`Color ${index + 1}`}
-            aria-label={`Color ${index + 1}`}
+            title={t("Color {0}", [index + 1])}
+            aria-label={t("Color {0}", [index + 1])}
             aria-pressed={selected}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPickIndex(index)}
@@ -61,8 +62,8 @@ export function ColorSwatchRow({
       })}
       <button
         type="button"
-        title="Custom color"
-        aria-label="Custom color"
+        title={t("Custom color")}
+        aria-label={t("Custom color")}
         aria-expanded={customPickerOpen}
         aria-pressed={customColor != null}
         onMouseDown={(event) => event.preventDefault()}
@@ -182,7 +183,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       <div
         ref={svRef}
         role="slider"
-        aria-label="Saturation and brightness"
+        aria-label={t("Saturation and brightness")}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(hsv.s)}
@@ -205,7 +206,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       <div
         ref={hueRef}
         role="slider"
-        aria-label="Hue"
+        aria-label={t("Hue")}
         aria-valuemin={0}
         aria-valuemax={360}
         aria-valuenow={Math.round(hsv.h)}
@@ -235,7 +236,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
           type="text"
           value={preview}
           spellCheck={false}
-          aria-label="Hex color"
+          aria-label={t("Hex color")}
           onChange={(e) => onHexInput(e.target.value)}
           className="min-w-0 flex-1 rounded-md border border-content/10 bg-content/5 px-2 py-1 font-mono text-[12px] text-content outline-none ring-accent/40 focus:ring-1"
         />

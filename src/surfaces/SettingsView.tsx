@@ -91,7 +91,7 @@ import {
 } from "../lib/recents";
 import {
   HARNESSES,
-  HARNESS_TITLE,
+  getHarnessTitle,
   sessionDisplayTitle,
   type HarnessId,
 } from "../lib/session";
@@ -114,7 +114,7 @@ import {
 import { loadTabGroupLabels, resolveTabGroupLabel } from "../lib/tabGroups";
 import {
   filterKeybindings,
-  KEYBINDINGS,
+  getKeybindings,
   loadClaudeHooks,
   loadComposerRunner,
   loadDiffViewer,
@@ -135,6 +135,7 @@ import {
   type FollowUpBehavior,
   type SettingsSectionId,
 } from "../lib/settings";
+import { t } from "../lib/i18n";
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../lib/sounds";
 import {
   installPendingUpdate,
@@ -189,7 +190,7 @@ export function SettingsView({
   return (
     <div
       role="region"
-      aria-label="Settings"
+      aria-label={t("Settings")}
       data-app-settings
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -199,7 +200,7 @@ export function SettingsView({
       >
         {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
         <div className="flex min-w-0 flex-1 items-center gap-2 px-3 text-[13px]">
-          <span className="shrink-0 text-content/45">Settings</span>
+          <span className="shrink-0 text-content/45">{t("Settings")}</span>
           <span aria-hidden className="shrink-0 text-content/25">
             /
           </span>
@@ -215,7 +216,7 @@ export function SettingsView({
             className="mr-2 flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
           >
             <RotateCcw className="size-3.5" strokeWidth={1.75} />
-            Restore defaults
+            {t("Restore defaults")}
           </button>
         ) : null}
         {IS_MAC ? null : <WindowControls />}
@@ -341,114 +342,114 @@ function GeneralPage({
   return (
     <>
       <Row
-        label="Transcript layout"
-        description="Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app."
+        label={t("Transcript layout")}
+        description={t("Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app.")}
       >
         <Segmented
-          label="Transcript layout"
+          label={t("Transcript layout")}
           value={transcriptLayout}
           options={[
-            { value: "full", label: "Full width" },
-            { value: "chat", label: "Chat" },
+            { value: "full", label: t("Full width") },
+            { value: "chat", label: t("Chat") },
           ]}
           onChange={onTranscriptLayout}
         />
       </Row>
       <Row
-        label="Diff view"
-        description="Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines."
+        label={t("Diff view")}
+        description={t("Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines.")}
       >
         <Segmented
-          label="Diff view"
+          label={t("Diff view")}
           value={diffViewer}
           options={[
-            { value: "editor", label: "Editor" },
-            { value: "unified", label: "Unified" },
+            { value: "editor", label: t("Editor") },
+            { value: "unified", label: t("Unified") },
           ]}
           onChange={onDiffViewer}
         />
       </Row>
       <Row
-        label="Follow-up behavior"
-        description="Queue follow-ups until the active turn finishes, or steer the active turn immediately."
+        label={t("Follow-up behavior")}
+        description={t("Queue follow-ups until the active turn finishes, or steer the active turn immediately.")}
       >
         <Segmented
-          label="Follow-up behavior"
+          label={t("Follow-up behavior")}
           value={followUpBehavior}
           options={[
-            { value: "queue", label: "Queue" },
-            { value: "steer", label: "Steer" },
+            { value: "queue", label: t("Queue") },
+            { value: "steer", label: t("Steer") },
           ]}
           onChange={onFollowUpBehavior}
         />
       </Row>
       <Row
-        label="Anchor prompts to top"
-        description="When you send, the new prompt sits at the top of the transcript and the reply grows into the space below. Turn this off to keep the classic layout, with the latest message resting on the composer."
+        label={t("Anchor prompts to top")}
+        description={t("When you send, the new prompt sits at the top of the transcript and the reply grows into the space below. Turn this off to keep the classic layout, with the latest message resting on the composer.")}
       >
         <Toggle
-          label="Anchor prompts to top"
+          label={t("Anchor prompts to top")}
           on={transcriptAnchor}
           onChange={onTranscriptAnchor}
         />
       </Row>
       <Row
-        label="Composer mascot"
-        description="When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin."
+        label={t("Composer mascot")}
+        description={t("When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin.")}
       >
         <Toggle
-          label="Composer mascot"
+          label={t("Composer mascot")}
           on={composerRunner}
           onChange={onComposerRunner}
         />
       </Row>
       <Row
-        label="Empty session games"
-        description="Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still."
+        label={t("Empty session games")}
+        description={t("Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still.")}
       >
         <Toggle
-          label="Empty session games"
+          label={t("Empty session games")}
           on={gridArcadeEnabled}
           onChange={onGridArcadeEnabled}
         />
       </Row>
       <Row
-        label="Notes"
-        description="A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat. Turn this off to hide Notes from the UI."
+        label={t("Notes")}
+        description={t("A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat. Turn this off to hide Notes from the UI.")}
       >
-        <Toggle label="Notes" on={notesEnabled} onChange={onNotesEnabled} />
+        <Toggle label={t("Notes")} on={notesEnabled} onChange={onNotesEnabled} />
       </Row>
       <Row
-        label="Working agents"
-        description="When two or more chats are in flight, a card on the project rail lists them so you can jump across projects. Finished turns stay until you open that session. Turn this off to hide the card."
+        label={t("Working agents")}
+        description={t("When two or more chats are in flight, a card on the project rail lists them so you can jump across projects. Finished turns stay until you open that session. Turn this off to hide the card.")}
       >
         <Toggle
-          label="Working agents"
+          label={t("Working agents")}
           on={liveAgentsEnabled}
           onChange={onLiveAgentsEnabled}
         />
       </Row>
       <Row
-        label="Sounds"
-        description="Short cues when a turn finishes, a new inbox item appears on the project rail, or an update is available. Switches and Copy on a finished turn also play."
+        label={t("Sounds")}
+        description={t("Short cues when a turn finishes, a new inbox item appears on the project rail, or an update is available. Switches and Copy on a finished turn also play.")}
       >
-        <Toggle label="Sounds" on={soundsEnabled} onChange={onSoundsEnabled} />
+        <Toggle label={t("Sounds")} on={soundsEnabled} onChange={onSoundsEnabled} />
       </Row>
       <Row
-        label="Claude Code hooks"
-        description="Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn."
+        label={t("Claude Code hooks")}
+        description={t("Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn.")}
       >
         <Toggle
-          label="Claude Code hooks"
+          label={t("Claude Code hooks")}
           on={claudeHooks}
           onChange={onClaudeHooks}
         />
       </Row>
 
-      <Heading title="Linear" />
+      <Heading title={t("Linear")} />
       <LinearSettings />
 
-      <Heading title="About" />
+      <Heading title={t("About")} />
       <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
     </>
   );
@@ -535,14 +536,14 @@ function LinearSettings() {
         label={
           <span className="flex items-center gap-2">
             <InboxProviderMark provider="linear" className="size-4 shrink-0" />
-            API key
+            {t("API key")}
           </span>
         }
-        description="Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it."
+        description={t("Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it.")}
       >
         {connected ? (
           <SecondaryButton onClick={() => void onDisconnect()} disabled={busy}>
-            Disconnect
+            {t("Disconnect")}
           </SecondaryButton>
         ) : (
           <div className="flex items-center gap-2">
@@ -555,7 +556,7 @@ function LinearSettings() {
                   if (event.key === "Enter") void onSave();
                 }}
                 placeholder="lin_api_…"
-                aria-label="Linear API key"
+                aria-label={t("Linear API key")}
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -565,7 +566,7 @@ function LinearSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy ? t("Saving") : t("Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -576,10 +577,10 @@ function LinearSettings() {
       {connected && teams.length > 0 ? (
         <div className="border-b border-content/5 py-4">
           <div className="text-[13px] font-medium text-content">
-            Linear Teams
+            {t("Linear Teams")}
           </div>
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            Unchecked teams stay out of the inbox.
+            {t("Unchecked teams stay out of the inbox.")}
           </p>
           <div className="mt-3 flex flex-col gap-0.5 -mx-2">
             {teams.map((team) => {
@@ -646,22 +647,22 @@ function UpdateRow({
 
   const status =
     snapshot.phase === "available"
-      ? `Version ${snapshot.availableVersion} is available.`
+      ? t("Version {0} is available.", [snapshot.availableVersion ?? ""])
       : snapshot.phase === "downloading"
-        ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
+        ? t("Downloading{0}", [snapshot.progress != null ? ` ${snapshot.progress}%` : "…"])
         : snapshot.phase === "checking"
-          ? "Checking for updates…"
+          ? t("Checking for updates…")
           : snapshot.phase === "current"
-            ? "You're on the latest version."
+            ? t("You're on the latest version.")
             : snapshot.phase === "error"
-              ? (snapshot.error ?? "Update check failed.")
-              : "MonoCode updates itself from the release feed.";
+              ? (snapshot.error ?? t("Update check failed."))
+              : t("MonoCode updates itself from the release feed.");
 
   return (
     <Row
       label={
         <span className="flex items-baseline gap-2">
-          Version
+          {t("Version")}
           <span className="font-mono text-[12px] text-content/45">
             {snapshot.currentVersion}
           </span>
@@ -674,7 +675,7 @@ function UpdateRow({
           onClick={() => onOpenWhatsNew(snapshot.currentVersion)}
           disabled={snapshot.currentVersion === "…"}
         >
-          What's new
+          {t("What's new")}
         </SecondaryButton>
         <SecondaryButton onClick={() => void onClick()} disabled={busy}>
           {busy ? (
@@ -684,7 +685,7 @@ function UpdateRow({
         ) : (
           <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
         )}
-          {hasUpdate ? "Download" : "Check for updates"}
+          {hasUpdate ? t("Download") : t("Check for updates")}
         </SecondaryButton>
       </div>
     </Row>
@@ -764,26 +765,26 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   return (
     <>
       <Row
-        label="Theme"
-        description="System follows the OS appearance. Dark and light share the same tint, so the hue below applies to both."
+        label={t("Theme")}
+        description={t("System follows the OS appearance. Dark and light share the same tint, so the hue below applies to both.")}
       >
         <Segmented
-          label="Theme"
+          label={t("Theme")}
           value={appearance.themePreference}
           options={[
-            { value: "system", label: "System" },
-            { value: "dark", label: "Dark" },
-            { value: "light", label: "Light" },
+            { value: "system", label: t("System") },
+            { value: "dark", label: t("Dark") },
+            { value: "light", label: t("Light") },
           ]}
           onChange={appearance.onThemePreference}
         />
       </Row>
       <Row
-        label="Sidebar opacity"
-        description="How much of the desktop shows through the sidebar and the project rail."
+        label={t("Sidebar opacity")}
+        description={t("How much of the desktop shows through the sidebar and the project rail.")}
       >
         <Slider
-          label="Sidebar opacity"
+          label={t("Sidebar opacity")}
           value={percent}
           display={`${percent}%`}
           min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
@@ -792,11 +793,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         />
       </Row>
       <Row
-        label="Blur radius"
-        description="Background blur behind the window. Higher values cost more to composite."
+        label={t("Blur radius")}
+        description={t("Background blur behind the window. Higher values cost more to composite.")}
       >
         <Slider
-          label="Blur radius"
+          label={t("Blur radius")}
           value={appearance.blur}
           display={String(appearance.blur)}
           min={SIDEBAR_BLUR_MIN}
@@ -804,9 +805,9 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           onChange={appearance.onBlur}
         />
       </Row>
-      <Row label="Hue" description="Base hue for accents and tinted surfaces.">
+      <Row label={t("Hue")} description={t("Base hue for accents and tinted surfaces.")}>
         <Slider
-          label="Hue"
+          label={t("Hue")}
           value={appearance.themeHue}
           display={`${appearance.themeHue}°`}
           min={THEME_HUE_MIN}
@@ -817,11 +818,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         />
       </Row>
       <Row
-        label="Saturation"
-        description="How strongly the hue tints the interface. Zero keeps it neutral."
+        label={t("Saturation")}
+        description={t("How strongly the hue tints the interface. Zero keeps it neutral.")}
       >
         <Slider
-          label="Saturation"
+          label={t("Saturation")}
           value={appearance.themeSaturation}
           display={`${appearance.themeSaturation}%`}
           min={THEME_SATURATION_MIN}
@@ -830,11 +831,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         />
       </Row>
       <Row
-        label="Main pane glass"
-        description="Extend the translucent treatment to the main pane behind sessions and editors."
+        label={t("Main pane glass")}
+        description={t("Extend the translucent treatment to the main pane behind sessions and editors.")}
       >
         <Toggle
-          label="Main pane glass"
+          label={t("Main pane glass")}
           on={appearance.bodyGlass}
           onChange={appearance.onBodyGlass}
         />
@@ -845,21 +846,21 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
 
 function KeybindingsPage() {
   const [query, setQuery] = useState("");
-  const rows = useMemo(() => filterKeybindings(KEYBINDINGS, query), [query]);
+  const rows = useMemo(() => filterKeybindings(getKeybindings(), query), [query]);
 
   return (
     <>
       <div className="flex items-center justify-end gap-3 pb-3">
         <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
-          {rows.length} {rows.length === 1 ? "binding" : "bindings"}
+          {rows.length} {rows.length === 1 ? t("binding") : t("bindings")}
         </span>
         <label className="flex h-7 w-52 shrink-0 items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20">
           <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter"
-            aria-label="Filter keybindings"
+            placeholder={t("Filter")}
+            aria-label={t("Filter keybindings")}
             spellCheck={false}
             autoComplete="off"
             className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -869,13 +870,13 @@ function KeybindingsPage() {
 
       <div className="overflow-hidden rounded-lg border border-content/10">
         <div className="flex items-center border-b border-content/10 bg-content/5 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-content/40">
-          <span className="min-w-0 flex-1">Command</span>
-          <span className="w-40 shrink-0">Keybinding</span>
-          <span className="w-28 shrink-0">When</span>
+          <span className="min-w-0 flex-1">{t("Command")}</span>
+          <span className="w-40 shrink-0">{t("Keybinding")}</span>
+          <span className="w-28 shrink-0">{t("When")}</span>
         </div>
         {rows.length === 0 ? (
           <p className="px-3 py-3 text-[12px] text-content/45">
-            No matching bindings
+            {t("No matching bindings")}
           </p>
         ) : (
           rows.map((row) => (
@@ -896,8 +897,7 @@ function KeybindingsPage() {
       </div>
 
       <p className="pt-3 text-[12px] text-content/40">
-        Bindings come from the app menu and the workspace key handler; they
-        aren’t customizable yet.
+        {t("Bindings come from the app menu and the workspace key handler; they aren't customizable yet.")}
       </p>
     </>
   );
@@ -935,11 +935,7 @@ function ProvidersPage() {
   return (
     <>
       <p className="pb-2 text-[12px] leading-relaxed text-content/45">
-        A provider is listed as installed once its CLI is found on your PATH.
-        Uninstalled CLIs stay listed here but are omitted from the model picker.
-        Turn off Show in picker to hide an installed provider from those tabs.
-        The model beside each provider is what new conversations use when that
-        provider is selected; Use by default picks the provider itself.
+        {t("A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed here but are omitted from the model picker. Turn off Show in picker to hide an installed provider from those tabs. The model beside each provider is what new conversations use when that provider is selected; Use by default picks the provider itself.")}
       </p>
       {HARNESSES.map((harness) => (
         <ProviderRow
@@ -996,23 +992,23 @@ function ProviderRow({
       label={
         <span className="flex items-center gap-2">
           <HarnessIcon harness={harness} className="size-4 shrink-0" />
-          {HARNESS_TITLE[harness]}
+          {getHarnessTitle()[harness]}
           {isDefault ? (
             <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
-              Default
+              {t("Default")}
             </span>
           ) : null}
         </span>
       }
       description={
         available
-          ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
+          ? t("{0} {1} available.", [models.length, models.length === 1 ? t("model") : t("models")])
           : harnessUnavailableHint(harness)
       }
     >
       {current ? (
         <Select
-          label={`${HARNESS_TITLE[harness]} model`}
+          label={t("{0} model", [getHarnessTitle()[harness]])}
           value={current.id}
           onChange={(next) => onModelChange(harness, next)}
           options={models.map((item) => ({
@@ -1025,13 +1021,13 @@ function ProviderRow({
         onClick={() => current && onDefault(harness, current.id)}
         disabled={isDefault || !current}
       >
-        {isDefault ? "Default" : "Use by default"}
+        {isDefault ? t("Default") : t("Use by default")}
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">Show in picker</span>
+          <span className="text-[12px] text-content/50">{t("Show in picker")}</span>
           <Toggle
-            label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
+            label={t("Show {0} in the model picker", [getHarnessTitle()[harness]])}
             on={inPicker}
             onChange={onPickerVisible}
           />
@@ -1094,11 +1090,10 @@ function ArchivePage({
 
   return (
     <>
-      <Heading title="Archived projects" first />
+      <Heading title={t("Archived projects")} first />
       {archivedProjects.length === 0 ? (
         <p className="py-3 text-[12px] text-content/45">
-          Archive a project from the rail to keep its chats without listing it
-          in the sidebar.
+          {t("Archive a project from the rail to keep its chats without listing it in the sidebar.")}
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-content/10">
@@ -1117,12 +1112,12 @@ function ArchivePage({
               </div>
               {onRestoreProject ? (
                 <SecondaryButton onClick={() => onRestoreProject(project.path)}>
-                  Restore
+                  {t("Restore")}
                 </SecondaryButton>
               ) : null}
               {onDeleteProject ? (
                 <SecondaryButton danger onClick={() => setDeleting(project)}>
-                  Delete
+                  {t("Delete")}
                 </SecondaryButton>
               ) : null}
             </div>
@@ -1131,11 +1126,11 @@ function ArchivePage({
       )}
 
       <Row
-        label="Show archived in the sidebar"
-        description="Keep archived conversations listed alongside the active ones."
+        label={t("Show archived in the sidebar")}
+        description={t("Keep archived conversations listed alongside the active ones.")}
       >
         <Toggle
-          label="Show archived in the sidebar"
+          label={t("Show archived in the sidebar")}
           on={filters.showArchived}
           onChange={onShowArchived}
         />
@@ -1144,18 +1139,18 @@ function ArchivePage({
       <Heading
         title={
           looksLikeProject(cwd)
-            ? `Archived in ${projectName(cwd)}`
-            : "Archived conversations"
+            ? t("Archived in {0}", [projectName(cwd)])
+            : t("Archived conversations")
         }
       />
 
       {!looksLikeProject(cwd) ? (
         <p className="py-3 text-[12px] text-content/45">
-          Open a project to see its archived conversations.
+          {t("Open a project to see its archived conversations.")}
         </p>
       ) : archived.length === 0 ? (
         <p className="py-3 text-[12px] text-content/45">
-          No archived conversations in this project.
+          {t("No archived conversations in this project.")}
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-content/10">
@@ -1181,13 +1176,13 @@ function ArchivePage({
               <SecondaryButton
                 onClick={() => onArchiveSession(session.id, false)}
               >
-                Unarchive
+                {t("Unarchive")}
               </SecondaryButton>
               <SecondaryButton
                 danger
                 onClick={() => onDeleteSession(session.id)}
               >
-                Delete
+                {t("Delete")}
               </SecondaryButton>
             </div>
           ))}

@@ -3,6 +3,7 @@ import { MAX_PREVIEW_LINES } from "../lib/harness/preview";
 import { displayPath, resolveWorkspacePath } from "../lib/paths";
 import type { ToolPreview, ToolPreviewLine } from "../lib/session";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { t } from "../lib/i18n";
 
 type Status = "pending" | "accepted" | "rejected";
 
@@ -78,7 +79,7 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
   const deleted = preview.deletions ?? 0;
   const label = path
     ? displayPath(path, cwd)
-    : fileName || preview.title || "File";
+    : fileName || preview.title || t("File");
 
   return (
     <div className="overflow-hidden rounded-[10px] border border-content/10 bg-content/6">

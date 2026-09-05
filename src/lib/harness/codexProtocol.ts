@@ -12,6 +12,7 @@ import {
 } from "./preview";
 import { streamTextDelta } from "./streamText";
 import type { HarnessEvent } from "./types";
+import { t } from "../i18n";
 
 /** Codex approval / sandbox settings for thread/start and turn/start. */
 export type CodexThreadConfig = {
@@ -798,7 +799,7 @@ export function mapApprovalRequest(
   if (method === "item/fileChange/requestApproval") {
     const callId = stringField(rec, "itemId");
     const reason = stringField(rec, "reason");
-    const title = reason ?? "Approve file changes";
+    const title = reason ?? t("Approve file changes");
     return {
       kind: "file-change",
       event: {

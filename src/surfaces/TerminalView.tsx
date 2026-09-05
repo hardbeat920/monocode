@@ -22,6 +22,7 @@ import {
   type TerminalFitMode,
 } from "../lib/terminalLayout";
 import { IS_MAC } from "../lib/platform";
+import { t } from "../lib/i18n";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -193,7 +194,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       (code) => {
         if (closed) return;
         const status = code == null ? "" : ` (${code})`;
-        term.writeln(`\r\n[process exited${status}]`);
+        term.writeln(`\r\n${t("[process exited{0}]", [status])}`);
       },
     );
 

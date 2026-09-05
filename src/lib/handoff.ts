@@ -1,8 +1,9 @@
 import { isEditTool } from "./harness/preview";
+import { t } from "./i18n";
 import { limitSection } from "./jsonText";
 import { displayPath } from "./paths";
 import {
-  HARNESS_TITLE,
+  getHarnessTitle,
   type Block,
   type HarnessId,
   type HandoffMeta,
@@ -11,7 +12,7 @@ import {
   type Session,
 } from "./session";
 
-export const HANDOFF_TITLE = "Handoff";
+export const HANDOFF_TITLE = t("Handoff");
 
 /** Composer chip: recap is injected on send so the user can add context first. */
 export type HandoffComposerCard = {
@@ -304,7 +305,7 @@ export function buildDeterministicHandoff(
   const sections: string[] = [];
   if (omitted > 0 || prior.length > 0 || lastAssistant) {
     const lines = [
-      omitted > 0 ? `(${omitted} earlier messages omitted)` : "",
+      omitted > 0 ? t("({0} earlier messages omitted)", [omitted]) : "",
       ...prior.map((text) =>
         `User: ${oneLine(limitSection(text, USER_LINE_LIMIT))}`,
       ),
@@ -313,22 +314,22 @@ export function buildDeterministicHandoff(
         : "",
     ].filter(Boolean);
     if (lines.length > 0) {
-      sections.push(`## Session so far\n${lines.join("\n")}`);
+      sections.push(`## ${t("Session so far")}\n${lines.join("\n")}`);
     }
   }
   if (files.size > 0) {
     sections.push(
-      `## Files edited in this session\n${[...files.values()]
+      `## ${t("Files edited in this session")}\n${[...files.values()]
         .slice(0, 40)
         .map((line) => `- ${line}`)
         .join("\n")}`,
     );
   }
   if (lastPlan) {
-    sections.push(`## Plan\n${limitSection(lastPlan, PLAN_LIMIT)}`);
+    sections.push(`## ${t("Plan")}\n${limitSection(lastPlan, PLAN_LIMIT)}`);
   }
   if (lastTasks) {
-    sections.push(`## Current tasks\n${limitSection(lastTasks, PLAN_LIMIT)}`);
+    sections.push(`## ${t("Current tasks")}\n${limitSection(lastTasks, PLAN_LIMIT)}`);
   }
 
   return limitSection(sections.join("\n\n").trim(), BRIEF_LIMIT);
@@ -340,7 +341,7 @@ export function wrapHandoffPrompt(
   userText: string,
   earlierRequests: string[] = [],
 ): string {
-  const fromTitle = HARNESS_TITLE[from];
+  const fromTitle = getHarnessTitle()[from];
   const request = userText.trim();
   const body = stripGoalSections(brief);
   const earlier = earlierRequests.map((text) => text.trim()).filter(Boolean);

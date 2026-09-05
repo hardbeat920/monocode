@@ -1,4 +1,5 @@
 import bundledChangelog from "../../CHANGELOG.md?raw";
+import { t } from "./i18n";
 
 export type ReleaseNotesTabSource = {
   version: string;
@@ -10,7 +11,7 @@ export type ReleaseNotesDocument = {
 };
 
 export function releaseNotesTitle(version: string): string {
-  return `What's new in MonoCode ${version}`;
+  return `${t("What's new in MonoCode")} ${version}`;
 }
 
 export function releaseNotesForVersion(
@@ -79,18 +80,18 @@ export function presentReleaseNotes(
 }
 
 const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
+  t("Jan"),
+  t("Feb"),
+  t("Mar"),
+  t("Apr"),
+  t("May"),
+  t("Jun"),
+  t("Jul"),
+  t("Aug"),
+  t("Sep"),
+  t("Oct"),
+  t("Nov"),
+  t("Dec"),
 ] as const;
 
 export function formatReleaseDate(iso: string): string {

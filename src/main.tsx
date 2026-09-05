@@ -7,8 +7,10 @@ import { initAppearance } from "./lib/appearance";
 import { initSounds } from "./lib/sounds";
 import { handleQuitRequested, loadBootWorkspace } from "./lib/appLifecycle";
 import { consumeInstalledUpdate } from "./lib/updateNotice";
+import { setLocale } from "./lib/i18n";
 import "./index.css";
 
+setLocale("zh-CN");
 initAppearance();
 initSounds();
 

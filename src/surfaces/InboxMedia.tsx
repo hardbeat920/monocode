@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { t } from "../lib/i18n";
 import {
   fetchInboxMedia,
   sniffInboxMedia,
@@ -75,7 +76,7 @@ export function InboxMedia({ src, alt }: Props) {
     );
   }
 
-  const label = alt?.trim() || "Image";
+  const label = alt?.trim() || t("Image");
   return (
     <img
       src={state.url}

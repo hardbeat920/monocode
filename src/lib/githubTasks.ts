@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "./i18n";
 import {
   linearConnected,
   linearTeamIdsForFetch,
@@ -364,11 +365,11 @@ export async function githubWorkItemComment(
 export function githubReviewDecisionLabel(decision: string): string {
   switch (decision.trim().toUpperCase()) {
     case "APPROVED":
-      return "Approved";
+      return t("Approved");
     case "CHANGES_REQUESTED":
-      return "Changes requested";
+      return t("Changes requested");
     case "REVIEW_REQUIRED":
-      return "Review required";
+      return t("Review required");
     default:
       return "";
   }
@@ -377,13 +378,13 @@ export function githubReviewDecisionLabel(decision: string): string {
 export function githubReviewStateLabel(state: string): string {
   switch (state.trim().toUpperCase()) {
     case "APPROVED":
-      return "Approved";
+      return t("Approved");
     case "CHANGES_REQUESTED":
-      return "Requested changes";
+      return t("Requested changes");
     case "DISMISSED":
-      return "Dismissed";
+      return t("Dismissed");
     case "COMMENTED":
-      return "Commented";
+      return t("Commented");
     default:
       return "";
   }
@@ -683,13 +684,13 @@ export function inboxItemStatus(item: {
 }): string {
   if (item.kind === "linear") {
     const type = item.stateType?.trim().toLowerCase();
-    if (type === "completed" || type === "canceled") return "Closed";
-    return "Open";
+    if (type === "completed" || type === "canceled") return t("Closed");
+    return t("Open");
   }
-  if (item.draft) return "Draft";
-  if (item.state === "merged") return "Merged";
-  if (item.state === "closed") return "Closed";
-  return "Open";
+  if (item.draft) return t("Draft");
+  if (item.state === "merged") return t("Merged");
+  if (item.state === "closed") return t("Closed");
+  return t("Open");
 }
 
 export function matchesInboxQuery(item: InboxItem, query: string): boolean {
@@ -738,9 +739,9 @@ export function inboxItemRef(item: {
 
 export function inboxStartDraft(item: InboxItem, body?: string): string {
   if (item.provider === "linear") {
-    const id = item.identifier?.trim() || `Linear #${item.number}`;
+    const id = item.identifier?.trim() || t("Linear #{0}", [String(item.number)]);
     const title = item.title.trim() || id;
-    const lines = ["Work on this Linear issue:", "", `${id} ${title}`];
+    const lines = [t("Work on this Linear issue:"), "", `${id} ${title}`];
     const url = item.url.trim();
     if (url) lines.push(url);
     const description = body?.trim();
@@ -749,10 +750,10 @@ export function inboxStartDraft(item: InboxItem, body?: string): string {
     }
     return `${lines.join("\n")}\n`;
   }
-  const kind = item.kind === "pr" ? "pull request" : "issue";
-  const title = item.title.trim() || `GitHub ${kind} #${item.number}`;
+  const kind = item.kind === "pr" ? t("pull request") : t("issue");
+  const title = item.title.trim() || t("GitHub {0} #{1}", [kind, String(item.number)]);
   const lines = [
-    `Work on this GitHub ${kind}:`,
+    t("Work on this GitHub {0}:", [kind]),
     "",
     `#${item.number} ${title}`,
   ];

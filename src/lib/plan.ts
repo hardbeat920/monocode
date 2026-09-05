@@ -1,10 +1,11 @@
 import type { BuiltinSkill } from "./skills";
+import { t } from "./i18n";
 
 export const PLAN_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "plan",
   invocation: "plan",
-  description: "Create a reviewable implementation plan before changing files.",
+  description: t("Create a reviewable implementation plan before changing files."),
   scope: "builtin",
   source: "monocode",
 };
@@ -70,9 +71,9 @@ export function planTitle(text: string): string {
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("```") || trimmed === "---") continue;
-    return unwrapMarkdown(trimmed).slice(0, 80) || "Plan";
+    return unwrapMarkdown(trimmed).slice(0, 80) || t("Plan");
   }
-  return "Plan";
+  return t("Plan");
 }
 
 /** First prose paragraph that is not the title heading. */
@@ -99,12 +100,12 @@ export function planSummary(text: string): string {
 }
 
 export function planMeta(text: string): string[] {
-  const parts: string[] = ["Plan"];
+  const parts: string[] = [t("Plan")];
   const headings = text.match(/^\s{0,3}#{1,6}\s+/gm)?.length ?? 0;
-  if (headings > 1) parts.push(`${headings} sections`);
-  if (/```\s*mermaid\b/i.test(text)) parts.push("diagram");
+  if (headings > 1) parts.push(t("{0} sections", [headings]));
+  if (/```\s*mermaid\b/i.test(text)) parts.push(t("diagram"));
   const words = text.trim().split(/\s+/).filter(Boolean).length;
-  if (words > 0) parts.push(`${words} words`);
+  if (words > 0) parts.push(t("{0} words", [words]));
   return parts;
 }
 

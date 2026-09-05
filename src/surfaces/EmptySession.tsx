@@ -1,4 +1,5 @@
 import { type ReactNode, useSyncExternalStore } from "react";
+import { t } from "../lib/i18n";
 import { basename } from "../lib/fs";
 import { looksLikeProject } from "../lib/recents";
 import {
@@ -22,8 +23,8 @@ export function EmptySession({ cwd, composer }: Props) {
   );
   const project = looksLikeProject(cwd) ? basename(cwd) : null;
   const title = project
-    ? `What should we work on in ${project}?`
-    : "What should we work on?";
+    ? t("What should we work on in {0}?", [project])
+    : t("What should we work on?");
 
   return (
     <div

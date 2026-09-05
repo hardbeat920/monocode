@@ -9,9 +9,10 @@ import {
 } from "./icons";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import {
-  SETTINGS_SECTIONS,
+  getSettingsSections,
   type SettingsSectionId,
 } from "../lib/settings";
+import { t } from "../lib/i18n";
 
 const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   general: SlidersHorizontal,
@@ -35,10 +36,10 @@ export function SettingsNav({ section, onSelect, onClose }: Props) {
     <>
       <div
         ref={lockOverscroll}
-        aria-label="Settings"
+        aria-label={t("Settings")}
         className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto overscroll-none px-2 pb-2"
       >
-        {SETTINGS_SECTIONS.map((item) => (
+        {getSettingsSections().map((item) => (
           <NavRow
             key={item.id}
             label={item.label}
@@ -49,7 +50,7 @@ export function SettingsNav({ section, onSelect, onClose }: Props) {
         ))}
       </div>
       <div className="flex shrink-0 flex-col gap-px p-2">
-        <NavRow label="Back" icon={ArrowLeft} onClick={onClose} />
+        <NavRow label={t("Back")} icon={ArrowLeft} onClick={onClose} />
       </div>
     </>
   );

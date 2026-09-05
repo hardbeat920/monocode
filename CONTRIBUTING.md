@@ -1,60 +1,60 @@
-# Contributing
+# 贡献指南
 
-MonoCode is early and I’m the only maintainer, so small and focused lands much faster than large and ambitious. Past that, the door is open - bug reports and fixes are genuinely welcome.
+MonoCode 目前还处于早期阶段，我是唯一的维护者，因此小而聚焦的改动比大而宏大的改动更容易被合并。除此之外，大门始终敞开 -- 非常欢迎提交 bug 报告和修复。
 
-Please don’t open PRs that add a new provider right now. The existing harnesses still need to agree on a few patterns, and a new adapter would copy whatever is there today. See [New providers](#new-providers).
+请暂时不要提交添加新 provider 的 PR。现有的适配层还需要在一些模式上达成一致，新增适配器只会复制当前已有的做法。参见 [新 provider](#新-provider)。
 
-## Get it running
+## 运行项目
 
-You need Node.js 20+, a current stable Rust toolchain, and at least one provider CLI installed and logged in:
+你需要 Node.js 20+、当前稳定的 Rust 工具链，以及至少一个已安装并登录的 provider CLI：
 
 - [Claude Code](https://claude.com/product/claude-code) - `claude auth login`
 - [Codex](https://developers.openai.com/codex/cli) - `codex login`
 - [Cursor CLI](https://cursor.com/cli) - `agent login`
-- [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
+- [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` 然后 `grok login`
 - [OpenCode](https://opencode.ai) - `opencode auth login`
 - [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
 - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
-- [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`
+- [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` 然后 `fx login`
 
-macOS and Linux are supported targets. On Debian/Ubuntu, `npm run setup:linux:deb` installs the native Tauri build dependencies.
+支持 macOS 和 Linux 平台。在 Debian/Ubuntu 上，`npm run setup:linux:deb` 会安装 Tauri 的原生构建依赖。
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-One provider is enough. MonoCode probes for each CLI at startup and disables the ones it can’t find, with a hint about how to install them, so a missing Codex doesn’t stop you from working on anything else.
+一个 provider 就够了。MonoCode 在启动时会探测每个 CLI，找不到的会自动禁用，并给出安装提示，所以缺少 Codex 不会影响你开发其他功能。
 
-## Where things live
+## 项目结构
 
-- `src/chrome/` - the window frame: title bar, sidebar, composer, tabs, model picker
-- `src/surfaces/` - the panes inside a tab: transcript, file editor, diff, terminal
-- `src/lib/harness/` - one adapter per provider, plus the registry they plug into
-- `src-tauri/src/` - the Rust side: PTYs, filesystem and git, session storage, native window
+- `src/chrome/` - 窗口框架：标题栏、侧边栏、编辑器、标签页、模型选择器
+- `src/surfaces/` - 标签页内的面板：对话记录、文件编辑器、diff、终端
+- `src/lib/harness/` - 每个 provider 一个适配器，以及它们接入的注册中心
+- `src-tauri/src/` - Rust 端：PTY、文件系统和 git、会话存储、原生窗口
 
-`src/lib/harness/` is the most useful place to start if you want to fix something real. Each provider has an adapter (`claudeAdapter.ts`) that implements the shared `HarnessAdapter` lifecycle from `registry.ts`, and a protocol module (`claudeProtocol.ts`) that translates the CLI’s output into MonoCode’s own event types. The protocol modules are pure functions with unit tests beside them, so you can fix a Codex parsing bug with only Claude Code installed. That’s for the providers we already ship - please don’t add a new one yet.
+如果你想修复一些实际问题，`src/lib/harness/` 是最好的起点。每个 provider 都有一个适配器（`claudeAdapter.ts`），实现了 `registry.ts` 中定义的共享 `HarnessAdapter` 生命周期，还有一个协议模块（`claudeProtocol.ts`），负责将 CLI 的输出转换为 MonoCode 自身的事件类型。协议模块是纯函数，旁边就有单元测试，所以即使只安装了 Claude Code，你也可以修复 Codex 的解析 bug。以上是针对我们已有的 provider -- 请暂时不要添加新的。
 
-## Before you push
+## 提交前检查
 
 ```bash
 npm run check
 ```
 
-That runs what CI runs: vitest, `tsc --noEmit`, `cargo fmt`, `cargo clippy`, and `cargo test`. If it’s green locally it should be green on GitHub. `npm run check:web` and `npm run check:rust` run the two halves separately when you only touched one side.
+这会运行 CI 中的所有检查：vitest、`tsc --noEmit`、`cargo fmt`、`cargo clippy` 和 `cargo test`。如果本地通过，在 GitHub 上也应该通过。`npm run check:web` 和 `npm run check:rust` 可以分别运行前端和后端的检查，适用于你只修改了一侧的情况。
 
-## New providers
+## 新 provider
 
-I’m pausing new harnesses until the current ones share the same patterns - session lifecycle, catalog probes, usage, approvals, and how slash commands and skills are wired. A PR that adds another provider will be closed for now, even if the work is good. Fixes, tests, and protocol bugs on Claude, Codex, Cursor, Grok, OpenCode, Pi, omp, and fx are still the best kind of contribution.
+我正在暂停添加新的适配层，直到现有的适配层在以下方面达成一致：会话生命周期、目录探测、用量统计、审批流程，以及斜杠命令和技能的接入方式。新增 provider 的 PR 目前会被关闭，即使代码质量很好。对 Claude、Codex、Cursor、Grok、OpenCode、Pi、omp 和 fx 的修复、测试和协议 bug 修复仍然是最好的贡献方式。
 
-When the pause lifts, this section goes away.
+暂停解除后，本节将被移除。
 
-## Pull requests
+## Pull 请求
 
-Keep a PR to one thing, and say what changed and why. The [PR template](.github/pull_request_template.md) covers the rest. If it changes the UI, a before/after screenshot helps a lot.
+一个 PR 只做一件事，并说明改了什么以及为什么。[PR 模板](.github/pull_request_template.md) 涵盖了其余内容。如果涉及 UI 变更，附上变更前后的截图会很有帮助。
 
-For anything that moves product direction - a new surface, new provider behavior, a refactor that changes the shape of the app - open an issue first. That’s not gatekeeping, I’d just rather you hear “I’m already halfway through that” before you write it than after. New providers are the exception: don’t send the adapter, even from an issue, until the pause above is gone.
+对于影响产品方向的改动 -- 新的界面层、新的 provider 行为、改变应用结构的重构 -- 请先开一个 issue。这不是在设置门槛，我只是希望你在动手之前就能听到"我已经做了一半了"，而不是做完之后才知道。新 provider 是例外：在上面的暂停解除之前，即使有对应的 issue，也不要提交适配器代码。
 
-I might close a PR, ask you to shrink it, or end up implementing the idea differently. That’s a call about scope and timing, not about you or the quality of your work.
+我可能会关闭一个 PR、要求你缩小范围，或者最终用不同的方式实现这个想法。这是关于范围和时机的决定，不是针对你或你工作的质量。
 
-Be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Security reports: [SECURITY.md](SECURITY.md).
+请保持友善：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。安全报告：[SECURITY.md](SECURITY.md)。

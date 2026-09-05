@@ -1,5 +1,6 @@
 import { X } from "./icons";
 import type { InstalledUpdate } from "../lib/updateNotice";
+import { t } from "../lib/i18n";
 
 type Props = {
   update: InstalledUpdate | null;
@@ -30,16 +31,16 @@ export function UpdateRailCard({ update, onOpen, onDismiss }: Props) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[12px] font-medium leading-tight text-content">
-            Updated to {update.version}
+            {t("Updated to {0}", [update.version])}
           </span>
           <span className="mt-0.5 block truncate text-[11px] leading-tight text-content/50">
-            What's new
+            {t("What's new")}
           </span>
         </span>
       </button>
       <button
         type="button"
-        aria-label="Dismiss update notification"
+        aria-label={t("Dismiss update notification")}
         onClick={onDismiss}
         className="absolute right-1 top-1 grid size-6 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >

@@ -1,8 +1,10 @@
+import { t } from "./i18n";
+
 /** Bundled MonoCode skill: teach the agent how to write portable SKILL.md files. */
 export const CREATE_SKILL_NAME = "create-skill";
 
 export const CREATE_SKILL_DESCRIPTION =
-  "Create a MonoCode skill as a SKILL.md in .agents/skills. Use when the user wants to author, write, save, or scaffold a skill, or asks about skill format.";
+  t("Create a MonoCode skill as a SKILL.md in .agents/skills. Use when the user wants to author, write, save, or scaffold a skill, or asks about skill format.");
 
 export const CREATE_SKILL_BODY = `---
 name: create-skill

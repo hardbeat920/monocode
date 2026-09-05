@@ -6,6 +6,7 @@ import {
   isLiveHarness,
   killAllChildren,
 } from "./harness";
+import { t } from "./i18n";
 import {
   hasInFlightSessions,
   inFlightRefs,
@@ -350,9 +351,9 @@ async function confirmQuitAndExit(
     const refs = inFlightRefs(sessions, tabs);
     if (refs.length > 0) {
       const ok = await ask(quitWhileBusyMessage(refs.length), {
-        title: "MonoCode",
+        title: t("MonoCode"),
         kind: "warning",
-        okLabel: "Quit",
+        okLabel: t("Quit"),
       });
       if (!ok) return;
     }

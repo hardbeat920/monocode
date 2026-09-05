@@ -4,6 +4,7 @@ import { isTaskListToolName } from "../taskList";
 import type { PiFlavor } from "./piFlavor";
 import { extractToolPreview, titleFromToolInput } from "./preview";
 import { streamTextDelta } from "./streamText";
+import { t } from "../i18n";
 
 /** Images Pi RPC accepts on `prompt` / `steer`. */
 export const SUPPORTED_PI_IMAGE_MIME_TYPES = new Set([
@@ -254,7 +255,7 @@ export function parseExtensionUiRequest(
     return {
       id,
       method,
-      title: stringField(rec, "title") ?? "Choose an option",
+      title: stringField(rec, "title") ?? t("Choose an option"),
       options,
     };
   }
@@ -262,7 +263,7 @@ export function parseExtensionUiRequest(
     return {
       id,
       method,
-      title: stringField(rec, "title") ?? "Confirm",
+      title: stringField(rec, "title") ?? t("Confirm"),
       message: stringField(rec, "message") ?? "",
     };
   }
