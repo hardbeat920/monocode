@@ -1,5 +1,6 @@
 import { homeDir } from "../fs";
 import {
+  MODELS,
   setHarnessModels,
   type AgentModel,
   type ModelSetting,
@@ -26,6 +27,16 @@ type OpenCodeModelJson = {
   limit?: { context?: number; input?: number; output?: number };
 };
 
+type OpenRouterModelJson = {
+  id?: string;
+  name?: string;
+  context_length?: number;
+  architecture?: {
+    input_modalities?: string[];
+    output_modalities?: string[];
+  };
+};
+
 type ParsedProvider = {
   id: string;
   name: string;
@@ -44,7 +55,15 @@ export function refreshOpenCodeCatalog(): Promise<void> {
   if (inflight) return inflight;
   inflight = discoverOpenCodeModels()
     .then((models) => {
-      if (models.length > 0) setHarnessModels("opencode", models);
+      const byHarness = new Map<AgentModel["harness"], AgentModel[]>();
+      for (const model of models) {
+        const entries = byHarness.get(model.harness) ?? [];
+        entries.push(model);
+        byHarness.set(model.harness, entries);
+      }
+      for (const [harness, entries] of byHarness) {
+        if (entries.length > 0) setHarnessModels(harness, entries);
+      }
     })
     .catch((error: unknown) => {
       console.debug("[monocode] opencode catalog", error);
@@ -80,7 +99,40 @@ async function discoverOpenCodeModels(): Promise<AgentModel[]> {
   } catch (error) {
     console.debug("[monocode] opencode agents", error);
   }
-  return flattenOpenCodeModels(parsed, agents);
+  const models = flattenOpenCodeModels(parsed, agents);
+  const openRouterModels = await discoverOpenRouterModels();
+  return [...models, ...openRouterModels];
+}
+
+async function discoverOpenRouterModels(): Promise<AgentModel[]> {
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/models");
+    if (!response.ok) throw new Error(`OpenRouter models HTTP ${response.status}`);
+    const payload = (await response.json()) as { data?: OpenRouterModelJson[] };
+    return (payload.data ?? [])
+      .filter((model) => {
+        const input = model.architecture?.input_modalities ?? ["text"];
+        const output = model.architecture?.output_modalities ?? ["text"];
+        return input.includes("text") && output.includes("text");
+      })
+      .flatMap((model) => {
+        const nativeId = model.id?.trim();
+        if (!nativeId) return [];
+        return [{
+          id: `openrouter:openrouter/${nativeId}`,
+          harness: "openrouter" as const,
+          name: model.name?.trim() || nativeId,
+          nativeId: `openrouter/${nativeId}`,
+          ...(model.context_length && model.context_length > 0
+            ? { contextWindow: model.context_length }
+            : {}),
+        }];
+      })
+      .sort((left, right) => left.name.localeCompare(right.name));
+  } catch (error) {
+    console.debug("[monocode] openrouter public catalog", error);
+    return [];
+  }
 }
 
 export function parseModelsCliOutput(stdout: string): {
@@ -184,10 +236,12 @@ export function flattenOpenCodeModels(
     for (const [modelId, model] of Object.entries(provider.models)) {
       const name = model.name?.trim() || titleCaseSlug(modelId);
       const nativeId = `${provider.id}/${model.id ?? modelId}`;
+      if (isRetiredModel(nativeId)) continue;
+      const harness = providerHarness(provider.id);
       const contextWindow = model.limit?.context;
       models.push({
-        id: `opencode:${nativeId}`,
-        harness: "opencode",
+        id: `${harness}:${nativeId}`,
+        harness,
         name,
         nativeId,
         settings: openCodeModelSettings(provider.id, model, primaryAgents),
@@ -195,7 +249,50 @@ export function flattenOpenCodeModels(
       });
     }
   }
+  // Keep the providers MonoCode knows about even when the local OpenCode
+  // installation has not emitted them yet. Once configured, the live catalog
+  // entries above replace these fallback entries by their complete metadata.
+  const seen = new Set(models.map((model) => model.nativeId));
+  for (const model of MODELS) {
+    if (
+      !["opencode", "zai", "mimo", "openrouter", "nvidia"].includes(model.harness) ||
+      !model.nativeId ||
+      seen.has(model.nativeId) ||
+      isRetiredModel(model.nativeId)
+    ) {
+      continue;
+    }
+    models.push(model);
+  }
   return models.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function isRetiredModel(nativeId: string): boolean {
+  return new Set([
+    "nvidia/deepseek-ai/deepseek-v4-pro",
+    "nvidia/z-ai/glm-5.2",
+    "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/nvidia/nvidia-nemotron-nano-9b-v2",
+    "nvidia/nvidia/nemotron-nano-12b-v2-vl",
+  ]).has(nativeId);
+}
+
+function providerHarness(providerID: string): AgentModel["harness"] {
+  if (
+    providerID === "zai" ||
+    providerID === "zai-coding-plan"
+  ) {
+    return "zai";
+  }
+  if (
+    providerID === "mimo" ||
+    providerID.startsWith("xiaomi-token-plan-")
+  ) {
+    return "mimo";
+  }
+  if (providerID === "openrouter") return "openrouter";
+  if (providerID === "nvidia") return "nvidia";
+  return "opencode";
 }
 
 function openCodeModelSettings(

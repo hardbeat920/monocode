@@ -6,6 +6,10 @@ import fx from "../assets/providers/fx.svg";
 import grok from "../assets/providers/grok.svg";
 import omp from "../assets/providers/omp.svg";
 import opencode from "../assets/providers/opencode.svg";
+import zai from "../assets/providers/zai.svg";
+import mimo from "../assets/providers/mimo.svg";
+import openrouter from "../assets/providers/openrouter.svg";
+import nvidia from "../assets/providers/nvidia.svg";
 import pi from "../assets/providers/pi.svg";
 import type { HarnessId } from "../lib/session";
 
@@ -15,6 +19,10 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   cursor,
   grok,
   opencode,
+  zai,
+  mimo,
+  openrouter,
+  nvidia,
   pi,
   omp,
   fx,
@@ -25,6 +33,10 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "cursor",
   "grok",
   "opencode",
+  "zai",
+  "mimo",
+  "openrouter",
+  "nvidia",
   "pi",
   "omp",
   "fx",
@@ -83,16 +95,6 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
-  if (harness === "opencode") {
-    return (
-      <MonoIcon className={className}>
-        <path
-          fillRule="evenodd"
-          d="M20.4 5.8H8.8V23.2H20.4V5.8ZM26.2 29H3V0H26.2V29Z"
-        />
-      </MonoIcon>
-    );
-  }
   if (harness === "pi") {
     return (
       <MonoIcon className={className}>
@@ -117,12 +119,24 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
+  if (harness === "opencode") {
+    return (
+      <MonoIcon className={className}>
+        <path
+          fillRule="evenodd"
+          d="M20.4 5.8H8.8V23.2H20.4V5.8ZM26.2 29H3V0H26.2V29Z"
+        />
+      </MonoIcon>
+    );
+  }
   return (
     <img
       src={HARNESS_ICONS[harness]}
       alt=""
       draggable={false}
-      className={`block object-contain ${className}`}
+      className={`block object-contain ${
+        MONOCHROME_HARNESSES.has(harness) ? "provider-icon-monochrome" : ""
+      } ${className}`}
     />
   );
 }

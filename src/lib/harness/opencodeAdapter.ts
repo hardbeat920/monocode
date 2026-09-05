@@ -18,6 +18,7 @@ import {
 import { generateOpenCodeSessionTitle } from "./opencodeTitle";
 import { warmupOpenCodeText } from "./opencodeText";
 import { registerHarness, type HarnessAdapter } from "./registry";
+import type { HarnessId } from "../session";
 
 export const openCodeAdapter: HarnessAdapter = {
   id: "opencode",
@@ -46,3 +47,16 @@ export function ensureOpenCodeRegistered(): void {
   registerHarness(openCodeAdapter);
   registered = true;
 }
+
+/**
+ * OpenAI-compatible providers use the OpenCode runtime, but remain separate
+ * provider tabs in MonoCode. The selected model's native id tells OpenCode
+ * which provider/model pair to route to.
+ */
+export function ensureOpenCodeProviderRegistered(id: Exclude<HarnessId, "opencode">): void {
+  if (registeredProviders.has(id)) return;
+  registerHarness({ ...openCodeAdapter, id, refreshCatalog: refreshOpenCodeCatalog });
+  registeredProviders.add(id);
+}
+
+const registeredProviders = new Set<HarnessId>();
