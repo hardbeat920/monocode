@@ -13,6 +13,7 @@ import {
   X,
 } from "../chrome/icons";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -149,6 +150,9 @@ export function AgentTranscript({
   const wasVisible = useRef(false);
   const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURNS);
+  const [expandedActivityTurns, setExpandedActivityTurns] = useState<
+    Set<string>
+  >(() => new Set());
   // Stretch the last turn after a send while this tab stays open. Closing
   // the tab is a new visit: the remount uses the true transcript height so
   // the latest reply sits on the composer instead of a hole of empty space.
@@ -365,6 +369,17 @@ export function AgentTranscript({
                 item.type === "activity" ? item.blocks : [],
               )
             : [];
+          const turnId = turn[0].id;
+          const compactActivityExpanded =
+            compactActivity && expandedActivityTurns.has(turnId);
+          const toggleCompactActivity = () => {
+            setExpandedActivityTurns((current) => {
+              const next = new Set(current);
+              if (next.has(turnId)) next.delete(turnId);
+              else next.add(turnId);
+              return next;
+            });
+          };
           const turnHarness = harness
             ? harnessForTurn(blocks, turn, harness)
             : undefined;
@@ -382,18 +397,26 @@ export function AgentTranscript({
               {items.map((item, itemIndex) =>
                 item.type === "activity" ? (
                   compactActivity ? (
-                    itemIndex === foldedAt ? (
-                      <ActivityPhases
-                        key={item.blocks[0].id}
-                        blocks={compactActivityBlocks}
-                        cwd={cwd}
-                        done
-                        compact
-                        onApproval={onApproval}
-                        onOpenFile={onOpenFile}
-                        onOpenDiff={onOpenDiff}
-                      />
-                    ) : null
+                    <Fragment key={item.blocks[0].id}>
+                      {compactActivityExpanded ? (
+                        <ActivityPhases
+                          blocks={item.blocks}
+                          cwd={cwd}
+                          done
+                          defaultOpen
+                          onApproval={onApproval}
+                          onOpenFile={onOpenFile}
+                          onOpenDiff={onOpenDiff}
+                        />
+                      ) : null}
+                      {itemIndex === foldedAt ? (
+                        <ActivitySummary
+                          blocks={compactActivityBlocks}
+                          expanded={compactActivityExpanded}
+                          onToggle={toggleCompactActivity}
+                        />
+                      ) : null}
+                    </Fragment>
                   ) : itemIndex === initialThinkingAt ? (
                     <InitialThinking key={item.blocks[0].id} live={!settled} />
                   ) : (
@@ -945,7 +968,7 @@ function ActivityPhases({
   blocks,
   cwd,
   done,
-  compact = false,
+  defaultOpen = false,
   onApproval,
   onOpenFile,
   onOpenDiff,
@@ -953,52 +976,12 @@ function ActivityPhases({
   blocks: Block[];
   cwd?: string;
   done?: boolean;
-  compact?: boolean;
+  defaultOpen?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
   const phases = useMemo(() => buildActivityPhases(blocks), [blocks]);
-  const [expanded, setExpanded] = useState(false);
-
-  if (compact) {
-    const summary = activitySummary(blocks);
-    return (
-      <div className="flex min-w-0 flex-col px-4">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-label={expanded ? "Hide activity" : `Show activity: ${summary}`}
-          onClick={() => setExpanded((value) => !value)}
-          className="group flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
-        >
-          <ChevronRight
-            className={`size-3.5 shrink-0 text-content/45 transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}
-            strokeWidth={1.75}
-          />
-          <span className="min-w-0 flex-1 truncate font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
-            {summary}
-          </span>
-        </button>
-        {expanded ? (
-          <div className="flex min-w-0 flex-col gap-1">
-            {phases.map((phase) => (
-              <ActivityPhaseGroup
-                key={phase.id}
-                phase={phase}
-                cwd={cwd}
-                active={false}
-                defaultOpen
-                onApproval={onApproval}
-                onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
-              />
-            ))}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
 
   return (
     <div className="flex min-w-0 flex-col gap-1 px-4">
@@ -1008,11 +991,43 @@ function ActivityPhases({
           phase={phase}
           cwd={cwd}
           active={!done && index === phases.length - 1}
+          defaultOpen={defaultOpen}
           onApproval={onApproval}
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
         />
       ))}
+    </div>
+  );
+}
+
+function ActivitySummary({
+  blocks,
+  expanded,
+  onToggle,
+}: {
+  blocks: Block[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const summary = activitySummary(blocks);
+  return (
+    <div className="flex min-w-0 flex-col px-4">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={expanded ? "Hide activity" : `Show activity: ${summary}`}
+        onClick={onToggle}
+        className="group flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
+      >
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-content/45 transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}
+          strokeWidth={1.75}
+        />
+        <span className="min-w-0 flex-1 truncate font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
+          {summary}
+        </span>
+      </button>
     </div>
   );
 }
