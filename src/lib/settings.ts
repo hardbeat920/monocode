@@ -80,6 +80,48 @@ const COMPOSER_RUNNER_KEY = "monocode.composerRunner";
 
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 
+const AUTO_COLLAPSE_ACTIVITY_KEY = "monocode.autoCollapseActivity";
+
+export const AUTO_COLLAPSE_ACTIVITY_DEFAULT = true;
+
+/** Fired on `window` when settled transcript activity compactness changes. */
+export const AUTO_COLLAPSE_ACTIVITY_CHANGE_EVENT =
+  "monocode:auto-collapse-activity-change";
+
+export function loadAutoCollapseActivity(): boolean {
+  try {
+    const raw = localStorage.getItem(AUTO_COLLAPSE_ACTIVITY_KEY);
+    if (raw == null) return AUTO_COLLAPSE_ACTIVITY_DEFAULT;
+    return raw === "1" || raw === "true";
+  } catch {
+    return AUTO_COLLAPSE_ACTIVITY_DEFAULT;
+  }
+}
+
+export function saveAutoCollapseActivity(value: boolean) {
+  try {
+    localStorage.setItem(AUTO_COLLAPSE_ACTIVITY_KEY, value ? "1" : "0");
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(AUTO_COLLAPSE_ACTIVITY_CHANGE_EVENT, {
+      detail: value,
+    }),
+  );
+}
+
+export function subscribeAutoCollapseActivity(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(AUTO_COLLAPSE_ACTIVITY_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(
+      AUTO_COLLAPSE_ACTIVITY_CHANGE_EVENT,
+      onStoreChange,
+    );
+}
+
 export type FollowUpBehavior = "steer" | "queue";
 
 export const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = "steer";

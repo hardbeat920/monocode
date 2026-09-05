@@ -13,6 +13,7 @@ import {
   X,
 } from "../chrome/icons";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -20,6 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { AttachmentChip } from "../chrome/AttachmentChip";
 import { FilePreview } from "../chrome/FilePreview";
@@ -61,10 +63,16 @@ import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../lib/appearance";
+import {
+  AUTO_COLLAPSE_ACTIVITY_DEFAULT,
+  loadAutoCollapseActivity,
+  subscribeAutoCollapseActivity,
+} from "../lib/settings";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
 import {
   activityPhaseTitle,
+  activitySummary,
   activityStillRunning,
   buildActivityPhases,
   editVerb,
@@ -142,6 +150,9 @@ export function AgentTranscript({
   const wasVisible = useRef(false);
   const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURNS);
+  const [expandedActivityTurns, setExpandedActivityTurns] = useState<
+    Set<string>
+  >(() => new Set());
   // Stretch the last turn after a send while this tab stays open. Closing
   // the tab is a new visit: the remount uses the true transcript height so
   // the latest reply sits on the composer instead of a hole of empty space.
@@ -152,6 +163,11 @@ export function AgentTranscript({
   );
   const transcriptLayout = useTranscriptLayout();
   const promptAnchor = useTranscriptAnchor();
+  const autoCollapseActivity = useSyncExternalStore(
+    subscribeAutoCollapseActivity,
+    loadAutoCollapseActivity,
+    () => AUTO_COLLAPSE_ACTIVITY_DEFAULT,
+  );
   const lastUserId = lastUserBlockId(blocks);
   const seenUserId = useRef(lastUserId);
   if (lastUserId !== seenUserId.current) {
@@ -328,6 +344,9 @@ export function AgentTranscript({
           // Earlier activity groups have already been followed by prose or
           // more work. Only the last one can still be the live group.
           const foldedAt = lastActivityIndex(items);
+          const firstActivityAt = items.findIndex(
+            (item) => item.type === "activity",
+          );
           const initialThinkingAt = initialThinkingIndex(items);
           const startedAt = userBlock?.startedAt;
           // The agent starting its answer is the end of the work: fold the
@@ -341,6 +360,26 @@ export function AgentTranscript({
                 (item) => item.type === "block" && isProseBlock(item.block),
               );
           const workStillRunning = activityStillRunning(turn);
+          const compactActivity =
+            autoCollapseActivity &&
+            firstActivityAt >= 0 &&
+            (settled || (answering && !workStillRunning));
+          const compactActivityBlocks = compactActivity
+            ? items.flatMap((item) =>
+                item.type === "activity" ? item.blocks : [],
+              )
+            : [];
+          const turnId = turn[0].id;
+          const compactActivityExpanded =
+            compactActivity && expandedActivityTurns.has(turnId);
+          const toggleCompactActivity = () => {
+            setExpandedActivityTurns((current) => {
+              const next = new Set(current);
+              if (next.has(turnId)) next.delete(turnId);
+              else next.add(turnId);
+              return next;
+            });
+          };
           const turnHarness = harness
             ? harnessForTurn(blocks, turn, harness)
             : undefined;
@@ -357,7 +396,28 @@ export function AgentTranscript({
             >
               {items.map((item, itemIndex) =>
                 item.type === "activity" ? (
-                  itemIndex === initialThinkingAt ? (
+                  compactActivity ? (
+                    <Fragment key={item.blocks[0].id}>
+                      {compactActivityExpanded ? (
+                        <ActivityPhases
+                          blocks={item.blocks}
+                          cwd={cwd}
+                          done
+                          defaultOpen
+                          onApproval={onApproval}
+                          onOpenFile={onOpenFile}
+                          onOpenDiff={onOpenDiff}
+                        />
+                      ) : null}
+                      {itemIndex === foldedAt ? (
+                        <ActivitySummary
+                          blocks={compactActivityBlocks}
+                          expanded={compactActivityExpanded}
+                          onToggle={toggleCompactActivity}
+                        />
+                      ) : null}
+                    </Fragment>
+                  ) : itemIndex === initialThinkingAt ? (
                     <InitialThinking key={item.blocks[0].id} live={!settled} />
                   ) : (
                     <ActivityPhases
@@ -908,6 +968,7 @@ function ActivityPhases({
   blocks,
   cwd,
   done,
+  defaultOpen = false,
   onApproval,
   onOpenFile,
   onOpenDiff,
@@ -915,6 +976,7 @@ function ActivityPhases({
   blocks: Block[];
   cwd?: string;
   done?: boolean;
+  defaultOpen?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
@@ -929,11 +991,43 @@ function ActivityPhases({
           phase={phase}
           cwd={cwd}
           active={!done && index === phases.length - 1}
+          defaultOpen={defaultOpen}
           onApproval={onApproval}
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
         />
       ))}
+    </div>
+  );
+}
+
+function ActivitySummary({
+  blocks,
+  expanded,
+  onToggle,
+}: {
+  blocks: Block[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const summary = activitySummary(blocks);
+  return (
+    <div className="flex min-w-0 flex-col px-4">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={expanded ? "Hide activity" : `Show activity: ${summary}`}
+        onClick={onToggle}
+        className="group flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
+      >
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-content/45 transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}
+          strokeWidth={1.75}
+        />
+        <span className="min-w-0 flex-1 truncate font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
+          {summary}
+        </span>
+      </button>
     </div>
   );
 }
@@ -1005,6 +1099,7 @@ function ActivityPhaseGroup({
   phase,
   cwd,
   active,
+  defaultOpen = false,
   onApproval,
   onOpenFile,
   onOpenDiff,
@@ -1012,13 +1107,14 @@ function ActivityPhaseGroup({
   phase: ActivityPhase;
   cwd?: string;
   active: boolean;
+  defaultOpen?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const waiting = phase.steps.some(needsApproval);
-  const open = waiting || (override ?? active);
+  const open = waiting || (override ?? (defaultOpen || active));
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
   useLivePhaseScroll(liveScroller, active && open, phase.steps);
   const title = activityPhaseTitle(phase, active);
