@@ -20,6 +20,8 @@ const STDERR_EVENT: &str = "harness-stderr";
 const EXIT_EVENT: &str = "harness-exit";
 const SSE_EVENT: &str = "harness-sse";
 const SSE_END_EVENT: &str = "harness-sse-end";
+const CODEX_INSTALL_URL: &str = "https://chatgpt.com/codex/install.sh";
+const MAX_INSTALLER_BYTES: u64 = 1024 * 1024;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -223,9 +225,93 @@ pub fn harness_resolve_codex() -> Result<CursorBinary, String> {
             path: path.to_string_lossy().into_owned(),
         })
         .ok_or_else(|| {
-            "Codex CLI not found. Install it from https://developers.openai.com/codex/cli and run `codex login`, then retry."
+            "Codex CLI not found. Install it from Settings > Providers, run `codex` once to sign in, then retry."
                 .into()
         })
+}
+
+/// Install the official standalone Codex CLI into MonoCode's user-owned tool directory.
+/// This is only called after the user confirms the install from Settings.
+#[tauri::command]
+pub async fn harness_install_codex() -> Result<CursorBinary, String> {
+    tauri::async_runtime::spawn_blocking(install_codex_sync)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn install_codex_sync() -> Result<CursorBinary, String> {
+    let home = dirs_home().ok_or_else(|| "Could not resolve your home directory".to_string())?;
+    let install_dir = codex_install_dir(Path::new(&home));
+    std::fs::create_dir_all(&install_dir)
+        .map_err(|error| format!("Could not create the Codex install directory: {error}"))?;
+
+    let response = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .get(CODEX_INSTALL_URL)
+        .set("Accept", "text/x-shellscript,text/plain")
+        .set("User-Agent", "MonoCode")
+        .call()
+        .map_err(|error| format!("Could not download the Codex installer: {error}"))?;
+    if let Some(length) = response
+        .header("Content-Length")
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        if length > MAX_INSTALLER_BYTES {
+            return Err("The Codex installer response was unexpectedly large".into());
+        }
+    }
+
+    let mut installer = Vec::new();
+    response
+        .into_reader()
+        .take(MAX_INSTALLER_BYTES + 1)
+        .read_to_end(&mut installer)
+        .map_err(|error| format!("Could not read the Codex installer: {error}"))?;
+    if installer.len() as u64 > MAX_INSTALLER_BYTES {
+        return Err("The Codex installer response was unexpectedly large".into());
+    }
+    if !installer.starts_with(b"#!") {
+        return Err("The Codex installer response was not a shell script".into());
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let installer_path = std::env::temp_dir().join(format!(
+        "monocode-codex-installer-{}-{stamp}.sh",
+        std::process::id()
+    ));
+    std::fs::write(&installer_path, installer)
+        .map_err(|error| format!("Could not stage the Codex installer: {error}"))?;
+
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg(&installer_path)
+        .env("CODEX_INSTALL_DIR", &install_dir)
+        .env("CODEX_NON_INTERACTIVE", "1")
+        .stdin(Stdio::null());
+    apply_gui_env(&mut command);
+    let result = command.output();
+    let _ = std::fs::remove_file(&installer_path);
+    let output = result.map_err(|error| format!("Could not run the Codex installer: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "The Codex installer did not complete successfully".into()
+        } else {
+            format!("The Codex installer failed: {detail}")
+        });
+    }
+
+    let binary = install_dir.join("codex");
+    if !is_executable_file(&binary) {
+        return Err("Codex installed, but its executable could not be found".into());
+    }
+    Ok(CursorBinary {
+        path: binary.to_string_lossy().into_owned(),
+    })
 }
 
 /// Resolve the OpenCode CLI (`opencode`).
@@ -1168,10 +1254,7 @@ fn resolve_codex() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Some(home) = &home {
-        candidates.push(home.join(".local/bin/codex"));
-        candidates.push(home.join(".npm-global/bin/codex"));
-        candidates.push(home.join(".cargo/bin/codex"));
-        candidates.push(home.join("n/bin/codex"));
+        candidates.extend(codex_home_candidates(home));
     }
     candidates.push(PathBuf::from("/opt/homebrew/bin/codex"));
     candidates.push(PathBuf::from("/usr/local/bin/codex"));
@@ -1192,6 +1275,21 @@ fn resolve_codex() -> Option<PathBuf> {
     ));
 
     candidates.into_iter().find(|path| path.is_file())
+}
+
+fn codex_install_dir(home: &Path) -> PathBuf {
+    home.join(".monocode/bin")
+}
+
+fn codex_home_candidates(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join(".local/bin/codex"),
+        codex_install_dir(home).join("codex"),
+        home.join(".bun/bin/codex"),
+        home.join(".npm-global/bin/codex"),
+        home.join(".cargo/bin/codex"),
+        home.join("n/bin/codex"),
+    ]
 }
 
 fn resolve_opencode() -> Option<PathBuf> {
@@ -2156,6 +2254,15 @@ mod tests {
         assert_eq!(which_in_path(&path, "gh"), Some(target));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_candidates_include_monocode_and_bun_installs() {
+        let home = Path::new("/Users/example");
+        let candidates = codex_home_candidates(home);
+
+        assert!(candidates.contains(&home.join(".monocode/bin/codex")));
+        assert!(candidates.contains(&home.join(".bun/bin/codex")));
     }
 
     #[test]

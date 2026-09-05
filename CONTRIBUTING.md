@@ -9,7 +9,7 @@ Please don’t open PRs that add a new provider right now. The existing harnesse
 You need Node.js 20+, a current stable Rust toolchain, and at least one provider CLI installed and logged in:
 
 - [Claude Code](https://claude.com/product/claude-code) - `claude auth login`
-- [Codex](https://developers.openai.com/codex/cli) - `codex login`
+- [Codex](https://developers.openai.com/codex/cli) - install it from **Settings → Providers**, then run `codex` once to sign in
 - [Cursor CLI](https://cursor.com/cli) - `agent login`
 - [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
 - [OpenCode](https://opencode.ai) - `opencode auth login`
