@@ -95,16 +95,6 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
-  if (["opencode", "zai", "mimo", "openrouter", "nvidia"].includes(harness)) {
-    return (
-      <MonoIcon className={className}>
-        <path
-          fillRule="evenodd"
-          d="M20.4 5.8H8.8V23.2H20.4V5.8ZM26.2 29H3V0H26.2V29Z"
-        />
-      </MonoIcon>
-    );
-  }
   if (harness === "pi") {
     return (
       <MonoIcon className={className}>
@@ -127,6 +117,25 @@ export function HarnessIcon({
           d="M15.5 17H26.5V25.5H15.5V17ZM19 20V22.5H20.5V20H19ZM22.5 20V22.5H24V20H22.5Z"
         />
       </MonoIcon>
+    );
+  }
+  if (MONOCHROME_HARNESSES.has(harness)) {
+    const icon = HARNESS_ICONS[harness];
+    return (
+      <span
+        aria-hidden
+        className={`block shrink-0 bg-current ${className}`}
+        style={{
+          maskImage: `url(${icon})`,
+          maskRepeat: "no-repeat",
+          maskPosition: "center",
+          maskSize: "contain",
+          WebkitMaskImage: `url(${icon})`,
+          WebkitMaskRepeat: "no-repeat",
+          WebkitMaskPosition: "center",
+          WebkitMaskSize: "contain",
+        }}
+      />
     );
   }
   return (
