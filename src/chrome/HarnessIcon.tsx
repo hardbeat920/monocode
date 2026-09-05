@@ -15,6 +15,10 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   cursor,
   grok,
   opencode,
+  zai: opencode,
+  mimo: opencode,
+  openrouter: opencode,
+  nvidia: opencode,
   pi,
   omp,
   fx,
@@ -25,6 +29,10 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "cursor",
   "grok",
   "opencode",
+  "zai",
+  "mimo",
+  "openrouter",
+  "nvidia",
   "pi",
   "omp",
   "fx",
@@ -83,7 +91,7 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
-  if (harness === "opencode") {
+  if (["opencode", "zai", "mimo", "openrouter", "nvidia"].includes(harness)) {
     return (
       <MonoIcon className={className}>
         <path

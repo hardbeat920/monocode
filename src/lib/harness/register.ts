@@ -3,7 +3,10 @@ import { ensureCodexRegistered } from "./codexAdapter";
 import { ensureCursorRegistered } from "./cursorAdapter";
 import { ensureFxRegistered } from "./fxAdapter";
 import { ensureGrokRegistered } from "./grokAdapter";
-import { ensureOpenCodeRegistered } from "./opencodeAdapter";
+import {
+  ensureOpenCodeProviderRegistered,
+  ensureOpenCodeRegistered,
+} from "./opencodeAdapter";
 import { ensureOmpRegistered } from "./ompAdapter";
 import { ensurePiRegistered } from "./piAdapter";
 
@@ -14,6 +17,10 @@ export function registerBuiltinHarnesses(): void {
   ensureCodexRegistered();
   ensureGrokRegistered();
   ensureOpenCodeRegistered();
+  ensureOpenCodeProviderRegistered("zai");
+  ensureOpenCodeProviderRegistered("mimo");
+  ensureOpenCodeProviderRegistered("openrouter");
+  ensureOpenCodeProviderRegistered("nvidia");
   ensurePiRegistered();
   ensureOmpRegistered();
   ensureFxRegistered();

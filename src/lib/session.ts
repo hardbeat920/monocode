@@ -11,7 +11,18 @@ import {
 } from "./models";
 
 export type HarnessId =
-  "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi" | "omp" | "fx";
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "grok"
+  | "opencode"
+  | "zai"
+  | "mimo"
+  | "openrouter"
+  | "nvidia"
+  | "pi"
+  | "omp"
+  | "fx";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
@@ -19,6 +30,10 @@ export const HARNESSES: HarnessId[] = [
   "cursor",
   "grok",
   "opencode",
+  "zai",
+  "mimo",
+  "openrouter",
+  "nvidia",
   "pi",
   "omp",
   "fx",
@@ -261,6 +276,10 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   cursor: "cursor",
   grok: "grok",
   opencode: "opencode",
+  zai: "zai",
+  mimo: "mimo",
+  openrouter: "openrouter",
+  nvidia: "nvidia",
   pi: "pi",
   omp: "omp",
   fx: "fx",
@@ -272,6 +291,10 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   cursor: "Cursor",
   grok: "Grok Build",
   opencode: "OpenCode",
+  zai: "Z.AI",
+  mimo: "MiMo",
+  openrouter: "OpenRouter",
+  nvidia: "NVIDIA",
   pi: "Pi",
   omp: "omp",
   fx: "fx",
