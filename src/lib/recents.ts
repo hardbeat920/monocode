@@ -299,7 +299,7 @@ export function projectRailItems(
 /** True if this looks like a user project, not an app bundle or system root. */
 export function looksLikeProject(path: string): boolean {
   if (!path || path === "/" || path === "~") return false;
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+  const normalized = slash(path).replace(/\/+$/, "") || "/";
   if (/^[A-Za-z]:$/.test(normalized) || normalized === "/") return false;
   // Home itself arrives expanded (`/Users/me`), so the `~` check above misses
   // it. Indexing it walks `~/Library`, which trips the OS consent prompt.

@@ -11,6 +11,11 @@ import {
 } from "./paths";
 
 describe("slash", () => {
+  it("preserves backslashes in absolute Unix filenames", () => {
+    expect(slash("/tmp/a\\b.txt")).toBe("/tmp/a\\b.txt");
+    expect(joinPath("/tmp", "a\\b.txt")).toBe("/tmp/a\\b.txt");
+    expect(parentPath("/tmp/a\\b.txt")).toBe("/tmp");
+  });
   it("normalizes Windows separators", () => {
     expect(slash("C:\\Users\\me\\code")).toBe("C:/Users/me/code");
   });
@@ -26,6 +31,10 @@ describe("prettyCwd", () => {
 });
 
 describe("parentPath and joinPath", () => {
+  it("preserves Windows filesystem roots", () => {
+    expect(parentPath("//server/share")).toBe("//server/share");
+    expect(rebasePath("C:/old", "C:/old", "D:/")).toBe("D:/");
+  });
   it("walks Windows drive paths", () => {
     expect(parentPath("C:/Users/me/code")).toBe("C:/Users/me");
     expect(parentPath("C:/Users")).toBe("C:/");

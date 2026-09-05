@@ -18,6 +18,8 @@ mod session_store;
 mod skills;
 mod window;
 mod window_transfer;
+#[cfg(windows)]
+mod windows;
 
 // Phase 1 seam: spawn / kill harness children per MonoCode thread.
 // Adapters own the protocol; this host only supervises processes.
@@ -155,6 +157,8 @@ fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    windows::initialize().expect("Failed to initialize Windows process safety");
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

@@ -122,6 +122,16 @@ export async function handleQuitRequested(): Promise<void> {
   await invoke("confirm_quit");
 }
 
+/** Confirm and stop this window's work without terminating other windows. */
+export async function closeBusyWindow(): Promise<void> {
+  if (!liveWorkspace) return;
+  liveWorkspace.flush();
+  await confirmQuitAndExit(
+    liveWorkspace.sessions(), liveWorkspace.tabs(), liveWorkspace.activeTabId(),
+    liveWorkspace.projectCwd(), liveWorkspace.projectTerminals(), true,
+  );
+}
+
 export function loadResumedWorkspace(): Promise<ResumedWorkspace | null> {
   if (!resumedPromise) resumedPromise = loadResumedWorkspaceOnce();
   return resumedPromise;
@@ -343,16 +353,19 @@ async function confirmQuitAndExit(
   activeTabId: string,
   projectCwd: string,
   projectTerminals: ProjectTerminalDock[] = [],
+  closeWindow = false,
 ): Promise<void> {
   if (quitDialogOpen) return;
   quitDialogOpen = true;
   try {
     const refs = inFlightRefs(sessions, tabs);
     if (refs.length > 0) {
-      const ok = await ask(quitWhileBusyMessage(refs.length), {
+      const ok = await ask(closeWindow
+        ? "Close this window and stop its running chats? Other windows will stay open."
+        : quitWhileBusyMessage(refs.length), {
         title: "MonoCode",
         kind: "warning",
-        okLabel: "Quit",
+        okLabel: closeWindow ? "Close window" : "Quit",
       });
       if (!ok) return;
     }
@@ -366,7 +379,12 @@ async function confirmQuitAndExit(
         "quit",
         projectTerminals,
       );
-      await invoke("confirm_quit");
+      if (closeWindow) {
+        await reapWindowRuntime(sessions, tabs, projectTerminals, false);
+        await closeCurrentWindow();
+      } else {
+        await invoke("confirm_quit");
+      }
     } catch {
       quitting = false;
     }
@@ -379,6 +397,7 @@ export async function reapWindowRuntime(
   sessions: Session[],
   tabs: WorkspaceTab[],
   projectTerminals: ProjectTerminalDock[] = [],
+  includeAllChildren = true,
 ): Promise<void> {
   await Promise.all(
     sessions.map((session) =>
@@ -396,7 +415,7 @@ export async function reapWindowRuntime(
   );
   // Catalog probes, title generators, and usage scrapers are not session
   // children. Drop them so an unused Pi/Codex probe cannot outlive the window.
-  await killAllChildren().catch(() => undefined);
+  if (includeAllChildren) await killAllChildren().catch(() => undefined);
 }
 
 function terminalFileIds(tabs: WorkspaceTab[]): string[] {

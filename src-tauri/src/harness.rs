@@ -348,9 +348,8 @@ pub fn harness_spawn(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start {command}: {e}"))?;
+    let mut child =
+        spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
 
     let stdin = child
@@ -697,9 +696,7 @@ fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<Str
         }
     }
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to run {command}: {e}"))?;
+    let child = spawn_managed(&mut cmd).map_err(|e| format!("Failed to run {command}: {e}"))?;
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -762,6 +759,17 @@ fn isolate_child(cmd: &mut Command) {
     #[cfg(not(any(unix, windows)))]
     {
         let _ = cmd;
+    }
+}
+
+fn spawn_managed(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)]
+    {
+        crate::windows::spawn_managed(cmd)
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.spawn()
     }
 }
 
@@ -1442,7 +1450,7 @@ fn help_mentions_rpc_mode(path: &Path) -> bool {
     // fails outright without a PATH that has node on it.
     apply_gui_env(&mut cmd);
     isolate_child(&mut cmd);
-    let Ok(child) = cmd.spawn() else {
+    let Ok(child) = spawn_managed(&mut cmd) else {
         return false;
     };
     let pid = child.id();
@@ -1533,7 +1541,7 @@ fn fx_help_mentions_acp(path: &Path) -> bool {
     // fails outright without a PATH that has node on it.
     apply_gui_env(&mut cmd);
     isolate_child(&mut cmd);
-    let Ok(child) = cmd.spawn() else {
+    let Ok(child) = spawn_managed(&mut cmd) else {
         return false;
     };
     let pid = child.id();
@@ -1594,7 +1602,7 @@ fn grok_help_mentions_agent(path: &Path) -> bool {
         .stderr(Stdio::piped());
     apply_gui_env(&mut cmd);
     isolate_child(&mut cmd);
-    let Ok(child) = cmd.spawn() else {
+    let Ok(child) = spawn_managed(&mut cmd) else {
         return false;
     };
     let pid = child.id();
@@ -1653,7 +1661,7 @@ fn is_cursor_agent(path: &Path) -> bool {
 /// Reads the cached PATH rather than spawning a shell per lookup: six
 /// resolvers each asking `command -v` meant six shell startups per probe.
 fn which_via_login_shell(name: &str) -> Option<PathBuf> {
-    which_in_path(&login_shell_path()?, name)
+    which_in_path(&gui_search_path(), name)
 }
 
 fn which_in_path(path: &str, name: &str) -> Option<PathBuf> {
@@ -1680,9 +1688,6 @@ fn first_binary_matching(
 }
 
 fn existing_binary(path: PathBuf) -> Option<PathBuf> {
-    if is_executable_file(&path) {
-        return Some(path);
-    }
     #[cfg(windows)]
     if path.extension().is_none() {
         for ext in ["exe", "cmd", "bat", "com"] {
@@ -1692,7 +1697,27 @@ fn existing_binary(path: PathBuf) -> Option<PathBuf> {
             }
         }
     }
-    None
+    is_executable_file(&path).then_some(path)
+}
+
+#[cfg(all(test, windows))]
+mod windows_launcher_tests {
+    use super::*;
+
+    #[test]
+    fn npm_shell_shim_does_not_hide_windows_launcher() {
+        let dir = std::env::temp_dir().join(format!("monocode-launcher-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("agent");
+        let cmd = dir.join("agent.cmd");
+        std::fs::write(&bare, b"#!/bin/sh\n").unwrap();
+        std::fs::write(&cmd, b"@echo off\n").unwrap();
+        assert_eq!(existing_binary(bare.clone()), Some(cmd.clone()));
+        std::fs::remove_file(&cmd).unwrap();
+        assert_eq!(existing_binary(bare.clone()), None);
+        std::fs::remove_file(bare).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 }
 
 fn binary_name_eq(path: &Path, expected: &str) -> bool {
@@ -1727,6 +1752,14 @@ fn is_executable_file(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ["exe", "cmd", "bat", "com"]
+                        .iter()
+                        .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+                })
     }
 }
 

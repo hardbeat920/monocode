@@ -111,7 +111,7 @@ fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
         if rel.is_empty() {
             continue;
         }
-        let relative = String::from_utf8_lossy(rel).replace('\\', "/");
+        let relative = path_to_js(Path::new(String::from_utf8_lossy(rel).as_ref()));
         if relative.ends_with('/') || path_has_skipped_dir(&relative) {
             continue;
         }
@@ -947,7 +947,7 @@ fn normalize_diff_path(path: &str) -> String {
     } else {
         path
     };
-    path.replace('\\', "/")
+    path_to_js(Path::new(path))
 }
 
 const MAX_UNTRACKED_BYTES: u64 = 1024 * 1024;
@@ -963,7 +963,7 @@ fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
         if rel.is_empty() {
             continue;
         }
-        let relative = rel.replace('\\', "/");
+        let relative = path_to_js(Path::new(rel));
         let entry = files.entry(relative.clone()).or_default();
         entry.untracked = true;
         if entry.additions == 0 {
@@ -2971,7 +2971,7 @@ fn walk_project_files(root: &Path) -> Vec<ProjectFile> {
             let Ok(relative) = path.strip_prefix(root) else {
                 continue;
             };
-            let relative = relative.to_string_lossy().replace('\\', "/");
+            let relative = path_to_js(relative);
             files.push(ProjectFile {
                 name: name.to_string(),
                 path: path_to_js(&path),
@@ -3020,7 +3020,9 @@ fn skip_walk_dir_name(name: &str) -> bool {
 }
 
 fn path_has_skipped_dir(relative: &str) -> bool {
-    relative.split(['/', '\\']).any(skip_walk_dir_name)
+    relative
+        .split(std::path::is_separator)
+        .any(skip_walk_dir_name)
 }
 
 /// Directories the OS guards behind a consent prompt. macOS pops "would like to
@@ -3148,7 +3150,13 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(path));
     }
-    let rest = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"));
+    let rest = path.strip_prefix("~/").or_else(|| {
+        if cfg!(windows) {
+            path.strip_prefix("~\\")
+        } else {
+            None
+        }
+    });
     if let Some(rest) = rest {
         if let Some(home) = dirs_home() {
             return PathBuf::from(home).join(rest);
@@ -3158,7 +3166,19 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
 }
 
 pub(crate) fn path_to_js(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn preserves_unix_backslash_filenames() {
+    assert_eq!(path_to_js(Path::new(r"/tmp/a\b.txt")), r"/tmp/a\b.txt");
+    assert_eq!(expand_home(r"~\literal"), PathBuf::from(r"~\literal"));
 }
 
 struct Ignore {
