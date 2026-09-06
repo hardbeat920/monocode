@@ -11,6 +11,7 @@ use tauri::AppHandle;
 
 /// Emitted to every window when the user clicks a notification. Payload is
 /// the session id; the window that owns that session handles it.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub const CLICK_EVENT: &str = "monocode:notification-click";
 
 #[cfg(target_os = "macos")]
