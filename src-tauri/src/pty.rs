@@ -8,7 +8,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::dirs_home;
@@ -48,6 +48,24 @@ struct LivePty {
 
 pub struct PtyHost {
     sessions: Mutex<HashMap<String, Arc<LivePty>>>,
+}
+
+#[derive(Deserialize)]
+pub struct PtyCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+impl PtyCommand {
+    fn validate(&self) -> Result<(), String> {
+        if self.program.trim().is_empty()
+            || self.program.contains('\0')
+            || self.args.iter().any(|arg| arg.contains('\0'))
+        {
+            return Err("Invalid terminal command.".into());
+        }
+        Ok(())
+    }
 }
 
 impl PtyHost {
@@ -123,7 +141,11 @@ pub fn pty_spawn(
     cwd: String,
     cols: u16,
     rows: u16,
+    command: Option<PtyCommand>,
 ) -> Result<(), String> {
+    if let Some(command) = &command {
+        command.validate()?;
+    }
     if let Some(prev) = host.remove(&id) {
         terminate(prev.pid);
         #[cfg(unix)]
@@ -132,17 +154,17 @@ pub fn pty_spawn(
 
     #[cfg(unix)]
     {
-        spawn_unix(app, host, id, cwd, cols.max(2), rows.max(2))
+        spawn_unix(app, host, id, cwd, cols.max(2), rows.max(2), command)
     }
 
     #[cfg(windows)]
     {
-        spawn_windows(app, host, id, cwd, cols.max(2), rows.max(2))
+        spawn_windows(app, host, id, cwd, cols.max(2), rows.max(2), command)
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (app, cwd, cols, rows);
+        let _ = (app, cwd, cols, rows, command);
         Err("Terminals are not supported on this platform.".into())
     }
 }
@@ -238,6 +260,7 @@ fn spawn_unix(
     cwd: String,
     cols: u16,
     rows: u16,
+    command: Option<PtyCommand>,
 ) -> Result<(), String> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
@@ -245,7 +268,9 @@ fn spawn_unix(
     use std::process::Command;
 
     let workdir = working_dir(&cwd);
-    let (shell, args) = default_shell();
+    let (shell, args) = command
+        .map(|cmd| (cmd.program, cmd.args))
+        .unwrap_or_else(default_shell);
     let (master, slave) = open_pty(cols, rows)?;
 
     let mut cmd = Command::new(&shell);
@@ -282,10 +307,12 @@ fn spawn_unix(
         });
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start {shell}: {e}"))?;
+    let result = cmd.spawn();
     close_fd(slave);
+    let mut child = result.map_err(|e| {
+        close_fd(master);
+        format!("Failed to start {shell}: {e}")
+    })?;
     let pid = child.id();
 
     set_cloexec(master);
@@ -367,11 +394,14 @@ fn spawn_windows(
     cwd: String,
     cols: u16,
     rows: u16,
+    command: Option<PtyCommand>,
 ) -> Result<(), String> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
     let workdir = working_dir(&cwd);
-    let (shell, args) = default_shell();
+    let (shell, args) = command
+        .map(|cmd| (cmd.program, cmd.args))
+        .unwrap_or_else(default_shell);
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {

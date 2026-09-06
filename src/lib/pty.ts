@@ -7,6 +7,8 @@ type ExitPayload = { id: string; code: number | null };
 type DataHandler = (data: Uint8Array) => void;
 type ExitHandler = (code: number | null) => void;
 
+export type PtyCommand = { program: string; args: string[] };
+
 const dataHandlers = new Map<string, DataHandler>();
 const exitHandlers = new Map<string, ExitHandler>();
 const dataBuffer = new Map<string, Uint8Array[]>();
@@ -118,8 +120,17 @@ export async function spawnPty(
   cwd: string,
   cols: number,
   rows: number,
+  command?: PtyCommand,
 ): Promise<void> {
-  await invoke("pty_spawn", { id, cwd, cols, rows });
+  ensureBridge();
+  await bridge;
+  await invoke("pty_spawn", {
+    id,
+    cwd,
+    cols,
+    rows,
+    ...(command ? { command } : {}),
+  });
 }
 
 export async function writePty(id: string, data: string): Promise<void> {

@@ -121,6 +121,15 @@ import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "./Popover";
 import { consumePlanCommand, PLAN_COMMAND } from "../lib/plan";
 import { COMPACT_COMMAND, isCompactCommand } from "../lib/compact";
+import {
+  agentCliCommands,
+  agentCliPrompt,
+  filterSlashItems,
+  loadSlashFilter,
+  saveSlashFilter,
+  supportsAgentCli,
+  type SlashFilter,
+} from "../lib/agentCli";
 
 type Props = {
   enabled?: boolean;
@@ -154,6 +163,7 @@ type Props = {
   onCwdChange: (cwd: string) => void;
   onBranchChange?: () => void;
   onNewTerminal?: () => void;
+  onAgentCommand?: (command?: string) => boolean;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange?: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -407,6 +417,7 @@ export function Composer({
   onCwdChange,
   onBranchChange,
   onNewTerminal,
+  onAgentCommand,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
@@ -491,10 +502,15 @@ export function Composer({
     pickerOpen,
   });
   const skills = skillCatalog.skills;
+  const [slashFilter, setSlashFilter] = useState<SlashFilter>(loadSlashFilter);
+  const [cliError, setCliError] = useState("");
+  const cliSupported = !!onAgentCommand && supportsAgentCli(harness);
+  const effectiveFilter = cliSupported ? slashFilter : "all";
   const slashItems = useMemo(
     () => [
       PLAN_COMMAND,
       COMPACT_COMMAND,
+      ...(cliSupported ? agentCliCommands(harness) : []),
       ...skills.filter(
         (skill) =>
           skill.kind === "native" ||
@@ -502,12 +518,17 @@ export function Composer({
             skill.name !== COMPACT_COMMAND.name),
       ),
     ],
-    [skills],
+    [skills, cliSupported, harness],
   );
-  const skillLimit = hasNativeCommands(harness)
-    ? Number.POSITIVE_INFINITY
-    : undefined;
-  const rankedSkills = rankSkills(slashItems, slash?.query ?? "", skillLimit);
+  const skillLimit =
+    hasNativeCommands(harness) || cliSupported
+      ? Number.POSITIVE_INFINITY
+      : undefined;
+  const rankedSkills = rankSkills(
+    filterSlashItems(slashItems, effectiveFilter),
+    slash?.query ?? "",
+    skillLimit,
+  );
   const attachmentsSupported = harnessSupportsAttachments(harness);
   const skillNames = useMemo(
     () => new Set(slashItems.map((skill) => skill.invocation)),
@@ -900,6 +921,31 @@ export function Composer({
   }, [addAttachments, attachmentsSupported, enabled]);
 
   const submit = (value: string) => {
+    const native = cliSupported
+      ? agentCliPrompt(value, harness, effectiveFilter, skills)
+      : null;
+    if (native) {
+      // Keep attachments/cards/draft intact when a native session cannot open.
+      if (attachments.length || inboxCard || noteCard || handoffCard) {
+        setCliError(
+          "Send or remove the attached items first, or use the CLI button to keep this draft in chat.",
+        );
+        return;
+      }
+      if (!onAgentCommand?.(native)) return;
+      setCliError("");
+      if (ref.current) {
+        ref.current.value = "";
+        ref.current.style.height = "auto";
+      }
+      setDraft("");
+      onDraftChange?.("");
+      setSlash(null);
+      setMention(null);
+      setPlanSelected(false);
+      syncHasValue("", []);
+      return;
+    }
     if (isCompactCommand(value)) {
       if (!onCompactContext?.()) return;
       if (!ref.current) return;
@@ -983,7 +1029,14 @@ export function Composer({
     if (
       e.key === "Enter" &&
       !e.shiftKey &&
-      isCompactCommand(e.currentTarget.value)
+      (isCompactCommand(e.currentTarget.value) ||
+        (cliSupported &&
+          agentCliPrompt(
+            e.currentTarget.value,
+            harness,
+            effectiveFilter,
+            skills,
+          ) !== null))
     ) {
       e.preventDefault();
       submit(e.currentTarget.value);
@@ -1073,6 +1126,11 @@ export function Composer({
         onResume={onResumeQueue}
       />
       <div className="relative overflow-visible">
+        {cliError ? (
+          <p role="alert" className="px-3 py-2 text-xs text-red-400">
+            {cliError}
+          </p>
+        ) : null}
         {pickerOpen ? (
           <div className="absolute inset-x-0 bottom-full z-30 mb-1">
             <SkillPicker
@@ -1085,6 +1143,24 @@ export function Composer({
               busy={createBusy}
               onActive={setSkillActive}
               onPick={pickSkill}
+              filter={effectiveFilter}
+              onFilterChange={
+                cliSupported
+                  ? (filter) => {
+                      setSlashFilter(filter);
+                      saveSlashFilter(filter);
+                      setSkillActive(0);
+                      ref.current?.focus();
+                    }
+                  : undefined
+              }
+              onOpenCli={
+                cliSupported
+                  ? () => {
+                      onAgentCommand?.();
+                    }
+                  : undefined
+              }
               onStartCreate={() => {
                 setCreatingSkill(true);
                 setCreateError(null);
@@ -1181,6 +1257,17 @@ export function Composer({
                 />
               )}
               <div className="ml-auto flex shrink-0 items-center">
+                {cliSupported ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    title="Open the installed agent CLI with its full command menu"
+                    onClick={() => onAgentCommand?.()}
+                    className="mr-2 rounded px-2 py-1 font-mono text-xs text-content/60 hover:bg-content/10 hover:text-content disabled:opacity-40"
+                  >
+                    CLI
+                  </button>
+                ) : null}
                 <ContextMeter
                   usage={context}
                   onCompact={compactSupported ? onCompactContext : undefined}

@@ -42,6 +42,8 @@ import { loadNotesEnabled, subscribeNotesEnabled } from "../lib/settings";
 import { resolveModel } from "../lib/models";
 import { isAstraModel } from "../lib/astraWelcome";
 import { AstraWelcome } from "./AstraWelcome";
+import { AgentCliView } from "./AgentCliView";
+import { supportsAgentCli, cliCommandInput } from "../lib/agentCli";
 
 type Props = {
   session: Session;
@@ -238,11 +240,34 @@ export const SessionPane = memo(function SessionPane({
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer = !isEmpty || inSplit || !!session.inboxAsk;
   const draftRef = useRef<string | undefined>(undefined);
+  const [nativeCli, setNativeCli] = useState<{ command?: string } | null>(null);
+  const [nativeError, setNativeError] = useState("");
+  const openAgentCli = (command?: string): boolean => {
+    if (
+      session.busy ||
+      session.queuedMessages?.length ||
+      !supportsAgentCli(session.harness)
+    ) {
+      setNativeError(
+        "Finish the current turn and queued messages before opening the CLI.",
+      );
+      return false;
+    }
+    try {
+      if (command) cliCommandInput(command);
+      setNativeError("");
+      setNativeCli({ command });
+      return true;
+    } catch (error) {
+      setNativeError(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  };
   const composer = (
     <Composer
-      enabled={visible}
-      focused={focused && composerFocused}
-      hotkeys={focused}
+      enabled={visible && !nativeCli}
+      focused={focused && composerFocused && !nativeCli}
+      hotkeys={focused && !nativeCli}
       shell={!dockComposer}
       harness={session.harness}
       model={session.model}
@@ -283,6 +308,9 @@ export const SessionPane = memo(function SessionPane({
       onCwdChange={(cwd) => onCwdChange(session.id, cwd)}
       onBranchChange={() => onBranchChange(session.id)}
       onNewTerminal={() => onNewTerminal(session.id)}
+      onAgentCommand={
+        supportsAgentCli(session.harness) ? openAgentCli : undefined
+      }
       onModelChange={(harness, model) => {
         onModelChange(session.id, harness, model);
         const selected = resolveModel(harness, model);
@@ -337,120 +365,139 @@ export const SessionPane = memo(function SessionPane({
       className="relative isolate flex h-full min-h-0 min-w-0 flex-1 flex-col"
       onMouseDown={() => onFocus(session.id)}
     >
-      {astraWelcomeRun !== null && visible ? (
-        <AstraWelcome key={astraWelcomeRun} onDone={dismissAstraWelcome} />
+      {nativeCli && supportsAgentCli(session.harness) ? (
+        <AgentCliView
+          session={{ ...session, harness: session.harness }}
+          initialCommand={nativeCli.command}
+          active={visible && focused}
+          onClose={() => setNativeCli(null)}
+        />
       ) : null}
-      {inSplit ? (
-        <div
-          className={`flex h-9 shrink-0 touch-none items-center gap-1.5 border-b border-content/10 px-2 select-none ${
-            onPaneDragStart ? "cursor-grab active:cursor-grabbing" : ""
-          }`}
-          onPointerDown={(event) => {
-            if (event.button !== 0 || !onPaneDragStart) return;
-            if (
-              (event.target as HTMLElement | null)?.closest("[data-no-drag]")
-            ) {
-              return;
-            }
-            onPaneDragStart(event);
-          }}
-        >
-          {onPaneDragStart ? (
-            <GripVertical
-              className="size-3.5 shrink-0 text-content/35"
-              strokeWidth={1.75}
-            />
-          ) : null}
-          <span
-            className={`size-2 shrink-0 rounded-full ${focused ? "bg-accent" : "bg-transparent"}`}
-          />
-          <span
-            className="min-w-0 flex-1 truncate text-xs text-content"
-            title={title}
-          >
-            {title}
-          </span>
-          <button
-            type="button"
-            title={`Close Pane (${MOD}W)`}
-            aria-label="Close pane"
-            data-no-drag
-            className="grid size-5 shrink-0 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content"
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose(session.id);
+      <div
+        className={
+          nativeCli ? "hidden" : "relative flex min-h-0 flex-1 flex-col"
+        }
+      >
+        {astraWelcomeRun !== null && visible ? (
+          <AstraWelcome key={astraWelcomeRun} onDone={dismissAstraWelcome} />
+        ) : null}
+        {nativeError ? (
+          <p role="alert" className="shrink-0 px-3 py-2 text-sm text-red-400">
+            {nativeError}
+          </p>
+        ) : null}
+        {inSplit ? (
+          <div
+            className={`flex h-9 shrink-0 touch-none items-center gap-1.5 border-b border-content/10 px-2 select-none ${
+              onPaneDragStart ? "cursor-grab active:cursor-grabbing" : ""
+            }`}
+            onPointerDown={(event) => {
+              if (event.button !== 0 || !onPaneDragStart) return;
+              if (
+                (event.target as HTMLElement | null)?.closest("[data-no-drag]")
+              ) {
+                return;
+              }
+              onPaneDragStart(event);
             }}
           >
-            <X className="size-3" strokeWidth={1.75} />
-          </button>
-        </div>
-      ) : null}
-      <div className="relative min-h-0 flex-1">
-        {isEmpty ? (
-          session.inboxAsk ? (
-            <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-              <DiscussionEmpty message="Explore this item with your agent." />
-            </div>
-          ) : (
-            <EmptySession
-              cwd={session.cwd}
-              composer={dockComposer ? undefined : composer}
-            />
-          )
-        ) : (
-          <>
-            <AgentTranscript
-              blocks={session.blocks}
-              busy={!!session.busy}
-              visible={visible}
-              cwd={workCwd}
-              harness={session.harness}
-              model={session.model}
-              pendingQuestion={!!session.pendingQuestion}
-              onApproval={approve}
-              onAddToChat={addSelectionToChat}
-              onSaveNote={notesEnabled ? saveNote : undefined}
-              onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
-              onOpenPlan={openPlan}
-              onBuildPlan={buildPlan}
-              onSecondOpinion={
-                !session.inboxAsk && onSecondOpinion
-                  ? (harness, turn, model) =>
-                      onSecondOpinion(session.id, harness, turn, model)
-                  : undefined
-              }
-              onHandoff={
-                !session.inboxAsk && onHandoff
-                  ? (harness, turn, model) =>
-                      onHandoff(session.id, harness, turn, model)
-                  : undefined
-              }
-              onJumpToBottomChange={setShowJumpToBottom}
-              onJumpToBottomReady={onJumpToBottomReady}
-            />
-            {showJumpToBottom ? (
-              <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 flex justify-center">
-                <button
-                  type="button"
-                  title="Jump to latest"
-                  aria-label="Jump to latest"
-                  data-jump-to-bottom
-                  onClick={() => jumpToBottomRef.current?.()}
-                  className="pointer-events-auto grid size-6 place-items-center rounded-md border border-content/15 bg-content/10 text-content shadow-md hover:bg-content/5 backdrop-blur-md"
-                >
-                  <ChevronDown className="size-4" strokeWidth={2} />
-                </button>
-              </div>
+            {onPaneDragStart ? (
+              <GripVertical
+                className="size-3.5 shrink-0 text-content/35"
+                strokeWidth={1.75}
+              />
             ) : null}
-          </>
-        )}
+            <span
+              className={`size-2 shrink-0 rounded-full ${focused ? "bg-accent" : "bg-transparent"}`}
+            />
+            <span
+              className="min-w-0 flex-1 truncate text-xs text-content"
+              title={title}
+            >
+              {title}
+            </span>
+            <button
+              type="button"
+              title={`Close Pane (${MOD}W)`}
+              aria-label="Close pane"
+              data-no-drag
+              className="grid size-5 shrink-0 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content"
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose(session.id);
+              }}
+            >
+              <X className="size-3" strokeWidth={1.75} />
+            </button>
+          </div>
+        ) : null}
+        <div className="relative min-h-0 flex-1">
+          {isEmpty ? (
+            session.inboxAsk ? (
+              <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
+                <DiscussionEmpty message="Explore this item with your agent." />
+              </div>
+            ) : (
+              <EmptySession
+                cwd={session.cwd}
+                composer={dockComposer ? undefined : composer}
+              />
+            )
+          ) : (
+            <>
+              <AgentTranscript
+                blocks={session.blocks}
+                busy={!!session.busy}
+                visible={visible}
+                cwd={workCwd}
+                harness={session.harness}
+                model={session.model}
+                pendingQuestion={!!session.pendingQuestion}
+                onApproval={approve}
+                onAddToChat={addSelectionToChat}
+                onSaveNote={notesEnabled ? saveNote : undefined}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+                onOpenPlan={openPlan}
+                onBuildPlan={buildPlan}
+                onSecondOpinion={
+                  !session.inboxAsk && onSecondOpinion
+                    ? (harness, turn, model) =>
+                        onSecondOpinion(session.id, harness, turn, model)
+                    : undefined
+                }
+                onHandoff={
+                  !session.inboxAsk && onHandoff
+                    ? (harness, turn, model) =>
+                        onHandoff(session.id, harness, turn, model)
+                    : undefined
+                }
+                onJumpToBottomChange={setShowJumpToBottom}
+                onJumpToBottomReady={onJumpToBottomReady}
+              />
+              {showJumpToBottom ? (
+                <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 flex justify-center">
+                  <button
+                    type="button"
+                    title="Jump to latest"
+                    aria-label="Jump to latest"
+                    data-jump-to-bottom
+                    onClick={() => jumpToBottomRef.current?.()}
+                    className="pointer-events-auto grid size-6 place-items-center rounded-md border border-content/15 bg-content/10 text-content shadow-md hover:bg-content/5 backdrop-blur-md"
+                  >
+                    <ChevronDown className="size-4" strokeWidth={2} />
+                  </button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+        {dockComposer ? (
+          <div className="mx-auto w-full max-w-4xl shrink-0">{composer}</div>
+        ) : null}
       </div>
-      {dockComposer ? (
-        <div className="mx-auto w-full max-w-4xl shrink-0">{composer}</div>
-      ) : null}
     </div>
   );
 });
