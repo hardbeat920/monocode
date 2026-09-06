@@ -275,7 +275,6 @@ import {
   setWindowFocused,
 } from "./lib/notifications";
 import { playCue } from "./lib/sounds";
-import { handleArchiveShortcut } from "./lib/archiveShortcut";
 import {
   adjacentItemId,
   deferUnhandledEscape,
@@ -2845,6 +2844,58 @@ export default function App({
     [onRemoveHistorySession],
   );
 
+  const onArchiveFocusedSession = useCallback(
+    (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        projectTerminalFocusedRef.current ||
+        searchViewOpenRef.current ||
+        inboxViewOpenRef.current ||
+        notesViewOpenRef.current ||
+        settingsOpenRef.current ||
+        filePickerOpenRef.current ||
+        whatsNewVersionRef.current
+      )
+        return;
+
+      const tab = tabsRef.current.find(
+        (entry) => entry.id === activeTabIdRef.current,
+      );
+      if (!tab || tab.diffFocused) return;
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === tab.focusedId,
+      );
+      if (!session) return;
+
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(".cm-editor, .monocode-terminal")) return;
+      if (
+        target?.closest('input, textarea, select, [contenteditable="true"]') &&
+        !target.closest("[data-composer]")
+      )
+        return;
+
+      // Popovers can leave focus in the composer. Check the whole document,
+      // excluding overlays in hidden or inactive surfaces.
+      const overlayOpen = Array.from(
+        document.querySelectorAll(
+          '[data-popover-side], [role="dialog"], [role="alertdialog"], [role="menu"], [data-skill-picker], [data-mention-picker]',
+        ),
+      ).some(
+        (element) =>
+          element.getClientRects().length > 0 &&
+          getComputedStyle(element).visibility !== "hidden" &&
+          !element.closest('[hidden], [inert], [aria-hidden="true"]'),
+      );
+      if (overlayOpen) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void onArchiveHistorySession(session.id, true);
+    },
+    [onArchiveHistorySession],
+  );
+
   const onPinHistorySession = useCallback(
     async (sessionId: string, pinned: boolean) => {
       const open = sessionsRef.current.find(
@@ -4646,7 +4697,7 @@ export default function App({
 
   const actions = useRef({
     onNew,
-    onArchiveHistorySession,
+    onArchiveFocusedSession,
     onCloseOtherTabs,
     onClosePane,
     onNext,
@@ -4673,7 +4724,7 @@ export default function App({
   });
   actions.current = {
     onNew,
-    onArchiveHistorySession,
+    onArchiveFocusedSession,
     onCloseOtherTabs,
     onClosePane,
     onNext,
@@ -4732,31 +4783,11 @@ export default function App({
       }
       const cmd = tabCommand(e);
       if (cmd) {
-        const target = e.target instanceof Element ? e.target : null;
-        const surfaceOpen =
-          searchViewOpenRef.current ||
-          inboxViewOpenRef.current ||
-          notesViewOpenRef.current ||
-          settingsOpenRef.current ||
-          filePickerOpenRef.current ||
-          Boolean(whatsNewVersionRef.current);
         if (cmd === "archive-session") {
-          handleArchiveShortcut(
-            e,
-            {
-              activeTabId: activeTabIdRef.current,
-              tabs: tabsRef.current,
-              sessions: sessionsRef.current,
-              projectTerminalFocused: projectTerminalFocusedRef.current,
-              surfaceOpen,
-            },
-            (sessionId) =>
-              run("archive-session", () => {
-                void actions.current.onArchiveHistorySession(sessionId, true);
-              }),
-          );
+          actions.current.onArchiveFocusedSession(e);
           return;
         }
+        const target = e.target instanceof Element ? e.target : null;
         const listNavigation =
           cmd === "prev-session" ||
           cmd === "next-session" ||
@@ -4771,6 +4802,13 @@ export default function App({
           const emptyComposerTarget = Boolean(
             target?.matches('textarea[data-composer-empty="true"]'),
           );
+          const surfaceOpen =
+            searchViewOpenRef.current ||
+            inboxViewOpenRef.current ||
+            notesViewOpenRef.current ||
+            settingsOpenRef.current ||
+            filePickerOpenRef.current ||
+            Boolean(whatsNewVersionRef.current);
           if (
             !shouldHandleListNavigation({
               blockedTarget,

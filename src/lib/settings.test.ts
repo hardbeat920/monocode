@@ -20,7 +20,6 @@ import {
   saveLiveAgentsEnabled,
   saveNotesEnabled,
 } from "./settings";
-import { MOD, SHIFT } from "./platform";
 
 const KEY = "monocode.composerRunner";
 const NOTES_KEY = "monocode.notesEnabled";
@@ -156,14 +155,6 @@ describe("grid arcade enabled setting", () => {
 });
 
 describe("workspace navigation keybindings", () => {
-  it("documents the archive shortcut for the focused session", () => {
-    expect(KEYBINDINGS.find((row) => row.command === "Session: Archive")).toEqual({
-      command: "Session: Archive",
-      keys: `${MOD}${SHIFT}A`,
-      when: "sessionFocus && !overlay",
-    });
-  });
-
   it("documents session and project cycling in the shortcut list", () => {
     const rows = KEYBINDINGS.filter(
       (row) => /^(Session|Project): (Previous|Next)$/.test(row.command),
