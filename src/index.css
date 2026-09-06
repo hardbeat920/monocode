@@ -269,6 +269,28 @@ html.is-resizing * {
   scrollbar-width: none;
 }
 
+/* Prompt outline list: a thin thumb, always visible, on all platforms.
+   Replaces the native overlay bar. */
+html .prompt-outline-list::-webkit-scrollbar {
+  width: 12px;
+}
+
+html .prompt-outline-list::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 6px;
+}
+
+html .prompt-outline-list::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-color: color-mix(in srgb, var(--color-content) 16%, transparent);
+  background-clip: padding-box;
+}
+
+html .prompt-outline-list::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--color-content) 32%, transparent);
+}
+
 [data-tauri-drag-region] button {
   -webkit-app-region: no-drag;
   app-region: no-drag;

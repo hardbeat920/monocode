@@ -22,6 +22,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import { AttachmentChip } from "../chrome/AttachmentChip";
 import { FilePreview } from "../chrome/FilePreview";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
@@ -116,6 +117,8 @@ type Props = {
   onHandoff?: (harness: HarnessId, turn: Block[], model: string) => void;
   onJumpToBottomChange?: (show: boolean) => void;
   onJumpToBottomReady?: (jump: () => void) => void;
+  /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
+  onRevealReady?: (reveal: (blockId: string) => boolean) => void;
   /** False while another tab is in front. Hidden tabs stay laid out. */
   visible?: boolean;
 };
@@ -138,6 +141,7 @@ export function AgentTranscript({
   onHandoff,
   onJumpToBottomChange,
   onJumpToBottomReady,
+  onRevealReady,
   visible = true,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -293,6 +297,10 @@ export function AgentTranscript({
   const turns = groupTurns(blocks);
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  const visibleTurnCountRef = useRef(visibleTurnCount);
+  visibleTurnCountRef.current = visibleTurnCount;
 
   useLayoutEffect(() => {
     const previousHeight = prependHeight.current;
@@ -304,21 +312,46 @@ export function AgentTranscript({
       el.scrollHeight - el.scrollTop - el.clientHeight;
   }, [visibleTurnCount]);
 
-  const loadEarlier = () => {
+  const prepareToPrepend = useCallback(() => {
     const el = scroller.current;
     if (el) prependHeight.current = el.scrollHeight;
     stickToBottom.current = false;
+  }, []);
+
+  const loadEarlier = () => {
+    prepareToPrepend();
     setVisibleTurnCount((count) =>
       Math.min(turns.length, count + TURN_PAGE_SIZE),
     );
   };
+
+  const revealBlock = useCallback(
+    (blockId: string): boolean => {
+      const all = turnsRef.current;
+      const index = all.findIndex((turn) =>
+        turn.some((block) => block.id === blockId),
+      );
+      if (index < 0) return false;
+      const needed = all.length - index;
+      if (needed <= visibleTurnCountRef.current) return true;
+      prepareToPrepend();
+      // Synchronous. The caller finds the turn in the DOM after this call.
+      flushSync(() => setVisibleTurnCount(needed));
+      return true;
+    },
+    [prepareToPrepend],
+  );
+
+  useEffect(() => {
+    onRevealReady?.(revealBlock);
+  }, [revealBlock, onRevealReady]);
 
   return (
     <div
       ref={setScroller}
       className="agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5"
     >
-      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-1">
+      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-1 @max-[62rem]:pr-11">
         {firstVisibleTurn > 0 ? (
           <div className="flex justify-center px-4 py-3">
             <button
@@ -894,6 +927,7 @@ function UserMessageBlock({
 
   return (
     <div
+      data-prompt-anchor={block.id}
       className={
         chat ? "flex justify-end pt-1.5 pr-4 pb-4 pl-14" : "p-1.5 pb-3"
       }

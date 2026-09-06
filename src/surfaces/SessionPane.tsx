@@ -11,6 +11,7 @@ import {
 import { Composer } from "../chrome/Composer";
 import { DiscussionEmpty } from "../chrome/DiscussionEmpty";
 import { SessionReview } from "../chrome/SessionReview";
+import { PromptOutline } from "../chrome/PromptOutline";
 import {
   canCompactHarnessContext,
   type ApprovalDecision,
@@ -180,6 +181,7 @@ export const SessionPane = memo(function SessionPane({
     [onBuildPlan, session.id],
   );
   const jumpToBottomRef = useRef<(() => void) | null>(null);
+  const transcriptScope = useRef<HTMLDivElement>(null);
   const quoteRequestId = useRef(0);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const astraWelcomeSequence = useRef(0);
@@ -192,6 +194,14 @@ export const SessionPane = memo(function SessionPane({
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;
   }, []);
+  const revealBlockRef = useRef<((blockId: string) => boolean) | null>(null);
+  const onRevealReady = useCallback((reveal: (blockId: string) => boolean) => {
+    revealBlockRef.current = reveal;
+  }, []);
+  const revealBlock = useCallback(
+    (blockId: string) => revealBlockRef.current?.(blockId) ?? false,
+    [],
+  );
   const addSelectionToChat = useCallback(
     (text: string, mode?: QuoteRequest["mode"]) => {
       quoteRequestId.current += 1;
@@ -387,7 +397,7 @@ export const SessionPane = memo(function SessionPane({
           </button>
         </div>
       ) : null}
-      <div className="relative min-h-0 flex-1">
+      <div ref={transcriptScope} className="@container relative min-h-0 flex-1">
         {isEmpty ? (
           session.inboxAsk ? (
             <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
@@ -430,6 +440,13 @@ export const SessionPane = memo(function SessionPane({
               }
               onJumpToBottomChange={setShowJumpToBottom}
               onJumpToBottomReady={onJumpToBottomReady}
+              onRevealReady={onRevealReady}
+            />
+            <PromptOutline
+              blocks={session.blocks}
+              scope={transcriptScope}
+              visible={visible}
+              revealBlock={revealBlock}
             />
             {showJumpToBottom ? (
               <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 flex justify-center">
