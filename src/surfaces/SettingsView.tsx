@@ -61,6 +61,15 @@ import {
   type TranscriptLayout,
 } from "../lib/appearance";
 import {
+  applyUiScale,
+  loadUiScale,
+  saveUiScale,
+  subscribeUiScale,
+  UI_SCALE_DEFAULT,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+} from "../lib/uiScale";
+import {
   getHarnessAvailabilitySnapshot,
   harnessUnavailableHint,
   isHarnessAvailable,
@@ -752,6 +761,9 @@ function useAppearanceSettings() {
   const [themeHue, setThemeHue] = useState(loadThemeHue);
   const [themeSaturation, setThemeSaturation] = useState(loadThemeSaturation);
   const [bodyGlass, setBodyGlass] = useState(loadBodyGlass);
+  const [uiScale, setUiScale] = useState(loadUiScale);
+
+  useEffect(() => subscribeUiScale(() => setUiScale(loadUiScale())), []);
 
   const onThemePreference = useCallback((next: ThemePreference) => {
     applyThemePreference(next);
@@ -785,13 +797,20 @@ function useAppearanceSettings() {
     setBodyGlass(next);
   }, []);
 
+  const onUiScale = useCallback((percent: number) => {
+    const next = saveUiScale(percent / 100);
+    setUiScale(next);
+    void applyUiScale(next);
+  }, []);
+
   const restoreDefaults = useCallback(() => {
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
     onBlur(SIDEBAR_BLUR_DEFAULT);
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
-  }, [onBlur, onBodyGlass, onThemePreference, onOpacity, onTint]);
+    onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
+  }, [onBlur, onBodyGlass, onThemePreference, onOpacity, onTint, onUiScale]);
 
   return {
     themePreference,
@@ -800,11 +819,13 @@ function useAppearanceSettings() {
     themeHue,
     themeSaturation,
     bodyGlass,
+    uiScale,
     onThemePreference,
     onOpacity,
     onBlur,
     onTint,
     onBodyGlass,
+    onUiScale,
     restoreDefaults,
   };
 }
@@ -888,6 +909,20 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           label="Main pane glass"
           on={appearance.bodyGlass}
           onChange={appearance.onBodyGlass}
+        />
+      </Row>
+      <Row
+        label="Interface scale"
+        description="Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS)."
+      >
+        <Slider
+          label="Interface scale"
+          value={Math.round(appearance.uiScale * 100)}
+          display={`${Math.round(appearance.uiScale * 100)}%`}
+          min={Math.round(UI_SCALE_MIN * 100)}
+          max={Math.round(UI_SCALE_MAX * 100)}
+          step={10}
+          onChange={appearance.onUiScale}
         />
       </Row>
     </>
@@ -1375,6 +1410,7 @@ function Slider({
   display,
   min,
   max,
+  step = 1,
   onChange,
 }: {
   label: string;
@@ -1382,6 +1418,7 @@ function Slider({
   display: string;
   min: number;
   max: number;
+  step?: number;
   onChange: (value: number) => void;
 }) {
   return (
@@ -1390,6 +1427,7 @@ function Slider({
         type="range"
         min={min}
         max={max}
+        step={step}
         value={value}
         aria-valuemin={min}
         aria-valuemax={max}

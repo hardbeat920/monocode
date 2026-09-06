@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { HAS_NATIVE_GLASS, IS_MAC } from "./platform";
+import { applyUiScale, loadUiScale } from "./uiScale";
 
 const THEME_HUE_KEY = "monocode.themeHue";
 const THEME_SATURATION_KEY = "monocode.themeSaturation";
@@ -162,6 +163,7 @@ export function initAppearance() {
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());
+  void applyUiScale(loadUiScale());
 }
 
 function isThemePreference(value: unknown): value is ThemePreference {

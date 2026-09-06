@@ -22,7 +22,8 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project"
         | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
         | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" | "check_for_updates" => {
+        | "open_model_picker" | "open_settings" | "check_for_updates" | "zoom_in" | "zoom_out"
+        | "zoom_reset" => {
             let _ = app.emit(id, ());
         }
         _ => {}
@@ -108,6 +109,12 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .build(app)?;
     let sidebar_opacity =
         MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
+    // No accelerators here on purpose: the webview key handler owns
+    // CmdOrCtrl + - 0, and a menu accelerator would fire the same command
+    // a second time on top of it.
+    let zoom_in = MenuItemBuilder::with_id("zoom_in", "Zoom In").build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
     let find = MenuItemBuilder::with_id("find", "Find")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
@@ -148,6 +155,10 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&focus_right)
         .item(&focus_up)
         .item(&focus_down)
+        .separator()
+        .item(&zoom_in)
+        .item(&zoom_out)
+        .item(&zoom_reset)
         .separator()
         .item(&sidebar_opacity)
         .build()?;
