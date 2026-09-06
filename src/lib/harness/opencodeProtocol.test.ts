@@ -227,3 +227,40 @@ describe("flattenOpenCodeModels context window", () => {
     expect(models[0]?.contextWindow).toBe(200_000);
   });
 });
+
+describe("flattenOpenCodeModels free flag", () => {
+  it("marks zero-cost catalog entries as free", () => {
+    const models = flattenOpenCodeModels(
+      {
+        providers: new Map([
+          [
+            "opencode",
+            {
+              id: "opencode",
+              name: "opencode",
+              models: {
+                "big-pickle": {
+                  id: "big-pickle",
+                  name: "Big Pickle",
+                  cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+                },
+                "glm-5": {
+                  id: "glm-5",
+                  name: "GLM 5",
+                  cost: { input: 1.4, output: 4.4 },
+                },
+              },
+            },
+          ],
+        ]),
+        connected: ["opencode"],
+      },
+      [],
+    );
+    expect(models.find((model) => model.nativeId === "opencode/big-pickle")?.free).toBe(
+      true,
+    );
+    expect(models.find((model) => model.nativeId === "opencode/glm-5")?.free).toBeUndefined();
+  });
+});
+

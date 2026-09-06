@@ -24,6 +24,11 @@ type OpenCodeModelJson = {
   name?: string;
   variants?: Record<string, unknown>;
   limit?: { context?: number; input?: number; output?: number };
+  cost?: {
+    input?: number;
+    output?: number;
+    cache?: { read?: number; write?: number };
+  };
 };
 
 type ParsedProvider = {
@@ -192,10 +197,23 @@ export function flattenOpenCodeModels(
         nativeId,
         settings: openCodeModelSettings(provider.id, model, primaryAgents),
         ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
+        ...(isOpenCodeModelFree(model) ? { free: true } : {}),
       });
     }
   }
   return models.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function isOpenCodeModelFree(model: OpenCodeModelJson): boolean {
+  const cost = model.cost;
+  if (!cost) return false;
+  const cache = cost.cache;
+  return (
+    (cost.input ?? 0) === 0 &&
+    (cost.output ?? 0) === 0 &&
+    (cache?.read ?? 0) === 0 &&
+    (cache?.write ?? 0) === 0
+  );
 }
 
 function openCodeModelSettings(

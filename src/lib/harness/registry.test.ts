@@ -146,6 +146,25 @@ describe("harness registry", () => {
     expect(pi).toHaveBeenCalledOnce();
   });
 
+  it("can force a live catalog to refresh again", async () => {
+    const pi = vi.fn(async () => {
+      setHarnessModels("pi", [
+        {
+          id: "pi:opus",
+          harness: "pi",
+          name: "Opus",
+          nativeId: "anthropic/opus",
+        },
+      ]);
+    });
+    registerHarness(stub("pi", { refreshCatalog: pi }));
+
+    await refreshHarnessCatalogs(["pi"]);
+    await refreshHarnessCatalogs(["pi"], { force: true });
+
+    expect(pi).toHaveBeenCalledTimes(2);
+  });
+
   it("skips catalog refresh when no harness is in use", async () => {
     const pi = vi.fn(async () => undefined);
     registerHarness(stub("pi", { refreshCatalog: pi }));

@@ -13,13 +13,17 @@ import {
   findModel,
   getModelSnapshot,
   getPickerVisibilitySnapshot,
+  isFreeOpenCodeModel,
   loadFavoriteModels,
   loadModelPickerTab,
+  loadOpenCodeFreeOnly,
   modelsFor,
   resolveModel,
   saveFavoriteModels,
   saveModelPickerTab,
+  saveOpenCodeFreeOnly,
   showProviderInModelPicker,
+  sortModelsNewestFirst,
   stepModelPickerTab,
   subscribeModels,
   subscribePickerVisibility,
@@ -85,6 +89,7 @@ export function ModelPicker({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [favorites, setFavorites] = useState(loadFavoriteModels);
+  const [freeOnly, setFreeOnly] = useState(loadOpenCodeFreeOnly);
   const root = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
@@ -143,7 +148,7 @@ export function ModelPicker({
 
   useEffect(() => {
     if (!open || visibleTab === "favorites") return;
-    void refreshHarnessCatalogs([visibleTab]);
+    void refreshHarnessCatalogs([visibleTab], { force: true });
   }, [open, visibleTab]);
 
   useEffect(() => {
@@ -223,8 +228,12 @@ export function ModelPicker({
                 item != null && shownInPicker(item.harness),
             )
         : modelsFor(visibleTab);
-    if (!needle) return pool;
-    return pool.filter((item) => {
+    const scoped =
+      visibleTab === "opencode" && freeOnly
+        ? pool.filter(isFreeOpenCodeModel)
+        : pool;
+    if (!needle) return scoped;
+    return scoped.filter((item) => {
       const hay =
         `${item.name} ${HARNESS_TITLE[item.harness]} ${HARNESS_LABEL[item.harness]}`.toLowerCase();
       return hay.includes(needle);
@@ -238,6 +247,7 @@ export function ModelPicker({
     catalogVersion,
     availabilityVersion,
     visibilityVersion,
+    freeOnly,
   ]);
 
   useEffect(() => {
@@ -256,6 +266,21 @@ export function ModelPicker({
     if (!isHarnessAvailable(item.harness)) return;
     onChange(item.harness, item.id);
     dismiss(true);
+  };
+
+  const toggleFreeOnly = () => {
+    const next = !freeOnly;
+    setFreeOnly(next);
+    saveOpenCodeFreeOnly(next);
+    if (!next || visibleTab !== "opencode") return;
+    const currentModel = modelsFor("opencode").find((item) => item.id === current.id);
+    if (currentModel && isFreeOpenCodeModel(currentModel)) return;
+    const newestFree = sortModelsNewestFirst(
+      modelsFor("opencode").filter(isFreeOpenCodeModel),
+    )[0];
+    if (newestFree && isHarnessAvailable("opencode")) {
+      onChange("opencode", newestFree.id);
+    }
   };
 
   const toggleFavorite = (id: string) => {
@@ -381,6 +406,23 @@ export function ModelPicker({
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={onSearchKey}
                 />
+                {visibleTab === "opencode" ? (
+                  <button
+                    type="button"
+                    aria-pressed={freeOnly}
+                    aria-label="Show free OpenCode models"
+                    title="Show free OpenCode models"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={toggleFreeOnly}
+                    className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                      freeOnly
+                        ? "bg-content/15 text-content"
+                        : "text-content/50 hover:bg-content/10 hover:text-content"
+                    }`}
+                  >
+                    Free
+                  </button>
+                ) : null}
               </label>
             </div>
             <ModelList
@@ -396,7 +438,9 @@ export function ModelPicker({
                     ? harnessUnavailableHint(visibleTab)
                     : visibleTab === "codex" && !query.trim()
                       ? "Loading Codex models…"
-                      : "No matching models"
+                      : visibleTab === "opencode" && freeOnly && !query.trim()
+                        ? "No free models available"
+                        : "No matching models"
               }
               onActive={setActive}
               onPick={pick}

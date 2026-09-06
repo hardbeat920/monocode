@@ -23,6 +23,8 @@ export type AgentModel = {
   settings?: ModelSetting[];
   /** Context window, when the harness catalog reports one. */
   contextWindow?: number;
+  /** True when the live catalog reports this model as free (zero cost). */
+  free?: boolean;
 };
 
 export const MODELS: AgentModel[] = [
@@ -193,6 +195,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
 const FAVORITES_KEY = "monocode.favoriteModels";
 const MODEL_PICKER_TAB_KEY = "monocode.modelPickerTab";
 const HIDDEN_PICKER_PROVIDERS_KEY = "monocode.hiddenPickerProviders";
+const OPENCODE_FREE_ONLY_KEY = "monocode.opencodeFreeOnly";
 const LAST_MODEL_KEY = "monocode.lastModel";
 const LAST_MODEL_SETTINGS_KEY = "monocode.lastModelSettings";
 const DEFAULT_MODELS_KEY = "monocode.defaultModels";
@@ -244,10 +247,11 @@ export function getModelSnapshot(): number {
 
 export function setHarnessModels(harness: HarnessId, models: AgentModel[]) {
   if (models.length === 0) return;
-  overlays = { ...overlays, [harness]: models };
+  const ranked = sortModelsNewestFirst(models);
+  overlays = { ...overlays, [harness]: ranked };
   overlayDefaults = {
     ...overlayDefaults,
-    [harness]: pickDefaultId(harness, models),
+    [harness]: pickDefaultId(harness, ranked),
   };
   emit();
 }
@@ -265,7 +269,7 @@ export function resetHarnessModelOverlays() {
 }
 
 export function defaultModelId(harness: HarnessId): string {
-  return overlayDefaults[harness] ?? DEFAULT_MODEL_ID[harness];
+  return overlayDefaults[harness] ?? pickDefaultId(harness, modelsFor(harness));
 }
 
 // `modelsFor`/`findModel` sit in render bodies (every session card, every
@@ -280,6 +284,9 @@ function baseModelsFor(harness: HarnessId): AgentModel[] {
     const grouped: Partial<Record<HarnessId, AgentModel[]>> = {};
     for (const model of MODELS) {
       (grouped[model.harness] ??= []).push(model);
+    }
+    for (const harness of Object.keys(grouped) as HarnessId[]) {
+      grouped[harness] = sortModelsNewestFirst(grouped[harness] ?? []);
     }
     baseByHarness = grouped;
   }
@@ -440,6 +447,29 @@ export function saveFavoriteModels(ids: string[]) {
 
 function isHarnessId(value: string): value is HarnessId {
   return HARNESS_ORDER.includes(value as HarnessId);
+}
+
+export function isFreeOpenCodeModel(model: AgentModel): boolean {
+  if (model.harness !== "opencode") return false;
+  if (model.free === true) return true;
+  const hay = `${model.nativeId ?? ""} ${model.id} ${model.name}`.toLowerCase();
+  return /(?:^|[^a-z0-9])free(?:[^a-z0-9]|$)|-free(?:$|[/_-])/.test(hay);
+}
+
+export function loadOpenCodeFreeOnly(): boolean {
+  try {
+    return localStorage.getItem(OPENCODE_FREE_ONLY_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveOpenCodeFreeOnly(value: boolean) {
+  try {
+    localStorage.setItem(OPENCODE_FREE_ONLY_KEY, value ? "true" : "false");
+  } catch {
+    // private mode / quota
+  }
 }
 
 export function loadModelPickerTab(): ModelPickerTab {
@@ -668,58 +698,103 @@ function nativeIdFrom(id: string): string {
   return bracket >= 0 ? slug.slice(0, bracket) : slug;
 }
 
+function nativeHaystack(model: AgentModel): string {
+  return `${model.nativeId ?? ""} ${model.id} ${model.name}`;
+}
+
+/** Pull dotted/hyphenated version tokens, ignoring date suffixes like 20251001. */
+export function modelVersionKey(text: string): number[] {
+  const cleaned = text.replace(/\d{8,}/g, " ");
+  const parts: number[] = [];
+  const matches = cleaned.matchAll(/\d+(?:\.\d+)*/g);
+  for (const match of matches) {
+    for (const piece of match[0].split(".")) {
+      parts.push(Number.parseInt(piece, 10) || 0);
+    }
+  }
+  return parts;
+}
+
+function compareVersionKey(left: number[], right: number[]): number {
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const delta = (left[i] ?? 0) - (right[i] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
+}
+
+function versionKeyFor(model: AgentModel): number[] {
+  return modelVersionKey(model.nativeId || nativeIdFrom(model.id));
+}
+
+export function sortModelsNewestFirst(models: AgentModel[]): AgentModel[] {
+  return [...models].sort((left, right) => {
+    const byVersion = compareVersionKey(
+      versionKeyFor(right),
+      versionKeyFor(left),
+    );
+    if (byVersion !== 0) return byVersion;
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function newestMatching(
+  models: AgentModel[],
+  predicate?: (model: AgentModel) => boolean,
+): AgentModel | undefined {
+  const pool = predicate ? models.filter(predicate) : models;
+  return sortModelsNewestFirst(pool)[0];
+}
+
 function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
   if (harness === "claude") {
     return (
-      models.find((model) => model.nativeId === "claude-sonnet-5")?.id ??
-      models.find((model) => model.nativeId === "sonnet")?.id ??
-      models.find((model) => model.id === DEFAULT_MODEL_ID.claude)?.id ??
-      models[0]?.id ??
+      newestMatching(models, (model) =>
+        /sonnet/i.test(nativeHaystack(model)),
+      )?.id ??
+      newestMatching(models)?.id ??
       DEFAULT_MODEL_ID.claude
     );
   }
   if (harness === "cursor") {
     return (
-      models.find((model) => model.nativeId === "composer-2.5")?.id ??
-      models.find(
-        (model) => model.nativeId === "default" || model.nativeId === "auto",
+      newestMatching(models, (model) =>
+        /composer/i.test(nativeHaystack(model)),
       )?.id ??
-      models[0]?.id ??
+      newestMatching(models, (model) =>
+        /^(default|auto)$/i.test(model.nativeId ?? ""),
+      )?.id ??
+      newestMatching(models)?.id ??
       DEFAULT_MODEL_ID.cursor
     );
   }
   if (harness === "codex") {
-    return models[0]?.id ?? "";
+    return newestMatching(models)?.id ?? "";
   }
   if (harness === "grok") {
     return (
-      models.find((model) => model.nativeId === "grok-4.6")?.id ??
-      models.find((model) => model.id === DEFAULT_MODEL_ID.grok)?.id ??
-      models[0]?.id ??
+      newestMatching(models, (model) => /grok/i.test(nativeHaystack(model)))
+        ?.id ??
+      newestMatching(models)?.id ??
       DEFAULT_MODEL_ID.grok
     );
   }
   if (harness === "fx") {
-    const preferred = [
-      "zai/glm-5.2-fast",
-      "zai/glm-5.2",
-      "zai/glm-4.7-flash",
-      "zai/glm-4.7",
-      "openai/gpt-5.2",
-    ];
-    for (const nativeId of preferred) {
-      const hit = models.find((model) => model.nativeId === nativeId);
-      if (hit) return hit.id;
-    }
     return (
-      models.find((model) => model.id === DEFAULT_MODEL_ID.fx)?.id ??
-      models[0]?.id ??
+      newestMatching(models, (model) => /glm/i.test(nativeHaystack(model)))
+        ?.id ??
+      newestMatching(models)?.id ??
       DEFAULT_MODEL_ID.fx
     );
   }
-  return (
-    models.find((model) => model.id === DEFAULT_MODEL_ID[harness])?.id ??
-    models[0]?.id ??
-    DEFAULT_MODEL_ID[harness]
-  );
+  if (harness === "antigravity") {
+    return (
+      newestMatching(models, (model) => /gemini/i.test(nativeHaystack(model)))
+        ?.id ??
+      newestMatching(models)?.id ??
+      DEFAULT_MODEL_ID.antigravity
+    );
+  }
+  return newestMatching(models)?.id ?? DEFAULT_MODEL_ID[harness];
 }

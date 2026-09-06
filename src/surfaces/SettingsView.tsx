@@ -17,6 +17,7 @@ import {
 } from "react";
 import { HarnessIcon } from "../chrome/HarnessIcon";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
+import { ProviderModelSelect } from "../chrome/ProviderModelSelect";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -196,6 +197,7 @@ export function SettingsView({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (document.querySelector("[data-popover-side]")) return;
       event.preventDefault();
       event.stopPropagation();
       onCloseRef.current();
@@ -1068,9 +1070,9 @@ function ProviderRow({
   );
 
   useEffect(() => {
-    if (!available || models.length > 0) return;
-    void refreshHarnessCatalogs([harness]);
-  }, [available, harness, models.length]);
+    if (!available) return;
+    void refreshHarnessCatalogs([harness], { force: true });
+  }, [available, harness]);
 
   const onPickerVisible = (visible: boolean) => {
     savePickerProviderVisible(harness, visible);
@@ -1097,14 +1099,12 @@ function ProviderRow({
       }
     >
       {current ? (
-        <Select
+        <ProviderModelSelect
           label={`${HARNESS_TITLE[harness]} model`}
+          harness={harness}
           value={current.id}
+          models={models}
           onChange={(next) => onModelChange(harness, next)}
-          options={models.map((item) => ({
-            value: item.id,
-            label: item.name,
-          }))}
         />
       ) : null}
       <SecondaryButton
@@ -1492,33 +1492,6 @@ function Toggle({
         }`}
       />
     </button>
-  );
-}
-
-function Select({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <select
-      aria-label={label}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      className="max-w-52 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-[12px] text-content outline-none hover:border-content/20"
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
   );
 }
 

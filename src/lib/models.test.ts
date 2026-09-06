@@ -5,6 +5,7 @@ import {
   defaultModelId,
   defaultSessionChoice,
   hasLiveCatalog,
+  modelsFor,
   isPickerProviderVisible,
   loadDefaultModels,
   loadHiddenPickerProviders,
@@ -20,6 +21,9 @@ import {
   saveLastModelSettings,
   savePickerProviderVisible,
   setHarnessModels,
+  isFreeOpenCodeModel,
+  loadOpenCodeFreeOnly,
+  saveOpenCodeFreeOnly,
   showProviderInModelPicker,
   stepModelPickerTab,
   type AgentModel,
@@ -302,5 +306,116 @@ describe("live catalog overlays", () => {
     ]);
     expect(hasLiveCatalog("pi")).toBe(true);
     expect(hasLiveCatalog("omp")).toBe(false);
+  });
+
+  it("ranks live catalogs newest-first and defaults to the latest family match", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:composer-2.5",
+        harness: "cursor",
+        name: "Composer 2.5",
+        nativeId: "composer-2.5",
+      },
+      {
+        id: "cursor:composer-4",
+        harness: "cursor",
+        name: "Composer 4",
+        nativeId: "composer-4",
+      },
+      {
+        id: "cursor:gpt-5.4",
+        harness: "cursor",
+        name: "GPT-5.4",
+        nativeId: "gpt-5.4",
+      },
+    ]);
+    expect(modelsFor("cursor").map((model) => model.nativeId)).toEqual([
+      "gpt-5.4",
+      "composer-4",
+      "composer-2.5",
+    ]);
+    expect(defaultModelId("cursor")).toBe("cursor:composer-4");
+
+    setHarnessModels("claude", [
+      {
+        id: "claude:sonnet-4.6",
+        harness: "claude",
+        name: "Sonnet 4.6",
+        nativeId: "claude-sonnet-4-6",
+      },
+      {
+        id: "claude:sonnet-5",
+        harness: "claude",
+        name: "Sonnet 5",
+        nativeId: "claude-sonnet-5",
+      },
+      {
+        id: "claude:opus-5",
+        harness: "claude",
+        name: "Opus 5",
+        nativeId: "claude-opus-5",
+      },
+    ]);
+    expect(defaultModelId("claude")).toBe("claude:sonnet-5");
+
+    setHarnessModels("opencode", [
+      {
+        id: "opencode:zai/glm-5",
+        harness: "opencode",
+        name: "GLM 5",
+        nativeId: "zai/glm-5",
+      },
+      {
+        id: "opencode:zai/glm-5.2",
+        harness: "opencode",
+        name: "GLM 5.2",
+        nativeId: "zai/glm-5.2",
+      },
+      {
+        id: "opencode:openai/gpt-5.4",
+        harness: "opencode",
+        name: "GPT-5.4",
+        nativeId: "openai/gpt-5.4",
+      },
+    ]);
+    expect(defaultModelId("opencode")).toBe("opencode:openai/gpt-5.4");
+  });
+});
+
+describe("OpenCode free models", () => {
+  it("treats catalog-reported zero-cost models as free", () => {
+    expect(
+      isFreeOpenCodeModel({
+        id: "opencode:opencode/big-pickle",
+        harness: "opencode",
+        name: "Big Pickle",
+        nativeId: "opencode/big-pickle",
+        free: true,
+      }),
+    ).toBe(true);
+    expect(
+      isFreeOpenCodeModel({
+        id: "opencode:alibaba/glm-5.2",
+        harness: "opencode",
+        name: "GLM-5.2",
+        nativeId: "alibaba/glm-5.2",
+      }),
+    ).toBe(false);
+    expect(
+      isFreeOpenCodeModel({
+        id: "opencode:opencode/mimo-v2.5-free",
+        harness: "opencode",
+        name: "MiMo V2.5 Free",
+        nativeId: "opencode/mimo-v2.5-free",
+      }),
+    ).toBe(true);
+  });
+
+  it("persists the free-only picker filter", () => {
+    expect(loadOpenCodeFreeOnly()).toBe(false);
+    saveOpenCodeFreeOnly(true);
+    expect(loadOpenCodeFreeOnly()).toBe(true);
+    saveOpenCodeFreeOnly(false);
+    expect(loadOpenCodeFreeOnly()).toBe(false);
   });
 });

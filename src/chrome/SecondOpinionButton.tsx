@@ -172,7 +172,7 @@ export function SecondOpinionButton({
 
   useEffect(() => {
     if (!open || !activeHarness) return;
-    void refreshHarnessCatalogs([activeHarness]);
+    void refreshHarnessCatalogs([activeHarness], { force: true });
   }, [open, activeHarness]);
 
   useEffect(() => {
