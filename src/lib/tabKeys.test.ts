@@ -39,6 +39,28 @@ function key(
 }
 
 describe("tabCommand", () => {
+  it("archives a session with shift-cmd-a or shift-ctrl-a", () => {
+    expect(
+      tabCommand(key({ key: "A", metaKey: true, shiftKey: true })),
+    ).toBe("archive-session");
+    expect(
+      tabCommand(key({ key: "a", ctrlKey: true, shiftKey: true })),
+    ).toBe("archive-session");
+  });
+
+  it("does not archive on select-all, extra modifiers, composition, or repeat", () => {
+    for (const modifiers of [
+      { metaKey: true },
+      { ctrlKey: true },
+      { shiftKey: true },
+      { metaKey: true, shiftKey: true, altKey: true },
+      { metaKey: true, shiftKey: true, isComposing: true },
+      { metaKey: true, shiftKey: true, repeat: true },
+    ]) {
+      expect(tabCommand(key({ key: "a", ...modifiers }))).toBeNull();
+    }
+  });
+
   it("opens a terminal pane with cmd-backtick", () => {
     expect(tabCommand(key({ key: "`", code: "Backquote", metaKey: true }))).toBe(
       "new-terminal",

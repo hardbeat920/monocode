@@ -2844,6 +2844,18 @@ export default function App({
     [onRemoveHistorySession],
   );
 
+  const onArchiveFocusedSession = useCallback(() => {
+    if (projectTerminalFocusedRef.current) return;
+    const tab = tabsRef.current.find(
+      (entry) => entry.id === activeTabIdRef.current,
+    );
+    if (!tab || tab.diffFocused) return;
+    const session = sessionsRef.current.find(
+      (entry) => entry.id === tab.focusedId,
+    );
+    if (session) void onArchiveHistorySession(session.id, true);
+  }, [onArchiveHistorySession]);
+
   const onPinHistorySession = useCallback(
     async (sessionId: string, pinned: boolean) => {
       const open = sessionsRef.current.find(
@@ -4645,6 +4657,7 @@ export default function App({
 
   const actions = useRef({
     onNew,
+    onArchiveFocusedSession,
     onCloseOtherTabs,
     onClosePane,
     onNext,
@@ -4671,6 +4684,7 @@ export default function App({
   });
   actions.current = {
     onNew,
+    onArchiveFocusedSession,
     onCloseOtherTabs,
     onClosePane,
     onNext,
@@ -4730,6 +4744,23 @@ export default function App({
       const cmd = tabCommand(e);
       if (cmd) {
         const target = e.target instanceof Element ? e.target : null;
+        const surfaceOpen =
+          searchViewOpenRef.current ||
+          inboxViewOpenRef.current ||
+          notesViewOpenRef.current ||
+          settingsOpenRef.current ||
+          filePickerOpenRef.current ||
+          Boolean(whatsNewVersionRef.current);
+        if (
+          cmd === "archive-session" &&
+          (surfaceOpen ||
+            e.defaultPrevented ||
+            target?.closest(
+              '[role="dialog"], [data-model-picker], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-app-search]',
+            ))
+        ) {
+          return;
+        }
         const listNavigation =
           cmd === "prev-session" ||
           cmd === "next-session" ||
@@ -4744,13 +4775,6 @@ export default function App({
           const emptyComposerTarget = Boolean(
             target?.matches('textarea[data-composer-empty="true"]'),
           );
-          const surfaceOpen =
-            searchViewOpenRef.current ||
-            inboxViewOpenRef.current ||
-            notesViewOpenRef.current ||
-            settingsOpenRef.current ||
-            filePickerOpenRef.current ||
-            Boolean(whatsNewVersionRef.current);
           if (
             !shouldHandleListNavigation({
               blockedTarget,
@@ -4789,6 +4813,8 @@ export default function App({
         e.stopPropagation();
         const a = actions.current;
         if (cmd === "new") run("new", a.onNew);
+        else if (cmd === "archive-session")
+          run("archive-session", a.onArchiveFocusedSession);
         else if (cmd === "close-others")
           run("close-others", a.onCloseOtherTabs);
         else if (cmd === "close") run("close", a.onClosePane);

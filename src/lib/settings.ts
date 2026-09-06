@@ -346,6 +346,11 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "Tab: Activate 1–8", keys: `${MOD}1 … ${MOD}8`, when: "Always" },
   { command: "Tab: Activate Last", keys: `${MOD}9`, when: "Always" },
   {
+    command: "Session: Archive",
+    keys: `${MOD}${SHIFT}A`,
+    when: "sessionFocus && !overlay",
+  },
+  {
     command: "Session: Previous",
     keys: `${MOD}${SHIFT}↑`,
     when: "!overlay && (!textFocus || emptyComposer)",
