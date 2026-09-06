@@ -41,7 +41,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
                 .or(windows.first());
             match target {
                 Some(window) => {
-                    let _ = window.emit(id, ());
+                    let _ = app.emit_to(window.label(), id, ());
                 }
                 None => {
                     let _ = app.emit(id, ());
