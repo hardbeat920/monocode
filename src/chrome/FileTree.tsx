@@ -50,7 +50,7 @@ import {
   type FsEntry,
 } from "../lib/fs";
 import { displayPath, parentPath, rebasePath } from "../lib/paths";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import type { GitStatusMap } from "../hooks/useGitFileStatuses";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
@@ -83,7 +83,7 @@ type MenuState = { x: number; y: number; target: MenuTarget };
 
 const REVEAL_LABEL = IS_MAC
   ? t("Reveal in Finder")
-  : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
+  : IS_WIN
     ? t("Reveal in File Explorer")
     : t("Open Containing Folder");
 

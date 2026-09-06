@@ -95,9 +95,9 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-html.is-mac,
-html.is-mac body,
-html.is-mac #root {
+html.has-native-glass,
+html.has-native-glass body,
+html.has-native-glass #root {
   background: transparent;
 }
 
@@ -109,7 +109,7 @@ html.theme-light .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 93%, black 7%);
 }
 
-html.is-mac .sidebar-glass {
+html.has-native-glass .sidebar-glass {
   background: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
       var(--sidebar-opacity)
@@ -143,7 +143,7 @@ html.is-mac .sidebar-glass {
   min-height: var(--transcript-viewport, 0px);
 }
 
-html.is-mac.glass-body .body-glass {
+html.has-native-glass.glass-body .body-glass {
   background: color-mix(
     in srgb,
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
@@ -906,6 +906,90 @@ header[data-tauri-drag-region] button {
   border-bottom-left-radius: 8px;
 }
 
+/*
+ * The connector: a line dropping out of the chevron and curving into the first
+ * thing the fold holds, so opened work reads as hanging off that line rather
+ * than running on from the answer below it. Same geometry as the phase rail —
+ * 23px is the chevron's own centre (16px of row padding plus half a 14px
+ * icon), and the curve is a quarter circle tangent to both.
+ */
+.zen-fold-drop,
+.zen-fold-rail {
+  position: relative;
+  --zen-rail: color-mix(
+    in srgb,
+    var(--color-content) 14%,
+    var(--color-background-base)
+  );
+}
+
+/* Out of the chevron, down through the gap to the row below. */
+.zen-fold-drop::after {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 22px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--zen-rail);
+}
+
+/* The spine, carried by every row so it follows however tall they turn out. */
+.zen-fold-rail::before {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--zen-rail);
+}
+
+/* The last row is where the spine leaves off: with the content, not the gap. */
+.zen-fold-tail::before {
+  bottom: 4px;
+}
+
+/* The curve into the first row, a quarter circle tangent to spine and row. */
+.zen-fold-head::after {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  border-left: 1px solid var(--zen-rail);
+  border-bottom: 1px solid var(--zen-rail);
+  border-bottom-left-radius: 8px;
+}
+
+/*
+ * A turn's rows fold in place. The content the fold swallows was on screen a
+ * moment ago, so it sinks behind the fold line on its own height instead of
+ * being yanked out from under the text that replaced it. Rows animate as one
+ * run, which is why they share the phase timing rather than staggering.
+ */
+.zen-fold-item {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease;
+}
+
+.zen-fold-item[data-folded="true"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+  /* Nothing invisible should end up in a selection dragged past the fold. */
+  user-select: none;
+}
+
+.zen-fold-item > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* Live steps fade in place. A slide or blur hitch the autoscroll. */
 @keyframes zen-step-in {
   from {
@@ -953,7 +1037,8 @@ header[data-tauri-drag-region] button {
     animation: none;
   }
 
-  .zen-phase-body {
+  .zen-phase-body,
+  .zen-fold-item {
     transition: none;
   }
 }

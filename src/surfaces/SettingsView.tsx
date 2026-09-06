@@ -61,6 +61,15 @@ import {
   type TranscriptLayout,
 } from "../lib/appearance";
 import {
+  applyUiScale,
+  loadUiScale,
+  saveUiScale,
+  subscribeUiScale,
+  UI_SCALE_DEFAULT,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+} from "../lib/uiScale";
+import {
   getHarnessAvailabilitySnapshot,
   harnessUnavailableHint,
   isHarnessAvailable,
@@ -137,6 +146,15 @@ import {
 } from "../lib/settings";
 import { t } from "../lib/i18n";
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../lib/sounds";
+import {
+  cachedNotificationPermission,
+  loadNotificationsEnabled,
+  openNotificationSettings,
+  probeNotificationPermission,
+  requestNotificationPermission,
+  saveNotificationsEnabled,
+  type NotificationPermission,
+} from "../lib/notifications";
 import {
   installPendingUpdate,
   readAppVersion,
@@ -277,7 +295,24 @@ function GeneralPage({
     loadLiveAgentsEnabled,
   );
   const [soundsEnabled, setSoundsEnabled] = useState(loadSoundsEnabled);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    loadNotificationsEnabled,
+  );
+  const [notificationPermission, setNotificationPermission] =
+    useState<NotificationPermission>(cachedNotificationPermission);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+
+  // The user may flip the switch in System Settings and come back: re-read
+  // the OS state whenever the window regains focus while the toggle is on.
+  useEffect(() => {
+    if (!notificationsEnabled) return;
+    const refresh = () => {
+      void probeNotificationPermission().then(setNotificationPermission);
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [notificationsEnabled]);
 
   useEffect(() => {
     const onAnchor = (event: Event) => {
@@ -332,6 +367,13 @@ function GeneralPage({
   const onSoundsEnabled = (next: boolean) => {
     saveSoundsEnabled(next);
     setSoundsEnabled(next);
+  };
+
+  const onNotificationsEnabled = (next: boolean) => {
+    saveNotificationsEnabled(next);
+    setNotificationsEnabled(next);
+    if (!next) return;
+    void requestNotificationPermission().then(setNotificationPermission);
   };
 
   const onClaudeHooks = (next: boolean) => {
@@ -434,6 +476,24 @@ function GeneralPage({
         description={t("Short cues when a turn finishes, a new inbox item appears on the project rail, or an update is available. Switches and Copy on a finished turn also play.")}
       >
         <Toggle label={t("Sounds")} on={soundsEnabled} onChange={onSoundsEnabled} />
+      </Row>
+      <Row
+        label={t("Notifications")}
+        description={t("Notify when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session.")}
+      >
+        {notificationsEnabled && notificationPermission === "denied" ? (
+          <NotificationsBlocked />
+        ) : null}
+        {notificationsEnabled && notificationPermission === "unsupported" ? (
+          <span className="text-[12px] text-content/45">
+            {t("Not available on this platform")}
+          </span>
+        ) : null}
+        <Toggle
+          label={t("Notifications")}
+          on={notificationsEnabled}
+          onChange={onNotificationsEnabled}
+        />
       </Row>
       <Row
         label={t("Claude Code hooks")}
@@ -702,6 +762,9 @@ function useAppearanceSettings() {
   const [themeHue, setThemeHue] = useState(loadThemeHue);
   const [themeSaturation, setThemeSaturation] = useState(loadThemeSaturation);
   const [bodyGlass, setBodyGlass] = useState(loadBodyGlass);
+  const [uiScale, setUiScale] = useState(loadUiScale);
+
+  useEffect(() => subscribeUiScale(() => setUiScale(loadUiScale())), []);
 
   const onThemePreference = useCallback((next: ThemePreference) => {
     applyThemePreference(next);
@@ -735,13 +798,20 @@ function useAppearanceSettings() {
     setBodyGlass(next);
   }, []);
 
+  const onUiScale = useCallback((percent: number) => {
+    const next = saveUiScale(percent / 100);
+    setUiScale(next);
+    void applyUiScale(next);
+  }, []);
+
   const restoreDefaults = useCallback(() => {
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
     onBlur(SIDEBAR_BLUR_DEFAULT);
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
-  }, [onBlur, onBodyGlass, onThemePreference, onOpacity, onTint]);
+    onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
+  }, [onBlur, onBodyGlass, onThemePreference, onOpacity, onTint, onUiScale]);
 
   return {
     themePreference,
@@ -750,11 +820,13 @@ function useAppearanceSettings() {
     themeHue,
     themeSaturation,
     bodyGlass,
+    uiScale,
     onThemePreference,
     onOpacity,
     onBlur,
     onTint,
     onBodyGlass,
+    onUiScale,
     restoreDefaults,
   };
 }
@@ -838,6 +910,20 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           label={t("Main pane glass")}
           on={appearance.bodyGlass}
           onChange={appearance.onBodyGlass}
+        />
+      </Row>
+      <Row
+        label="Interface scale"
+        description="Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS)."
+      >
+        <Slider
+          label="Interface scale"
+          value={Math.round(appearance.uiScale * 100)}
+          display={`${Math.round(appearance.uiScale * 100)}%`}
+          min={Math.round(UI_SCALE_MIN * 100)}
+          max={Math.round(UI_SCALE_MAX * 100)}
+          step={10}
+          onChange={appearance.onUiScale}
         />
       </Row>
     </>
@@ -1319,6 +1405,7 @@ function Slider({
   display,
   min,
   max,
+  step = 1,
   onChange,
 }: {
   label: string;
@@ -1326,6 +1413,7 @@ function Slider({
   display: string;
   min: number;
   max: number;
+  step?: number;
   onChange: (value: number) => void;
 }) {
   return (
@@ -1334,6 +1422,7 @@ function Slider({
         type="range"
         min={min}
         max={max}
+        step={step}
         value={value}
         aria-valuemin={min}
         aria-valuemax={max}
@@ -1346,6 +1435,26 @@ function Slider({
         {display}
       </span>
     </div>
+  );
+}
+
+/** macOS keeps the decision after the first prompt; only System Settings can flip it. */
+function NotificationsBlocked() {
+  return (
+    <span className="flex items-center gap-2 text-[12px] text-content/45">
+      Permission needed
+      {IS_MAC ? (
+        <button
+          type="button"
+          onClick={() => {
+            void openNotificationSettings().catch(() => {});
+          }}
+          className="rounded-md border border-content/10 px-2 py-1 text-content/70 hover:bg-content/10 hover:text-content"
+        >
+          Open System Settings
+        </button>
+      ) : null}
+    </span>
   );
 }
 

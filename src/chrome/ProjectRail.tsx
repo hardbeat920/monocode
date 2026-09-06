@@ -29,7 +29,7 @@ import {
   saveProjectRailWidth,
 } from "../lib/appearance";
 import { basename, revealPath, type GitDiffStats } from "../lib/fs";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import { projectName } from "../lib/paths";
 import {
   collectRailProjects,
@@ -74,13 +74,11 @@ import { TerminalSpinner } from "./TerminalSpinner";
 import type { SettingsSectionId } from "../lib/settings";
 import { t } from "../lib/i18n";
 
-function getRevealLabel() {
-  return IS_MAC
-    ? t("Reveal in Finder")
-    : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
-      ? t("Reveal in File Explorer")
-      : t("Open Containing Folder");
-}
+const REVEAL_LABEL = IS_MAC
+  ? t("Reveal in Finder")
+  : IS_WIN
+    ? t("Reveal in File Explorer")
+    : t("Open Containing Folder");
 
 function projectMenuExtraItems(
   pinned: boolean,
@@ -90,7 +88,7 @@ function projectMenuExtraItems(
     pinned
       ? { id: "unpin", label: t("Unpin project"), icon: PinOff }
       : { id: "pin", label: t("Pin project"), icon: Pin },
-    { id: "reveal", label: getRevealLabel(), icon: FolderOpen },
+    { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
   ];
   if (canRemove) {
     items.push(

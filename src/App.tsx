@@ -25,7 +25,16 @@ import {
   saveProjectRailOpen,
   type SidebarTabId,
 } from "./lib/appearance";
-import { IS_MAC } from "./lib/platform";
+import { HAS_NATIVE_GLASS, IS_MAC } from "./lib/platform";
+import {
+  applyUiScale,
+  loadUiScale,
+  saveUiScale,
+  UI_SCALE_DEFAULT,
+  uiScaleCommand,
+  zoomInUiScale,
+  zoomOutUiScale,
+} from "./lib/uiScale";
 import { runUpdateFlow } from "./lib/updater";
 import { displayAttachments, prepareAttachments } from "./lib/attachments";
 import {
@@ -258,6 +267,13 @@ import { syncDockBadge } from "./lib/dockBadge";
 import { liveAgentsFromSessions } from "./lib/liveAgents";
 import { hiddenApprovalNotices } from "./lib/approvalToast";
 import { nextUnseenFinishedSessions } from "./lib/sessionDone";
+import {
+  loadNotificationsEnabled,
+  NOTIFICATION_CLICK_EVENT,
+  notifySession,
+  probeNotificationPermission,
+  setWindowFocused,
+} from "./lib/notifications";
 import { playCue } from "./lib/sounds";
 import {
   adjacentItemId,
@@ -341,6 +357,7 @@ import {
 import type { InstalledUpdate } from "./lib/updateNotice";
 import {
   bindResumedSessions,
+  closeBusyWindow,
   hasInFlightSessions,
   hideCurrentWindow,
   closeCurrentWindow,
@@ -944,6 +961,30 @@ export default function App({
   const approvalSessionIds = approvalSessionIdsRef.current;
 
   const activeSessionId = active?.id;
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
+
+  const notifiedApprovalIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const previous = notifiedApprovalIdsRef.current;
+    notifiedApprovalIdsRef.current = approvalSessionIds;
+    for (const id of approvalSessionIds) {
+      if (previous.has(id)) continue;
+      const session = sessionsRef.current.find((s) => s.id === id);
+      if (session) {
+        void notifySession(
+          session,
+          "needsInput",
+          id === activeSessionIdRef.current,
+        );
+      }
+    }
+  }, [approvalSessionIds]);
+
+  // Cache the OS decision so a turn ending later can skip a denied banner.
+  useEffect(() => {
+    if (loadNotificationsEnabled()) void probeNotificationPermission();
+  }, []);
   const busyForDoneRef = useRef(busySessionIds);
   const focusedForDoneRef = useRef(activeSessionId);
   const unseenFinishedRef = useRef<Set<string>>(new Set());
@@ -983,6 +1024,7 @@ export default function App({
     let unlisten: (() => void) | undefined;
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
+        setWindowFocused(focused);
         if (focused) {
           flushHarnessEvents();
           syncDockBadge(sessionsRef.current);
@@ -1021,6 +1063,10 @@ export default function App({
         event.preventDefault();
         if (hasInFlightSessions(sessionsRef.current)) {
           flushHarnessEvents();
+          if (!IS_MAC) {
+            void closeBusyWindow();
+            return;
+          }
           void persistLiveTranscripts(sessionsRef.current);
           void hideCurrentWindow();
           return;
@@ -3721,7 +3767,18 @@ export default function App({
                 : finalized;
             }),
           );
-          playCue("turnFinished");
+          // Next tick: the flush above has rendered by then, so the banner
+          // quotes the reply's final text rather than the previous batch.
+          window.setTimeout(() => {
+            const finished = sessionsRef.current.find((s) => s.id === sessionId);
+            const visible = sessionId === activeSessionIdRef.current;
+            const sent = finished
+              ? notifySession(finished, "finished", visible)
+              : Promise.resolve(false);
+            void sent.then((ok) => {
+              if (!ok) playCue("turnFinished");
+            });
+          }, 0);
           notifyReviewChanged(sessionId);
           notifyGitChanged();
           nudgeWorkspace(workCwd);
@@ -4544,6 +4601,7 @@ export default function App({
     onNavigateSessionList,
     onNavigateProjectList,
     openSettings,
+    onOpenApprovalSession,
   });
   actions.current = {
     onNew,
@@ -4569,6 +4627,7 @@ export default function App({
     onNavigateSessionList,
     onNavigateProjectList,
     openSettings,
+    onOpenApprovalSession,
   };
 
   const debounce = useRef({ name: "", at: 0 });
@@ -4582,6 +4641,26 @@ export default function App({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Browser-standard UI zoom. Runs before tabCommand and always applies —
+      // even in inputs and the terminal — so Ctrl/Cmd + - 0 behave like a browser.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.isComposing) {
+        const zoom = uiScaleCommand(e);
+        if (zoom) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (zoom === "zoom-in") {
+            const next = saveUiScale(zoomInUiScale(loadUiScale()));
+            void applyUiScale(next);
+          } else if (zoom === "zoom-out") {
+            const next = saveUiScale(zoomOutUiScale(loadUiScale()));
+            void applyUiScale(next);
+          } else {
+            saveUiScale(UI_SCALE_DEFAULT);
+            void applyUiScale(UI_SCALE_DEFAULT);
+          }
+          return;
+        }
+      }
       const cmd = tabCommand(e);
       if (cmd) {
         const target = e.target instanceof Element ? e.target : null;
@@ -4785,6 +4864,26 @@ export default function App({
       listen("open_model_picker", () => {
         window.dispatchEvent(new Event("open_model_picker"));
       }),
+      // Every window hears the click; only the one holding the session acts.
+      listen<string>(NOTIFICATION_CLICK_EVENT, ({ payload: sessionId }) => {
+        if (!sessionsRef.current.some((s) => s.id === sessionId)) return;
+        void getCurrentWindow().setFocus();
+        actions.current.onOpenApprovalSession(sessionId);
+      }),
+      listen("zoom_in", () => {
+        const next = zoomInUiScale(loadUiScale());
+        saveUiScale(next);
+        void applyUiScale(next);
+      }),
+      listen("zoom_out", () => {
+        const next = zoomOutUiScale(loadUiScale());
+        saveUiScale(next);
+        void applyUiScale(next);
+      }),
+      listen("zoom_reset", () => {
+        saveUiScale(UI_SCALE_DEFAULT);
+        void applyUiScale(UI_SCALE_DEFAULT);
+      }),
     ];
     return () => {
       void Promise.all(unlisten).then((fns) => fns.forEach((fn) => fn()));
@@ -4824,7 +4923,7 @@ export default function App({
   return (
     <div
       className={`flex h-full text-content ${
-        IS_MAC ? "bg-background-base/40" : "bg-background-base"
+        HAS_NATIVE_GLASS ? "bg-background-base/40" : "bg-background-base"
       }`}
     >
       <Sidebar
@@ -4940,6 +5039,18 @@ export default function App({
               onSearch={onOpenSearch}
               onOpenInbox={onOpenInbox}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+              onZoomIn={() => {
+                const next = saveUiScale(zoomInUiScale(loadUiScale()));
+                void applyUiScale(next);
+              }}
+              onZoomOut={() => {
+                const next = saveUiScale(zoomOutUiScale(loadUiScale()));
+                void applyUiScale(next);
+              }}
+              onZoomReset={() => {
+                saveUiScale(UI_SCALE_DEFAULT);
+                void applyUiScale(UI_SCALE_DEFAULT);
+              }}
             />
           ) : null}
           <TitleBar

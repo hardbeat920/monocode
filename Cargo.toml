@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["src-tauri"]
+exclude = ["vendor/portable-pty"]
 
 [workspace.package]
 version = "0.1.34"

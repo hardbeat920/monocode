@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        MonoCode is macOS (Apple Silicon) only. Linux and Windows are out of scope.
+        MonoCode supports macOS, Linux, and Windows.
 
   - type: input
     id: version
@@ -15,11 +15,22 @@ body:
     validations:
       required: true
 
-  - type: input
-    id: macos
+  - type: dropdown
+    id: os
     attributes:
-      label: macOS version
-      placeholder: "15.5"
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: "Windows 11, Ubuntu 24.04, macOS 15.5"
     validations:
       required: true
 

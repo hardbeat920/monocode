@@ -17,7 +17,8 @@
     "tauri": "tauri",
     "tauri:stable": "tauri dev --no-watch --config src-tauri/tauri.stable.conf.json",
     "setup:linux:deb": "bash scripts/install-linux-deps-debian.sh",
-    "build:linux": "tauri build --bundles deb,appimage"
+    "build:linux": "tauri build --bundles deb,appimage",
+    "build:windows": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" && tauri build --bundles nsis"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

@@ -21,6 +21,9 @@ type Props = {
   onSearch?: () => void;
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoomReset?: () => void;
 };
 
 export function MenuBar({
@@ -37,6 +40,9 @@ export function MenuBar({
   onSearch,
   onOpenInbox,
   onOpenNotes,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [activeMenu, setActiveMenu] = useState<MenuKey | null>(null);
@@ -148,6 +154,15 @@ export function MenuBar({
         case "check_for_updates":
           void runUpdateFlow(true);
           break;
+        case "zoom_in":
+          onZoomIn?.();
+          break;
+        case "zoom_out":
+          onZoomOut?.();
+          break;
+        case "zoom_reset":
+          onZoomReset?.();
+          break;
       }
     },
     [
@@ -165,6 +180,9 @@ export function MenuBar({
       onOpenNotes,
       onShowSourceControl,
       onToggleSidebar,
+      onZoomIn,
+      onZoomOut,
+      onZoomReset,
     ],
   );
 
@@ -201,6 +219,10 @@ export function MenuBar({
           { kind: "item", id: "toggle_terminal", label: t("Toggle Terminal"), shortcut: `${MOD}J` },
           { kind: "item", id: "open_model_picker", label: t("Switch Model…"), shortcut: `${MOD}.` },
           { kind: "item", id: "toggle_diff", label: t("Toggle Changes") },
+          { kind: "sep" },
+          { kind: "item", id: "zoom_in", label: t("Zoom In"), shortcut: `${MOD}+` },
+          { kind: "item", id: "zoom_out", label: t("Zoom Out"), shortcut: `${MOD}-` },
+          { kind: "item", id: "zoom_reset", label: t("Reset Zoom"), shortcut: `${MOD}0` },
         ];
       case "terminal":
         return [

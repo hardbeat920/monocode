@@ -20,6 +20,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { AttachmentChip } from "../chrome/AttachmentChip";
 import { FilePreview } from "../chrome/FilePreview";
@@ -69,6 +70,9 @@ import {
   activityStillRunning,
   buildActivityPhases,
   editVerb,
+  firstFoldableIndex,
+  foldableWork,
+  foldedBlocks,
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
@@ -83,9 +87,12 @@ import {
   toolCallLabel,
   toolCallState,
   turnCopyText,
+  workKind,
+  workSummaryLine,
   type ActivityPhase,
   type ActivityPhaseKind,
   type ToolCallState,
+  type TurnItem,
 } from "./transcriptActivity";
 
 const NEAR_BOTTOM_PX = 16;
@@ -143,6 +150,11 @@ export function AgentTranscript({
   const wasVisible = useRef(false);
   const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURNS);
+  // Turns whose folded work the reader has opened, by turn id.
+  const [openWork, setOpenWork] = useState<Record<string, boolean>>({});
+  const toggleWork = useCallback((turnId: string) => {
+    setOpenWork((open) => ({ ...open, [turnId]: !open[turnId] }));
+  }, []);
   // Stretch the last turn after a send while this tab stays open. Closing
   // the tab is a new visit: the remount uses the true transcript height so
   // the latest reply sits on the composer instead of a hole of empty space.
@@ -159,7 +171,6 @@ export function AgentTranscript({
     seenUserId.current = lastUserId;
     if (lastUserId && !anchorTurn) setAnchorTurn(true);
   }
-  const liveStartedAt = turnUserBlock(blocks)?.startedAt;
   const modelName = harness ? resolveModel(harness, model).name : undefined;
   const waitingForApproval = hasPendingApproval(blocks) || pendingQuestion;
   const preparingHandoff = blocks.some(
@@ -345,10 +356,100 @@ export function AgentTranscript({
           const turnHarness = harness
             ? harnessForTurn(blocks, turn, harness)
             : undefined;
+          // Work the turn has already answered for folds away behind one line,
+          // leaving the prompt and the answer to it.
+          const turnId = turn[0].id;
+          const fold = foldableWork(items);
+          const workOpen = !!openWork[turnId];
+          const folded = fold ? foldedBlocks(items, fold) : [];
+          // The fold line is the turn's status line from the first token to
+          // the last: the mark, and the clock beside it. It never moves, so a
+          // turn settling does not shuffle the layout around the answer.
+          const live = !settled && !preparingHandoff;
+          const foldTitle: ReactNode = live ? (
+            <LiveFoldTitle
+              startedAt={startedAt}
+              paused={waitingForApproval}
+              waitingLabel={pendingQuestion ? t("Waiting for answers") : undefined}
+              subagent={hasRunningSubagent(turn)}
+              modelName={modelName}
+            />
+          ) : durationMs != null ? (
+            formatWorkingDuration(durationMs, true, false, modelName)
+          ) : (
+            workSummaryLine(folded)
+          );
+          const showFoldLine = live || durationMs != null || !!fold;
+          // It sits where the work starts, from before there is any: the row
+          // is there from the first token, so nothing shoves the answer down
+          // when the turn folds.
+          const firstWork = firstFoldableIndex(items);
+          const foldLineAt = fold
+            ? fold.start
+            : firstWork >= 0
+              ? firstWork
+              : items.length;
+          const renderItem = (item: TurnItem, itemIndex: number) =>
+            item.type === "activity" ? (
+              itemIndex === initialThinkingAt ? (
+                <InitialThinking key={item.blocks[0].id} live={!settled} />
+              ) : (
+                <ActivityPhases
+                  key={item.blocks[0].id}
+                  blocks={item.blocks}
+                  cwd={cwd}
+                  done={
+                    settled ||
+                    itemIndex < foldedAt ||
+                    (answering && !workStillRunning)
+                  }
+                  onApproval={onApproval}
+                  onOpenFile={onOpenFile}
+                  onOpenDiff={onOpenDiff}
+                />
+              )
+            ) : (
+              <TranscriptBlock
+                key={item.block.id}
+                block={item.block}
+                layout={transcriptLayout}
+                stickyIndex={firstVisibleTurn + turnIndex + 1}
+                // Prose reads the same wherever it lands: under the fold
+                // line at the top of the turn, or under the work it follows.
+                underLine={
+                  isProseBlock(item.block) &&
+                  itemIndex > 0 &&
+                  (items[itemIndex - 1]?.type === "activity" ||
+                    (itemIndex === foldLineAt && showFoldLine))
+                }
+                onApproval={onApproval}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+                onOpenPlan={onOpenPlan}
+                onBuildPlan={onBuildPlan}
+                planBusy={!!busy}
+                planHarness={harness}
+                planModel={model}
+                cwd={cwd}
+              />
+            );
+          const foldLineRow = (
+            <TurnRow key="work-fold" folded={!showFoldLine}>
+              <WorkFoldLine
+                title={foldTitle}
+                kind={workKind(folded)}
+                harness={turnHarness}
+                live={live}
+                expandable={!!fold}
+                open={workOpen && !!fold}
+                onToggle={() => toggleWork(turnId)}
+              />
+            </TurnRow>
+          );
           return (
             <div
               key={turn[0].id}
-              className={`transcript-turn flex min-w-0 flex-col gap-1${
+              className={`transcript-turn flex min-w-0 flex-col${
                 isLastTurn ? " transcript-turn-live" : ""
               }${
                 promptAnchor && anchorTurn && isLastTurn && userBlock
@@ -356,52 +457,28 @@ export function AgentTranscript({
                   : ""
               }`}
             >
-              {items.map((item, itemIndex) =>
-                item.type === "activity" ? (
-                  itemIndex === initialThinkingAt ? (
-                    <InitialThinking key={item.blocks[0].id} live={!settled} />
-                  ) : (
-                    <ActivityPhases
-                      key={item.blocks[0].id}
-                      blocks={item.blocks}
-                      cwd={cwd}
-                      done={
-                        settled ||
-                        itemIndex < foldedAt ||
-                        (answering && !workStillRunning)
-                      }
-                      onApproval={onApproval}
-                      onOpenFile={onOpenFile}
-                      onOpenDiff={onOpenDiff}
-                    />
-                  )
-                ) : (
-                  <TranscriptBlock
-                    key={item.block.id}
-                    block={item.block}
-                    layout={transcriptLayout}
-                    stickyIndex={firstVisibleTurn + turnIndex + 1}
-                    afterActivity={
-                      itemIndex > 0 &&
-                      items[itemIndex - 1]?.type === "activity" &&
-                      isProseBlock(item.block)
-                    }
-                    onApproval={onApproval}
-                    onOpenFile={onOpenFile}
-                    onOpenDiff={onOpenDiff}
-                    onOpenPlan={onOpenPlan}
-                    onBuildPlan={onBuildPlan}
-                    planBusy={!!busy}
-                    planHarness={harness}
-                    planModel={model}
-                    cwd={cwd}
-                  />
-                ),
-              )}
+              {items.flatMap((item, itemIndex) => {
+                const inFold =
+                  !!fold && itemIndex >= fold.start && itemIndex <= fold.end;
+                const row = (
+                  <TurnRow
+                    key={turnItemKey(item)}
+                    folded={!workOpen && inFold}
+                    indented={inFold}
+                    railHead={inFold && itemIndex === fold?.start}
+                    railTail={inFold && itemIndex === fold?.end}
+                  >
+                    {renderItem(item, itemIndex)}
+                  </TurnRow>
+                );
+                if (itemIndex !== foldLineAt) return row;
+                return [foldLineRow, row];
+              })}
+              {foldLineAt >= items.length ? foldLineRow : null}
               {durationMs != null && settled ? (
                 <TurnDuration
                   elapsedMs={durationMs}
-                  done
+                  labelHidden={showFoldLine}
                   modelName={modelName}
                   completedAt={
                     startedAt != null ? startedAt + durationMs : undefined
@@ -420,18 +497,6 @@ export function AgentTranscript({
                       ? (target, model) => onHandoff(target, turn, model)
                       : undefined
                   }
-                />
-              ) : null}
-              {busy && !preparingHandoff && isLastTurn ? (
-                <LiveWorking
-                  startedAt={liveStartedAt}
-                  paused={waitingForApproval}
-                  waitingLabel={
-                    pendingQuestion ? t("Waiting for answers") : undefined
-                  }
-                  subagent={hasRunningSubagent(turn)}
-                  modelName={modelName}
-                  harness={turnHarness}
                 />
               ) : null}
             </div>
@@ -458,42 +523,44 @@ function InitialThinking({ live }: { live: boolean }) {
   );
 }
 
-function LiveWorking({
+/**
+ * The clock on a turn's fold line: how long the agent has been at it, or what
+ * it is waiting on. The band that sweeps the text is sized off this element,
+ * so it shrinks to the words — stretched across the row, the sweep spends its
+ * time on empty space and the line just sits there looking dim.
+ */
+function LiveFoldTitle({
   startedAt,
   paused,
   waitingLabel,
   subagent = false,
   modelName,
-  harness,
 }: {
   startedAt?: number;
   paused: boolean;
   waitingLabel?: string;
   subagent?: boolean;
   modelName?: string;
-  harness?: HarnessId;
 }) {
   const elapsedMs = useElapsedFrom(startedAt, paused);
+  const text = paused
+    ? (waitingLabel ?? t("Waiting for approval"))
+    : formatWorkingDuration(elapsedMs, false, subagent, modelName);
   return (
-    <TurnDuration
-      elapsedMs={elapsedMs}
-      live
-      waiting={paused}
-      waitingLabel={waitingLabel}
-      subagent={subagent}
-      modelName={modelName}
-      harness={harness}
-    />
+    <Shimmer className="min-w-0 truncate font-sans text-sm" duration={1}>
+      {text}
+    </Shimmer>
   );
 }
 
+/**
+ * What a finished turn leaves under the answer: what you can do with it, and
+ * when it landed. The clock lives on the fold line above, from the first token
+ * to the last, so it is not repeated here.
+ */
 function TurnDuration({
   elapsedMs,
-  live = false,
-  done = false,
-  waiting = false,
-  waitingLabel,
-  subagent = false,
+  labelHidden = false,
   modelName,
   harness,
   completedAt,
@@ -504,11 +571,8 @@ function TurnDuration({
   onHandoff,
 }: {
   elapsedMs: number | null;
-  live?: boolean;
-  done?: boolean;
-  waiting?: boolean;
-  waitingLabel?: string;
-  subagent?: boolean;
+  /** True when the fold line above already keeps the time for this turn. */
+  labelHidden?: boolean;
   modelName?: string;
   harness?: HarnessId;
   completedAt?: number;
@@ -518,9 +582,7 @@ function TurnDuration({
   onSecondOpinion?: (harness: HarnessId, model: string) => void;
   onHandoff?: (harness: HarnessId, model: string) => void;
 }) {
-  const label = waiting
-    ? (waitingLabel ?? t("Waiting for approval"))
-    : formatWorkingDuration(elapsedMs, done, subagent, modelName);
+  const label = formatWorkingDuration(elapsedMs, true, false, modelName);
   const dot = (
     <span
       aria-hidden
@@ -529,62 +591,41 @@ function TurnDuration({
   );
   return (
     <div
-      role={live ? "status" : undefined}
-      aria-live={live ? "polite" : undefined}
-      aria-label={
-        waiting
-          ? label
-          : live
-            ? subagent
-              ? modelName
-                ? t("{0} subagent is running", [modelName])
-                : t("Subagent is running")
-              : modelName
-                ? t("{0} is working", [modelName])
-                : t("Agent is working")
-            : label
-      }
+      aria-label={label}
       className="flex min-w-0 items-center gap-2.5 px-4 pt-1 pb-3 font-sans text-sm text-content/40"
     >
-      {done ? (
-        <span className="flex shrink-0 items-center gap-1">
-          {output ? (
-            <>
-              <CopyTurnButton text={output} />
-              {onSaveNote ? (
-                <SaveNoteButton text={output} onSave={onSaveNote} />
-              ) : null}
-            </>
-          ) : (
-            <Check className="size-3.5" strokeWidth={1.75} />
-          )}
-          {fromHarness && onHandoff ? (
-            <HandoffButton from={fromHarness} onPick={onHandoff} />
-          ) : null}
-          {fromHarness && onSecondOpinion ? (
-            <SecondOpinionButton from={fromHarness} onPick={onSecondOpinion} />
-          ) : null}
-        </span>
-      ) : (
-        <TerminalSpinner />
-      )}
-
-      {done ? dot : null}
-
-      <span className="flex min-w-0 items-center gap-1.5">
-        {harness ? (
-          <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-        ) : null}
-        {live && !done ? (
-          <Shimmer duration={1} className="min-w-0 truncate">
-            {label}
-          </Shimmer>
+      <span className="flex shrink-0 items-center gap-1">
+        {output ? (
+          <>
+            <CopyTurnButton text={output} />
+            {onSaveNote ? (
+              <SaveNoteButton text={output} onSave={onSaveNote} />
+            ) : null}
+          </>
         ) : (
-          <span className="min-w-0 truncate" title={label}>
-            {label}
-          </span>
+          <Check className="size-3.5" strokeWidth={1.75} />
         )}
+        {fromHarness && onHandoff ? (
+          <HandoffButton from={fromHarness} onPick={onHandoff} />
+        ) : null}
+        {fromHarness && onSecondOpinion ? (
+          <SecondOpinionButton from={fromHarness} onPick={onSecondOpinion} />
+        ) : null}
       </span>
+
+      {labelHidden ? null : (
+        <>
+          {dot}
+          <span className="flex min-w-0 items-center gap-1.5">
+            {harness ? (
+              <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+            ) : null}
+            <span className="min-w-0 truncate" title={label}>
+              {label}
+            </span>
+          </span>
+        </>
+      )}
 
       {completedAt != null ? (
         <>
@@ -688,7 +729,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   block,
   layout,
   stickyIndex,
-  afterActivity = false,
+  underLine = false,
   cwd,
   onApproval,
   onOpenFile,
@@ -702,7 +743,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   block: Block;
   layout: TranscriptLayout;
   stickyIndex: number;
-  afterActivity?: boolean;
+  /** True when something already sits directly above this in the turn. */
+  underLine?: boolean;
   cwd?: string;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
@@ -809,7 +851,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   return (
     <div
       data-selectable-agent-response={block.streaming ? undefined : block.id}
-      className={`min-w-0 px-4 pb-1 text-content ${afterActivity ? "pt-1" : "pt-3"}`}
+      className={`min-w-0 px-4 pb-1 text-content ${underLine ? "pt-1" : "pt-3"}`}
     >
       <AgentMarkdown
         text={block.text}
@@ -900,26 +942,171 @@ function UserMessageBlock({
 }
 
 /**
+ * One row of a turn, in a box that never moves. Folding is then a height on a
+ * stable element: nothing is reparented and nothing remounts, so a run of work
+ * sinks behind the fold line instead of blinking out from under the text that
+ * replaced it. The row owns the gap below it too, so the space folds away with
+ * the work rather than stacking up as a column of nothing.
+ */
+function TurnRow({
+  folded,
+  indented = false,
+  railHead = false,
+  railTail = false,
+  children,
+}: {
+  folded: boolean;
+  /** Work that hangs off the fold line, indented to sit under its title. */
+  indented?: boolean;
+  /** The first row under the fold line: where the connector curves in. */
+  railHead?: boolean;
+  /** The last row the fold holds: where the spine leaves off. */
+  railTail?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    // `inert` keeps folded work out of tab order and off the screen reader
+    // while it is only a height away from view.
+    <div className="zen-fold-item" data-folded={folded} inert={folded}>
+      <div>
+        {/* 20px puts the row under the fold line's title rather than its
+         * mark, so opened work reads as hanging off that line instead of
+         * running on from the answer below it. */}
+        <div
+          className={`pb-1 ${indented ? "pl-5 zen-fold-rail" : ""} ${
+            railHead ? "zen-fold-head" : ""
+          } ${railTail ? "zen-fold-tail" : ""}`}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A turn item's identity, stable as the group it names grows. */
+function turnItemKey(item: TurnItem): string {
+  return item.type === "activity" ? item.blocks[0].id : item.block.id;
+}
+
+/**
+ * The line a turn's work folds behind: the harness mark, and the clock —
+ * ticking while the agent works, how long it took once it is done. Everything
+ * the fold holds stays one click away, so the settled transcript reads as
+ * prompt, answer, and a receipt for the work in between.
+ */
+function WorkFoldLine({
+  title,
+  kind,
+  harness,
+  live = false,
+  expandable,
+  open,
+  onToggle,
+}: {
+  title: ReactNode;
+  kind: ActivityPhaseKind;
+  harness?: HarnessId;
+  live?: boolean;
+  expandable: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const icon = (
+    <span className="relative flex size-3.5 shrink-0 items-center justify-center">
+      {open ? (
+        // Open, the chevron stays put: it is the way back, and hunting for it
+        // under the cursor is no way to close what you opened.
+        <ChevronRight
+          className="size-3.5 rotate-90 text-content/45"
+          strokeWidth={1.75}
+        />
+      ) : (
+        <>
+          {harness ? (
+            <HarnessIcon
+              harness={harness}
+              className={`size-3.5 shrink-0 ${expandable ? "group-hover:opacity-0" : ""}`}
+            />
+          ) : (
+            <ActivityPhaseIcon
+              kind={kind}
+              className={expandable ? "group-hover:opacity-0" : ""}
+            />
+          )}
+          {expandable ? (
+            <ChevronRight
+              className="absolute size-3.5 text-content/45 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+              strokeWidth={1.75}
+            />
+          ) : null}
+        </>
+      )}
+    </span>
+  );
+  // While the agent runs, the clock shimmers here rather than at the bottom,
+  // which is now bare.
+  const label = live ? (
+    title
+  ) : (
+    <span className="min-w-0 flex-1 truncate font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
+      {title}
+    </span>
+  );
+  const row = `flex w-full min-w-0 items-center gap-1.5 px-4 py-1 text-left${
+    open ? " zen-fold-drop" : ""
+  }`;
+
+  if (!expandable) {
+    return (
+      <div
+        className={`group ${row}`}
+        role={live ? "status" : undefined}
+        aria-live={live ? "polite" : undefined}
+      >
+        {icon}
+        {label}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-label={open ? t("Hide the work") : t("Show the work")}
+      aria-live={live ? "polite" : undefined}
+      onClick={onToggle}
+      className={`group ${row}`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+/**
  * The turn's work as phases. Related reasoning and calls stay together while
  * assistant prose remains outside as full-size transcript text. The phase the
  * agent is in stays open, with new steps scrolling inside a short window; the
  * moment it moves on the phase folds back to its header.
  */
-function ActivityPhases({
-  blocks,
-  cwd,
-  done,
-  onApproval,
-  onOpenFile,
-  onOpenDiff,
-}: {
+type ActivityPhasesProps = {
   blocks: Block[];
   cwd?: string;
   done?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
-}) {
+};
+
+const ActivityPhases = memo(function ActivityPhases({
+  blocks,
+  cwd,
+  done,
+  onApproval,
+  onOpenFile,
+  onOpenDiff,
+}: ActivityPhasesProps) {
   const phases = useMemo(() => buildActivityPhases(blocks), [blocks]);
 
   return (
@@ -936,6 +1123,23 @@ function ActivityPhases({
         />
       ))}
     </div>
+  );
+}, sameActivity);
+
+/**
+ * A settled group is the same calls it was on the last token. Comparing the
+ * blocks themselves keeps every earlier turn out of the streaming re-render,
+ * which is most of what makes a long transcript stutter while the agent works.
+ */
+function sameActivity(a: ActivityPhasesProps, b: ActivityPhasesProps): boolean {
+  return (
+    a.cwd === b.cwd &&
+    a.done === b.done &&
+    a.onApproval === b.onApproval &&
+    a.onOpenFile === b.onOpenFile &&
+    a.onOpenDiff === b.onOpenDiff &&
+    a.blocks.length === b.blocks.length &&
+    a.blocks.every((block, index) => block === b.blocks[index])
   );
 }
 
@@ -1053,10 +1257,7 @@ function ActivityPhaseGroup({
   }
 
   const label = active ? (
-    <Shimmer
-      className="min-w-0 flex-1 truncate font-sans text-sm"
-      duration={1.6}
-    >
+    <Shimmer className="min-w-0 truncate font-sans text-sm" duration={1.6}>
       {title}
     </Shimmer>
   ) : (
@@ -1505,10 +1706,12 @@ function formatWorkingDuration(
   const elapsed = formatElapsed(elapsedMs);
   const verb = workingVerb(done, subagent, !who);
   if (elapsed == null) {
-    if (done) return who ? `${who} ${verb}` : verb;
-    return who ? `${who} ${verb}…` : `${verb}…`;
+    if (done) return who ? t("{0} {1}", [who, verb]) : verb;
+    return who ? t("{0} {1}…", [who, verb]) : `${verb}…`;
   }
-  return who ? `${who} ${verb} for ${elapsed}` : `${verb} for ${elapsed}`;
+  return who
+    ? t("{0} {1} for {2}", [who, verb, elapsed])
+    : t("{1} for {2}", [verb, elapsed]);
 }
 
 function workingVerb(
