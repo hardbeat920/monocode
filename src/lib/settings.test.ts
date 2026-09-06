@@ -12,6 +12,7 @@ import {
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadSubagentModel,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
   saveDiffViewer,
@@ -19,6 +20,7 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveSubagentModel,
 } from "./settings";
 
 const KEY = "monocode.composerRunner";
@@ -172,6 +174,27 @@ describe("workspace navigation keybindings", () => {
         (row) => row.when === "!overlay && (!textFocus || emptyComposer)",
       ),
     ).toBe(true);
+  });
+});
+
+describe("subagent model setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem("monocode.subagentModels");
+  });
+
+  it("starts unset so helpers inherit the parent model", () => {
+    expect(loadSubagentModel("claude")).toBeUndefined();
+  });
+
+  it("persists a helper model per provider", () => {
+    saveSubagentModel("claude", "claude:opus-5");
+    saveSubagentModel("cursor", "cursor:composer-2.5");
+    expect(loadSubagentModel("claude")).toBe("claude:opus-5");
+    expect(loadSubagentModel("cursor")).toBe("cursor:composer-2.5");
+    saveSubagentModel("claude", null);
+    expect(loadSubagentModel("claude")).toBeUndefined();
+    expect(loadSubagentModel("cursor")).toBe("cursor:composer-2.5");
   });
 });
 

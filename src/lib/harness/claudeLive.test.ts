@@ -242,6 +242,67 @@ describe("claude subagents", () => {
   });
 });
 
+describe("claude subagent model", () => {
+  it("pins Agent tool calls to the configured helper model", async () => {
+    const data = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => data.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          data.set(key, value);
+        },
+        removeItem: (key: string) => {
+          data.delete(key);
+        },
+        clear: () => data.clear(),
+      },
+    });
+    data.set(
+      "monocode.subagentModels",
+      JSON.stringify({ claude: "claude:opus-5" }),
+    );
+
+    const { turn } = await startTurn("s1", { runtimeMode: "full-access" });
+    emit({
+      type: "control_request",
+      request_id: "agent_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Agent",
+        input: {
+          description: "Explore",
+          subagent_type: "explore",
+        },
+      },
+    });
+    await waitFor(
+      () =>
+        parse().some((message) => {
+          const response = message.response as Record<string, unknown> | undefined;
+          return (
+            message.type === "control_response" &&
+            response?.request_id === "agent_1"
+          );
+        }),
+      "agent permission response",
+    );
+    const response = parse().find((message) => {
+      const nested = message.response as Record<string, unknown> | undefined;
+      return nested?.request_id === "agent_1";
+    });
+    const payload = (response?.response as Record<string, unknown> | undefined)
+      ?.response as Record<string, unknown> | undefined;
+    expect(payload?.behavior).toBe("allow");
+    expect(
+      (payload?.updatedInput as Record<string, unknown> | undefined)?.model,
+    ).toBe("claude-opus-5");
+
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+});
+
 describe("claude plan permissions", () => {
   it("answers residual plan-mode permissions without prompting the user", async () => {
     const { events, turn } = await startTurn("s1", {

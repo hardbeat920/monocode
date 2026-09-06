@@ -1,6 +1,6 @@
 import { nativeModelId } from "../models";
 import type { RuntimeMode } from "../session";
-import { loadClaudeHooks } from "../settings";
+import { loadClaudeHooks, loadSubagentModel } from "../settings";
 import {
   killChild,
   resolveClaudeBinary,
@@ -109,6 +109,7 @@ type LiveAgentTask = {
 type Live = {
   cwd: string;
   claudeSessionId: string;
+  model: string;
   runtimeMode: RuntimeMode;
   planning: boolean;
   settingsKey: string;
@@ -168,6 +169,7 @@ export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
   if (cancelledThreads.delete(input.sessionId)) return;
 
   live.onEvent = input.onEvent;
+  live.model = input.model;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
@@ -195,6 +197,7 @@ export async function compactClaudeContext(
   if (cancelledThreads.delete(input.sessionId)) return;
 
   live.onEvent = input.onEvent;
+  live.model = input.model;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
@@ -360,6 +363,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const live: Live = {
     cwd: input.cwd,
     claudeSessionId,
+    model: input.model,
     runtimeMode: input.runtimeMode,
     planning,
     settingsKey,
@@ -801,6 +805,7 @@ async function handleControlRequest(
   }
 
   applyKnownToolInput(live, toolName, input, control.toolUseId);
+  const permissionInput = withSubagentModel(live, toolName, input);
 
   if (live.planning) {
     const kind = toolKindFromName(toolName);
@@ -809,7 +814,7 @@ async function handleControlRequest(
       sessionId,
       buildControlResponse(
         control.requestId,
-        toClaudePermissionResult(decision, input),
+        toClaudePermissionResult(decision, permissionInput),
       ),
     ).catch(() => undefined);
     return;
@@ -820,7 +825,7 @@ async function handleControlRequest(
       sessionId,
       buildControlResponse(
         control.requestId,
-        toClaudePermissionResult("allow", input),
+        toClaudePermissionResult("allow", permissionInput),
       ),
     ).catch(() => undefined);
     return;
@@ -842,9 +847,21 @@ async function handleControlRequest(
     sessionId,
     buildControlResponse(
       control.requestId,
-      toClaudePermissionResult(decision, input),
+      toClaudePermissionResult(decision, withSubagentModel(live, toolName, input)),
     ),
   ).catch(() => undefined);
+}
+
+function withSubagentModel(
+  live: Live,
+  toolName: string,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isAgentToolName(toolName)) return input;
+  const configured = loadSubagentModel("claude");
+  const model = nativeModelId(configured ?? live.model);
+  if (!model) return input;
+  return { ...input, model };
 }
 
 function applyKnownToolInput(

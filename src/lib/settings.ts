@@ -3,7 +3,12 @@ import { ALT, IS_MAC, MOD, SHIFT } from "./platform";
 const SECTION_KEY = "monocode.settingsSection";
 
 export type SettingsSectionId =
-  "general" | "appearance" | "keybindings" | "providers" | "archive";
+  | "general"
+  | "appearance"
+  | "keybindings"
+  | "providers"
+  | "sub-agents"
+  | "archive";
 
 export const SETTINGS_SECTIONS: {
   id: SettingsSectionId;
@@ -31,6 +36,12 @@ export const SETTINGS_SECTIONS: {
     label: "Providers",
     description:
       "Agent CLIs MonoCode can drive, and the model new sessions start with.",
+  },
+  {
+    id: "sub-agents",
+    label: "Sub agents",
+    description:
+      "Models helper agents use when a provider spawns a nested agent.",
   },
   {
     id: "archive",
@@ -71,6 +82,42 @@ export function loadSettingsSection(): SettingsSectionId {
 export function saveSettingsSection(id: SettingsSectionId) {
   try {
     localStorage.setItem(SECTION_KEY, id);
+  } catch {
+    // private mode / quota
+  }
+}
+
+const SUBAGENT_MODELS_KEY = "monocode.subagentModels";
+
+export function loadSubagentModels(): Partial<Record<string, string>> {
+  try {
+    const raw = localStorage.getItem(SUBAGENT_MODELS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: Partial<Record<string, string>> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && value.trim()) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function loadSubagentModel(harness: string): string | undefined {
+  const value = loadSubagentModels()[harness];
+  return value?.trim() || undefined;
+}
+
+export function saveSubagentModel(harness: string, model: string | null) {
+  const next = { ...loadSubagentModels() };
+  if (model && model.trim()) next[harness] = model;
+  else delete next[harness];
+  try {
+    localStorage.setItem(SUBAGENT_MODELS_KEY, JSON.stringify(next));
   } catch {
     // private mode / quota
   }

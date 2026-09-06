@@ -132,6 +132,7 @@ import {
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadSubagentModels,
   saveClaudeHooks,
   saveComposerRunner,
   saveDiffViewer,
@@ -139,6 +140,7 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveSubagentModel,
   settingsSectionDescription,
   settingsSectionLabel,
   type DiffViewer,
@@ -258,6 +260,7 @@ export function SettingsView({
           ) : null}
           {section === "keybindings" ? <KeybindingsPage /> : null}
           {section === "providers" ? <ProvidersPage /> : null}
+          {section === "sub-agents" ? <SubAgentsPage /> : null}
           {section === "archive" ? (
             <ArchivePage
               cwd={cwd}
@@ -1123,6 +1126,115 @@ function ProviderRow({
           />
         </div>
       ) : null}
+    </Row>
+  );
+}
+
+function SubAgentsPage() {
+  useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
+  useSyncExternalStore(
+    subscribeHarnessAvailability,
+    getHarnessAvailabilitySnapshot,
+    getHarnessAvailabilitySnapshot,
+  );
+  const [subagentModels, setSubagentModels] = useState(loadSubagentModels);
+
+  useEffect(() => {
+    void probeHarnessAvailability();
+  }, []);
+
+  const onModelChange = (harness: HarnessId, model: string) => {
+    saveSubagentModel(harness, model);
+    setSubagentModels((prev) => ({ ...prev, [harness]: model }));
+  };
+
+  const onReset = (harness: HarnessId) => {
+    saveSubagentModel(harness, null);
+    setSubagentModels((prev) => {
+      const next = { ...prev };
+      delete next[harness];
+      return next;
+    });
+  };
+
+  return (
+    <>
+      <p className="pb-2 text-[12px] leading-relaxed text-content/45">
+        When a provider spawns a nested agent, MonoCode can pin the helper to a
+        specific model instead of letting the CLI pick. Leave a row on Inherit
+        to keep the parent conversation's model.
+      </p>
+      {HARNESSES.map((harness) => (
+        <SubAgentRow
+          key={harness}
+          harness={harness}
+          selectedModel={subagentModels[harness]}
+          onModelChange={onModelChange}
+          onReset={onReset}
+        />
+      ))}
+    </>
+  );
+}
+
+function SubAgentRow({
+  harness,
+  selectedModel,
+  onModelChange,
+  onReset,
+}: {
+  harness: HarnessId;
+  selectedModel?: string;
+  onModelChange: (harness: HarnessId, model: string) => void;
+  onReset: (harness: HarnessId) => void;
+}) {
+  const models = modelsFor(harness);
+  const available = isHarnessAvailable(harness);
+  const inherited = defaultModelId(harness);
+  const current =
+    models.length > 0
+      ? resolveModel(harness, selectedModel ?? inherited)
+      : null;
+  const usingInherited = !selectedModel;
+
+  useEffect(() => {
+    if (!available) return;
+    void refreshHarnessCatalogs([harness], { force: true });
+  }, [available, harness]);
+
+  return (
+    <Row
+      label={
+        <span className="flex items-center gap-2">
+          <HarnessIcon harness={harness} className="size-4 shrink-0" />
+          {HARNESS_TITLE[harness]}
+          {usingInherited ? (
+            <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
+              Inherit
+            </span>
+          ) : null}
+        </span>
+      }
+      description={
+        available
+          ? usingInherited
+            ? `Helpers inherit ${current?.name ?? "the parent model"}.`
+            : `Helpers use ${current?.name ?? selectedModel}.`
+          : harnessUnavailableHint(harness)
+      }
+    >
+      {current ? (
+        <ProviderModelSelect
+          label={`${HARNESS_TITLE[harness]} subagent model`}
+          harness={harness}
+          value={current.id}
+          models={models}
+          onChange={(next) => onModelChange(harness, next)}
+        />
+      ) : null}
+      <SecondaryButton onClick={() => onReset(harness)} disabled={usingInherited}>
+        Inherit
+      </SecondaryButton>
     </Row>
   );
 }
