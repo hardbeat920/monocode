@@ -103,6 +103,7 @@ describe("secondOpinionTargets", () => {
     "codex",
     "cursor",
     "opencode",
+    "antigravity",
     "pi",
     "omp",
     "fx",

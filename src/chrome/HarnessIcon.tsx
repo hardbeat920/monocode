@@ -6,6 +6,7 @@ import fx from "../assets/providers/fx.svg";
 import grok from "../assets/providers/grok.svg";
 import omp from "../assets/providers/omp.svg";
 import opencode from "../assets/providers/opencode.svg";
+import antigravity from "../assets/providers/antigravity.svg";
 import pi from "../assets/providers/pi.svg";
 import type { HarnessId } from "../lib/session";
 
@@ -15,6 +16,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   cursor,
   grok,
   opencode,
+  antigravity,
   pi,
   omp,
   fx,

@@ -306,6 +306,18 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Google Antigravity (`agy`).
+#[tauri::command(async)]
+pub fn harness_resolve_antigravity() -> Result<CursorBinary, String> {
+    resolve_antigravity()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Antigravity CLI not found. Install `agy` and retry.".into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -656,6 +668,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_omp(),
         resolve_fx(),
         resolve_grok(),
+        resolve_antigravity(),
     ]
     .into_iter()
     .flatten()
@@ -1412,6 +1425,32 @@ fn resolve_grok() -> Option<PathBuf> {
     first_binary_matching(candidates, is_grok_agent)
 }
 
+fn resolve_antigravity() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        candidates.push(home.join("AppData/Local/agy/bin/agy"));
+        candidates.push(home.join(".local/bin/agy"));
+        candidates.push(home.join(".agy/bin/agy"));
+        candidates.push(home.join(".cargo/bin/agy"));
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        if !local.is_empty() {
+            candidates.push(PathBuf::from(local).join("agy").join("bin").join("agy"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/agy"));
+    candidates.push(PathBuf::from("/usr/local/bin/agy"));
+    candidates.push(PathBuf::from("/usr/bin/agy"));
+    if let Some(from_shell) = which_via_login_shell("agy") {
+        candidates.push(from_shell);
+    }
+
+    first_binary_matching(candidates, is_antigravity_agent)
+}
+
 fn is_pi_coding_agent(path: &Path) -> bool {
     if !path.is_file() {
         return false;
@@ -1497,6 +1536,13 @@ fn is_grok_agent(path: &Path) -> bool {
         return true;
     }
     file_mentions_grok_agent(path) || grok_help_mentions_agent(path)
+}
+
+fn is_antigravity_agent(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    binary_name_eq(path, "agy")
 }
 
 /// The fx markers sit megabytes into the compiled binary, so a small head-read
@@ -1792,6 +1838,7 @@ fn gui_search_path_from(
         parts.push(format!("{home}/.local/share/claude").into());
         parts.push(format!("{home}/.opencode/bin").into());
         parts.push(format!("{home}/.grok/bin").into());
+        parts.push(format!("{home}/AppData/Local/agy/bin").into());
         parts.push(format!("{home}/.npm-global/bin").into());
         parts.push(format!("{home}/.bun/bin").into());
         parts.push(format!("{home}/AppData/Roaming/npm").into());

@@ -12,7 +12,15 @@ import {
 } from "./models";
 
 export type HarnessId =
-  "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi" | "omp" | "fx";
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "grok"
+  | "opencode"
+  | "antigravity"
+  | "pi"
+  | "omp"
+  | "fx";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
@@ -20,6 +28,7 @@ export const HARNESSES: HarnessId[] = [
   "cursor",
   "grok",
   "opencode",
+  "antigravity",
   "pi",
   "omp",
   "fx",
@@ -264,6 +273,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   cursor: "cursor",
   grok: "grok",
   opencode: "opencode",
+  antigravity: "antigravity",
   pi: "pi",
   omp: "omp",
   fx: "fx",
@@ -275,14 +285,15 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   cursor: "Cursor",
   grok: "Grok Build",
   opencode: "OpenCode",
+  antigravity: "Antigravity",
   pi: "Pi",
   omp: "omp",
   fx: "fx",
 };
 
-/** fx ACP rejects attachment prompt blocks. */
+/** fx ACP and Antigravity print mode reject attachment prompt blocks. */
 export function harnessSupportsAttachments(id: HarnessId): boolean {
-  return id !== "fx";
+  return id !== "fx" && id !== "antigravity";
 }
 
 export function newSession(

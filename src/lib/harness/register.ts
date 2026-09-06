@@ -1,3 +1,4 @@
+import { ensureAntigravityRegistered } from "./antigravityAdapter";
 import { ensureClaudeRegistered } from "./claudeAdapter";
 import { ensureCodexRegistered } from "./codexAdapter";
 import { ensureCursorRegistered } from "./cursorAdapter";
@@ -14,6 +15,7 @@ export function registerBuiltinHarnesses(): void {
   ensureCodexRegistered();
   ensureGrokRegistered();
   ensureOpenCodeRegistered();
+  ensureAntigravityRegistered();
   ensurePiRegistered();
   ensureOmpRegistered();
   ensureFxRegistered();
