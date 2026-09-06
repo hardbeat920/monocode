@@ -320,7 +320,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       termRef.current = null;
       spawned.current = false;
     };
-  }, [id, cwd]);
+  }, [id]);
 
   // Identity-stable: the callers pass an inline arrow, so depending on the
   // prop itself would tear down and re-arm the poll — and re-fork `ps` — on
