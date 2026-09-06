@@ -76,7 +76,7 @@ mod platform {
     use objc2::{define_class, AnyThread, DefinedClass, MainThreadMarker};
     use objc2_foundation::{NSArray, NSError, NSSet, NSString};
     use objc2_user_notifications::{
-        UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
+        UNAlertStyle, UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
         UNNotification, UNNotificationAction, UNNotificationActionOptions, UNNotificationCategory,
         UNNotificationCategoryOptions, UNNotificationPresentationOptions, UNNotificationRequest,
         UNNotificationResponse, UNNotificationSetting, UNNotificationSettings, UNNotificationSound,
@@ -116,14 +116,31 @@ mod platform {
             | UNAuthorizationOptions::Badge
     }
 
-    fn map_settings(settings: &UNNotificationSettings) -> Permission {
-        match settings.authorizationStatus() {
+    fn map_permission(
+        authorization: UNAuthorizationStatus,
+        alert_setting: UNNotificationSetting,
+        alert_style: UNAlertStyle,
+    ) -> Permission {
+        match authorization {
             UNAuthorizationStatus::NotDetermined => Permission::Prompt,
             UNAuthorizationStatus::Denied => Permission::Denied,
-            // Authorized for badges only still leaves alerts off.
-            _ if settings.alertSetting() == UNNotificationSetting::Disabled => Permission::Denied,
+            // Authorization alone does not guarantee a visible alert on
+            // macOS: users can leave alerts enabled but select no alert style.
+            _ if alert_setting == UNNotificationSetting::Disabled
+                || alert_style == UNAlertStyle::None =>
+            {
+                Permission::Denied
+            }
             _ => Permission::Granted,
         }
+    }
+
+    fn map_settings(settings: &UNNotificationSettings) -> Permission {
+        map_permission(
+            settings.authorizationStatus(),
+            settings.alertSetting(),
+            settings.alertStyle(),
+        )
     }
 
     /// Completion handlers run on a UN background queue. The ObjC objects
@@ -338,6 +355,26 @@ mod platform {
             let id = request_identifier("549ae7ac");
             assert_eq!(session_from_identifier(&id), Some("549ae7ac"));
             assert_eq!(session_from_identifier("other"), None);
+        }
+
+        #[test]
+        fn permission_requires_a_visible_alert_style() {
+            assert_eq!(
+                map_permission(
+                    UNAuthorizationStatus::Authorized,
+                    UNNotificationSetting::Enabled,
+                    UNAlertStyle::None,
+                ),
+                Permission::Denied,
+            );
+            assert_eq!(
+                map_permission(
+                    UNAuthorizationStatus::Authorized,
+                    UNNotificationSetting::Enabled,
+                    UNAlertStyle::Banner,
+                ),
+                Permission::Granted,
+            );
         }
 
         #[test]

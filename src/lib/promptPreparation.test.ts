@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   applyNotesToTurn: vi.fn(),
   applySkillsToTurn: vi.fn(),
   events: [] as string[],
-  warmPiSkills: vi.fn(),
+  warmNativeSkills: vi.fn(),
 }));
 
 vi.mock("./fileMentions", () => ({
@@ -18,7 +18,9 @@ vi.mock("./notes", () => ({
 
 vi.mock("./skills", () => ({
   applySkillsToTurn: mocks.applySkillsToTurn,
-  warmPiSkills: mocks.warmPiSkills,
+  warmNativeSkills: mocks.warmNativeSkills,
+  isNativeCommandPrompt: (text: string, harness: string) =>
+    harness === "omp" && text.startsWith("/"),
 }));
 
 import { preparePrompt } from "./promptPreparation";
@@ -37,13 +39,25 @@ beforeEach(() => {
   mocks.applyNotesToTurn.mockReset();
   mocks.applyNotesToTurn.mockImplementation(async (text: string) => text);
   mocks.applySkillsToTurn.mockReset();
-  mocks.warmPiSkills.mockReset();
-  mocks.warmPiSkills.mockImplementation(() => {
+  mocks.warmNativeSkills.mockReset();
+  mocks.warmNativeSkills.mockImplementation(() => {
     mocks.events.push("warm");
   });
 });
 
 describe("preparePrompt", () => {
+  it.each([
+    "/workflow foo @README.md",
+    "/Review_Code a:b",
+    "/omp:compact custom instructions",
+  ])("preserves native command arguments: %s", async (text) => {
+    await expect(
+      preparePrompt(text, { harness: "omp", cwd: "/repo" }),
+    ).resolves.toBe(text.replace("/omp:compact", "/compact"));
+    expect(mocks.applyFileMentionsToTurn).not.toHaveBeenCalled();
+    expect(mocks.applyNotesToTurn).not.toHaveBeenCalled();
+    expect(mocks.applySkillsToTurn).not.toHaveBeenCalled();
+  });
   it("starts warmup before awaiting file mentions", async () => {
     const files = deferred<string>();
     mocks.applyFileMentionsToTurn.mockImplementation(() => {

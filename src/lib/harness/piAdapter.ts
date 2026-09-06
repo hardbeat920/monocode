@@ -12,10 +12,12 @@ import { refreshPiCatalog } from "./piCatalog";
 import { generatePiSessionTitle } from "./piTitle";
 import { warmupPiText } from "./piText";
 import { registerHarness, type HarnessAdapter } from "./registry";
+import { discoverPiSkills } from "./piSkills";
 
 export const piAdapter: HarnessAdapter = {
   id: "pi",
   live: true,
+  commands: { discover: ({ cwd }) => discoverPiSkills(cwd) },
   sendTurn: sendPiTurn,
   compactContext: compactPiContext,
   steerTurn: steerPiTurn,

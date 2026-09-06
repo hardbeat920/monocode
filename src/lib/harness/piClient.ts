@@ -46,7 +46,8 @@ export class PiRpc {
     timeoutMs = 15_000,
   ): Promise<Record<string, unknown>> {
     if (this.closed) throw new Error(`${this.label} process is not running`);
-    const id = `mc_${this.nextId++}`;
+    const id = stringField(command, "id") ?? `mc_${this.nextId++}`;
+    if (this.pending.has(id)) throw new Error(`Duplicate RPC request id: ${id}`);
     const payload = { ...command, id };
     const pending = new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -81,5 +82,11 @@ export class PiRpc {
     const err = error ?? new Error(`${this.label} process exited`);
     for (const pending of this.pending.values()) pending.reject(err);
     this.pending.clear();
+  }
+
+  cancelRequest(id: string): void {
+    const pending = this.pending.get(id);
+    this.pending.delete(id);
+    pending?.reject(new Error(`${this.label} request cancelled`));
   }
 }

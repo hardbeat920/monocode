@@ -12,6 +12,11 @@ export type HarnessEvent =
   | { type: "session.ended"; code?: number | null }
   | { type: "session.error"; message: string }
   | { type: "session.providerBound"; providerSessionId: string }
+  | {
+      type: "session.configChanged";
+      model?: string;
+      modelSettings?: Record<string, string>;
+    }
   | { type: "status"; text: string }
   | { type: "message.delta"; text: string }
   | { type: "message.completed" }

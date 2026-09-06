@@ -46,12 +46,16 @@ describe("looksLikeProject", () => {
     expect(looksLikeProject("/Users/me")).toBe(false);
     expect(looksLikeProject("/Users/me/")).toBe(false);
     expect(looksLikeProject("/home/me")).toBe(false);
+    expect(looksLikeProject("C:/Users/me")).toBe(false);
+    expect(looksLikeProject("C:\\Users\\me")).toBe(false);
     expect(looksLikeProject("~")).toBe(false);
   });
 
   it("rejects system roots and app bundles", () => {
     expect(looksLikeProject("/")).toBe(false);
     expect(looksLikeProject("")).toBe(false);
+    expect(looksLikeProject("C:/")).toBe(false);
+    expect(looksLikeProject("C:")).toBe(false);
     expect(looksLikeProject("/Applications/Some.app/Contents")).toBe(false);
   });
 
@@ -59,6 +63,7 @@ describe("looksLikeProject", () => {
     expect(looksLikeProject("/Users/me/code/app")).toBe(true);
     expect(looksLikeProject("/Users/me/Desktop")).toBe(true);
     expect(looksLikeProject("/tmp/scratch")).toBe(true);
+    expect(looksLikeProject("C:/Users/me/code/app")).toBe(true);
   });
 });
 
@@ -144,6 +149,14 @@ describe("forgetProject", () => {
     expect(loadProjectRailOrder()).toEqual(["/tmp/keep"]);
     expect(loadPinnedProjects()).toEqual([]);
   });
+
+  it("treats differently-cased Windows paths as one project", () => {
+    rememberProject("C:/Users/me/Code/App");
+    rememberProject("c:/users/ME/code/app");
+    expect(loadRecents().map((item) => item.path)).toEqual([
+      "c:/users/ME/code/app",
+    ]);
+  });
 });
 
 describe("archiveProject", () => {
@@ -186,29 +199,5 @@ describe("archiveProject", () => {
     forgetProject("/tmp/gone");
     expect(loadArchivedProjects()).toEqual([]);
     expect(loadRecents()).toEqual([]);
-  });
-});
-
-
-describe("looksLikeProject", () => {
-  it("rejects the home directory so it is never indexed", () => {
-    // Home arrives expanded from `default_cwd`. Walking it reaches
-    // ~/Library, which makes macOS prompt for access to other apps' data.
-    expect(looksLikeProject("/Users/me")).toBe(false);
-    expect(looksLikeProject("/Users/me/")).toBe(false);
-    expect(looksLikeProject("/home/me")).toBe(false);
-    expect(looksLikeProject("~")).toBe(false);
-  });
-
-  it("rejects system roots and app bundles", () => {
-    expect(looksLikeProject("/")).toBe(false);
-    expect(looksLikeProject("")).toBe(false);
-    expect(looksLikeProject("/Applications/Some.app/Contents")).toBe(false);
-  });
-
-  it("accepts real projects, including ones directly under home", () => {
-    expect(looksLikeProject("/Users/me/code/app")).toBe(true);
-    expect(looksLikeProject("/Users/me/Desktop")).toBe(true);
-    expect(looksLikeProject("/tmp/scratch")).toBe(true);
   });
 });

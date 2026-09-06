@@ -302,7 +302,7 @@ fn scan_root(root: &Path, scope: &str, source: &str) -> Vec<DiscoveredSkill> {
         out.push(DiscoveredSkill {
             name,
             description,
-            path: skill_md.to_string_lossy().into_owned(),
+            path: crate::fs::path_to_js(&skill_md),
             scope: scope.to_string(),
             source: source.to_string(),
         });

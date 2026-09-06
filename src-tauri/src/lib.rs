@@ -19,6 +19,8 @@ mod session_store;
 mod skills;
 mod window;
 mod window_transfer;
+#[cfg(windows)]
+mod windows;
 
 // Phase 1 seam: spawn / kill harness children per MonoCode thread.
 // Adapters own the protocol; this host only supervises processes.
@@ -27,14 +29,18 @@ mod window_transfer;
 #[tauri::command]
 fn default_cwd() -> String {
     if let Ok(cwd) = std::env::current_dir() {
-        return cwd.to_string_lossy().into_owned();
+        return fs::path_to_js(&cwd);
     }
-    dirs_home().unwrap_or_else(|| "~".into())
+    dirs_home()
+        .map(|home| fs::path_to_js(std::path::Path::new(&home)))
+        .unwrap_or_else(|| "~".into())
 }
 
 #[tauri::command]
 fn home_dir() -> String {
-    dirs_home().unwrap_or_else(|| "~".into())
+    dirs_home()
+        .map(|home| fs::path_to_js(std::path::Path::new(&home)))
+        .unwrap_or_else(|| "~".into())
 }
 
 pub(crate) struct PasswdIdentity {
@@ -44,13 +50,35 @@ pub(crate) struct PasswdIdentity {
 }
 
 pub(crate) fn dirs_home() -> Option<String> {
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = home.to_string_lossy().into_owned();
-        if !home.is_empty() {
-            return Some(home);
+    #[cfg(windows)]
+    let keys = ["USERPROFILE", "HOME"];
+    #[cfg(not(windows))]
+    let keys = ["HOME", "USERPROFILE"];
+    for key in keys {
+        if let Some(home) = std::env::var_os(key) {
+            let home = home.to_string_lossy().into_owned();
+            if !home.is_empty() {
+                return Some(home);
+            }
         }
     }
-    passwd_identity().map(|id| id.home)
+    match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+        (Ok(drive), Ok(path)) if !drive.is_empty() && !path.is_empty() => {
+            Some(format!("{drive}{path}"))
+        }
+        _ => passwd_identity().map(|id| id.home),
+    }
+}
+
+/// Hide the console window that Windows allocates for GUI-spawned children.
+pub(crate) fn hide_window_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = cmd;
 }
 
 /// Finder-launched .app bundles often omit HOME/USER/SHELL. Fall back to the
@@ -130,6 +158,8 @@ fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    windows::initialize().expect("Failed to initialize Windows process safety");
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -326,9 +356,12 @@ pub fn run() {
                 return;
             }
             api.prevent_exit();
-            // Last window destroyed (red button). Stay in the dock; ⌘Q is a
-            // separate menu handler and arrives with an exit code.
+            // Last window destroyed (red button). Stay in the dock on macOS;
+            // ⌘Q is a separate menu handler and arrives with an exit code.
+            // Windows has no dock, so the last close is a quit.
             if code.is_none() {
+                #[cfg(target_os = "windows")]
+                window::request_quit(handle);
                 return;
             }
             window::request_quit(handle);

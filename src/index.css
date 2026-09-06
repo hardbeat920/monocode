@@ -95,9 +95,9 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-html.is-mac,
-html.is-mac body,
-html.is-mac #root {
+html.has-native-glass,
+html.has-native-glass body,
+html.has-native-glass #root {
   background: transparent;
 }
 
@@ -109,7 +109,7 @@ html.theme-light .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 93%, black 7%);
 }
 
-html.is-mac .sidebar-glass {
+html.has-native-glass .sidebar-glass {
   background: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
       var(--sidebar-opacity)
@@ -143,7 +143,7 @@ html.is-mac .sidebar-glass {
   min-height: var(--transcript-viewport, 0px);
 }
 
-html.is-mac.glass-body .body-glass {
+html.has-native-glass.glass-body .body-glass {
   background: color-mix(
     in srgb,
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),

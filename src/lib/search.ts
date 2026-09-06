@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { pathKey, slash } from "./paths";
 
 export type ProjectSearchMatch = {
   path: string;
@@ -36,11 +37,11 @@ export type EditorNavigationTarget = EditorNavigation & {
 export type OpenFileFn = (path: string, navigation?: EditorNavigation) => void;
 
 export function normalizeEditorPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "") || path;
+  return slash(path).replace(/\/+$/, "") || path;
 }
 
 export function editorPathsEqual(a: string, b: string): boolean {
-  return normalizeEditorPath(a) === normalizeEditorPath(b);
+  return pathKey(a) === pathKey(b);
 }
 
 export function searchProject(

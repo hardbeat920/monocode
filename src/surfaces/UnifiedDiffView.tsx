@@ -894,9 +894,12 @@ const DiffLineRow = memo(function DiffLineRow({
 }) {
   if (line.kind === "hunk") {
     return (
-      <div className="bg-content/5" style={{ height: UNIFIED_HUNK_PX }}>
+      <div
+        className="flex items-center bg-content/5"
+        style={{ height: UNIFIED_HUNK_PX }}
+      >
         {lane === "code" ? (
-          <span className="px-3 font-mono text-[11px] leading-5 text-content/40">
+          <span className="px-3 font-mono text-[11px] leading-none text-content/40">
             {line.text}
           </span>
         ) : null}
@@ -920,15 +923,17 @@ const DiffLineRow = memo(function DiffLineRow({
 
   if (lane === "gutter") {
     return (
-      <div className={`relative ${row}`} style={{ height: UNIFIED_LINE_PX }}>
+      <div
+        className={`relative flex items-center ${row}`}
+        style={{ height: UNIFIED_LINE_PX }}
+      >
         {gutterTint ? (
           <span
             className={`pointer-events-none absolute inset-0 ${gutterTint}`}
           />
         ) : null}
         <span
-          className={`relative block pr-2 text-right font-mono text-[11px] tabular-nums ${gutterText}`}
-          style={{ lineHeight: `${UNIFIED_LINE_PX}px` }}
+          className={`relative block w-full pr-2 text-right font-mono text-[11px] leading-none tabular-nums ${gutterText}`}
         >
           {number ?? ""}
         </span>
@@ -967,12 +972,14 @@ const DiffLineRow = memo(function DiffLineRow({
   }
 
   return (
-    <div className={row} style={{ height: UNIFIED_LINE_PX }}>
+    <div
+      className={`flex items-center ${row}`}
+      style={{ height: UNIFIED_LINE_PX }}
+    >
       <span
-        className={`whitespace-pre px-3 font-mono text-[12px] text-content/80 ${
+        className={`whitespace-pre px-3 font-mono text-[12px] leading-none text-content/80 ${
           line.kind === "context" ? "opacity-70" : ""
         }`}
-        style={{ lineHeight: `${UNIFIED_LINE_PX}px` }}
       >
         {renderLineText(line, tokens)}
       </span>

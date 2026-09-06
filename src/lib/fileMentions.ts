@@ -76,7 +76,9 @@ export function replaceMentionToken(
 }
 
 export function buildMentionIndex(files: ProjectFile[]): MentionIndex {
-  const entries = withMentionDirectories(files);
+  const entries = withMentionDirectories(files).filter((file) =>
+    isMentionableRelative(file.relative),
+  );
   const counts = new Map<string, number>();
   for (const file of entries) {
     counts.set(file.name, (counts.get(file.name) ?? 0) + 1);
@@ -84,14 +86,34 @@ export function buildMentionIndex(files: ProjectFile[]): MentionIndex {
 
   const labels = new Map<string, ProjectFile>();
   const labelOf = new Map<string, string>();
+  const used = new Set<string>();
+
+  const claim = (label: string, file: ProjectFile, preferred = false) => {
+    if (!isTokenSafe(label) || used.has(label)) return false;
+    used.add(label);
+    labels.set(label, file);
+    if (preferred || !labelOf.has(file.path)) labelOf.set(file.path, label);
+    return true;
+  };
+
   for (const file of entries) {
-    if (hasSpace(file.relative)) continue;
     const unique =
-      !file.isDir && counts.get(file.name) === 1 && !hasSpace(file.name);
-    labelOf.set(file.path, unique ? file.name : file.relative);
-    if (!labels.has(file.relative)) labels.set(file.relative, file);
-    if (unique && !labels.has(file.name)) labels.set(file.name, file);
+      !file.isDir && counts.get(file.name) === 1 && isTokenSafe(file.name);
+    if (unique) claim(file.name, file, true);
+    if (isTokenSafe(file.relative)) claim(file.relative, file);
   }
+
+  for (const file of entries) {
+    if (labelOf.has(file.path)) continue;
+    const encoded = encodeMentionToken(file.relative);
+    if (!encoded) continue;
+    let label = encoded;
+    for (let n = 2; used.has(label) && n < 1000; n++) {
+      label = `${encoded}~${n}`;
+    }
+    claim(label, file, true);
+  }
+
   return { labels, labelOf };
 }
 
@@ -106,8 +128,8 @@ export function rankMentionFiles(
   recents: string[],
   limit = MAX_PICKER,
 ): RankedFile[] {
-  const usable = withMentionDirectories(files).filter(
-    (file) => !hasSpace(file.relative),
+  const usable = withMentionDirectories(files).filter((file) =>
+    isMentionableRelative(file.relative),
   );
   const needle = query.replace(/\/+$/, "").trim();
   if (needle) return rankProjectFiles(usable, needle, recents, limit);
@@ -198,15 +220,16 @@ export function withMentionDirectories(files: ProjectFile[]): ProjectFile[] {
   const dirs = new Map<string, ProjectFile>();
   for (const file of files) {
     if (file.isDir) {
-      if (!hasSpace(file.relative)) dirs.set(file.relative, file);
+      if (isSafeProjectRelative(file.relative)) dirs.set(file.relative, file);
       continue;
     }
+    if (!isSafeProjectRelative(file.relative)) continue;
     const parts = file.relative.split("/");
     let rel = "";
     for (let i = 0; i < parts.length - 1; i++) {
       const segment = parts[i]!;
       rel = rel ? `${rel}/${segment}` : segment;
-      if (dirs.has(rel) || hasSpace(rel)) continue;
+      if (dirs.has(rel) || !isSafeProjectRelative(rel)) continue;
       dirs.set(rel, {
         name: segment,
         path: mentionDirPath(file, rel),
@@ -285,8 +308,45 @@ function pathDepth(relative: string): number {
   return depth;
 }
 
-function hasSpace(value: string): boolean {
-  return /\s/.test(value);
+/** Workspace-relative only: no absolute paths, `..`, or control / format characters. */
+function isSafeProjectRelative(relative: string): boolean {
+  if (!relative || relative.length > MAX_QUERY * 4) return false;
+  if (hasUnsafeChars(relative)) return false;
+  if (relative.startsWith("/") || relative.startsWith("\\")) return false;
+  if (relative.includes("://")) return false;
+  for (const part of relative.split("/")) {
+    if (!part || part === "." || part === "..") return false;
+  }
+  return true;
+}
+
+/**
+ * `@` tokens are one whitespace-delimited word. Collapse whitespace so a
+ * spaced path still inserts as a normal `@label`; the real relative path is
+ * recovered from the mention index on send.
+ */
+function encodeMentionToken(relative: string): string | null {
+  const encoded = relative.replace(/\s+/g, "-");
+  return isTokenSafe(encoded) ? encoded : null;
+}
+
+function isTokenSafe(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= MAX_QUERY &&
+    !/[\s@\\]/.test(value) &&
+    !hasUnsafeChars(value)
+  );
+}
+
+/** ASCII/C1 controls, bidi/format marks, and Unicode line/paragraph separators. */
+function hasUnsafeChars(value: string): boolean {
+  return /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value);
+}
+
+function isMentionableRelative(relative: string): boolean {
+  if (!isSafeProjectRelative(relative)) return false;
+  return isTokenSafe(relative) || encodeMentionToken(relative) != null;
 }
 
 function isSpace(ch: string): boolean {

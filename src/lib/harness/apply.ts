@@ -97,6 +97,14 @@ export function applyHarnessEvent(
       });
     case "session.providerBound":
       return { ...session, providerSessionId: event.providerSessionId };
+    case "session.configChanged":
+      return {
+        ...session,
+        ...(event.model ? { model: event.model } : {}),
+        ...(event.modelSettings
+          ? { modelSettings: { ...session.modelSettings, ...event.modelSettings } }
+          : {}),
+      };
     case "status":
       return appendStatus(session, event.text);
     default:

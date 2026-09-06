@@ -38,6 +38,9 @@ import {
 } from "../lib/quoteDraft";
 import { createNote, noteTitle } from "../lib/notes";
 import { loadNotesEnabled, subscribeNotesEnabled } from "../lib/settings";
+import { resolveModel } from "../lib/models";
+import { isAstraModel } from "../lib/astraWelcome";
+import { AstraWelcome } from "./AstraWelcome";
 
 type Props = {
   session: Session;
@@ -178,6 +181,12 @@ export const SessionPane = memo(function SessionPane({
   const jumpToBottomRef = useRef<(() => void) | null>(null);
   const quoteRequestId = useRef(0);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const astraWelcomeSequence = useRef(0);
+  const [astraWelcomeRun, setAstraWelcomeRun] = useState<number | null>(null);
+  const dismissAstraWelcome = useCallback(() => setAstraWelcomeRun(null), []);
+  useEffect(() => {
+    if (!visible) setAstraWelcomeRun(null);
+  }, [visible]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;
@@ -227,6 +236,7 @@ export const SessionPane = memo(function SessionPane({
   const isEmpty = session.blocks.length === 0;
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer = !isEmpty || inSplit;
+  const draftRef = useRef<string | undefined>(undefined);
   const composer = (
     <Composer
       enabled={visible}
@@ -239,16 +249,21 @@ export const SessionPane = memo(function SessionPane({
       runtimeMode={session.runtimeMode}
       cwd={session.cwd}
       executionCwd={workCwd}
+      sessionId={session.id}
       compactSupported={canCompactHarnessContext(session.harness)}
       recents={recents}
       hideProjectPicker={hideProjectPicker ? !showDeckProjectPicker : false}
       context={session.context}
       quoteRequest={quoteRequest}
       initialDraft={
-        session.inboxCard || session.noteCard || session.handoffCard
+        draftRef.current ??
+        (session.inboxCard || session.noteCard || session.handoffCard
           ? undefined
-          : session.composerSeed
+          : session.composerSeed)
       }
+      onDraftChange={(text) => {
+        draftRef.current = text;
+      }}
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}
       handoffCard={session.handoffCard}
@@ -262,9 +277,14 @@ export const SessionPane = memo(function SessionPane({
       onCwdChange={(cwd) => onCwdChange(session.id, cwd)}
       onBranchChange={() => onBranchChange(session.id)}
       onNewTerminal={() => onNewTerminal(session.id)}
-      onModelChange={(harness, model) =>
-        onModelChange(session.id, harness, model)
-      }
+      onModelChange={(harness, model) => {
+        onModelChange(session.id, harness, model);
+        const selected = resolveModel(harness, model);
+        // A new key restarts the animation and its cleanup timer on every pick.
+        setAstraWelcomeRun(
+          isAstraModel(selected) ? ++astraWelcomeSequence.current : null,
+        );
+      }}
       onModelSettingsChange={(settings) =>
         onModelSettingsChange(session.id, settings)
       }
@@ -306,9 +326,12 @@ export const SessionPane = memo(function SessionPane({
   return (
     <div
       data-session-drop={session.id}
-      className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
+      className="relative isolate flex h-full min-h-0 min-w-0 flex-1 flex-col"
       onMouseDown={() => onFocus(session.id)}
     >
+      {astraWelcomeRun !== null && visible ? (
+        <AstraWelcome key={astraWelcomeRun} onDone={dismissAstraWelcome} />
+      ) : null}
       {inSplit ? (
         <div
           className={`flex h-9 shrink-0 touch-none items-center gap-1.5 border-b border-content/10 px-2 select-none ${

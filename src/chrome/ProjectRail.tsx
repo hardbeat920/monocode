@@ -29,7 +29,7 @@ import {
   saveProjectRailWidth,
 } from "../lib/appearance";
 import { basename, revealPath, type GitDiffStats } from "../lib/fs";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import { projectName } from "../lib/paths";
 import {
   collectRailProjects,
@@ -75,7 +75,7 @@ import type { SettingsSectionId } from "../lib/settings";
 
 const REVEAL_LABEL = IS_MAC
   ? "Reveal in Finder"
-  : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
+  : IS_WIN
     ? "Reveal in File Explorer"
     : "Open Containing Folder";
 

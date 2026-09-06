@@ -12,7 +12,8 @@ import { joinPath } from "./paths";
 import { looksLikeProject, normalizeProjectPath } from "./recents";
 import { isMarkdownBlockquotePosition } from "./quoteDraft";
 import type { HarnessId } from "./session";
-import { discoverPiSkills } from "./harness/piSkills";
+import { getHarness } from "./harness/registry";
+import type { NativeCommand } from "./harness/nativeCommands";
 import {
   CREATE_SKILL_BODY,
   CREATE_SKILL_DESCRIPTION,
@@ -51,9 +52,8 @@ export type BuiltinSkill = SkillCommon & {
   source: "monocode";
 };
 
-export type NativeSkill = SkillCommon & {
+export type NativeSkill = NativeCommand & {
   kind: "native";
-  source: "pi";
 };
 
 export type Skill = FileSkill | BuiltinSkill | NativeSkill;
@@ -77,12 +77,13 @@ const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SKILL_TOKEN_RE =
   /(^|\s)\/([a-z0-9]+(?:-[a-z0-9]+)*(?::[a-z0-9]+(?:-[a-z0-9]+)*)?)(?=\s|$)/g;
 const MAX_PICKER = 50;
-const PI_SKILL_TTL_MS = 30_000;
-const PI_SKILL_RETRY_MS = 5_000;
+const NATIVE_SKILL_TTL_MS = 30_000;
+const NATIVE_SKILL_RETRY_MS = 5_000;
 
 export type SkillCatalogContext = {
   harness: HarnessId;
   cwd: string;
+  sessionId?: string;
 };
 
 type CatalogRequest = {
@@ -102,7 +103,48 @@ type CatalogEntry = {
 const catalogEntries = new Map<string, CatalogEntry>();
 
 export function skillCatalogKey(context: SkillCatalogContext): string {
-  return `${context.harness}\0${normalizeProjectPath(context.cwd)}`;
+  const sessionScoped = !!getHarness(context.harness)?.commands?.subscribe;
+  return `${context.harness}\0${normalizeProjectPath(context.cwd)}${sessionScoped && context.sessionId ? `\0${context.sessionId}` : ""}`;
+}
+
+export function hasNativeCommands(harness: HarnessId): boolean {
+  return !!getHarness(harness)?.commands;
+}
+
+export function isNativeCommandPrompt(
+  text: string,
+  harness: HarnessId,
+): boolean {
+  return (
+    getHarness(harness)?.commands?.rawSlashCommands === true &&
+    /^\s*\/[^\s/\\]+(?=\s|$)/.test(text)
+  );
+}
+
+/** A live update supersedes any cold probe already in flight. */
+export function subscribeSkills(
+  context: SkillCatalogContext,
+  onSkills: (skills: Skill[]) => void,
+): () => void {
+  return (
+    getHarness(context.harness)?.commands?.subscribe?.(context, (commands) => {
+      const key = skillCatalogKey(context);
+      const previous = catalogEntries.get(key);
+      const skills: Skill[] = commands.map((command) => ({
+        ...command,
+        kind: "native",
+      }));
+      catalogEntries.set(key, {
+        cwd: normalizeProjectPath(context.cwd),
+        skills,
+        loadedAt: Date.now(),
+        retryAt: 0,
+        generation: (previous?.generation ?? 0) + 1,
+        inFlight: null,
+      });
+      onSkills(skills);
+    }) ?? (() => undefined)
+  );
 }
 
 export function peekSkills(context: SkillCatalogContext): Skill[] | null {
@@ -131,6 +173,7 @@ export function loadSkills(
   const normalized = {
     harness: context.harness,
     cwd: normalizeProjectPath(context.cwd),
+    ...(context.sessionId ? { sessionId: context.sessionId } : {}),
   } satisfies SkillCatalogContext;
   const key = skillCatalogKey(normalized);
   let entry = catalogEntries.get(key);
@@ -159,17 +202,17 @@ export function loadSkills(
   if (entry.inFlight?.generation === entry.generation) {
     return entry.inFlight.promise;
   }
-  if (normalized.harness !== "pi" && entry.skills) {
+  if (!hasNativeCommands(normalized.harness) && entry.skills) {
     return Promise.resolve(entry.skills);
   }
   if (
-    normalized.harness === "pi" &&
+    hasNativeCommands(normalized.harness) &&
     entry.skills &&
-    now - entry.loadedAt < PI_SKILL_TTL_MS
+    now - entry.loadedAt < NATIVE_SKILL_TTL_MS
   ) {
     return Promise.resolve(entry.skills);
   }
-  if (normalized.harness === "pi" && now < entry.retryAt) {
+  if (hasNativeCommands(normalized.harness) && now < entry.retryAt) {
     return Promise.resolve(entry.skills ?? []);
   }
   return startCatalogLoad(key, entry, normalized);
@@ -201,8 +244,8 @@ function startCatalogLoad(
       ) {
         return catalogEntries.get(key)?.skills ?? [];
       }
-      if (context.harness === "pi") {
-        entry.retryAt = Date.now() + PI_SKILL_RETRY_MS;
+      if (hasNativeCommands(context.harness)) {
+        entry.retryAt = Date.now() + NATIVE_SKILL_RETRY_MS;
         return entry.skills ?? [];
       }
       const fallback = mergeCatalog([]);
@@ -224,8 +267,9 @@ function startCatalogLoad(
 }
 
 async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
-  if (context.harness === "pi") {
-    const commands = await discoverPiSkills(context.cwd);
+  const provider = getHarness(context.harness)?.commands;
+  if (provider) {
+    const commands = await provider.discover(context);
     return commands.map((command): NativeSkill => ({
       kind: "native",
       ...command,
@@ -262,7 +306,11 @@ function asSkill(skill: DiscoveredSkill): FileSkill {
   };
 }
 
-export function rankSkills(skills: Skill[], query: string, limit = MAX_PICKER): Skill[] {
+export function rankSkills(
+  skills: Skill[],
+  query: string,
+  limit = MAX_PICKER,
+): Skill[] {
   const needle = query.trim().toLowerCase();
   if (!needle) {
     return [...skills]
@@ -279,11 +327,15 @@ export function rankSkills(skills: Skill[], query: string, limit = MAX_PICKER): 
     const nameHit = fuzzyMatch(needle, skill.name);
     const invocationHit = nameHit
       ? null
-      : fuzzyMatch(needle, skill.invocation);
+      : fuzzyMatch(
+          needle,
+          [
+            skill.invocation,
+            ...(skill.kind === "native" ? (skill.aliases ?? []) : []),
+          ].join(" "),
+        );
     const descHit =
-      nameHit || invocationHit
-        ? null
-        : fuzzyMatch(needle, skill.description);
+      nameHit || invocationHit ? null : fuzzyMatch(needle, skill.description);
     const hit = nameHit ?? invocationHit ?? descHit;
     if (!hit) continue;
     const score = nameHit || invocationHit ? hit.score + 400 : hit.score;
@@ -303,7 +355,11 @@ function scopeRank(skill: Skill): number {
 }
 
 /** Slash token that contains `cursor`, if the user is typing `/skill`. */
-export function slashTokenAt(text: string, cursor: number): SlashToken | null {
+export function slashTokenAt(
+  text: string,
+  cursor: number,
+  native = false,
+): SlashToken | null {
   const i = clamp(cursor, 0, text.length);
   let start = i;
   while (start > 0 && !isSpace(text[start - 1]!)) start -= 1;
@@ -316,8 +372,12 @@ export function slashTokenAt(text: string, cursor: number): SlashToken | null {
 
   const typed = text.slice(start + 1, i);
   if (typed.includes("/") || typed.includes("\\")) return null;
-  if (/[A-Z]/.test(typed)) return null;
-  if (!/^(?:[a-z0-9-]+(?::[a-z0-9-]*)?)?$/.test(typed)) return null;
+  if (native) {
+    if (!/^[a-zA-Z0-9_.:-]*$/.test(typed)) return null;
+  } else {
+    if (/[A-Z]/.test(typed)) return null;
+    if (!/^(?:[a-z0-9-]+(?::[a-z0-9-]*)?)?$/.test(typed)) return null;
+  }
 
   return { start, end, query: typed };
 }
@@ -426,7 +486,7 @@ export async function applySkillsToTurn(
   text: string,
   context: SkillCatalogContext,
 ): Promise<string> {
-  if (context.harness === "pi") return text;
+  if (hasNativeCommands(context.harness)) return text;
   const names = skillNamesInText(text);
   if (names.length === 0) return text;
   const catalog = await loadSkills(context);
@@ -449,11 +509,11 @@ export async function applySkillsToTurn(
 
 type SkillLoader = typeof loadSkills;
 
-export function warmPiSkills(
+export function warmNativeSkills(
   context: SkillCatalogContext,
   load: SkillLoader = loadSkills,
 ): void {
-  if (context.harness !== "pi") return;
+  if (!hasNativeCommands(context.harness)) return;
   void load(context).catch(() => undefined);
 }
 

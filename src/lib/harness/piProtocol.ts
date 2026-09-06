@@ -307,13 +307,19 @@ export function extensionUiResponse(
 }
 
 export function extensionUiTitle(request: PiExtensionUiRequest): string {
-  if (request.method === "confirm") {
-    return [request.title, request.message].filter(Boolean).join(" — ");
-  }
-  if (request.method === "select") {
-    return request.title;
-  }
-  return request.title ?? "Pi extension";
+  const text =
+    request.method === "confirm"
+      ? [request.title, request.message].filter(Boolean).join(" — ")
+      : request.title ?? "Pi extension";
+  // Pi's theme helpers emit ANSI even in RPC mode (e.g. Ponytail setStatus).
+  // These labels use native UI styling. Strip CSI and OSC sequences only at
+  // the display boundary: select replies must retain the original option.
+  return text
+    .replace(
+      /(?:\u001b\]|\u009d)[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)/g,
+      "",
+    )
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g, "");
 }
 
 export function needsExtensionUiReply(request: PiExtensionUiRequest): boolean {

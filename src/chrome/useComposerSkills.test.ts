@@ -1,4 +1,16 @@
-import { describe, expect, it } from "vitest";
+vi.mock("../lib/harness/registry", () => ({
+  getHarness: (id: string) =>
+    id === "pi" || id === "omp"
+      ? {
+          commands: {
+            discover: async () => [],
+            rawSlashCommands: id === "omp",
+          },
+        }
+      : undefined,
+}));
+
+import { describe, expect, it, vi } from "vitest";
 import type { Skill } from "../lib/skills";
 import {
   nextComposerSkillContextToken,
@@ -44,6 +56,7 @@ describe("composer skill catalog policies", () => {
 
   it("preserves filesystem refresh while Pi uses its TTL", () => {
     expect(pickerSkillLoadOptions("pi")).toBeUndefined();
+    expect(pickerSkillLoadOptions("omp")).toBeUndefined();
     expect(pickerSkillLoadOptions("claude")).toEqual({ refresh: true });
   });
 

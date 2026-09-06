@@ -174,6 +174,11 @@ function SkillList({
                 {skill.description}
               </span>
             ) : null}
+            {skill.kind === "native" && (skill.inputHint || skill.subcommands?.length) ? (
+              <span className="line-clamp-2 text-[11px] text-content/40">
+                {skill.inputHint || skill.subcommands?.map((sub) => sub.usage || sub.name).join(" · ")}
+              </span>
+            ) : null}
           </button>
         );
       })}
@@ -312,7 +317,9 @@ function ScopeButton({
 }
 
 function scopeLabel(skill: Skill): string {
-  if (skill.kind === "native") return skill.source;
+  if (skill.kind === "native") {
+    return skill.origin ? `${skill.source} · ${skill.origin}` : skill.source;
+  }
   if (skill.kind === "builtin") return "monocode";
   if (skill.scope === "user") return "personal";
   if (skill.source !== "agents" && skill.source !== "monocode") return skill.source;

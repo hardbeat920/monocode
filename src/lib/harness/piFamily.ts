@@ -1,5 +1,14 @@
 import { nativeModelId } from "../models";
 import { taskListFromToolInput } from "../taskList";
+import { normalizeProjectPath } from "../recents";
+import type { UserQuestionReply } from "../userQuestion";
+import type {
+  CommandContext,
+  NativeCommand,
+  NativeCommandProvider,
+} from "./nativeCommands";
+import { discoverOmpCommands, ompCommandsFromRpcData } from "./piSkills";
+import { OMP_FLAVOR } from "./piFlavor";
 import {
   killChild,
   spawnChild,
@@ -77,6 +86,12 @@ type Live = {
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
+  questions: Map<
+    number,
+    { id: string; resolve: (reply: UserQuestionReply) => void }
+  >;
+  availableCommands?: NativeCommand[];
+  promptId: string | null;
   nextApprovalUiId: number;
   toolsByIndex: Map<number, InFlightTool>;
   toolsById: Map<string, InFlightTool>;
@@ -111,6 +126,7 @@ type FlavorState = {
   resumeByThread: Map<string, Resume>;
   cancelledThreads: Set<string>;
   resolveBinary: () => Promise<{ path: string }>;
+  commandListeners: Map<string, Set<(commands: NativeCommand[]) => void>>;
 };
 
 /**
@@ -127,11 +143,57 @@ function stateFor(flavor: PiFlavor): FlavorState {
       resumeByThread: new Map(),
       cancelledThreads: new Set(),
       resolveBinary: flavor.resolveBinary,
+      commandListeners: new Map(),
     };
     stateByFlavor.set(flavor.id, state);
   }
   return state;
 }
+
+function commandContextKey(context: CommandContext): string {
+  return `${context.sessionId ?? ""}\0${normalizeProjectPath(context.cwd)}`;
+}
+
+export const ompCommandProvider: NativeCommandProvider = {
+  rawSlashCommands: true,
+  async discover(context) {
+    const live = context.sessionId
+      ? stateFor(OMP_FLAVOR).liveByThread.get(context.sessionId)
+      : undefined;
+    if (
+      !live ||
+      normalizeProjectPath(live.cwd) !== normalizeProjectPath(context.cwd)
+    ) {
+      return discoverOmpCommands(context.cwd);
+    }
+    if (live.availableCommands) return live.availableCommands;
+    const response = await live.rpc.request(
+      { type: "get_available_commands" },
+      INIT_TIMEOUT_MS,
+    );
+    return live.availableCommands ?? ompCommandsFromRpcData(response.data);
+  },
+  subscribe(context, onCommands) {
+    const state = stateFor(OMP_FLAVOR);
+    const key = commandContextKey(context);
+    let listeners = state.commandListeners.get(key);
+    if (!listeners) state.commandListeners.set(key, (listeners = new Set()));
+    listeners.add(onCommands);
+    const live = context.sessionId
+      ? state.liveByThread.get(context.sessionId)
+      : undefined;
+    if (
+      live?.availableCommands &&
+      normalizeProjectPath(live.cwd) === normalizeProjectPath(context.cwd)
+    ) {
+      onCommands(live.availableCommands);
+    }
+    return () => {
+      listeners.delete(onCommands);
+      if (!listeners.size) state.commandListeners.delete(key);
+    };
+  },
+};
 
 /** Test seam. */
 export function setPiBinaryResolver(
@@ -167,7 +229,7 @@ export async function sendTurn(
       live.cancelled = false;
       live.muteUpdates = false;
       try {
-        await runTurn(live, input);
+        await runTurn(flavor, live, input);
       } catch (error) {
         if (live.cancelled) return;
         throw error;
@@ -220,7 +282,12 @@ export async function steerTurn(
   const live = stateFor(flavor).liveByThread.get(input.sessionId);
   if (!live?.activeTurn) throw new Error("No active turn to steer");
   const message = input.text.trim();
-  const command = buildPiSteer({
+  const buildCommand =
+    flavor.id === "omp" && message.startsWith("/")
+      ? (input: Parameters<typeof buildPiPrompt>[0]) =>
+          buildPiPrompt({ ...input, streaming: true })
+      : buildPiSteer;
+  const command = buildCommand({
     text: message,
     attachments: input.attachments,
   });
@@ -240,6 +307,18 @@ export function respondApproval(
   pending.resolve(decision);
 }
 
+export function respondQuestion(
+  flavor: PiFlavor,
+  sessionId: string,
+  requestId: number,
+  reply: UserQuestionReply,
+): void {
+  stateFor(flavor)
+    .liveByThread.get(sessionId)
+    ?.questions.get(requestId)
+    ?.resolve(reply);
+}
+
 export async function cancelTurn(
   flavor: PiFlavor,
   sessionId: string,
@@ -255,6 +334,9 @@ export async function cancelTurn(
   live.settleToken += 1;
   for (const [, pending] of live.approvals) pending.resolve("deny");
   live.approvals.clear();
+  for (const question of live.questions.values())
+    question.resolve({ kind: "skipped" });
+  live.questions.clear();
   await live.rpc.request({ type: "abort" }, 5_000).catch(() => undefined);
   finishActiveTurn(live, [
     { type: "message.completed" },
@@ -275,6 +357,9 @@ export async function stopSession(
     live.settleToken += 1;
     for (const [, pending] of live.approvals) pending.resolve("deny");
     live.approvals.clear();
+    for (const question of live.questions.values())
+      question.resolve({ kind: "skipped" });
+    live.questions.clear();
     live.activeTurn = false;
     live.turnDone?.();
     live.turnDone = null;
@@ -376,6 +461,8 @@ async function startLive(
     planning: input.intent === "plan",
     onEvent: input.onEvent,
     approvals: new Map(),
+    questions: new Map(),
+    promptId: null,
     nextApprovalUiId: 1,
     toolsByIndex: new Map(),
     toolsById: new Map(),
@@ -404,6 +491,12 @@ async function startLive(
       liveByThread.delete(input.sessionId);
       input.onEvent({ type: "session.ended", code });
       const current = liveRef.current;
+      if (current) {
+        for (const question of current.questions.values())
+          question.resolve({ kind: "skipped" });
+        for (const approval of current.approvals.values())
+          approval.resolve("deny");
+      }
       current?.turnFailed?.(new Error(`${flavor.label} exited`));
       if (current) {
         current.turnDone = null;
@@ -449,7 +542,11 @@ async function startLive(
   }
 }
 
-async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
+async function runTurn(
+  flavor: PiFlavor,
+  live: Live,
+  input: SendTurnInput,
+): Promise<void> {
   await applyModel(live, input);
   live.emittedAssistant = "";
   live.emittedReasoning = "";
@@ -458,6 +555,10 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.toolsById.clear();
   live.compacting = false;
   live.retrying = false;
+  live.settleToken += 1;
+  live.settling = false;
+  const promptId = `mc_turn_${crypto.randomUUID()}`;
+  live.promptId = promptId;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -467,12 +568,28 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   settlePendingTurn(live);
 
   try {
-    await live.rpc.request(
-      buildPiPrompt({
-        text: input.text,
-        attachments: input.attachments,
-      }),
-    );
+    const response = await Promise.race([
+      live.rpc.request(
+        {
+          ...buildPiPrompt({
+            text: input.text,
+            attachments: input.attachments,
+          }),
+          id: promptId,
+        },
+        flavor.id === "omp" ? COMPACT_TIMEOUT_MS : 15_000,
+      ),
+      turnPromise.then(() => null),
+    ]);
+    if (
+      flavor.id === "omp" &&
+      asRecord(response?.data)?.agentInvoked === false
+    ) {
+      finishActiveTurn(live, [
+        { type: "message.completed" },
+        { type: "reasoning.completed" },
+      ]);
+    }
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
@@ -483,6 +600,9 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw error;
   } finally {
+    live.activeTurn = false;
+    live.promptId = null;
+    live.rpc.cancelRequest(promptId);
     live.turnDone = null;
     live.turnFailed = null;
   }
@@ -494,14 +614,101 @@ function handleFrame(
   live: Live,
   rec: Record<string, unknown>,
 ): void {
+  if (flavor.id === "omp" && rec.type === "available_commands_update") {
+    try {
+      live.availableCommands = ompCommandsFromRpcData(rec);
+      const listeners = stateFor(flavor).commandListeners.get(
+        commandContextKey({ sessionId, cwd: live.cwd }),
+      );
+      for (const listener of listeners ?? []) listener(live.availableCommands);
+    } catch {
+      // Preserve the last valid inventory when a runtime emits a malformed update.
+    }
+    return;
+  }
+  if (
+    flavor.id === "omp" &&
+    rec.type === "extension_ui_request" &&
+    rec.method === "cancel"
+  ) {
+    for (const question of live.questions.values()) {
+      if (question.id === rec.id) question.resolve({ kind: "skipped" });
+    }
+    return;
+  }
   const ui = parseExtensionUiRequest(rec);
   if (ui) {
-    void handleExtensionUi(sessionId, live, ui);
+    void handleExtensionUi(flavor, sessionId, live, ui);
     return;
   }
   if (live.muteUpdates) return;
 
   const type = stringField(rec, "type");
+  if (flavor.id === "omp") {
+    if (type === "session_info_update") {
+      const providerSessionId = stringField(rec, "sessionId");
+      if (providerSessionId) {
+        bindState(flavor, sessionId, live, { sessionId: providerSessionId });
+        live.onEvent({ type: "session.providerBound", providerSessionId });
+      }
+      return;
+    }
+    if (type === "config_update") {
+      const model = asRecord(rec.model);
+      const provider = stringField(model, "provider");
+      const modelId = stringField(model, "id");
+      const thinking = stringField(rec, "thinkingLevel");
+      const native =
+        provider && modelId ? piNativeId(provider, modelId) : undefined;
+      if (native) live.nativeModel = native;
+      if (isPiThinkingLevel(thinking)) live.thinking = thinking;
+      live.onEvent({
+        type: "session.configChanged",
+        ...(native ? { model: `${flavor.id}:${native}` } : {}),
+        ...(isPiThinkingLevel(thinking) ? { modelSettings: { thinking } } : {}),
+      });
+      return;
+    }
+    if (type === "command_output") {
+      const text = stringField(rec, "text");
+      if (text)
+        live.onEvent({
+          type: "status",
+          text: extensionUiTitle({
+            id: "output",
+            method: "notify",
+            title: text,
+          }),
+        });
+      return;
+    }
+    if (type === "prompt_result") {
+      if (
+        live.activeTurn &&
+        rec.id === live.promptId &&
+        rec.agentInvoked === false
+      ) {
+        finishActiveTurn(live, [
+          { type: "message.completed" },
+          { type: "reasoning.completed" },
+        ]);
+      }
+      return;
+    }
+    // OMP can acknowledge a prompt and later report an asynchronous error.
+    if (
+      type === "response" &&
+      rec.command === "prompt" &&
+      rec.id === live.promptId &&
+      rec.success === false
+    ) {
+      live.turnFailed?.(
+        new Error(stringField(rec, "error") ?? "OMP command failed"),
+      );
+      return;
+    }
+    if (type === "agent_end" && rec.isTerminal === false) return;
+  }
   if (type === "compaction_start") live.compacting = true;
   if (type === "compaction_end") live.compacting = false;
   if (type === "auto_retry_start") live.retrying = true;
@@ -646,16 +853,18 @@ async function settleTurn(live: Live): Promise<void> {
       { type: "reasoning.completed" },
     ]);
   }
-  live.settling = false;
+  if (live.settleToken === token) live.settling = false;
 }
 
 async function handleExtensionUi(
+  flavor: PiFlavor,
   sessionId: string,
   live: Live,
   request: PiExtensionUiRequest,
 ): Promise<void> {
   if (!needsExtensionUiReply(request)) {
-    if (request.title) live.onEvent({ type: "status", text: request.title });
+    const text = request.title ? extensionUiTitle(request) : "";
+    if (text.trim()) live.onEvent({ type: "status", text });
     return;
   }
 
@@ -663,6 +872,68 @@ async function handleExtensionUi(
     await writeChild(
       sessionId,
       JSON.stringify(extensionUiResponse(request, "deny")),
+    ).catch(() => undefined);
+    return;
+  }
+
+  if (
+    flavor.id === "omp" &&
+    (request.method === "select" ||
+      request.method === "input" ||
+      request.method === "editor")
+  ) {
+    const uiId = live.nextApprovalUiId++;
+    const replyPromise = new Promise<UserQuestionReply>((resolve) => {
+      live.questions.set(uiId, { id: request.id, resolve });
+    });
+    live.onEvent({
+      type: "question.asked",
+      requestId: uiId,
+      title: extensionUiTitle(request),
+      questions: [
+        {
+          id: request.id,
+          prompt: extensionUiTitle(request),
+          multiSelect: false,
+          allowCustom: request.method !== "select",
+          options:
+            request.method === "select"
+              ? request.options.map((label, index) => ({
+                  id: String(index),
+                  label: extensionUiTitle({
+                    id: request.id,
+                    method: "notify",
+                    title: label,
+                  }),
+                }))
+              : [],
+        },
+      ],
+    });
+    const reply = await replyPromise;
+    live.questions.delete(uiId);
+    let value: string | undefined;
+    if (reply.kind === "answered") {
+      if (request.method === "select") {
+        const selected = reply.answers[request.id]?.[0];
+        if (selected !== undefined && /^\d+$/.test(selected))
+          value = request.options[Number(selected)];
+      } else {
+        value = reply.custom?.[request.id];
+      }
+    }
+    live.onEvent({
+      type: "question.resolved",
+      requestId: uiId,
+      decision: value === undefined ? "skipped" : "answered",
+    });
+    await writeChild(
+      sessionId,
+      JSON.stringify({
+        type: "extension_ui_response",
+        id: request.id,
+        ...(value === undefined ? { cancelled: true } : { value }),
+      }),
     ).catch(() => undefined);
     return;
   }

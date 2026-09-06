@@ -9,8 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Diff reviews can be annotated line by line in both Unified and Editor views. Use the comment action on a changed line to write a note and add its file, line number, and code context to the active composer; collect multiple comments and send them to the agent in one prompt.
 - Settings: Notifications, off by default. With it on, a system notification appears when a turn finishes or an agent waits on an approval or question in a session that is not on screen, whether MonoCode is in the background or another session is open; clicking it jumps to that session. Turning it on asks macOS for permission, and a blocked state links to System Settings. The Sounds setting decides whether the notification plays a sound, and the in-app cue is skipped when the banner fires.
+
+## [0.1.34] - 2026-09-05
+
+### Added
+
+- Navigate sessions with Shift+Command/Ctrl+Up or Down and projects with Shift+Command/Ctrl+Left or Right. The shortcuts follow the visible sidebar order and also work from an empty composer. In #47 by @MisterWanted.
+- Session cards show an Archive or Unarchive action on hover and keyboard focus.
+- OMP's native commands and custom workflows appear in the `/` picker, with descriptions and argument hints. Commands run through OMP with their arguments intact, and workflow dialogs support choosing options and entering text. MonoCode keeps `/plan` and `/compact`; use `/omp:plan` and `/omp:compact` for OMP's versions.
+- The `@` file picker supports files and folders whose paths contain spaces and refreshes when the workspace changes, so newly created paths appear without restarting MonoCode. Unsafe control and bidirectional formatting characters are excluded from mention tokens. In #67 by @elanchezhiyanr.
+
+### Fixed
+
+- Opening a file from the explorer preserves the unfinished composer draft. In #76 by @kartava.
+- Pi extension status and notification labels no longer expose raw ANSI styling codes; interactive option values remain unchanged.
+- OMP commands that finish locally display their output and release the composer without waiting for an agent turn. Command inventory updates refresh the active session's picker, and ongoing OMP workflows no longer finish early on a nonterminal agent event. In #73.
+
+## [0.1.33] - 2026-09-04
+
+### Added
+
+- Selecting Astra in the composer celebrates it with a pane-wide solar animation: champagne-gold meteors, star glints, a glowing sun, and orbiting rings. The effect replays on every selection, fades out automatically, and respects reduced-motion preferences.
+- Diff reviews can be annotated line by line in both Unified and Editor views. Use the comment action on a changed line to write a note and add its file, line number, and code context to the active composer; collect multiple comments and send them to the agent in one prompt.
+- Compact session context manually with `/compact` or the context meter on supported agent harnesses.
+
+### Fixed
+
+- Agent markdown supports mixed right-to-left and left-to-right text while keeping code and Mermaid blocks left-to-right.
+- Popover glass backgrounds stay stable during opening and closing animations.
 
 ## [0.1.32] - 2026-09-04
 
@@ -61,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Windows is a supported desktop target. Terminals, agent CLIs, and the rest of the macOS/Linux feature set run there, and the window uses Tauri Acrylic in place of macOS vibrancy.
 - Settings → General → Diff view: Editor or Unified. Unified stacks every working-tree change in one **Changes** tab — GitHub-style review, editor syntax colours, sticky file headers and line numbers, and a single horizontal scroll that stops at the end of the line. Editor keeps the previous per-file working-tree tabs.
 
 ### Fixed
@@ -511,7 +539,10 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.31...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.34...HEAD
+[0.1.34]: https://github.com/hardbeat920/monocode/compare/v0.1.33...v0.1.34
+[0.1.33]: https://github.com/hardbeat920/monocode/compare/v0.1.32...v0.1.33
+[0.1.32]: https://github.com/hardbeat920/monocode/compare/v0.1.31...v0.1.32
 [0.1.31]: https://github.com/hardbeat920/monocode/compare/v0.1.30...v0.1.31
 [0.1.30]: https://github.com/hardbeat920/monocode/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/hardbeat920/monocode/compare/v0.1.28...v0.1.29

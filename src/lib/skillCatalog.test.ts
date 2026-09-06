@@ -2,11 +2,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   discoverPiSkills: vi.fn(),
+  discoverOmpCommands: vi.fn(),
+  subscribe: vi.fn(),
   listSkills: vi.fn(),
 }));
 
-vi.mock("./harness/piSkills", () => ({
-  discoverPiSkills: mocks.discoverPiSkills,
+vi.mock("./harness/registry", () => ({
+  getHarness: (id: string) =>
+    id === "pi"
+      ? {
+          commands: {
+            discover: ({ cwd }: { cwd: string }) => mocks.discoverPiSkills(cwd),
+          },
+        }
+      : id === "omp"
+        ? {
+            commands: {
+              discover: mocks.discoverOmpCommands,
+              subscribe: mocks.subscribe,
+              rawSlashCommands: true,
+            },
+          }
+        : undefined,
 }));
 
 vi.mock("./fs", () => ({
@@ -23,6 +40,8 @@ import {
   loadSkills,
   peekSkills,
   skillCatalogKey,
+  subscribeSkills,
+  applySkillsToTurn,
 } from "./skills";
 import type { PiSkillCommand } from "./harness/piSkills";
 
@@ -50,6 +69,16 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-08-29T12:00:00Z"));
   invalidateSkills();
   mocks.discoverPiSkills.mockReset();
+  mocks.discoverOmpCommands.mockReset();
+  mocks.discoverOmpCommands.mockResolvedValue([
+    {
+      name: "workflow",
+      invocation: "workflow",
+      description: "",
+      source: "omp",
+    },
+  ]);
+  mocks.subscribe.mockReset();
   mocks.listSkills.mockReset();
   mocks.discoverPiSkills.mockResolvedValue([piSkill("architect")]);
   mocks.listSkills.mockResolvedValue([]);
@@ -67,6 +96,84 @@ describe("provider-aware skill catalog", () => {
       },
     ]);
     expect(catalog).not.toContainEqual(BUILTIN_CREATE_SKILL);
+  });
+
+  it("uses OMP native discovery and leaves commands and arguments out of skill injection", async () => {
+    const context = {
+      harness: "omp" as const,
+      cwd: "/repo",
+      sessionId: "thread",
+    };
+    await expect(loadSkills(context)).resolves.toMatchObject([
+      { kind: "native", source: "omp", name: "workflow" },
+    ]);
+    expect(mocks.discoverOmpCommands).toHaveBeenCalledWith(context);
+    expect(mocks.listSkills).not.toHaveBeenCalled();
+    await expect(
+      applySkillsToTurn("/workflow foo /create-skill", context),
+    ).resolves.toBe("/workflow foo /create-skill");
+  });
+
+  it("isolates OMP sessions while retaining Pi's shared project cache", () => {
+    for (const harness of ["pi", "omp"] as const) {
+      const a = skillCatalogKey({ harness, cwd: "/repo", sessionId: "a" });
+      const b = skillCatalogKey({ harness, cwd: "/repo", sessionId: "b" });
+      expect(a === b).toBe(harness === "pi");
+    }
+  });
+
+  it("a live command update supersedes an older probe and refreshes subscribers", async () => {
+    const context = {
+      harness: "omp" as const,
+      cwd: "/repo",
+      sessionId: "thread",
+    };
+    const probe = deferred<unknown>();
+    mocks.discoverOmpCommands.mockReturnValue(probe.promise);
+    const pending = loadSkills(context);
+    const onSkills = vi.fn();
+    const unsubscribe = vi.fn();
+    mocks.subscribe.mockReturnValue(unsubscribe);
+    const stop = subscribeSkills(context, onSkills);
+    mocks.subscribe.mock.calls[0]![1]([
+      {
+        name: "new-workflow",
+        invocation: "new-workflow",
+        source: "omp",
+        description: "",
+      },
+    ]);
+    probe.resolve([
+      {
+        name: "old-workflow",
+        invocation: "old-workflow",
+        source: "omp",
+        description: "",
+      },
+    ]);
+    await expect(pending).resolves.toMatchObject([{ name: "new-workflow" }]);
+    expect(onSkills).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "native", name: "new-workflow" }),
+      ]),
+    );
+    stop();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the last OMP inventory on discovery failure without falling back to injected files", async () => {
+    const context = { harness: "omp" as const, cwd: "/repo" };
+    await loadSkills(context);
+    vi.advanceTimersByTime(30_001);
+    mocks.discoverOmpCommands.mockRejectedValue(
+      new Error("Unsupported command"),
+    );
+    await expect(loadSkills(context)).resolves.toMatchObject([
+      { name: "workflow" },
+    ]);
+    invalidateSkills();
+    await expect(loadSkills(context)).resolves.toEqual([]);
+    expect(mocks.listSkills).not.toHaveBeenCalled();
   });
 
   it("keeps filesystem discovery and the built-in row for non-Pi providers", async () => {
