@@ -404,6 +404,17 @@ export function IconButton({
   );
 }
 
+export function AppMark({ className = "size-5" }: { className?: string }) {
+  return (
+    <img
+      src="/monocode.png"
+      alt=""
+      draggable={false}
+      className={`block object-contain ${className}`}
+    />
+  );
+}
+
 export function DevModeLabel() {
   if (!import.meta.env.DEV) return null;
   return (
@@ -416,11 +427,20 @@ export function DevModeLabel() {
   );
 }
 
-/** Flex spacer that keeps the Development badge next to the visit arrows. */
+/** App mark plus a flex spacer that keeps the Development badge next to the visit arrows. */
 export function DevModeSlot() {
   return (
-    <div className="flex min-w-0 flex-1 items-center justify-end">
-      <DevModeLabel />
+    <div className="flex min-w-0 flex-1 items-center">
+      <span
+        className="ml-2.5 grid size-6 shrink-0 place-items-center"
+        title="MonoCode"
+        aria-hidden
+      >
+        <AppMark className="size-5" />
+      </span>
+      <div className="flex min-w-0 flex-1 items-center justify-end">
+        <DevModeLabel />
+      </div>
     </div>
   );
 }
