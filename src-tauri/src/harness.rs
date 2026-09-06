@@ -1764,6 +1764,21 @@ mod windows_launcher_tests {
         std::fs::remove_file(bare).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }
+
+    #[test]
+    fn cursor_agent_accepts_windows_cmd_shim() {
+        let dir = std::env::temp_dir().join(format!("monocode-cursor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = dir.join("cursor-agent.cmd");
+        std::fs::write(&cmd, b"@echo off\n").unwrap();
+        assert_eq!(
+            existing_binary(dir.join("cursor-agent")),
+            Some(cmd.clone())
+        );
+        assert!(is_cursor_agent(&cmd));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 fn binary_name_eq(path: &Path, expected: &str) -> bool {
@@ -1843,6 +1858,7 @@ fn gui_search_path_from(
         parts.push(format!("{home}/.bun/bin").into());
         parts.push(format!("{home}/AppData/Roaming/npm").into());
         parts.push(format!("{home}/AppData/Local/Yarn/bin").into());
+        parts.push(format!("{home}/AppData/Local/cursor-agent").into());
         parts.push(format!("{home}/scoop/shims").into());
     }
     parts.push("/opt/homebrew/bin".into());
