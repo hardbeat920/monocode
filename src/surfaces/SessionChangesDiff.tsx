@@ -8,6 +8,7 @@ import {
 } from "../lib/checkpoint";
 import { forEachConcurrent } from "../lib/concurrent";
 import { buildUnifiedFile, type UnifiedFileDiff } from "../lib/unifiedDiff";
+import { t } from "../lib/i18n";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
 
 type Props = {
@@ -117,14 +118,14 @@ export function SessionChangesDiff({ cwd, sessionId, focusPath }: Props) {
         tooLarge: loaded?.tooLarge,
         emptyMessage:
           loaded == null
-            ? "Loading…"
+            ? t("Loading…")
             : loaded.error
               ? loaded.error
               : unified != null &&
                   unified.additions === 0 &&
                   unified.deletions === 0 &&
                   !loaded.binary
-                ? "No textual diff"
+                ? t("No textual diff")
                 : undefined,
         additions: unified?.additions ?? file.additions,
         deletions: unified?.deletions ?? file.deletions,
@@ -148,7 +149,7 @@ export function SessionChangesDiff({ cwd, sessionId, focusPath }: Props) {
   if (!cwd || cwd === "~") {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No project folder
+        {t("No project folder")}
       </p>
     );
   }
@@ -156,7 +157,7 @@ export function SessionChangesDiff({ cwd, sessionId, focusPath }: Props) {
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
-        <p className="text-[13px] text-content">Couldn’t load session changes</p>
+        <p className="text-[13px] text-content">{t("Couldn't load session changes")}</p>
         <p className="mt-1 text-[12px] text-content/50">{error}</p>
       </div>
     );
@@ -171,7 +172,7 @@ export function SessionChangesDiff({ cwd, sessionId, focusPath }: Props) {
   if (files.length === 0) {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No session changes
+        {t("No session changes")}
       </p>
     );
   }

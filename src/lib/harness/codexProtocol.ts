@@ -12,6 +12,7 @@ import {
 } from "./preview";
 import { streamTextDelta } from "./streamText";
 import type { HarnessEvent } from "./types";
+import { t } from "../i18n";
 
 /** Codex approval / sandbox settings for thread/start and turn/start. */
 export type CodexThreadConfig = {
@@ -514,7 +515,7 @@ function mapToolItem(
   if (!callId) return null;
 
   if (itemType === "commandExecution") {
-    const command = stringField(item, "command") ?? "Shell";
+    const command = stringField(item, "command") ?? t("Shell");
     const status = mapItemStatus(stringField(item, "status"), completed);
     const output =
       stringField(item, "aggregatedOutput") ?? stringField(item, "output");
@@ -546,7 +547,7 @@ function mapToolItem(
   }
 
   if (itemType === "webSearch") {
-    const query = stringField(item, "query") ?? "Search";
+    const query = stringField(item, "query") ?? t("Search");
     const status = mapItemStatus(stringField(item, "status"), completed);
     if (!completed) {
       return {
@@ -628,7 +629,9 @@ function mapSubAgentActivity(
   const path =
     stringField(item, "agentPath") ?? stringField(item, "agent_path");
   const leaf = path?.split(/[/\\]/).filter(Boolean).pop();
-  const title = leaf ? `${formatAgentType(leaf)} subagent` : "Subagent";
+  const title = leaf
+    ? t("{0} subagent", [formatAgentType(leaf)])
+    : t("Subagent");
   if (kind === "interrupted") {
     return {
       type: "tool.updated",
@@ -675,10 +678,10 @@ function mapFileChangeItem(
   const title =
     composeToolTitle({
       kind: "edit",
-      title: path ? `Edit ${path}` : "Edit",
+      title: path ? t("Edit {0}", [path]) : t("Edit"),
       path,
       previewKind: "write",
-    }) || "Edit";
+    }) || t("Edit");
   if (!completed) {
     return {
       type: "tool.started",
@@ -717,10 +720,10 @@ function mapFileChangePatch(
   const title =
     composeToolTitle({
       kind: "edit",
-      title: path ? `Edit ${path}` : "Edit",
+      title: path ? t("Edit {0}", [path]) : t("Edit"),
       path,
       previewKind: "write",
-    }) || "Edit";
+    }) || t("Edit");
   return {
     events: [
       {
@@ -743,7 +746,7 @@ function buildDiffPreview(
   if (!path && !diff) return undefined;
   const fake = {
     kind: "edit",
-    title: path ? `Edit ${path}` : "Edit",
+    title: path ? t("Edit {0}", [path]) : t("Edit"),
     content: diff
       ? [{ type: "diff", path, patch: diff }]
       : path
@@ -779,7 +782,7 @@ export function mapApprovalRequest(
   if (!rec) return null;
 
   if (method === "item/commandExecution/requestApproval") {
-    const command = stringField(rec, "command") ?? "Shell";
+    const command = stringField(rec, "command") ?? t("Shell");
     const callId = stringField(rec, "itemId");
     const reason = stringField(rec, "reason");
     return {
@@ -798,7 +801,7 @@ export function mapApprovalRequest(
   if (method === "item/fileChange/requestApproval") {
     const callId = stringField(rec, "itemId");
     const reason = stringField(rec, "reason");
-    const title = reason ?? "Approve file changes";
+    const title = reason ?? t("Approve file changes");
     return {
       kind: "file-change",
       event: {
@@ -813,7 +816,7 @@ export function mapApprovalRequest(
 
   if (method === "item/permissions/requestApproval") {
     const callId = stringField(rec, "itemId");
-    const reason = stringField(rec, "reason") ?? "Approve permissions";
+    const reason = stringField(rec, "reason") ?? t("Approve permissions");
     return {
       kind: "permissions",
       event: {

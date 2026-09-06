@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fuzzyMatch } from "./fuzzy";
 import type { ProjectFile } from "./fs";
 import type { RankedFile } from "./fileIndex";
+import { t } from "./i18n";
 import { projectName } from "./paths";
 import { looksLikeProject } from "./recents";
 
@@ -193,7 +194,7 @@ export function noteTitle(text: string): string {
     const title = unwrapMarkdown(trimmed).slice(0, MAX_TITLE);
     if (title) return title;
   }
-  return "Untitled";
+  return t("Untitled");
 }
 
 /** Folder name for a note saved from a session, or null when there is no project. */
@@ -231,8 +232,8 @@ export function appendNoteReference(
 ): string {
   const content = body.replace(/\r\n?/g, "\n").trim();
   if (!content) return draft;
-  const heading = title.trim() || "Untitled";
-  const block = `Note: ${heading}\n\n${content}`;
+  const heading = title.trim() || t("Untitled");
+  const block = `${t("Note: {0}", [heading])}\n\n${content}`;
   const separator =
     draft.length === 0
       ? ""
@@ -261,8 +262,8 @@ export function noteSlugsInText(text: string): string[] {
 export function injectNotePrompt(text: string, notes: Note[]): string {
   if (notes.length === 0) return text;
   const blocks = notes.map((note) => {
-    const heading = note.title.trim() || "Untitled";
-    return [`Referenced note "${heading}":`, "", note.body.trim()].join("\n");
+    const heading = note.title.trim() || t("Untitled");
+    return [t('Referenced note "{0}":', [heading]), "", note.body.trim()].join("\n");
   });
   return [text.trimEnd(), "", "---", ...blocks].join("\n");
 }
@@ -308,7 +309,7 @@ export function composeNoteMessage(
   text: string,
 ): string {
   if (!card) return text.trim();
-  const lead = text.trim() || "Use this note.";
+  const lead = text.trim() || t("Use this note.");
   return injectNotePrompt(lead, [
     {
       id: card.id,

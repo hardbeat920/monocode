@@ -5,6 +5,7 @@ import { isNoteMentionPath } from "../lib/notes";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { MatchText } from "./MatchText";
+import { t } from "../lib/i18n";
 
 type Props = {
   files: RankedFile[];
@@ -64,20 +65,20 @@ export function FileMentionPicker({
       {files.length === 0 ? (
         <p className="px-3 py-2.5 text-[12px] text-content/50">
             {loading
-              ? "Indexing files…"
+              ? t("Indexing files\u2026")
               : query.trim()
                 ? includeNotes
-                  ? "No matching files or notes"
-                  : "No matching files or folders"
+                  ? t("No matching files or notes")
+                  : t("No matching files or folders")
                 : includeNotes
-                  ? "No files or notes found"
-                  : "No files or folders found"}
+                  ? t("No files or notes found")
+                  : t("No files or folders found")}
         </p>
       ) : (
         <div
           ref={lockOverscroll}
           role="listbox"
-          aria-label={includeNotes ? "Files and notes" : "Files and folders"}
+          aria-label={includeNotes ? t("Files and notes") : t("Files and folders")}
           onMouseMove={onListMouseMove}
           className="max-h-[min(240px,40vh)] overflow-y-auto overscroll-none px-1 py-1"
         >
@@ -131,7 +132,7 @@ export function FileMentionPicker({
                 </span>
                 {note ? (
                   <span className="shrink-0 font-mono text-[11px] text-content/40">
-                    Note
+                    {t("Note")}
                   </span>
                 ) : dir ? (
                   <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] text-content/40">

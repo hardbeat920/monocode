@@ -8,6 +8,7 @@ import {
 } from "./fs";
 import { invalidateProjectFiles } from "./fileIndex";
 import { fuzzyMatch } from "./fuzzy";
+import { t } from "./i18n";
 import { joinPath } from "./paths";
 import { looksLikeProject, normalizeProjectPath } from "./recents";
 import { isMarkdownBlockquotePosition } from "./quoteDraft";
@@ -524,7 +525,7 @@ export async function readSkillBody(
   try {
     return await readTextFile(skill.path);
   } catch {
-    return `Skill "${skill.name}" could not be read from ${skill.path}.`;
+    return t("Skill \"{0}\" could not be read from {1}.", [skill.name, skill.path]);
   }
 }
 
@@ -572,7 +573,7 @@ export async function createBlankSkill(input: {
 }): Promise<string> {
   const name = slugSkillName(input.name);
   if (!isValidSkillName(name)) {
-    throw new Error("Use a lowercase name with letters, numbers, and hyphens.");
+    throw new Error(t("Use a lowercase name with letters, numbers, and hyphens."));
   }
   const root =
     input.scope === "user" || !looksLikeProject(input.cwd)

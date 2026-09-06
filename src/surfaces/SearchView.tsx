@@ -1,4 +1,5 @@
 import { Folder, LoaderCircle, MessageSquare, Search } from "../chrome/icons";
+import { t } from "../lib/i18n";
 import {
   useEffect,
   useMemo,
@@ -43,10 +44,10 @@ import { type Session } from "../lib/session";
 import { searchSessions, type SessionSummary } from "../lib/sessionStore";
 
 const SCOPES: { id: SearchScope; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "conversations", label: "Conversations" },
-  { id: "files", label: "Files" },
-  { id: "projects", label: "Projects" },
+  { id: "all", label: t("All") },
+  { id: "conversations", label: t("Conversations") },
+  { id: "files", label: t("Files") },
+  { id: "projects", label: t("Projects") },
 ];
 
 type Props = {
@@ -315,7 +316,7 @@ export function SearchView({
   return (
     <div
       role="search"
-      aria-label="Search"
+      aria-label={t("Search")}
       data-app-search
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -334,8 +335,8 @@ export function SearchView({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onQueryKeyDown}
-            placeholder="Search everything..."
-            aria-label="Search"
+            placeholder={t("Search everything...")}
+            aria-label={t("Search")}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
@@ -387,7 +388,7 @@ export function SearchView({
         ) : error && hits.length === 0 ? (
           <p className="px-2 py-1.5 text-[12px] text-red-400">{error}</p>
         ) : noResults ? (
-          <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+          <p className="px-2 py-1.5 text-[12px] text-content/50">{t("No results")}</p>
         ) : (
           <ResultList
             hits={hits}
@@ -431,7 +432,7 @@ function EmptyState() {
       </div>
 
       <p className="max-w-xs text-center text-[13px] text-content/45">
-        Find files, conversations, messages, and projects.
+        {t("Find files, conversations, messages, and projects.")}
       </p>
     </div>
   );
@@ -486,7 +487,7 @@ function ResultList({
   return (
     <div
       role="listbox"
-      aria-label="Search results"
+      aria-label={t("Search results")}
       onMouseMove={onListMouseMove}
     >
       {hits.map((hit, index) => {

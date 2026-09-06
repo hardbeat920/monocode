@@ -37,14 +37,15 @@ import {
 import { refreshHarnessCatalogs } from "../lib/harness/registry";
 import {
   HARNESSES,
+  getHarnessTitle,
   HARNESS_LABEL,
-  HARNESS_TITLE,
   type HarnessId,
 } from "../lib/session";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
 import { MOD } from "../lib/platform";
+import { t } from "../lib/i18n";
 
 type Props = {
   harness: HarnessId;
@@ -226,7 +227,7 @@ export function ModelPicker({
     if (!needle) return pool;
     return pool.filter((item) => {
       const hay =
-        `${item.name} ${HARNESS_TITLE[item.harness]} ${HARNESS_LABEL[item.harness]}`.toLowerCase();
+        `${item.name} ${getHarnessTitle()[item.harness]} ${HARNESS_LABEL[item.harness]}`.toLowerCase();
       return hay.includes(needle);
     });
     // Catalog, install probes, and picker-visibility all feed this list:
@@ -297,8 +298,8 @@ export function ModelPicker({
     <div ref={root} className="relative">
       <button
         type="button"
-        title={`${HARNESS_TITLE[current.harness]} · ${current.name} (${MOD}.)`}
-        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}`}
+        title={t("{0} · {1} ({2}.)", [getHarnessTitle()[current.harness], current.name, MOD])}
+        aria-label={t("{0} {1}", [getHarnessTitle()[current.harness], current.name])}
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -333,19 +334,19 @@ export function ModelPicker({
           onDismiss={() => dismiss(false)}
           dismissOnEscape={false}
           role="dialog"
-          aria-label="Model picker"
+          aria-label={t("Model picker")}
           data-model-picker
           className="flex flex-col overflow-hidden"
         >
           <nav
             role="tablist"
-            aria-label="Providers"
+            aria-label={t("Providers")}
             aria-keyshortcuts="ArrowLeft ArrowRight"
             aria-orientation="horizontal"
             className="flex w-full shrink-0 items-stretch border-b border-content/10"
           >
             <ProviderTabButton
-              title="Favorites"
+              title={t("Favorites")}
               selected={visibleTab === "favorites"}
               onSelect={() => selectTab("favorites")}
             >
@@ -358,7 +359,7 @@ export function ModelPicker({
             {pickerHarnesses.map((id) => (
               <ProviderTabButton
                 key={id}
-                title={HARNESS_TITLE[id]}
+                title={getHarnessTitle()[id]}
                 selected={visibleTab === id}
                 onSelect={() => selectTab(id)}
               >
@@ -375,8 +376,8 @@ export function ModelPicker({
                   ref={search}
                   type="text"
                   value={query}
-                  placeholder="Search models..."
-                  aria-label="Search models"
+                  placeholder={t("Search models...")}
+                  aria-label={t("Search models")}
                   className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/40"
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={onSearchKey}
@@ -390,13 +391,13 @@ export function ModelPicker({
               favorites={favorites}
               emptyLabel={
                 visibleTab === "favorites" && !query.trim()
-                  ? "No favorite models"
+                  ? t("No favorite models")
                   : visibleTab !== "favorites" &&
                       !isHarnessAvailable(visibleTab)
                     ? harnessUnavailableHint(visibleTab)
                     : visibleTab === "codex" && !query.trim()
-                      ? "Loading Codex models…"
-                      : "No matching models"
+                      ? t("Loading Codex models…")
+                      : t("No matching models")
               }
               onActive={setActive}
               onPick={pick}
@@ -507,7 +508,7 @@ function ModelList({
     <div
       ref={setListRef}
       role="listbox"
-      aria-label="Models"
+      aria-label={t("Models")}
       className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 pb-1.5"
     >
       {models.map((item, index) => {
@@ -557,7 +558,7 @@ function ModelList({
                     className="size-3 shrink-0 opacity-80"
                   />
                   <span className="truncate">
-                    {HARNESS_TITLE[item.harness]} ·{" "}
+                    {getHarnessTitle()[item.harness]} ·{" "}
                     {HARNESS_LABEL[item.harness]}
                   </span>
                 </span>
@@ -570,10 +571,10 @@ function ModelList({
             </button>
             <button
               type="button"
-              title={favorited ? "Remove from favorites" : "Add to favorites"}
-              aria-label={
-                favorited ? "Remove from favorites" : "Add to favorites"
-              }
+            title={favorited ? t("Remove from favorites") : t("Add to favorites")}
+            aria-label={
+              favorited ? t("Remove from favorites") : t("Add to favorites")
+            }
               onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => {
                 e.stopPropagation();

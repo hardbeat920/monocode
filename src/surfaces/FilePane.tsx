@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { memo, useSyncExternalStore } from "react";
+import { t } from "../lib/i18n";
 import {
   MarkdownViewShell,
   useMarkdownMode,
@@ -256,7 +257,7 @@ function PlanSurface({
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <p className="text-[13px] text-content/70">
-          This plan is no longer in the session.
+          {t("This plan is no longer in the session.")}
         </p>
       </div>
     );
@@ -270,10 +271,10 @@ function PlanSurface({
     block.plan?.status === "built";
   const buildLabel =
     block.plan?.status === "building"
-      ? "Building…"
+      ? t("Building…")
       : block.plan?.status === "built"
-        ? "Built"
-        : "Build";
+        ? t("Built")
+        : t("Build");
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
@@ -315,7 +316,7 @@ function PlanSurface({
         }
         source={
           <textarea
-            aria-label="Plan markdown"
+            aria-label={t("Plan markdown")}
             spellCheck={false}
             value={block.text}
             disabled={

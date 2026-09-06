@@ -4,6 +4,7 @@ import type {
   TaskListItem,
   ToolPreview,
 } from "../session";
+import { t } from "../i18n";
 import { isTaskListToolName, taskListFromToolInput } from "../taskList";
 import {
   questionPromptTitle,
@@ -449,7 +450,7 @@ export function statusTextFromSystem(
     text && !LIFECYCLE_STATUSES.has(text.toLowerCase().replace(/[\s.…]+$/, ""));
   if (notable) return text;
   // Compaction is worth one row even when the CLI sends no prose with it.
-  return compact ? "Compacted context" : undefined;
+  return compact ? t("Compacted context") : undefined;
 }
 
 export function turnStatusFromResult(rec: Record<string, unknown>): {
@@ -576,7 +577,7 @@ export function parseTaskStarted(
   return {
     taskId,
     toolUseId: stringField(rec, "tool_use_id"),
-    description: stringField(rec, "description") ?? "Subagent",
+    description: stringField(rec, "description") ?? t("Subagent"),
     taskType: stringField(rec, "task_type") ?? "",
     backgrounded: rec.is_backgrounded === true,
     ambient: rec.ambient === true,
@@ -606,7 +607,7 @@ export function parseTaskProgress(
   return {
     taskId,
     toolUseId: stringField(rec, "tool_use_id"),
-    description: stringField(rec, "description") ?? "Subagent",
+    description: stringField(rec, "description") ?? t("Subagent"),
     subagentType: stringField(rec, "subagent_type"),
     lastToolName: stringField(rec, "last_tool_name"),
     summary: stringField(rec, "summary"),
@@ -702,7 +703,7 @@ export function parseBackgroundAgentTasks(
       {
         taskId,
         taskType,
-        description: stringField(row, "description") ?? "Subagent",
+        description: stringField(row, "description") ?? t("Subagent"),
       },
     ];
   });

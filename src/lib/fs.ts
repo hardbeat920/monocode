@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { t } from "./i18n";
 
 export type FsEntry = {
   name: string;
@@ -331,7 +332,7 @@ export function homeDir(): Promise<string> {
   return invoke<string>("home_dir");
 }
 
-export async function pickFolder(title = "Open project"): Promise<string | null> {
+export async function pickFolder(title = t("Open project")): Promise<string | null> {
   const selected = await open({
     directory: true,
     multiple: false,
@@ -340,7 +341,7 @@ export async function pickFolder(title = "Open project"): Promise<string | null>
   return typeof selected === "string" && selected ? selected : null;
 }
 
-export async function pickFiles(title = "Attach files"): Promise<string[] | null> {
+export async function pickFiles(title = t("Attach files")): Promise<string[] | null> {
   const selected = await open({
     multiple: true,
     directory: false,

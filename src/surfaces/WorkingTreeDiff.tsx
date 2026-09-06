@@ -14,6 +14,7 @@ import { forEachConcurrent } from "../lib/concurrent";
 import { buildUnifiedFile, type UnifiedFileDiff } from "../lib/unifiedDiff";
 import { stageChunkText } from "./editorGit";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
+import { t } from "../lib/i18n";
 
 type Props = {
   cwd: string;
@@ -169,13 +170,13 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
         tooLarge: loaded?.tooLarge,
         emptyMessage:
           loaded == null
-            ? "Loading…"
+            ? t("Loading…")
             : loaded.error
-              ? `Couldn’t load diff: ${loaded.error}`
+              ? t("Couldn't load diff: {0}", [loaded.error])
               : unchanged
                 ? file.staged
-                  ? "Staged — no unstaged changes"
-                  : "No unstaged changes"
+                  ? t("Staged — no unstaged changes")
+                  : t("No unstaged changes")
                 : undefined,
         additions: unified?.additions ?? file.additions,
         deletions: unified?.deletions ?? file.deletions,
@@ -233,7 +234,7 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
   if (!cwd || cwd === "~") {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No project folder
+        {t("No project folder")}
       </p>
     );
   }
@@ -241,7 +242,7 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
-        <p className="text-[13px] text-content">Couldn’t load changes</p>
+        <p className="text-[13px] text-content">{t("Couldn't load changes")}</p>
         <p className="mt-1 text-[12px] text-content/50">{error}</p>
       </div>
     );

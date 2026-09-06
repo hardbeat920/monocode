@@ -1,12 +1,13 @@
 import { leafIds, newTab, type WorkspaceTab } from "./layout";
+import { t } from "./i18n";
 import type { ProjectTerminalDock } from "./projectTerminal";
 import { sessionNeedsInput, type Session } from "./session";
 import { stopStreaming } from "./harness/apply";
 
 export const INTERRUPT_MESSAGE =
-  "Turn interrupted when MonoCode quit.";
+  t("Turn interrupted when MonoCode quit.");
 
-export const CONTINUE_PROMPT = "Continue from where you left off.";
+export const CONTINUE_PROMPT = t("Continue from where you left off.");
 
 export type InFlightRef = {
   sessionId: string;
@@ -58,9 +59,9 @@ export function inFlightRefs(
 
 export function quitWhileBusyMessage(count: number): string {
   if (count === 1) {
-    return "1 chat is still running. Quit anyway? It will resume when you reopen MonoCode.";
+    return t("1 chat is still running. Quit anyway? It will resume when you reopen MonoCode.");
   }
-  return `${count} chats are still running. Quit anyway? They will resume when you reopen MonoCode.`;
+  return t("{0} chats are still running. Quit anyway? They will resume when you reopen MonoCode.", [count]);
 }
 
 /**

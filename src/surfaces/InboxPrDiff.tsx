@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { GithubPrDiff } from "../lib/githubTasks";
+import { t } from "../lib/i18n";
 import { mergePrDiff, parsePrPatch, type PrDiffFile } from "../lib/prDiff";
 import { blocksFromLines, type UnifiedLine } from "../lib/unifiedDiff";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
@@ -39,8 +40,8 @@ function toModel(file: PrDiffFile, truncated: boolean): UnifiedDiffFileModel {
     emptyMessage:
       !file.binary && file.lines.length === 0
         ? truncated
-          ? "Patch unavailable because this pull request is too large"
-          : "No textual diff"
+          ? t("Patch unavailable because this pull request is too large")
+          : t("No textual diff")
         : undefined,
     additions: file.additions,
     deletions: file.deletions,

@@ -13,6 +13,7 @@ import {
   type Skill,
 } from "../lib/skills";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
+import { t } from "../lib/i18n";
 
 type Props = {
   skills: Skill[];
@@ -73,7 +74,7 @@ export function SkillPicker({
             className="flex w-full items-center gap-2 border-t border-content/10 px-2.5 py-2 text-left text-[12px] text-content/70 hover:bg-content/10 hover:text-content"
           >
             <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
-            New skill
+            {t("New skill")}
           </button>
         </>
       )}
@@ -128,7 +129,7 @@ function SkillList({
   if (skills.length === 0) {
     return (
       <p className="px-3 py-2.5 text-[12px] text-content/50">
-        {query.trim() ? "No matching commands or skills" : "No commands yet"}
+        {query.trim() ? t("No matching commands or skills") : t("No commands yet")}
       </p>
     );
   }
@@ -137,7 +138,7 @@ function SkillList({
     <div
       ref={lockOverscroll}
       role="listbox"
-      aria-label="Commands and skills"
+      aria-label={t("Commands and skills")}
       onMouseMove={onListMouseMove}
       className="max-h-[min(240px,40vh)] overflow-y-auto overscroll-none px-1 py-1"
     >
@@ -225,14 +226,14 @@ function CreateSkillForm({
   return (
     <form onSubmit={submit} className="px-2.5 py-2">
       <p className="mb-2 text-[11px] text-content/50">
-        Writes a starter SKILL.md you can edit.
+        {t("Writes a starter SKILL.md you can edit.")}
       </p>
       <input
         ref={input}
         value={name}
         spellCheck={false}
         placeholder="skill-name"
-        aria-label="Skill name"
+        aria-label={t("Skill name")}
         disabled={busy}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
@@ -244,14 +245,14 @@ function CreateSkillForm({
       />
       <div className="mb-2 flex gap-1">
         <ScopeButton
-          label="Project"
+          label={t("Project")}
           hint=".agents/skills"
           selected={scope === "project"}
           disabled={!project || busy}
           onClick={() => setScope("project")}
         />
         <ScopeButton
-          label="Personal"
+          label={t("Personal")}
           hint="~/.agents/skills"
           selected={scope === "user"}
           disabled={busy}
@@ -262,7 +263,7 @@ function CreateSkillForm({
         <p className="mb-2 text-[12px] text-content/70">{error}</p>
       ) : !name.trim() || valid ? null : (
         <p className="mb-2 text-[12px] text-content/50">
-          Use lowercase letters, numbers, and hyphens.
+          {t("Use lowercase letters, numbers, and hyphens.")}
         </p>
       )}
       <div className="flex items-center justify-end gap-1">
@@ -272,14 +273,14 @@ function CreateSkillForm({
           onClick={onCancel}
           className="rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
         >
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           type="submit"
           disabled={!valid || busy}
           className="rounded-md bg-content/20 px-2 py-1 text-[12px] text-content disabled:opacity-40"
         >
-          {busy ? "Creating…" : "Create"}
+          {busy ? t("Creating…") : t("Create")}
         </button>
       </div>
     </form>
@@ -320,8 +321,8 @@ function scopeLabel(skill: Skill): string {
   if (skill.kind === "native") {
     return skill.origin ? `${skill.source} · ${skill.origin}` : skill.source;
   }
-  if (skill.kind === "builtin") return "monocode";
-  if (skill.scope === "user") return "personal";
+  if (skill.kind === "builtin") return t("monocode");
+  if (skill.scope === "user") return t("personal");
   if (skill.source !== "agents" && skill.source !== "monocode") return skill.source;
-  return "project";
+  return t("project");
 }

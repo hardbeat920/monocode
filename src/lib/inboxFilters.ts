@@ -5,6 +5,7 @@ import {
   type InboxKind,
   type InboxProvider,
 } from "./githubTasks";
+import { t } from "./i18n";
 import { normalizeProjectPath } from "./recents";
 import {
   timeFilterStart,
@@ -174,10 +175,10 @@ export function filterInboxByStatus(
   if (!any) return [...items];
   return items.filter((item) => {
     const label = inboxItemStatus(item);
-    if (status.open && label === "Open") return true;
-    if (status.draft && label === "Draft") return true;
-    if (status.closed && label === "Closed") return true;
-    if (status.merged && label === "Merged") return true;
+    if (status.open && label === t("Open")) return true;
+    if (status.draft && label === t("Draft")) return true;
+    if (status.closed && label === t("Closed")) return true;
+    if (status.merged && label === t("Merged")) return true;
     return false;
   });
 }

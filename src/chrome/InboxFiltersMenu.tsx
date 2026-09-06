@@ -1,6 +1,7 @@
 import { Check, CircleDot, GitPullRequest } from "./icons";
 import { type ReactNode } from "react";
 import type { InboxKind } from "../lib/githubTasks";
+import { t } from "../lib/i18n";
 import {
   DEFAULT_INBOX_FILTERS,
   hasActiveInboxFilters,
@@ -30,10 +31,10 @@ type Props = {
 };
 
 const TIME_OPTIONS: { id: InboxTimeFilter; label: string }[] = [
-  { id: "all", label: "All time" },
-  { id: "today", label: "Today" },
-  { id: "7d", label: "Last 7 days" },
-  { id: "30d", label: "Last 30 days" },
+  { id: "all", label: t("All time") },
+  { id: "today", label: t("Today") },
+  { id: "7d", label: t("Last 7 days") },
+  { id: "30d", label: t("Last 30 days") },
 ];
 
 const KIND_OPTIONS: {
@@ -43,12 +44,12 @@ const KIND_OPTIONS: {
 }[] = [
   {
     id: "issue",
-    label: "Issues",
+    label: t("Issues"),
     icon: <CircleDot className="size-3.5 shrink-0" strokeWidth={1.75} />,
   },
   {
     id: "pr",
-    label: "Pull requests",
+    label: t("Pull requests"),
     icon: <GitPullRequest className="size-3.5 shrink-0" strokeWidth={1.75} />,
   },
 ];
@@ -102,43 +103,43 @@ export function InboxFiltersMenu({
       maxHeight={480}
       onDismiss={onClose}
       role="menu"
-      aria-label="Filter inbox"
+      aria-label={t("Filter inbox")}
       onContextMenu={(event) => event.preventDefault()}
       className="overflow-y-auto overscroll-none p-1"
     >
       <FilterItem
-        label="Assigned to me"
+        label={t("Assigned to me")}
         checked={filters.assignedToMe}
         onClick={toggleAssigned}
       />
 
-      <SectionLabel>Status</SectionLabel>
+      <SectionLabel>{t("Status")}</SectionLabel>
       <FilterItem
-        label="Open"
+        label={t("Open")}
         checked={filters.status.open}
         onClick={() => toggleStatus("open")}
       />
       {source === "github" ? (
         <FilterItem
-          label="Draft"
+          label={t("Draft")}
           checked={filters.status.draft}
           onClick={() => toggleStatus("draft")}
         />
       ) : null}
       <FilterItem
-        label="Closed"
+        label={t("Closed")}
         checked={filters.status.closed}
         onClick={() => toggleStatus("closed")}
       />
       {source === "github" ? (
         <FilterItem
-          label="Merged"
+          label={t("Merged")}
           checked={filters.status.merged}
           onClick={() => toggleStatus("merged")}
         />
       ) : null}
 
-      <SectionLabel>Time</SectionLabel>
+      <SectionLabel>{t("Time")}</SectionLabel>
       {TIME_OPTIONS.map((option) => (
         <FilterItem
           key={option.id}
@@ -150,7 +151,7 @@ export function InboxFiltersMenu({
 
       {source === "github" ? (
         <>
-          <SectionLabel>Type</SectionLabel>
+          <SectionLabel>{t("Type")}</SectionLabel>
           {KIND_OPTIONS.map((option) => (
             <FilterItem
               key={option.id}
@@ -165,7 +166,7 @@ export function InboxFiltersMenu({
 
       {source === "github" && projects.length > 0 ? (
         <>
-          <SectionLabel>Projects</SectionLabel>
+          <SectionLabel>{t("Projects")}</SectionLabel>
           {projects.map((project) => (
             <FilterItem
               key={project.path}
@@ -196,7 +197,7 @@ export function InboxFiltersMenu({
             onClick={() => onChange(DEFAULT_INBOX_FILTERS)}
             className="flex h-7 w-full items-center rounded-lg px-2 text-left text-[13px] leading-none text-content/70 hover:bg-content/5 hover:text-content"
           >
-            Clear filters
+            {t("Clear filters")}
           </button>
         </>
       ) : null}

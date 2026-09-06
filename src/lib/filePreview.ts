@@ -1,4 +1,5 @@
 import { basename } from "./fs";
+import { t } from "./i18n";
 
 const IMAGE_EXTENSIONS = new Set([
   ".png",
@@ -56,7 +57,7 @@ export function sniffImageMime(bytes: Uint8Array): string | null {
 /** Byte count for the viewer footer, in the units a file manager would show. */
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
+  const units = [t("KB"), t("MB"), t("GB")];
   let size = bytes / 1024;
   let unit = 0;
   while (size >= 1024 && unit < units.length - 1) {

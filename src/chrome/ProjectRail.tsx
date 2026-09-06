@@ -72,12 +72,15 @@ import { Shimmer } from "../surfaces/Shimmer";
 import { TabGroupMenu, type TabGroupMenuExtraItem } from "./TabGroupMenu";
 import { TerminalSpinner } from "./TerminalSpinner";
 import type { SettingsSectionId } from "../lib/settings";
+import { t } from "../lib/i18n";
 
-const REVEAL_LABEL = IS_MAC
-  ? "Reveal in Finder"
-  : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
-    ? "Reveal in File Explorer"
-    : "Open Containing Folder";
+function getRevealLabel() {
+  return IS_MAC
+    ? t("Reveal in Finder")
+    : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
+      ? t("Reveal in File Explorer")
+      : t("Open Containing Folder");
+}
 
 function projectMenuExtraItems(
   pinned: boolean,
@@ -85,14 +88,14 @@ function projectMenuExtraItems(
 ): TabGroupMenuExtraItem[] {
   const items: TabGroupMenuExtraItem[] = [
     pinned
-      ? { id: "unpin", label: "Unpin project", icon: PinOff }
-      : { id: "pin", label: "Pin project", icon: Pin },
-    { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
+      ? { id: "unpin", label: t("Unpin project"), icon: PinOff }
+      : { id: "pin", label: t("Pin project"), icon: Pin },
+    { id: "reveal", label: getRevealLabel(), icon: FolderOpen },
   ];
   if (canRemove) {
     items.push(
-      { id: "archive", label: "Archive", icon: Archive, sepBefore: true },
-      { id: "delete", label: "Delete", icon: Trash2, danger: true },
+      { id: "archive", label: t("Archive"), icon: Archive, sepBefore: true },
+      { id: "delete", label: t("Delete"), icon: Trash2, danger: true },
     );
   }
   return items;
@@ -353,7 +356,7 @@ export function ProjectRail({
   return (
     <nav
       ref={resize.setPaneRef}
-      aria-label="Projects"
+      aria-label={t("Projects")}
       className="sidebar-glass relative flex shrink-0 flex-col border-r border-content/10"
     >
       <div
@@ -382,29 +385,29 @@ export function ProjectRail({
         <>
           <div className="flex shrink-0 flex-col gap-px px-2 pb-2 pt-0.5">
             <RailSearch
-              label="Search"
+              label={t("Search")}
               icon={Search}
               onClick={onSearch}
               active={searchActive}
               shortcut={`${MOD}K`}
-              ariaLabel={`Search (${MOD}K)`}
+              ariaLabel={t("Search ({0})", [`${MOD}K`])}
             />
             <div className="mt-0.5" />
             <RailAction
-              label="Inbox"
+              label={t("Inbox")}
               icon={Inbox}
               onClick={onOpenInbox}
               active={inboxActive}
               dot={inboxUnseen}
-              ariaLabel={inboxUnseen ? "Inbox, new items" : "Inbox"}
+              ariaLabel={inboxUnseen ? t("Inbox, new items") : t("Inbox")}
             />
             {notesEnabled ? (
               <RailAction
-                label="Notes"
+                label={t("Notes")}
                 icon={File}
                 onClick={onOpenNotes}
                 active={notesActive}
-                ariaLabel="Notes"
+                ariaLabel={t("Notes")}
               />
             ) : null}
           </div>
@@ -418,7 +421,7 @@ export function ProjectRail({
           >
             {sections.pinned.length > 0 ? (
               <ProjectSection
-                label="Pinned"
+                label={t("Pinned")}
                 items={sections.pinned}
                 cwd={cwd}
                 busy={busy}
@@ -438,9 +441,9 @@ export function ProjectRail({
             ) : null}
 
             <ProjectSection
-              label="Projects"
+              label={t("Projects")}
               items={sections.projects}
-              emptyLabel="No projects yet"
+              emptyLabel={t("No projects yet")}
               onAdd={onOpenProject}
               cwd={cwd}
               busy={busy}
@@ -474,11 +477,11 @@ export function ProjectRail({
           />
           <div className="flex shrink-0 flex-col gap-px p-2 pt-0">
             <RailAction
-              label="Settings"
+              label={t("Settings")}
               icon={Settings}
               onClick={onOpenSettings}
               shortcut={`${MOD},`}
-              ariaLabel={`Settings (${MOD},)`}
+              ariaLabel={t("Settings ({0})", [`${MOD},`])}
             />
           </div>
         </>
@@ -543,7 +546,7 @@ export function ProjectRail({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize project sidebar"
+        aria-label={t("Resize project sidebar")}
         aria-valuenow={resize.width}
         aria-valuemin={PROJECT_RAIL_WIDTH_MIN}
         aria-valuemax={PROJECT_RAIL_WIDTH_MAX}
@@ -602,7 +605,7 @@ function LiveAgentsPreview({
     <div className="shrink-0 px-2">
       <div
         role="status"
-        aria-label="Working agents"
+        aria-label={t("Working agents")}
         className="overflow-hidden rounded-lg bg-content/5"
       >
         <div className="flex items-center gap-2 px-3.5 py-1.5">
@@ -611,7 +614,7 @@ function LiveAgentsPreview({
             className="size-1.5 shrink-0 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] animate-pulse"
           />
           <span className="min-w-0 flex-1 truncate text-xs text-content/50">
-            Working
+            {t("Working")}
           </span>
           <span className="text-[11px] tabular-nums text-content/40">
             {agents.length}
@@ -649,7 +652,7 @@ function LiveAgentsPreview({
             ) : (
               <ChevronDown className="size-3" strokeWidth={1.75} />
             )}
-            {expanded ? "Show less" : `${extra} more`}
+            {expanded ? t("Show less") : t("{0} more", [extra])}
           </button>
         ) : null}
       </div>
@@ -692,9 +695,9 @@ function LiveAgentCard({
       ? formatLiveElapsed(agent.startedAt, now)
       : "";
   const activity = agent.needsApproval
-    ? "Need approval"
+    ? t("Need approval")
     : agent.done
-      ? "Done"
+      ? t("Done")
       : agent.activity;
   const live = !agent.needsApproval && !agent.done;
   const title = [agent.title, project, activity, elapsed]
@@ -809,8 +812,8 @@ function ProjectSection({
         {onAdd ? (
           <button
             type="button"
-            title="Open project"
-            aria-label="Open project"
+            title={t("Open project")}
+            aria-label={t("Open project")}
             onClick={onAdd}
             className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
           >
@@ -985,8 +988,8 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title="Project options"
-        aria-label="Project options"
+        title={t("Project options")}
+        aria-label={t("Project options")}
         aria-haspopup="menu"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
@@ -1000,8 +1003,8 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title={pinned ? "Unpin project" : "Pin project"}
-        aria-label={pinned ? "Unpin project" : "Pin project"}
+        title={pinned ? t("Unpin project") : t("Pin project")}
+        aria-label={pinned ? t("Unpin project") : t("Pin project")}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
@@ -1044,7 +1047,7 @@ function ProjectDiffStat({
 
   return (
     <span
-      title={`${label} uncommitted`}
+      title={t("{0} uncommitted", [label])}
       className="flex shrink-0 items-center gap-1 font-mono text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (
@@ -1064,14 +1067,14 @@ function projectCardTitle(
   busy: boolean,
 ): string {
   const parts = [name, path];
-  if (busy) parts.push("Working");
+  if (busy) parts.push(t("Working"));
   const files = stats?.files ?? 0;
   const additions = stats?.additions ?? 0;
   const deletions = stats?.deletions ?? 0;
   if (files > 0 || additions > 0 || deletions > 0) {
     parts.push(
       [
-        files > 0 ? `${files} ${files === 1 ? "file" : "files"} changed` : "",
+        files > 0 ? t("{0} {1} changed", [files, files === 1 ? "file" : "files"]) : "",
         additions > 0 ? `+${additions}` : "",
         deletions > 0 ? `-${deletions}` : "",
       ]
@@ -1088,12 +1091,12 @@ function projectCardAriaLabel(
   busy: boolean,
 ): string {
   const parts = [name];
-  if (busy) parts.push("working");
+  if (busy) parts.push(t("working"));
   const files = stats?.files ?? 0;
   const additions = stats?.additions ?? 0;
   const deletions = stats?.deletions ?? 0;
   if (files > 0) {
-    parts.push(`${files} ${files === 1 ? "file" : "files"} changed`);
+    parts.push(t("{0} {1} changed", [files, files === 1 ? "file" : "files"]));
   }
   if (additions > 0) parts.push(`+${additions}`);
   if (deletions > 0) parts.push(`-${deletions}`);

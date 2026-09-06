@@ -17,6 +17,7 @@ import { terminalTabLabel } from "../lib/terminalTab";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useSortable } from "../hooks/useSortable";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { t } from "../lib/i18n";
 
 type Props = {
   files: FilePaneTab[];
@@ -53,19 +54,19 @@ export function surfaceTabPresentation(
 
   if (isChangesTab(file)) {
     return {
-      name: "Changes",
-      label: "Changes",
+      name: t("Changes"),
+      label: t("Changes"),
       iconName: "CHANGES",
-      tooltip: "Working tree changes",
+      tooltip: t("Working tree changes"),
     };
   }
 
   if (isSessionChangesTab(file)) {
     return {
-      name: "Session Changes",
-      label: "Session Changes",
+      name: t("Session Changes"),
+      label: t("Session Changes"),
       iconName: "CHANGES",
-      tooltip: "Changes captured for this session only",
+      tooltip: t("Changes captured for this session only"),
     };
   }
 
@@ -82,20 +83,20 @@ export function surfaceTabPresentation(
   const review = isReviewTab(file);
   const terminal = isTerminalTab(file);
   const name = isPlanTab(file)
-    ? file.plan.title.trim() || "Plan"
+    ? file.plan.title.trim() || t("Plan")
     : terminal
       ? terminalTabLabel(file)
       : basename(file.path);
   return {
     name,
-    label: review ? `${name} (Working Tree)` : name,
+    label: review ? t("{0} (Working Tree)", [name]) : name,
     iconName: isPlanTab(file) ? "plan.md" : name,
     tooltip: isPlanTab(file)
       ? name
       : terminal
         ? `${name} — ${file.cwd}`
         : review
-          ? `${file.path} (Working Tree)`
+          ? t("{0} (Working Tree)", [file.path])
           : file.path,
   };
 }
@@ -103,7 +104,7 @@ export function surfaceTabPresentation(
 /** Tab tooltip: the path, then what is wrong with it. */
 export function appendProblems(title: string, errors: number): string {
   if (!errors) return title;
-  return `${title} — ${errors} ${errors === 1 ? "problem" : "problems"}`;
+  return `${title} — ${errors === 1 ? t("{0} problem", [errors]) : t("{0} problems", [errors])}`;
 }
 
 export function SurfaceTabs({
@@ -115,7 +116,7 @@ export function SurfaceTabs({
   onCloseFile,
   onReorder,
   onPaneDragStart,
-  label = "Open files",
+  label = t("Open files"),
   trailing,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -143,8 +144,8 @@ export function SurfaceTabs({
       {onPaneDragStart ? (
         <div
           role="button"
-          title="Drag to reorder pane"
-          aria-label="Drag to reorder pane"
+          title={t("Drag to reorder pane")}
+          aria-label={t("Drag to reorder pane")}
           tabIndex={-1}
           className="grid h-full w-5 shrink-0 cursor-grab place-items-center text-content/35 hover:bg-content/5 hover:text-content/70 active:cursor-grabbing touch-none"
           onPointerDown={(event) => {
@@ -242,15 +243,15 @@ export function SurfaceTabs({
               {dirty ? (
                 <span
                   className="size-1.5 shrink-0 rounded-full bg-content/75"
-                  title="Unsaved changes"
-                  aria-label="Unsaved changes"
+                  title={t("Unsaved changes")}
+                  aria-label={t("Unsaved changes")}
                 />
               ) : null}
             </button>
             <button
               type="button"
-              title={`Close ${label}`}
-              aria-label={`Close ${label}`}
+              title={t("Close {0}", [label])}
+              aria-label={t("Close {0}", [label])}
               data-no-drag
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {

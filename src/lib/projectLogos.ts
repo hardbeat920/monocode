@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { t } from "./i18n";
 import {
   notifyTabGroupLogosChanged,
   saveTabGroupLogo,
@@ -10,10 +11,10 @@ export async function pickImageFile(): Promise<string | null> {
   const selected = await open({
     multiple: false,
     directory: false,
-    title: "Choose project logo",
+    title: t("Choose project logo"),
     filters: [
       {
-        name: "Images",
+        name: t("Images"),
         extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"],
       },
     ],

@@ -1,61 +1,69 @@
 import { ALT, IS_MAC, MOD, SHIFT } from "./platform";
+import { t } from "./i18n";
 
 const SECTION_KEY = "monocode.settingsSection";
 
 export type SettingsSectionId =
   "general" | "appearance" | "keybindings" | "providers" | "archive";
 
-export const SETTINGS_SECTIONS: {
+export function getSettingsSections(): {
   id: SettingsSectionId;
   label: string;
   description: string;
-}[] = [
-  {
-    id: "general",
-    label: "General",
-    description: "App-wide behavior and the build you are running.",
-  },
-  {
-    id: "appearance",
-    label: "Appearance",
-    description: "Theme, translucency, and the tint applied to the chrome.",
-  },
-  {
-    id: "keybindings",
-    label: "Keybindings",
-    description:
-      "Every shortcut the workspace handles, from the app menu and the key handler.",
-  },
-  {
-    id: "providers",
-    label: "Providers",
-    description:
-      "Agent CLIs MonoCode can drive, and the model new sessions start with.",
-  },
-  {
-    id: "archive",
-    label: "Archive",
-    description: "Projects and conversations you have archived.",
-  },
-];
+}[] {
+  return [
+    {
+      id: "general",
+      label: t("General"),
+      description: t("App-wide behavior and the build you are running."),
+    },
+    {
+      id: "appearance",
+      label: t("Appearance"),
+      description: t("Theme, translucency, and the tint applied to the chrome."),
+    },
+    {
+      id: "keybindings",
+      label: t("Keybindings"),
+      description: t(
+        "Every shortcut the workspace handles, from the app menu and the key handler.",
+      ),
+    },
+    {
+      id: "providers",
+      label: t("Providers"),
+      description: t(
+        "Agent CLIs MonoCode can drive, and the model new sessions start with.",
+      ),
+    },
+    {
+      id: "archive",
+      label: t("Archive"),
+      description: t("Projects and conversations you have archived."),
+    },
+  ];
+}
+
+/** @deprecated Use getSettingsSections() for i18n-aware access */
+export const SETTINGS_SECTIONS = getSettingsSections();
 
 export const SETTINGS_SECTION_DEFAULT: SettingsSectionId = "general";
 
 export function isSettingsSectionId(
   value: unknown,
 ): value is SettingsSectionId {
-  return SETTINGS_SECTIONS.some((section) => section.id === value);
+  return getSettingsSections().some((section) => section.id === value);
 }
 
 export function settingsSectionLabel(id: SettingsSectionId): string {
   return (
-    SETTINGS_SECTIONS.find((section) => section.id === id)?.label ?? "General"
+    getSettingsSections().find((section) => section.id === id)?.label ?? t("General")
   );
 }
 
 export function settingsSectionDescription(id: SettingsSectionId): string {
   return (
-    SETTINGS_SECTIONS.find((section) => section.id === id)?.description ?? ""
+    getSettingsSections().find((section) => section.id === id)?.description ?? ""
   );
 }
 
@@ -320,65 +328,70 @@ export type KeybindingRow = {
  * Mirrors the bindings we actually handle: the native menu accelerators in
  * `src-tauri/src/menu.rs`, `tabCommand`, and the window key handler in App.
  */
-export const KEYBINDINGS: KeybindingRow[] = [
-  { command: "App: Search", keys: `${MOD}K`, when: "Always" },
-  { command: "App: Go to File", keys: `${MOD}P`, when: "Always" },
-  { command: "App: Find in Files", keys: `${MOD}${SHIFT}F`, when: "Always" },
-  { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
-  { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
-  { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
-  { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
-  { command: "Tab: New", keys: `${MOD}T`, when: "Always" },
-  { command: "Tab: Close Others", keys: `${MOD}${ALT}T`, when: "Always" },
-  { command: "Tab: Next", keys: `${MOD}${SHIFT}]`, when: "Always" },
-  { command: "Tab: Previous", keys: `${MOD}${SHIFT}[`, when: "Always" },
-  { command: "Tab: Cycle Next", keys: `${CTRL}Tab`, when: "Always" },
-  {
-    command: "Tab: Cycle Previous",
-    keys: `${CTRL}${SHIFT}Tab`,
-    when: "Always",
-  },
-  { command: "Tab: Back", keys: `${MOD}[`, when: "Always" },
-  { command: "Tab: Forward", keys: `${MOD}]`, when: "Always" },
-  { command: "Tab: Activate 1–8", keys: `${MOD}1 … ${MOD}8`, when: "Always" },
-  { command: "Tab: Activate Last", keys: `${MOD}9`, when: "Always" },
-  {
-    command: "Session: Previous",
-    keys: `${MOD}${SHIFT}↑`,
-    when: "!overlay && (!textFocus || emptyComposer)",
-  },
-  {
-    command: "Session: Next",
-    keys: `${MOD}${SHIFT}↓`,
-    when: "!overlay && (!textFocus || emptyComposer)",
-  },
-  {
-    command: "Project: Previous",
-    keys: `${MOD}${SHIFT}←`,
-    when: "!overlay && (!textFocus || emptyComposer)",
-  },
-  {
-    command: "Project: Next",
-    keys: `${MOD}${SHIFT}→`,
-    when: "!overlay && (!textFocus || emptyComposer)",
-  },
-  { command: "Pane: Close", keys: `${MOD}W`, when: "Always" },
-  { command: "Pane: Split Right", keys: `${MOD}D`, when: "!editorFocus" },
-  {
-    command: "Pane: Split Down",
-    keys: `${MOD}${SHIFT}D`,
-    when: "!editorFocus",
-  },
-  { command: "Pane: Focus Left", keys: `${MOD}${ALT}←`, when: "Always" },
-  { command: "Pane: Focus Right", keys: `${MOD}${ALT}→`, when: "Always" },
-  { command: "Pane: Focus Up", keys: `${MOD}${ALT}↑`, when: "Always" },
-  { command: "Pane: Focus Down", keys: `${MOD}${ALT}↓`, when: "Always" },
-  { command: "Terminal: New", keys: `${MOD}\``, when: "Always" },
-  { command: "Terminal: New Tab", keys: `${MOD}${SHIFT}\``, when: "Always" },
-  { command: "Terminal: Toggle Dock", keys: `${MOD}J`, when: "Always" },
-  { command: "Editor: Find", keys: `${MOD}F`, when: "editorFocus" },
-  { command: "Editor: Replace", keys: `${MOD}${ALT}F`, when: "editorFocus" },
-];
+export function getKeybindings(): KeybindingRow[] {
+  return [
+    { command: t("App: Search"), keys: `${MOD}K`, when: t("Always") },
+    { command: t("App: Go to File"), keys: `${MOD}P`, when: t("Always") },
+    { command: t("App: Find in Files"), keys: `${MOD}${SHIFT}F`, when: t("Always") },
+    { command: t("App: Open Project"), keys: `${MOD}O`, when: t("Always") },
+    { command: t("App: New Window"), keys: `${MOD}${SHIFT}N`, when: t("Always") },
+    { command: t("App: Toggle Sidebar"), keys: `${MOD}B`, when: t("Always") },
+    { command: t("App: Switch Model"), keys: `${MOD}.`, when: t("Always") },
+    { command: t("Tab: New"), keys: `${MOD}T`, when: t("Always") },
+    { command: t("Tab: Close Others"), keys: `${MOD}${ALT}T`, when: t("Always") },
+    { command: t("Tab: Next"), keys: `${MOD}${SHIFT}]`, when: t("Always") },
+    { command: t("Tab: Previous"), keys: `${MOD}${SHIFT}[`, when: t("Always") },
+    { command: t("Tab: Cycle Next"), keys: `${CTRL}Tab`, when: t("Always") },
+    {
+      command: t("Tab: Cycle Previous"),
+      keys: `${CTRL}${SHIFT}Tab`,
+      when: t("Always"),
+    },
+    { command: t("Tab: Back"), keys: `${MOD}[`, when: t("Always") },
+    { command: t("Tab: Forward"), keys: `${MOD}]`, when: t("Always") },
+    { command: t("Tab: Activate 1–8"), keys: `${MOD}1 … ${MOD}8`, when: t("Always") },
+    { command: t("Tab: Activate Last"), keys: `${MOD}9`, when: t("Always") },
+    {
+      command: t("Session: Previous"),
+      keys: `${MOD}${SHIFT}↑`,
+      when: "!overlay && (!textFocus || emptyComposer)",
+    },
+    {
+      command: t("Session: Next"),
+      keys: `${MOD}${SHIFT}↓`,
+      when: "!overlay && (!textFocus || emptyComposer)",
+    },
+    {
+      command: t("Project: Previous"),
+      keys: `${MOD}${SHIFT}←`,
+      when: "!overlay && (!textFocus || emptyComposer)",
+    },
+    {
+      command: t("Project: Next"),
+      keys: `${MOD}${SHIFT}→`,
+      when: "!overlay && (!textFocus || emptyComposer)",
+    },
+    { command: t("Pane: Close"), keys: `${MOD}W`, when: t("Always") },
+    { command: t("Pane: Split Right"), keys: `${MOD}D`, when: "!editorFocus" },
+    {
+      command: t("Pane: Split Down"),
+      keys: `${MOD}${SHIFT}D`,
+      when: "!editorFocus",
+    },
+    { command: t("Pane: Focus Left"), keys: `${MOD}${ALT}←`, when: t("Always") },
+    { command: t("Pane: Focus Right"), keys: `${MOD}${ALT}→`, when: t("Always") },
+    { command: t("Pane: Focus Up"), keys: `${MOD}${ALT}↑`, when: t("Always") },
+    { command: t("Pane: Focus Down"), keys: `${MOD}${ALT}↓`, when: t("Always") },
+    { command: t("Terminal: New"), keys: `${MOD}\``, when: t("Always") },
+    { command: t("Terminal: New Tab"), keys: `${MOD}${SHIFT}\``, when: t("Always") },
+    { command: t("Terminal: Toggle Dock"), keys: `${MOD}J`, when: t("Always") },
+    { command: t("Editor: Find"), keys: `${MOD}F`, when: "editorFocus" },
+    { command: t("Editor: Replace"), keys: `${MOD}${ALT}F`, when: "editorFocus" },
+  ];
+}
+
+/** @deprecated Use getKeybindings() for i18n-aware access */
+export const KEYBINDINGS = getKeybindings();
 
 export function filterKeybindings(
   rows: KeybindingRow[],

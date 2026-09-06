@@ -1,4 +1,5 @@
 import { homeDir } from "../fs";
+import { t } from "../i18n";
 import {
   setHarnessModels,
   type AgentModel,
@@ -254,7 +255,7 @@ function groupCliModels(
     if (efforts.length > 1) {
       settings.push({
         id: effortKeyFor(base),
-        label: "Effort",
+        label: t("Effort"),
         kind: "select",
         value: canonical?.effort ?? efforts[0],
         options: efforts.map((value) => ({
@@ -266,24 +267,24 @@ function groupCliModels(
     if (hasThinking) {
       settings.push({
         id: "thinking",
-        label: "Thinking",
+        label: t("Thinking"),
         kind: "toggle",
         value: canonical?.thinking ? "true" : "false",
         options: [
-          { value: "false", label: "Off" },
-          { value: "true", label: "On" },
+          { value: "false", label: t("Off") },
+          { value: "true", label: t("On") },
         ],
       });
     }
     if (hasFast) {
       settings.push({
         id: "fast",
-        label: "Fast",
+        label: t("Fast"),
         kind: "toggle",
         value: canonical?.fast ? "true" : "false",
         options: [
-          { value: "false", label: "Off" },
-          { value: "true", label: "Fast" },
+          { value: "false", label: t("Off") },
+          { value: "true", label: t("Fast") },
         ],
       });
     }
@@ -360,8 +361,8 @@ function parseConfigOptions(raw: unknown): ModelSetting[] | undefined {
         kind: "toggle",
         value: on ? "true" : "false",
         options: [
-          { value: "false", label: "Off" },
-          { value: "true", label: "On" },
+          { value: "false", label: t("Off") },
+          { value: "true", label: t("On") },
         ],
       });
       continue;
@@ -445,20 +446,20 @@ function effortKeyFor(base: string): string {
 function effortLabel(value: string): string {
   switch (value) {
     case "none":
-      return "None";
+      return t("None");
     case "minimal":
-      return "Minimal";
+      return t("Minimal");
     case "low":
-      return "Low";
+      return t("Low");
     case "medium":
-      return "Medium";
+      return t("Medium");
     case "high":
-      return "High";
+      return t("High");
     case "xhigh":
     case "extra-high":
-      return "Extra High";
+      return t("Extra High");
     case "max":
-      return "Max";
+      return t("Max");
     default:
       return value;
   }

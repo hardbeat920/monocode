@@ -1,6 +1,7 @@
 import { leafIds, type WorkspaceTab } from "./layout";
 import type { Block, Session } from "./session";
 import { toolCallLabel } from "../surfaces/transcriptActivity";
+import { t } from "./i18n";
 
 export type PendingApprovalNotice = {
   sessionId: string;
@@ -21,7 +22,7 @@ export function pendingApprovalForSession(
       label:
         session.pendingQuestion.title ||
         session.pendingQuestion.questions[0]?.prompt ||
-        "Question",
+        t("Question"),
       kind: "question",
     };
   }

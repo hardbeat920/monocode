@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "./fs";
+import { t } from "./i18n";
 import {
   errorRateLimits,
   parseClaudeOAuthUsage,
@@ -42,17 +43,17 @@ export async function fetchClaudeRateLimits(): Promise<ProviderRateLimits> {
     if (result.status === "unavailable") {
       return unavailableRateLimits(
         "claude",
-        result.error?.trim() || "Claude not signed in",
+        result.error?.trim() || t("Claude not signed in"),
       );
     }
     return errorRateLimits(
       "claude",
-      result.error?.trim() || "Claude usage unavailable",
+      result.error?.trim() || t("Claude usage unavailable"),
     );
   } catch (error) {
     return errorRateLimits(
       "claude",
-      error instanceof Error ? error.message : "Claude usage unavailable",
+      error instanceof Error ? error.message : t("Claude usage unavailable"),
     );
   }
 }
@@ -62,7 +63,7 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
   try {
     path = (await resolveCodexBinary()).path;
   } catch {
-    return unavailableRateLimits("codex", "Codex CLI not found");
+    return unavailableRateLimits("codex", t("Codex CLI not found"));
   }
 
   const cwd = await homeDir();
@@ -87,7 +88,7 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
   watchChild(
     USAGE_CHILD_ID,
     (line) => rpc.pushLine(line),
-    () => rpc.close(new Error("Codex usage probe exited")),
+    () => rpc.close(new Error(t("Codex usage probe exited"))),
   );
 
   try {
@@ -118,7 +119,7 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
         if (parsed.session || parsed.weekly) return parsed;
         const rec = asRecord(result);
         if (rec && !parsed.session && !parsed.weekly) {
-          return unavailableRateLimits("codex", "No Codex usage data");
+          return unavailableRateLimits("codex", t("No Codex usage data"));
         }
         return parsed;
       },
@@ -133,10 +134,10 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
         message,
       )
     ) {
-      return unavailableRateLimits("codex", "Codex not signed in");
+      return unavailableRateLimits("codex", t("Codex not signed in"));
     }
     if (/ENOENT|not found|could not run/i.test(message)) {
-      return unavailableRateLimits("codex", "Codex CLI not found");
+      return unavailableRateLimits("codex", t("Codex CLI not found"));
     }
     return errorRateLimits("codex", message);
   } finally {
@@ -157,7 +158,7 @@ async function withTimeout<T>(
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => {
           onTimeout();
-          reject(new Error("Codex usage probe timed out"));
+          reject(new Error(t("Codex usage probe timed out")));
         }, ms);
       }),
     ]);

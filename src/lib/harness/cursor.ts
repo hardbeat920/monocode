@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { nativeModelId } from "../models";
 import type { RuntimeMode } from "../session";
 import { promptBlocks } from "../attachments";
@@ -864,7 +865,7 @@ function cursorAgentTitle(
   existing: string | undefined,
 ): string {
   const input = asRecord(rawInput);
-  if (input) return agentToolTitle(input, existing ?? rawTitle ?? "Subagent");
+  if (input) return agentToolTitle(input, existing ?? rawTitle ?? t("Subagent"));
   if (existing) return existing;
   const stripped = rawTitle
     ?.replace(/^(?:agent|task|subagent)\b[\s:·-]*/i, "")

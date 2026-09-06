@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 /** Shared clarifying-question model for every harness that can ask the user. */
 
 export const CUSTOM_OPTION_ID = "__custom__";
@@ -49,7 +51,7 @@ export function questionsFromUnknown(value: unknown): UserQuestion[] {
 
 export function questionPromptTitle(questions: UserQuestion[]): string {
   const first = questions[0];
-  return first?.header || first?.prompt || "Question";
+  return first?.header || first?.prompt || t("Question");
 }
 
 export function questionIsComplete(
@@ -154,7 +156,7 @@ function questionFromUnknown(
       usedIds,
     ),
     ...(header ? { header } : {}),
-    prompt: prompt || header || `Question ${index + 1}`,
+    prompt: prompt || header || t("Question {0}", [index + 1]),
     multiSelect:
       rec.multiSelect === true ||
       rec.allowMultiple === true ||

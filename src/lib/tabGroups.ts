@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { Tab } from "../chrome/TitleBar";
 
 /** Chrome-like palette — saturated enough to read on dark glass. */
@@ -222,7 +223,7 @@ export function resolveTabGroupCustomColor(
 export function resolveTabGroupLabel(
   project: string,
   overrides?: Record<string, string>,
-  fallback = "Group",
+  fallback = t("Group"),
 ): string {
   return overrides?.[project]?.trim() || fallback;
 }

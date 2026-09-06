@@ -32,6 +32,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { WindowControls } from "./WindowControls";
 import { IS_MAC, MOD } from "../lib/platform";
+import { t } from "../lib/i18n";
 import type { RecentProject } from "../lib/recents";
 
 export type Tab = {
@@ -83,7 +84,7 @@ type Props = {
 
 function sessionMeta(tab: Tab): string {
   if (tab.more.length === 1) return tab.more[0];
-  if (tab.sessionCount > 1) return `${tab.sessionCount} sessions`;
+  if (tab.sessionCount > 1) return t("{0} sessions", [String(tab.sessionCount)]);
   return "";
 }
 
@@ -96,7 +97,7 @@ export function tabCopy(tab: Tab): {
   const conversation = tab.title.trim();
   const file = tab.files[0] ?? "";
   const sessions = sessionMeta(tab);
-  const untitled = "New session";
+  const untitled = t("New session");
 
   let headline: string;
   const metaParts: string[] = [];
@@ -128,7 +129,7 @@ export function tabCopy(tab: Tab): {
   if (conversation) tooltipParts.push(conversation);
   tooltipParts.push(...tab.more);
   if (tab.files.length > 0) tooltipParts.push(tab.files.join(", "));
-  if (tab.dirty) tooltipParts.push("Unsaved changes");
+  if (tab.dirty) tooltipParts.push(t("Unsaved changes"));
 
   return { headline, meta, tooltip: tooltipParts.join(" · ") };
 }
@@ -303,8 +304,8 @@ function TitleTabItem({
             {tab.dirty ? (
               <span
                 className="size-1.5 shrink-0 rounded-full bg-content/70"
-                title="Unsaved changes"
-                aria-label="Unsaved changes"
+                title={t("Unsaved changes")}
+                aria-label={t("Unsaved changes")}
               />
             ) : null}
           </span>
@@ -318,8 +319,8 @@ function TitleTabItem({
       {closable ? (
         <button
           type="button"
-          title="Close Tab"
-          aria-label={`Close ${headline}`}
+          title={t("Close Tab")}
+          aria-label={t("Close {0}", [headline])}
           data-no-drag
           data-tauri-drag-region="false"
           onPointerDown={(event) => event.stopPropagation()}
@@ -343,7 +344,7 @@ function TabStripChevron({
   side: "left" | "right";
   onClick: () => void;
 }) {
-  const label = side === "left" ? "Scroll tabs left" : "Scroll tabs right";
+  const label = side === "left" ? t("Scroll tabs left") : t("Scroll tabs right");
   const Icon = side === "left" ? ChevronLeft : ChevronRight;
   return (
     <button
@@ -408,10 +409,10 @@ export function DevModeLabel() {
   if (!import.meta.env.DEV) return null;
   return (
     <span
-      title="Development build"
+      title={t("Development build")}
       className="mr-1 min-w-0 truncate rounded-md bg-skill/15 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-skill"
     >
-      Development
+      {t("Development")}
     </span>
   );
 }
@@ -432,7 +433,7 @@ export function TabVisitNav({
   onGoForward,
   onTogglePanel,
   panelActive = false,
-  panelLabel = "Toggle Projects",
+  panelLabel = t("Toggle Projects"),
 }: {
   canGoBack?: boolean;
   canGoForward?: boolean;
@@ -445,14 +446,14 @@ export function TabVisitNav({
   return (
     <div className="flex shrink-0 items-center">
       <IconButton
-        label={`Back (${MOD}[)`}
+        label={t("Back ({0})", [`${MOD}[`])}
         disabled={!canGoBack}
         onClick={onGoBack}
       >
         <ChevronLeft className="size-3.5" strokeWidth={1.75} />
       </IconButton>
       <IconButton
-        label={`Forward (${MOD}])`}
+        label={t("Forward ({0})", [`${MOD}]`])}
         disabled={!canGoForward}
         onClick={onGoForward}
       >
@@ -483,13 +484,13 @@ export function OverlayNav({
   return (
     <div className="flex shrink-0 items-center px-1.5">
       {onBack ? (
-        <IconButton label={`Back (${MOD}[)`} onClick={onBack}>
+        <IconButton label={t("Back ({0})", [`${MOD}[`])} onClick={onBack}>
           <ChevronLeft className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
       {onToggleSidebar ? (
         <IconButton
-          label={`Toggle Sidebar (${MOD}B)`}
+          label={t("Toggle Sidebar ({0})", [`${MOD}B`])}
           onClick={onToggleSidebar}
         >
           <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -586,10 +587,10 @@ function TitleBarComponent({
       : "";
     const project = cwd ? basename(cwd) : "";
     if (activeName && project && activeName !== project) {
-      return `${activeName} — ${project} — MonoCode`;
+      return t("{0} — {1} — MonoCode", [activeName, project]);
     }
     if (project) {
-      return `${project} — MonoCode`;
+      return t("{0} — MonoCode", [project]);
     }
     return "MonoCode";
   }, [activeTab, cwd]);
@@ -614,21 +615,21 @@ function TitleBarComponent({
     <div className="flex h-full shrink-0 items-stretch">
       <div className="flex items-center gap-0.5 px-2">
         {projectless && railClosed && onOpenInbox ? (
-          <IconButton label="Inbox" onClick={onOpenInbox}>
+          <IconButton label={t("Inbox")} onClick={onOpenInbox}>
             <Inbox className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
         {projectless && railClosed && onOpenNotes ? (
-          <IconButton label="Notes" onClick={onOpenNotes}>
+          <IconButton label={t("Notes")} onClick={onOpenNotes}>
             <StickyNote className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
         {railClosed && !projectless ? (
           <>
-            <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
+            <IconButton label={t("Go to File ({0})", [`${MOD}P`])} onClick={onGoToFile}>
               <Search className="size-3.5" strokeWidth={1.75} />
             </IconButton>
-            <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+            <IconButton label={t("New session ({0})", [`${MOD}T`])} onClick={onNew}>
               <Plus className="size-3.5" strokeWidth={1.75} />
             </IconButton>
           </>
@@ -636,7 +637,7 @@ function TitleBarComponent({
         {!projectless && (onShowTerminal || onNewTerminal) ? (
           <IconButton
             label={
-              projectTerminalActive ? "Terminal" : `New Terminal (${MOD}\`)`
+              projectTerminalActive ? t("Terminal") : t("New Terminal ({0})", [`${MOD}\``])
             }
             accent={projectTerminalActive}
             onClick={
@@ -649,7 +650,7 @@ function TitleBarComponent({
           </IconButton>
         ) : null}
         {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
-          <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
+          <IconButton label={t("Settings ({0})", [`${MOD},`])} onClick={onOpenSettings}>
             <Settings className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
@@ -673,7 +674,7 @@ function TitleBarComponent({
           <div className="w-[78px] shrink-0" />
           <div className="flex shrink-0 items-center px-1.5">
             <IconButton
-              label={`Toggle Sidebar (${MOD}B)`}
+              label={t("Toggle Sidebar ({0})", [`${MOD}B`])}
               onClick={onToggleSidebar}
             >
               <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -690,7 +691,7 @@ function TitleBarComponent({
           onNewTerminal={onNewTerminal}
           buttonClassName="flex h-full min-w-0 max-w-64 shrink items-center gap-2 px-6 text-left text-sm font-medium leading-tight"
         >
-          <span className="min-w-0 truncate text-content/50">No project</span>
+          <span className="min-w-0 truncate text-content/50">{t("No project")}</span>
         </CwdPicker>
       ) : null}
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader } from "../chrome/icons";
+import { t } from "../lib/i18n";
 import {
   gitCommitFileDiff,
   gitCommitFiles,
@@ -109,14 +110,14 @@ export function CommitDiff({ cwd, sha }: Props) {
         tooLarge: loaded?.tooLarge,
         emptyMessage:
           loaded == null
-            ? "Loading…"
+            ? t("Loading…")
             : loaded.error
-              ? `Couldn’t load diff: ${loaded.error}`
+              ? t("Couldn't load diff: {0}", [loaded.error])
               : unified != null &&
                   unified.additions === 0 &&
                   unified.deletions === 0 &&
                   !loaded.binary
-                ? "No textual diff"
+                ? t("No textual diff")
                 : undefined,
         additions: unified?.additions ?? file.additions,
         deletions: unified?.deletions ?? file.deletions,
@@ -138,7 +139,7 @@ export function CommitDiff({ cwd, sha }: Props) {
   if (!cwd || cwd === "~") {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No project folder
+        {t("No project folder")}
       </p>
     );
   }
@@ -146,7 +147,7 @@ export function CommitDiff({ cwd, sha }: Props) {
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
-        <p className="text-[13px] text-content">Couldn’t load commit</p>
+        <p className="text-[13px] text-content">{t("Couldn't load commit")}</p>
         <p className="mt-1 text-[12px] text-content/50">{error}</p>
       </div>
     );

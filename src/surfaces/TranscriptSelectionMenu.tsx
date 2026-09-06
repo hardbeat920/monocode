@@ -2,6 +2,7 @@ import { MessageSquarePlus } from "../chrome/icons";
 import { useEffect, useRef } from "react";
 import { Popover } from "../chrome/Popover";
 import { type TranscriptSelection } from "../lib/transcriptSelection";
+import { t } from "../lib/i18n";
 
 type Props = {
   selection: TranscriptSelection | null;
@@ -42,7 +43,7 @@ export function TranscriptSelectionMenu({
         onDismiss();
       }}
       role="toolbar"
-      aria-label="Selected text actions"
+      aria-label={t("Selected text actions")}
       className="p-1"
     >
       <button
@@ -60,7 +61,7 @@ export function TranscriptSelectionMenu({
           className="size-3.5"
           strokeWidth={1.75}
         />
-        Add to chat
+        {t("Add to chat")}
       </button>
     </Popover>
   );

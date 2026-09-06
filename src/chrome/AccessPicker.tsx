@@ -6,12 +6,13 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
-  RUNTIME_MODE_HINT,
-  RUNTIME_MODE_LABEL,
+  getRuntimeModeHint,
+  getRuntimeModeLabel,
   RUNTIME_MODES,
   type RuntimeMode,
 } from "../lib/session";
 import { Popover } from "./Popover";
+import { t } from "../lib/i18n";
 
 type Props = {
   value: RuntimeMode;
@@ -75,8 +76,8 @@ export function AccessPicker({ value, onChange, onClose }: Props) {
     <div ref={root} className="relative">
       <button
         type="button"
-        title={RUNTIME_MODE_HINT[value]}
-        aria-label={RUNTIME_MODE_LABEL[value]}
+        title={getRuntimeModeHint()[value]}
+        aria-label={getRuntimeModeLabel()[value]}
         aria-expanded={open}
         aria-haspopup="listbox"
         onMouseDown={(e) => e.preventDefault()}
@@ -95,7 +96,7 @@ export function AccessPicker({ value, onChange, onClose }: Props) {
       >
         <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
         <span className="min-w-0 truncate text-[11px]">
-          {RUNTIME_MODE_LABEL[value]}
+          {getRuntimeModeLabel()[value]}
         </span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
@@ -110,7 +111,7 @@ export function AccessPicker({ value, onChange, onClose }: Props) {
           autoFocus
           onDismiss={(reason) => dismiss(reason === "escape")}
           role="listbox"
-          aria-label="Access"
+          aria-label={t("Access")}
           data-access-picker
           tabIndex={-1}
           onKeyDown={onMenuKey}
@@ -141,10 +142,10 @@ export function AccessPicker({ value, onChange, onClose }: Props) {
                 />
                 <span className="min-w-0">
                   <span className="block text-[13px] font-medium leading-5">
-                    {RUNTIME_MODE_LABEL[mode]}
+                    {getRuntimeModeLabel()[mode]}
                   </span>
                   <span className="mt-0.5 block text-[11px] leading-4 text-content/50">
-                    {RUNTIME_MODE_HINT[mode]}
+                    {getRuntimeModeHint()[mode]}
                   </span>
                 </span>
               </button>

@@ -1,4 +1,5 @@
 import type { PromptContentBlock } from "../attachments";
+import { t } from "../i18n";
 import type { AgentModel, ModelSetting, ModelSettingChoice } from "../models";
 import type { RuntimeMode, ToolPreview } from "../session";
 import { normalizeTaskListStatus } from "../taskList";
@@ -29,14 +30,14 @@ export type SessionConfigOption = {
 };
 
 const EFFORT_LABELS: Record<string, string> = {
-  auto: "Auto",
-  none: "None",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  max: "Max",
+  auto: t("Auto"),
+  none: t("None"),
+  minimal: t("Minimal"),
+  low: t("Low"),
+  medium: t("Medium"),
+  high: t("High"),
+  xhigh: t("Extra High"),
+  max: t("Max"),
 };
 
 /** ACP prompt blocks for fx: text only. Image and audio are not accepted. */
@@ -436,7 +437,7 @@ function settingsFromJson(rec: Record<string, unknown>): ModelSetting[] {
   if (effortOptions.length > 1) {
     settings.push({
       id: "effort",
-      label: "Effort",
+      label: t("Effort"),
       kind: "select",
       value: stringField(rec, "effort") ?? effortOptions[0]?.value ?? "auto",
       options: effortOptions,
@@ -445,12 +446,12 @@ function settingsFromJson(rec: Record<string, unknown>): ModelSetting[] {
   if (rec.fast === true || rec.fast_mode === true || rec.supportsFast === true) {
     settings.push({
       id: "fast",
-      label: "Fast",
+      label: t("Fast"),
       kind: "toggle",
       value: rec.fast_mode === true || rec.fast === true ? "true" : "false",
       options: [
-        { value: "true", label: "On" },
-        { value: "false", label: "Off" },
+        { value: "true", label: t("On") },
+        { value: "false", label: t("Off") },
       ],
     });
   }

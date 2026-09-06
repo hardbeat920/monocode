@@ -31,92 +31,92 @@ pub fn dispatch(app: &AppHandle, id: &str) {
 
 #[cfg(target_os = "macos")]
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let open_settings = MenuItemBuilder::with_id("open_settings", "Settings…")
+    // Labels are Chinese (hard-zh fork); dispatch matches on item IDs, never labels.
+    let open_settings = MenuItemBuilder::with_id("open_settings", "设置…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
     let check_for_updates =
-        MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
-    let new_window = MenuItemBuilder::with_id("new_window", "New Window")
+        MenuItemBuilder::with_id("check_for_updates", "检查更新…").build(app)?;
+    let new_window = MenuItemBuilder::with_id("new_window", "新建窗口")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
-    let open_project = MenuItemBuilder::with_id("open_project", "Open Project…")
+    let open_project = MenuItemBuilder::with_id("open_project", "打开项目…")
         .accelerator("CmdOrCtrl+O")
         .build(app)?;
-    let go_to_file = MenuItemBuilder::with_id("go_to_file", "Go to File…")
+    let go_to_file = MenuItemBuilder::with_id("go_to_file", "跳转到文件…")
         .accelerator("CmdOrCtrl+P")
         .build(app)?;
-    let open_search = MenuItemBuilder::with_id("open_search", "Search…")
+    let open_search = MenuItemBuilder::with_id("open_search", "搜索…")
         .accelerator("CmdOrCtrl+K")
         .build(app)?;
-    let open_inbox = MenuItemBuilder::with_id("open_inbox", "Inbox").build(app)?;
-    let open_notes = MenuItemBuilder::with_id("open_notes", "Notes").build(app)?;
-    let new_tab = MenuItemBuilder::with_id("new_tab", "New Tab")
+    let open_inbox = MenuItemBuilder::with_id("open_inbox", "收件箱").build(app)?;
+    let open_notes = MenuItemBuilder::with_id("open_notes", "笔记").build(app)?;
+    let new_tab = MenuItemBuilder::with_id("new_tab", "新建标签页")
         .accelerator("CmdOrCtrl+T")
         .build(app)?;
-    let new_terminal = MenuItemBuilder::with_id("new_terminal", "New Terminal")
+    let new_terminal = MenuItemBuilder::with_id("new_terminal", "新建终端")
         .accelerator("CmdOrCtrl+`")
         .build(app)?;
-    let new_terminal_tab = MenuItemBuilder::with_id("new_terminal_tab", "New Terminal Tab")
+    let new_terminal_tab = MenuItemBuilder::with_id("new_terminal_tab", "新建终端标签页")
         .accelerator("CmdOrCtrl+Shift+`")
         .build(app)?;
-    let toggle_terminal = MenuItemBuilder::with_id("toggle_terminal", "Toggle Terminal")
+    let toggle_terminal = MenuItemBuilder::with_id("toggle_terminal", "切换终端")
         .accelerator("CmdOrCtrl+J")
         .build(app)?;
-    let split_right = MenuItemBuilder::with_id("split_right", "Split Pane Right")
+    let split_right = MenuItemBuilder::with_id("split_right", "向右拆分窗格")
         .accelerator("CmdOrCtrl+D")
         .build(app)?;
-    let split_down = MenuItemBuilder::with_id("split_down", "Split Pane Down")
+    let split_down = MenuItemBuilder::with_id("split_down", "向下拆分窗格")
         .accelerator("CmdOrCtrl+Shift+D")
         .build(app)?;
-    let close_tab = MenuItemBuilder::with_id("close_tab", "Close Pane")
+    let close_tab = MenuItemBuilder::with_id("close_tab", "关闭窗格")
         .accelerator("CmdOrCtrl+W")
         .build(app)?;
-    let close_other_tabs = MenuItemBuilder::with_id("close_other_tabs", "Close Other Tabs")
+    let close_other_tabs = MenuItemBuilder::with_id("close_other_tabs", "关闭其他标签页")
         .accelerator("CmdOrCtrl+Alt+T")
         .build(app)?;
-    let next_tab = MenuItemBuilder::with_id("next_tab", "Next Tab")
+    let next_tab = MenuItemBuilder::with_id("next_tab", "下一个标签页")
         .accelerator("CmdOrCtrl+Shift+]")
         .build(app)?;
-    let prev_tab = MenuItemBuilder::with_id("prev_tab", "Previous Tab")
+    let prev_tab = MenuItemBuilder::with_id("prev_tab", "上一个标签页")
         .accelerator("CmdOrCtrl+Shift+[")
         .build(app)?;
-    let back_tab = MenuItemBuilder::with_id("back_tab", "Go Back")
+    let back_tab = MenuItemBuilder::with_id("back_tab", "后退")
         .accelerator("CmdOrCtrl+[")
         .build(app)?;
-    let forward_tab = MenuItemBuilder::with_id("forward_tab", "Go Forward")
+    let forward_tab = MenuItemBuilder::with_id("forward_tab", "前进")
         .accelerator("CmdOrCtrl+]")
         .build(app)?;
 
-    let focus_left = MenuItemBuilder::with_id("focus_left", "Focus Pane Left")
+    let focus_left = MenuItemBuilder::with_id("focus_left", "聚焦左侧窗格")
         .accelerator("CmdOrCtrl+Alt+Left")
         .build(app)?;
-    let focus_right = MenuItemBuilder::with_id("focus_right", "Focus Pane Right")
+    let focus_right = MenuItemBuilder::with_id("focus_right", "聚焦右侧窗格")
         .accelerator("CmdOrCtrl+Alt+Right")
         .build(app)?;
-    let focus_up = MenuItemBuilder::with_id("focus_up", "Focus Pane Up")
+    let focus_up = MenuItemBuilder::with_id("focus_up", "聚焦上方窗格")
         .accelerator("CmdOrCtrl+Alt+Up")
         .build(app)?;
-    let focus_down = MenuItemBuilder::with_id("focus_down", "Focus Pane Down")
+    let focus_down = MenuItemBuilder::with_id("focus_down", "聚焦下方窗格")
         .accelerator("CmdOrCtrl+Alt+Down")
         .build(app)?;
 
-    let toggle_sidebar = MenuItemBuilder::with_id("toggle_sidebar", "Toggle Sidebar")
+    let toggle_sidebar = MenuItemBuilder::with_id("toggle_sidebar", "切换侧边栏")
         .accelerator("CmdOrCtrl+B")
         .build(app)?;
-    let open_model_picker = MenuItemBuilder::with_id("open_model_picker", "Switch Model…")
+    let open_model_picker = MenuItemBuilder::with_id("open_model_picker", "切换模型…")
         .accelerator("CmdOrCtrl+.")
         .build(app)?;
-    let sidebar_opacity =
-        MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
-    let find = MenuItemBuilder::with_id("find", "Find")
+    let sidebar_opacity = MenuItemBuilder::with_id("sidebar_opacity", "侧边栏外观…").build(app)?;
+    let find = MenuItemBuilder::with_id("find", "查找")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
 
-    let find_in_project = MenuItemBuilder::with_id("find_in_project", "Find in Files…")
+    let find_in_project = MenuItemBuilder::with_id("find_in_project", "在文件中查找…")
         .accelerator("CmdOrCtrl+Shift+F")
         .build(app)?;
 
-    let file = SubmenuBuilder::new(app, "File")
+    let file = SubmenuBuilder::new(app, "文件")
         .item(&new_window)
         .item(&open_project)
         .item(&open_search)
@@ -137,7 +137,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&forward_tab)
         .build()?;
 
-    let view = SubmenuBuilder::new(app, "View")
+    let view = SubmenuBuilder::new(app, "查看")
         .item(&toggle_sidebar)
         .item(&open_inbox)
         .item(&open_notes)
@@ -152,7 +152,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&sidebar_opacity)
         .build()?;
 
-    let edit = SubmenuBuilder::new(app, "Edit")
+    let edit = SubmenuBuilder::new(app, "编辑")
         .undo()
         .redo()
         .separator()
@@ -166,7 +166,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
     #[cfg(target_os = "macos")]
     {
-        let quit = MenuItemBuilder::with_id("quit", "Quit MonoCode")
+        let quit = MenuItemBuilder::with_id("quit", "退出 MonoCode")
             .accelerator("CmdOrCtrl+Q")
             .build(app)?;
         let app_menu = SubmenuBuilder::new(app, "MonoCode")
@@ -181,7 +181,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             .separator()
             .item(&quit)
             .build()?;
-        let window_menu = SubmenuBuilder::new(app, "Window").build()?;
+        let window_menu = SubmenuBuilder::new(app, "窗口").build()?;
         window_menu.set_as_windows_menu_for_nsapp()?;
         return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
     }

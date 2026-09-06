@@ -1,6 +1,8 @@
+import { t } from "./i18n";
+
 export function limitSection(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}\n\n[truncated]`;
+  return `${value.slice(0, maxChars)}\n\n${t("[truncated]")}`;
 }
 
 export function extractJsonObject(raw: string): string | null {

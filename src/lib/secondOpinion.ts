@@ -1,9 +1,10 @@
 import { isEditTool } from "./harness/preview";
+import { t } from "./i18n";
 import { limitSection } from "./jsonText";
 import { displayPath } from "./paths";
 import {
+  getHarnessTitle,
   HARNESSES,
-  HARNESS_TITLE,
   type Block,
   type HarnessId,
   type SecondOpinionMeta,
@@ -13,7 +14,7 @@ const USER_LIMIT = 400;
 const REPORT_LIMIT = 900;
 const PROMPT_LIMIT = 1_800;
 
-export const SECOND_OPINION_TITLE = "Second opinion";
+export const SECOND_OPINION_TITLE = t("Second opinion");
 
 /** Which provider produced this turn, walking back through handoff dividers. */
 export function harnessForTurn(
@@ -103,7 +104,7 @@ export function buildSecondOpinionPrompt(input: {
   report: string;
   files: string[];
 }): string {
-  const fromTitle = HARNESS_TITLE[input.from];
+  const fromTitle = getHarnessTitle()[input.from];
   const request = input.userRequest.trim();
   const report = input.report.trim();
   const files = input.files.map((path) => path.trim()).filter(Boolean);

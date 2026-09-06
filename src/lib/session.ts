@@ -9,6 +9,7 @@ import {
   preferredModelSettings,
   resolveModel,
 } from "./models";
+import { t } from "./i18n";
 
 export type HarnessId =
   "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi" | "omp" | "fx";
@@ -185,19 +186,28 @@ export const RUNTIME_MODES: RuntimeMode[] = [
 
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "supervised";
 
-export const RUNTIME_MODE_LABEL: Record<RuntimeMode, string> = {
-  supervised: "Supervised",
-  "auto-accept-edits": "Auto-accept edits",
-  auto: "Auto",
-  "full-access": "Full access",
-};
+export function getRuntimeModeLabel(): Record<RuntimeMode, string> {
+  return {
+    supervised: t("Supervised"),
+    "auto-accept-edits": t("Auto-accept edits"),
+    auto: t("Auto"),
+    "full-access": t("Full access"),
+  };
+}
 
-export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
-  supervised: "Ask before commands and file changes.",
-  "auto-accept-edits": "Auto-approve edits, ask before other actions.",
-  auto: "An AI reviewer approves routine actions; risky ones still ask.",
-  "full-access": "Allow commands and edits without prompts.",
-};
+export function getRuntimeModeHint(): Record<RuntimeMode, string> {
+  return {
+    supervised: t("Ask before commands and file changes."),
+    "auto-accept-edits": t("Auto-approve edits, ask before other actions."),
+    auto: t("An AI reviewer approves routine actions; risky ones still ask."),
+    "full-access": t("Allow commands and edits without prompts."),
+  };
+}
+
+/** @deprecated Use getRuntimeModeLabel() for i18n-aware access */
+export const RUNTIME_MODE_LABEL = getRuntimeModeLabel();
+/** @deprecated Use getRuntimeModeHint() for i18n-aware access */
+export const RUNTIME_MODE_HINT = getRuntimeModeHint();
 
 export type Session = {
   id: string;
@@ -266,16 +276,21 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   fx: "fx",
 };
 
-export const HARNESS_TITLE: Record<HarnessId, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  cursor: "Cursor",
-  grok: "Grok Build",
-  opencode: "OpenCode",
-  pi: "Pi",
-  omp: "omp",
-  fx: "fx",
-};
+export function getHarnessTitle(): Record<HarnessId, string> {
+  return {
+    claude: t("Claude Code"),
+    codex: t("Codex"),
+    cursor: t("Cursor"),
+    grok: t("Grok Build"),
+    opencode: t("OpenCode"),
+    pi: t("Pi"),
+    omp: t("omp"),
+    fx: t("fx"),
+  };
+}
+
+/** @deprecated Use getHarnessTitle() for i18n-aware access */
+export const HARNESS_TITLE = getHarnessTitle();
 
 /** fx ACP rejects attachment prompt blocks. */
 export function harnessSupportsAttachments(id: HarnessId): boolean {
@@ -348,7 +363,7 @@ export function canReplaceSessionTitle(
   return (
     current === seed ||
     current === HARNESS_LABEL[harness] ||
-    current === HARNESS_TITLE[harness]
+    current === getHarnessTitle()[harness]
   );
 }
 
@@ -364,8 +379,8 @@ export function sessionNeedsInput(session: Session): boolean {
 export function sessionDisplayTitle(title: string, harness: HarnessId): string {
   const prefix = `${HARNESS_LABEL[harness]} · `;
   if (title.startsWith(prefix)) return title.slice(prefix.length);
-  if (title === HARNESS_LABEL[harness] || title === HARNESS_TITLE[harness]) {
-    return "New session";
+  if (title === HARNESS_LABEL[harness] || title === getHarnessTitle()[harness]) {
+    return t("New session");
   }
   return title;
 }

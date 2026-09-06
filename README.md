@@ -1,3 +1,5 @@
+<p align="center"><a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a></p>
+
 
 <p align="center">
   <img src="public/monocode.png" alt="MonoCode" width="88" />

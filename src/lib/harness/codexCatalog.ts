@@ -1,4 +1,5 @@
 import { homeDir } from "../fs";
+import { t } from "../i18n";
 import {
   setHarnessModels,
   type AgentModel,
@@ -20,14 +21,14 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 const REASONING_LABELS: Record<string, string> = {
-  none: "None",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  max: "Max",
-  ultra: "Ultra",
+  none: t("None"),
+  minimal: t("Minimal"),
+  low: t("Low"),
+  medium: t("Medium"),
+  high: t("High"),
+  xhigh: t("Extra High"),
+  max: t("Max"),
+  ultra: t("Ultra"),
 };
 
 let inflight: Promise<void> | null = null;
@@ -195,7 +196,7 @@ function parseModelSettings(rec: Record<string, unknown>): ModelSetting[] {
   if (effortOptions.length > 0) {
     settings.push({
       id: "reasoningEffort",
-      label: "Reasoning",
+      label: t("Reasoning"),
       kind: "select",
       value: defaultEffort ?? effortOptions[0].value,
       options: effortOptions,
@@ -209,14 +210,14 @@ function parseModelSettings(rec: Record<string, unknown>): ModelSetting[] {
         ? rec.additionalSpeedTiers
         : []) ?? [];
   const tierOptions: ModelSettingChoice[] = [
-    { value: "default", label: "Standard" },
+    { value: "default", label: t("Standard") },
   ];
   for (const entry of tiersRaw) {
     if (typeof entry === "string") {
       if (entry === "default") continue;
       tierOptions.push({
         value: entry,
-        label: entry === "fast" ? "Fast" : entry,
+        label: entry === "fast" ? t("Fast") : entry,
       });
       continue;
     }
@@ -233,7 +234,7 @@ function parseModelSettings(rec: Record<string, unknown>): ModelSetting[] {
       stringField(rec, "defaultServiceTier") ?? "default";
     settings.push({
       id: "serviceTier",
-      label: "Service Tier",
+      label: t("Service Tier"),
       kind: "select",
       value: tierOptions.some((o) => o.value === defaultTier)
         ? defaultTier

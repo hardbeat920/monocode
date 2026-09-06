@@ -2,6 +2,7 @@ import { RefreshCw } from "./icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
+import { t } from "../lib/i18n";
 import {
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
@@ -19,7 +20,11 @@ import {
   type RateLimitProvider,
   type RateLimitWindow,
 } from "../lib/rateLimits";
-import { HARNESS_LABEL, HARNESS_TITLE, type HarnessId } from "../lib/session";
+import {
+  HARNESS_LABEL,
+  getHarnessTitle,
+  type HarnessId,
+} from "../lib/session";
 import {
   runningTerminalChipLabel,
   type RunningTerminal,
@@ -120,11 +125,11 @@ export function UsageFooter({
   const showTerminals = terminals.length > 0;
   const showRight = showUsage || showTerminals;
   const ariaLabel = showUsage
-    ? "Provider usage"
+    ? t("Provider usage")
     : showTerminals
-      ? "Terminals"
+      ? t("Terminals")
       : session
-        ? "Session"
+        ? t("Session")
         : undefined;
 
   return (
@@ -153,8 +158,8 @@ export function UsageFooter({
             <button
               type="button"
               className="grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
-              aria-label="Refresh usage"
-              title="Refresh usage"
+              aria-label={t("Refresh usage")}
+              title={t("Refresh usage")}
               disabled={refreshing}
               onClick={() => void refresh(true)}
             >
@@ -185,7 +190,7 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
   return (
     <span
       className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap"
-      title={HARNESS_TITLE[session.harness]}
+      title={getHarnessTitle()[session.harness]}
     >
       <HarnessIcon harness={session.harness} className="size-3 shrink-0" />
       <span>{HARNESS_LABEL[session.harness]}</span>
@@ -207,16 +212,16 @@ function RunningTerminalChip({
   const label = runningTerminalChipLabel(terminals);
   const many = terminals.length > 1;
   const title = terminals
-    .map((terminal) => `"${terminal.process}" in ${terminal.label}`)
+    .map((terminal) => t(`"{0}" in {1}`, [terminal.process, terminal.label]))
     .join("\n");
   const ariaLabel =
     terminals.length === 1
       ? panelOpen
-        ? `Hide ${terminals[0]?.process}`
-        : `Show ${terminals[0]?.process}`
+        ? t("Hide {0}", [terminals[0]?.process ?? ""])
+        : t("Show {0}", [terminals[0]?.process ?? ""])
       : panelOpen
-        ? "Hide running terminals"
-        : `${terminals.length} terminals are running processes`;
+        ? t("Hide running terminals")
+        : t("{0} terminals are running processes", [String(terminals.length)]);
 
   const toggle = (fileId: string) => {
     setMenuOpen(false);
@@ -256,7 +261,7 @@ function RunningTerminalChip({
           autoFocus
           onDismiss={() => setMenuOpen(false)}
           role="menu"
-          aria-label="Running terminals"
+          aria-label={t("Running terminals")}
           className="min-w-[12rem] p-1"
         >
           {terminals.map((terminal) => (
@@ -314,9 +319,9 @@ function ProviderChip({
         tooltip ||
         limits.error ||
         (disconnected
-          ? "Not connected"
+          ? t("Not connected")
           : loading
-            ? "Loading usage…"
+            ? t("Loading usage…")
             : undefined)
       }
     >
@@ -324,7 +329,7 @@ function ProviderChip({
       {loading ? (
         <span className="animate-pulse text-content/35">···</span>
       ) : disconnected ? (
-        <span className="text-content/35">not connected</span>
+        <span className="text-content/35">{t("not connected")}</span>
       ) : windows.length === 0 ? (
         <span className="text-content/35">{emptyUsageLabel(limits)}</span>
       ) : (
