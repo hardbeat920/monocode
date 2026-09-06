@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   releaseBridge: vi.fn(),
   request: vi.fn(),
   resolveBinary: vi.fn(),
+  resolveOmpBinary: vi.fn(),
   spawnChild: vi.fn(),
   unwatchChild: vi.fn(),
   watchChild: vi.fn(),
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./child", () => ({
   acquireHarnessBridge: mocks.acquireHarnessBridge,
   killChild: mocks.killChild,
-  resolveOmpBinary: vi.fn(),
+  resolveOmpBinary: mocks.resolveOmpBinary,
   resolvePiBinary: mocks.resolveBinary,
   spawnChild: mocks.spawnChild,
   unwatchChild: mocks.unwatchChild,
@@ -44,6 +45,8 @@ vi.mock("./piClient", () => ({
 
 import {
   discoverPiSkills,
+  discoverOmpCommands,
+  ompCommandsFromRpcData,
   piSkillsFromRpcData,
 } from "./piSkills";
 
@@ -70,6 +73,7 @@ beforeEach(() => {
   mocks.onExit = undefined;
   mocks.acquireHarnessBridge.mockResolvedValue(mocks.releaseBridge);
   mocks.resolveBinary.mockResolvedValue({ path: "/bin/pi" });
+  mocks.resolveOmpBinary.mockResolvedValue({ path: "/bin/omp" });
   mocks.spawnChild.mockResolvedValue(undefined);
   mocks.killChild.mockResolvedValue(undefined);
   mocks.writeChild.mockResolvedValue(undefined);
@@ -81,6 +85,137 @@ beforeEach(() => {
       onExit: (code: number | null) => void,
     ) => {
       mocks.onExit = onExit;
+    },
+  );
+});
+
+describe("OMP native commands", () => {
+  it("queries OMP in the project with config, skills and extensions enabled", async () => {
+    mocks.request.mockResolvedValue({
+      data: {
+        commands: [
+          {
+            name: "orchestrate",
+            source: "custom",
+            description: "Select agents",
+          },
+        ],
+      },
+    });
+    await expect(discoverOmpCommands("/repo-worktree")).resolves.toMatchObject([
+      {
+        name: "orchestrate",
+        invocation: "orchestrate",
+        source: "omp",
+        origin: "custom",
+      },
+    ]);
+    expect(mocks.spawnChild).toHaveBeenCalledWith(
+      expect.stringMatching(/^monocode-omp-skills-/),
+      "/bin/omp",
+      ["--mode", "rpc", "--no-session"],
+      "/repo-worktree",
+    );
+    expect(mocks.request).toHaveBeenCalledWith(
+      { type: "get_available_commands" },
+      45_000,
+    );
+    expect(mocks.releaseBridge).toHaveBeenCalledOnce();
+  });
+
+  it("preserves metadata from all command origins and escapes reserved MonoCode commands", () => {
+    expect(
+      ompCommandsFromRpcData({
+        commands: [
+          { name: "plan", source: "builtin" },
+          { name: "compact", source: "builtin" },
+          {
+            name: "Review_Code",
+            source: "custom",
+            aliases: ["review", null],
+            description: "Choose reviewer",
+            input: { hint: "<reviewer> [path]" },
+            subcommands: [
+              {
+                name: "list",
+                description: "List reviewers",
+                usage: "list --all",
+              },
+              null,
+            ],
+          },
+          { name: "Review_Code", description: "duplicate" },
+          { name: "skill:design", source: "skill" },
+          { name: "mcp:search", source: "mcp" },
+          { name: "file", source: "file" },
+          { name: "extension", source: "extension" },
+          { name: "" },
+          { name: "bad command" },
+          null,
+        ],
+      }),
+    ).toEqual([
+      {
+        name: "plan",
+        invocation: "omp:plan",
+        description: "",
+        source: "omp",
+        origin: "builtin",
+      },
+      {
+        name: "compact",
+        invocation: "omp:compact",
+        description: "",
+        source: "omp",
+        origin: "builtin",
+      },
+      {
+        name: "Review_Code",
+        invocation: "Review_Code",
+        source: "omp",
+        origin: "custom",
+        description: "Choose reviewer",
+        aliases: ["review"],
+        inputHint: "<reviewer> [path]",
+        subcommands: [
+          { name: "list", description: "List reviewers", usage: "list --all" },
+        ],
+      },
+      {
+        name: "skill:design",
+        invocation: "skill:design",
+        description: "",
+        source: "omp",
+        origin: "skill",
+      },
+      {
+        name: "mcp:search",
+        invocation: "mcp:search",
+        description: "",
+        source: "omp",
+        origin: "mcp",
+      },
+      {
+        name: "file",
+        invocation: "file",
+        description: "",
+        source: "omp",
+        origin: "file",
+      },
+      {
+        name: "extension",
+        invocation: "extension",
+        description: "",
+        source: "omp",
+        origin: "extension",
+      },
+    ]);
+  });
+
+  it.each([undefined, {}, { commands: null }])(
+    "rejects malformed inventories: %j",
+    (value) => {
+      expect(() => ompCommandsFromRpcData(value)).toThrow(/commands/);
     },
   );
 });

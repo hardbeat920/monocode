@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { tabCopy, tabStripOverflow, type Tab } from "./TitleBar";
+import {
+  tabCopy,
+  tabStripOverflow,
+  titleTabClosable,
+  type Tab,
+} from "./TitleBar";
 
 function tab(overrides: Partial<Tab> = {}): Tab {
   return {
@@ -93,5 +98,19 @@ describe("tabStripOverflow", () => {
 
   it("shows only the left chevron at the end", () => {
     expect(tabStripOverflow(400, 400, 800)).toEqual({ left: true, right: false });
+  });
+});
+
+describe("titleTabClosable", () => {
+  it("hides close on a sole blank tab", () => {
+    expect(titleTabClosable(tab({ blank: true }), 1)).toBe(false);
+  });
+
+  it("shows close on a sole tab once it has a conversation", () => {
+    expect(titleTabClosable(tab({ blank: false }), 1)).toBe(true);
+  });
+
+  it("allows a blank tab to be removed when another tab remains", () => {
+    expect(titleTabClosable(tab({ blank: true }), 2)).toBe(true);
   });
 });

@@ -95,9 +95,9 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-html.is-mac,
-html.is-mac body,
-html.is-mac #root {
+html.has-native-glass,
+html.has-native-glass body,
+html.has-native-glass #root {
   background: transparent;
 }
 
@@ -109,7 +109,7 @@ html.theme-light .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 93%, black 7%);
 }
 
-html.is-mac .sidebar-glass {
+html.has-native-glass .sidebar-glass {
   background: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
       var(--sidebar-opacity)
@@ -143,7 +143,7 @@ html.is-mac .sidebar-glass {
   min-height: var(--transcript-viewport, 0px);
 }
 
-html.is-mac.glass-body .body-glass {
+html.has-native-glass.glass-body .body-glass {
   background: color-mix(
     in srgb,
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
@@ -906,6 +906,125 @@ header[data-tauri-drag-region] button {
   border-bottom-left-radius: 8px;
 }
 
+/*
+ * The connector: a line dropping out of the chevron and curving into the first
+ * thing the fold holds, so opened work reads as hanging off that line rather
+ * than running on from the answer below it. Same geometry as the phase rail —
+ * 23px is the chevron's own centre (16px of row padding plus half a 14px
+ * icon), and the curve is a quarter circle tangent to both.
+ */
+.zen-fold-drop,
+.zen-fold-rail {
+  position: relative;
+  --zen-rail: color-mix(
+    in srgb,
+    var(--color-content) 14%,
+    var(--color-background-base)
+  );
+}
+
+/* Out of the chevron, down through the gap to the row below. */
+.zen-fold-drop::after {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 22px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--zen-rail);
+}
+
+/* The spine, carried by every row so it follows however tall they turn out. */
+.zen-fold-rail::before {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--zen-rail);
+}
+
+/* The last row is where the spine ends, at its final branch. */
+.zen-fold-tail::before {
+  bottom: auto;
+  height: 7px;
+}
+
+/* Every row branches off the spine on the same curve as an activity step. */
+.zen-fold-rail::after {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  border-left: 1px solid var(--zen-rail);
+  border-bottom: 1px solid var(--zen-rail);
+  border-bottom-left-radius: 8px;
+}
+
+.zen-fold-item[data-fold-state="closed"] {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.zen-fold-item[data-fold-state="open"] {
+  /* Match Grid's non-collapsing margins without participating in Grid sizing. */
+  display: flow-root;
+}
+
+/*
+ * Expanded rows stay in ordinary block flow so text rewraps naturally when a
+ * pane is resized. Grid exists only during the fold animation, then gets out
+ * of the layout again.
+ */
+.zen-fold-item[data-fold-state="opening"],
+.zen-fold-item[data-fold-state="closing"] {
+  display: grid;
+}
+
+.zen-fold-item[data-fold-state="opening"] {
+  animation: zen-fold-open 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.zen-fold-item[data-fold-state="closing"] {
+  pointer-events: none;
+  user-select: none;
+  animation: zen-fold-close 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.zen-fold-item:is([data-fold-state="opening"], [data-fold-state="closing"]) > *,
+.zen-fold-item[data-fold-state="closed"] > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@keyframes zen-fold-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+@keyframes zen-fold-close {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
 /* Live steps fade in place. A slide or blur hitch the autoscroll. */
 @keyframes zen-step-in {
   from {
@@ -955,6 +1074,17 @@ header[data-tauri-drag-region] button {
 
   .zen-phase-body {
     transition: none;
+  }
+
+  .zen-fold-item[data-fold-state="opening"] {
+    display: flow-root;
+    animation: none;
+  }
+
+  .zen-fold-item[data-fold-state="closing"] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    animation: none;
   }
 }
 
@@ -1112,9 +1242,7 @@ header[data-tauri-drag-region] button {
   }
 }
 
-[data-session-review-shell]
-  + [data-message-queue]
-  [data-message-queue-card] {
+[data-session-review-shell] + [data-message-queue] [data-message-queue-card] {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }

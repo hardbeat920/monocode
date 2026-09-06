@@ -52,6 +52,8 @@ export type Tab = {
   multiPane?: boolean;
   /** Focus is on a file/terminal pane rather than a conversation pane. */
   fileFocused?: boolean;
+  /** The sole pane is a fresh conversation with no user turn or open file. */
+  blank?: boolean;
   /** Explicit tab group; absent means ungrouped. */
   groupId?: string;
   dirty?: boolean;
@@ -143,6 +145,10 @@ export function tabStripOverflow(
     left: scrollLeft > 1,
     right: scrollLeft < maxScroll - 1,
   };
+}
+
+export function titleTabClosable(tab: Tab, tabCount: number): boolean {
+  return tabCount > 1 || !tab.blank;
 }
 
 function TabHarnesses({
@@ -541,7 +547,6 @@ function TitleBarComponent({
     el.scrollBy({ left: direction * amount, behavior: "smooth" });
   }, []);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
-  const closable = tabs.length > 0;
   const canDrag = tabs.length > 1;
 
   useEffect(() => {
@@ -724,7 +729,7 @@ function TitleBarComponent({
                   tab={tab}
                   index={index}
                   active={tab.id === activeId}
-                  closable={closable}
+                  closable={titleTabClosable(tab, tabs.length)}
                   canDrag={canDrag}
                   sortable={sortable}
                   onSelect={onSelect}

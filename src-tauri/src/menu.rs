@@ -2,7 +2,7 @@
 use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
 #[cfg(target_os = "macos")]
 use tauri::Wry;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
@@ -24,6 +24,29 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
         | "open_model_picker" | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
+        }
+        "zoom_in" | "zoom_out" | "zoom_reset" => {
+            // Zoom targets one window: a broadcast would make every window
+            // increment the shared scale setting on a single menu click.
+            let mut windows: Vec<_> = app.webview_windows().into_values().collect();
+            windows.sort_by(|a, b| a.label().cmp(b.label()));
+            let target = windows
+                .iter()
+                .find(|window| window.is_focused().unwrap_or(false))
+                .or_else(|| {
+                    windows
+                        .iter()
+                        .find(|window| window.is_visible().unwrap_or(false))
+                })
+                .or(windows.first());
+            match target {
+                Some(window) => {
+                    let _ = app.emit_to(window.label(), id, ());
+                }
+                None => {
+                    let _ = app.emit(id, ());
+                }
+            }
         }
         _ => {}
     }
@@ -108,6 +131,12 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .build(app)?;
     let sidebar_opacity =
         MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
+    // No accelerators here on purpose: the webview key handler owns
+    // CmdOrCtrl + - 0, and a menu accelerator would fire the same command
+    // a second time on top of it.
+    let zoom_in = MenuItemBuilder::with_id("zoom_in", "Zoom In").build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
     let find = MenuItemBuilder::with_id("find", "Find")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
@@ -148,6 +177,10 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&focus_right)
         .item(&focus_up)
         .item(&focus_down)
+        .separator()
+        .item(&zoom_in)
+        .item(&zoom_out)
+        .item(&zoom_reset)
         .separator()
         .item(&sidebar_opacity)
         .build()?;

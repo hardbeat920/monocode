@@ -9,6 +9,7 @@ import { suppressTextSelection } from "../lib/drag";
 
 type Options = {
   min: number;
+  direction?: "left" | "right";
   max: () => number;
   defaultWidth: number;
   initial: number;
@@ -21,6 +22,7 @@ function clampTo(value: number, min: number, max: number) {
 
 /** Drag a pane's width by writing the DOM directly so React re-renders can't fight the cursor. */
 export function useDragResize({
+  direction = "right",
   min,
   max,
   defaultWidth,
@@ -81,7 +83,9 @@ export function useDragResize({
 
     const onMove = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
-      apply(clamp(startW + (ev.clientX - startX)));
+      apply(
+        clamp(startW + (ev.clientX - startX) * (direction === "left" ? -1 : 1)),
+      );
     };
 
     const stop = () => {

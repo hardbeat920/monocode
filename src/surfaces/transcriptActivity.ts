@@ -366,9 +366,10 @@ export function toolCategory(block: Block): ActivityWorkKind {
 }
 
 /**
- * Splits a turn's activity into labelled groups. Two things start a new one:
- * the agent saying what it is about to do, and it switching from one kind of
- * work to another. Everything else piles into the group already open.
+ * Splits a turn's activity into labelled groups. Only the agent saying what it
+ * is about to do starts a new one: a run of work is one group however many
+ * shapes it takes, so a read, two edits and a test run read as one thing done
+ * rather than three rows of chrome.
  */
 export function buildActivityPhases(blocks: Block[]): ActivityPhase[] {
   const phases: ActivityPhase[] = [];
@@ -406,59 +407,14 @@ export function buildActivityPhases(blocks: Block[]): ActivityPhase[] {
       }
       continue;
     }
-    const kind = toolCategory(block);
-    if (!current) {
-      current = open(kind);
-    } else if (current.kind === "think" || current.kind === "note") {
-      // The group the agent announced takes the shape of the work it announced.
-      current.kind = kind;
-    } else if (current.kind !== kind) {
-      // A thought at the end of a group was about what came next: it moves
-      // into the group it introduced.
-      const trailing = takeTrailingNarration(current);
-      current = open(kind);
-      current.steps.push(...trailing);
-      if (trailing[0]) current.id = trailing[0].id;
-    }
+    if (!current) current = open(toolCategory(block));
     current.steps.push(block);
+    // The icon follows whatever the group did most of.
+    current.kind = dominantWorkKind(current.steps) ?? current.kind;
     if (!current.id) current.id = block.id;
   }
 
-  return absorbStrayPhases(phases);
-}
-
-/** The run of thinking a group ends on, lifted out of it. */
-function takeTrailingNarration(phase: ActivityPhase): Block[] {
-  let cut = phase.steps.length;
-  while (cut > 0 && !isToolBlock(phase.steps[cut - 1])) cut -= 1;
-  return phase.steps.splice(cut);
-}
-
-/**
- * A single call the agent never introduced — the read wedged between two edits,
- * the test run after them — folds back into the group before it rather than
- * taking a header of its own.
- */
-function absorbStrayPhases(phases: ActivityPhase[]): ActivityPhase[] {
-  const kept: ActivityPhase[] = [];
-  for (const phase of phases) {
-    const previous = kept[kept.length - 1];
-    const stray =
-      !phase.headline && phase.steps.filter(isToolBlock).length === 1;
-    if (
-      previous &&
-      stray &&
-      previous.steps.length > 0 &&
-      phase.kind !== "agent" &&
-      previous.kind !== "agent"
-    ) {
-      previous.steps.push(...phase.steps);
-      previous.kind = dominantWorkKind(previous.steps) ?? previous.kind;
-      continue;
-    }
-    kept.push(phase);
-  }
-  return kept;
+  return phases;
 }
 
 function dominantWorkKind(steps: Block[]): ActivityWorkKind | undefined {
@@ -477,19 +433,24 @@ function dominantWorkKind(steps: Block[]): ActivityWorkKind | undefined {
 }
 
 type PhaseTally = {
+  /** The kinds of work in the group, in the order the agent first did them. */
+  order: ActivityWorkKind[];
   reads: Set<string>;
   edits: Set<string>;
   searches: number;
   runs: number;
+  agents: number;
   others: number;
 };
 
 function tallySteps(steps: Block[]): PhaseTally {
   const tally: PhaseTally = {
+    order: [],
     reads: new Set(),
     edits: new Set(),
     searches: 0,
     runs: 0,
+    agents: 0,
     others: 0,
   };
   for (const block of steps) {
@@ -498,11 +459,25 @@ function tallySteps(steps: Block[]): PhaseTally {
     const title = block.text || block.tool?.title;
     const preview = block.tool?.preview;
     const target = preview?.path ?? preview?.fileName ?? block.id;
-    if (isEditTool(kind, title, preview)) tally.edits.add(target);
-    else if (isSearchTool(kind, title, preview)) tally.searches += 1;
-    else if (isReadTool(kind, title, preview)) tally.reads.add(target);
-    else if (isExecuteTool(kind, title)) tally.runs += 1;
-    else tally.others += 1;
+    const category = toolCategory(block);
+    if (!tally.order.includes(category)) tally.order.push(category);
+    switch (category) {
+      case "edit":
+        tally.edits.add(target);
+        break;
+      case "agent":
+        tally.agents += 1;
+        break;
+      case "run":
+        tally.runs += 1;
+        break;
+      case "research":
+        if (isSearchTool(kind, title, preview)) tally.searches += 1;
+        else tally.reads.add(target);
+        break;
+      default:
+        tally.others += 1;
+    }
   }
   return tally;
 }
@@ -513,19 +488,13 @@ function fileLabel(paths: Set<string>): string {
   return `${paths.size} files`;
 }
 
-/**
- * The group's header. The agent's own line if it wrote one, otherwise what the
- * calls add up to — in the present tense while the group is still running, so
- * "Reading 3 files" becomes "Read 3 files" the moment it folds.
- */
-export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
-  if (phase.headline) {
-    const summary = proseSummary(phase.headline.text);
-    if (summary) return summary;
-    return phase.headline.role === "reasoning" ? "Thinking" : "Working";
-  }
-  const tally = tallySteps(phase.steps);
-  switch (phase.kind) {
+/** What the calls of one kind add up to: "Edited 2 files", "Ran 3 commands". */
+function workSummary(
+  kind: ActivityWorkKind,
+  tally: PhaseTally,
+  live: boolean,
+): string {
+  switch (kind) {
     case "edit":
       return `${live ? "Editing" : "Edited"} ${fileLabel(tally.edits)}`;
     case "research":
@@ -542,16 +511,12 @@ export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
           ? "Running a command"
           : "Ran a command"
         : `${live ? "Running" : "Ran"} ${tally.runs} commands`;
-    case "agent": {
-      const count = phase.steps.filter(isToolBlock).length;
-      return count <= 1
+    case "agent":
+      return tally.agents === 1
         ? live
           ? "Running a subagent"
           : "Ran a subagent"
-        : `${live ? "Running" : "Ran"} ${count} subagents`;
-    }
-    case "think":
-      return live ? "Thinking" : "Thought";
+        : `${live ? "Running" : "Ran"} ${tally.agents} subagents`;
     default:
       return tally.others === 1
         ? live
@@ -559,6 +524,102 @@ export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
           : "Ran a tool"
         : `${live ? "Running" : "Ran"} ${tally.others} tools`;
   }
+}
+
+/** The kind of work the group is in the middle of: its most recent call. */
+function currentWorkKind(steps: Block[]): ActivityWorkKind | undefined {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (isToolBlock(steps[index])) return toolCategory(steps[index]);
+  }
+  return undefined;
+}
+
+/**
+ * What a run of work adds up to, one clause per kind: "Read 3 files · Edited 2
+ * files · Ran a command". While the run is live, the clause for the call in
+ * flight is present tense, so "Running 2 commands" settles to "Ran 2 commands"
+ * when it folds.
+ */
+export function workSummaryLine(steps: Block[], live = false): string {
+  const tally = tallySteps(steps);
+  if (tally.order.length === 0) return live ? "Thinking" : "Thought";
+  const running = live ? currentWorkKind(steps) : undefined;
+  return tally.order
+    .map((kind) => workSummary(kind, tally, kind === running))
+    .join(" · ");
+}
+
+/** The icon a run of work answers to: whatever it did most of. */
+export function workKind(steps: Block[]): ActivityPhaseKind {
+  return dominantWorkKind(steps) ?? "think";
+}
+
+/**
+ * The group's header: the agent's own line if it wrote one, otherwise what the
+ * calls add up to.
+ */
+export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
+  if (phase.headline) {
+    const summary = proseSummary(phase.headline.text);
+    if (summary) return summary;
+    return phase.headline.role === "reasoning" ? "Thinking" : "Working";
+  }
+  return workSummaryLine(phase.steps, live);
+}
+
+/** The span of a turn that folds away once the agent has answered for it. */
+export type WorkFold = { start: number; end: number };
+
+/**
+ * The work a turn can put away: everything from the first thing the agent did
+ * up to the last group it has already narrated past, leaving the user's
+ * message above and the answer that summarised the work below.
+ *
+ * There is nothing to predict here. A group counts as finished work the moment
+ * prose follows it, so the fold only ever grows: while the turn streams, each
+ * new paragraph swallows the work and the running commentary that came before
+ * it, and the final answer ends up as the only prose left standing.
+ */
+export function foldableWork(items: TurnItem[]): WorkFold | undefined {
+  let end = -1;
+  let answered = false;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.type === "activity") {
+      if (answered) {
+        end = index;
+        break;
+      }
+      continue;
+    }
+    if (isProseBlock(item.block)) answered = true;
+  }
+  if (end < 0) return undefined;
+  // Only work and the agent's commentary on it fold. A plan, a task list or a
+  // call waiting on approval stays where the agent put it.
+  let start = end;
+  while (start > 0 && isFoldableItem(items[start - 1])) start -= 1;
+  return { start, end };
+}
+
+function isFoldableItem(item: TurnItem): boolean {
+  return item.type === "activity" || isProseBlock(item.block);
+}
+
+/**
+ * Where a turn's work begins, fold or no fold: the line the work folds behind
+ * has a place to sit from the start, so it fades in rather than appearing
+ * under the reader's eye and shoving the answer down.
+ */
+export function firstFoldableIndex(items: TurnItem[]): number {
+  return items.findIndex(isFoldableItem);
+}
+
+/** Every block inside a fold, work and commentary alike. */
+export function foldedBlocks(items: TurnItem[], fold: WorkFold): Block[] {
+  return items
+    .slice(fold.start, fold.end + 1)
+    .flatMap((item) => (item.type === "activity" ? item.blocks : [item.block]));
 }
 
 /** True when a nested scroller should consume this wheel, not the parent. */

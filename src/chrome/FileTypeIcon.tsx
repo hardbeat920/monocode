@@ -60,23 +60,16 @@ export function FileTypeIcon({
     );
   }
 
-  if (isDir) {
-    return (
-      <icons.FolderIcon
-        folderName={name}
-        isOpen={isOpen}
-        isRoot={isRoot}
-        size={size}
-        className="shrink-0"
-      />
-    );
-  }
+  const iconName = isDir
+    ? icons.getFolderIcon({ folderName: name, isOpen, isRoot })
+    : resolveFileIcon(icons, name);
 
   return (
-    <icons.MaterialIcon
-      name={resolveFileIcon(icons, name)}
-      size={size}
-      className="shrink-0"
+    <span
+      aria-hidden
+      className="material-icon inline-block shrink-0 align-middle"
+      style={{ width: size, height: size }}
+      dangerouslySetInnerHTML={{ __html: icons.getIconSvg(iconName) ?? "" }}
     />
   );
 }

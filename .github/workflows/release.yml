@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    needs: linux
+    needs: [linux, windows]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -168,6 +168,12 @@ jobs:
           name: linux-packages
           path: target/release/bundle/linux
 
+      - name: Download Windows packages
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-packages
+          path: target/release/bundle/nsis
+
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -181,14 +187,15 @@ jobs:
           shopt -s nullglob
           DEB=("$BUNDLE"/linux/*.deb)
           APPIMAGE=("$BUNDLE"/linux/*.AppImage)
-          if (( ${#DEB[@]} != 1 || ${#APPIMAGE[@]} != 1 )); then
-            echo "Expected exactly one .deb and one AppImage" >&2
+          NSIS=("$BUNDLE"/nsis/*.exe)
+          if (( ${#DEB[@]} != 1 || ${#APPIMAGE[@]} != 1 || ${#NSIS[@]} != 1 )); then
+            echo "Expected exactly one .deb, one AppImage, and one NSIS installer" >&2
             exit 1
           fi
           gh release create "$GITHUB_REF_NAME" \
             --title "MonoCode $VERSION" \
             --notes "See CHANGELOG.md for details." \
-            "$DMG" "$TAR" "$SIG" "${DEB[0]}" "${APPIMAGE[0]}"
+            "$DMG" "$TAR" "$SIG" "${DEB[0]}" "${APPIMAGE[0]}" "${NSIS[0]}"
 
   linux:
     name: Linux packages
@@ -229,4 +236,29 @@ jobs:
         with:
           name: linux-packages
           path: release-artifacts/
+          if-no-files-found: error
+
+  windows:
+    name: Windows packages
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm ci
+
+      - name: Build Windows packages
+        run: npm run build:windows
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: target/release/bundle/nsis/*.exe
           if-no-files-found: error

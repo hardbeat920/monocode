@@ -1,12 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   loadSkills,
+  hasNativeCommands,
+  subscribeSkills,
   mergeCatalog,
   peekSkills,
   skillCatalogKey,
@@ -36,7 +32,7 @@ export function nextComposerSkillContextToken(
 export function pickerSkillLoadOptions(
   harness: HarnessId,
 ): { refresh: true } | undefined {
-  return harness === "pi" ? undefined : { refresh: true };
+  return hasNativeCommands(harness) ? undefined : { refresh: true };
 }
 
 export function visibleComposerSkills(
@@ -45,21 +41,26 @@ export function visibleComposerSkills(
   cached: Skill[] | null,
   fallback: Skill[],
 ): Skill[] {
-  return state.key === currentKey ? state.skills : cached ?? fallback;
+  return state.key === currentKey ? state.skills : (cached ?? fallback);
 }
 
 export function useComposerSkills(input: {
   harness: HarnessId;
   executionCwd: string;
+  sessionId?: string;
   pickerOpen: boolean;
 }) {
   const context = useMemo<SkillCatalogContext>(
-    () => ({ harness: input.harness, cwd: input.executionCwd }),
-    [input.executionCwd, input.harness],
+    () => ({
+      harness: input.harness,
+      cwd: input.executionCwd,
+      sessionId: input.sessionId,
+    }),
+    [input.executionCwd, input.harness, input.sessionId],
   );
   const contextKey = skillCatalogKey(context);
   const fallback = useMemo<Skill[]>(
-    () => (input.harness === "pi" ? [] : mergeCatalog([])),
+    () => (hasNativeCommands(input.harness) ? [] : mergeCatalog([])),
     [input.harness],
   );
   const currentToken = useRef<ComposerSkillContextToken | null>(null);
@@ -93,6 +94,10 @@ export function useComposerSkills(input: {
     },
     [commit, context, contextToken],
   );
+
+  useEffect(() => {
+    return subscribeSkills(context, (skills) => commit(contextToken, skills));
+  }, [commit, context, contextToken]);
 
   useEffect(() => {
     const cached = peekSkills(context);

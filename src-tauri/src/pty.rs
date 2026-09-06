@@ -1,14 +1,12 @@
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
-#[cfg(unix)]
 use std::thread;
+use std::time::Duration;
 #[cfg(unix)]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -18,11 +16,9 @@ use crate::fs::expand_home;
 
 const DATA_EVENT: &str = "pty-data";
 const EXIT_EVENT: &str = "pty-exit";
-#[cfg(unix)]
 const READ_CHUNK: usize = 32 * 1024;
 /// Cap how often a busy PTY hops the webview. Each `emit` is a JS eval; a
 /// flood of small reads was thousands per second and froze input.
-#[cfg(unix)]
 const PTY_COALESCE: Duration = Duration::from_millis(8);
 #[cfg(unix)]
 const KILL_ESCALATE: Duration = Duration::from_secs(1);
@@ -45,6 +41,8 @@ struct LivePty {
     writer: Mutex<Box<dyn Write + Send>>,
     #[cfg(unix)]
     master_fd: i32,
+    #[cfg(windows)]
+    master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     pid: u32,
 }
 
@@ -97,9 +95,12 @@ impl PtyHost {
         let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
         for live in kids {
             #[cfg(unix)]
-            hangup(live.pid);
-            #[cfg(unix)]
-            close_fd(live.master_fd);
+            {
+                hangup(live.pid);
+                close_fd(live.master_fd);
+            }
+            #[cfg(not(unix))]
+            drop(live);
         }
         // Quit and `Drop` both exit the process, so the SIGKILL has to land
         // before this returns. `terminate`'s detached escalate thread never gets
@@ -129,15 +130,20 @@ pub fn pty_spawn(
         close_fd(prev.master_fd);
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = (app, cwd, cols, rows);
-        return Err("Terminals are supported on macOS and Linux.".into());
-    }
-
     #[cfg(unix)]
     {
         spawn_unix(app, host, id, cwd, cols.max(2), rows.max(2))
+    }
+
+    #[cfg(windows)]
+    {
+        spawn_windows(app, host, id, cwd, cols.max(2), rows.max(2))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (app, cwd, cols, rows);
+        Err("Terminals are not supported on this platform.".into())
     }
 }
 
@@ -162,10 +168,22 @@ pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Res
     {
         resize_fd(live.master_fd, cols.max(2), rows.max(2))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let master = live.master.lock().unwrap_or_else(|e| e.into_inner());
+        master
+            .resize(portable_pty::PtySize {
+                rows: rows.max(2),
+                cols: cols.max(2),
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| format!("Failed to resize terminal: {err}"))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (live, cols, rows);
-        Err("Terminals are supported on macOS and Linux.".into())
+        Err("Terminals are not supported on this platform.".into())
     }
 }
 
@@ -239,8 +257,8 @@ fn spawn_unix(
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
         .env("COLORFGBG", "15;0")
-        .env("TERM_PROGRAM", "MonoCode");
-    apply_path(&mut cmd);
+        .env("TERM_PROGRAM", "MonoCode")
+        .env("PATH", crate::harness::gui_search_path());
     if let Some(home) = dirs_home() {
         cmd.env("HOME", &home);
     }
@@ -341,7 +359,97 @@ fn spawn_unix(
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn spawn_windows(
+    app: AppHandle,
+    host: State<PtyHost>,
+    id: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+    let workdir = working_dir(&cwd);
+    let (shell, args) = default_shell();
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|err| format!("Failed to open terminal: {err}"))?;
+
+    let mut cmd = CommandBuilder::new(&shell);
+    cmd.args(&args);
+    cmd.cwd(&workdir);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("COLORFGBG", "15;0");
+    cmd.env("TERM_PROGRAM", "MonoCode");
+    cmd.env("PATH", crate::harness::gui_search_path());
+    if let Some(home) = dirs_home() {
+        cmd.env("HOME", &home);
+        cmd.env("USERPROFILE", &home);
+    }
+    cmd.env("PWD", workdir.to_string_lossy().as_ref());
+
+    let mut child = crate::windows::spawn_pty(pair.slave.as_ref(), cmd)
+        .map_err(|err| format!("Failed to start {shell}: {err}"))?;
+    let pid = child.process_id().unwrap_or(0);
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|err| format!("Failed to read terminal: {err}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|err| format!("Failed to write to terminal: {err}"))?;
+
+    let live = Arc::new(LivePty {
+        writer: Mutex::new(Box::new(writer)),
+        master: Mutex::new(pair.master),
+        pid,
+    });
+    host.insert(id.clone(), live);
+
+    let data_app = app.clone();
+    let data_id = id.clone();
+    thread::spawn(move || {
+        let mut buf = vec![0_u8; READ_CHUNK];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    // ponytail: caps bridge traffic at 125 emits/s; use a timed
+                    // drain only if sustained PTY throughput becomes limiting.
+                    thread::sleep(PTY_COALESCE);
+                    emit_pty_data(&data_app, &data_id, &buf[..n]);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let wait_app = app;
+    let wait_id = id;
+    thread::spawn(move || {
+        let code = child.wait().ok().map(|status| status.exit_code() as i32);
+        let emit = if let Some(host) = wait_app.try_state::<PtyHost>() {
+            host.remove_if_pid(&wait_id, pid).is_some()
+        } else {
+            false
+        };
+        if emit {
+            let _ = wait_app.emit(EXIT_EVENT, PtyExit { id: wait_id, code });
+        }
+    });
+
+    Ok(())
+}
+
 fn working_dir(cwd: &str) -> std::path::PathBuf {
     let path = expand_home(cwd);
     if path.is_dir() {
@@ -350,55 +458,46 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
     dirs_home().map(std::path::PathBuf::from).unwrap_or(path)
 }
 
-#[cfg(unix)]
 fn default_shell() -> (String, Vec<String>) {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-        if cfg!(target_os = "macos") {
-            "/bin/zsh".into()
-        } else {
-            "/bin/bash".into()
+    #[cfg(windows)]
+    {
+        if let Ok(comspec) = std::env::var("COMSPEC") {
+            if !comspec.is_empty() {
+                return (comspec, Vec::new());
+            }
         }
-    });
-    let args = login_args(&shell)
-        .iter()
-        .map(|arg| (*arg).to_string())
-        .collect();
-    (shell, args)
+        ("powershell.exe".into(), vec!["-NoLogo".into()])
+    }
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|shell| !shell.is_empty())
+            .unwrap_or_else(|| {
+                if cfg!(target_os = "macos") {
+                    "/bin/zsh".into()
+                } else {
+                    "/bin/bash".into()
+                }
+            });
+        let args = login_args(&shell)
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        (shell, args)
+    }
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn login_args(shell: &str) -> &'static [&'static str] {
     match std::path::Path::new(shell)
-        .file_name()
+        .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or(shell)
     {
         "zsh" | "bash" | "sh" | "fish" => &["-l"],
         _ => &[],
     }
-}
-
-#[cfg(unix)]
-fn apply_path(cmd: &mut std::process::Command) {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(home) = dirs_home() {
-        parts.push(format!("{home}/.local/bin"));
-        parts.push(format!("{home}/.cargo/bin"));
-        parts.push(format!("{home}/.claude/local"));
-        parts.push(format!("{home}/.local/share/claude"));
-        parts.push(format!("{home}/.opencode/bin"));
-        parts.push(format!("{home}/.grok/bin"));
-        parts.push(format!("{home}/.npm-global/bin"));
-    }
-    parts.push("/opt/homebrew/bin".into());
-    parts.push("/usr/local/bin".into());
-    parts.push("/usr/bin".into());
-    parts.push("/bin".into());
-    parts.push("/snap/bin".into());
-    if let Ok(existing) = std::env::var("PATH") {
-        parts.push(existing);
-    }
-    cmd.env("PATH", parts.join(":"));
 }
 
 /// The hangup a closing shell expects, without `terminate`'s escalation.
@@ -435,7 +534,17 @@ fn terminate(pid: u32) {
             }
         });
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new("taskkill");
+        crate::hide_window_console(&mut cmd);
+        let _ = cmd
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
     }
@@ -545,7 +654,6 @@ fn os_err(ctx: &str) -> String {
     format!("{ctx}: {}", std::io::Error::last_os_error())
 }
 
-#[cfg(unix)]
 fn emit_pty_data(app: &AppHandle, id: &str, bytes: &[u8]) {
     if bytes.is_empty() {
         return;

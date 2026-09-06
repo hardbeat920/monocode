@@ -120,6 +120,23 @@ export function buildSessionList(
   return entries;
 }
 
+export function sessionListNavigationIds(
+  entries: readonly SessionListEntry[],
+  expandCollapsed: boolean,
+): string[] {
+  const ids: string[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "session") {
+      ids.push(entry.session.id);
+      continue;
+    }
+    if (entry.kind !== "folder") continue;
+    if (entry.folder.collapsed && !expandCollapsed) continue;
+    ids.push(...entry.sessions.map((session) => session.id));
+  }
+  return ids;
+}
+
 export function createFolderWithSessions(
   folders: SessionFolder[],
   sessionIds: string[],

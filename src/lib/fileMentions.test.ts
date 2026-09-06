@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectFile } from "./fs";
+import { loadProjectFiles } from "./fileIndex";
 import {
+  applyFileMentionsToTurn,
   buildMentionIndex,
   fileMentionParts,
   fileMentionsInText,
@@ -10,6 +12,16 @@ import {
   replaceMentionToken,
   withMentionDirectories,
 } from "./fileMentions";
+
+vi.mock("./fileIndex", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./fileIndex")>();
+  return {
+    ...actual,
+    loadProjectFiles: vi.fn(actual.loadProjectFiles),
+  };
+});
+
+const list = vi.mocked(loadProjectFiles);
 
 const files: ProjectFile[] = [
   {
@@ -77,9 +89,43 @@ describe("buildMentionIndex", () => {
     expect(mentionLabel(files[0], index)).toBe("apps/desktop/src/App.tsx");
   });
 
-  it("skips paths that cannot survive a whitespace-delimited token", () => {
+  it("keeps a spaced path as a single @ token", () => {
+    expect(mentionLabel(files[3], index)).toBe("docs/read-me.md");
+    expect(index.labels.get("docs/read-me.md")).toBe(files[3]);
     expect(index.labels.has("read me.md")).toBe(false);
-    expect(index.labelOf.has(files[3].path)).toBe(false);
+  });
+
+  it("does not steal a token already owned by a real path", () => {
+    const spaced: ProjectFile = {
+      name: "read me.md",
+      path: "/p/notes/read me.md",
+      relative: "notes/read me.md",
+    };
+    const existing: ProjectFile = {
+      name: "read-me.md",
+      path: "/p/notes/read-me.md",
+      relative: "notes/read-me.md",
+    };
+    const mixed = buildMentionIndex([spaced, existing]);
+    expect(mentionLabel(existing, mixed)).toBe("read-me.md");
+    expect(mixed.labels.get("notes/read-me.md")).toBe(existing);
+    expect(mentionLabel(spaced, mixed)).toBe("notes/read-me.md~2");
+    expect(mixed.labels.get("notes/read-me.md~2")).toBe(spaced);
+  });
+
+  it("ignores paths that leave the project or break the tokenizer", () => {
+    const unsafe = buildMentionIndex([
+      { name: "secret", path: "/etc/secret", relative: "../secret" },
+      { name: "abs", path: "/tmp/abs", relative: "/tmp/abs" },
+      { name: "at.md", path: "/p/at.md", relative: "see@me.md" },
+      { name: "nul", path: "/p/nul", relative: "bad\0name.md" },
+      { name: "ls.md", path: "/p/ls.md", relative: "docs/read\u2028me.md" },
+      { name: "ps.md", path: "/p/ps.md", relative: "docs/read\u2029me.md" },
+      { name: "nel.md", path: "/p/nel.md", relative: "a\u0085b.md" },
+      { name: "bidi.md", path: "/p/bidi.md", relative: "photo\u202Egpj.md" },
+      { name: "zwsp.ts", path: "/p/zwsp.ts", relative: "file\u200B.ts" },
+    ]);
+    expect(unsafe.labels.size).toBe(0);
   });
 
   it("always accepts the relative path as a label", () => {
@@ -116,6 +162,21 @@ describe("buildMentionIndex", () => {
       path: "/p/docs",
       isDir: true,
     });
+  });
+
+  it("inserts a spaced folder as a normal @ token", () => {
+    const cat: ProjectFile = {
+      name: "cat.png",
+      path: "/p/My Photos/cat.png",
+      relative: "My Photos/cat.png",
+    };
+    const photos = buildMentionIndex([cat]);
+    const folder = [...photos.labels.values()].find(
+      (file) => file.relative === "My Photos",
+    );
+    expect(folder).toMatchObject({ isDir: true, relative: "My Photos" });
+    expect(mentionLabel(folder!, photos)).toBe("My-Photos");
+    expect(mentionLabel(cat, photos)).toBe("cat.png");
   });
 });
 
@@ -172,6 +233,14 @@ describe("fileMentionParts", () => {
 });
 
 describe("fileMentionsInText", () => {
+  it("highlights the encoded token for a spaced path", () => {
+    expect(fileMentionParts("see @docs/read-me.md now", index.labels)).toEqual([
+      { text: "see " },
+      { text: "@docs/read-me.md", file: files[3] },
+      { text: " now" },
+    ]);
+  });
+
   it("collects each referenced file once", () => {
     const hits = fileMentionsInText(
       "@Composer.tsx and @apps/web/src/App.tsx and @Composer.tsx",
@@ -190,10 +259,26 @@ describe("rankMentionFiles", () => {
     expect(ranked[0].path).toBe(files[1].path);
   });
 
-  it("fuzzy matches and drops paths with whitespace", () => {
+  it("fuzzy matches spaced names from a space-free query", () => {
     const ranked = rankMentionFiles(files, "read", []);
-    expect(ranked).toEqual([]);
+    expect(ranked[0].path).toBe(files[3].path);
     expect(rankMentionFiles(files, "compo", [])[0].path).toBe(files[2].path);
+  });
+
+  it("lists a folder whose name has spaces", () => {
+    const photos = [
+      {
+        name: "cat.png",
+        path: "/p/My Photos/cat.png",
+        relative: "My Photos/cat.png",
+      },
+    ];
+    expect(
+      rankMentionFiles(photos, "photos", []).some(
+        (file) => file.relative === "My Photos" && file.isDir,
+      ),
+    ).toBe(true);
+    expect(rankMentionFiles(photos, "cat", [])[0].path).toBe(photos[0].path);
   });
 
   it("offers folders alongside files", () => {
@@ -246,6 +331,19 @@ describe("withMentionDirectories", () => {
     expect(withMentionDirectories(entries)).toEqual(entries);
   });
 
+  it("keeps parent folders that contain spaces", () => {
+    const entries = withMentionDirectories([
+      {
+        name: "cat.png",
+        path: "/p/My Photos/cat.png",
+        relative: "My Photos/cat.png",
+      },
+    ]);
+    expect(entries.some((file) => file.relative === "My Photos" && file.isDir)).toBe(
+      true,
+    );
+  });
+
   it("rebuilds folder paths on Windows separators", () => {
     const [dir] = withMentionDirectories([
       {
@@ -259,5 +357,26 @@ describe("withMentionDirectories", () => {
       path: "C:\\p\\apps\\web",
       isDir: true,
     });
+  });
+});
+
+describe("applyFileMentionsToTurn", () => {
+  beforeEach(() => {
+    list.mockReset();
+    list.mockResolvedValue(files);
+  });
+
+  it("maps a spaced-file token to the real relative path on send", async () => {
+    const out = await applyFileMentionsToTurn("look at @docs/read-me.md", "/p");
+    expect(out).toContain("look at @docs/read-me.md");
+    expect(out).toContain("- @docs/read-me.md → docs/read me.md");
+  });
+
+  it("does not invent a path from a token that is not in the index", async () => {
+    const out = await applyFileMentionsToTurn(
+      "look at @notes/read-me.md~2",
+      "/p",
+    );
+    expect(out).toBe("look at @notes/read-me.md~2");
   });
 });

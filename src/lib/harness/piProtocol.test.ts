@@ -156,6 +156,35 @@ describe("buildPiPrompt", () => {
 });
 
 describe("RPC frames", () => {
+  it("displays colored extension labels without changing RPC values", () => {
+    const option = "\u001b[32mProceed\u001b[39m";
+    const request = parseExtensionUiRequest({
+      type: "extension_ui_request",
+      id: "colored-select",
+      method: "select",
+      title: "\u001b[1mChoose\u001b[22m",
+      options: [option],
+    })!;
+    expect(extensionUiTitle(request)).toBe("Choose");
+    expect(extensionUiResponse(request, "allow")).toEqual({
+      type: "extension_ui_response",
+      id: "colored-select",
+      value: option,
+    });
+  });
+
+  it("removes terminal styling and hyperlink controls from confirmation text", () => {
+    const request = parseExtensionUiRequest({
+      type: "extension_ui_request",
+      id: "colored-confirm",
+      method: "confirm",
+      title: "\u001b[38;2;100;150;200mReview\u001b[0m",
+      message:
+        "Open \u001b]8;;https://example.com\u001b\\docs\u001b]8;;\u0007?\n\t[1, 2]",
+    })!;
+    expect(extensionUiTitle(request)).toBe("Review — Open docs?\n\t[1, 2]");
+  });
+
   it("parses responses, events, and extension UI", () => {
     expect(parseJsonLine("not json")).toBeNull();
     const response = parseRpcResponse({

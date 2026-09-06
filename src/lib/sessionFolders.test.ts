@@ -15,6 +15,7 @@ import {
   removeSessionFromFolder,
   renameFolder,
   saveSessionFolders,
+  sessionListNavigationIds,
   setFolderCollapsed,
   setFolderColor,
   setFolderCustomColor,
@@ -164,6 +165,28 @@ describe("buildSessionList", () => {
         entry.kind === "session" ? entry.session.id : entry.kind,
       ),
     ).toEqual(["pin", "divider", "rest"]);
+  });
+
+  it("exposes the full visible navigation order without pagination", () => {
+    const sessions = [
+      summary("folder-a"),
+      summary("folder-b"),
+      summary("loose"),
+    ];
+    const folders = [
+      folder("work", ["folder-a", "folder-b"], { collapsed: true }),
+    ];
+    const entries = buildSessionList(
+      sessions,
+      folders,
+      ungroupedSessions(sessions, folders),
+    );
+    expect(sessionListNavigationIds(entries, false)).toEqual(["loose"]);
+    expect(sessionListNavigationIds(entries, true)).toEqual([
+      "folder-a",
+      "folder-b",
+      "loose",
+    ]);
   });
 });
 

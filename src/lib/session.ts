@@ -2,6 +2,7 @@ import type { ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
 import type { InboxComposerCard } from "./githubTasks";
+import type { InboxAskContext } from "./inboxAsk";
 import type { NoteCardMeta, NoteComposerCard } from "./notes";
 import {
   defaultSessionChoice,
@@ -224,6 +225,8 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
 };
 
 export type Session = {
+  /** Temporary Inbox conversation: shares the runtime, never saved as a session. */
+  inboxAsk?: InboxAskContext;
   id: string;
   harness: HarnessId;
   model: string;

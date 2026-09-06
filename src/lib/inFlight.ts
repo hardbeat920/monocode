@@ -43,7 +43,7 @@ export function inFlightRefs(
   const refs: InFlightRef[] = [];
 
   const push = (session: Session | undefined) => {
-    if (!session || seen.has(session.id)) return;
+    if (!session || session.inboxAsk || seen.has(session.id)) return;
     if (!isInFlightSession(session) || !canResumeAfterQuit(session)) return;
     seen.add(session.id);
     refs.push({ sessionId: session.id, cwd: session.cwd });
@@ -88,6 +88,7 @@ export function markTurnInterrupted(session: Session): Session {
 export function workspaceFromResumed(
   sessions: Session[],
 ): ResumedWorkspace | null {
+  sessions = sessions.filter((session) => !session.inboxAsk);
   if (sessions.length === 0) return null;
   const tabs = sessions.map((session) => newTab(session.id));
   return {

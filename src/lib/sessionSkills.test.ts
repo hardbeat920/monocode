@@ -1,10 +1,32 @@
-import { describe, expect, it } from "vitest";
-import { piSkillContextForSession } from "./sessionSkills";
+vi.mock("./harness/registry", () => ({
+  getHarness: (id: string) =>
+    id === "pi" || id === "omp"
+      ? {
+          commands: {
+            discover: async () => [],
+            rawSlashCommands: id === "omp",
+          },
+        }
+      : undefined,
+}));
 
-describe("piSkillContextForSession", () => {
+import { describe, expect, it, vi } from "vitest";
+import { nativeSkillContextForSession } from "./sessionSkills";
+
+describe("nativeSkillContextForSession", () => {
+  it("scopes OMP warmup to the active conversation worktree", () => {
+    expect(
+      nativeSkillContextForSession({
+        id: "thread",
+        harness: "omp",
+        cwd: "/repo",
+        worktreeCwd: "/worktree",
+      }),
+    ).toEqual({ harness: "omp", cwd: "/worktree", sessionId: "thread" });
+  });
   it("uses a Pi session worktree", () => {
     expect(
-      piSkillContextForSession({
+      nativeSkillContextForSession({
         harness: "pi",
         cwd: "/repo",
         worktreeCwd: "/repo-worktree",
@@ -14,7 +36,7 @@ describe("piSkillContextForSession", () => {
 
   it("ignores a non-Pi session", () => {
     expect(
-      piSkillContextForSession({ harness: "claude", cwd: "/repo" }),
+      nativeSkillContextForSession({ harness: "claude", cwd: "/repo" }),
     ).toBeNull();
   });
 });

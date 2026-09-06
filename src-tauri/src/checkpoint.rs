@@ -11,8 +11,8 @@ use tauri::{AppHandle, Manager, State};
 #[cfg(test)]
 use crate::fs::GitDiffStats;
 use crate::fs::{
-    expand_home, git_checked, git_diff_files_for, resolve_repo_path, GitChangedFile, GitDiffIndex,
-    MAX_TEXT_FILE_BYTES,
+    expand_home, git_checked, git_diff_files_for, path_to_js, resolve_repo_path, GitChangedFile,
+    GitDiffIndex, MAX_TEXT_FILE_BYTES,
 };
 
 const MAX_SNAPSHOT_FILES: usize = 500;
@@ -247,7 +247,7 @@ impl CheckpointStore {
             .map(|stats| stats.status.clone())
             .unwrap_or_else(|| "modified".into());
         Ok(CheckpointFileDiff {
-            path: root.join(&relative).to_string_lossy().into_owned(),
+            path: path_to_js(&root.join(&relative)),
             relative,
             status,
             original,
@@ -719,7 +719,7 @@ fn describe_change(
 ) -> CheckpointFile {
     if let Some((status, additions, deletions)) = session_change {
         return CheckpointFile {
-            path: root.join(relative).to_string_lossy().into_owned(),
+            path: path_to_js(&root.join(relative)),
             relative: relative.to_string(),
             status,
             additions,
@@ -742,7 +742,7 @@ fn describe_change(
     let abs = root.join(relative);
     let status = if !abs.exists() { "deleted" } else { "modified" };
     CheckpointFile {
-        path: abs.to_string_lossy().into_owned(),
+        path: path_to_js(&abs),
         relative: relative.to_string(),
         status: status.into(),
         additions: 0,
@@ -775,7 +775,9 @@ fn calculate_session_stats(dir: &Path, manifest: &Manifest, relative: &str) -> O
 }
 
 fn diff_numstat(before: &Path, after: &Path) -> Option<(i64, i64)> {
-    let output = Command::new("git")
+    let mut cmd = Command::new("git");
+    crate::hide_window_console(&mut cmd);
+    let output = cmd
         .args(["diff", "--no-index", "--no-ext-diff", "--numstat", "--"])
         .arg(before)
         .arg(after)
@@ -1109,6 +1111,7 @@ mod tests {
         }
         let _ = git(dir, &["config", "user.email", "monocode@test"]);
         let _ = git(dir, &["config", "user.name", "monocode"]);
+        let _ = git(dir, &["config", "core.autocrlf", "false"]);
         for (name, contents) in files {
             let path = dir.join(name);
             if let Some(parent) = path.parent() {
@@ -1396,10 +1399,12 @@ mod tests {
         assert_eq!(status.files[0].deletions, 0);
         assert!(status.files[0].exact);
         assert!(status.files[0].undoable);
+        assert_eq!(status.files[0].path, path_to_js(&repo.0.join("app.ts")));
 
         let diff = store.file_diff("s1", &cwd, "app.ts").unwrap();
         assert_eq!(diff.original, "user-one\nuser-two\n");
         assert_eq!(diff.current, "user-one\nuser-two\nagent\n");
+        assert_eq!(diff.path, path_to_js(&repo.0.join("app.ts")));
 
         // Review remains the captured session result, not a later shared
         // working-tree state.

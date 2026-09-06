@@ -135,9 +135,11 @@ export function historyWithLiveSessions(
   cwd: string,
   git?: SessionGitHint,
 ): SessionSummary[] {
-  let rows = history.filter((entry) => sameProjectPath(entry.cwd, cwd));
+  const inboxIds = new Set(sessions.filter(session => session.inboxAsk).map(session => session.id));
+  let rows = history.filter((entry) => !inboxIds.has(entry.id) && sameProjectPath(entry.cwd, cwd));
   const hint = projectGitHint(rows, gitOverlayForCwd(cwd, git));
   for (const session of sessions) {
+    if (session.inboxAsk) continue;
     if (!sameProjectPath(session.cwd, cwd)) continue;
     const live = session.busy || sessionNeedsInput(session);
     if (!shouldPersistSession(session) && !live) continue;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  adjacentItemId,
   deferUnhandledEscape,
   focusedBusyAgentSessionId,
+  shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
 } from "./tabKeys";
@@ -85,6 +87,71 @@ describe("tabCommand", () => {
         key({ key: "}", code: "BracketRight", metaKey: true, shiftKey: true }),
       ),
     ).toBe("next");
+  });
+
+  it("uses shift-mod arrows for session and project navigation", () => {
+    expect(
+      tabCommand(key({ key: "ArrowUp", metaKey: true, shiftKey: true })),
+    ).toBe("prev-session");
+    expect(
+      tabCommand(key({ key: "ArrowDown", metaKey: true, shiftKey: true })),
+    ).toBe("next-session");
+    expect(
+      tabCommand(key({ key: "ArrowLeft", metaKey: true, shiftKey: true })),
+    ).toBe("prev-project");
+    expect(
+      tabCommand(key({ key: "ArrowRight", metaKey: true, shiftKey: true })),
+    ).toBe("next-project");
+  });
+
+  it("cycles ordered item ids and wraps at both ends", () => {
+    expect(adjacentItemId(["a", "b", "c"], "b", 1)).toBe("c");
+    expect(adjacentItemId(["a", "b", "c"], "c", 1)).toBe("a");
+    expect(adjacentItemId(["a", "b", "c"], "a", -1)).toBe("c");
+    expect(adjacentItemId(["a", "b", "c"], "missing", 1)).toBe("a");
+    expect(adjacentItemId(["a", "b", "c"], "missing", -1)).toBe("c");
+    expect(adjacentItemId([], "a", 1)).toBeNull();
+  });
+
+  it("allows navigation from an empty composer", () => {
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: true,
+        emptyComposerTarget: true,
+        surfaceOpen: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks list navigation while another text or app surface owns focus", () => {
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        surfaceOpen: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: true,
+        emptyComposerTarget: false,
+        surfaceOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        surfaceOpen: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: true,
+        emptyComposerTarget: true,
+        surfaceOpen: true,
+      }),
+    ).toBe(false);
   });
 });
 

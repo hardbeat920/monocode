@@ -61,6 +61,7 @@ export function hiddenApprovalNotices(
 ): Array<PendingApprovalNotice & { session: Session }> {
   const notices: Array<PendingApprovalNotice & { session: Session }> = [];
   for (const session of sessions) {
+    if (session.inboxAsk) continue;
     const pending = pendingApprovalForSession(session);
     if (!pending) continue;
     if (
