@@ -2,7 +2,7 @@
 use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
 #[cfg(target_os = "macos")]
 use tauri::Wry;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
@@ -22,9 +22,31 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project"
         | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
         | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" | "check_for_updates" | "zoom_in" | "zoom_out"
-        | "zoom_reset" => {
+        | "open_model_picker" | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
+        }
+        "zoom_in" | "zoom_out" | "zoom_reset" => {
+            // Zoom targets one window: a broadcast would make every window
+            // increment the shared scale setting on a single menu click.
+            let mut windows: Vec<_> = app.webview_windows().into_values().collect();
+            windows.sort_by(|a, b| a.label().cmp(b.label()));
+            let target = windows
+                .iter()
+                .find(|window| window.is_focused().unwrap_or(false))
+                .or_else(|| {
+                    windows
+                        .iter()
+                        .find(|window| window.is_visible().unwrap_or(false))
+                })
+                .or(windows.first());
+            match target {
+                Some(window) => {
+                    let _ = window.emit(id, ());
+                }
+                None => {
+                    let _ = app.emit(id, ());
+                }
+            }
         }
         _ => {}
     }
