@@ -197,7 +197,7 @@ function MarkdownCode({
       <code
         {...props}
         dir="ltr"
-        className={`inline-flex items-center gap-1 rounded-md bg-content/8 px-1.5 h-6 align-baseline font-mono text-[0.8em] text-content ${
+        className={`inline-flex items-center gap-1 rounded-md bg-content/8 px-1.5 min-h-6 max-w-full [overflow-wrap:anywhere] align-baseline font-mono text-[0.8em] text-content ${
           open ? "cursor-pointer hover:text-sky-300 hover:underline" : ""
         } ${className ?? ""}`}
         role={open ? "link" : undefined}

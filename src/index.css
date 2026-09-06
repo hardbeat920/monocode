@@ -185,6 +185,13 @@ input,
     color-mix(in srgb, var(--color-content) 20%, transparent);
 }
 
+.agent-markdown [data-streamdown="ordered-list"],
+.agent-markdown [data-streamdown="unordered-list"] {
+  list-style-position: outside;
+  padding-left: 0;
+  padding-inline-start: 1.5rem;
+}
+
 .agent-markdown li > [data-streamdown="ordered-list"],
 .agent-markdown li > [data-streamdown="unordered-list"] {
   padding-left: 0;
