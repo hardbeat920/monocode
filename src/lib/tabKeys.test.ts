@@ -39,6 +39,27 @@ function key(
 }
 
 describe("tabCommand", () => {
+  it("archives with Cmd+Shift+A or Ctrl+Shift+A", () => {
+    expect(
+      tabCommand(key({ key: "A", metaKey: true, shiftKey: true })),
+    ).toBe("archive-session");
+    expect(
+      tabCommand(key({ key: "a", ctrlKey: true, shiftKey: true })),
+    ).toBe("archive-session");
+  });
+
+  it.each([
+    {},
+    { metaKey: true },
+    { ctrlKey: true },
+    { shiftKey: true },
+    { metaKey: true, shiftKey: true, altKey: true },
+    { metaKey: true, shiftKey: true, isComposing: true },
+    { metaKey: true, shiftKey: true, repeat: true },
+  ])("leaves other A key events alone (%j)", (modifiers) => {
+    expect(tabCommand(key({ key: "a", ...modifiers }))).toBeNull();
+  });
+
   it("opens a terminal pane with cmd-backtick", () => {
     expect(tabCommand(key({ key: "`", code: "Backquote", metaKey: true }))).toBe(
       "new-terminal",

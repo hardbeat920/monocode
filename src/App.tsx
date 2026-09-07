@@ -275,6 +275,7 @@ import {
   setWindowFocused,
 } from "./lib/notifications";
 import { playCue } from "./lib/sounds";
+import { archiveFocusedSession } from "./lib/archiveShortcut";
 import {
   adjacentItemId,
   deferUnhandledEscape,
@@ -2846,52 +2847,26 @@ export default function App({
 
   const onArchiveFocusedSession = useCallback(
     (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        projectTerminalFocusedRef.current ||
-        searchViewOpenRef.current ||
-        inboxViewOpenRef.current ||
-        notesViewOpenRef.current ||
-        settingsOpenRef.current ||
-        filePickerOpenRef.current ||
-        whatsNewVersionRef.current
-      )
-        return;
-
-      const tab = tabsRef.current.find(
-        (entry) => entry.id === activeTabIdRef.current,
+      archiveFocusedSession(
+        event,
+        {
+          activeTabId: activeTabIdRef.current,
+          tabs: tabsRef.current,
+          sessions: sessionsRef.current,
+          projectTerminalFocused: projectTerminalFocusedRef.current,
+          surfaceOpen: Boolean(
+            searchViewOpenRef.current ||
+            inboxViewOpenRef.current ||
+            notesViewOpenRef.current ||
+            settingsOpenRef.current ||
+            filePickerOpenRef.current ||
+            whatsNewVersionRef.current,
+          ),
+        },
+        (sessionId) => {
+          void onArchiveHistorySession(sessionId, true);
+        },
       );
-      if (!tab || tab.diffFocused) return;
-      const session = sessionsRef.current.find(
-        (entry) => entry.id === tab.focusedId,
-      );
-      if (!session) return;
-
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest(".cm-editor, .monocode-terminal")) return;
-      if (
-        target?.closest('input, textarea, select, [contenteditable="true"]') &&
-        !target.closest("[data-composer]")
-      )
-        return;
-
-      // Popovers can leave focus in the composer. Check the whole document,
-      // excluding overlays in hidden or inactive surfaces.
-      const overlayOpen = Array.from(
-        document.querySelectorAll(
-          '[data-popover-side], [role="dialog"], [role="alertdialog"], [role="menu"], [data-skill-picker], [data-mention-picker]',
-        ),
-      ).some(
-        (element) =>
-          element.getClientRects().length > 0 &&
-          getComputedStyle(element).visibility !== "hidden" &&
-          !element.closest('[hidden], [inert], [aria-hidden="true"]'),
-      );
-      if (overlayOpen) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      void onArchiveHistorySession(session.id, true);
     },
     [onArchiveHistorySession],
   );
