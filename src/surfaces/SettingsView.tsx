@@ -1487,8 +1487,8 @@ function Toggle({
       aria-label={label}
       aria-checked={on}
       onClick={() => {
-        playCue("switch");
         onChange(!on);
+        playCue("switch");
       }}
       className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
         on ? "bg-accent" : "bg-content/20"
