@@ -29,7 +29,7 @@ fn fnv1a(value: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in value.as_bytes() {
         hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x1000_0000_01b3);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
     }
     hash
 }
