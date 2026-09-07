@@ -23,6 +23,8 @@ export type LinearIssue = {
   repo: string;
   teamId: string;
   teamName: string;
+  projectId: string;
+  projectName: string;
   projectPath: string;
 };
 

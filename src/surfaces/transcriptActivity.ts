@@ -373,9 +373,11 @@ export function toolCategory(block: Block): ActivityWorkKind {
 export function buildActivityPhases(blocks: Block[]): ActivityPhase[] {
   const phases: ActivityPhase[] = [];
   let current: ActivityPhase | undefined;
+  const counts = new Map<ActivityWorkKind, number>();
 
   const open = (kind: ActivityPhaseKind, headline?: Block) => {
     current = { id: headline?.id ?? "", kind, headline, steps: [] };
+    counts.clear();
     phases.push(current);
     return current;
   };
@@ -408,8 +410,13 @@ export function buildActivityPhases(blocks: Block[]): ActivityPhase[] {
     }
     if (!current) current = open(toolCategory(block));
     current.steps.push(block);
-    // The icon follows whatever the group did most of.
-    current.kind = dominantWorkKind(current.steps) ?? current.kind;
+    // Count each call once. Rescanning the growing group here makes long
+    // tool runs quadratic, including work hidden behind a transcript fold.
+    if (isToolBlock(block)) {
+      const kind = toolCategory(block);
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+      current.kind = dominantCountedWorkKind(counts) ?? current.kind;
+    }
     if (!current.id) current.id = block.id;
   }
 
@@ -423,6 +430,12 @@ function dominantWorkKind(steps: Block[]): ActivityWorkKind | undefined {
     const kind = toolCategory(block);
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
+  return dominantCountedWorkKind(counts);
+}
+
+function dominantCountedWorkKind(
+  counts: ReadonlyMap<ActivityWorkKind, number>,
+): ActivityWorkKind | undefined {
   let best: ActivityWorkKind | undefined;
   for (const kind of WORK_KIND_ORDER) {
     const count = counts.get(kind) ?? 0;
@@ -574,10 +587,10 @@ export type WorkFold = { start: number; end: number };
  * up to the last group it has already narrated past, leaving the user's
  * message above and the answer that summarised the work below.
  *
- * There is nothing to predict here. A group counts as finished work the moment
- * prose follows it, so the fold only ever grows: while the turn streams, each
- * new paragraph swallows the work and the running commentary that came before
- * it, and the final answer ends up as the only prose left standing.
+ * Prose following a group puts its work away, except for calls still awaiting
+ * approval. As the turn streams, each new paragraph folds the work and running
+ * commentary before it, leaving the final answer visible. A late approval can
+ * reopen that boundary so its controls remain available.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;
@@ -585,7 +598,7 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.type === "activity") {
-      if (answered) {
+      if (answered && isFoldableItem(item)) {
         end = index;
         break;
       }
@@ -602,7 +615,9 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
 }
 
 function isFoldableItem(item: TurnItem): boolean {
-  return item.type === "activity" || isProseBlock(item.block);
+  return item.type === "activity"
+    ? !item.blocks.some(needsApproval)
+    : isProseBlock(item.block);
 }
 
 /**

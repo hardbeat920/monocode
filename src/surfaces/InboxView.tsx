@@ -66,6 +66,7 @@ import {
 import {
   applyInboxFilters,
   hasActiveInboxFilters,
+  linearProjectOptions,
   inboxFetchState,
   loadInboxFilters,
   loadInboxSource,
@@ -75,7 +76,7 @@ import {
   type InboxFilters,
   type InboxSource,
 } from "../lib/inboxFilters";
-import { projectName } from "../lib/paths";
+import { projectKey, projectName } from "../lib/paths";
 import { IS_MAC } from "../lib/platform";
 import { sameProjectPath, type RecentProject } from "../lib/recents";
 import {
@@ -89,10 +90,13 @@ import {
   linearIssueComment,
   linearIssueDetails,
   linearIssueThread,
+  listLinearTeams,
   loadHiddenLinearTeamIds,
   peekLinearIssueDetails,
   peekLinearIssueThread,
+  saveHiddenLinearTeamIds,
   type LinearIssueThread,
+  type LinearTeam,
 } from "../lib/linear";
 import {
   loadTabGroupColors,
@@ -145,13 +149,14 @@ function inboxProjectOptions(
   const custom = loadTabGroupCustomColors();
   return [...projects]
     .map((project) => {
-      const key = projectName(project.path);
+      const name = projectName(project.path);
+      const key = projectKey(project.path);
       return {
         path: project.path,
-        name: key,
+        name,
         logoPath: resolveTabGroupLogo(key, logos),
         mascotName: resolveTabGroupMascot(key, mascots),
-        mascotColor: resolveTabGroupColor(key, colors, custom, key),
+        mascotColor: resolveTabGroupColor(key, colors, custom, name),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -312,6 +317,7 @@ export function InboxView({
   const [linearHiddenTeamIds, setLinearHiddenTeamIds] = useState(
     loadHiddenLinearTeamIds,
   );
+  const [linearTeams, setLinearTeams] = useState<LinearTeam[]>([]);
   const prevRefresh = useRef(refresh);
 
   const projects = useMemo(
@@ -322,6 +328,7 @@ export function InboxView({
     () => inboxProjectOptions(projects, logos),
     [logos, projects],
   );
+  const linearProjects = useMemo(() => linearProjectOptions(items), [items]);
   const activeFilters = useMemo(
     () =>
       pruneInboxFilters(
@@ -330,7 +337,11 @@ export function InboxView({
       ),
     [filters, projects],
   );
-  const filtersActive = hasActiveInboxFilters(activeFilters, source);
+  const filtersActive = hasActiveInboxFilters(
+    activeFilters,
+    source,
+    linearHiddenTeamIds,
+  );
   const fetchState = inboxFetchState(activeFilters);
   const fetchQuery = useMemo<InboxQuery>(
     () => ({
@@ -375,6 +386,23 @@ export function InboxView({
     window.addEventListener(LINEAR_CHANGE_EVENT, onChange);
     return () => window.removeEventListener(LINEAR_CHANGE_EVENT, onChange);
   }, []);
+
+  // The roster has to come from Linear, not from the fetched issues: hiding a
+  // team drops its issues, so a derived list could never offer it back.
+  useEffect(() => {
+    if (source !== "linear") return;
+    let cancelled = false;
+    void listLinearTeams()
+      .then((teams) => {
+        if (!cancelled) setLinearTeams(teams);
+      })
+      .catch(() => {
+        if (!cancelled) setLinearTeams([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, linearHiddenTeamIds]);
 
   useEffect(() => {
     const force = refresh !== prevRefresh.current;
@@ -587,19 +615,19 @@ export function InboxView({
           <ul className="flex flex-col gap-0.5 p-1.5">
             {visibleItems.map((item) => {
               const key = inboxItemKey(item);
-              const projectKey = projectName(item.projectPath);
+              const projectId = projectKey(item.projectPath);
               return (
                 <li key={key}>
                   <InboxCard
                     item={item}
                     active={selected != null && key === inboxItemKey(selected)}
-                    logoPath={resolveTabGroupLogo(projectKey, logos)}
-                    mascotName={resolveTabGroupMascot(projectKey, groupMascots)}
+                    logoPath={resolveTabGroupLogo(projectId, logos)}
+                    mascotName={resolveTabGroupMascot(projectId, groupMascots)}
                     mascotColor={resolveTabGroupColor(
-                      projectKey,
+                      projectId,
                       groupColors,
                       groupCustomColors,
-                      projectKey,
+                      projectName(item.projectPath),
                     )}
                     onSelect={() => {
                       markInboxItemSeen({
@@ -633,9 +661,13 @@ export function InboxView({
       x={filterMenu.x}
       y={filterMenu.y}
       projects={projectOptions}
+      linearProjects={linearProjects}
+      linearTeams={linearTeams}
+      hiddenLinearTeamIds={linearHiddenTeamIds}
       source={source}
       filters={activeFilters}
       onChange={onFiltersChange}
+      onLinearTeamsChange={saveHiddenLinearTeamIds}
       onClose={() => setFilterMenu(null)}
     />
   ) : null;

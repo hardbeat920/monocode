@@ -58,6 +58,8 @@ pub struct LinearIssue {
     pub repo: String,
     pub team_id: String,
     pub team_name: String,
+    pub project_id: String,
+    pub project_name: String,
     pub project_path: String,
 }
 
@@ -247,6 +249,7 @@ query InboxIssues($first: Int!, $filter: IssueFilter) {
       updatedAt
       state { name type }
       team { id key name }
+      project { id name }
       labels { nodes { name color } }
       assignee { name displayName avatarUrl }
     }
@@ -435,6 +438,13 @@ fn parse_linear_issue(node: &Value) -> Option<LinearIssue> {
     let team_name = team
         .and_then(|value| string_field(value, "name"))
         .unwrap_or_else(|| team_key.clone());
+    let project = node.get("project");
+    let project_id = project
+        .and_then(|value| string_field(value, "id"))
+        .unwrap_or_default();
+    let project_name = project
+        .and_then(|value| string_field(value, "name"))
+        .unwrap_or_default();
     let state = node.get("state");
     Some(LinearIssue {
         provider: "linear".into(),
@@ -457,6 +467,8 @@ fn parse_linear_issue(node: &Value) -> Option<LinearIssue> {
         repo: team_key,
         team_id,
         team_name,
+        project_id,
+        project_name,
         project_path: String::new(),
     })
 }
@@ -787,6 +799,7 @@ mod tests {
                     "updatedAt": "2026-08-27T10:00:00.000Z",
                     "state": { "name": "In Progress", "type": "started" },
                     "team": { "id": "t1", "key": "ENG", "name": "Engineering" },
+                    "project": { "id": "p1", "name": "Billing" },
                     "labels": { "nodes": [{ "name": "bug", "color": "#eb5757" }] },
                     "assignee": { "displayName": "Maya", "name": "maya", "avatarUrl": "https://uploads.linear.app/maya.png" }
                 }]
@@ -804,6 +817,8 @@ mod tests {
         assert_eq!(item.repo, "ENG");
         assert_eq!(item.team_id, "t1");
         assert_eq!(item.team_name, "Engineering");
+        assert_eq!(item.project_id, "p1");
+        assert_eq!(item.project_name, "Billing");
         assert_eq!(item.labels[0].color, "eb5757");
         assert_eq!(item.assignees[0].login, "Maya");
         assert_eq!(
@@ -811,6 +826,26 @@ mod tests {
             "https://uploads.linear.app/maya.png"
         );
         assert!(item.project_path.is_empty());
+    }
+
+    #[test]
+    fn parse_linear_issues_leaves_project_empty_when_unassigned() {
+        let data = json!({
+            "issues": {
+                "nodes": [{
+                    "id": "issue-2",
+                    "identifier": "ENG-10",
+                    "number": 10,
+                    "title": "Loose issue",
+                    "team": { "id": "t1", "key": "ENG", "name": "Engineering" },
+                    "project": Value::Null
+                }]
+            }
+        });
+        let items = parse_linear_issues(&data).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].project_id.is_empty());
+        assert!(items[0].project_name.is_empty());
     }
 
     #[test]

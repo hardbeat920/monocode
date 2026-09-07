@@ -26,7 +26,8 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "sidebarImage": "icons/installer-sidebar.bmp"
+        "sidebarImage": "icons/installer-sidebar.bmp",
+        "installerIcon": "icons/icon.ico"
       }
     },
     "resources": null

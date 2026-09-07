@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-09-07
+
+### Fixed
+
+- Improved transcript performance by rendering collapsed work only when opened, skipping hidden-tab layout work, and reusing line-height measurements across reflows.
+- Pending approval controls remain visible when completed transcript work folds, and switching tabs preserves transcript state.
+
+## [0.1.36] - 2026-09-07
+
+### Added
+
+- Filter Linear Inbox issues by team and project, including issues with no project. Team filters stay in sync with Settings. In #103.
+
+### Fixed
+
+- Improved performance in tool-heavy conversations by avoiding repeated rescans when grouping transcript activity.
+- Projects with the same folder name keep independent names, colors, logos, and mascots. Existing appearance settings migrate to each project, and shared logo files remain available while another project uses them. In #104.
+- Terminal focus stays in place after changing directories with `cd`. In #94.
+- Wrapped inline code grows to fit its content, and list markers stay beside it. In #93.
+- GitHub pull request lookups qualify the head branch with its repository owner.
+- The Windows installer uses the MonoCode icon.
+
 ## [0.1.35] - 2026-09-06
 
 ### Added

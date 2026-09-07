@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HARNESSES } from "../lib/session";
 import type { ArcadeSprite } from "./gridArcade";
 import { createPacmanArcade } from "./pacmanArcade";
@@ -9,6 +9,35 @@ const ROWS = 28;
 const FRAME_MS = 33;
 /** Matches the arcade's own logo lifetime. */
 const LOGO_LIFE_MS = 12000;
+
+/**
+ * The maze, the logo drops, the mascot pen and the chatter all come off
+ * Math.random, so a run is only as repeatable as that stream. Pin it, and the
+ * same board plays out everywhere; leave it loose and a thin tail of unlucky
+ * boards — pac-man walled off from a logo until it times out — turns the
+ * counts below into a coin toss on CI. Override ARCADE_SEED to sweep other
+ * boards and check the counts still hold.
+ */
+const SEED = Number(process.env.ARCADE_SEED) || 0x5eed;
+
+/** mulberry32: small, fast, and good enough to play a maze with. */
+function seededRandom(seed: number) {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockImplementation(seededRandom(SEED));
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const HEADINGS = [
   { x: 1, y: 0 },

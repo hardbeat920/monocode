@@ -47,3 +47,22 @@ describe("AgentMarkdown text direction", () => {
     expect(markup).toContain('class="markdown-code-shell" dir="ltr"');
   });
 });
+
+describe("AgentMarkdown inline code", () => {
+  it("lets a long inline code span grow instead of clipping to a fixed height", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "1. `Before I refactor the transcript rendering, summarize how turns are grouped, in five bullets.`",
+      }),
+    );
+
+    const match = markup.match(/<code dir="ltr" class="([^"]*)"/);
+    expect(match).not.toBeNull();
+    const classes = match![1].split(/\s+/);
+    expect(classes).toContain("inline-flex");
+    expect(classes).toContain("min-h-6");
+    expect(classes).toContain("max-w-full");
+    expect(classes).toContain("[overflow-wrap:anywhere]");
+    expect(classes).not.toContain("h-6");
+  });
+});

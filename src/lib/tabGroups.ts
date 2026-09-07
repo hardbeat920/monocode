@@ -1,4 +1,6 @@
 import type { Tab } from "../chrome/TitleBar";
+import { projectKey, projectName } from "./paths";
+import { knownProjectPaths } from "./recents";
 
 /** Chrome-like palette — saturated enough to read on dark glass. */
 export const TAB_GROUP_COLORS = [
@@ -38,6 +40,7 @@ export function tabGroupLogoDisplayRevision(): number {
 }
 
 function readRecord(key: string): Record<string, string> {
+  migrateProjectAppearanceKeys();
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return {};
@@ -54,12 +57,97 @@ function readRecord(key: string): Record<string, string> {
   }
 }
 
-function writeRecord(key: string, value: Record<string, string>): void {
+function writeRecord(key: string, value: Record<string, string>): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch {
-    /* ignore quota errors */
+    return false;
   }
+}
+
+const APPEARANCE_KEYS = [
+  COLOR_KEY,
+  CUSTOM_COLOR_KEY,
+  LABEL_KEY,
+  LOGO_KEY,
+  MASCOT_KEY,
+] as const;
+
+const KEY_VERSION_KEY = "monocode:tab-group:key-version";
+const KEY_VERSION = "2";
+/** Guards the reads the migration itself makes. */
+let migrating = false;
+/** One attempt per storage instance, so an unfinished pass is not re-run hot. */
+let attemptedFor: unknown = null;
+
+/** Folder names carry no separator; every path key does, drive roots aside. */
+function looksLikeFolderNameKey(key: string): boolean {
+  return !key.includes("/") && key !== "~" && !/^[A-Za-z]:$/.test(key);
+}
+
+/**
+ * Appearance used to be filed under the project's folder name, so checkouts that
+ * share a name — `cortex/agentbase` and `cortex-finance/agentbase` — overwrote
+ * each other's label, color, logo and mascot. Keys are full paths now; each old
+ * entry moves to every remembered project that carries its name, which keeps
+ * both rails looking the same until one of them is changed.
+ *
+ * A project we do not remember yet — evicted from recents, never pinned — cannot
+ * be matched, so its entry stays under the old name and the pass is left unfinished.
+ * Later launches retry until every name is claimed, which is what stops a
+ * reopened project from losing its label for good.
+ */
+export function migrateProjectAppearanceKeys(): void {
+  if (migrating) return;
+  let store: Storage;
+  try {
+    store = localStorage;
+    if (store.getItem(KEY_VERSION_KEY) === KEY_VERSION) return;
+  } catch {
+    return;
+  }
+  if (attemptedFor === store) return;
+  attemptedFor = store;
+  migrating = true;
+  try {
+    if (migrateNow()) store.setItem(KEY_VERSION_KEY, KEY_VERSION);
+  } catch {
+    /* quota or storage loss: the pass stays unfinished and retries next launch */
+  } finally {
+    migrating = false;
+  }
+}
+
+/** `true` once nothing folder-name-shaped is left to claim. */
+function migrateNow(): boolean {
+  const byName = new Map<string, string[]>();
+  for (const path of knownProjectPaths()) {
+    const name = projectName(path);
+    const keys = byName.get(name);
+    if (keys) keys.push(projectKey(path));
+    else byName.set(name, [projectKey(path)]);
+  }
+
+  let done = true;
+  for (const store of APPEARANCE_KEYS) {
+    const record = readRecord(store);
+    const next: Record<string, string> = {};
+    let changed = false;
+    for (const [name, value] of Object.entries(record)) {
+      const keys = byName.get(name);
+      if (keys) {
+        for (const key of keys) next[key] = value;
+        changed = true;
+        continue;
+      }
+      // A name nothing claims stays put, and keeps the pass unfinished.
+      next[name] = value;
+      done &&= !looksLikeFolderNameKey(name);
+    }
+    if (changed && !writeRecord(store, next)) done = false;
+  }
+  return done;
 }
 
 export function loadTabGroupColors(): Record<string, number> {
@@ -162,13 +250,7 @@ export function saveTabGroupMascot(project: string, name: string | null): void {
 
 /** Drops every saved appearance override for a project. */
 export function clearTabGroupSettings(project: string): void {
-  for (const key of [
-    COLOR_KEY,
-    CUSTOM_COLOR_KEY,
-    LABEL_KEY,
-    LOGO_KEY,
-    MASCOT_KEY,
-  ]) {
+  for (const key of APPEARANCE_KEYS) {
     const next = readRecord(key);
     if (!(project in next)) continue;
     delete next[project];
@@ -262,7 +344,7 @@ export type GroupedTab = { id: string; groupId?: string };
 export type TabProjectLookup = (tabId: string) => string | undefined;
 
 /** An unknown project is a wildcard — nothing to scope against. */
-function projectKey(project: string | undefined): string {
+function groupScopeKey(project: string | undefined): string {
   return project?.trim() ?? "";
 }
 
@@ -279,7 +361,7 @@ export function tabGroupProject<T extends GroupedTab>(
   let project: string | null = null;
   for (const tab of tabs) {
     if (tab.groupId !== groupId) continue;
-    const key = projectKey(projectOf(tab.id));
+    const key = groupScopeKey(projectOf(tab.id));
     if (!project) project = key;
     else if (key && project !== key) return null;
   }
@@ -296,7 +378,7 @@ export function canJoinTabGroup<T extends GroupedTab>(
   if (!projectOf) return true;
   const project = tabGroupProject(tabs, groupId, projectOf);
   if (project == null) return true;
-  return sameProject(project, projectKey(projectOf(tabId)));
+  return sameProject(project, groupScopeKey(projectOf(tabId)));
 }
 
 /** Whether dropping one tab onto another may form or extend a group. */
@@ -318,8 +400,8 @@ export function canJoinTabOnto<T extends GroupedTab>(
     return canJoinTabGroup(tabs, targetId, dragged.groupId, projectOf);
   }
   return sameProject(
-    projectKey(projectOf(draggedId)),
-    projectKey(projectOf(targetId)),
+    groupScopeKey(projectOf(draggedId)),
+    groupScopeKey(projectOf(targetId)),
   );
 }
 
