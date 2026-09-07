@@ -9,7 +9,7 @@ import {
 import { looksLikeProject } from "../lib/recents";
 import { isValidSkillName, slugSkillName, type Skill } from "../lib/skills";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import type { SlashFilter } from "../lib/agentCli";
+import type { SlashFilter } from "../lib/agentCommands";
 
 type Props = {
   skills: Skill[];
@@ -26,7 +26,6 @@ type Props = {
   onCreate: (name: string, scope: "project" | "user") => void;
   filter?: SlashFilter;
   onFilterChange?: (filter: SlashFilter) => void;
-  onOpenCli?: () => void;
 };
 
 export function SkillPicker({
@@ -44,7 +43,6 @@ export function SkillPicker({
   onCreate,
   filter = "all",
   onFilterChange,
-  onOpenCli,
 }: Props) {
   return (
     <div
@@ -95,16 +93,6 @@ export function SkillPicker({
             onActive={onActive}
             onPick={onPick}
           />
-          {onOpenCli && filter !== "skills" ? (
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={onOpenCli}
-              className="w-full border-t border-content/10 px-3 py-2 text-left text-xs text-content/70 hover:bg-content/10"
-            >
-              Open agent CLI · all installed commands
-            </button>
-          ) : null}
           {filter !== "commands" ? (
             <button
               type="button"

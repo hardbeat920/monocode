@@ -7,7 +7,6 @@ import {
   spawnPty,
   subscribePty,
   writePty,
-  type PtyCommand,
 } from "../lib/pty";
 import { isOscColorQuery, oscColorReply } from "../lib/terminalChrome";
 import {
@@ -30,9 +29,6 @@ type Props = {
   cwd: string;
   active: boolean;
   onMetaChange?: (patch: TerminalMetaPatch) => void;
-  command?: PtyCommand;
-  onReady?: (send: ((text: string) => Promise<void>) | null) => void;
-  onExit?: (code: number | null) => void;
 };
 
 function cssColor(expr: string, fallback: string): string {
@@ -112,15 +108,7 @@ function oscColors() {
   return isLightScheme() ? OSC_LIGHT : OSC_DARK;
 }
 
-export function TerminalView({
-  id,
-  cwd,
-  active,
-  onMetaChange,
-  command,
-  onReady,
-  onExit,
-}: Props) {
+export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
   const outerRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -129,10 +117,6 @@ export function TerminalView({
   const onMetaChangeRef = useRef(onMetaChange);
   onMetaChangeRef.current = onMetaChange;
   const runningProcessRef = useRef<string | null>(null);
-  const readyRef = useRef(onReady);
-  readyRef.current = onReady;
-  const exitRef = useRef(onExit);
-  exitRef.current = onExit;
 
   useEffect(() => {
     const outer = outerRef.current;
@@ -206,34 +190,14 @@ export function TerminalView({
       },
       (code) => {
         if (closed) return;
-        spawned.current = false;
-        readyRef.current?.(null);
-        exitRef.current?.(code);
         const status = code == null ? "" : ` (${code})`;
         term.writeln(`\r\n[process exited${status}]`);
       },
     );
 
-    const starting = spawnPty(id, cwd, term.cols, term.rows, command)
+    const starting = spawnPty(id, cwd, term.cols, term.rows)
       .then(() => {
-        if (!closed) {
-          spawned.current = true;
-          readyRef.current?.(async (text) => {
-            if (closed || !spawned.current)
-              throw new Error("The CLI has exited.");
-            const input = term.modes.bracketedPasteMode
-              ? `\x1b[200~${text}\x1b[201~`
-              : text;
-            await writePty(id, input);
-            // Native TUIs coalesce bursts into paste events. Give their event
-            // loop time to accept the draft before delivering a separate Enter.
-            await new Promise((resolve) => setTimeout(resolve, 150));
-            if (closed || !spawned.current)
-              throw new Error("The CLI has exited.");
-            await writePty(id, "\r");
-            term.focus();
-          });
-        }
+        if (!closed) spawned.current = true;
       })
       .catch((error) => {
         spawned.current = false;
@@ -336,7 +300,6 @@ export function TerminalView({
 
     return () => {
       closed = true;
-      readyRef.current?.(null);
       cancelAnimationFrame(frame);
       if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
@@ -357,7 +320,7 @@ export function TerminalView({
       termRef.current = null;
       spawned.current = false;
     };
-  }, [id, cwd, command]);
+  }, [id, cwd]);
 
   // Identity-stable: the callers pass an inline arrow, so depending on the
   // prop itself would tear down and re-arm the poll — and re-fork `ps` — on
