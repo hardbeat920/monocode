@@ -28,6 +28,7 @@ import {
   requestAddNoteToChat,
   type Note,
 } from "../lib/notes";
+import { projectKey, projectName } from "../lib/paths";
 import { IS_MAC } from "../lib/platform";
 import { looksLikeProject } from "../lib/recents";
 import {
@@ -320,20 +321,17 @@ type ProjectMarks = {
 };
 
 function NoteProjectMark({
-  project,
+  cwd,
   logos,
   mascots,
   colors,
   customColors,
-}: { project: string } & ProjectMarks) {
-  const logoPath = resolveTabGroupLogo(project, logos);
-  const mascotName = resolveTabGroupMascot(project, mascots);
-  const mascotColor = resolveTabGroupColor(
-    project,
-    colors,
-    customColors,
-    project,
-  );
+}: { cwd: string } & ProjectMarks) {
+  const project = projectName(cwd);
+  const key = projectKey(cwd);
+  const logoPath = resolveTabGroupLogo(key, logos);
+  const mascotName = resolveTabGroupMascot(key, mascots);
+  const mascotColor = resolveTabGroupColor(key, colors, customColors, project);
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       {logoPath ? (
@@ -412,10 +410,10 @@ function NoteCard({
       }`}
     >
       <span className="flex items-center gap-2">
-        {project ? (
+        {project && note.sourceCwd ? (
           <span className="min-w-0 flex-1 text-[11px] text-content/50">
             <NoteProjectMark
-              project={project}
+              cwd={note.sourceCwd}
               logos={logos}
               mascots={mascots}
               colors={colors}
@@ -588,9 +586,9 @@ function NoteEditor({
             {note.slug ? (
               <span className="min-w-0 truncate">{note.slug}</span>
             ) : null}
-            {project ? (
+            {project && note.sourceCwd ? (
               <NoteProjectMark
-                project={project}
+                cwd={note.sourceCwd}
                 logos={logos}
                 mascots={mascots}
                 colors={colors}

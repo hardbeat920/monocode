@@ -155,3 +155,12 @@ export function projectName(cwd: string): string {
   const parts = trimmed.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? trimmed;
 }
+
+/**
+ * Identity for a project's saved appearance and data. Folder names repeat across
+ * checkouts (`cortex/agentbase` and `cortex-finance/agentbase`), so the whole
+ * path is the key — `projectName` is for display only.
+ */
+export function projectKey(cwd: string): string {
+  return pathKey(cwd);
+}

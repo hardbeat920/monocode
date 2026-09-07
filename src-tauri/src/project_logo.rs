@@ -17,12 +17,29 @@ fn project_logos_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Projects are keyed by their full path, which sanitizing alone cannot keep
+/// apart: `a-b/c` and `a/b/c` both collapse to `a-b-c`, and a deep checkout can
+/// outgrow the filesystem's name limit. So every stem carries a hash of the
+/// whole key and keeps only as much of its readable tail as fits.
+const MAX_STEM_CHARS: usize = 96;
+/// `-` plus the hex hash.
+const HASH_CHARS: usize = 17;
+
+fn fnv1a(value: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    hash
+}
+
 fn sanitize_project_key(project: &str) -> String {
     let trimmed = project.trim();
     if trimmed.is_empty() {
         return "project".into();
     }
-    trimmed
+    let safe: String = trimmed
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
@@ -31,7 +48,14 @@ fn sanitize_project_key(project: &str) -> String {
                 '-'
             }
         })
-        .collect()
+        .collect();
+    let head = MAX_STEM_CHARS - HASH_CHARS;
+    let readable: String = if safe.chars().count() <= head {
+        safe
+    } else {
+        safe.chars().skip(safe.chars().count() - head).collect()
+    };
+    format!("{readable}-{:016x}", fnv1a(trimmed))
 }
 
 fn logo_stem(project: &str) -> String {
@@ -111,6 +135,29 @@ pub async fn save_project_logo(
     .map_err(|e| e.to_string())?
 }
 
+/// Drops a logo file the app itself copied in. Logos saved before the key scheme
+/// changed live under a stem we can no longer derive, so the caller hands us the
+/// path it had stored; anything outside the logo directory is ignored.
+fn forget_logo_file_sync(app: &AppHandle, path: &str) -> Result<(), String> {
+    let dir = project_logos_dir(app)?;
+    let file = expand_home(path);
+    if file.parent() != Some(dir.as_path()) || !file.is_file() {
+        return Ok(());
+    }
+    match std::fs::remove_file(&file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn forget_logo_file(app: AppHandle, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || forget_logo_file_sync(&app, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn remove_project_logo(app: AppHandle, project: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || remove_project_logo_sync(&app, &project))
@@ -124,8 +171,31 @@ mod tests {
 
     #[test]
     fn sanitize_project_key_replaces_unsafe_characters() {
-        assert_eq!(sanitize_project_key("agent-terminal"), "agent-terminal");
-        assert_eq!(sanitize_project_key("foo/bar"), "foo-bar");
+        assert!(sanitize_project_key("agent-terminal").starts_with("agent-terminal-"));
+        assert!(sanitize_project_key("foo/bar").starts_with("foo-bar-"));
         assert_eq!(sanitize_project_key("  "), "project");
+    }
+
+    #[test]
+    fn sanitize_project_key_separates_paths_that_sanitize_alike() {
+        // `-` survives and `/` becomes `-`, so only the hash tells these apart.
+        assert_ne!(
+            sanitize_project_key("/Users/me/cortex-finance/agentbase"),
+            sanitize_project_key("/Users/me/cortex/finance/agentbase"),
+        );
+        // A sibling folder cannot be a filename prefix of its neighbour either.
+        let stem = sanitize_project_key("/Users/me/proj");
+        assert!(!sanitize_project_key("/Users/me/proj.old").starts_with(&format!("{stem}.")));
+    }
+
+    #[test]
+    fn sanitize_project_key_shortens_long_paths_without_colliding() {
+        let base = "/Users/me/".to_string() + &"deep/".repeat(40);
+        let a = sanitize_project_key(&format!("{base}agentbase"));
+        let b = sanitize_project_key(&format!("{base}other/agentbase"));
+        assert!(a.chars().count() <= MAX_STEM_CHARS);
+        assert!(b.chars().count() <= MAX_STEM_CHARS);
+        assert_ne!(a, b);
+        assert_eq!(a, sanitize_project_key(&format!("{base}agentbase")));
     }
 }

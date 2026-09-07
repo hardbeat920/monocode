@@ -33,7 +33,7 @@ import {
   stunStars,
   type Coin,
 } from "../lib/composerRunner";
-import { projectName } from "../lib/paths";
+import { projectKey, projectName } from "../lib/paths";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -79,16 +79,18 @@ export function ComposerRunner({
   onExitedRef.current = onExited;
 
   const project = projectName(cwd);
+  const key = projectKey(cwd);
   const appearance = useMemo(() => {
     return {
-      name: resolveTabGroupMascot(project, loadTabGroupMascots()),
+      name: resolveTabGroupMascot(key, loadTabGroupMascots()),
       color: resolveTabGroupColor(
-        project,
+        key,
         loadTabGroupColors(),
         loadTabGroupCustomColors(),
+        project,
       ),
     };
-  }, [project]);
+  }, [key, project]);
 
   useLayoutEffect(() => {
     const layer = layerRef.current;

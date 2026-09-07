@@ -75,7 +75,7 @@ import {
   type InboxFilters,
   type InboxSource,
 } from "../lib/inboxFilters";
-import { projectName } from "../lib/paths";
+import { projectKey, projectName } from "../lib/paths";
 import { IS_MAC } from "../lib/platform";
 import { sameProjectPath, type RecentProject } from "../lib/recents";
 import {
@@ -145,13 +145,14 @@ function inboxProjectOptions(
   const custom = loadTabGroupCustomColors();
   return [...projects]
     .map((project) => {
-      const key = projectName(project.path);
+      const name = projectName(project.path);
+      const key = projectKey(project.path);
       return {
         path: project.path,
-        name: key,
+        name,
         logoPath: resolveTabGroupLogo(key, logos),
         mascotName: resolveTabGroupMascot(key, mascots),
-        mascotColor: resolveTabGroupColor(key, colors, custom, key),
+        mascotColor: resolveTabGroupColor(key, colors, custom, name),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -587,19 +588,19 @@ export function InboxView({
           <ul className="flex flex-col gap-0.5 p-1.5">
             {visibleItems.map((item) => {
               const key = inboxItemKey(item);
-              const projectKey = projectName(item.projectPath);
+              const projectId = projectKey(item.projectPath);
               return (
                 <li key={key}>
                   <InboxCard
                     item={item}
                     active={selected != null && key === inboxItemKey(selected)}
-                    logoPath={resolveTabGroupLogo(projectKey, logos)}
-                    mascotName={resolveTabGroupMascot(projectKey, groupMascots)}
+                    logoPath={resolveTabGroupLogo(projectId, logos)}
+                    mascotName={resolveTabGroupMascot(projectId, groupMascots)}
                     mascotColor={resolveTabGroupColor(
-                      projectKey,
+                      projectId,
                       groupColors,
                       groupCustomColors,
-                      projectKey,
+                      projectName(item.projectPath),
                     )}
                     onSelect={() => {
                       markInboxItemSeen({

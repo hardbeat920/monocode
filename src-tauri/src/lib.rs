@@ -319,6 +319,7 @@ pub fn run() {
             window_transfer::take_window_transfer,
             project_logo::save_project_logo,
             project_logo::remove_project_logo,
+            project_logo::forget_logo_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building MonoCode");

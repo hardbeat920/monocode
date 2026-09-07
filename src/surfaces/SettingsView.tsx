@@ -90,7 +90,7 @@ import {
   savePickerProviderVisible,
   subscribeModels,
 } from "../lib/models";
-import { prettyCwd, projectName } from "../lib/paths";
+import { prettyCwd, projectKey, projectName } from "../lib/paths";
 import { IS_MAC } from "../lib/platform";
 import {
   loadArchivedProjects,
@@ -1138,7 +1138,7 @@ function useArchivedProjects(): ArchivedProject[] {
 
 function archivedProjectLabel(path: string): string {
   return resolveTabGroupLabel(
-    projectName(path),
+    projectKey(path),
     loadTabGroupLabels(),
     projectName(path),
   );

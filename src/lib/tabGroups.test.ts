@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Tab } from "../chrome/TitleBar";
 import {
   addTabToGroup,
@@ -11,11 +11,18 @@ import {
   joinTabOnto,
   removeTabFromGroup,
   reorderTabSegments,
+  loadTabGroupColors,
+  loadTabGroupLabels,
+  resolveTabGroupColor,
+  resolveTabGroupLabel,
   resolveTabGroupLogo,
+  saveTabGroupColor,
+  saveTabGroupLabel,
   segmentTabs,
   sharedGroupProject,
   ungroupTabs,
 } from "./tabGroups";
+import { projectKey, projectName } from "./paths";
 
 function tab(id: string, project: string, groupId?: string): Tab {
   return {
@@ -322,5 +329,123 @@ describe("project-scoped grouping", () => {
       ["c", null],
       ["d", null],
     ]);
+  });
+});
+
+function mockLocalStorage(seed: Record<string, string> = {}) {
+  const data = new Map(Object.entries(seed));
+  Object.defineProperty(globalThis, "localStorage", {
+    value: {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+      removeItem: (key: string) => {
+        data.delete(key);
+      },
+      clear: () => data.clear(),
+      key: (index: number) => [...data.keys()][index] ?? null,
+      get length() {
+        return data.size;
+      },
+    },
+    configurable: true,
+  });
+  return data;
+}
+
+const FINANCE = "/Users/me/cortex-finance/agentbase";
+const CORTEX = "/Users/me/cortex/agentbase";
+
+describe("project appearance keys", () => {
+  beforeEach(() => {
+    mockLocalStorage({ "monocode:tab-group:key-version": "2" });
+  });
+
+  it("keeps same-named projects in different folders apart", () => {
+    // Both checkouts share a folder name — the collision this guards against.
+    expect(projectName(FINANCE)).toBe(projectName(CORTEX));
+    expect(projectKey(FINANCE)).not.toBe(projectKey(CORTEX));
+
+    saveTabGroupLabel(projectKey(FINANCE), "Finance");
+    saveTabGroupColor(projectKey(FINANCE), 3);
+
+    const labels = loadTabGroupLabels();
+    expect(resolveTabGroupLabel(projectKey(FINANCE), labels, "agentbase")).toBe(
+      "Finance",
+    );
+    expect(resolveTabGroupLabel(projectKey(CORTEX), labels, "agentbase")).toBe(
+      "agentbase",
+    );
+    expect(loadTabGroupColors()[projectKey(CORTEX)]).toBeUndefined();
+  });
+});
+
+describe("migrateProjectAppearanceKeys", () => {
+  it("moves folder-name entries onto every project that carries the name", () => {
+    const store = mockLocalStorage({
+      "monocode.recentProjects": JSON.stringify([
+        { path: FINANCE, openedAt: 2 },
+        { path: CORTEX, openedAt: 1 },
+      ]),
+      "monocode:tab-group:labels": JSON.stringify({ agentbase: "Agentbase" }),
+      "monocode:tab-group:colors": JSON.stringify({ agentbase: "4" }),
+    });
+
+    const labels = loadTabGroupLabels();
+    expect(labels[projectKey(FINANCE)]).toBe("Agentbase");
+    expect(labels[projectKey(CORTEX)]).toBe("Agentbase");
+    expect(labels.agentbase).toBeUndefined();
+    expect(loadTabGroupColors()[projectKey(CORTEX)]).toBe(4);
+    expect(store.get("monocode:tab-group:key-version")).toBe("2");
+
+    // Renaming one afterwards leaves the other alone.
+    saveTabGroupLabel(projectKey(CORTEX), "Cortex");
+    const after = loadTabGroupLabels();
+    expect(after[projectKey(CORTEX)]).toBe("Cortex");
+    expect(after[projectKey(FINANCE)]).toBe("Agentbase");
+  });
+
+  it("leaves entries for projects it no longer knows about", () => {
+    const store = mockLocalStorage({
+      "monocode:tab-group:labels": JSON.stringify({ gone: "Gone" }),
+    });
+    expect(loadTabGroupLabels().gone).toBe("Gone");
+    // Unfinished: a later launch must still get the chance to claim it.
+    expect(store.get("monocode:tab-group:key-version")).toBeUndefined();
+  });
+
+  it("claims an entry once its project is remembered again", () => {
+    // Evicted from the 20-slot recents cap, so the first pass cannot match it.
+    mockLocalStorage({
+      "monocode:tab-group:labels": JSON.stringify({ agentbase: "Finance" }),
+    });
+    expect(loadTabGroupLabels()[projectKey(FINANCE)]).toBeUndefined();
+
+    // Next launch, with the project reopened.
+    mockLocalStorage({
+      "monocode.recentProjects": JSON.stringify([{ path: FINANCE, openedAt: 1 }]),
+      "monocode:tab-group:labels": JSON.stringify({ agentbase: "Finance" }),
+    });
+    expect(loadTabGroupLabels()[projectKey(FINANCE)]).toBe("Finance");
+  });
+
+  it("keeps Windows checkouts that differ only in case together", () => {
+    mockLocalStorage({
+      "monocode.recentProjects": JSON.stringify([
+        { path: "C:\\Users\\me\\cortex\\Agentbase", openedAt: 1 },
+      ]),
+      "monocode:tab-group:labels": JSON.stringify({ Agentbase: "Finance" }),
+    });
+    const labels = loadTabGroupLabels();
+    expect(labels[projectKey("C:/Users/me/cortex/agentbase")]).toBe("Finance");
+  });
+});
+
+describe("resolveTabGroupColor", () => {
+  it("falls back to the folder-name hash so existing rails keep their color", () => {
+    expect(resolveTabGroupColor(projectKey(FINANCE), {}, {}, "agentbase")).toBe(
+      resolveTabGroupColor("agentbase", {}, {}, "agentbase"),
+    );
   });
 });

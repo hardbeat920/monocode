@@ -1,4 +1,4 @@
-import { projectName } from "./paths";
+import { projectKey } from "./paths";
 import { clearProjectLogo } from "./projectLogos";
 import { normalizeProjectPath } from "./recents";
 import { deleteSession, listSessionsByProject } from "./sessionStore";
@@ -13,7 +13,7 @@ export async function projectSessionCount(path: string): Promise<number> {
 /** Everything we persist for a project: saved chats plus its rail appearance. */
 export async function removeProjectData(path: string): Promise<void> {
   const normalized = normalizeProjectPath(path);
-  const key = projectName(normalized);
+  const key = projectKey(normalized);
   const sessions = await listSessionsByProject(normalized).catch(() => []);
   for (const session of sessions) {
     await deleteSession(session.id).catch(() => undefined);
