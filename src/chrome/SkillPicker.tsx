@@ -7,12 +7,9 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { looksLikeProject } from "../lib/recents";
-import {
-  isValidSkillName,
-  slugSkillName,
-  type Skill,
-} from "../lib/skills";
+import { isValidSkillName, slugSkillName, type Skill } from "../lib/skills";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
+import type { SlashFilter } from "../lib/agentCommands";
 
 type Props = {
   skills: Skill[];
@@ -27,6 +24,8 @@ type Props = {
   onStartCreate: () => void;
   onCancelCreate: () => void;
   onCreate: (name: string, scope: "project" | "user") => void;
+  filter?: SlashFilter;
+  onFilterChange?: (filter: SlashFilter) => void;
 };
 
 export function SkillPicker({
@@ -42,6 +41,8 @@ export function SkillPicker({
   onStartCreate,
   onCancelCreate,
   onCreate,
+  filter = "all",
+  onFilterChange,
 }: Props) {
   return (
     <div
@@ -59,6 +60,32 @@ export function SkillPicker({
         />
       ) : (
         <>
+          {onFilterChange ? (
+            <div
+              className="flex items-center gap-1 border-b border-content/10 p-1"
+              role="group"
+              aria-label="Show slash entries"
+            >
+              {(
+                [
+                  ["all", "All"],
+                  ["commands", "Agent commands"],
+                  ["skills", "Skills"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={filter === value}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => onFilterChange(value)}
+                  className={`rounded px-2 py-1 text-xs ${filter === value ? "bg-content/15 text-content" : "text-content/60 hover:bg-content/10"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <SkillList
             skills={skills}
             query={query}
@@ -66,15 +93,17 @@ export function SkillPicker({
             onActive={onActive}
             onPick={onPick}
           />
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onStartCreate}
-            className="flex w-full items-center gap-2 border-t border-content/10 px-2.5 py-2 text-left text-[12px] text-content/70 hover:bg-content/10 hover:text-content"
-          >
-            <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
-            New skill
-          </button>
+          {filter !== "commands" ? (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={onStartCreate}
+              className="flex w-full items-center gap-2 border-t border-content/10 px-2.5 py-2 text-left text-[12px] text-content/70 hover:bg-content/10 hover:text-content"
+            >
+              <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
+              New skill
+            </button>
+          ) : null}
         </>
       )}
     </div>
@@ -174,9 +203,13 @@ function SkillList({
                 {skill.description}
               </span>
             ) : null}
-            {skill.kind === "native" && (skill.inputHint || skill.subcommands?.length) ? (
+            {skill.kind === "native" &&
+            (skill.inputHint || skill.subcommands?.length) ? (
               <span className="line-clamp-2 text-[11px] text-content/40">
-                {skill.inputHint || skill.subcommands?.map((sub) => sub.usage || sub.name).join(" · ")}
+                {skill.inputHint ||
+                  skill.subcommands
+                    ?.map((sub) => sub.usage || sub.name)
+                    .join(" · ")}
               </span>
             ) : null}
           </button>
@@ -305,7 +338,9 @@ function ScopeButton({
       disabled={disabled}
       onClick={onClick}
       className={`flex min-w-0 flex-1 flex-col rounded-md px-2 py-1.5 text-left ${
-        selected ? "bg-content/20 text-content" : "bg-content/10 text-content/70"
+        selected
+          ? "bg-content/20 text-content"
+          : "bg-content/10 text-content/70"
       } disabled:opacity-40`}
     >
       <span className="text-[12px]">{label}</span>
@@ -322,6 +357,7 @@ function scopeLabel(skill: Skill): string {
   }
   if (skill.kind === "builtin") return "monocode";
   if (skill.scope === "user") return "personal";
-  if (skill.source !== "agents" && skill.source !== "monocode") return skill.source;
+  if (skill.source !== "agents" && skill.source !== "monocode")
+    return skill.source;
   return "project";
 }

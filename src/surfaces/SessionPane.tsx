@@ -42,6 +42,12 @@ import { loadNotesEnabled, subscribeNotesEnabled } from "../lib/settings";
 import { resolveModel } from "../lib/models";
 import { isAstraModel } from "../lib/astraWelcome";
 import { AstraWelcome } from "./AstraWelcome";
+import { AgentCommandPanel } from "../chrome/AgentCommandPanel";
+import {
+  runChatCommand,
+  supportsAgentCommands,
+  type CommandPanel,
+} from "../lib/agentCommands";
 
 type Props = {
   session: Session;
@@ -238,6 +244,19 @@ export const SessionPane = memo(function SessionPane({
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer = !isEmpty || inSplit || !!session.inboxAsk;
   const draftRef = useRef<string | undefined>(undefined);
+  const [commandPanel, setCommandPanel] = useState<CommandPanel | null>(null);
+  const handleAgentCommand = (command: string): boolean => {
+    const result = runChatCommand(session, command, {
+      onModelChange,
+      onModelSettingsChange,
+      onRuntimeModeChange,
+      onCompactContext,
+      onStop,
+      onOpenDiff,
+    });
+    setCommandPanel(result.panel);
+    return result.accepted;
+  };
   const composer = (
     <Composer
       enabled={visible}
@@ -283,6 +302,27 @@ export const SessionPane = memo(function SessionPane({
       onCwdChange={(cwd) => onCwdChange(session.id, cwd)}
       onBranchChange={() => onBranchChange(session.id)}
       onNewTerminal={() => onNewTerminal(session.id)}
+      onAgentCommand={
+        supportsAgentCommands(session.harness) ? handleAgentCommand : undefined
+      }
+      commandResult={
+        commandPanel && supportsAgentCommands(session.harness) ? (
+          <AgentCommandPanel
+            panel={commandPanel}
+            session={session}
+            onClose={() => setCommandPanel(null)}
+            onModelChange={(model) =>
+              onModelChange(session.id, session.harness, model)
+            }
+            onModelSettingsChange={(settings) =>
+              onModelSettingsChange(session.id, settings)
+            }
+            onRuntimeModeChange={(mode) =>
+              onRuntimeModeChange(session.id, mode)
+            }
+          />
+        ) : null
+      }
       onModelChange={(harness, model) => {
         onModelChange(session.id, harness, model);
         const selected = resolveModel(harness, model);

@@ -121,6 +121,15 @@ import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "./Popover";
 import { consumePlanCommand, PLAN_COMMAND } from "../lib/plan";
 import { COMPACT_COMMAND, isCompactCommand } from "../lib/compact";
+import {
+  agentCommands,
+  agentCommandPrompt,
+  filterSlashItems,
+  loadSlashFilter,
+  saveSlashFilter,
+  supportsAgentCommands,
+  type SlashFilter,
+} from "../lib/agentCommands";
 
 type Props = {
   enabled?: boolean;
@@ -154,6 +163,8 @@ type Props = {
   onCwdChange: (cwd: string) => void;
   onBranchChange?: () => void;
   onNewTerminal?: () => void;
+  onAgentCommand?: (command: string) => boolean;
+  commandResult?: ReactNode;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange?: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -407,6 +418,8 @@ export function Composer({
   onCwdChange,
   onBranchChange,
   onNewTerminal,
+  onAgentCommand,
+  commandResult,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
@@ -491,10 +504,14 @@ export function Composer({
     pickerOpen,
   });
   const skills = skillCatalog.skills;
+  const [slashFilter, setSlashFilter] = useState<SlashFilter>(loadSlashFilter);
+  const commandsSupported = !!onAgentCommand && supportsAgentCommands(harness);
+  const effectiveFilter = commandsSupported ? slashFilter : "all";
   const slashItems = useMemo(
     () => [
       PLAN_COMMAND,
       COMPACT_COMMAND,
+      ...(commandsSupported ? agentCommands(harness) : []),
       ...skills.filter(
         (skill) =>
           skill.kind === "native" ||
@@ -502,12 +519,17 @@ export function Composer({
             skill.name !== COMPACT_COMMAND.name),
       ),
     ],
-    [skills],
+    [skills, commandsSupported, harness],
   );
-  const skillLimit = hasNativeCommands(harness)
-    ? Number.POSITIVE_INFINITY
-    : undefined;
-  const rankedSkills = rankSkills(slashItems, slash?.query ?? "", skillLimit);
+  const skillLimit =
+    hasNativeCommands(harness) || commandsSupported
+      ? Number.POSITIVE_INFINITY
+      : undefined;
+  const rankedSkills = rankSkills(
+    filterSlashItems(slashItems, effectiveFilter),
+    slash?.query ?? "",
+    skillLimit,
+  );
   const attachmentsSupported = harnessSupportsAttachments(harness);
   const skillNames = useMemo(
     () => new Set(slashItems.map((skill) => skill.invocation)),
@@ -701,7 +723,11 @@ export function Composer({
   const syncTokensFromTextarea = (el: HTMLTextAreaElement) => {
     if (creatingSkill) return;
     const cursor = el.selectionStart ?? 0;
-    const token = slashTokenAt(el.value, cursor, hasNativeCommands(harness));
+    const token = slashTokenAt(
+      el.value,
+      cursor,
+      hasNativeCommands(harness) || commandsSupported,
+    );
     setSlash(token);
     setMention(token ? null : mentionTokenAt(el.value, cursor));
   };
@@ -900,6 +926,36 @@ export function Composer({
   }, [addAttachments, attachmentsSupported, enabled]);
 
   const submit = (value: string) => {
+    const native = commandsSupported
+      ? agentCommandPrompt(value, harness, effectiveFilter, skills)
+      : null;
+    if (native && /^\/plan(?=\s|$)/.test(native)) {
+      value = native;
+      if (!consumePlanCommand(value).text.trim()) {
+        setPlanSelected(true);
+        if (ref.current) ref.current.value = "";
+        setDraft("");
+        onDraftChange?.("");
+        setSlash(null);
+        syncHasValue("", attachments);
+        return;
+      }
+    } else if (native) {
+      const accepted = onAgentCommand?.(native);
+      setSlash(null);
+      if (!accepted) return;
+      if (ref.current) {
+        ref.current.value = "";
+        ref.current.style.height = "auto";
+      }
+      setDraft("");
+      onDraftChange?.("");
+      setMention(null);
+      // A chat command consumes only its text. Keep attachments, cards and
+      // the next-message plan selection in the same mounted composer.
+      syncHasValue("", attachments);
+      return;
+    }
     if (isCompactCommand(value)) {
       if (!onCompactContext?.()) return;
       if (!ref.current) return;
@@ -983,7 +1039,23 @@ export function Composer({
     if (
       e.key === "Enter" &&
       !e.shiftKey &&
-      isCompactCommand(e.currentTarget.value)
+      (isCompactCommand(e.currentTarget.value) ||
+        (commandsSupported &&
+          agentCommandPrompt(
+            e.currentTarget.value,
+            harness,
+            effectiveFilter,
+            skills,
+          ) !== null &&
+          (!slash ||
+            rankedSkills.length === 0 ||
+            agentCommands(harness).some((item) => {
+              const name = e.currentTarget.value
+                .trim()
+                .split(/\s/)[0]
+                .replace(/^\/(agent:|cli:)?/, "");
+              return item.name === name;
+            }))))
     ) {
       e.preventDefault();
       submit(e.currentTarget.value);
@@ -1072,6 +1144,7 @@ export function Composer({
         onSteer={onSteerQueuedMessage}
         onResume={onResumeQueue}
       />
+      {commandResult}
       <div className="relative overflow-visible">
         {pickerOpen ? (
           <div className="absolute inset-x-0 bottom-full z-30 mb-1">
@@ -1085,6 +1158,17 @@ export function Composer({
               busy={createBusy}
               onActive={setSkillActive}
               onPick={pickSkill}
+              filter={effectiveFilter}
+              onFilterChange={
+                commandsSupported
+                  ? (filter) => {
+                      setSlashFilter(filter);
+                      saveSlashFilter(filter);
+                      setSkillActive(0);
+                      ref.current?.focus();
+                    }
+                  : undefined
+              }
               onStartCreate={() => {
                 setCreatingSkill(true);
                 setCreateError(null);
