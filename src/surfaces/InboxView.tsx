@@ -66,6 +66,7 @@ import {
 import {
   applyInboxFilters,
   hasActiveInboxFilters,
+  linearProjectOptions,
   inboxFetchState,
   loadInboxFilters,
   loadInboxSource,
@@ -89,10 +90,13 @@ import {
   linearIssueComment,
   linearIssueDetails,
   linearIssueThread,
+  listLinearTeams,
   loadHiddenLinearTeamIds,
   peekLinearIssueDetails,
   peekLinearIssueThread,
+  saveHiddenLinearTeamIds,
   type LinearIssueThread,
+  type LinearTeam,
 } from "../lib/linear";
 import {
   loadTabGroupColors,
@@ -312,6 +316,7 @@ export function InboxView({
   const [linearHiddenTeamIds, setLinearHiddenTeamIds] = useState(
     loadHiddenLinearTeamIds,
   );
+  const [linearTeams, setLinearTeams] = useState<LinearTeam[]>([]);
   const prevRefresh = useRef(refresh);
 
   const projects = useMemo(
@@ -322,6 +327,7 @@ export function InboxView({
     () => inboxProjectOptions(projects, logos),
     [logos, projects],
   );
+  const linearProjects = useMemo(() => linearProjectOptions(items), [items]);
   const activeFilters = useMemo(
     () =>
       pruneInboxFilters(
@@ -330,7 +336,11 @@ export function InboxView({
       ),
     [filters, projects],
   );
-  const filtersActive = hasActiveInboxFilters(activeFilters, source);
+  const filtersActive = hasActiveInboxFilters(
+    activeFilters,
+    source,
+    linearHiddenTeamIds,
+  );
   const fetchState = inboxFetchState(activeFilters);
   const fetchQuery = useMemo<InboxQuery>(
     () => ({
@@ -375,6 +385,23 @@ export function InboxView({
     window.addEventListener(LINEAR_CHANGE_EVENT, onChange);
     return () => window.removeEventListener(LINEAR_CHANGE_EVENT, onChange);
   }, []);
+
+  // The roster has to come from Linear, not from the fetched issues: hiding a
+  // team drops its issues, so a derived list could never offer it back.
+  useEffect(() => {
+    if (source !== "linear") return;
+    let cancelled = false;
+    void listLinearTeams()
+      .then((teams) => {
+        if (!cancelled) setLinearTeams(teams);
+      })
+      .catch(() => {
+        if (!cancelled) setLinearTeams([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, linearHiddenTeamIds]);
 
   useEffect(() => {
     const force = refresh !== prevRefresh.current;
@@ -633,9 +660,13 @@ export function InboxView({
       x={filterMenu.x}
       y={filterMenu.y}
       projects={projectOptions}
+      linearProjects={linearProjects}
+      linearTeams={linearTeams}
+      hiddenLinearTeamIds={linearHiddenTeamIds}
       source={source}
       filters={activeFilters}
       onChange={onFiltersChange}
+      onLinearTeamsChange={saveHiddenLinearTeamIds}
       onClose={() => setFilterMenu(null)}
     />
   ) : null;

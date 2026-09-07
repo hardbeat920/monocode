@@ -3,12 +3,15 @@ import {
   applyInboxFilters,
   DEFAULT_INBOX_FILTERS,
   filterInboxByKind,
+  filterInboxByLinearProject,
   filterInboxByProject,
   filterInboxByProvider,
   filterInboxByStatus,
   filterInboxByTime,
   hasActiveInboxFilters,
   inboxFetchState,
+  LINEAR_NO_PROJECT,
+  linearProjectOptions,
   pruneInboxFilters,
 } from "./inboxFilters";
 import type { InboxItem } from "./githubTasks";
@@ -56,6 +59,103 @@ describe("filterInboxByProject", () => {
     expect(
       filterInboxByProject(rows, ["/tmp/web"]).map((row) => row.number),
     ).toEqual([9]);
+  });
+});
+
+describe("linearProjectOptions", () => {
+  function linearItem(number: number, project?: { id: string; name: string }) {
+    return item({
+      number,
+      kind: "linear",
+      provider: "linear",
+      projectPath: "",
+      projectId: project?.id ?? "",
+      projectName: project?.name ?? "",
+      updatedAt: "2026-08-27T10:00:00Z",
+    });
+  }
+
+  it("collects distinct projects sorted by name", () => {
+    const rows = [
+      linearItem(1, { id: "p2", name: "Onboarding" }),
+      linearItem(2, { id: "p1", name: "Billing" }),
+      linearItem(3, { id: "p1", name: "Billing" }),
+    ];
+    expect(linearProjectOptions(rows)).toEqual([
+      { id: "p1", name: "Billing" },
+      { id: "p2", name: "Onboarding" },
+    ]);
+  });
+
+  it("appends a No project row when an issue sits outside every project", () => {
+    const rows = [linearItem(1, { id: "p1", name: "Billing" }), linearItem(2)];
+    expect(linearProjectOptions(rows)).toEqual([
+      { id: "p1", name: "Billing" },
+      { id: LINEAR_NO_PROJECT, name: "No project" },
+    ]);
+  });
+
+  it("ignores GitHub items", () => {
+    const rows = [item({ number: 1, updatedAt: "2026-08-27T10:00:00Z" })];
+    expect(linearProjectOptions(rows)).toEqual([]);
+  });
+
+  it("falls back to the id when a project has no name", () => {
+    expect(linearProjectOptions([linearItem(1, { id: "p1", name: "" })])).toEqual(
+      [{ id: "p1", name: "p1" }],
+    );
+  });
+});
+
+describe("filterInboxByLinearProject", () => {
+  const rows = [
+    item({
+      number: 1,
+      kind: "linear",
+      provider: "linear",
+      projectPath: "",
+      projectId: "p1",
+      projectName: "Billing",
+      updatedAt: "2026-08-27T10:00:00Z",
+    }),
+    item({
+      number: 2,
+      kind: "linear",
+      provider: "linear",
+      projectPath: "",
+      projectId: "",
+      projectName: "",
+      updatedAt: "2026-08-27T10:00:00Z",
+    }),
+    item({ number: 3, updatedAt: "2026-08-27T10:00:00Z" }),
+  ];
+
+  it("keeps everything when nothing is hidden", () => {
+    expect(filterInboxByLinearProject(rows, []).map((row) => row.number)).toEqual(
+      [1, 2, 3],
+    );
+  });
+
+  it("hides the selected project", () => {
+    expect(
+      filterInboxByLinearProject(rows, ["p1"]).map((row) => row.number),
+    ).toEqual([2, 3]);
+  });
+
+  it("hides project-less issues via the No project sentinel", () => {
+    expect(
+      filterInboxByLinearProject(rows, [LINEAR_NO_PROJECT]).map(
+        (row) => row.number,
+      ),
+    ).toEqual([1, 3]);
+  });
+
+  it("never hides GitHub items", () => {
+    expect(
+      filterInboxByLinearProject(rows, ["p1", LINEAR_NO_PROJECT]).map(
+        (row) => row.number,
+      ),
+    ).toEqual([3]);
   });
 });
 
@@ -262,6 +362,42 @@ describe("hasActiveInboxFilters", () => {
         "linear",
       ),
     ).toBe(false);
+  });
+
+  it("is true when a Linear project is hidden on the Linear tab", () => {
+    expect(
+      hasActiveInboxFilters(
+        { ...DEFAULT_INBOX_FILTERS, hiddenLinearProjects: ["p1"] },
+        "linear",
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores hidden Linear projects on the GitHub tab", () => {
+    expect(
+      hasActiveInboxFilters(
+        { ...DEFAULT_INBOX_FILTERS, hiddenLinearProjects: ["p1"] },
+        "github",
+      ),
+    ).toBe(false);
+  });
+
+  it("is true when a Linear team is hidden on the Linear tab", () => {
+    expect(hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "linear", ["t1"])).toBe(
+      true,
+    );
+  });
+
+  it("ignores hidden Linear teams on the GitHub tab", () => {
+    expect(hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "github", ["t1"])).toBe(
+      false,
+    );
+  });
+
+  it("is false on the Linear tab when no team is hidden", () => {
+    expect(hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "linear", [])).toBe(
+      false,
+    );
   });
 });
 

@@ -50,6 +50,9 @@ export type InboxItem = Omit<GithubWorkItem, "kind"> & {
   identifier?: string;
   teamId?: string;
   teamName?: string;
+  /** Linear project the issue belongs to. Empty when it sits outside every project. */
+  projectId?: string;
+  projectName?: string;
   stateType?: string;
 };
 
@@ -534,6 +537,8 @@ function linearIssueToInboxItem(issue: LinearIssue): InboxItem {
     repo: issue.repo,
     teamId: issue.teamId,
     teamName: issue.teamName,
+    projectId: issue.projectId || "",
+    projectName: issue.projectName || "",
     projectPath: issue.projectPath || "",
   };
 }
@@ -707,6 +712,7 @@ export function matchesInboxQuery(item: InboxItem, query: string): boolean {
     item.projectPath,
     item.identifier,
     item.teamName,
+    item.projectName,
     kind,
     `#${item.number}`,
     String(item.number),
