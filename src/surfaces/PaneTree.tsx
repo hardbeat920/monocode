@@ -4,6 +4,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { setGrabbing, suppressTextSelection } from "../lib/drag";
@@ -300,6 +301,12 @@ function PaneTreeComponent({
         const session = sessions.find((entry) => entry.id === leaf.id);
         const dragging = drop?.fromId === leaf.id;
         const onPaneDragStart = inSplit ? paneDragStartFor(leaf.id) : undefined;
+        const backgroundStyle = {
+          "--chat-background-left": `${(-leaf.rect.x / leaf.rect.w) * 100}%`,
+          "--chat-background-top": `${(-leaf.rect.y / leaf.rect.h) * 100}%`,
+          "--chat-background-width": `${100 / leaf.rect.w}%`,
+          "--chat-background-height": `${100 / leaf.rect.h}%`,
+        } as CSSProperties;
         return (
           <div
             key={leaf.id}
@@ -310,6 +317,7 @@ function PaneTreeComponent({
               top: `${leaf.rect.y * 100}%`,
               width: `${leaf.rect.w * 100}%`,
               height: `${leaf.rect.h * 100}%`,
+              ...backgroundStyle,
             }}
           >
             {drop && drop.overId === leaf.id && drop.fromId !== leaf.id ? (

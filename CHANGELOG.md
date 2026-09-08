@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Prevented truncated labels in tabs and context menus from clipping the bottoms of letters on Windows.
+- Split conversation panes now share one continuous chat background instead of repeating the image in every pane.
 
 ## [0.1.39] - 2026-09-08
 
