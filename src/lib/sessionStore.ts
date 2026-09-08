@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke } from "./transport";
 import { persistableAttachment } from "./attachments";
 import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
@@ -32,6 +33,62 @@ export type SessionSummary = {
   archived?: boolean;
   pinned?: boolean;
 };
+
+export const SESSION_STORE_CHANGED = "session-store-changed";
+
+export type SessionStoreChanged =
+  | { kind: "upserted"; summary: SessionSummary }
+  | { kind: "deleted"; sessionId: string; cwd?: string }
+  | { kind: "archived"; sessionId: string; cwd?: string; archived: boolean }
+  | { kind: "pinned"; sessionId: string; cwd?: string; pinned: boolean };
+
+function isSessionSummary(value: unknown): value is SessionSummary {
+  if (!value || typeof value !== "object") return false;
+  if (!("id" in value) || !("cwd" in value)) return false;
+  return typeof value.id === "string" && typeof value.cwd === "string";
+}
+
+export function parseSessionStoreChanged(
+  value: unknown,
+): SessionStoreChanged | null {
+  if (!value || typeof value !== "object" || !("kind" in value)) return null;
+  const kind = value.kind;
+  if (typeof kind !== "string") return null;
+  if (kind === "upserted") {
+    if (!("summary" in value) || !isSessionSummary(value.summary)) return null;
+    return { kind: "upserted", summary: value.summary };
+  }
+  if (!("sessionId" in value) || typeof value.sessionId !== "string") {
+    return null;
+  }
+  const sessionId = value.sessionId;
+  const cwd =
+    "cwd" in value && typeof value.cwd === "string" ? value.cwd : undefined;
+  if (kind === "deleted") {
+    return { kind: "deleted", sessionId, ...(cwd ? { cwd } : {}) };
+  }
+  if (kind === "archived") {
+    if (!("archived" in value) || typeof value.archived !== "boolean") {
+      return null;
+    }
+    return {
+      kind: "archived",
+      sessionId,
+      archived: value.archived,
+      ...(cwd ? { cwd } : {}),
+    };
+  }
+  if (kind === "pinned") {
+    if (!("pinned" in value) || typeof value.pinned !== "boolean") return null;
+    return {
+      kind: "pinned",
+      sessionId,
+      pinned: value.pinned,
+      ...(cwd ? { cwd } : {}),
+    };
+  }
+  return null;
+}
 
 type SessionRecord = {
   id: string;

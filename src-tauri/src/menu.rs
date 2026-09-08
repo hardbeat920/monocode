@@ -1,8 +1,10 @@
 #[cfg(target_os = "macos")]
 use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
+use tauri::AppHandle;
+#[cfg(desktop)]
+use tauri::Emitter;
 #[cfg(target_os = "macos")]
 use tauri::Wry;
-use tauri::{AppHandle, Emitter};
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
@@ -11,6 +13,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Desktop-only: mobile has no menu events, so nothing dispatches here.
+#[cfg(desktop)]
 pub fn dispatch(app: &AppHandle, id: &str) {
     match id {
         "new_window" => {

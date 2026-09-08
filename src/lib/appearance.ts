@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
-import { IS_MAC } from "./platform";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke } from "./transport";
+import { IS_IPAD, IS_MACOS } from "./platform";
 
 const THEME_HUE_KEY = "monocode.themeHue";
 const THEME_SATURATION_KEY = "monocode.themeSaturation";
@@ -154,13 +155,14 @@ export function applyThemeTint(hue: number, saturation: number) {
 }
 
 export function initAppearance() {
-  document.documentElement.classList.toggle("is-mac", IS_MAC);
+  document.documentElement.classList.toggle("is-mac", IS_MACOS);
+  document.documentElement.classList.toggle("is-ios", IS_IPAD);
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemePreference(loadThemePreference());
   watchSystemColorScheme();
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());
-  applyBodyGlass(loadBodyGlass());
+  applyBodyGlass(IS_IPAD ? false : loadBodyGlass());
 }
 
 function isThemePreference(value: unknown): value is ThemePreference {

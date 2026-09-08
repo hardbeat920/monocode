@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+// TRANSPORT SEAM: same invoke/listen signatures as Tauri; in companion mode
+// these transparently forward to the paired host. See src/lib/transport/.
+import { invoke, listen, type UnlistenFn } from "../transport";
 
 type LinePayload = { sessionId: string; line: string };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };

@@ -58,6 +58,7 @@ import {
   type InboxComposerCard,
 } from "../lib/githubTasks";
 import type { HandoffComposerCard } from "../lib/handoff";
+import { isRemote } from "../lib/transport";
 import { looksLikeProject, type RecentProject } from "../lib/recents";
 import type {
   Attachment,
@@ -503,6 +504,10 @@ export function Composer({
   const skillLimit = hasNativeCommands(harness) ? Number.POSITIVE_INFINITY : undefined;
   const rankedSkills = rankSkills(slashItems, slash?.query ?? "", skillLimit);
   const attachmentsSupported = harnessSupportsAttachments(harness);
+  // Companion: the native file sheet would open on the iPad while the files
+  // live on the host. Paste/drop keeps working (bytes in hand); only the
+  // picker goes away.
+  const pickerSupported = attachmentsSupported && !isRemote();
   const skillNames = useMemo(
     () => new Set(slashItems.map((skill) => skill.invocation)),
     [slashItems],
@@ -1039,7 +1044,7 @@ export function Composer({
   };
 
   const attachFromPicker = () => {
-    if (!attachmentsSupported) return;
+    if (!pickerSupported) return;
     void pickAttachments().then((files) => {
       addAttachments(files);
       ref.current?.focus();
@@ -1281,7 +1286,7 @@ export function Composer({
                   </p>
                   <button
                     type="button"
-                    disabled={!attachmentsSupported}
+                    disabled={!pickerSupported}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setPlusOpen(false);
@@ -1293,9 +1298,11 @@ export function Composer({
                     <span className="min-w-0">
                       <span className="block text-[13px]">Upload file</span>
                       <span className="block text-[11px] leading-4 text-content/45">
-                        {attachmentsSupported
+                        {pickerSupported
                           ? "Attach files or images to this message"
-                          : `${HARNESS_TITLE[harness]} does not support attachments`}
+                          : isRemote()
+                            ? "File upload needs the desktop app — paste images instead"
+                            : `${HARNESS_TITLE[harness]} does not support attachments`}
                       </span>
                     </span>
                   </button>

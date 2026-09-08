@@ -1,5 +1,7 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc } from "@tauri-apps/api/core";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke } from "./transport";
+import { openDialog as open } from "./transport/dialog";
 import {
   notifyTabGroupLogosChanged,
   saveTabGroupLogo,

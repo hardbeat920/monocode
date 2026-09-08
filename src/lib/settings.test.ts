@@ -19,6 +19,9 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  SETTINGS_SECTIONS,
+  clampSettingsSection,
+  visibleSettingsSections,
 } from "./settings";
 
 const KEY = "monocode.composerRunner";
@@ -151,6 +154,27 @@ describe("grid arcade enabled setting", () => {
     expect(loadGridArcadeEnabled()).toBe(false);
     saveGridArcadeEnabled(true);
     expect(loadGridArcadeEnabled()).toBe(true);
+  });
+});
+
+describe("companion settings sections", () => {
+  it("hides host-only sections on the iPad client and keeps the rest", () => {
+    const visible = visibleSettingsSections(true);
+    expect(visible.map((section) => section.id)).not.toContain("keybindings");
+    expect(visible.map((section) => section.id)).not.toContain("providers");
+    expect(visible.map((section) => section.id)).toEqual(
+      SETTINGS_SECTIONS.filter(
+        (section) => section.id !== "keybindings" && section.id !== "providers",
+      ).map((section) => section.id),
+    );
+    expect(visibleSettingsSections(false)).toBe(SETTINGS_SECTIONS);
+  });
+
+  it("clamps a stored keybindings section to general on the client", () => {
+    expect(clampSettingsSection("keybindings", true)).toBe("general");
+    expect(clampSettingsSection("providers", true)).toBe("general");
+    expect(clampSettingsSection("appearance", true)).toBe("appearance");
+    expect(clampSettingsSection("keybindings", false)).toBe("keybindings");
   });
 });
 

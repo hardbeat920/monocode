@@ -16,8 +16,6 @@
     "core:window:allow-hide",
     "opener:default",
     "dialog:default",
-    "updater:default",
-    "process:default",
-    "window-state:default"
+    "process:default"
   ]
 }

@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke } from "./transport";
 import { sniffImageMime } from "./filePreview";
 
 /**

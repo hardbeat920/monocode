@@ -36,7 +36,7 @@ import {
   recentOpenedFiles,
 } from "../lib/fileIndex";
 import { prettyCwd, projectName } from "../lib/paths";
-import { IS_MAC } from "../lib/platform";
+import { IS_MAC, IS_MACOS } from "../lib/platform";
 import { looksLikeProject, type RecentProject } from "../lib/recents";
 import { searchProject, type OpenFileFn } from "../lib/search";
 import { type Session } from "../lib/session";
@@ -323,7 +323,7 @@ export function SearchView({
         className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
         data-tauri-drag-region="deep"
       >
-        {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
+        {IS_MACOS && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
         {besideRail ? null : (
           <OverlayNav onBack={onClose} onToggleSidebar={onToggleSidebar} />
         )}

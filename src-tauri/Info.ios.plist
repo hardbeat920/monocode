@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- LAN WebSocket link to the paired desktop. Required on iOS 14+ the
+       first time the companion dials a local-network address. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>MonoCode connects to your paired desktop on the local network to run your coding sessions.</string>
+  <!-- QR pairing-code scanner. Video never leaves the device. -->
+  <key>NSCameraUsageDescription</key>
+  <string>MonoCode scans the pairing code on your Mac to connect. Video is processed on-device only.</string>
+  <!-- The companion link is cleartext ws:// to the paired desktop (LAN or
+       tailnet). Every frame is pairing-token authenticated, so TLS would add
+       no security here — only deployment friction. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+    <key>NSAllowsArbitraryLoadsInWebContent</key>
+    <true/>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

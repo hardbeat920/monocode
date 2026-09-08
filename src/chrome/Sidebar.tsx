@@ -30,7 +30,7 @@ import {
   type SidebarTabId,
 } from "../lib/appearance";
 import { basename, type GitHistoryCommit } from "../lib/fs";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MACOS, MOD, SHOW_KEY_SHORTCUTS } from "../lib/platform";
 import { resolveModel } from "../lib/models";
 import { projectName } from "../lib/paths";
 import { sessionDisplayTitle } from "../lib/session";
@@ -950,7 +950,7 @@ function SidebarComponent({
             className="flex h-10 shrink-0 select-none items-center border-b border-content/10 pr-1.5"
             data-tauri-drag-region="deep"
           >
-            {IS_MAC ? <div className="w-[78px] shrink-0" /> : null}
+            {IS_MACOS ? <div className="w-[78px] shrink-0" /> : null}
             <DevModeSlot />
             <TabVisitNav
               canGoBack={canGoBack}
@@ -1285,8 +1285,8 @@ function SidebarComponent({
                 label="Settings"
                 icon={Settings}
                 onClick={onOpenSettings}
-                shortcut={`${MOD},`}
-                ariaLabel={`Settings (${MOD},)`}
+                shortcut={SHOW_KEY_SHORTCUTS ? `${MOD},` : undefined}
+                ariaLabel="Settings"
               />
             </div>
           </>

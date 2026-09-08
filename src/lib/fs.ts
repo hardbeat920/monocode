@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke } from "./transport";
+import { openDialog as open } from "./transport/dialog";
 
 export type FsEntry = {
   name: string;

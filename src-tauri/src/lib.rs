@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod checkpoint;
+mod companion_ws;
 mod cursor_store;
 mod fs;
 mod harness;
@@ -13,9 +14,16 @@ mod notes;
 mod project_logo;
 mod pty;
 mod rate_limits;
+mod remote;
+mod remote_dispatch;
+mod remote_server;
 mod search;
 mod session_store;
 mod skills;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod tailnet_embed;
+#[cfg(target_os = "ios")]
+mod tsnet_mobile;
 mod window;
 mod window_transfer;
 
@@ -129,19 +137,33 @@ fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    // Updater + window-state are desktop-only crates (window-state is an
+    // empty crate on mobile; updater isn't even a dependency there), so they
+    // stay out of the mobile plugin set. The companion updates via the App
+    // Store and has no window chrome to restore.
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init());
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build());
+    let builder = builder
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
+        .manage(remote::RemoteState::new())
+        .manage(companion_ws::CompanionWs::new())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             checkpoint::init(app.handle())?;
+            remote::autostart(app.handle());
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            crate::tailnet_embed::autostart(app.handle());
+            #[cfg(target_os = "ios")]
+            crate::tsnet_mobile::autostart(app.handle());
             menu::install(app.handle())?;
             #[cfg(target_os = "macos")]
             {
@@ -150,7 +172,7 @@ pub fn run() {
                     macos::install(&window);
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(all(not(target_os = "macos"), desktop))]
             {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_decorations(false);
@@ -158,10 +180,14 @@ pub fn run() {
                 }
             }
             Ok(())
-        })
-        .on_menu_event(|app, event| {
-            menu::dispatch(app, event.id().as_ref());
-        })
+        });
+    // Native menus do not exist on mobile; the companion reaches every
+    // action through the touch chrome instead.
+    #[cfg(desktop)]
+    let builder = builder.on_menu_event(|app, event| {
+        menu::dispatch(app, event.id().as_ref());
+    });
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             default_cwd,
             home_dir,
@@ -243,6 +269,25 @@ pub fn run() {
             harness::harness_sse_close,
             harness::harness_exec,
             rate_limits::fetch_claude_usage,
+            remote::remote_status,
+            remote::remote_enable,
+            remote::remote_set_route,
+            remote::remote_set_system_tailscale,
+            remote::remote_disable,
+            remote::remote_pairing,
+            remote::remote_pairing_code,
+            remote::remote_tailnet,
+            remote::remote_serve_on,
+            remote::remote_serve_off,
+            remote::remote_serve_status,
+            remote::remote_embed_status,
+            remote::remote_embed_start,
+            remote::remote_embed_stop,
+            remote::remote_embed_logout,
+            remote::remote_peers,
+            companion_ws::companion_ws_open,
+            companion_ws::companion_ws_send,
+            companion_ws::companion_ws_close,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

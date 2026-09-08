@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke, isCompanionClient, isRemote, listen } from "./lib/transport";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask, message } from "@tauri-apps/plugin-dialog";
+import { askDialog as ask, messageDialog as message } from "./lib/transport/dialog";
 import {
   useCallback,
   useEffect,
@@ -17,6 +17,7 @@ import { WhatsNewDialog } from "./chrome/WhatsNewDialog";
 import { TitleBar, type Tab as TitleTab } from "./chrome/TitleBar";
 import { MenuBar } from "./chrome/MenuBar";
 import { FilePicker } from "./chrome/FilePicker";
+import { RemoteProjectPicker } from "./chrome/RemoteProjectPicker";
 import { UsageFooter } from "./chrome/UsageFooter";
 import { useProjectBranches } from "./hooks/useProjectBranches";
 import {
@@ -25,7 +26,7 @@ import {
   saveProjectRailOpen,
   type SidebarTabId,
 } from "./lib/appearance";
-import { IS_MAC } from "./lib/platform";
+import { IS_MAC, IS_MACOS } from "./lib/platform";
 import { runUpdateFlow } from "./lib/updater";
 import { displayAttachments, prepareAttachments } from "./lib/attachments";
 import {
@@ -252,6 +253,8 @@ import {
   setSessionPinned,
   shouldPersistSession,
   upsertSession,
+  parseSessionStoreChanged,
+  SESSION_STORE_CHANGED,
   type SessionSummary,
 } from "./lib/sessionStore";
 import { syncDockBadge } from "./lib/dockBadge";
@@ -304,6 +307,7 @@ import { NotesView } from "./surfaces/NotesView";
 import { inboxComposerCard, type InboxItem } from "./lib/githubTasks";
 import { linearIssueDetails, peekLinearIssueDetails } from "./lib/linear";
 import {
+  clampSettingsSection,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   loadDiffViewer,
@@ -603,12 +607,18 @@ export default function App({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateNotice, setUpdateNotice] = useState(installedUpdate);
   const [whatsNewVersion, setWhatsNewVersion] = useState<string | null>(null);
-  const [settingsSection, setSettingsSection] =
-    useState<SettingsSectionId>(loadSettingsSection);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>(
+    () => clampSettingsSection(loadSettingsSection(), isCompanionClient()),
+  );
+  const shownSettingsSection = clampSettingsSection(
+    settingsSection,
+    isCompanionClient(),
+  );
   const [editorNavigation, setEditorNavigation] =
     useState<EditorNavigationTarget | null>(null);
   const editorNavigationToken = useRef(0);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(
     () => new Set(windowTransfer?.dirtyFileIds ?? []),
   );
@@ -979,6 +989,9 @@ export default function App({
   }, [sessions]);
 
   useEffect(() => {
+    // Companion has no OS window: focus tracking runs through the
+    // visibilitychange listener below instead.
+    if (isRemote()) return;
     let unlisten: (() => void) | undefined;
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
@@ -1004,6 +1017,9 @@ export default function App({
   }, [flushHarnessEvents]);
 
   useEffect(() => {
+    // Companion has no OS window to close: quitting is leaving the page,
+    // and transcripts persist continuously on the host.
+    if (isRemote()) return;
     let unlistenClose: (() => void) | undefined;
     const releaseQuit = setQuitWorkspace(
       () => sessionsRef.current,
@@ -1072,6 +1088,34 @@ export default function App({
   useEffect(() => {
     void refreshHistory(sidebarCwd);
   }, [sidebarCwd, refreshHistory]);
+
+  useEffect(() => {
+    const unlisten = listen(SESSION_STORE_CHANGED, (event) => {
+      const payload = parseSessionStoreChanged(event.payload);
+      if (!payload) return;
+      switch (payload.kind) {
+        case "upserted":
+          if (sameProjectPath(payload.summary.cwd, sidebarCwdRef.current)) {
+            setHistory((current) =>
+              mergeProjectHistorySummary(current, payload.summary),
+            );
+          }
+          return;
+        case "deleted":
+        case "archived":
+        case "pinned":
+          void refreshHistory(sidebarCwdRef.current);
+          return;
+        default: {
+          const _exhaustive: never = payload;
+          void _exhaustive;
+        }
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [refreshHistory]);
 
   useEffect(() => {
     prefetchProjectFiles(sidebarCwd);
@@ -2930,6 +2974,12 @@ export default function App({
   );
 
   const pickProject = useCallback(async () => {
+    // Companion: the native sheet would open on the iPad, so browse the
+    // host filesystem in-app instead.
+    if (isRemote()) {
+      setProjectPickerOpen(true);
+      return;
+    }
     const path = await pickFolder();
     if (path) onSelectProject(path);
   }, [onSelectProject]);
@@ -4816,7 +4866,7 @@ export default function App({
   return (
     <div
       className={`flex h-full text-content ${
-        IS_MAC ? "bg-background-base/40" : "bg-background-base"
+        IS_MACOS ? "bg-background-base/40" : "bg-background-base"
       }`}
     >
       <Sidebar
@@ -4888,7 +4938,7 @@ export default function App({
         onToggleProjectRail={onToggleProjectRail}
         unseenFinishedIds={unseenFinishedIds}
         settingsOpen={settingsOpen}
-        settingsSection={settingsSection}
+        settingsSection={shownSettingsSection}
         onOpenSettings={onOpenSettings}
         onSelectSettingsSection={onSelectSettingsSection}
         onCloseSettings={onCloseSettings}
@@ -4915,7 +4965,7 @@ export default function App({
             undefined
           }
         >
-          {!IS_MAC ? (
+          {!IS_MAC && !isCompanionClient() ? (
             <MenuBar
               onNew={onNew}
               onNewTerminal={onNewTerminal}
@@ -5122,7 +5172,7 @@ export default function App({
         ) : null}
         {settingsOpen ? (
           <SettingsView
-            section={settingsSection}
+            section={shownSettingsSection}
             cwd={sidebarCwd}
             sessions={sidebarHistory}
             besideRail
@@ -5158,6 +5208,18 @@ export default function App({
           openPaths={openFilePaths}
           onOpenFile={onOpenFile}
           onClose={() => setFilePickerOpen(false)}
+        />
+      ) : null}
+
+      {projectPickerOpen ? (
+        <RemoteProjectPicker
+          open
+          initialCwd={projectCwd}
+          onSelect={(path) => {
+            setProjectPickerOpen(false);
+            onSelectProject(path);
+          }}
+          onClose={() => setProjectPickerOpen(false)}
         />
       ) : null}
 

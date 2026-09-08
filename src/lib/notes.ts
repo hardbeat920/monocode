@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke } from "./transport";
 import { fuzzyMatch } from "./fuzzy";
 import type { ProjectFile } from "./fs";
 import type { RankedFile } from "./fileIndex";

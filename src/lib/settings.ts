@@ -3,7 +3,12 @@ import { ALT, IS_MAC, MOD, SHIFT } from "./platform";
 const SECTION_KEY = "monocode.settingsSection";
 
 export type SettingsSectionId =
-  "general" | "appearance" | "keybindings" | "providers" | "archive";
+  | "general"
+  | "appearance"
+  | "keybindings"
+  | "providers"
+  | "archive"
+  | "companion";
 
 export const SETTINGS_SECTIONS: {
   id: SettingsSectionId;
@@ -37,6 +42,12 @@ export const SETTINGS_SECTIONS: {
     label: "Archive",
     description: "Projects and conversations you have archived.",
   },
+  {
+    id: "companion",
+    label: "Companion",
+    description:
+      "Serve this machine to the thin iPad client over LAN or Tailscale.",
+  },
 ];
 
 export const SETTINGS_SECTION_DEFAULT: SettingsSectionId = "general";
@@ -57,6 +68,29 @@ export function settingsSectionDescription(id: SettingsSectionId): string {
   return (
     SETTINGS_SECTIONS.find((section) => section.id === id)?.description ?? ""
   );
+}
+
+/** Sections that only apply to the Mac host (keyboard, CLIs, window chrome). */
+export const COMPANION_HIDDEN_SECTION_IDS: ReadonlySet<SettingsSectionId> =
+  new Set(["keybindings", "providers"]);
+
+export function visibleSettingsSections(
+  companionClient: boolean,
+): typeof SETTINGS_SECTIONS {
+  if (!companionClient) return SETTINGS_SECTIONS;
+  return SETTINGS_SECTIONS.filter(
+    (section) => !COMPANION_HIDDEN_SECTION_IDS.has(section.id),
+  );
+}
+
+export function clampSettingsSection(
+  id: SettingsSectionId,
+  companionClient: boolean,
+): SettingsSectionId {
+  const visible = visibleSettingsSections(companionClient);
+  return visible.some((section) => section.id === id)
+    ? id
+    : SETTINGS_SECTION_DEFAULT;
 }
 
 export function loadSettingsSection(): SettingsSectionId {

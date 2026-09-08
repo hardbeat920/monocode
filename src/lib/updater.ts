@@ -1,5 +1,9 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { ask, message } from "@tauri-apps/plugin-dialog";
+import { isRemote } from "./transport";
+import {
+  askDialog as ask,
+  messageDialog as message,
+} from "./transport/dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { announceUpdateAvailable } from "./sounds";
@@ -48,6 +52,14 @@ export async function runUpdateFlow(
   onProgress?: (snapshot: UpdaterSnapshot) => void,
 ): Promise<UpdaterSnapshot> {
   const currentVersion = await readAppVersion();
+  // Companions update through the App Store, never self-update: the updater
+  // plugin is desktop-only and installing a host build from the iPad would
+  // be actively harmful.
+  if (isRemote()) {
+    const snapshot: UpdaterSnapshot = { phase: "idle", currentVersion };
+    onProgress?.(snapshot);
+    return snapshot;
+  }
   const base: UpdaterSnapshot = { phase: "checking", currentVersion };
   onProgress?.(base);
 

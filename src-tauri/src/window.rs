@@ -30,7 +30,9 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     crate::macos::install(&window);
 
-    #[cfg(not(target_os = "macos"))]
+    // Frameless-window styling is desktop-only; the mobile shell owns its
+    // chrome and these methods do not exist there.
+    #[cfg(all(not(target_os = "macos"), desktop))]
     {
         let _ = window.set_decorations(false);
         let _ = window.set_shadow(true);
@@ -75,6 +77,8 @@ pub fn show_hidden_or_open_new(app: &AppHandle) -> Result<(), String> {
     }
     windows.sort_by(|a, b| a.label().cmp(b.label()));
     for window in &windows {
+        // No minimize concept on mobile; `show` alone re-presents the view.
+        #[cfg(desktop)]
         let _ = window.unminimize();
         let _ = window.show();
     }

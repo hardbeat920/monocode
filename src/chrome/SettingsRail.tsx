@@ -2,14 +2,16 @@ import {
   Archive,
   ArrowLeft,
   Bot,
+  ExternalLink,
   Keyboard,
   Palette,
   SlidersHorizontal,
   type IconComponent,
 } from "./icons";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
+import { isCompanionClient } from "../lib/transport";
 import {
-  SETTINGS_SECTIONS,
+  visibleSettingsSections,
   type SettingsSectionId,
 } from "../lib/settings";
 
@@ -19,6 +21,7 @@ const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   keybindings: Keyboard,
   providers: Bot,
   archive: Archive,
+  companion: ExternalLink,
 };
 
 type Props = {
@@ -30,6 +33,9 @@ type Props = {
 /** Body of the project rail while settings are open. */
 export function SettingsNav({ section, onSelect, onClose }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  // iPad / companion: keyboard shortcuts don't apply, so the keybindings
+  // section stays hidden even after disconnect (`isRemote()` is then false).
+  const visible = visibleSettingsSections(isCompanionClient());
 
   return (
     <>
@@ -38,7 +44,7 @@ export function SettingsNav({ section, onSelect, onClose }: Props) {
         aria-label="Settings"
         className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto overscroll-none px-2 pb-2"
       >
-        {SETTINGS_SECTIONS.map((item) => (
+        {visible.map((item) => (
           <NavRow
             key={item.id}
             label={item.label}

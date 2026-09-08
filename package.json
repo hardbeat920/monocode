@@ -44,10 +44,12 @@
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
     "cuelume": "^0.2.2",
+    "jsqr": "^1.4.0",
     "prettier": "^3.9.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-material-icon-theme": "^1.2.0",
+    "react-qr-code": "^2.2.0",
     "rehype-harden": "^1.1.8",
     "streamdown": "^2.5.0"
   },

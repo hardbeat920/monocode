@@ -31,7 +31,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { WindowControls } from "./WindowControls";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MAC, IS_MACOS, MOD } from "../lib/platform";
 import type { RecentProject } from "../lib/recents";
 
 export type Tab = {
@@ -670,7 +670,7 @@ function TitleBarComponent({
           title bar takes over the traffic lights and the rail toggle. */}
       {projectless && railClosed ? (
         <>
-          <div className="w-[78px] shrink-0" />
+          {IS_MACOS ? <div className="w-[78px] shrink-0" /> : null}
           <div className="flex shrink-0 items-center px-1.5">
             <IconButton
               label={`Toggle Sidebar (${MOD}B)`}

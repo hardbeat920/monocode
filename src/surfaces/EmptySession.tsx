@@ -5,6 +5,7 @@ import {
   loadGridArcadeEnabled,
   subscribeGridArcadeEnabled,
 } from "../lib/settings";
+import { IS_IPAD } from "../lib/platform";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { TerminalGridBackground } from "./TerminalGridBackground";
 
@@ -30,7 +31,7 @@ export function EmptySession({ cwd, composer }: Props) {
       ref={lockOverscroll}
       className="relative flex h-full min-h-0 overflow-y-auto overscroll-none"
     >
-      {arcadeEnabled ? <TerminalGridBackground /> : null}
+      {arcadeEnabled && !IS_IPAD ? <TerminalGridBackground /> : null}
       {composer ? (
         <div className="pointer-events-none relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-6 py-12">
           <div className="pointer-events-auto mb-4 px-2.5">

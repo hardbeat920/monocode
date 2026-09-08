@@ -13,9 +13,15 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type ReactNode,
 } from "react";
 import { HarnessIcon } from "../chrome/HarnessIcon";
+import {
+  Heading,
+  Row,
+  SecondaryButton,
+  Toggle,
+} from "../chrome/settingsControls";
+import { CompanionPage } from "./CompanionPage";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
@@ -82,7 +88,8 @@ import {
   subscribeModels,
 } from "../lib/models";
 import { prettyCwd, projectName } from "../lib/paths";
-import { IS_MAC } from "../lib/platform";
+import { IS_MAC, IS_MACOS } from "../lib/platform";
+import { isCompanionClient } from "../lib/transport";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -113,6 +120,7 @@ import {
 } from "../lib/linear";
 import { loadTabGroupLabels, resolveTabGroupLabel } from "../lib/tabGroups";
 import {
+  clampSettingsSection,
   filterKeybindings,
   KEYBINDINGS,
   loadClaudeHooks,
@@ -135,7 +143,7 @@ import {
   type FollowUpBehavior,
   type SettingsSectionId,
 } from "../lib/settings";
-import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../lib/sounds";
+import { loadSoundsEnabled, saveSoundsEnabled } from "../lib/sounds";
 import {
   installPendingUpdate,
   readAppVersion,
@@ -174,6 +182,8 @@ export function SettingsView({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const appearance = useAppearanceSettings();
+  const companionClient = isCompanionClient();
+  const shownSection = clampSettingsSection(section, companionClient);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -197,17 +207,17 @@ export function SettingsView({
         className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
         data-tauri-drag-region="deep"
       >
-        {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
+        {IS_MACOS && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
         <div className="flex min-w-0 flex-1 items-center gap-2 px-3 text-[13px]">
           <span className="shrink-0 text-content/45">Settings</span>
           <span aria-hidden className="shrink-0 text-content/25">
             /
           </span>
           <span className="min-w-0 truncate text-content">
-            {settingsSectionLabel(section)}
+            {settingsSectionLabel(shownSection)}
           </span>
         </div>
-        {section === "appearance" ? (
+        {shownSection === "appearance" ? (
           <button
             type="button"
             data-tauri-drag-region="false"
@@ -227,18 +237,28 @@ export function SettingsView({
       >
         <div className="mx-auto w-full max-w-5xl px-8 py-8">
           <PageHeader
-            title={settingsSectionLabel(section)}
-            description={settingsSectionDescription(section)}
+            title={settingsSectionLabel(shownSection)}
+            description={
+              shownSection === "companion" && companionClient
+                ? "This device is a client of the paired Mac. Sessions, files, and agents run there."
+                : settingsSectionDescription(shownSection)
+            }
           />
-          {section === "general" ? (
-            <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
+          {shownSection === "general" ? (
+            <GeneralPage
+              companionClient={companionClient}
+              onOpenWhatsNew={onOpenWhatsNew}
+            />
           ) : null}
-          {section === "appearance" ? (
-            <AppearancePage appearance={appearance} />
+          {shownSection === "appearance" ? (
+            <AppearancePage
+              companionClient={companionClient}
+              appearance={appearance}
+            />
           ) : null}
-          {section === "keybindings" ? <KeybindingsPage /> : null}
-          {section === "providers" ? <ProvidersPage /> : null}
-          {section === "archive" ? (
+          {shownSection === "keybindings" ? <KeybindingsPage /> : null}
+          {shownSection === "providers" ? <ProvidersPage /> : null}
+          {shownSection === "archive" ? (
             <ArchivePage
               cwd={cwd}
               sessions={sessions}
@@ -249,6 +269,7 @@ export function SettingsView({
               onDeleteProject={onDeleteProject}
             />
           ) : null}
+          {shownSection === "companion" ? <CompanionPage /> : null}
         </div>
       </div>
     </div>
@@ -256,8 +277,10 @@ export function SettingsView({
 }
 
 function GeneralPage({
+  companionClient,
   onOpenWhatsNew,
 }: {
+  companionClient: boolean;
   onOpenWhatsNew: (version: string) => void;
 }) {
   const [transcriptLayout, setTranscriptLayout] =
@@ -392,26 +415,30 @@ function GeneralPage({
           onChange={onTranscriptAnchor}
         />
       </Row>
-      <Row
-        label="Composer mascot"
-        description="When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin."
-      >
-        <Toggle
-          label="Composer mascot"
-          on={composerRunner}
-          onChange={onComposerRunner}
-        />
-      </Row>
-      <Row
-        label="Empty session games"
-        description="Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still."
-      >
-        <Toggle
-          label="Empty session games"
-          on={gridArcadeEnabled}
-          onChange={onGridArcadeEnabled}
-        />
-      </Row>
+      {companionClient ? null : (
+        <>
+          <Row
+            label="Composer mascot"
+            description="When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin."
+          >
+            <Toggle
+              label="Composer mascot"
+              on={composerRunner}
+              onChange={onComposerRunner}
+            />
+          </Row>
+          <Row
+            label="Empty session games"
+            description="Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still."
+          >
+            <Toggle
+              label="Empty session games"
+              on={gridArcadeEnabled}
+              onChange={onGridArcadeEnabled}
+            />
+          </Row>
+        </>
+      )}
       <Row
         label="Notes"
         description="A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat. Turn this off to hide Notes from the UI."
@@ -434,22 +461,31 @@ function GeneralPage({
       >
         <Toggle label="Sounds" on={soundsEnabled} onChange={onSoundsEnabled} />
       </Row>
-      <Row
-        label="Claude Code hooks"
-        description="Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn."
-      >
-        <Toggle
+      {companionClient ? null : (
+        <Row
           label="Claude Code hooks"
-          on={claudeHooks}
-          onChange={onClaudeHooks}
-        />
-      </Row>
+          description="Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn."
+        >
+          <Toggle
+            label="Claude Code hooks"
+            on={claudeHooks}
+            onChange={onClaudeHooks}
+          />
+        </Row>
+      )}
 
-      <Heading title="Linear" />
-      <LinearSettings />
+      {companionClient ? null : (
+        <>
+          <Heading title="Linear" />
+          <LinearSettings />
+        </>
+      )}
 
       <Heading title="About" />
-      <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
+      <UpdateRow
+        companionClient={companionClient}
+        onOpenWhatsNew={onOpenWhatsNew}
+      />
     </>
   );
 }
@@ -611,8 +647,10 @@ function LinearSettings() {
 }
 
 function UpdateRow({
+  companionClient,
   onOpenWhatsNew,
 }: {
+  companionClient: boolean;
   onOpenWhatsNew: (version: string) => void;
 }) {
   const [snapshot, setSnapshot] = useState<UpdaterSnapshot>({
@@ -644,8 +682,9 @@ function UpdateRow({
     await runUpdateFlow(true, setSnapshot);
   };
 
-  const status =
-    snapshot.phase === "available"
+  const status = companionClient
+    ? "This iPad app updates from the App Store."
+    : snapshot.phase === "available"
       ? `Version ${snapshot.availableVersion} is available.`
       : snapshot.phase === "downloading"
         ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
@@ -676,16 +715,18 @@ function UpdateRow({
         >
           What's new
         </SecondaryButton>
-        <SecondaryButton onClick={() => void onClick()} disabled={busy}>
-          {busy ? (
-          <Loader className="size-3.5 animate-spin" aria-hidden />
-        ) : hasUpdate ? (
-          <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
-        ) : (
-          <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
+        {companionClient ? null : (
+          <SecondaryButton onClick={() => void onClick()} disabled={busy}>
+            {busy ? (
+              <Loader className="size-3.5 animate-spin" aria-hidden />
+            ) : hasUpdate ? (
+              <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
+            ) : (
+              <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
+            )}
+            {hasUpdate ? "Download" : "Check for updates"}
+          </SecondaryButton>
         )}
-          {hasUpdate ? "Download" : "Check for updates"}
-        </SecondaryButton>
       </div>
     </Row>
   );
@@ -758,7 +799,13 @@ function useAppearanceSettings() {
   };
 }
 
-function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
+function AppearancePage({
+  companionClient,
+  appearance,
+}: {
+  companionClient: boolean;
+  appearance: AppearanceSettings;
+}) {
   const percent = Math.round(appearance.opacity * 100);
 
   return (
@@ -778,32 +825,36 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           onChange={appearance.onThemePreference}
         />
       </Row>
-      <Row
-        label="Sidebar opacity"
-        description="How much of the desktop shows through the sidebar and the project rail."
-      >
-        <Slider
-          label="Sidebar opacity"
-          value={percent}
-          display={`${percent}%`}
-          min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
-          max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
-          onChange={appearance.onOpacity}
-        />
-      </Row>
-      <Row
-        label="Blur radius"
-        description="Background blur behind the window. Higher values cost more to composite."
-      >
-        <Slider
-          label="Blur radius"
-          value={appearance.blur}
-          display={String(appearance.blur)}
-          min={SIDEBAR_BLUR_MIN}
-          max={SIDEBAR_BLUR_MAX}
-          onChange={appearance.onBlur}
-        />
-      </Row>
+      {companionClient ? null : (
+        <>
+          <Row
+            label="Sidebar opacity"
+            description="How much of the desktop shows through the sidebar and the project rail."
+          >
+            <Slider
+              label="Sidebar opacity"
+              value={percent}
+              display={`${percent}%`}
+              min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
+              max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
+              onChange={appearance.onOpacity}
+            />
+          </Row>
+          <Row
+            label="Blur radius"
+            description="Background blur behind the window. Higher values cost more to composite."
+          >
+            <Slider
+              label="Blur radius"
+              value={appearance.blur}
+              display={String(appearance.blur)}
+              min={SIDEBAR_BLUR_MIN}
+              max={SIDEBAR_BLUR_MAX}
+              onChange={appearance.onBlur}
+            />
+          </Row>
+        </>
+      )}
       <Row label="Hue" description="Base hue for accents and tinted surfaces.">
         <Slider
           label="Hue"
@@ -829,16 +880,18 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           onChange={(value) => appearance.onTint(appearance.themeHue, value)}
         />
       </Row>
-      <Row
-        label="Main pane glass"
-        description="Extend the translucent treatment to the main pane behind sessions and editors."
-      >
-        <Toggle
+      {companionClient ? null : (
+        <Row
           label="Main pane glass"
-          on={appearance.bodyGlass}
-          onChange={appearance.onBodyGlass}
-        />
-      </Row>
+          description="Extend the translucent treatment to the main pane behind sessions and editors."
+        >
+          <Toggle
+            label="Main pane glass"
+            on={appearance.bodyGlass}
+            onChange={appearance.onBodyGlass}
+          />
+        </Row>
+      )}
     </>
   );
 }
@@ -1242,43 +1295,7 @@ function PageHeader({
   );
 }
 
-function Heading({ title, first = false }: { title: string; first?: boolean }) {
-  return (
-    <h2
-      className={`pb-1 text-[15px] font-semibold text-content ${
-        first ? "" : "pt-8"
-      }`}
-    >
-      {title}
-    </h2>
-  );
-}
 
-function Row({
-  label,
-  description,
-  children,
-}: {
-  label: ReactNode;
-  description?: string;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-6 border-b border-content/5 py-4 last:border-b-0">
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-content">{label}</div>
-        {description ? (
-          <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            {description}
-          </p>
-        ) : null}
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-        {children}
-      </div>
-    </div>
-  );
-}
 
 function Segmented<T extends string>({
   label,
@@ -1354,37 +1371,7 @@ function Slider({
   );
 }
 
-function Toggle({
-  label,
-  on,
-  onChange,
-}: {
-  label: string;
-  on: boolean;
-  onChange: (on: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-label={label}
-      aria-checked={on}
-      onClick={() => {
-        playCue("switch");
-        onChange(!on);
-      }}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-        on ? "bg-accent" : "bg-content/20"
-      }`}
-    >
-      <span
-        className={`absolute top-0.5 size-4 rounded-full bg-white transition-[left] ${
-          on ? "left-4.5" : "left-0.5"
-        }`}
-      />
-    </button>
-  );
-}
+
 
 function Select({
   label,
@@ -1413,29 +1400,4 @@ function Select({
   );
 }
 
-function SecondaryButton({
-  onClick,
-  disabled = false,
-  danger = false,
-  children,
-}: {
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] ${
-        danger
-          ? "text-red-400 hover:border-red-400/40 hover:bg-red-400/10"
-          : "text-content/70 hover:bg-content/10 hover:text-content"
-      } disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent`}
-    >
-      {children}
-    </button>
-  );
-}
+

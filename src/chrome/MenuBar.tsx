@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke, isCompanionClient, isRemote } from "../lib/transport";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { ALT, MOD, SHIFT } from "../lib/platform";
@@ -168,12 +169,19 @@ export function MenuBar({
   );
 
   const getMenuItems = (key: MenuKey): ExplorerMenuItem[] => {
+    // Companion has no windows of its own and updates through the App
+    // Store: drop both entries instead of showing dead actions.
+    const remote = isRemote() || isCompanionClient();
     switch (key) {
       case "file":
         return [
           { kind: "item", id: "new_tab", label: "New Tab", shortcut: `${MOD}T` },
           { kind: "item", id: "new_terminal", label: "New Terminal", shortcut: `${MOD}\`` },
-          { kind: "item", id: "new_window", label: "New Window", shortcut: `${MOD}${SHIFT}N` },
+          ...(remote
+            ? []
+            : [
+                { kind: "item" as const, id: "new_window", label: "New Window", shortcut: `${MOD}${SHIFT}N` },
+              ]),
           { kind: "sep" },
           { kind: "item", id: "open_project", label: "Open Project…", shortcut: `${MOD}O` },
           { kind: "item", id: "open_search", label: "Search…", shortcut: `${MOD}K` },
@@ -187,8 +195,12 @@ export function MenuBar({
             label: "Close Other Tabs",
             shortcut: `${MOD}${ALT}T`,
           },
-          { kind: "sep" },
-          { kind: "item", id: "check_for_updates", label: "Check for Updates…" },
+          ...(remote
+            ? []
+            : [
+                { kind: "sep" as const },
+                { kind: "item" as const, id: "check_for_updates", label: "Check for Updates…" },
+              ]),
         ];
       case "view":
         return [

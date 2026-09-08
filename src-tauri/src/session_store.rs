@@ -5,7 +5,50 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+const SESSION_STORE_CHANGED: &str = "session-store-changed";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SessionStoreChanged {
+    Upserted {
+        summary: Box<SessionSummary>,
+    },
+    Deleted {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
+    Archived {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        archived: bool,
+    },
+    Pinned {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        pinned: bool,
+    },
+}
+
+fn emit_store_changed(app: &AppHandle, payload: SessionStoreChanged) {
+    let _ = app.emit(SESSION_STORE_CHANGED, payload);
+}
+
+fn session_cwd(conn: &Connection, session_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT cwd FROM sessions WHERE id = ?1",
+        params![session_id],
+        |row| row.get(0),
+    )
+    .ok()
+}
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
@@ -145,6 +188,7 @@ pub struct SessionRecord {
 
 #[tauri::command(async)]
 pub fn session_upsert(
+    app: AppHandle,
     store: State<'_, SessionStore>,
     session: SessionUpsert,
 ) -> Result<SessionSummary, String> {
@@ -164,8 +208,17 @@ pub fn session_upsert(
         return Err("blocks must be an array".into());
     }
 
-    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    upsert_session(&conn, &session).map_err(|e| e.to_string())
+    let summary = {
+        let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+        upsert_session(&conn, &session).map_err(|e| e.to_string())?
+    };
+    emit_store_changed(
+        &app,
+        SessionStoreChanged::Upserted {
+            summary: Box::new(summary.clone()),
+        },
+    );
+    Ok(summary)
 }
 
 #[tauri::command(async)]
@@ -238,32 +291,70 @@ pub fn session_search(
 }
 
 #[tauri::command(async)]
-pub fn session_delete(store: State<'_, SessionStore>, session_id: String) -> Result<(), String> {
+pub fn session_delete(
+    app: AppHandle,
+    store: State<'_, SessionStore>,
+    session_id: String,
+) -> Result<(), String> {
     validate_id(&session_id, "session")?;
-    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    delete_session(&conn, &session_id).map_err(|e| e.to_string())
+    let cwd = {
+        let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+        let cwd = session_cwd(&conn, &session_id);
+        delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
+        cwd
+    };
+    emit_store_changed(&app, SessionStoreChanged::Deleted { session_id, cwd });
+    Ok(())
 }
 
 #[tauri::command(async)]
 pub fn session_set_archived(
+    app: AppHandle,
     store: State<'_, SessionStore>,
     session_id: String,
     archived: bool,
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
-    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    set_archived(&conn, &session_id, archived).map_err(|e| e.to_string())
+    let cwd = {
+        let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+        let cwd = session_cwd(&conn, &session_id);
+        set_archived(&conn, &session_id, archived).map_err(|e| e.to_string())?;
+        cwd
+    };
+    emit_store_changed(
+        &app,
+        SessionStoreChanged::Archived {
+            session_id,
+            cwd,
+            archived,
+        },
+    );
+    Ok(())
 }
 
 #[tauri::command(async)]
 pub fn session_set_pinned(
+    app: AppHandle,
     store: State<'_, SessionStore>,
     session_id: String,
     pinned: bool,
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
-    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    set_pinned(&conn, &session_id, pinned).map_err(|e| e.to_string())
+    let cwd = {
+        let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+        let cwd = session_cwd(&conn, &session_id);
+        set_pinned(&conn, &session_id, pinned).map_err(|e| e.to_string())?;
+        cwd
+    };
+    emit_store_changed(
+        &app,
+        SessionStoreChanged::Pinned {
+            session_id,
+            cwd,
+            pinned,
+        },
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

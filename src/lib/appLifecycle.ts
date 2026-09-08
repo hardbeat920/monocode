@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+// TRANSPORT SEAM: see src/lib/transport/.
+import { invoke } from "./transport";
+import { askDialog as ask } from "./transport/dialog";
 import {
   bindHarnessSession,
   forgetHarnessSession,

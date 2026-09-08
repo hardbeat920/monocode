@@ -101,6 +101,19 @@ html.is-mac #root {
   background: transparent;
 }
 
+/* iPad WKWebView has no desktop blur behind the page. Transparent
+   fills flash to the system surface on every layout. */
+html.is-ios,
+html.is-ios body,
+html.is-ios #root,
+html.is-ios #boot-splash {
+  background: var(--color-background-base);
+}
+
+html.is-ios.glass-body .body-glass {
+  background: var(--color-background-base);
+}
+
 .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 90%, black);
 }
@@ -1161,3 +1174,30 @@ header[data-tauri-drag-region] button {
     var(--color-background-base)
   );
 }
+
+/* ---- Companion touch hardening (additive; desktop unaffected) ---- */
+
+/* Kill the double-tap-zoom delay on every interactive element. */
+button,
+[role="button"],
+input,
+select,
+textarea,
+a {
+  touch-action: manipulation;
+}
+
+/* CodeMirror/xterm keep their own touch handling for editing gestures. */
+.cm-editor,
+.xterm {
+  touch-action: auto;
+}
+
+#root {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+

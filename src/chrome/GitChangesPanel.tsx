@@ -1,4 +1,4 @@
-import { ask } from "@tauri-apps/plugin-dialog";
+import { askDialog as ask } from "../lib/transport/dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,

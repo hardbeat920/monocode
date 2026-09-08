@@ -20,6 +20,9 @@ dist-ssr/
 build/
 target/
 gen/schemas/
+src-tauri/tsnet/*.a
+src-tauri/tsnet/*.h
+src-tauri/gen/apple/Externals/**/libmonocode_tsnet.a
 coverage/
 .vite/
 .turbo/

@@ -1,5 +1,6 @@
 import { ArrowDownCircle, Loader, RefreshCw } from "./icons";
 import { useCallback, useEffect, useState } from "react";
+import { isCompanionClient } from "../lib/transport";
 import {
   installPendingUpdate,
   probeForUpdate,
@@ -19,6 +20,8 @@ export function SidebarUpdateFooter({
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
 }) {
+  // Companions update through the App Store, never self-update.
+  if (isCompanionClient()) return null;
   return (
     <div className="flex flex-col gap-1.5 p-2 pb-1">
       {update && onOpenWhatsNew && onDismissUpdate ? (
