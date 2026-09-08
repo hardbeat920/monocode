@@ -5474,18 +5474,13 @@ export default function App({
             onOpenWhatsNew={onOpenWhatsNew}
           />
         ) : null}
-        {searchViewOpen ||
-        inboxViewOpen ||
-        notesViewOpen ||
-        settingsOpen ? null : (
-          <UsageFooter
-            providers={usageProviders}
-            session={usageSession}
-            terminals={runningTerminals}
-            terminalOpen={runningTerminalOpen}
-            onToggleTerminal={onToggleRunningTerminal}
-          />
-        )}
+        <UsageFooter
+          providers={usageProviders}
+          session={usageSession}
+          terminals={runningTerminals}
+          terminalOpen={runningTerminalOpen}
+          onToggleTerminal={onToggleRunningTerminal}
+        />
       </div>
 
       {filePickerOpen ? (

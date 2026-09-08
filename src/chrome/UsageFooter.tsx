@@ -2,6 +2,7 @@ import { RefreshCw } from "./icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
+import { VersionUpdate } from "./VersionUpdate";
 import {
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
@@ -118,7 +119,6 @@ export function UsageFooter({
 
   const showUsage = wantClaude || wantCodex;
   const showTerminals = terminals.length > 0;
-  const showRight = showUsage || showTerminals;
   const ariaLabel = showUsage
     ? "Provider usage"
     : showTerminals
@@ -130,17 +130,17 @@ export function UsageFooter({
   return (
     <footer
       aria-label={ariaLabel}
-      className="flex h-7 shrink-0 items-center gap-3 overflow-x-auto border-t border-content/10 px-3 text-[11px] text-content/55"
+      className="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-t border-content/10 px-3 text-[11px] text-content/55"
     >
-      {showUsage ? (
-        <>
-          {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
-          {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
-        </>
-      ) : session ? (
-        <SessionChip session={session} />
-      ) : null}
-      {showRight ? (
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto">
+        {showUsage ? (
+          <>
+            {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
+            {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
+          </>
+        ) : session ? (
+          <SessionChip session={session} />
+        ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {showTerminals ? (
             <RunningTerminalChip
@@ -166,7 +166,8 @@ export function UsageFooter({
             </button>
           ) : null}
         </div>
-      ) : null}
+      </div>
+      <VersionUpdate />
     </footer>
   );
 }
