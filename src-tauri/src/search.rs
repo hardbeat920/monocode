@@ -85,6 +85,9 @@ fn git_grep(root: &Path, options: &SearchOptions, query: &str) -> Option<SearchR
     }
     cmd.arg("-e").arg(query);
 
+    // Terminate option parsing so an include glob starting with `-` is treated
+    // as a pathspec instead of a git grep flag.
+    cmd.arg("--");
     for spec in pathspecs(&options.include, &options.exclude) {
         cmd.arg(spec);
     }
