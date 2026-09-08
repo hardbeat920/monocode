@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevented truncated labels in tabs and context menus from clipping the bottoms of letters on Windows.
+
 ## [0.1.39] - 2026-09-08
 
 ### Added
