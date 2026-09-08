@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  loadArchiveOnClose,
+  saveArchiveOnClose,
   COMPOSER_RUNNER_DEFAULT,
   DIFF_VIEWER_DEFAULT,
   FOLLOW_UP_BEHAVIOR_DEFAULT,
@@ -27,6 +29,23 @@ const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+
+describe("archive on close setting", () => {
+  beforeEach(mockLocalStorage);
+
+  it("defaults to normal closing and ignores unknown saved values", () => {
+    expect(loadArchiveOnClose()).toBe(false);
+    localStorage.setItem("monocode.archiveOnClose", "invalid");
+    expect(loadArchiveOnClose()).toBe(false);
+  });
+
+  it("persists enabling and disabling archive on close", () => {
+    saveArchiveOnClose(true);
+    expect(loadArchiveOnClose()).toBe(true);
+    saveArchiveOnClose(false);
+    expect(loadArchiveOnClose()).toBe(false);
+  });
+});
 
 describe("follow-up behavior setting", () => {
   beforeEach(mockLocalStorage);

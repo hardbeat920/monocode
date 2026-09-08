@@ -112,7 +112,7 @@ import {
   subscribeModels,
 } from "../lib/models";
 import { prettyCwd, projectKey, projectName } from "../lib/paths";
-import { IS_MAC } from "../lib/platform";
+import { IS_MAC, MOD } from "../lib/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -147,6 +147,7 @@ import {
   filterKeybindings,
   KEYBINDINGS,
   loadClaudeHooks,
+  loadArchiveOnClose,
   loadComposerRunner,
   loadDiffViewer,
   loadFollowUpBehavior,
@@ -154,6 +155,7 @@ import {
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   saveClaudeHooks,
+  saveArchiveOnClose,
   saveComposerRunner,
   saveDiffViewer,
   saveFollowUpBehavior,
@@ -322,6 +324,7 @@ function GeneralPage({
   const [notificationPermission, setNotificationPermission] =
     useState<NotificationPermission>(cachedNotificationPermission);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [archiveOnClose, setArchiveOnClose] = useState(loadArchiveOnClose);
 
   // The user may flip the switch in System Settings and come back: re-read
   // the OS state whenever the window regains focus while the toggle is on.
@@ -404,6 +407,19 @@ function GeneralPage({
 
   return (
     <>
+      <Row
+        label="Archive on close shortcut"
+        description={`Make ${MOD}W use the archive action. Conversations remain available in Archive.`}
+      >
+        <Toggle
+          label="Archive on close shortcut"
+          on={archiveOnClose}
+          onChange={(enabled) => {
+            saveArchiveOnClose(enabled);
+            setArchiveOnClose(enabled);
+          }}
+        />
+      </Row>
       <Row
         label="Transcript layout"
         description="Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app."

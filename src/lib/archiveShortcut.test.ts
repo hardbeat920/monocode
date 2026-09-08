@@ -17,12 +17,15 @@ afterEach(() => vi.unstubAllGlobals());
 function fixture() {
   const overlays: { selector: string; element: ElementStub }[] = [];
   vi.stubGlobal("Element", ElementStub);
-  vi.stubGlobal("document", {
+  const documentStub = {
+    activeElement: null as ElementStub | null,
+    hasFocus: vi.fn(() => true),
     querySelectorAll: (selector: string) =>
       overlays
         .filter((overlay) => selector.split(", ").includes(overlay.selector))
         .map((overlay) => overlay.element),
-  });
+  };
+  vi.stubGlobal("document", documentStub);
   const style = vi.fn(() => ({ visibility: "visible" }));
   vi.stubGlobal("getComputedStyle", style);
   const context = {
@@ -45,6 +48,8 @@ function fixture() {
     archive,
     overlays,
     style,
+    document: documentStub,
+    runMenu: () => archiveFocusedSession(undefined, context, archive),
     run: () =>
       archiveFocusedSession(
         event as unknown as KeyboardEvent,
@@ -62,6 +67,26 @@ function expectUntouched(f: ReturnType<typeof fixture>) {
 }
 
 describe("archive shortcut routing", () => {
+  it("archives from a native close command in the focused window", () => {
+    const f = fixture();
+    f.runMenu();
+    expect(f.archive).toHaveBeenCalledExactlyOnceWith("session");
+  });
+
+  it("does not archive in another window receiving the native menu event", () => {
+    const f = fixture();
+    f.document.hasFocus.mockReturnValue(false);
+    f.runMenu();
+    expect(f.archive).not.toHaveBeenCalled();
+  });
+
+  it("checks DOM focus for native commands without a keyboard event", () => {
+    const f = fixture();
+    f.document.activeElement = new ElementStub([".cm-editor"]);
+    f.runMenu();
+    expect(f.archive).not.toHaveBeenCalled();
+  });
+
   it("consumes the event before archiving exactly the focused session", () => {
     const f = fixture();
     f.context.tabs[0].focusedId = "other";

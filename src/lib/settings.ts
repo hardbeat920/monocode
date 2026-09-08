@@ -78,6 +78,24 @@ export function saveSettingsSection(id: SettingsSectionId) {
 
 const COMPOSER_RUNNER_KEY = "monocode.composerRunner";
 
+const ARCHIVE_ON_CLOSE_KEY = "monocode.archiveOnClose";
+
+export function loadArchiveOnClose(): boolean {
+  try {
+    return localStorage.getItem(ARCHIVE_ON_CLOSE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveArchiveOnClose(enabled: boolean) {
+  try {
+    localStorage.setItem(ARCHIVE_ON_CLOSE_KEY, String(enabled));
+  } catch {
+    // private mode / quota
+  }
+}
+
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 
 export type FollowUpBehavior = "steer" | "queue";
@@ -370,7 +388,12 @@ export const KEYBINDINGS: KeybindingRow[] = [
     keys: `${MOD}${SHIFT}→`,
     when: "!overlay && (!textFocus || emptyComposer)",
   },
-  { command: "Pane: Close", keys: `${MOD}W`, when: "Always" },
+  { command: "Pane: Close", keys: `${MOD}W`, when: "!archiveOnClose" },
+  {
+    command: "Session: Archive with Close Pane",
+    keys: `${MOD}W`,
+    when: "archiveOnClose && sessionFocus && !overlay",
+  },
   { command: "Pane: Split Right", keys: `${MOD}D`, when: "!editorFocus" },
   {
     command: "Pane: Split Down",

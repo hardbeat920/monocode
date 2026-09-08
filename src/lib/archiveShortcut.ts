@@ -8,12 +8,13 @@ type ArchiveContext = {
 
 /** Archive only after confirming that the focused conversation owns the key. */
 export function archiveFocusedSession(
-  event: KeyboardEvent,
+  event: KeyboardEvent | undefined,
   context: ArchiveContext,
   archive: (sessionId: string) => void,
 ): void {
   if (
-    event.defaultPrevented ||
+    event?.defaultPrevented ||
+    (!event && !document.hasFocus()) ||
     context.projectTerminalFocused ||
     context.surfaceOpen
   )
@@ -24,7 +25,8 @@ export function archiveFocusedSession(
   const session = context.sessions.find((entry) => entry.id === tab.focusedId);
   if (!session) return;
 
-  const target = event.target instanceof Element ? event.target : null;
+  const eventTarget = event?.target ?? document.activeElement;
+  const target = eventTarget instanceof Element ? eventTarget : null;
   if (target?.closest(".cm-editor, .monocode-terminal")) return;
   if (
     target?.closest('input, textarea, select, [contenteditable="true"]') &&
@@ -46,7 +48,7 @@ export function archiveFocusedSession(
   );
   if (overlayOpen) return;
 
-  event.preventDefault();
-  event.stopPropagation();
+  event?.preventDefault();
+  event?.stopPropagation();
   archive(session.id);
 }

@@ -39,6 +39,22 @@ function key(
 }
 
 describe("tabCommand", () => {
+  it.each([{ metaKey: true }, { ctrlKey: true }])(
+    "opts the close shortcut into archiving (%j)",
+    (modifiers) => {
+      const close = key({ key: "w", ...modifiers });
+      expect(tabCommand(close)).toBe("close");
+      expect(tabCommand(close, true)).toBe("archive-session");
+      expect(tabCommand(close, false)).toBe("close");
+      expect(
+        tabCommand(key({ key: "w", repeat: true, ...modifiers }), true),
+      ).toBeNull();
+      expect(
+        tabCommand(key({ key: "w", shiftKey: true, ...modifiers }), true),
+      ).toBeNull();
+    },
+  );
+
   it("archives with Cmd+Shift+A or Ctrl+Shift+A", () => {
     expect(
       tabCommand(key({ key: "A", metaKey: true, shiftKey: true })),

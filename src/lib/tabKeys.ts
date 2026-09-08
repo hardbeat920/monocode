@@ -51,7 +51,10 @@ export type TabCommand =
   | { activate: number }
   | { focus: FocusDir };
 
-export function tabCommand(e: KeyboardEvent): TabCommand | null {
+export function tabCommand(
+  e: KeyboardEvent,
+  archiveOnClose = false,
+): TabCommand | null {
   if (e.isComposing) return null;
 
   const mod = e.metaKey || e.ctrlKey;
@@ -90,7 +93,10 @@ export function tabCommand(e: KeyboardEvent): TabCommand | null {
   }
 
   if (key === "t") return "new";
-  if (key === "w") return "close";
+  if (key === "w") {
+    if (!archiveOnClose) return "close";
+    return e.repeat ? null : "archive-session";
+  }
   if (key === "d") return "split-right";
   if (key === "j") return "toggle-terminal";
   if (e.key === "[" || e.code === "BracketLeft") return "back";

@@ -328,6 +328,7 @@ import { linearIssueDetails, peekLinearIssueDetails } from "./lib/linear";
 import {
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadArchiveOnClose,
   loadDiffViewer,
   loadFollowUpBehavior,
   loadSettingsSection,
@@ -2897,7 +2898,7 @@ export default function App({
   );
 
   const onArchiveFocusedSession = useCallback(
-    (event: KeyboardEvent) => {
+    (event?: KeyboardEvent) => {
       archiveFocusedSession(
         event,
         {
@@ -4841,10 +4842,12 @@ export default function App({
           return;
         }
       }
-      const cmd = tabCommand(e);
+      const cmd = tabCommand(e, loadArchiveOnClose());
       if (cmd) {
         if (cmd === "archive-session") {
-          actions.current.onArchiveFocusedSession(e);
+          run("archive-session", () =>
+            actions.current.onArchiveFocusedSession(e),
+          );
           return;
         }
         const target = e.target instanceof Element ? e.target : null;
@@ -4990,7 +4993,15 @@ export default function App({
       listen("close_other_tabs", () =>
         run("close-others", actions.current.onCloseOtherTabs),
       ),
-      listen("close_tab", () => run("close", actions.current.onClosePane)),
+      listen("close_tab", () => {
+        if (loadArchiveOnClose()) {
+          run("archive-session", () =>
+            actions.current.onArchiveFocusedSession(),
+          );
+        } else {
+          run("close", actions.current.onClosePane);
+        }
+      }),
       listen("next_tab", () => run("next", actions.current.onNext)),
       listen("prev_tab", () => run("prev", actions.current.onPrev)),
       listen("back_tab", () => run("back", actions.current.onVisitBack)),
