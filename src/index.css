@@ -3,6 +3,8 @@
 @source "../node_modules/@streamdown/code/dist/*.js";
 @source "../node_modules/@streamdown/mermaid/dist/*.js";
 
+@custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
+
 @theme {
   --color-background-base: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness)
