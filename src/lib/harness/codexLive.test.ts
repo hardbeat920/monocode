@@ -24,6 +24,7 @@ const {
   keepCodexQuestionOpen,
   respondCodexApproval,
   respondCodexQuestion,
+  rewindCodexLastTurn,
   sendCodexTurn,
   stopCodexSession,
   __codexTestReset,
@@ -1306,6 +1307,33 @@ describe("codex live turn sequence", () => {
     });
     await compact;
     expect(settled).toBe(true);
+  });
+
+  it("rolls back the last turn before resending an edited prompt", async () => {
+    const { turn } = await startTurn("codex-live");
+    notify("turn/completed", {
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+    sent.length = 0;
+
+    const rollback = rewindCodexLastTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "thread/rollback"),
+      "thread/rollback",
+    );
+    const request = parse().find(
+      (message) => message.method === "thread/rollback",
+    )!;
+    expect(request.params).toEqual({ threadId: "thr_1", numTurns: 1 });
+    reply(request.id as number, {});
+    expect(await rollback).toEqual({ submitted: false });
   });
 });
 

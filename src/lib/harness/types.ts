@@ -154,3 +154,14 @@ export type SteerTurnInput = {
   text: string;
   attachments?: Attachment[];
 };
+
+export type RewindLastTurnInput = CompactContextInput & {
+  /** When set, Cursor may resend via session/edit_prompt in one RPC. */
+  text?: string;
+  attachments?: Attachment[];
+};
+
+export type RewindLastTurnResult = {
+  /** True when the harness already ran the replacement turn. */
+  submitted: boolean;
+};

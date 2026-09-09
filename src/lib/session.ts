@@ -57,7 +57,10 @@ export type TaskListMeta = {
 
 /** One-shot behavior selected in the composer for the next harness turn. */
 export type TurnIntent = "default" | "plan" | "build" | "orchestrate";
-export type ComposerTurnOptions = { intent?: TurnIntent };
+export type ComposerTurnOptions = {
+  intent?: TurnIntent;
+  resendEdited?: boolean;
+};
 
 export type PlanStatus = "streaming" | "ready" | "building" | "built";
 

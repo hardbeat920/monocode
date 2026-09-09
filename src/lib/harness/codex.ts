@@ -35,6 +35,8 @@ import type {
   CompactContextInput,
   HarnessEvent,
   HarnessSessionInput,
+  RewindLastTurnInput,
+  RewindLastTurnResult,
   SendTurnInput,
   SteerTurnInput,
 } from "./types";
@@ -164,6 +166,31 @@ export async function compactCodexContext(
       }
     });
   await live.turns;
+}
+
+export async function rewindCodexLastTurn(
+  input: RewindLastTurnInput,
+): Promise<RewindLastTurnResult> {
+  let live: Live;
+  try {
+    live = await ensureLive(input);
+  } catch (error) {
+    cancelledThreads.delete(input.sessionId);
+    throw error;
+  }
+  if (cancelledThreads.delete(input.sessionId)) return { submitted: false };
+
+  live.onEvent = input.onEvent;
+  await live.turns;
+  if (live.activeTurnId) {
+    throw new Error("Stop the current turn before editing the last message");
+  }
+
+  await live.rpc.request("thread/rollback", {
+    threadId: live.threadId,
+    numTurns: 1,
+  });
+  return { submitted: false };
 }
 
 export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
@@ -527,7 +554,9 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       params,
     );
     const turnId = response.turn?.id;
-    if (turnId) {
+    // turn/completed can arrive before turn/start returns; don't resurrect a
+    // finished turn's id after finishActiveTurn cleared activeTurnId.
+    if (turnId && live.turnDone) {
       live.activeTurnId = live.activeTurnId ?? turnId;
     }
     settlePendingTurn(live);

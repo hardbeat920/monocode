@@ -161,8 +161,10 @@ import {
   bindHarnessSession,
   cancelHarnessTurn,
   canCompactHarnessContext,
+  canRewindHarnessLastTurn,
   canSteerHarness,
   compactHarnessContext,
+  rewindHarnessLastTurn,
   forgetHarnessSession,
   generateHarnessTitle,
   isLiveHarness,
@@ -204,6 +206,10 @@ import {
 } from "./lib/handoff";
 import { requestOutgoingHandoff } from "./lib/handoffTurn";
 import { isEditTool } from "./lib/harness/preview";
+import {
+  canEditLastTurn,
+  truncateBeforeLastUserTurn,
+} from "./lib/editLastTurn";
 import {
   beginSessionTurn,
   captureSessionCheckpoint,
@@ -4427,6 +4433,7 @@ export default function App({
         buildTarget?: PlanBuildTarget;
         managed?: boolean;
         onSettled?: (outcome: ControlOutcome) => void;
+        resendEdited?: boolean;
       },
     ) => {
       const controlError = orchestrator.submissionError(
@@ -4458,9 +4465,16 @@ export default function App({
       if (removingSessionIds.current.has(sessionId)) return false;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
       if (!storedCurrent) return false;
-      const current = options?.buildTarget
+      let current = options?.buildTarget
         ? withPlanBuildTarget(storedCurrent, options.buildTarget)
         : storedCurrent;
+      if (options?.resendEdited) {
+        if (!canEditLastTurn(current)) return false;
+        current = {
+          ...current,
+          blocks: truncateBeforeLastUserTurn(current.blocks),
+        };
+      }
       const intent = options?.intent ?? "default";
       if (intent === "orchestrate") {
         try {
@@ -4692,6 +4706,12 @@ export default function App({
             noteCard: rawCommand ? s.noteCard : undefined,
             handoffCard: rawCommand ? s.handoffCard : undefined,
           };
+          if (options?.resendEdited) {
+            next = {
+              ...next,
+              blocks: truncateBeforeLastUserTurn(next.blocks),
+            };
+          }
           if (approvedPlan && intent === "build") {
             next = {
               ...next,
@@ -4928,6 +4948,18 @@ export default function App({
         if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
         try {
+          if (options?.resendEdited && canRewindHarnessLastTurn(current.harness)) {
+            await rewindHarnessLastTurn({
+              harness: current.harness,
+              sessionId,
+              cwd: workCwd,
+              model: current.model,
+              modelSettings: current.modelSettings,
+              runtimeMode: current.runtimeMode,
+              onEvent: () => undefined,
+            });
+            if (turnGen.current.get(sessionId) !== gen) return;
+          }
           const prepared = await prepareAttachments(attachments);
           const prompt =
             intent === "build" && approvedPlan

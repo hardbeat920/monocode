@@ -215,6 +215,24 @@ export function buildPiPrompt(input: {
   return command;
 }
 
+export type PiForkMessage = {
+  entryId: string;
+  text: string;
+};
+
+export function forkMessagesFromRpcData(data: unknown): PiForkMessage[] {
+  const rec = asRecord(data);
+  const messages = Array.isArray(rec?.messages) ? rec.messages : [];
+  const parsed: PiForkMessage[] = [];
+  for (const item of messages) {
+    const row = asRecord(item);
+    const entryId = stringField(row, "entryId");
+    const text = stringField(row, "text") ?? "";
+    if (entryId) parsed.push({ entryId, text });
+  }
+  return parsed;
+}
+
 export function buildPiSteer(input: {
   text: string;
   attachments?: Attachment[];

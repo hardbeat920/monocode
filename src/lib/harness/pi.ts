@@ -4,6 +4,7 @@ import {
   compactContext,
   forgetSession,
   respondApproval,
+  rewindLastTurn,
   sendTurn,
   setPiBinaryResolver as setFlavorBinaryResolver,
   steerTurn,
@@ -13,6 +14,8 @@ import { PI_FLAVOR } from "./piFlavor";
 import type {
   ApprovalDecision,
   CompactContextInput,
+  RewindLastTurnInput,
+  RewindLastTurnResult,
   SendTurnInput,
   SteerTurnInput,
 } from "./types";
@@ -28,6 +31,12 @@ export function sendPiTurn(input: SendTurnInput): Promise<void> {
 
 export function compactPiContext(input: CompactContextInput): Promise<void> {
   return compactContext(PI_FLAVOR, input);
+}
+
+export function rewindPiLastTurn(
+  input: RewindLastTurnInput,
+): Promise<RewindLastTurnResult> {
+  return rewindLastTurn(PI_FLAVOR, input);
 }
 
 export function steerPiTurn(input: SteerTurnInput): Promise<void> {

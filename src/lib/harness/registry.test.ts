@@ -4,6 +4,7 @@ import type { HarnessId } from "../session";
 import {
   HARNESS_IDLE_PARK_MS,
   canCompactHarnessContext,
+  canRewindHarnessLastTurn,
   compactHarnessContext,
   isLiveHarness,
   listHarnesses,
@@ -107,6 +108,33 @@ describe("harness registry", () => {
       cursor: false,
       grok: true,
       opencode: true,
+      pi: true,
+      omp: true,
+      fx: false,
+    });
+  });
+
+  it("exposes the edit-last-turn support matrix", () => {
+    registerBuiltinHarnesses();
+    const ids: HarnessId[] = [
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+      "pi",
+      "omp",
+      "fx",
+    ];
+
+    expect(
+      Object.fromEntries(ids.map((id) => [id, canRewindHarnessLastTurn(id)])),
+    ).toEqual({
+      claude: false,
+      codex: true,
+      cursor: false,
+      grok: false,
+      opencode: false,
       pi: true,
       omp: true,
       fx: false,

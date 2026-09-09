@@ -8,6 +8,8 @@ import type { NativeCommandProvider } from "./nativeCommands";
 import type {
   ApprovalDecision,
   CompactContextInput,
+  RewindLastTurnInput,
+  RewindLastTurnResult,
   SendTurnInput,
   SteerTurnInput,
 } from "./types";
@@ -32,6 +34,8 @@ export type HarnessAdapter = {
   sendTurn(input: SendTurnInput): Promise<void>;
   /** Trigger provider-owned compaction outside MonoCode's normal user-turn path. */
   compactContext?(input: CompactContextInput): Promise<void>;
+  /** Rewind provider state so the last user turn can be replaced. */
+  rewindLastTurn?(input: RewindLastTurnInput): Promise<RewindLastTurnResult>;
   steerTurn(input: SteerTurnInput): Promise<void>;
   cancelTurn(sessionId: string): Promise<void>;
   respondApproval(
@@ -174,6 +178,26 @@ export function canSteerHarness(id: HarnessId): boolean {
   const adapter = adapters.get(id);
   if (!adapter?.live) return false;
   return adapter.canSteer !== false;
+}
+
+export function canRewindHarnessLastTurn(id: HarnessId): boolean {
+  const adapter = adapters.get(id);
+  return adapter?.live === true && adapter.rewindLastTurn != null;
+}
+
+export async function rewindHarnessLastTurn(
+  input: RewindLastTurnInput & { harness: HarnessId },
+): Promise<RewindLastTurnResult> {
+  const adapter = requireHarness(input.harness);
+  if (!adapter.rewindLastTurn) {
+    throw new Error(`${input.harness} does not support editing the last message`);
+  }
+  cancelIdlePark(input.sessionId);
+  try {
+    return await adapter.rewindLastTurn(input);
+  } finally {
+    scheduleIdlePark(input.harness, input.sessionId);
+  }
 }
 
 export async function steerHarnessTurn(

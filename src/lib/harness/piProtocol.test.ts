@@ -5,6 +5,7 @@ import {
   buildPiPrompt,
   buildPiSpawnArgs,
   buildPiSteer,
+  forkMessagesFromRpcData,
   contextFromSessionStats,
   contextFromUsage,
   turnMetricsFromUsage,
@@ -153,6 +154,20 @@ describe("buildPiPrompt", () => {
       type: "steer",
       message: "stop",
     });
+  });
+
+  it("parses forkable user messages from rpc data", () => {
+    expect(
+      forkMessagesFromRpcData({
+        messages: [
+          { entryId: "u1", text: "first" },
+          { entryId: "u2", text: "second" },
+        ],
+      }),
+    ).toEqual([
+      { entryId: "u1", text: "first" },
+      { entryId: "u2", text: "second" },
+    ]);
   });
 });
 
