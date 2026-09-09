@@ -58,6 +58,7 @@ async function startTurn(
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     resume?: boolean;
+    beforeThreadReply?: () => Promise<void>;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -84,6 +85,7 @@ async function startTurn(
     () => parse().some((m) => m.method === threadMethod),
     threadMethod,
   );
+  await options.beforeThreadReply?.();
   reply(parse().find((m) => m.method === threadMethod)!.id as number, {
     thread: { id: "thr_1" },
   });
@@ -107,9 +109,97 @@ describe("codex live turn sequence", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     await stopCodexSession("codex-live");
     __codexTestReset();
   });
+
+  it.each([false, true])(
+    "answers the external clock before thread setup finishes, resume=%s",
+    async (resume) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_789_000_000_789);
+      const { events, turn } = await startTurn("codex-live", {
+        resume,
+        beforeThreadReply: async () => {
+          onLine!(
+            JSON.stringify({
+              id: "clock_setup",
+              method: "currentTime/read",
+              params: { threadId: "thr_1" },
+            }),
+          );
+          await Promise.resolve();
+        },
+      });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+      expect(parse().find((m) => m.id === "clock_setup")).toEqual({
+        id: "clock_setup",
+        result: { currentTimeAt: 1_789_000_000 },
+      });
+      expect(events.some((e) => e.type === "session.error")).toBe(false);
+    },
+  );
+
+  it.each([undefined, "plan"] as const)(
+    "answers fresh clock reads without interrupting a pending question, intent=%s",
+    async (intent) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_789_000_000_789);
+      const { events, turn } = await startTurn("codex-live", { intent });
+      expect(
+        parse().find((m) => m.method === "initialize")?.params,
+      ).toMatchObject({
+        capabilities: { experimentalApi: true },
+      });
+      expect(
+        parse().find((m) => m.method === "turn/start")?.params,
+      ).toMatchObject({
+        collaborationMode: { mode: intent === "plan" ? "plan" : "default" },
+      });
+      onLine!(
+        JSON.stringify({
+          id: "pending_question",
+          method: "item/tool/requestUserInput",
+          params: {
+            itemId: "q1",
+            questions: [
+              { id: "choice", header: "Source", question: "Which source?" },
+            ],
+          },
+        }),
+      );
+      await waitFor(
+        () => events.some((e) => e.type === "question.asked"),
+        "question",
+      );
+      const beforeClock = [...events];
+      for (const [id, millis] of [
+        [91, 1_789_000_000_789],
+        ["clock_next", 1_789_000_005_123],
+      ] as const) {
+        now.mockReturnValue(millis);
+        onLine!(
+          JSON.stringify({
+            id,
+            method: "currentTime/read",
+            params: { threadId: "thr_1" },
+          }),
+        );
+        await waitFor(
+          () => parse().some((m) => m.id === id),
+          "external clock reply",
+        );
+        expect(parse().find((m) => m.id === id)).toEqual({
+          id,
+          result: { currentTimeAt: Math.floor(millis / 1000) },
+        });
+      }
+      expect(events).toEqual(beforeClock);
+      expect(parse().some((m) => m.id === "pending_question")).toBe(false);
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
 
   it.each([false, true])(
     "routes full-access escalation after resume=%s",

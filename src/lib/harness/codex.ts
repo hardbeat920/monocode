@@ -291,16 +291,21 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
-        if (!live) return;
-        void handleServerRequest(live, id, method, params).catch(
-          (error: unknown) => {
-            if (!live.muteUpdates)
-              live.onEvent({
-                type: "session.error",
-                message: error instanceof Error ? error.message : String(error),
-              });
-          },
-        );
+        // The external clock can be requested before thread/start or resume
+        // returns, so it must not depend on the live session being bound.
+        const response =
+          method === "currentTime/read"
+            ? rpc.respond(id, { currentTimeAt: Math.floor(Date.now() / 1000) })
+            : live
+              ? handleServerRequest(live, id, method, params)
+              : undefined;
+        void response?.catch((error: unknown) => {
+          if (!live?.muteUpdates)
+            (live?.onEvent ?? input.onEvent)({
+              type: "session.error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+        });
       },
     },
     { includeJsonrpc: false, label: "codex" },
@@ -333,6 +338,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         version: "0.1.0",
       },
       capabilities: {
+        // Required by collaborationMode (including Plan); currentTime/read is
+        // handled above even while the thread is starting or resuming.
         experimentalApi: true,
       },
     });

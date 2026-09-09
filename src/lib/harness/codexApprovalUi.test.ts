@@ -6,9 +6,9 @@ import { QuestionForm } from "../../chrome/QuestionForm";
 import { ApprovalToasts } from "../../chrome/ApprovalToasts";
 import { AgentTranscript } from "../../surfaces/AgentTranscript";
 import { hiddenApprovalNotices } from "../approvalToast";
+import { useInputNotifications } from "../../hooks/useInputNotifications";
 import { newSession, type Session } from "../session";
 import {
-  notifySession,
   probeNotificationPermission,
   saveNotificationsEnabled,
   setWindowFocused,
@@ -39,6 +39,11 @@ vi.mock("./child", () => ({
 const { codexAdapter } = await import("./codexAdapter");
 const { __codexTestReset } = await import("./codex");
 
+function InputNotifications({ session }: { session: Session }) {
+  useInputNotifications([session], "other");
+  return null;
+}
+
 describe("Codex requests reach the chat and notifications", () => {
   let root: Root;
   let container: HTMLDivElement;
@@ -51,6 +56,7 @@ describe("Codex requests reach the chat and notifications", () => {
       createElement(
         Fragment,
         null,
+        createElement(InputNotifications, { session }),
         createElement(AgentTranscript, {
           blocks: session.blocks,
           busy: true,
@@ -172,7 +178,6 @@ describe("Codex requests reach the chat and notifications", () => {
       "Source",
     );
     expect(sent.some((m) => m.id === 91)).toBe(false);
-    expect(await notifySession(session, "needsInput", false)).toBe(true);
     expect(invoke).toHaveBeenCalledWith(
       "show_notification",
       expect.objectContaining({ sessionId: session.id, body: "Source" }),
@@ -211,7 +216,6 @@ describe("Codex requests reach the chat and notifications", () => {
     );
     expect(container.textContent).toContain("Allow");
     expect(document.querySelector(".approval-toast")).not.toBeNull();
-    expect(await notifySession(session, "needsInput", false)).toBe(true);
     expect(invoke).toHaveBeenCalledWith(
       "show_notification",
       expect.objectContaining({

@@ -206,14 +206,14 @@ describe("notificationText", () => {
         },
       ],
     });
-    expect(notificationText(session, "needsInput")).toEqual({
+    expect(notificationText(session, { kind: "approval", requestId: 1 })).toEqual({
       title: "MonoCode",
       subtitle: "Fix the sidebar",
       body: "Approve: Run npm test",
     });
   });
 
-  it("prefers the question prompt over an approval", () => {
+  it("names the requested question", () => {
     const session = chat({
       pendingQuestion: {
         requestId: 2,
@@ -228,7 +228,7 @@ describe("notificationText", () => {
         ],
       },
     });
-    expect(notificationText(session, "needsInput")).toEqual({
+    expect(notificationText(session, { kind: "question", requestId: 2 })).toEqual({
       title: "MonoCode",
       subtitle: "Fix the sidebar",
       body: "Which database?",
