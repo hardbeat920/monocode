@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    needs: [linux, windows]
+    needs: [linux, linux-appimage, windows]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +117,12 @@ jobs:
           name: linux-packages
           path: target/release/bundle/linux
 
+      - name: Download Linux AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-appimage
+          path: target/release/bundle/linux-appimage
+
       - name: Download Windows packages
         uses: actions/download-artifact@v4
         with:
@@ -213,7 +219,15 @@ jobs:
           SIG="${TAR}.sig"
           DMG="$BUNDLE/dmg/MonoCode_${VERSION}_aarch64.dmg"
           DEB="$BUNDLE/linux/MonoCode_${VERSION}_amd64.deb"
-          APPIMAGE="$BUNDLE/linux/MonoCode_${VERSION}_amd64.AppImage"
+          # The standalone linux-appimage job uploads the AppImage to its
+          # own artifact directory so its job surface stays focused; the
+          # combined `linux-packages` artifact is what carries the .deb.
+          APPIMAGE=$(find "$BUNDLE/linux-appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)
+          if [[ -z "$APPIMAGE" ]]; then
+            # Fall back to the combined artifact if the dedicated job is not
+            # wired into this release.
+            APPIMAGE=$(find "$BUNDLE/linux" -maxdepth 1 -type f -name '*.AppImage' -print -quit)
+          fi
           NSIS="$BUNDLE/nsis/MonoCode_${VERSION}_x64-setup.exe"
           NSIS_SIG="${NSIS}.sig"
           for artifact in "$DMG" "$TAR" "$SIG" "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"; do
@@ -246,6 +260,13 @@ jobs:
       - run: npm ci
 
       - name: Build Linux packages
+        # NO_STRIP=1: the linuxdeploy AppImage that Tauri downloads ships an old
+        # `strip` binary that doesn't understand the SHT_RELR (0x13) section
+        # type introduced in glibc 2.36+; modern Ubuntu runners bundle libs
+        # that use it and die on every .so. Disabling the strip step costs
+        # ~25 MB on the AppImage but makes the build work on every distro.
+        env:
+          NO_STRIP: "1"
         run: npm run build:linux
 
       - name: Stage Linux packages
@@ -265,6 +286,48 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-packages
+          path: release-artifacts/
+          if-no-files-found: error
+
+  linux-appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        run: bash scripts/install-linux-deps-debian.sh
+
+      - run: npm ci
+
+      - name: Build Linux AppImage
+        env:
+          NO_STRIP: "1"
+        run: npm run build:linux:appimage
+
+      - name: Stage Linux AppImage
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimage=(target/release/bundle/appimage/*.AppImage)
+          if (( ${#appimage[@]} != 1 )); then
+            echo "Expected exactly one AppImage" >&2
+            exit 1
+          fi
+          mkdir -p release-artifacts
+          cp "${appimage[0]}" release-artifacts/
+
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
           path: release-artifacts/
           if-no-files-found: error
 
