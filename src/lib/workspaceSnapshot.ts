@@ -400,6 +400,27 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
   if (typeof value.id !== "string" || !value.id) return null;
   if (typeof value.path !== "string" || !value.path) return null;
   if (typeof value.cwd !== "string" || !value.cwd) return null;
+  // Keep the pane, but never persist/revisit a page when restoring a workspace.
+  if ("browser" in value) {
+    if (
+      !value.browser ||
+      typeof value.browser !== "object" ||
+      value.plan ||
+      value.review ||
+      value.terminal ||
+      value.commit ||
+      value.sessionChanges ||
+      value.releaseNotes ||
+      value.changes
+    )
+      return null;
+    return {
+      id: value.id,
+      path: "Browser",
+      cwd: value.cwd,
+      browser: { url: "" },
+    };
+  }
   const plan = sanitizePlan(value.plan);
   const hasReleaseNotes = "releaseNotes" in value;
   const releaseNotes = sanitizeReleaseNotes(value.releaseNotes);

@@ -19,6 +19,8 @@ import { MenuBar } from "./chrome/MenuBar";
 import { FilePicker } from "./chrome/FilePicker";
 import { UsageFooter } from "./chrome/UsageFooter";
 import { useProjectBranches } from "./hooks/useProjectBranches";
+import { useLocalPreviews } from "./hooks/useLocalPreviews";
+import { claimLocalPreview, type LocalPreview } from "./lib/browserPreview";
 import {
   loadProjectRailOpen,
   loadSidebarTabOrder,
@@ -73,6 +75,7 @@ import {
   openChangesTab,
   openCommitTab,
   openEditorTab,
+  openBrowserTab,
   openSessionChangesTab,
   openTerminalTab,
   removePane,
@@ -3405,6 +3408,47 @@ export default function App({
     });
   }, []);
 
+  const seenPreviews = useRef(new Map<string, Set<string>>());
+  const onLocalPreview = useCallback(
+    ({ cwd, url }: LocalPreview, sessionId?: string) => {
+      if (!sessionId && !isEqualOrInside(cwd, projectCwdRef.current)) return;
+      const tab = tabsRef.current.find((entry) =>
+        sessionId
+          ? leafIds(entry.layout).includes(sessionId)
+          : entry.id === activeTabIdRef.current,
+      );
+      if (!tab) return;
+      const seen = seenPreviews.current.get(tab.id) ?? new Set<string>();
+      const target = claimLocalPreview(url, seen);
+      if (!target) return;
+      seenPreviews.current.set(tab.id, seen);
+      setTabs((previous) =>
+        previous.map((entry) => {
+          if (entry.id !== tab.id) return entry;
+          const opened = openBrowserTab(entry, cwd, target);
+          // Showing a server must not take typing focus from the conversation.
+          return { ...opened, focusedId: entry.focusedId };
+        }),
+      );
+    },
+    [],
+  );
+  useLocalPreviews(sessions, onLocalPreview);
+  useEffect(() => {
+    for (const id of seenPreviews.current.keys())
+      if (!tabs.some((tab) => tab.id === id)) seenPreviews.current.delete(id);
+  }, [tabs]);
+  const onOpenBrowser = useCallback(() => {
+    setTabs((previous) =>
+      previous.map((entry) =>
+        entry.id === activeTabId
+          ? openBrowserTab(entry, sidebarCwdRef.current)
+          : entry,
+      ),
+    );
+    setComposerFocused(false);
+  }, [activeTabId]);
+
   const onOpenFile = useCallback<OpenFileFn>(
     (path, navigation) => {
       void (async () => {
@@ -5446,6 +5490,7 @@ export default function App({
             onNew={onNew}
             onNewTerminal={onNewTerminal}
             onShowTerminal={onShowProjectTerminal}
+            onOpenBrowser={onOpenBrowser}
             projectTerminalActive={
               !!currentProjectDock && currentProjectDock.pane.files.length > 0
             }

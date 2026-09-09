@@ -26,6 +26,7 @@ import { BuildTargetButton } from "../chrome/SecondOpinionButton";
 import { loadDiffViewer, subscribeDiffViewer } from "../lib/settings";
 import { MarkdownPreview } from "./AgentMarkdown";
 import { BinaryFileView } from "./BinaryFileView";
+import { BrowserPreview } from "./BrowserPreview";
 import { CommitDiff } from "./CommitDiff";
 import { FileEditor } from "./FileEditor";
 import { ReleaseNotesSurface } from "./ReleaseNotesSurface";
@@ -146,7 +147,12 @@ function FilePaneComponent({
                   : "hidden"
               }
             >
-              {isPlanTab(file) ? (
+              {file.browser ? (
+                <BrowserPreview
+                  initialUrl={file.browser.url}
+                  onFocus={() => onFocus(pane.id)}
+                />
+              ) : isPlanTab(file) ? (
                 <PlanSurface
                   file={file}
                   sessions={sessions}

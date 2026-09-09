@@ -62,6 +62,8 @@ export type FilePaneTab = {
   /** Historical commit review (unified diff, read-only). */
   commit?: CommitTabSource;
   terminal?: boolean;
+  /** Ephemeral web preview. Never pass its address to filesystem helpers. */
+  browser?: { url: string };
   /** Foreground command when it isn't the shell. Live only — not persisted. */
   foreground?: string;
 };
@@ -304,7 +306,12 @@ export function isTerminalTab(file: FilePaneTab): boolean {
 }
 
 export function isVirtualDocumentTab(file: FilePaneTab): boolean {
-  return isPlanTab(file) || isReleaseNotesTab(file) || isCommitTab(file);
+  return (
+    !!file.browser ||
+    isPlanTab(file) ||
+    isReleaseNotesTab(file) ||
+    isCommitTab(file)
+  );
 }
 
 export function isFilesystemTab(file: FilePaneTab): boolean {
@@ -382,6 +389,7 @@ export function isSessionChangesTab(
 }
 
 export function editorTabKey(file: FilePaneTab): string {
+  if (file.browser) return `browser:${file.cwd}`;
   if (file.terminal) return `terminal:${file.id}`;
   if (file.plan) return `plan:${file.plan.blockId}`;
   if (file.releaseNotes) return `release-notes:${file.releaseNotes.version}`;
@@ -397,6 +405,34 @@ export function newEditorPane(file: FilePaneTab): EditorPane {
     id: crypto.randomUUID(),
     files: [file],
     activeFileId: file.id,
+  };
+}
+
+/** Reuse the preview for this directory in its workspace tab. */
+export function openBrowserTab(
+  tab: WorkspaceTab,
+  cwd: string,
+  url?: string,
+): WorkspaceTab {
+  const existing = tab.editorPanes
+    .flatMap((pane) => pane.files)
+    .find((file) => file.browser && file.cwd === cwd);
+  const file = existing ?? {
+    id: crypto.randomUUID(),
+    path: "Browser",
+    cwd,
+    browser: { url: url ?? "" },
+  };
+  const opened = openEditorTab(tab, file);
+  if (!existing || url === undefined) return opened;
+  return {
+    ...opened,
+    editorPanes: opened.editorPanes.map((pane) => ({
+      ...pane,
+      files: pane.files.map((entry) =>
+        entry.id === file.id ? { ...entry, browser: { url } } : entry,
+      ),
+    })),
   };
 }
 

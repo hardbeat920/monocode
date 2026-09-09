@@ -1,5 +1,6 @@
 import {
   ChevronLeft,
+  AppWindow,
   ChevronRight,
   Inbox,
   PanelLeft,
@@ -72,6 +73,7 @@ type Props = {
   onNew: () => void;
   onNewTerminal?: () => void;
   onShowTerminal?: () => void;
+  onOpenBrowser?: () => void;
   projectTerminalActive?: boolean;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
@@ -538,6 +540,7 @@ function TitleBarComponent({
   onNew,
   onNewTerminal,
   onShowTerminal,
+  onOpenBrowser,
   projectTerminalActive = false,
   onOpenSettings,
   onOpenInbox,
@@ -720,6 +723,11 @@ function TitleBarComponent({
               <Plus className="size-3.5" strokeWidth={1.75} />
             </IconButton>
           </>
+        ) : null}
+        {!projectless && onOpenBrowser ? (
+          <IconButton label="Open browser preview" onClick={onOpenBrowser}>
+            <AppWindow className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
         ) : null}
         {!projectless && (onShowTerminal || onNewTerminal) ? (
           <IconButton

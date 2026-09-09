@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+mod browser_preview;
 mod chat_background;
 mod checkpoint;
 mod cursor_store;
@@ -196,6 +197,11 @@ pub fn run() {
             menu::dispatch(app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
+            browser_preview::browser_preview_open,
+            browser_preview::browser_preview_sync,
+            browser_preview::browser_preview_action,
+            browser_preview::browser_preview_url,
+            browser_preview::browser_preview_close,
             default_cwd,
             home_dir,
             notifications::notification_permission,
@@ -365,6 +371,7 @@ pub fn run() {
             event: tauri::WindowEvent::Destroyed,
             ..
         } => {
+            browser_preview::close_window(&label);
             let other_window = handle.webview_windows().keys().any(|name| name != &label);
             if !other_window {
                 reap_harness_children(handle);

@@ -2218,6 +2218,7 @@ version = "0.1.41"
 dependencies = [
  "base64 0.22.1",
  "block2",
+ "gtk",
  "libc",
  "notify-rust",
  "objc2",
@@ -2238,6 +2239,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "ureq",
  "windows-sys 0.61.2",
+ "wry",
 ]
 
 [[package]]
