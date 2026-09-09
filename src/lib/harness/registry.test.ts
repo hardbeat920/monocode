@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetHarnessModelOverlays, setHarnessModels } from "../models";
+import { customModelId, type CustomModelHarness } from "../customModels";
 import type { HarnessId } from "../session";
 import {
   HARNESS_IDLE_PARK_MS,
@@ -55,6 +56,62 @@ describe("harness registry", () => {
         .sort(),
     ).toEqual(["claude", "codex", "cursor"]);
   });
+
+  it.each<[CustomModelHarness, string]>([
+    ["codex", "reasoningEffort"],
+    ["claude", "effort"],
+  ])(
+    "applies edited %s options to existing sessions before sending or compacting",
+    async (harness, option) => {
+      const sendTurn = vi.fn(async () => undefined);
+      const compactContext = vi.fn(async () => undefined);
+      registerHarness(stub(harness, { sendTurn, compactContext }));
+      const model = customModelId(harness, "private-model");
+      setHarnessModels(harness, [
+        {
+          id: model,
+          harness,
+          nativeId: "private-model",
+          name: "Private",
+          isCustom: true,
+          settings: [
+            {
+              id: option,
+              label: "Reasoning",
+              kind: "select",
+              value: "high",
+              options: [
+                { value: "low", label: "Low" },
+                { value: "high", label: "High" },
+              ],
+            },
+          ],
+        },
+      ]);
+      const input = {
+        harness,
+        sessionId: "edited-custom",
+        cwd: "/tmp",
+        model,
+        modelSettings: { [option]: "removed-value", removedOption: "true" },
+        text: "hi",
+        runtimeMode: "supervised" as const,
+        onEvent: () => undefined,
+      };
+      await sendHarnessTurn(input);
+      await compactHarnessContext(input);
+      expect(sendTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ modelSettings: { [option]: "high" } }),
+      );
+      expect(compactContext).toHaveBeenCalledWith(
+        expect.objectContaining({ modelSettings: { [option]: "high" } }),
+      );
+      await sendHarnessTurn({ ...input, modelSettings: { [option]: "low" } });
+      expect(sendTurn).toHaveBeenLastCalledWith(
+        expect.objectContaining({ modelSettings: { [option]: "low" } }),
+      );
+    },
+  );
 
   it("advertises and dispatches compaction only when an adapter supports it", async () => {
     const compactContext = vi.fn(async () => undefined);

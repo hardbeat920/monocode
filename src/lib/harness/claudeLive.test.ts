@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { customModelId } from "../customModels";
 
 const sent: string[] = [];
+const spawned: string[][] = [];
 let onLine: ((line: string) => void) | undefined;
 
 vi.mock("./child", () => ({
   resolveClaudeBinary: async () => ({ path: "/fake/claude" }),
-  spawnChild: async () => undefined,
+  spawnChild: async (_id: string, _path: string, args: string[]) => {
+    spawned.push(args);
+  },
   killChild: async () => undefined,
   unwatchChild: () => undefined,
   watchChild: (_id: string, line: (l: string) => void) => {
@@ -19,6 +23,7 @@ vi.mock("./child", () => ({
 const {
   compactClaudeContext,
   sendClaudeTurn,
+  steerClaudeTurn,
   stopClaudeSession,
   __claudeTestReset,
 } = await import("./claude");
@@ -45,14 +50,19 @@ const waitFor = async (pred: () => boolean, label: string) => {
 
 async function startTurn(
   sessionId: string,
-  options: { runtimeMode?: RuntimeMode; intent?: TurnIntent } = {},
+  options: {
+    runtimeMode?: RuntimeMode;
+    intent?: TurnIntent;
+    model?: string;
+    modelSettings?: Record<string, string>;
+  } = {},
 ) {
   const events: HarnessEvent[] = [];
   const turn = sendClaudeTurn({
     sessionId,
     cwd: "/repo",
-    model: "claude:claude-sonnet-5",
-    modelSettings: {},
+    model: options.model ?? "claude:claude-sonnet-5",
+    modelSettings: options.modelSettings ?? {},
     runtimeMode: options.runtimeMode ?? "supervised",
     intent: options.intent,
     text: "explore the codebase",
@@ -79,6 +89,7 @@ async function startTurn(
 
 beforeEach(() => {
   sent.length = 0;
+  spawned.length = 0;
   onLine = undefined;
   __claudeTestReset();
 });
@@ -305,6 +316,59 @@ describe("claude plan permissions", () => {
       false,
     );
 
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+});
+
+describe("claude custom models", () => {
+  it.each(["sonnet-5", "vendor/claude:preview[1m]"])(
+    "passes %s and custom options to the CLI verbatim",
+    async (slug) => {
+      const { turn } = await startTurn("s1", {
+        model: customModelId("claude", slug),
+        modelSettings: {
+          effort: "xhigh",
+          fast: "true",
+          thinking: "true",
+          context: "1m",
+        },
+      });
+      const args = spawned[0];
+      expect(args[args.indexOf("--model") + 1]).toBe(slug);
+      expect(args[args.indexOf("--effort") + 1]).toBe("xhigh");
+      expect(JSON.parse(args[args.indexOf("--settings") + 1])).toMatchObject({
+        fastMode: true,
+        alwaysThinkingEnabled: true,
+      });
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await turn;
+    },
+  );
+
+  it("does not inject built-in prompt behavior for a custom effort value, including steering", async () => {
+    const model = customModelId("claude", "private-model");
+    const { turn } = await startTurn("s1", {
+      model,
+      modelSettings: { effort: "ultrathink" },
+    });
+    const args = spawned[0];
+    expect(args[args.indexOf("--effort") + 1]).toBe("ultrathink");
+    expect(parse().find((message) => message.type === "user")).toMatchObject({
+      message: { content: [{ type: "text", text: "explore the codebase" }] },
+    });
+    await steerClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model,
+      modelSettings: { effort: "ultrathink" },
+      text: "include tests",
+    });
+    expect(
+      parse().filter((message) => message.type === "user")[1],
+    ).toMatchObject({
+      message: { content: [{ type: "text", text: "include tests" }] },
+    });
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
   });

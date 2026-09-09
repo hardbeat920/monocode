@@ -1,4 +1,5 @@
 import { nativeModelId } from "../models";
+import { customModelSlug } from "../customModels";
 import type { RuntimeMode } from "../session";
 import { loadClaudeHooks } from "../settings";
 import {
@@ -230,7 +231,10 @@ export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const message = buildClaudeUserMessage({
     text: input.text,
     attachments: input.attachments,
-    effort: input.modelSettings?.effort,
+    effort:
+      customModelSlug(input.model) === null
+        ? input.modelSettings?.effort
+        : undefined,
   });
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
@@ -441,7 +445,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
-  const effort = input.modelSettings?.effort;
+  const effort =
+    customModelSlug(input.model) === null
+      ? input.modelSettings?.effort
+      : undefined;
   const message = buildClaudeUserMessage({
     text: input.text,
     attachments: input.attachments,
@@ -1171,7 +1178,10 @@ function writeJson(
 
 function settingsKeyFor(input: HarnessSessionInput): string {
   return claudeSettingsKey({
-    model: nativeModelId(input.model),
+    model:
+      customModelSlug(input.model) === null
+        ? nativeModelId(input.model)
+        : input.model,
     effort: input.modelSettings?.effort,
     fast: input.modelSettings?.fast,
     thinking: input.modelSettings?.thinking,
@@ -1194,6 +1204,7 @@ function launchOptions(
   settings?: ClaudeCliSettings;
 } {
   const native = nativeModelId(input.model);
+  const isCustom = customModelSlug(input.model) !== null;
   const effortRaw = input.modelSettings?.effort;
   const context = input.modelSettings?.context;
   const settings: ClaudeCliSettings = {};
@@ -1203,15 +1214,15 @@ function launchOptions(
   if (input.modelSettings?.fast === "true") {
     settings.fastMode = true;
   }
-  if (isClaudeUltracodeEffort(effortRaw)) {
+  if (!isCustom && isClaudeUltracodeEffort(effortRaw)) {
     settings.ultracode = true;
   }
   if (!loadClaudeHooks()) {
     settings.disableAllHooks = true;
   }
   return {
-    model: resolveClaudeApiModelId(native, context),
-    effort: normalizeClaudeCliEffort(effortRaw, native),
+    model: isCustom ? native : resolveClaudeApiModelId(native, context),
+    effort: isCustom ? effortRaw : normalizeClaudeCliEffort(effortRaw, native),
     permissionMode:
       input.intent === "plan"
         ? "plan"
