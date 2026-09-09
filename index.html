@@ -43,6 +43,10 @@
           if (isMac) {
             root.classList.add("is-mac");
           }
+          // All platforms want the glass CSS path (native on macOS/Windows,
+          // CSS `backdrop-filter` on Linux), so the body is transparent
+          // from the first frame instead of flashing solid then fading.
+          root.classList.add("has-native-glass");
         } catch (_) {}
       })();
     </script>
@@ -51,6 +55,7 @@
         --theme-hue: 240;
         --theme-saturation: 0%;
         --sidebar-opacity: 0.85;
+        --sidebar-blur: 24px;
         --background-lightness: 9%;
         --color-background-base: hsl(
           var(--theme-hue) var(--theme-saturation) var(--background-lightness)

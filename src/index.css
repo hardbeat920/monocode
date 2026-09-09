@@ -41,7 +41,9 @@ html {
 }
 
 html.theme-light {
-  --background-lightness: 97%;
+  /* Dropped from 97% so the translucent panels actually let the
+     desktop through — at 97% the panel reads as opaque white. */
+  --background-lightness: 88%;
   --content-lightness: 18%;
   --link-color: hsl(211 92% 40%);
   --color-skill: #a07c10;
@@ -98,9 +100,9 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-html.has-native-glass:not(.theme-light),
-html.has-native-glass:not(.theme-light) body,
-html.has-native-glass:not(.theme-light) #root {
+html.has-native-glass,
+html.has-native-glass body,
+html.has-native-glass #root {
   background: transparent;
 }
 
@@ -109,14 +111,80 @@ html.has-native-glass:not(.theme-light) #root {
 }
 
 html.theme-light .sidebar-glass {
-  background: var(--color-background-base);
+  background: color-mix(in srgb, var(--color-background-base) 92%, white);
 }
 
-html.has-native-glass:not(.theme-light) .sidebar-glass {
+/* Glass surfaces: macOS/Windows get OS-level vibrancy/acrylic, so the
+   translucent tint just needs to read on top of it. Linux relies on CSS
+   `backdrop-filter` for the same visual — and on compositors that can't
+   blur, the @supports fallback below paints a tinted gradient + border +
+   shadow so the panel still reads as glass instead of going flat. */
+html.has-native-glass .sidebar-glass {
   background: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
       var(--sidebar-opacity)
   );
+  border-right: 1px solid
+    color-mix(in srgb, var(--color-content) 8%, transparent);
+}
+
+@supports (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  html.has-native-glass .sidebar-glass {
+    backdrop-filter: blur(var(--sidebar-blur, 24px)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--sidebar-blur, 24px)) saturate(140%);
+    box-shadow:
+      inset 1px 0 0 0
+        color-mix(in srgb, var(--color-content) 5%, transparent);
+  }
+}
+
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  /* Faux-glass for compositors that can't blur. The trick: layer a tiny
+     SVG noise texture + a soft top-left light source + a 1-px inner edge
+     highlight on top of the existing translucent tint so the eye reads
+     the panel as a *blurred* surface even though no real blur is
+     happening. The 4% noise is below human-perceptible texture but is
+     enough to suggest the micro-variation you get from a real blur. */
+  html.has-native-glass .sidebar-glass {
+    background:
+      /* Subtle fractal noise — suggests blurred pixels */
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.06 0'/></filter><rect width='80' height='80' filter='url(%23n)'/></svg>"),
+      /* Top-left light source (suggests a window reflection) */
+      radial-gradient(
+        ellipse 90% 60% at 25% 0%,
+        hsl(
+          var(--theme-hue) var(--theme-saturation)
+            min(calc(var(--background-lightness) + 18%), 80%) /
+            calc(var(--sidebar-opacity) + 0.1)
+        ),
+        transparent 70%
+      ),
+      /* Body tint, slightly darker at the bottom edge for depth */
+      linear-gradient(
+        180deg,
+        hsl(
+          var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
+            calc(var(--sidebar-opacity) + 0.04)
+        ),
+        hsl(
+          var(--theme-hue) var(--theme-saturation)
+            max(calc(var(--background-lightness) - 4%), 0%) /
+            var(--sidebar-opacity)
+        )
+      );
+    box-shadow:
+      /* 1-px white inner edge — what a real frosted panel does at its rim */
+      inset 1px 0 0 0
+        color-mix(in srgb, var(--color-content) 9%, transparent),
+      inset 0 1px 0 0
+        color-mix(in srgb, var(--color-content) 7%, transparent),
+      inset 0 -1px 0 0
+        color-mix(in srgb, black 18%, transparent);
+  }
 }
 
 .body-glass {
@@ -173,12 +241,69 @@ html.chat-background-empty-only
   min-height: var(--transcript-viewport, 0px);
 }
 
-html.has-native-glass.glass-body:not(.theme-light) .body-glass {
+html.has-native-glass.glass-body .body-glass {
+  /* The body pane rides a bit lower than the sidebar so the desktop
+     reads through the chat surface — adjust the slider and the body
+     follows along. */
   background: color-mix(
     in srgb,
-    var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
+    var(--color-background-base) calc(var(--sidebar-opacity) * 78%),
     transparent
   );
+  border-top: 1px solid
+    color-mix(in srgb, var(--color-content) 6%, transparent);
+}
+
+@supports (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  html.has-native-glass.glass-body .body-glass {
+    backdrop-filter: blur(var(--sidebar-blur, 24px)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--sidebar-blur, 24px)) saturate(140%);
+    box-shadow:
+      inset 0 1px 0 0
+        color-mix(in srgb, var(--color-content) 4%, transparent);
+  }
+}
+
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  /* Faux-glass for the body pane — same noise + light + edge recipe as
+     the sidebar fallback above, with a wider radial light source that
+     suits a horizontal container. */
+  html.has-native-glass.glass-body .body-glass {
+    background:
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.06 0'/></filter><rect width='80' height='80' filter='url(%23n)'/></svg>"),
+      radial-gradient(
+        ellipse 60% 70% at 20% 0%,
+        hsl(
+          var(--theme-hue) var(--theme-saturation)
+            min(calc(var(--background-lightness) + 16%), 80%) /
+            calc(var(--sidebar-opacity) + 0.08)
+        ),
+        transparent 70%
+      ),
+      radial-gradient(
+        ellipse at 20% 0%,
+        color-mix(
+          in srgb,
+          var(--color-background-base)
+            calc((var(--sidebar-opacity) + 0.05) * 100%),
+          transparent
+        ),
+        color-mix(
+          in srgb,
+          var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
+          transparent
+        ) 70%
+      );
+    box-shadow:
+      inset 0 1px 0 0
+        color-mix(in srgb, var(--color-content) 7%, transparent),
+      inset 0 -1px 0 0
+        color-mix(in srgb, black 14%, transparent);
+  }
 }
 
 textarea,
