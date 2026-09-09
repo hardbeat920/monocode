@@ -18,12 +18,17 @@ vi.mock("./child", () => ({
 
 const {
   compactCodexContext,
+  bindCodexSession,
+  cancelCodexTurn,
+  respondCodexApproval,
+  respondCodexQuestion,
   sendCodexTurn,
   stopCodexSession,
   __codexTestReset,
 } = await import("./codex");
 import type { HarnessEvent } from "./types";
-import type { RuntimeMode, TurnIntent } from "../session";
+import { newSession, type RuntimeMode, type TurnIntent } from "../session";
+import { applyHarnessEvent } from "./apply";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -52,9 +57,11 @@ async function startTurn(
   options: {
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
+    resume?: boolean;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
+  if (options.resume) bindCodexSession(sessionId, "thr_1", "/repo");
   const turn = sendCodexTurn({
     sessionId,
     cwd: "/repo",
@@ -72,13 +79,15 @@ async function startTurn(
     "initialize",
   );
   reply(parse().find((m) => m.method === "initialize")!.id as number, {});
+  const threadMethod = options.resume ? "thread/resume" : "thread/start";
   await waitFor(
-    () => parse().some((m) => m.method === "thread/start"),
-    "thread/start",
+    () => parse().some((m) => m.method === threadMethod),
+    threadMethod,
   );
-  reply(parse().find((m) => m.method === "thread/start")!.id as number, {
+  reply(parse().find((m) => m.method === threadMethod)!.id as number, {
     thread: { id: "thr_1" },
   });
+
   await waitFor(
     () => parse().some((m) => m.method === "turn/start"),
     "turn/start",
@@ -100,6 +109,499 @@ describe("codex live turn sequence", () => {
     vi.useRealTimers();
     await stopCodexSession("codex-live");
     __codexTestReset();
+  });
+
+  it.each([false, true])(
+    "routes full-access escalation after resume=%s",
+    async (resume) => {
+      const { events, turn } = await startTurn("codex-live", {
+        runtimeMode: "full-access",
+        resume,
+      });
+      for (const message of parse().filter((m) =>
+        ["thread/start", "thread/resume", "turn/start"].includes(
+          String(m.method),
+        ),
+      )) {
+        expect(message.params).toMatchObject({
+          approvalPolicy: "on-request",
+          approvalsReviewer: "user",
+        });
+      }
+      onLine!(
+        JSON.stringify({
+          id: 91,
+          method: "item/commandExecution/requestApproval",
+          params: { itemId: "read_1", command: "git status --short" },
+        }),
+      );
+      await waitFor(
+        () => parse().some((m) => m.id === 91),
+        "full-access response",
+      );
+      expect(parse().find((m) => m.id === 91)?.result).toEqual({
+        decision: "accept",
+      });
+      expect(events.some((e) => e.type === "approval.requested")).toBe(false);
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
+
+  it("still waits for an explicit command decision in supervised mode", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "item/commandExecution/requestApproval",
+        params: { itemId: "cmd_1", command: "git status --short" },
+      }),
+    );
+    await waitFor(
+      () => events.some((e) => e.type === "approval.requested"),
+      "approval UI",
+    );
+    expect(parse().some((m) => m.id === 91)).toBe(false);
+    const request = events.find((e) => e.type === "approval.requested")!;
+    if (request.type !== "approval.requested")
+      throw new Error("missing approval");
+    respondCodexApproval("codex-live", request.requestId, "deny");
+    await waitFor(() => parse().some((m) => m.id === 91), "denial");
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      decision: "decline",
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each([undefined, "plan"] as const)(
+    "waits for user input in full-access intent=%s",
+    async (intent) => {
+      const { events, turn } = await startTurn("codex-live", {
+        runtimeMode: "full-access",
+        intent,
+      });
+      onLine!(
+        JSON.stringify({
+          id: "question_rpc",
+          method: "item/tool/requestUserInput",
+          params: {
+            itemId: "question_1",
+            questions: [
+              {
+                id: "permission",
+                header: "Access",
+                question: "Read the external source?",
+                isOther: true,
+                isSecret: false,
+                options: [
+                  { label: "Accept", description: "Read the source." },
+                  { label: "Decline", description: "Skip." },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+      await waitFor(
+        () => events.some((e) => e.type === "question.asked"),
+        "question UI",
+      );
+      expect(parse().some((m) => m.id === "question_rpc")).toBe(false);
+      const request = events.find((e) => e.type === "question.asked")!;
+      if (request.type !== "question.asked")
+        throw new Error("missing question");
+      respondCodexQuestion("codex-live", request.requestId, {
+        kind: "answered",
+        answers: { permission: ["Decline"] },
+      });
+      await waitFor(
+        () => parse().some((m) => m.id === "question_rpc"),
+        "question response",
+      );
+      expect(parse().find((m) => m.id === "question_rpc")?.result).toEqual({
+        answers: { permission: { answers: ["Decline"] } },
+      });
+      expect(events).toContainEqual({
+        type: "question.resolved",
+        requestId: request.requestId,
+        decision: "answered",
+      });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
+
+  it.each(["skip", "server", "complete", "stop", "cancel"])(
+    "clears pending questions on %s",
+    async (action) => {
+      const { events, turn } = await startTurn("codex-live");
+      onLine!(
+        JSON.stringify({
+          id: 91,
+          method: "item/tool/requestUserInput",
+          params: {
+            itemId: "q1",
+            questions: [
+              {
+                id: "q",
+                question: "Which source?",
+                isSecret: false,
+                isOther: true,
+                options: null,
+              },
+            ],
+          },
+        }),
+      );
+      await waitFor(
+        () => events.some((e) => e.type === "question.asked"),
+        "question UI",
+      );
+      const request = events.find((e) => e.type === "question.asked")!;
+      if (request.type !== "question.asked")
+        throw new Error("missing question");
+      if (action === "skip")
+        respondCodexQuestion("codex-live", request.requestId, {
+          kind: "skipped",
+        });
+      if (action === "server")
+        notify("serverRequest/resolved", { threadId: "thr_1", requestId: 91 });
+      if (action === "complete")
+        notify("turn/completed", {
+          turn: { id: "turn_1", status: "completed" },
+        });
+      if (action === "stop") await stopCodexSession("codex-live");
+      if (action === "cancel") {
+        const cancelled = cancelCodexTurn("codex-live");
+        await waitFor(
+          () => parse().some((m) => m.method === "turn/interrupt"),
+          "interrupt",
+        );
+        reply(
+          parse().find((m) => m.method === "turn/interrupt")!.id as number,
+          {},
+        );
+        await cancelled;
+      }
+      await waitFor(
+        () => events.some((e) => e.type === "question.resolved"),
+        "question cleanup",
+      );
+      expect(events).toContainEqual({
+        type: "question.resolved",
+        requestId: request.requestId,
+        decision: action === "skip" ? "skipped" : "cancelled",
+      });
+      if (action === "skip")
+        expect(parse().find((m) => m.id === 91)?.result).toEqual({
+          answers: {},
+        });
+      else expect(parse().some((m) => m.id === 91)).toBe(false);
+      respondCodexQuestion("codex-live", request.requestId, {
+        kind: "answered",
+        answers: {},
+        custom: { q: "too late" },
+      });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+      expect(parse().filter((m) => m.id === 91)).toHaveLength(
+        action === "skip" ? 1 : 0,
+      );
+    },
+  );
+
+  it("does not collect secret answers in the transcript question UI", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "item/tool/requestUserInput",
+        params: {
+          questions: [
+            {
+              id: "secret",
+              question: "Enter a secret",
+              isSecret: true,
+              options: null,
+            },
+          ],
+        },
+      }),
+    );
+    await waitFor(
+      () => parse().some((m) => m.id === 91),
+      "unsupported secret response",
+    );
+    expect(events.some((e) => e.type === "question.asked")).toBe(false);
+    expect(events).toContainEqual({
+      type: "status",
+      text: expect.stringContaining("secret input"),
+    });
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({ answers: {} });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("auto-approves full-access file and permission requests", async () => {
+    const { events, turn } = await startTurn("codex-live", {
+      runtimeMode: "full-access",
+    });
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "item/fileChange/requestApproval",
+        params: { itemId: "edit_1", reason: "Edit the requested file" },
+      }),
+    );
+    const permissions = { network: { enabled: true } };
+    onLine!(
+      JSON.stringify({
+        id: 92,
+        method: "item/permissions/requestApproval",
+        params: { itemId: "perm_1", permissions },
+      }),
+    );
+    await waitFor(() => parse().some((m) => m.id === 92), "permission grant");
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      decision: "accept",
+    });
+    expect(parse().find((m) => m.id === 92)?.result).toEqual({
+      scope: "session",
+      permissions,
+    });
+    expect(events.some((e) => e.type === "approval.requested")).toBe(false);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("queues concurrent questions instead of hiding the first one", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    for (const id of [91, 92])
+      onLine!(
+        JSON.stringify({
+          id,
+          method: "item/tool/requestUserInput",
+          params: {
+            questions: [
+              {
+                id: `q${id}`,
+                question: `Question ${id}`,
+                options: null,
+                isOther: true,
+              },
+            ],
+          },
+        }),
+      );
+    const asked = () => events.filter((e) => e.type === "question.asked");
+    expect(asked()).toHaveLength(1);
+    respondCodexQuestion("codex-live", asked()[0].requestId, {
+      kind: "answered",
+      answers: {},
+      custom: { q91: "first answer" },
+    });
+    await waitFor(() => asked().length === 2, "second question");
+    respondCodexQuestion("codex-live", asked()[1].requestId, {
+      kind: "skipped",
+    });
+    await waitFor(() => parse().some((m) => m.id === 92), "second reply");
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      answers: { q91: { answers: ["first answer"] } },
+    });
+    expect(parse().find((m) => m.id === 92)?.result).toEqual({ answers: {} });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each(["allow", "deny"] as const)(
+    "shows MCP confirmation and sends %s",
+    async (decision) => {
+      const { events, turn } = await startTurn("codex-live");
+      onLine!(
+        JSON.stringify({
+          id: 91,
+          method: "mcpServer/elicitation/request",
+          params: {
+            serverName: "example",
+            mode: "form",
+            message: "Read this source?",
+            requestedSchema: { type: "object", properties: {} },
+          },
+        }),
+      );
+      await waitFor(
+        () => events.some((e) => e.type === "approval.requested"),
+        "MCP approval UI",
+      );
+      expect(parse().some((m) => m.id === 91)).toBe(false);
+      const approval = events.find((e) => e.type === "approval.requested")!;
+      respondCodexApproval("codex-live", approval.requestId, decision);
+      await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
+      expect(parse().find((m) => m.id === 91)?.result).toEqual({
+        action: decision === "allow" ? "accept" : "decline",
+        content: decision === "allow" ? {} : null,
+        _meta: null,
+      });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
+
+  it("reports unsupported MCP forms instead of returning an empty success", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: 90,
+        method: "item/tool/requestUserInput",
+        params: {
+          questions: [{ id: "q", question: "Choose a name", options: null }],
+        },
+      }),
+    );
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "mcpServer/elicitation/request",
+        params: {
+          mode: "form",
+          requestedSchema: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          },
+        },
+      }),
+    );
+    await waitFor(() => parse().some((m) => m.id === 91), "MCP cancel");
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      action: "cancel",
+      content: null,
+      _meta: null,
+    });
+    expect(events).toContainEqual({
+      type: "status",
+      text: expect.stringContaining("does not support yet"),
+    });
+    onLine!(
+      JSON.stringify({ id: 92, method: "future/requestApproval", params: {} }),
+    );
+    await waitFor(() => parse().some((m) => m.id === 92), "protocol error");
+    expect(parse().find((m) => m.id === 92)?.error).toMatchObject({
+      code: -32601,
+    });
+    const session = events.reduce(applyHarnessEvent, {
+      ...newSession("codex", "/repo", "codex:gpt-5.4", "supervised"),
+      busy: true,
+    });
+    expect(session.busy).toBe(true);
+    expect(session.pendingQuestion?.questions[0].id).toBe("q");
+    respondCodexQuestion("codex-live", session.pendingQuestion!.requestId, {
+      kind: "answered",
+      answers: {},
+      custom: { q: "chosen name" },
+    });
+    await waitFor(() => parse().some((m) => m.id === 90), "remaining answer");
+    expect(parse().find((m) => m.id === 90)?.result).toEqual({
+      answers: { q: { answers: ["chosen name"] } },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("clears server-resolved approvals without replying twice", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "item/commandExecution/requestApproval",
+        params: { itemId: "cmd", command: "git status" },
+      }),
+    );
+    const request = events.find((e) => e.type === "approval.requested")!;
+    notify("serverRequest/resolved", { threadId: "unrelated", requestId: 91 });
+    await Promise.resolve();
+    expect(events.some((e) => e.type === "approval.resolved")).toBe(false);
+    notify("serverRequest/resolved", { threadId: "thr_1", requestId: 91 });
+    await waitFor(
+      () => events.some((e) => e.type === "approval.resolved"),
+      "approval cleanup",
+    );
+    expect(events).toContainEqual({
+      type: "approval.resolved",
+      requestId: request.requestId,
+      decision: "cancelled",
+    });
+    respondCodexApproval("codex-live", request.requestId, "allow");
+    expect(parse().some((m) => m.id === 91)).toBe(false);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("applies a queued access change only when that turn starts", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    const queued = sendCodexTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "full-access",
+      text: "Continue",
+      onEvent: (event) => events.push(event),
+    });
+    await Promise.resolve();
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "item/commandExecution/requestApproval",
+        params: { itemId: "cmd", command: "git status" },
+      }),
+    );
+    await waitFor(
+      () => events.some((event) => event.type === "approval.requested"),
+      "current turn approval",
+    );
+    expect(parse().some((m) => m.id === 91)).toBe(false);
+    const request = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    respondCodexApproval("codex-live", request.requestId, "deny");
+    await waitFor(
+      () => parse().some((m) => m.id === 91),
+      "current turn decision",
+    );
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      decision: "decline",
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    await waitFor(
+      () => parse().filter((m) => m.method === "turn/start").length === 2,
+      "queued turn",
+    );
+    const next = parse().filter((m) => m.method === "turn/start")[1];
+    expect(next.params).toMatchObject({
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    });
+    reply(next.id as number, { turn: { id: "turn_2" } });
+    notify("turn/started", { turn: { id: "turn_2" } });
+    onLine!(
+      JSON.stringify({
+        id: 92,
+        method: "item/commandExecution/requestApproval",
+        params: { itemId: "cmd2", command: "git status" },
+      }),
+    );
+    await waitFor(
+      () => parse().some((m) => m.id === 92),
+      "queued turn approval",
+    );
+    expect(parse().find((m) => m.id === 92)?.result).toEqual({
+      decision: "accept",
+    });
+    notify("turn/completed", { turn: { id: "turn_2", status: "completed" } });
+    await queued;
   });
 
   it("stays busy after an agent message until turn/completed", async () => {

@@ -272,6 +272,7 @@ import {
   loadNotificationsEnabled,
   NOTIFICATION_CLICK_EVENT,
   notifySession,
+  pendingInputNotifications,
   probeNotificationPermission,
   setWindowFocused,
 } from "./lib/notifications";
@@ -971,22 +972,25 @@ export default function App({
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
 
+  const inputNotifications = useMemo(
+    () => pendingInputNotifications(sessions),
+    [sessions],
+  );
   const notifiedApprovalIdsRef = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     const previous = notifiedApprovalIdsRef.current;
-    notifiedApprovalIdsRef.current = approvalSessionIds;
-    for (const id of approvalSessionIds) {
-      if (previous.has(id)) continue;
-      const session = sessionsRef.current.find((s) => s.id === id);
-      if (session) {
-        void notifySession(
-          session,
-          "needsInput",
-          id === activeSessionIdRef.current,
-        );
-      }
+    notifiedApprovalIdsRef.current = new Set(inputNotifications.keys());
+    const notifiedSessions = new Set<string>();
+    for (const [key, session] of inputNotifications) {
+      if (previous.has(key) || notifiedSessions.has(session.id)) continue;
+      notifiedSessions.add(session.id);
+      void notifySession(
+        session,
+        "needsInput",
+        session.id === activeSessionIdRef.current,
+      );
     }
-  }, [approvalSessionIds]);
+  }, [inputNotifications]);
 
   // Cache the OS decision so a turn ending later can skip a denied banner.
   useEffect(() => {

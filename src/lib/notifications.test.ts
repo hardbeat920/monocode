@@ -3,12 +3,68 @@ import {
   loadNotificationsEnabled,
   NOTIFICATIONS_DEFAULT,
   notificationText,
+  pendingInputNotifications,
   saveNotificationsEnabled,
   shouldNotify,
 } from "./notifications";
 import { newSession, type Session } from "./session";
 
 const KEY = "monocode.notifications";
+
+describe("pendingInputNotifications", () => {
+  it("detects a second approval without an intervening idle render", () => {
+    const session = chat({
+      blocks: [
+        { id: "p1", role: "tool", text: "first", approval: { requestId: 1 } },
+      ],
+    });
+    const before = pendingInputNotifications([session]);
+    const next = {
+      ...session,
+      blocks: [
+        ...session.blocks,
+        {
+          id: "p2",
+          role: "tool" as const,
+          text: "second",
+          approval: { requestId: 2 },
+        },
+      ],
+    };
+    const after = pendingInputNotifications([next]);
+    expect([...after.keys()].filter((key) => !before.has(key))).toHaveLength(1);
+    // An ordinary transcript update must not repeat either notification.
+    expect([
+      ...pendingInputNotifications([{ ...next, title: "changed" }]).keys(),
+    ]).toEqual([...after.keys()]);
+    const resolved = {
+      ...next,
+      blocks: next.blocks.map((block) => ({
+        ...block,
+        approval: { ...block.approval!, decided: "allow" as const },
+      })),
+    };
+    expect(pendingInputNotifications([resolved]).size).toBe(0);
+  });
+
+  it("keeps questions and approvals in different sessions distinct", () => {
+    const first = chat({
+      blocks: [
+        { id: "p1", role: "tool", text: "approve", approval: { requestId: 1 } },
+      ],
+      pendingQuestion: { requestId: 1, questions: [] },
+    });
+    const second = { ...first, id: "other" };
+    expect(pendingInputNotifications([first, second]).size).toBe(4);
+    expect(
+      [
+        ...pendingInputNotifications([
+          { ...first, pendingQuestion: { requestId: 2, questions: [] } },
+        ]).keys(),
+      ].filter((key) => !pendingInputNotifications([first]).has(key)),
+    ).toHaveLength(1);
+  });
+});
 
 function chat(patch: Partial<Session> = {}): Session {
   const session = newSession("claude", "/tmp/a");

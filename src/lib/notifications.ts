@@ -105,6 +105,35 @@ export function shouldNotify({
 
 export type NotificationEvent = "finished" | "needsInput";
 
+/** Track each request, including a new request in an already-waiting session. */
+export function pendingInputNotifications(
+  sessions: Session[],
+): Map<string, Session> {
+  const pending = new Map<string, Session>();
+  for (const session of sessions) {
+    if (session.inboxAsk) continue;
+    for (const block of session.blocks) {
+      if (block.approval && !block.approval.decided) {
+        pending.set(
+          JSON.stringify([session.id, "approval", block.approval.requestId]),
+          session,
+        );
+      }
+    }
+    if (session.pendingQuestion) {
+      pending.set(
+        JSON.stringify([
+          session.id,
+          "question",
+          session.pendingQuestion.requestId,
+        ]),
+        session,
+      );
+    }
+  }
+  return pending;
+}
+
 /** App name, then the session title, then the reply itself. */
 export type NotificationText = { title: string; subtitle: string; body: string };
 
