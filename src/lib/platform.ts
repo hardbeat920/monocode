@@ -5,8 +5,13 @@ export const IS_MAC =
 export const IS_WIN =
   typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
 
-/** Native desktop blur: macOS vibrancy and Windows acrylic. Linux stays opaque. */
-export const HAS_NATIVE_GLASS = IS_MAC || IS_WIN;
+/**
+ * Has a glass-capable surface. macOS/Windows use OS-level vibrancy/acrylic
+ * (compositor-side blur). Linux relies on the transparent Tauri window plus
+ * CSS `backdrop-filter`; if the compositor can't blur, the CSS fallback
+ * (translucent tint + border + shadow) still keeps the panel from looking flat.
+ */
+export const HAS_NATIVE_GLASS = true;
 
 export const MOD = IS_MAC ? "⌘" : "Ctrl+";
 export const ALT = IS_MAC ? "⌥" : "Alt+";
