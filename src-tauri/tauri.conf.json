@@ -19,12 +19,8 @@
         "height": 800,
         "minWidth": 800,
         "minHeight": 520,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "transparent": true,
         "backgroundColor": "#171717",
-        "backgroundThrottling": "throttle",
-        "shadow": true
+        "backgroundThrottling": "throttle"
       }
     ],
     "security": {
