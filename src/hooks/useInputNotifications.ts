@@ -6,8 +6,6 @@ export function useInputNotifications(
   sessions: Session[],
   activeSessionId: string | undefined,
 ) {
-  const activeSessionIdRef = useRef(activeSessionId);
-  activeSessionIdRef.current = activeSessionId;
   const inputNotifications = useMemo(
     () => pendingInputNotifications(sessions),
     [sessions],
@@ -28,8 +26,8 @@ export function useInputNotifications(
       void notifySession(
         session,
         event,
-        session.id === activeSessionIdRef.current,
+        session.id === activeSessionId,
       );
     }
-  }, [inputNotifications]);
+  }, [activeSessionId, inputNotifications]);
 }
