@@ -183,6 +183,8 @@ import {
   type UpdaterSnapshot,
 } from "../lib/updater";
 
+import { SkillsPage } from "./SkillsPage";
+
 type Props = {
   section: SettingsSectionId;
   cwd: string;
@@ -278,6 +280,7 @@ export function SettingsView({
           ) : null}
           {section === "keybindings" ? <KeybindingsPage /> : null}
           {section === "providers" ? <ProvidersPage /> : null}
+          {section === "skills" ? <SkillsPage key={cwd} cwd={cwd} /> : null}
           {section === "archive" ? (
             <ArchivePage
               cwd={cwd}

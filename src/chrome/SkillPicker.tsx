@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { looksLikeProject } from "../lib/recents";
@@ -186,7 +187,8 @@ function SkillList({
   );
 }
 
-function CreateSkillForm({
+/** Shared starter-skill form for the composer picker and Settings. */
+export function CreateSkillForm({
   query,
   cwd,
   error,
@@ -200,7 +202,7 @@ function CreateSkillForm({
   busy?: boolean;
   onCancel: () => void;
   onCreate: (name: string, scope: "project" | "user") => void;
-}) {
+}): ReactNode {
   const input = useRef<HTMLInputElement>(null);
   const project = looksLikeProject(cwd);
   const [name, setName] = useState(() => slugSkillName(query));

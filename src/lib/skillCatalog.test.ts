@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   discoverPiSkills: vi.fn(),
@@ -35,6 +35,9 @@ vi.mock("./fs", () => ({
 }));
 
 import {
+  loadDisabledSkillPaths,
+  saveDisabledSkillPaths,
+  SKILLS_CHANGE_EVENT,
   BUILTIN_CREATE_SKILL,
   invalidateSkills,
   loadSkills,
@@ -43,6 +46,7 @@ import {
   subscribeSkills,
   applySkillsToTurn,
 } from "./skills";
+import type { DiscoveredSkill } from "./fs";
 import type { PiSkillCommand } from "./harness/piSkills";
 
 function piSkill(name: string): PiSkillCommand {
@@ -268,5 +272,113 @@ describe("provider-aware skill catalog", () => {
     expect(peekSkills({ harness: "pi", cwd: "/repo" })).toMatchObject([
       { name: "current" },
     ]);
+  });
+});
+
+describe("file skill visibility preferences", () => {
+  const path = "/repo/.agents/skills/review/SKILL.md";
+  let storage: Map<string, string>;
+
+  beforeEach((): void => {
+    storage = new Map();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string): string | null => storage.get(key) ?? null,
+      setItem: (key: string, value: string): void => {
+        storage.set(key, value);
+      },
+    });
+    vi.stubGlobal("window", new EventTarget());
+    mocks.listSkills.mockResolvedValue([
+      {
+        name: "review",
+        description: "Review changes",
+        path,
+        source: "agents",
+        scope: "project",
+      },
+    ]);
+  });
+  afterEach((): void => {
+    vi.unstubAllGlobals();
+  });
+
+  it("removes a hidden file from a cached catalog and restores it", async (): Promise<void> => {
+    const context = { harness: "claude", cwd: "/repo" } satisfies Parameters<
+      typeof loadSkills
+    >[0];
+    expect(
+      (await loadSkills(context)).some((skill) => skill.name === "review"),
+    ).toBe(true);
+    saveDisabledSkillPaths([path]);
+    expect(await loadSkills(context)).toEqual([BUILTIN_CREATE_SKILL]);
+    saveDisabledSkillPaths([]);
+    expect(
+      (await loadSkills(context)).some((skill) => skill.name === "review"),
+    ).toBe(true);
+  });
+
+  it("does not inject hidden skill content into a submitted turn", async (): Promise<void> => {
+    saveDisabledSkillPaths([path]);
+    const result = await applySkillsToTurn("/review inspect this", {
+      harness: "claude",
+      cwd: "/repo",
+    });
+    expect(result).toBe("/review inspect this");
+  });
+
+  it("leaves provider-owned native catalogs intact", async (): Promise<void> => {
+    saveDisabledSkillPaths([path]);
+    expect(await loadSkills({ harness: "pi", cwd: "/repo" })).toMatchObject([
+      { name: "architect", kind: "native" },
+    ]);
+  });
+
+  it("notifies open views only after persistence succeeds", (): void => {
+    const listener = vi.fn();
+    window.addEventListener(SKILLS_CHANGE_EVENT, listener);
+    saveDisabledSkillPaths([path]);
+    expect(loadDisabledSkillPaths()).toEqual([path]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    vi.stubGlobal("localStorage", {
+      setItem: (): never => {
+        throw new Error("quota");
+      },
+    });
+    expect(() => saveDisabledSkillPaths([])).toThrow(
+      "Could not save skill preferences",
+    );
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates malformed and mixed stored preferences", (): void => {
+    storage.set("monocode.disabledSkillPaths", "invalid json");
+    expect(loadDisabledSkillPaths()).toEqual([]);
+    storage.set(
+      "monocode.disabledSkillPaths",
+      JSON.stringify([path, null, 42]),
+    );
+    expect(loadDisabledSkillPaths()).toEqual([path]);
+  });
+
+  it("does not restore an old catalog when a scan finishes after hiding a skill", async (): Promise<void> => {
+    const pending = deferred<DiscoveredSkill[]>();
+    mocks.listSkills.mockReturnValueOnce(pending.promise);
+    const context = { harness: "claude", cwd: "/repo" } satisfies Parameters<
+      typeof loadSkills
+    >[0];
+    const old = loadSkills(context);
+    saveDisabledSkillPaths([path]);
+    await loadSkills(context);
+    pending.resolve([
+      {
+        name: "review",
+        description: "Review changes",
+        path,
+        source: "agents",
+        scope: "project",
+      },
+    ]);
+    await old;
+    expect(peekSkills(context)).toEqual([BUILTIN_CREATE_SKILL]);
   });
 });
