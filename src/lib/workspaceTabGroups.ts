@@ -14,7 +14,7 @@ import type { Session } from "./session";
 
 export function workspaceTabCwd(
   tab: WorkspaceTab,
-  sessions: Session[],
+  sessions: readonly Pick<Session, "id" | "cwd">[],
 ): string | null {
   for (const id of leafIds(tab.layout)) {
     const session = sessions.find((entry) => entry.id === id);
