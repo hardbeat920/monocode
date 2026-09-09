@@ -1,0 +1,121 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentMarkdown } from "./AgentMarkdown";
+
+describe("markdown file navigation", () => {
+  let root: Root;
+  let container: HTMLDivElement;
+  const onOpenFile = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    onOpenFile.mockClear();
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  async function render(text: string) {
+    await act(async () =>
+      root.render(
+        createElement(AgentMarkdown, {
+          text,
+          cwd: "/repo",
+          onOpenFile,
+        }),
+      ),
+    );
+  }
+
+  it("keeps protocol methods and ordinary identifiers as code, not file chips", async () => {
+    await render("`currentTime/read` and `experimentalApi` and `true`");
+    for (const code of container.querySelectorAll("code")) {
+      expect(code.getAttribute("role")).toBeNull();
+      expect(code.querySelector('[aria-hidden="true"]')).toBeNull();
+      await act(async () => code.click());
+    }
+    expect(onOpenFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["Dockerfile", "Makefile", "Gemfile", "LICENSE", ".gitignore"])(
+    "opens the extensionless/dotfile reference %s",
+    async (name) => {
+      await render(`\`${name}\``);
+      const link = container.querySelector<HTMLElement>('code[role="link"]');
+      expect(link).not.toBeNull();
+      await act(async () => link!.click());
+      expect(onOpenFile.mock.calls).toHaveLength(1);
+      expect(onOpenFile.mock.calls[0][0]).toBe(`/repo/${name}`);
+    },
+  );
+
+  it("opens inline file references at their line and column with the keyboard", async () => {
+    await render("`src/main.ts:12:3`");
+    const link = container.querySelector<HTMLElement>('code[role="link"]')!;
+    await act(async () =>
+      link.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      ),
+    );
+    expect(onOpenFile).toHaveBeenCalledWith("/repo/src/main.ts", {
+      line: 12,
+      column: 3,
+    });
+  });
+
+  it("decodes spaces in markdown file links and preserves the source line", async () => {
+    await render("[Guide](<docs/My Guide.md#L7-L9>)");
+    expect(container.innerHTML).toContain("<a");
+    await act(async () =>
+      container.querySelector<HTMLAnchorElement>("a")!.click(),
+    );
+    expect(onOpenFile).toHaveBeenCalledWith("/repo/docs/My Guide.md", {
+      line: 7,
+    });
+  });
+
+  it("opens absolute file URLs at the referenced line", async () => {
+    await render("[Source](file:///Users/me/My%20Project/main.ts#L4)");
+    expect(container.innerHTML).toContain("<a");
+    await act(async () =>
+      container.querySelector<HTMLAnchorElement>("a")!.click(),
+    );
+    expect(onOpenFile).toHaveBeenCalledWith("/Users/me/My Project/main.ts", {
+      line: 4,
+    });
+  });
+
+  it("opens a code citation at the first displayed source line", async () => {
+    await render("```12:16:src/main.ts\nexport const answer = 42;\n```");
+    const link = container.querySelector<HTMLButtonElement>(
+      ".markdown-code-path-link",
+    );
+    expect(link).not.toBeNull();
+    await act(async () => link!.click());
+    expect(onOpenFile).toHaveBeenCalledWith("/repo/src/main.ts", { line: 12 });
+  });
+
+  it("preserves external web links and keeps executable URL schemes blocked", async () => {
+    await render(
+      [
+        "[Documentation](https://example.com/docs)",
+        "[Script](javascript:alert%281%29)",
+        "[Data](data:text/html,bad)",
+        "[Hidden](javascript:../src/main.ts)",
+      ].join("\n\n"),
+    );
+    const links = [...container.querySelectorAll<HTMLAnchorElement>("a")];
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "https://example.com/docs",
+    ]);
+    expect(onOpenFile).not.toHaveBeenCalled();
+  });
+});

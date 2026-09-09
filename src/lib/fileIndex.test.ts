@@ -76,6 +76,12 @@ describe("resolveOpenablePath", () => {
     const resolved = await resolveOpenablePath(cwd, "apps/desktop/src/main.tsx");
     expect(resolved).toBe(files[2].path);
   });
+
+  it("still opens a direct file when the optional project index is unavailable", async () => {
+    list.mockRejectedValue(new Error("Project scan unavailable"));
+    await expect(resolveOpenablePath(cwd, "apps/desktop/src/main.tsx"))
+      .resolves.toBe(files[2].path);
+  });
 });
 
 describe("loadProjectFiles", () => {

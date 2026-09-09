@@ -120,6 +120,17 @@ export function FileEditor({
   const markdown = isMarkdownPath(path);
   const svg = isSvgPath(path);
   const [mode, setMode] = useMarkdownMode(path);
+  const sourceNavigationToken = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (
+      !navigation ||
+      (!markdown && !svg) ||
+      sourceNavigationToken.current === navigation.token
+    )
+      return;
+    sourceNavigationToken.current = navigation.token;
+    setMode("source");
+  }, [markdown, svg, navigation, setMode]);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveGeneration = useRef(0);
   const loadGeneration = useRef(0);
@@ -787,11 +798,6 @@ function CodeMirrorEditor({
 
     let cancelled = false;
     const run = () => {
-      if (cancelled) return;
-      if (view.state.doc.lines < navigation.line) {
-        requestAnimationFrame(run);
-        return;
-      }
       if (cancelled) return;
       revealNavigation(view, navigation);
     };

@@ -189,7 +189,14 @@ export async function resolveOpenablePath(
   const direct = resolveWorkspacePath(href, cwd);
   if (!direct) return undefined;
 
-  const files = await loadProjectFiles(cwd);
+  let files: ProjectFile[];
+  try {
+    files = await loadProjectFiles(cwd);
+  } catch {
+    // The index only disambiguates shortened paths. Let the editor read the
+    // direct path and show its own error if that file is unavailable too.
+    return direct;
+  }
   if (files.length === 0) return direct;
 
   const byPath = new Map(
