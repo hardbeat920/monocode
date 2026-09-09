@@ -118,6 +118,12 @@ function parseWorkspaceFileReference(
       !/^[A-Za-z]:[\\/]/.test(value))
   ) return undefined;
 
+  // Strip heading anchors before decoding, keeping encoded '#' in filenames.
+  if (decodeUrl) {
+    const hash = value.indexOf("#");
+    if (hash > 0 && !/^L\d+(?:-L\d+)?$/.test(value.slice(hash + 1)))
+      value = value.slice(0, hash);
+  }
   const location = value.match(/(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L\d+)?)$/);
   const line = Number(location?.[1] ?? location?.[3]);
   const column = location?.[2] ? Number(location[2]) : undefined;

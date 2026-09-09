@@ -82,6 +82,15 @@ describe("markdown file navigation", () => {
     });
   });
 
+  it.each([
+    ["./docs/guide.md#installation", "/repo/docs/guide.md"],
+    ["./report%23L2.md#installation", "/repo/report#L2.md"],
+  ])("opens %s without treating the heading anchor as part of its filename", async (href, path) => {
+    await render(`[Guide](${href})`);
+    await act(async () => container.querySelector<HTMLAnchorElement>("a")!.click());
+    expect(onOpenFile).toHaveBeenCalledWith(path, undefined);
+  });
+
   it("opens absolute file URLs at the referenced line", async () => {
     await render("[Source](file:///Users/me/My%20Project/main.ts#L4)");
     expect(container.innerHTML).toContain("<a");
