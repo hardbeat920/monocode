@@ -9,6 +9,7 @@ import {
 import { Popover } from "./Popover";
 import {
   getModelSnapshot,
+  mergeModelSettings,
   resolveModel,
   subscribeModels,
   type ModelSetting,
@@ -56,8 +57,12 @@ export function ModelSettings({
 
   if (settings.length === 0) return null;
 
+  const selected = resolveModel(harness, model);
+  const currentValues = selected.isCustom
+    ? mergeModelSettings(selected, values)
+    : values;
   const setValue = (id: string, value: string) => {
-    onChange({ ...values, [id]: value });
+    onChange({ ...currentValues, [id]: value });
   };
 
   return (
@@ -67,14 +72,14 @@ export function ModelSettings({
           <ToggleSetting
             key={setting.id}
             setting={setting}
-            value={values[setting.id] ?? setting.value}
+            value={currentValues[setting.id] ?? setting.value}
             onChange={(value) => setValue(setting.id, value)}
           />
         ) : (
           <SelectSetting
             key={setting.id}
             setting={setting}
-            value={values[setting.id] ?? setting.value}
+            value={currentValues[setting.id] ?? setting.value}
             onChange={(value) => setValue(setting.id, value)}
             onClose={onClose}
           />

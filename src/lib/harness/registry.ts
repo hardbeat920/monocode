@@ -1,7 +1,7 @@
 import type { HarnessId } from "../session";
 import type { GeneratedSessionTitle } from "../sessionTitle";
 import type { PrContent } from "../gitText";
-import { hasLiveCatalog } from "../models";
+import { findModel, hasLiveCatalog, mergeModelSettings } from "../models";
 import type { UserQuestionReply } from "../userQuestion";
 import type { NativeCommandProvider } from "./nativeCommands";
 import type {
@@ -130,7 +130,16 @@ export async function sendHarnessTurn(
   }
   cancelIdlePark(input.sessionId);
   try {
-    await adapter.sendTurn(input);
+    // Settings can be edited after a session selects a custom model.
+    const model = findModel(input.model);
+    await adapter.sendTurn(
+      model?.isCustom
+        ? {
+            ...input,
+            modelSettings: mergeModelSettings(model, input.modelSettings),
+          }
+        : input,
+    );
   } finally {
     scheduleIdlePark(input.harness, input.sessionId);
   }
@@ -153,7 +162,15 @@ export async function compactHarnessContext(
   }
   cancelIdlePark(input.sessionId);
   try {
-    await adapter.compactContext(input);
+    const model = findModel(input.model);
+    await adapter.compactContext(
+      model?.isCustom
+        ? {
+            ...input,
+            modelSettings: mergeModelSettings(model, input.modelSettings),
+          }
+        : input,
+    );
   } finally {
     scheduleIdlePark(input.harness, input.sessionId);
   }

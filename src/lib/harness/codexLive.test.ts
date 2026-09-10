@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { customModelId } from "../customModels";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
@@ -52,14 +53,16 @@ async function startTurn(
   options: {
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
+    model?: string;
+    modelSettings?: Record<string, string>;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
   const turn = sendCodexTurn({
     sessionId,
     cwd: "/repo",
-    model: "codex:gpt-5.4",
-    modelSettings: {},
+    model: options.model ?? "codex:gpt-5.4",
+    modelSettings: options.modelSettings ?? {},
     runtimeMode: options.runtimeMode ?? "supervised",
     intent: options.intent,
     text: "summarize the changelog",
@@ -100,6 +103,22 @@ describe("codex live turn sequence", () => {
     vi.useRealTimers();
     await stopCodexSession("codex-live");
     __codexTestReset();
+  });
+
+  it("sends opaque custom IDs and options in thread and turn requests", async () => {
+    const slug = "gateway/gpt:preview[private]";
+    const { turn } = await startTurn("codex-live", {
+      model: customModelId("codex", slug),
+      modelSettings: { reasoningEffort: "xhigh", serviceTier: "fast" },
+    });
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).toMatchObject({ model: slug, serviceTier: "fast" });
+    expect(
+      parse().find((message) => message.method === "turn/start")?.params,
+    ).toMatchObject({ model: slug, effort: "xhigh", serviceTier: "fast" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
   });
 
   it("stays busy after an agent message until turn/completed", async () => {

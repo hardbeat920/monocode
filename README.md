@@ -40,6 +40,10 @@ This is very early and you should expect bugs.
 
 Small, focused pull requests are welcome. Anything large is worth an issue first - see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+### Custom models
+
+In Settings → Providers, use **Add model** under Codex or Claude Code to add an exact model ID supported by your CLI configuration. Custom models appear in the model picker and can be favorited or used by default. Expand **Custom models** to edit a display name and composer options (such as reasoning or fast mode), copy options from a discovered model, or remove an entry. Configure authentication and any custom endpoints in the provider's CLI as usual.
+
 ## Build from source
 
 Supports macOS, Linux, and Windows.

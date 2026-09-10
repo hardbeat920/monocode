@@ -1,5 +1,19 @@
 import type { HarnessId } from "./session";
 import { HARNESSES } from "./session";
+import {
+  appendCustomModels,
+  CUSTOM_MODEL_HARNESSES,
+  customModelId,
+  customModelSlug,
+  MAX_CUSTOM_MODEL_COUNT,
+  MAX_CUSTOM_MODEL_LENGTH,
+  normalizeCustomModelSlug,
+  readCustomModelEntries,
+  supportsCustomModels,
+  toCustomModelSetting,
+  type CustomModelDefinition,
+  type CustomModelHarness,
+} from "./customModels";
 
 export type ModelSettingChoice = {
   value: string;
@@ -21,6 +35,7 @@ export type AgentModel = {
   name: string;
   nativeId?: string;
   settings?: ModelSetting[];
+  isCustom?: boolean;
   /** Context window, when the harness catalog reports one. */
   contextWindow?: number;
 };
@@ -189,6 +204,7 @@ const HIDDEN_PICKER_PROVIDERS_KEY = "monocode.hiddenPickerProviders";
 const LAST_MODEL_KEY = "monocode.lastModel";
 const LAST_MODEL_SETTINGS_KEY = "monocode.lastModelSettings";
 const DEFAULT_MODELS_KEY = "monocode.defaultModels";
+const CUSTOM_MODELS_KEY = "monocode.customModels";
 
 export type ModelPickerTab = "favorites" | HarnessId;
 
@@ -209,6 +225,9 @@ const HARNESS_ORDER: HarnessId[] = [
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];
+const EMPTY_CUSTOM_MODELS: CustomModelDefinition[] = [];
+type CustomModelsStore = Partial<Record<CustomModelHarness, CustomModelDefinition[]>>;
+let customModelsStore: CustomModelsStore | null = null;
 
 let overlays: Partial<Record<HarnessId, AgentModel[]>> = {};
 let overlayDefaults: Partial<Record<HarnessId, string>> = {};
@@ -218,6 +237,7 @@ const listeners = new Set<() => void>();
 function emit() {
   catalogVersion += 1;
   baseByHarness = null;
+  mergedByHarness = {};
   indexById = null;
   allCache = null;
   for (const listener of listeners) listener();
@@ -249,10 +269,11 @@ export function hasLiveCatalog(harness: HarnessId): boolean {
   return overlays[harness] != null;
 }
 
-/** Test seam. */
+/** Test seam: clear live catalogs and reload persisted custom models. */
 export function resetHarnessModelOverlays() {
   overlays = {};
   overlayDefaults = {};
+  customModelsStore = null;
   emit();
 }
 
@@ -264,6 +285,7 @@ export function defaultModelId(harness: HarnessId): string {
 // provider row, the picker itself), so they must not rebuild the catalog on
 // each call. These caches are dropped in `emit()` whenever an overlay lands.
 let baseByHarness: Partial<Record<HarnessId, AgentModel[]>> | null = null;
+let mergedByHarness: Partial<Record<HarnessId, AgentModel[]>> = {};
 let allCache: AgentModel[] | null = null;
 let indexById: Map<string, AgentModel> | null = null;
 
@@ -278,8 +300,152 @@ function baseModelsFor(harness: HarnessId): AgentModel[] {
   return baseByHarness[harness] ?? EMPTY_MODELS;
 }
 
-export function modelsFor(harness: HarnessId): AgentModel[] {
+/** The provider catalog before user-authored entries are appended. */
+export function providerModelsFor(harness: HarnessId): AgentModel[] {
   return overlays[harness] ?? baseModelsFor(harness);
+}
+
+export function modelsFor(harness: HarnessId): AgentModel[] {
+  const catalog = providerModelsFor(harness);
+  if (!supportsCustomModels(harness)) return catalog;
+  return (mergedByHarness[harness] ??= appendCustomModels(
+    harness,
+    catalog,
+    loadCustomModels(harness),
+  ));
+}
+
+function loadCustomModelsStore(): CustomModelsStore {
+  if (customModelsStore) return customModelsStore;
+  const next: CustomModelsStore = {};
+  try {
+    const raw: unknown = JSON.parse(
+      localStorage.getItem(CUSTOM_MODELS_KEY) ?? "{}",
+    );
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      for (const harness of CUSTOM_MODEL_HARNESSES) {
+        next[harness] = readCustomModelEntries(
+          (raw as Record<string, unknown>)[harness],
+        );
+      }
+    }
+  } catch {
+    // Missing storage or malformed settings leave the CLI catalog usable.
+  }
+  return (customModelsStore = next);
+}
+
+export function loadCustomModels(
+  harness: CustomModelHarness,
+): CustomModelDefinition[] {
+  return loadCustomModelsStore()[harness] ?? EMPTY_CUSTOM_MODELS;
+}
+
+function persistCustomModels(
+  harness: CustomModelHarness,
+  entries: CustomModelDefinition[],
+): string | null {
+  const next = { ...loadCustomModelsStore(), [harness]: entries };
+  try {
+    localStorage.setItem(
+      CUSTOM_MODELS_KEY,
+      JSON.stringify(
+        Object.fromEntries(
+          CUSTOM_MODEL_HARNESSES.map((id) => [
+            id,
+            (next[id] ?? []).map(toCustomModelSetting),
+          ]),
+        ),
+      ),
+    );
+  } catch {
+    return "Could not save custom models. Local storage may be full or unavailable.";
+  }
+  customModelsStore = next;
+  return null;
+}
+
+export function addCustomModel(
+  harness: CustomModelHarness,
+  input: string,
+): string | null {
+  const slug = normalizeCustomModelSlug(input);
+  if (!slug) return "Enter a model ID.";
+  if (
+    providerModelsFor(harness).some((model) => nativeModelId(model) === slug)
+  ) {
+    return "That model is already provided by the CLI.";
+  }
+  if (slug.length > MAX_CUSTOM_MODEL_LENGTH) {
+    return `Model IDs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`;
+  }
+  const entries = loadCustomModels(harness);
+  if (entries.some((entry) => entry.slug === slug))
+    return "That custom model is already saved.";
+  if (entries.length >= MAX_CUSTOM_MODEL_COUNT) {
+    return `You can save up to ${MAX_CUSTOM_MODEL_COUNT} custom models per provider.`;
+  }
+  const error = persistCustomModels(harness, [
+    ...entries,
+    { slug, name: slug, settings: null },
+  ]);
+  if (!error) emit();
+  return error;
+}
+
+export function updateCustomModel(
+  harness: CustomModelHarness,
+  entry: CustomModelDefinition,
+): string | null {
+  const entries = loadCustomModels(harness);
+  if (!entries.some((candidate) => candidate.slug === entry.slug)) {
+    return "That custom model has been removed.";
+  }
+  const error = persistCustomModels(
+    harness,
+    entries.map((candidate) =>
+      candidate.slug === entry.slug ? entry : candidate,
+    ),
+  );
+  if (!error) emit();
+  return error;
+}
+
+export function removeCustomModel(
+  harness: CustomModelHarness,
+  slug: string,
+): string | null {
+  const entries = loadCustomModels(harness).filter(
+    (entry) => entry.slug !== slug,
+  );
+  const error = persistCustomModels(harness, entries);
+  if (error) return error;
+  const id = customModelId(harness, slug);
+  saveFavoriteModels(
+    loadFavoriteModels().filter((favorite) => favorite !== id),
+  );
+  const remaining = appendCustomModels(
+    harness,
+    providerModelsFor(harness),
+    entries,
+  );
+  const fallback =
+    remaining.find((model) => model.id === defaultModelId(harness))?.id ??
+    remaining[0]?.id ??
+    defaultModelId(harness);
+  if (loadDefaultModels()[harness] === id) saveDefaultModel(harness, fallback);
+  if (loadLastModelChoice()?.model === id)
+    saveLastModelChoice(harness, fallback);
+  emit();
+  return null;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== CUSTOM_MODELS_KEY && event.key !== null) return;
+    customModelsStore = null;
+    emit();
+  });
 }
 
 export function allModels(): AgentModel[] {
@@ -308,6 +474,10 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
       (model) => (model.nativeId ?? nativeIdFrom(model.id)) === slug,
     );
     if (byNative) return byNative;
+    // Removing a custom model from the picker must not retarget an open session.
+    if (supportsCustomModels(harness) && id.startsWith(`${harness}:custom:`)) {
+      return { id, harness, nativeId: slug, name: slug, isCustom: true };
+    }
     const prefix = available.find((model) => {
       const native = model.nativeId ?? nativeIdFrom(model.id);
       return native.startsWith(slug) || slug.startsWith(native);
@@ -654,6 +824,8 @@ function compatibleSettingValue(
 
 function nativeIdFrom(id: string): string {
   const trimmed = id.trim();
+  const custom = customModelSlug(trimmed);
+  if (custom !== null) return custom;
   const colon = trimmed.indexOf(":");
   const slug = colon >= 0 ? trimmed.slice(colon + 1) : trimmed;
   const bracket = slug.indexOf("[");

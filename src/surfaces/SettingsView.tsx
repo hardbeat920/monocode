@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { HarnessIcon } from "../chrome/HarnessIcon";
+import { CustomModelsSection } from "../chrome/CustomModelsSection";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
@@ -101,6 +102,7 @@ import { refreshHarnessCatalogs } from "../lib/harness/registry";
 import {
   defaultModelId,
   getModelSnapshot,
+  hasLiveCatalog,
   isPickerProviderVisible,
   loadDefaultModels,
   loadLastModelChoice,
@@ -111,6 +113,7 @@ import {
   savePickerProviderVisible,
   subscribeModels,
 } from "../lib/models";
+import { supportsCustomModels } from "../lib/customModels";
 import { prettyCwd, projectKey, projectName } from "../lib/paths";
 import { IS_MAC } from "../lib/platform";
 import {
@@ -223,6 +226,10 @@ export function SettingsView({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-custom-model-editor]")
+      ) return;
       event.preventDefault();
       event.stopPropagation();
       onCloseRef.current();
@@ -1371,7 +1378,11 @@ function KeybindingsPage() {
 }
 
 function ProvidersPage() {
-  useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
+  const catalogVersion = useSyncExternalStore(
+    subscribeModels,
+    getModelSnapshot,
+    getModelSnapshot,
+  );
   useSyncExternalStore(
     subscribeHarnessAvailability,
     getHarnessAvailabilitySnapshot,
@@ -1379,6 +1390,11 @@ function ProvidersPage() {
   );
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
+
+  useEffect(() => {
+    setChoice(loadLastModelChoice());
+    setDefaultModels(loadDefaultModels());
+  }, [catalogVersion]);
 
   useEffect(() => {
     void probeHarnessAvailability();
@@ -1441,17 +1457,20 @@ function ProviderRow({
   onModelChange: (harness: HarnessId, model: string) => void;
 }) {
   const models = modelsFor(harness);
+  const liveCatalog = hasLiveCatalog(harness);
   const available = isHarnessAvailable(harness);
   const current =
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
   const [inPicker, setInPicker] = useState(() =>
     isPickerProviderVisible(harness),
   );
+  const needsCatalogRefresh =
+    supportsCustomModels(harness) || models.length === 0;
 
   useEffect(() => {
-    if (!available || models.length > 0) return;
+    if (!available || liveCatalog || !needsCatalogRefresh) return;
     void refreshHarnessCatalogs([harness]);
-  }, [available, harness, models.length]);
+  }, [available, harness, liveCatalog, needsCatalogRefresh]);
 
   const onPickerVisible = (visible: boolean) => {
     savePickerProviderVisible(harness, visible);
@@ -1459,52 +1478,57 @@ function ProviderRow({
   };
 
   return (
-    <Row
-      label={
-        <span className="flex items-center gap-2">
-          <HarnessIcon harness={harness} className="size-4 shrink-0" />
-          {HARNESS_TITLE[harness]}
-          {isDefault ? (
-            <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
-              Default
-            </span>
-          ) : null}
-        </span>
-      }
-      description={
-        available
-          ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
-          : harnessUnavailableHint(harness)
-      }
-    >
-      {current ? (
-        <Select
-          label={`${HARNESS_TITLE[harness]} model`}
-          value={current.id}
-          onChange={(next) => onModelChange(harness, next)}
-          options={models.map((item) => ({
-            value: item.id,
-            label: item.name,
-          }))}
-        />
-      ) : null}
-      <SecondaryButton
-        onClick={() => current && onDefault(harness, current.id)}
-        disabled={isDefault || !current}
+    <div className="border-b border-content/5 last:border-b-0">
+      <Row
+        label={
+          <span className="flex items-center gap-2">
+            <HarnessIcon harness={harness} className="size-4 shrink-0" />
+            {HARNESS_TITLE[harness]}
+            {isDefault ? (
+              <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
+                Default
+              </span>
+            ) : null}
+          </span>
+        }
+        description={
+          available
+            ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
+            : harnessUnavailableHint(harness)
+        }
       >
-        {isDefault ? "Default" : "Use by default"}
-      </SecondaryButton>
-      {available ? (
-        <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">Show in picker</span>
-          <Toggle
-            label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
-            on={inPicker}
-            onChange={onPickerVisible}
+        {current ? (
+          <Select
+            label={`${HARNESS_TITLE[harness]} model`}
+            value={current.id}
+            onChange={(next) => onModelChange(harness, next)}
+            options={models.map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
           />
-        </div>
+        ) : null}
+        <SecondaryButton
+          onClick={() => current && onDefault(harness, current.id)}
+          disabled={isDefault || !current}
+        >
+          {isDefault ? "Default" : "Use by default"}
+        </SecondaryButton>
+        {available ? (
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-content/50">Show in picker</span>
+            <Toggle
+              label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
+              on={inPicker}
+              onChange={onPickerVisible}
+            />
+          </div>
+        ) : null}
+      </Row>
+      {supportsCustomModels(harness) ? (
+        <CustomModelsSection harness={harness} />
       ) : null}
-    </Row>
+    </div>
   );
 }
 
