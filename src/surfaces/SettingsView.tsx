@@ -1464,16 +1464,13 @@ function ProviderRow({
   const [inPicker, setInPicker] = useState(() =>
     isPickerProviderVisible(harness),
   );
+  const needsCatalogRefresh =
+    supportsCustomModels(harness) || models.length === 0;
 
   useEffect(() => {
-    if (
-      !available ||
-      liveCatalog ||
-      (!supportsCustomModels(harness) && models.length > 0)
-    )
-      return;
+    if (!available || liveCatalog || !needsCatalogRefresh) return;
     void refreshHarnessCatalogs([harness]);
-  }, [available, harness, liveCatalog, models.length]);
+  }, [available, harness, liveCatalog, needsCatalogRefresh]);
 
   const onPickerVisible = (visible: boolean) => {
     savePickerProviderVisible(harness, visible);
