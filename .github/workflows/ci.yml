@@ -12,7 +12,6 @@ concurrency:
 jobs:
   check:
     strategy:
-      fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -21,7 +20,7 @@ jobs:
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
-        run: bash scripts/install-linux-deps-debian.sh --sources /etc/apt/sources.list.d/ubuntu.sources
+        run: bash scripts/install-linux-deps-debian.sh
 
       - uses: actions/setup-node@v4
         with:
