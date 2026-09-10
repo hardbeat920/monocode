@@ -22,6 +22,7 @@ import {
   type TerminalFitMode,
 } from "../lib/terminalLayout";
 import { IS_MAC } from "../lib/platform";
+import { announceLocalPreview, localPreviewScanner } from "../lib/browserPreview";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -169,27 +170,33 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     });
 
     let oscBuffer = "";
+    const decoder = new TextDecoder();
+    let previewCwd = cwd;
+    const scanPreview = localPreviewScanner((url) =>
+      announceLocalPreview(previewCwd, url),
+    );
 
     const unsubscribe = subscribePty(
       id,
       (data) => {
+        const text = decoder.decode(data, { stream: true });
+        const scanned = scanOscCwd(text, oscBuffer);
+        oscBuffer = scanned.rest;
+        if (scanned.cwd) previewCwd = scanned.cwd;
         const onMeta = onMetaChangeRef.current;
-        if (onMeta) {
-          const text = new TextDecoder().decode(data);
-          const scanned = scanOscCwd(text, oscBuffer);
-          oscBuffer = scanned.rest;
-          if (scanned.cwd) {
-            const patch: TerminalMetaPatch = { cwd: scanned.cwd };
-            if (!runningProcessRef.current) {
-              patch.title = defaultTerminalTitle(scanned.cwd);
-            }
-            onMeta(patch);
+        if (onMeta && scanned.cwd) {
+          const patch: TerminalMetaPatch = { cwd: scanned.cwd };
+          if (!runningProcessRef.current) {
+            patch.title = defaultTerminalTitle(scanned.cwd);
           }
+          onMeta(patch);
         }
+        scanPreview(text);
         term.write(data);
       },
       (code) => {
         if (closed) return;
+        scanPreview(decoder.decode(), true);
         const status = code == null ? "" : ` (${code})`;
         term.writeln(`\r\n[process exited${status}]`);
       },

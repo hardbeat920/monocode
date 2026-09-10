@@ -1,4 +1,4 @@
-import { GitCompare, GripVertical, Terminal, X } from "./icons";
+import { AppWindow, GitCompare, GripVertical, Terminal, X } from "./icons";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useLayoutEffect, useRef } from "react";
 import { basename } from "../lib/fs";
@@ -41,6 +41,13 @@ export type SurfaceTabPresentation = {
 export function surfaceTabPresentation(
   file: FilePaneTab,
 ): SurfaceTabPresentation {
+  if (file.browser)
+    return {
+      name: "Browser",
+      label: "Browser",
+      iconName: "",
+      tooltip: file.browser.url || "Web preview",
+    };
   if (isReleaseNotesTab(file)) {
     const title = releaseNotesTitle(file.releaseNotes.version);
     return {
@@ -221,7 +228,9 @@ export function SurfaceTabs({
                 active ? "text-content" : "text-content/55 hover:text-content"
               }`}
             >
-              {terminal ? (
+              {file.browser ? (
+                <AppWindow className="size-3.5 shrink-0" strokeWidth={1.75} />
+              ) : terminal ? (
                 <Terminal className="size-3.5 shrink-0" strokeWidth={1.75} />
               ) : changes || commit ? (
                 <GitCompare className="size-3.5 shrink-0" strokeWidth={1.75} />
