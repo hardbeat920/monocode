@@ -2205,8 +2205,29 @@ function HandoffDivider({ block }: { block: Block }) {
 }
 
 /** A mid-turn interjection, e.g. OMP advisor notes: a labeled boundary with
- * the full advisory body below it. */
+ * a collapsible advisory body below it. */
 function InterjectionDivider({ block }: { block: Block }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const textRef = useRef<HTMLPreElement>(null);
+
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el || !block.text) {
+      setOverflows(false);
+      return;
+    }
+    const measure = () => {
+      if (!expanded) {
+        setOverflows(el.scrollHeight > el.clientHeight + 1);
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [block.text, expanded]);
+
   const meta = block.interjection;
   if (!meta) return null;
   const label =
@@ -2249,9 +2270,22 @@ function InterjectionDivider({ block }: { block: Block }) {
       </div>
       {block.text ? (
         <div className="mt-2 px-2">
-          <pre className="min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70">
+          <pre
+            ref={textRef}
+            className={`min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70 ${expanded ? "" : "line-clamp-2"}`}
+          >
             {block.text}
           </pre>
+          {overflows ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((value) => !value)}
+              className="mt-1 py-1 font-sans text-xs text-content/55 hover:text-content"
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
