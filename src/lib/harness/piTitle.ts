@@ -1,6 +1,7 @@
 import {
   buildThreadTitlePrompt,
-  parseGeneratedThreadTitle,
+  parseGeneratedSessionTitle,
+  type GeneratedSessionTitle,
 } from "../sessionTitle";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import { runTextPrompt } from "./piText";
@@ -14,14 +15,14 @@ async function generateSessionTitle(
     cwd: string;
     message: string;
   },
-): Promise<string | null> {
+): Promise<GeneratedSessionTitle | null> {
   try {
     const output = await runTextPrompt(flavor, {
       cwd: input.cwd,
       prompt: buildThreadTitlePrompt(input.message),
       timeoutMs: TITLE_TIMEOUT_MS,
     });
-    return parseGeneratedThreadTitle(output);
+    return parseGeneratedSessionTitle(output, input.message);
   } catch (error) {
     console.debug("[monocode] session title", error);
     return null;
@@ -32,7 +33,7 @@ export function generatePiSessionTitle(input: {
   sessionId: string;
   cwd: string;
   message: string;
-}): Promise<string | null> {
+}): Promise<GeneratedSessionTitle | null> {
   return generateSessionTitle(PI_FLAVOR, input);
 }
 
@@ -40,6 +41,6 @@ export function generateOmpSessionTitle(input: {
   sessionId: string;
   cwd: string;
   message: string;
-}): Promise<string | null> {
+}): Promise<GeneratedSessionTitle | null> {
   return generateSessionTitle(OMP_FLAVOR, input);
 }

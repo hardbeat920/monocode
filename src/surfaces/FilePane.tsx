@@ -121,7 +121,11 @@ function FilePaneComponent({
           </div>
         ) : unifiedReview && activeFile ? (
           <div className="absolute inset-0 h-full">
-            <WorkingTreeDiff cwd={activeFile.cwd} focusPath={activeFile.path} />
+            <WorkingTreeDiff
+              cwd={activeFile.cwd}
+              focusPath={activeFile.path}
+              focusKind={activeFile.changeKind}
+            />
           </div>
         ) : null}
         {pane.files.map((file) => {

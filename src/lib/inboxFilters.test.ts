@@ -37,8 +37,16 @@ function item(
 describe("filterInboxByProject", () => {
   it("hides selected projects", () => {
     const rows = [
-      item({ number: 1, updatedAt: "2026-08-27T10:00:00Z", projectPath: "/tmp/web" }),
-      item({ number: 2, updatedAt: "2026-08-27T10:00:00Z", projectPath: "/tmp/docs" }),
+      item({
+        number: 1,
+        updatedAt: "2026-08-27T10:00:00Z",
+        projectPath: "/tmp/web",
+      }),
+      item({
+        number: 2,
+        updatedAt: "2026-08-27T10:00:00Z",
+        projectPath: "/tmp/docs",
+      }),
     ];
     expect(
       filterInboxByProject(rows, ["/tmp/web/"]).map((row) => row.number),
@@ -47,7 +55,11 @@ describe("filterInboxByProject", () => {
 
   it("keeps Linear issues that are not tied to a folder", () => {
     const rows = [
-      item({ number: 1, updatedAt: "2026-08-27T10:00:00Z", projectPath: "/tmp/web" }),
+      item({
+        number: 1,
+        updatedAt: "2026-08-27T10:00:00Z",
+        projectPath: "/tmp/web",
+      }),
       item({
         number: 9,
         kind: "linear",
@@ -101,9 +113,9 @@ describe("linearProjectOptions", () => {
   });
 
   it("falls back to the id when a project has no name", () => {
-    expect(linearProjectOptions([linearItem(1, { id: "p1", name: "" })])).toEqual(
-      [{ id: "p1", name: "p1" }],
-    );
+    expect(
+      linearProjectOptions([linearItem(1, { id: "p1", name: "" })]),
+    ).toEqual([{ id: "p1", name: "p1" }]);
   });
 });
 
@@ -131,9 +143,9 @@ describe("filterInboxByLinearProject", () => {
   ];
 
   it("keeps everything when nothing is hidden", () => {
-    expect(filterInboxByLinearProject(rows, []).map((row) => row.number)).toEqual(
-      [1, 2, 3],
-    );
+    expect(
+      filterInboxByLinearProject(rows, []).map((row) => row.number),
+    ).toEqual([1, 2, 3]);
   });
 
   it("hides the selected project", () => {
@@ -174,16 +186,21 @@ describe("filterInboxByKind", () => {
     expect(filterInboxByKind(rows, ["pr"]).map((row) => row.number)).toEqual([
       1, 9,
     ]);
-    expect(filterInboxByKind(rows, ["linear"]).map((row) => row.number)).toEqual(
-      [1, 2],
-    );
+    expect(
+      filterInboxByKind(rows, ["linear"]).map((row) => row.number),
+    ).toEqual([1, 2]);
   });
 });
 
 describe("filterInboxByProvider", () => {
-  it("keeps GitHub or Linear items", () => {
+  it("keeps GitHub, GitLab, or Linear items", () => {
     const rows = [
       item({ number: 1, updatedAt: "2026-08-27T10:00:00Z" }),
+      item({
+        number: 2,
+        provider: "gitlab",
+        updatedAt: "2026-08-27T10:00:00Z",
+      }),
       item({
         number: 9,
         kind: "linear",
@@ -197,6 +214,9 @@ describe("filterInboxByProvider", () => {
     expect(
       filterInboxByProvider(rows, "linear").map((row) => row.number),
     ).toEqual([9]);
+    expect(
+      filterInboxByProvider(rows, "gitlab").map((row) => row.number),
+    ).toEqual([2]);
   });
 });
 

@@ -9,6 +9,7 @@ import {
 } from "./icons";
 import {
   createContext,
+  memo,
   useContext,
   useEffect,
   useRef,
@@ -212,7 +213,9 @@ function explorerItems(
   ];
 }
 
-export function FileTree({
+// Chat updates rerender the sidebar even when Files is hidden. Keep its tree
+// intact unless file-tree props, local state, or subscriptions actually change.
+export const FileTree = memo(function FileTree({
   cwd,
   onOpenFile,
   onOpenTerminal,
@@ -723,7 +726,7 @@ export function FileTree({
       ) : null}
     </TreeCtx.Provider>
   );
-}
+});
 
 function HeaderIcon({
   label,

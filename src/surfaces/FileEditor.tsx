@@ -208,7 +208,16 @@ export function FileEditor({
     setGitBase({ path, original: null });
 
     const load = () => {
-      void gitFileDiff(cwd, relative)
+      void (async () => {
+        let diff = await gitFileDiff(cwd, relative, "unstaged");
+        // A review tab opened from a clean staged file has no index-to-disk
+        // delta. Fall back to HEAD-to-index so the staged patch is still
+        // visible in the editor-style diff view.
+        if (!diff.binary && !diff.tooLarge && diff.original === diff.current) {
+          diff = await gitFileDiff(cwd, relative, "staged");
+        }
+        return diff;
+      })()
         .then((diff) => {
           if (cancelled) return;
           if (diff.binary || diff.tooLarge) {

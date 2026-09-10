@@ -1,4 +1,5 @@
 import type { HarnessId } from "../session";
+import type { GeneratedSessionTitle } from "../sessionTitle";
 import type { PrContent } from "../gitText";
 import { hasLiveCatalog } from "../models";
 import type { UserQuestionReply } from "../userQuestion";
@@ -51,7 +52,7 @@ export type HarnessAdapter = {
   /** Refresh the model catalog overlay when supported. */
   refreshCatalog?(): Promise<void>;
   /** Optional LLM tab title for the first turn. */
-  generateTitle?(input: TitleInput): Promise<string | null>;
+  generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
   generateCommitMessage?(cwd: string): Promise<string>;
   /** Optional LLM pull request title/body from branch diff context. */
@@ -258,7 +259,7 @@ export async function refreshHarnessCatalogs(
 export async function generateHarnessTitle(
   harness: HarnessId,
   input: TitleInput,
-): Promise<string | null> {
+): Promise<GeneratedSessionTitle | null> {
   const adapter = getHarness(harness);
   if (!adapter?.generateTitle) return null;
   return adapter.generateTitle(input);

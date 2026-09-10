@@ -53,7 +53,7 @@ describe("collectWorkspaceSnapshot", () => {
   });
 
   it("round-trips a unified Changes tab", () => {
-    const file = newChangesTab("/tmp/a", "/tmp/a/src/lib.rs");
+    const file = newChangesTab("/tmp/a", "/tmp/a/src/lib.rs", "staged");
     const tab = {
       ...newTab("s1"),
       id: "t1",
@@ -65,6 +65,7 @@ describe("collectWorkspaceSnapshot", () => {
     expect(restored?.changes).toBe(true);
     expect(restored?.review).toBe(true);
     expect(restored?.path).toBe("/tmp/a/src/lib.rs");
+    expect(restored?.changeKind).toBe("staged");
   });
 
   it("round-trips a session-scoped Changes tab", () => {

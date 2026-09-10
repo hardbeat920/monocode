@@ -686,13 +686,16 @@ export function modelsFromRpcData(
     seen.add(nativeId);
     const name = stringField(model, "name") || modelId;
     const contextWindow = numberField(model, "contextWindow");
-    const settings = thinkingSetting(model.reasoning === true);
+    const settings = [
+      thinkingSetting(model.reasoning === true),
+      flavor.id === "omp" ? fastModeSetting() : undefined,
+    ].filter((setting): setting is ModelSetting => setting != null);
     models.push({
       id: `${flavor.id}:${nativeId}`,
       harness: flavor.id,
       name,
       nativeId,
-      ...(settings ? { settings: [settings] } : {}),
+      ...(settings.length > 0 ? { settings } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     });
   }
@@ -710,6 +713,20 @@ export function thinkingSetting(reasoning: boolean): ModelSetting | undefined {
       value,
       label: thinkingLabel(value),
     })),
+  };
+}
+
+export function fastModeSetting(): ModelSetting {
+  return {
+    id: "fast",
+    label: "Fast",
+    description: "Use priority processing when the current model supports it",
+    kind: "toggle",
+    value: "false",
+    options: [
+      { value: "true", label: "On" },
+      { value: "false", label: "Off" },
+    ],
   };
 }
 

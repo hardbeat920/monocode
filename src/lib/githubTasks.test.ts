@@ -101,6 +101,16 @@ describe("inboxPersonAvatarUrl", () => {
   it("does not invent a GitHub avatar for Linear names", () => {
     expect(inboxPersonAvatarUrl("linear", "Ada")).toBe("");
   });
+
+  it("uses GitLab's explicit avatar URL", () => {
+    expect(
+      inboxPersonAvatarUrl(
+        "gitlab",
+        "maya",
+        "https://gitlab.example.com/uploads/maya.png",
+      ),
+    ).toBe("https://gitlab.example.com/uploads/maya.png");
+  });
 });
 
 describe("formatRelativeTime", () => {
@@ -122,7 +132,9 @@ describe("githubReviewDecisionLabel", () => {
     expect(githubReviewDecisionLabel("changes_requested")).toBe(
       "Changes requested",
     );
-    expect(githubReviewDecisionLabel("REVIEW_REQUIRED")).toBe("Review required");
+    expect(githubReviewDecisionLabel("REVIEW_REQUIRED")).toBe(
+      "Review required",
+    );
     expect(githubReviewDecisionLabel("")).toBe("");
   });
 });
@@ -206,7 +218,10 @@ describe("dedupeInboxItems", () => {
         repo: "HardBeat920/monocode",
       }),
     ];
-    const deduped = dedupeInboxItems(rows, ["/tmp/monocode", "/tmp/agent-terminal"]);
+    const deduped = dedupeInboxItems(rows, [
+      "/tmp/monocode",
+      "/tmp/agent-terminal",
+    ]);
     expect(deduped).toHaveLength(1);
     expect(deduped[0]?.projectPath).toBe("/tmp/monocode");
     expect(inboxItemKey(deduped[0]!)).toBe(
@@ -278,9 +293,9 @@ describe("filterInboxItems", () => {
   });
 
   it("matches title, number, kind, repo, and labels", () => {
-    expect(filterInboxItems(items, "checkout").map((row) => row.number)).toEqual(
-      [12],
-    );
+    expect(
+      filterInboxItems(items, "checkout").map((row) => row.number),
+    ).toEqual([12]);
     expect(filterInboxItems(items, "#4").map((row) => row.number)).toEqual([4]);
     expect(filterInboxItems(items, "pull").map((row) => row.number)).toEqual([
       12,
@@ -343,6 +358,23 @@ describe("inboxStartDraft", () => {
     );
   });
 
+  it("uses GitLab merge request wording", () => {
+    expect(
+      inboxStartDraft(
+        item({
+          number: 12,
+          kind: "pr",
+          provider: "gitlab",
+          title: "Fix checkout",
+          url: "https://gitlab.example.com/acme/web/-/merge_requests/12",
+          updatedAt: "2026-08-27T10:00:00Z",
+        }),
+      ),
+    ).toBe(
+      "Work on this GitLab merge request:\n\n#12 Fix checkout\nhttps://gitlab.example.com/acme/web/-/merge_requests/12\n",
+    );
+  });
+
   it("includes a Linear description when provided", () => {
     expect(
       inboxStartDraft(
@@ -374,6 +406,20 @@ describe("inboxItemKey", () => {
         }),
       ),
     ).toBe("linear:eng-9");
+  });
+
+  it("keeps GitLab identities separate from GitHub", () => {
+    const gitlab = item({
+      number: 9,
+      provider: "gitlab",
+      repo: "acme/web",
+      url: "https://gitlab.example.com/acme/web/-/issues/9",
+      updatedAt: "2026-08-27T10:00:00Z",
+    });
+    expect(inboxItemKey(gitlab)).toBe("gitlab:acme/web:issue:9");
+    expect(inboxItemKey(gitlab)).not.toBe(
+      inboxItemKey({ ...gitlab, provider: "github" }),
+    );
   });
 });
 
@@ -416,6 +462,25 @@ describe("inboxComposerCard", () => {
     );
     expect(card).toMatchObject({
       provider: "github",
+      kind: "issue",
+      identifier: "#10",
+      title: "Normalize streamed plan",
+      source: "acme/web",
+    });
+  });
+
+  it("builds a GitLab chip from the project and issue number", () => {
+    const card = inboxComposerCard(
+      item({
+        number: 10,
+        provider: "gitlab",
+        title: "Normalize streamed plan",
+        url: "https://gitlab.example.com/acme/web/-/issues/10",
+        updatedAt: "2026-08-27T10:00:00Z",
+      }),
+    );
+    expect(card).toMatchObject({
+      provider: "gitlab",
       kind: "issue",
       identifier: "#10",
       title: "Normalize streamed plan",

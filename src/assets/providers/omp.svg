@@ -1,6 +1,10 @@
-<svg viewBox="-4 -4 37 37" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M1 1H29V6.5H1V1Z" fill="currentColor"/>
-<path d="M5.5 6.5H10.5V28H5.5V6.5Z" fill="currentColor"/>
-<path d="M18.5 6.5H23.5V17H18.5V6.5Z" fill="currentColor"/>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 17H26.5V25.5H15.5V17ZM19 20V22.5H20.5V20H19ZM22.5 20V22.5H24V20H22.5Z" fill="currentColor"/>
+<svg viewBox="0 0 64 64" width="22" height="22" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pi-mark-1-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="oklch(0.7 0.24 340)"/>
+      <stop offset=".5" stop-color="oklch(0.62 0.21 295)"/>
+      <stop offset="1" stop-color="oklch(0.81 0.14 200)"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#pi-mark-1-grad)" d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z"/>
 </svg>

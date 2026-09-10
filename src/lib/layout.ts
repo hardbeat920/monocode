@@ -1,4 +1,5 @@
 import type { ReleaseNotesTabSource } from "./releaseNotes";
+import type { GitFileDiffKind } from "./fs";
 import {
   applyTerminalMeta,
   defaultTerminalTitle,
@@ -54,6 +55,8 @@ export type FilePaneTab = {
   review?: boolean;
   /** Single working-tree review of every changed file (unified diff). */
   changes?: boolean;
+  /** Which side of a staged/unstaged path was selected in source control. */
+  changeKind?: GitFileDiffKind;
   /** Read-only diff built from one session's captured before/after snapshots. */
   sessionChanges?: SessionChangesSource;
   /** Historical commit review (unified diff, read-only). */
@@ -105,22 +108,29 @@ export function newFileTab(
   path: string,
   cwd: string,
   review = false,
+  changeKind?: GitFileDiffKind,
 ): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path,
     cwd,
     ...(review ? { review: true } : {}),
+    ...(changeKind ? { changeKind } : {}),
   };
 }
 
-export function newChangesTab(cwd: string, focusPath?: string): FilePaneTab {
+export function newChangesTab(
+  cwd: string,
+  focusPath?: string,
+  focusKind?: GitFileDiffKind,
+): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path: focusPath || cwd,
     cwd,
     review: true,
     changes: true,
+    ...(focusKind ? { changeKind: focusKind } : {}),
   };
 }
 
@@ -452,16 +462,23 @@ export function openChangesTab(
   tab: WorkspaceTab,
   cwd: string,
   focusPath?: string,
+  focusKind?: GitFileDiffKind,
 ): WorkspaceTab {
   tab = isolateTerminalPanes(tab);
-  const next = newChangesTab(cwd, focusPath);
+  const next = newChangesTab(cwd, focusPath, focusKind);
   const existingPane = tab.editorPanes.find((pane) =>
     pane.files.some(isChangesTab),
   );
   const existingFile = existingPane?.files.find(isChangesTab);
 
   if (existingPane && existingFile) {
-    const updated = focusPath ? { ...existingFile, path: focusPath } : existingFile;
+    const updated = focusPath
+      ? {
+          ...existingFile,
+          path: focusPath,
+          changeKind: focusKind,
+        }
+      : existingFile;
     return {
       ...tab,
       focusedId: existingPane.id,

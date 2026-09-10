@@ -6,10 +6,7 @@ import {
   type InboxProvider,
 } from "./githubTasks";
 import { normalizeProjectPath } from "./recents";
-import {
-  timeFilterStart,
-  type SessionTimeFilter,
-} from "./sessionFilters";
+import { timeFilterStart, type SessionTimeFilter } from "./sessionFilters";
 
 export type InboxTimeFilter = SessionTimeFilter;
 
@@ -65,7 +62,7 @@ const SOURCE_KEY = "monocode.inboxSource";
 export function loadInboxSource(): InboxSource {
   try {
     const raw = localStorage.getItem(SOURCE_KEY);
-    return raw === "linear" ? "linear" : "github";
+    return raw === "linear" || raw === "gitlab" ? raw : "github";
   } catch {
     return "github";
   }
@@ -88,7 +85,8 @@ export function loadInboxFilters(): InboxFilters {
       assignedToMe: parsed.assignedToMe === true,
       hiddenProjects: Array.isArray(parsed.hiddenProjects)
         ? parsed.hiddenProjects.filter(
-            (path): path is string => typeof path === "string" && path.length > 0,
+            (path): path is string =>
+              typeof path === "string" && path.length > 0,
           )
         : [],
       hiddenLinearProjects: Array.isArray(parsed.hiddenLinearProjects)
@@ -312,5 +310,7 @@ function isGithubInboxKind(value: unknown): value is InboxKind {
 }
 
 function isTimeFilter(value: unknown): value is InboxTimeFilter {
-  return value === "all" || value === "today" || value === "7d" || value === "30d";
+  return (
+    value === "all" || value === "today" || value === "7d" || value === "30d"
+  );
 }

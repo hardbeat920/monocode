@@ -154,12 +154,18 @@ describe("openSessionChangesTab", () => {
 describe("openChangesTab", () => {
   it("reuses one Changes tab and updates the focused file", () => {
     const cwd = "/repo";
-    const first = openChangesTab(newTab("session-a"), cwd, "/repo/a.ts");
-    const second = openChangesTab(first, cwd, "/repo/b.ts");
+    const first = openChangesTab(
+      newTab("session-a"),
+      cwd,
+      "/repo/a.ts",
+      "staged",
+    );
+    const second = openChangesTab(first, cwd, "/repo/b.ts", "unstaged");
     const files = second.editorPanes[0]?.files ?? [];
     expect(files.filter(isChangesTab)).toHaveLength(1);
     expect(files.filter(isReviewTab)).toHaveLength(1);
     expect(files.find(isChangesTab)?.path).toBe("/repo/b.ts");
+    expect(files.find(isChangesTab)?.changeKind).toBe("unstaged");
   });
 
   it("opens a Changes tab without a focused file", () => {

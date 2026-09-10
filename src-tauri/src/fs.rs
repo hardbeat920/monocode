@@ -254,12 +254,19 @@ pub struct GitFileDiff {
     pub too_large: bool,
 }
 
-/// Working-tree vs index (or empty) contents for one changed file.
+/// Contents for one changed file. Staged diffs compare HEAD to the index;
+/// unstaged diffs compare the index to the working tree.
 #[tauri::command]
-pub async fn git_file_diff(cwd: String, relative: String) -> Result<GitFileDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || git_file_diff_for(&expand_home(&cwd), &relative))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn git_file_diff(
+    cwd: String,
+    relative: String,
+    staged: bool,
+) -> Result<GitFileDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_file_diff_for(&expand_home(&cwd), &relative, staged)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 const GIT_HISTORY_DEFAULT: u32 = 200;
@@ -566,6 +573,22 @@ pub async fn git_github_work_items(
             &search,
             limit.unwrap_or(40),
         )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One issue or pull request by number, used when session navigation misses
+/// the existing Inbox cache.
+#[tauri::command]
+pub async fn git_github_work_item(
+    cwd: String,
+    repo: String,
+    kind: String,
+    number: i64,
+) -> Result<GitHubWorkItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_work_item_for(&expand_home(&cwd), &repo, &kind, number)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1019,7 +1042,7 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
     }
 }
 
-fn git_file_diff_for(root: &Path, relative: &str) -> Result<GitFileDiff, String> {
+fn git_file_diff_for(root: &Path, relative: &str, staged: bool) -> Result<GitFileDiff, String> {
     let relative = normalize_diff_path(relative);
     if relative.is_empty()
         || relative.starts_with('/')
@@ -1039,24 +1062,31 @@ fn git_file_diff_for(root: &Path, relative: &str) -> Result<GitFileDiff, String>
 
     let prefix = git_stdout(root, &["rev-parse", "--show-prefix"]).unwrap_or_default();
     let index_spec = format!(":{prefix}{relative}");
-    let original = git_blob(root, &index_spec);
-    let in_index = original.is_some();
-    let orig = original.unwrap_or_default();
-    let current = if abs.is_file() {
-        std::fs::read(&abs).unwrap_or_default()
+    let (original, current) = if staged {
+        let head_spec = format!("HEAD:{prefix}{relative}");
+        (git_blob(root, &head_spec), git_blob(root, &index_spec))
     } else {
-        Vec::new()
+        let current = if abs.is_file() {
+            Some(std::fs::read(&abs).unwrap_or_default())
+        } else {
+            None
+        };
+        (git_blob(root, &index_spec), current)
     };
+    let had_original = original.is_some();
+    let had_current = current.is_some();
+    let orig = original.unwrap_or_default();
+    let current = current.unwrap_or_default();
     let binary = orig.contains(&0) || current.contains(&0);
     let too_large =
         orig.len() as u64 > MAX_TEXT_FILE_BYTES || current.len() as u64 > MAX_TEXT_FILE_BYTES;
-    let status = if !in_index {
-        if abs.is_file() {
-            "untracked"
+    let status = if !had_original && had_current {
+        if staged {
+            "added"
         } else {
-            "deleted"
+            "untracked"
         }
-    } else if !abs.exists() {
+    } else if had_original && !had_current {
         "deleted"
     } else {
         "modified"
@@ -1640,6 +1670,34 @@ fn git_github_work_items_for(
     let json = gh_checked(root, &refs)?;
     let repo = git_github_repo_for(root).unwrap_or_default();
     parse_github_work_items(&json, kind, &repo)
+}
+
+fn git_github_work_item_for(
+    root: &Path,
+    repo: &str,
+    kind: &str,
+    number: i64,
+) -> Result<GitHubWorkItem, String> {
+    let kind = kind.trim();
+    if kind != "issue" && kind != "pr" {
+        return Err("Unknown GitHub task kind".into());
+    }
+    if number <= 0 {
+        return Err("GitHub task number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
+    let number = number.to_string();
+    let fields = if kind == "pr" {
+        "number,title,url,state,updatedAt,labels,assignees,isDraft"
+    } else {
+        "number,title,url,state,updatedAt,labels,assignees"
+    };
+    let json = gh_checked(
+        root,
+        &[kind, "view", &number, "--repo", &repo, "--json", fields],
+    )?;
+    parse_github_work_item(&json, kind, &repo)
 }
 
 fn git_github_work_item_details_for(
@@ -2411,6 +2469,14 @@ fn parse_github_work_items(
             repo: repo.to_string(),
         })
         .collect())
+}
+
+fn parse_github_work_item(json: &str, kind: &str, repo: &str) -> Result<GitHubWorkItem, String> {
+    let wrapped = format!("[{json}]");
+    parse_github_work_items(&wrapped, kind, repo)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "GitHub did not return a work item".into())
 }
 
 fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
@@ -4309,12 +4375,66 @@ mod tests {
         }
         std::fs::write(dir.0.join("a.txt"), "alpha\ngamma\ndelta\n").unwrap();
 
-        let diff = git_file_diff_for(&dir.0, "a.txt").unwrap();
+        let diff = git_file_diff_for(&dir.0, "a.txt", false).unwrap();
         assert_eq!(diff.status, "modified");
         assert_eq!(diff.original, "alpha\nbeta\ngamma\n");
         assert_eq!(diff.current, "alpha\ngamma\ndelta\n");
         assert!(!diff.binary);
         assert!(!diff.too_large);
+    }
+
+    #[test]
+    fn git_file_diff_staged_reads_head_and_index() {
+        let dir = tmp("git-file-diff-staged");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+
+        let diff = git_file_diff_for(&dir.0, "a.txt", true).unwrap();
+        assert_eq!(diff.status, "modified");
+        assert_eq!(diff.original, "alpha\n");
+        assert_eq!(diff.current, "beta\n");
+    }
+
+    #[test]
+    fn git_file_diff_staged_handles_additions_and_deletions() {
+        let dir = tmp("git-file-diff-staged-status");
+        if !init_git_commit(&dir.0, &[("gone.txt", "old\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("new.txt"), "new\n").unwrap();
+        std::fs::remove_file(dir.0.join("gone.txt")).unwrap();
+        assert!(git(&dir.0, &["add", "-A"]));
+
+        let added = git_file_diff_for(&dir.0, "new.txt", true).unwrap();
+        assert_eq!(added.status, "added");
+        assert_eq!(added.original, "");
+        assert_eq!(added.current, "new\n");
+
+        let deleted = git_file_diff_for(&dir.0, "gone.txt", true).unwrap();
+        assert_eq!(deleted.status, "deleted");
+        assert_eq!(deleted.original, "old\n");
+        assert_eq!(deleted.current, "");
+    }
+
+    #[test]
+    fn git_file_diff_separates_staged_and_unstaged_changes() {
+        let dir = tmp("git-file-diff-partial");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\nbeta\ngamma\ndelta\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "alpha\nBETA\ngamma\nDELTA\n").unwrap();
+        git_stage_contents_for(&dir.0, "a.txt", b"alpha\nBETA\ngamma\ndelta\n").unwrap();
+
+        let staged = git_file_diff_for(&dir.0, "a.txt", true).unwrap();
+        assert_eq!(staged.original, "alpha\nbeta\ngamma\ndelta\n");
+        assert_eq!(staged.current, "alpha\nBETA\ngamma\ndelta\n");
+
+        let unstaged = git_file_diff_for(&dir.0, "a.txt", false).unwrap();
+        assert_eq!(unstaged.original, "alpha\nBETA\ngamma\ndelta\n");
+        assert_eq!(unstaged.current, "alpha\nBETA\ngamma\nDELTA\n");
     }
 
     #[test]
@@ -4325,7 +4445,7 @@ mod tests {
         }
         std::fs::write(dir.0.join("new.txt"), "hello\n").unwrap();
 
-        let diff = git_file_diff_for(&dir.0, "new.txt").unwrap();
+        let diff = git_file_diff_for(&dir.0, "new.txt", false).unwrap();
         assert_eq!(diff.status, "untracked");
         assert_eq!(diff.original, "");
         assert_eq!(diff.current, "hello\n");
@@ -4339,7 +4459,7 @@ mod tests {
         }
         std::fs::remove_file(dir.0.join("a.txt")).unwrap();
 
-        let diff = git_file_diff_for(&dir.0, "a.txt").unwrap();
+        let diff = git_file_diff_for(&dir.0, "a.txt", false).unwrap();
         assert_eq!(diff.status, "deleted");
         assert_eq!(diff.original, "alpha\n");
         assert_eq!(diff.current, "");
@@ -4348,14 +4468,14 @@ mod tests {
     #[test]
     fn git_file_diff_rejects_path_escape() {
         let dir = tmp("git-file-diff-escape");
-        assert!(git_file_diff_for(&dir.0, "../secret.txt").is_err());
+        assert!(git_file_diff_for(&dir.0, "../secret.txt", false).is_err());
     }
 
     #[test]
     fn git_file_diff_rejects_outside_a_repo() {
         let dir = tmp("git-file-diff-none");
         std::fs::write(dir.0.join("notes.txt"), "hello\n").unwrap();
-        assert!(git_file_diff_for(&dir.0, "notes.txt").is_err());
+        assert!(git_file_diff_for(&dir.0, "notes.txt", false).is_err());
     }
 
     #[test]
@@ -4586,7 +4706,7 @@ mod tests {
         assert!(file.staged);
         assert!(file.unstaged);
 
-        let diff = git_file_diff_for(&dir.0, "a.txt").unwrap();
+        let diff = git_file_diff_for(&dir.0, "a.txt", false).unwrap();
         assert_eq!(diff.original, "alpha\nBETA\ngamma\ndelta\n");
         assert_eq!(diff.current, "alpha\nBETA\ngamma\nDELTA\n");
     }
@@ -4907,6 +5027,22 @@ mod tests {
         assert!(items[0].draft);
         assert!(items[0].labels.is_empty());
         assert_eq!(items[0].repo, "acme/web");
+    }
+
+    #[test]
+    fn parse_github_work_item_reads_view_shape() {
+        let json = r#"{
+            "number": 12,
+            "title": "WIP checkout",
+            "url": "https://github.com/acme/web/pull/12",
+            "state": "OPEN",
+            "isDraft": true
+        }"#;
+        let item = parse_github_work_item(json, "pr", "acme/web").unwrap();
+        assert_eq!(item.number, 12);
+        assert_eq!(item.kind, "pr");
+        assert_eq!(item.repo, "acme/web");
+        assert!(item.draft);
     }
 
     #[test]

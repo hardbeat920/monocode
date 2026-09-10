@@ -85,6 +85,9 @@ fn git_grep(root: &Path, options: &SearchOptions, query: &str) -> Option<SearchR
     }
     cmd.arg("-e").arg(query);
 
+    // Terminate option parsing so an include glob starting with `-` is treated
+    // as a pathspec instead of a git grep flag.
+    cmd.arg("--");
     for spec in pathspecs(&options.include, &options.exclude) {
         cmd.arg(spec);
     }
@@ -321,4 +324,81 @@ fn pathspecs(include: &Option<String>, exclude: &Option<String>) -> Vec<String> 
         specs.push(format!(":(exclude){glob}"));
     }
     specs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::ErrorKind;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    struct Tmp(PathBuf);
+
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tmp(label: &str) -> Tmp {
+        loop {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "monocode-search-{label}-{}-{stamp}-{seq}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Tmp(dir),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("{error}"),
+            }
+        }
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> bool {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn git_grep_treats_hyphen_prefixed_include_as_pathspec() {
+        let dir = tmp("hyphen-pathspec");
+        if !git(&dir.0, &["init", "--quiet"]) {
+            return;
+        }
+        // `-l` is both a valid file name and git grep's files-with-matches flag.
+        std::fs::write(dir.0.join("-l"), "find me\n").unwrap();
+        std::fs::write(dir.0.join("other.txt"), "find me too\n").unwrap();
+        assert!(git(&dir.0, &["add", "--", "-l", "other.txt"]));
+
+        let result = git_grep(
+            &dir.0,
+            &SearchOptions {
+                cwd: dir.0.to_string_lossy().into_owned(),
+                query: "find me".to_string(),
+                case_sensitive: true,
+                whole_word: false,
+                regex: false,
+                include: Some("-l".to_string()),
+                exclude: None,
+            },
+            "find me",
+        )
+        .unwrap();
+
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].relative, "-l");
+        assert_eq!(result.matches[0].preview, "find me");
+    }
 }

@@ -63,7 +63,9 @@ type InitialExpansion = "all" | "first" | "none";
 type Props = {
   files: UnifiedDiffFileModel[];
   truncated?: boolean;
+  fileCount?: number;
   focusPath?: string;
+  focusId?: string;
   busyId?: string | null;
   totals?: { additions: number; deletions: number };
   /** Fill the parent pane and scroll inside. Off when the parent already scrolls. */
@@ -80,7 +82,9 @@ type Props = {
 export function UnifiedDiffView({
   files,
   truncated,
+  fileCount,
   focusPath,
+  focusId,
   busyId,
   totals,
   fill = true,
@@ -104,6 +108,13 @@ export function UnifiedDiffView({
     () => files.map((file) => file.id).join("\n"),
     [files],
   );
+  const resolvedFocusId = useMemo(
+    () =>
+      focusId ??
+      files.find((file) => file.path === focusPath || file.id === focusPath)
+        ?.id,
+    [fileKey, files, focusId, focusPath],
+  );
 
   useEffect(() => {
     setOpen(initiallyOpenFiles(files, initialExpansion));
@@ -111,13 +122,13 @@ export function UnifiedDiffView({
   }, [fileKey, initialExpansion]);
 
   useEffect(() => {
-    if (!focusPath) return;
-    const node = fileRefs.current.get(focusPath);
+    if (!resolvedFocusId) return;
+    const node = fileRefs.current.get(resolvedFocusId);
     const scroller = scrollerRef.current;
     if (!node || !scroller) return;
     const top = node.offsetTop - 8;
     scroller.scrollTo({ top: Math.max(0, top) });
-  }, [focusPath, fileKey]);
+  }, [resolvedFocusId, fileKey]);
 
   const bindScroller = useCallback(
     (el: HTMLDivElement | null) => {
@@ -156,9 +167,9 @@ export function UnifiedDiffView({
     [],
   );
 
-  const bindFileRef = useCallback((path: string, node: HTMLElement | null) => {
-    if (node) fileRefs.current.set(path, node);
-    else fileRefs.current.delete(path);
+  const bindFileRef = useCallback((id: string, node: HTMLElement | null) => {
+    if (node) fileRefs.current.set(id, node);
+    else fileRefs.current.delete(id);
   }, []);
 
   if (files.length === 0) {
@@ -167,7 +178,8 @@ export function UnifiedDiffView({
     );
   }
 
-  const fileLabel = files.length === 1 ? "1 file" : `${files.length} files`;
+  const count = fileCount ?? files.length;
+  const fileLabel = count === 1 ? "1 file" : `${count} files`;
   const additions =
     totals?.additions ?? files.reduce((sum, file) => sum + file.additions, 0);
   const deletions =
@@ -234,7 +246,7 @@ export function UnifiedDiffView({
               key={file.id}
               file={file}
               expanded={open.has(file.id)}
-              focused={focusPath === file.path || focusPath === file.id}
+              focused={resolvedFocusId === file.id}
               busy={busyId === file.id}
               reveals={reveals[file.id] ?? EMPTY_REVEALS}
               fileLayout={fileLayout}
@@ -314,9 +326,9 @@ const FileSection = memo(function FileSection({
   const setSection = useCallback(
     (node: HTMLElement | null) => {
       sectionRef.current = node;
-      bindRef(file.path, node);
+      bindRef(file.id, node);
     },
-    [bindRef, file.path],
+    [bindRef, file.id],
   );
 
   useLayoutEffect(() => {

@@ -9,15 +9,23 @@ import {
   notifyGitChanged,
   subscribeGitChanged,
   type GitChangedFile,
+  type GitFileDiffKind,
 } from "../lib/fs";
 import { forEachConcurrent } from "../lib/concurrent";
 import { buildUnifiedFile, type UnifiedFileDiff } from "../lib/unifiedDiff";
+import {
+  prioritizeWorkingTreeDiffEntries,
+  workingTreeDiffEntries,
+  workingTreeDiffEntryLabel,
+  workingTreeDiffFocusId,
+} from "../lib/workingTreeDiff";
 import { stageChunkText } from "./editorGit";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
 
 type Props = {
   cwd: string;
   focusPath?: string;
+  focusKind?: GitFileDiffKind;
 };
 
 type LoadedDiff = {
@@ -30,19 +38,12 @@ type LoadedDiff = {
 };
 
 const DIFF_LOAD_CONCURRENCY = 4;
-const EMPTY_UNIFIED_DIFF: UnifiedFileDiff = {
-  additions: 0,
-  deletions: 0,
-  lines: [],
-  blocks: [],
-};
 
-export function WorkingTreeDiff({ cwd, focusPath }: Props) {
+export function WorkingTreeDiff({ cwd, focusPath, focusKind }: Props) {
   const [files, setFiles] = useState<GitChangedFile[] | null>(null);
   const [diffs, setDiffs] = useState<Map<string, LoadedDiff>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [totals, setTotals] = useState({ additions: 0, deletions: 0 });
   const diffsRef = useRef(diffs);
   diffsRef.current = diffs;
 
@@ -63,57 +64,52 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
       void gitDiffFiles(cwd)
         .then(async (index) => {
           if (disposed || current !== generation) return;
-          setTotals({
-            additions: index.additions,
-            deletions: index.deletions,
-          });
           setFiles(index.files);
           setDiffs(new Map());
           setError(null);
-          const loadOrder = prioritizeFile(index.files, focusPath);
+          const entries = workingTreeDiffEntries(index.files);
+          const loadOrder = prioritizeWorkingTreeDiffEntries(
+            entries,
+            focusPath,
+            focusKind,
+          );
           await forEachConcurrent(
             loadOrder,
             DIFF_LOAD_CONCURRENCY,
-            async (file) => {
+            async (entry) => {
               let loaded: LoadedDiff;
-              if (!file.unstaged) {
+              try {
+                const diff = await gitFileDiff(
+                  cwd,
+                  entry.file.relative,
+                  entry.kind,
+                );
+                const unified =
+                  !diff.binary && !diff.tooLarge
+                    ? buildUnifiedFile(diff.original, diff.current)
+                    : null;
+                loaded = {
+                  binary: diff.binary,
+                  tooLarge: diff.tooLarge,
+                  original: diff.original,
+                  current: diff.current,
+                  unified,
+                };
+              } catch (caught: unknown) {
                 loaded = {
                   binary: false,
                   tooLarge: false,
                   original: "",
                   current: "",
-                  unified: EMPTY_UNIFIED_DIFF,
+                  unified: null,
+                  error:
+                    caught instanceof Error ? caught.message : String(caught),
                 };
-              } else {
-                try {
-                  const diff = await gitFileDiff(cwd, file.relative);
-                  const unified =
-                    !diff.binary && !diff.tooLarge
-                      ? buildUnifiedFile(diff.original, diff.current)
-                      : null;
-                  loaded = {
-                    binary: diff.binary,
-                    tooLarge: diff.tooLarge,
-                    original: diff.original,
-                    current: diff.current,
-                    unified,
-                  };
-                } catch (caught: unknown) {
-                  loaded = {
-                    binary: false,
-                    tooLarge: false,
-                    original: "",
-                    current: "",
-                    unified: null,
-                    error:
-                      caught instanceof Error ? caught.message : String(caught),
-                  };
-                }
               }
               if (disposed || current !== generation) return;
               setDiffs((existing) => {
                 const next = new Map(existing);
-                next.set(file.relative, loaded);
+                next.set(entry.id, loaded);
                 return next;
               });
             },
@@ -151,20 +147,25 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
     };
   }, [cwd]);
 
+  const entries = useMemo(() => workingTreeDiffEntries(files ?? []), [files]);
+
   const models = useMemo<UnifiedDiffFileModel[]>(() => {
     if (!files) return [];
-    return files.map((file) => {
-      const loaded = diffs.get(file.relative);
+    return entries.map((entry) => {
+      const { file, kind } = entry;
+      const loaded = diffs.get(entry.id);
       const unified = loaded?.unified ?? null;
       const unchanged =
         unified != null &&
         unified.additions === 0 &&
         unified.deletions === 0 &&
         !loaded?.binary;
+      const canUseIndexCounts =
+        loaded != null && !loaded.error && !(file.staged && file.unstaged);
       return {
-        id: file.relative,
+        id: entry.id,
         path: file.path,
-        label: file.relative,
+        label: workingTreeDiffEntryLabel(entry),
         binary: loaded?.binary,
         tooLarge: loaded?.tooLarge,
         emptyMessage:
@@ -173,61 +174,87 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
             : loaded.error
               ? `Couldn’t load diff: ${loaded.error}`
               : unchanged
-                ? file.staged
-                  ? "Staged — no unstaged changes"
+                ? kind === "staged"
+                  ? "No staged changes"
                   : "No unstaged changes"
                 : undefined,
-        additions: unified?.additions ?? file.additions,
-        deletions: unified?.deletions ?? file.deletions,
+        additions:
+          unified?.additions ?? (canUseIndexCounts ? file.additions : 0),
+        deletions:
+          unified?.deletions ?? (canUseIndexCounts ? file.deletions : 0),
         blocks: unchanged ? [] : (unified?.blocks ?? []),
-        canStage: file.unstaged,
-        canDiscard: file.unstaged,
-        canStageHunk: file.unstaged && !loaded?.binary && !loaded?.tooLarge,
+        canStage: kind === "unstaged",
+        canDiscard: kind === "unstaged",
+        canStageHunk:
+          kind === "unstaged" && !loaded?.binary && !loaded?.tooLarge,
       };
     });
-  }, [diffs, files]);
+  }, [diffs, entries, files]);
+
+  const totals = useMemo(
+    () =>
+      models.reduce(
+        (sum, file) => ({
+          additions: sum.additions + file.additions,
+          deletions: sum.deletions + file.deletions,
+        }),
+        { additions: 0, deletions: 0 },
+      ),
+    [models],
+  );
+
+  const focusId = useMemo(
+    () => workingTreeDiffFocusId(entries, focusPath, focusKind),
+    [entries, focusKind, focusPath],
+  );
 
   const onStageFile = useCallback(
     async (id: string) => {
+      const entry = entries.find((candidate) => candidate.id === id);
+      if (!entry || entry.kind !== "unstaged") return;
       setBusyId(id);
       try {
-        await gitStageFile(cwd, id);
+        await gitStageFile(cwd, entry.file.relative);
         notifyGitChanged();
       } finally {
         setBusyId(null);
       }
     },
-    [cwd],
+    [cwd, entries],
   );
 
   const onDiscardFile = useCallback(
     async (id: string) => {
+      const entry = entries.find((candidate) => candidate.id === id);
+      if (!entry || entry.kind !== "unstaged") return;
       setBusyId(id);
       try {
-        await gitDiscardFile(cwd, id);
+        await gitDiscardFile(cwd, entry.file.relative);
         notifyGitChanged();
       } finally {
         setBusyId(null);
       }
     },
-    [cwd],
+    [cwd, entries],
   );
 
   const onStageHunk = useCallback(
     async (id: string, pos: number) => {
+      const entry = entries.find((candidate) => candidate.id === id);
+      if (!entry || entry.kind !== "unstaged") return;
       const loaded = diffsRef.current.get(id);
       if (!loaded) return;
       const next = stageChunkText(loaded.original, loaded.current, pos);
       if (next == null) return;
       setBusyId(id);
       try {
-        await gitStageContents(cwd, id, next);
+        await gitStageContents(cwd, entry.file.relative, next);
         notifyGitChanged();
       } finally {
         setBusyId(null);
       }
     },
-    [cwd],
+    [cwd, entries],
   );
 
   if (!cwd || cwd === "~") {
@@ -257,7 +284,8 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
   return (
     <UnifiedDiffView
       files={models}
-      focusPath={focusPath}
+      fileCount={files.length}
+      focusId={focusId}
       busyId={busyId}
       totals={totals}
       onStageFile={onStageFile}
@@ -265,16 +293,4 @@ export function WorkingTreeDiff({ cwd, focusPath }: Props) {
       onStageHunk={onStageHunk}
     />
   );
-}
-
-function prioritizeFile(
-  files: readonly GitChangedFile[],
-  focusPath: string | undefined,
-): GitChangedFile[] {
-  if (!focusPath) return [...files];
-  const focused = files.find(
-    (file) => file.path === focusPath || file.relative === focusPath,
-  );
-  if (!focused) return [...files];
-  return [focused, ...files.filter((file) => file !== focused)];
 }

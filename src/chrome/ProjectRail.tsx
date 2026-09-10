@@ -488,7 +488,7 @@ export function ProjectRail({
             onOpenWhatsNew={onOpenWhatsNew}
             onDismissUpdate={onDismissUpdate}
           />
-          <div className="flex shrink-0 flex-col gap-px p-2 pt-0">
+          <div className="flex shrink-0 flex-col gap-px p-2">
             <RailAction
               label="Settings"
               icon={Settings}

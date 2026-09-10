@@ -1,7 +1,7 @@
 {
   "name": "monocode-desktop",
   "private": true,
-  "version": "0.1.39",
+  "version": "0.1.41",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -58,6 +58,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "happy-dom": "20.14.0",
     "tailwindcss": "^4",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",

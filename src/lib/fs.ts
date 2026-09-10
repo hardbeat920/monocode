@@ -38,8 +38,14 @@ export type DiscoveredSkill = {
     | "monocode";
 };
 
-export function listSkills(cwd: string): Promise<DiscoveredSkill[]> {
-  return invoke<DiscoveredSkill[]>("list_skills", { cwd });
+export function listSkills(
+  cwd: string,
+  disabledPaths?: readonly string[] | null,
+): Promise<DiscoveredSkill[]> {
+  return invoke<DiscoveredSkill[]>("list_skills", {
+    cwd,
+    disabledPaths: disabledPaths ?? null,
+  });
 }
 
 export function listProjectFiles(cwd: string): Promise<ProjectFile[]> {
@@ -98,8 +104,18 @@ export type GitFileDiff = {
   tooLarge: boolean;
 };
 
-export function gitFileDiff(cwd: string, relative: string): Promise<GitFileDiff> {
-  return invoke<GitFileDiff>("git_file_diff", { cwd, relative });
+export type GitFileDiffKind = "staged" | "unstaged";
+
+export function gitFileDiff(
+  cwd: string,
+  relative: string,
+  kind: GitFileDiffKind = "unstaged",
+): Promise<GitFileDiff> {
+  return invoke<GitFileDiff>("git_file_diff", {
+    cwd,
+    relative,
+    staged: kind === "staged",
+  });
 }
 
 export type GitHistoryRef = {

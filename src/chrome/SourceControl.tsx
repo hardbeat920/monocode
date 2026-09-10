@@ -1,5 +1,5 @@
 import type { HarnessId } from "../lib/session";
-import type { GitHistoryCommit } from "../lib/fs";
+import type { GitFileDiffKind, GitHistoryCommit } from "../lib/fs";
 import { GitChangesPanel } from "./GitChangesPanel";
 
 type Props = {
@@ -7,8 +7,10 @@ type Props = {
   enabled: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
+  selectedKind?: GitFileDiffKind;
   selectedSha?: string;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, kind: GitFileDiffKind) => void;
+  onOpenAllChanges: () => void;
   onOpenCommit: (commit: GitHistoryCommit) => void;
 };
 
@@ -17,8 +19,10 @@ export function SourceControl({
   enabled,
   textHarness,
   selectedPath,
+  selectedKind,
   selectedSha,
   onOpenFile,
+  onOpenAllChanges,
   onOpenCommit,
 }: Props) {
   return (
@@ -28,8 +32,10 @@ export function SourceControl({
         enabled={enabled}
         textHarness={textHarness}
         selectedPath={selectedPath}
+        selectedKind={selectedKind}
         selectedSha={selectedSha}
         onOpenFile={onOpenFile}
+        onOpenAllChanges={onOpenAllChanges}
         onOpenCommit={onOpenCommit}
       />
     </div>

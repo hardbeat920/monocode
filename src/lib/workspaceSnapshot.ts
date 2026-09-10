@@ -451,6 +451,9 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
     ...(sessionChanges ? { sessionChanges, review: true } : {}),
     ...(value.review === true ? { review: true } : {}),
     ...(value.changes === true ? { changes: true, review: true } : {}),
+    ...(value.changeKind === "staged" || value.changeKind === "unstaged"
+      ? { changeKind: value.changeKind }
+      : {}),
     ...(value.terminal === true ? { terminal: true } : {}),
   };
 }

@@ -8,6 +8,8 @@ const transport = vi.hoisted(() => ({
   }>,
   prompt: undefined as
     ((sessionId: string, command: Record<string, unknown>) => void) | undefined,
+  fast: undefined as
+    ((sessionId: string, command: Record<string, unknown>) => void) | undefined,
   writeChild: vi.fn(),
   spawnChild: vi.fn(),
 }));
@@ -71,6 +73,7 @@ beforeEach(() => {
   transport.spawnChild.mockReset();
   transport.spawnChild.mockResolvedValue(undefined);
   transport.prompt = (id, command) => response(id, command);
+  transport.fast = undefined;
   transport.writeChild.mockReset();
   transport.writeChild.mockImplementation(
     async (sessionId: string, line: string) => {
@@ -79,6 +82,8 @@ beforeEach(() => {
       if (command.type === "extension_ui_response") return;
       if (command.type === "prompt")
         return transport.prompt?.(sessionId, command);
+      if (command.type === "set_fast_mode" && transport.fast)
+        return transport.fast(sessionId, command);
       response(
         sessionId,
         command,
@@ -122,6 +127,74 @@ async function started(turnInput = input()) {
 }
 
 describe("OMP command lifecycle over the real RPC multiplexer", () => {
+  it("applies fast mode through OMP RPC before prompting", async () => {
+    const running = await started({
+      ...input(),
+      modelSettings: { fast: "true" },
+    });
+    const fast = transport.requests.find(
+      (request) => request.command.type === "set_fast_mode",
+    );
+    const promptIndex = transport.requests.findIndex(
+      (request) => request.command.type === "prompt",
+    );
+
+    expect(fast?.command).toMatchObject({
+      type: "set_fast_mode",
+      enabled: true,
+    });
+    expect(transport.requests.indexOf(fast!)).toBeLessThan(promptIndex);
+    frame("omp-test", { type: "agent_end" });
+    await running.turn;
+  });
+
+  it("keeps fast mode in sync with OMP config updates", async () => {
+    const running = await started();
+    frame("omp-test", {
+      type: "config_update",
+      fastModeEnabled: true,
+    });
+
+    expect(events).toContainEqual({
+      type: "session.configChanged",
+      modelSettings: { fast: "true" },
+    });
+    frame("omp-test", { type: "agent_end" });
+    await running.turn;
+  });
+
+  it("falls back cleanly when the current model cannot use fast mode", async () => {
+    transport.fast = (sessionId, command) => {
+      frame(sessionId, {
+        type: "response",
+        id: command.id,
+        command: command.type,
+        success: false,
+        error: "Fast mode is unavailable for the current model.",
+      });
+    };
+    const running = await started({
+      ...input(),
+      modelSettings: { fast: "true" },
+    });
+
+    expect(
+      transport.requests.filter(
+        (request) => request.command.type === "set_fast_mode",
+      ),
+    ).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: "session.configChanged",
+      modelSettings: { fast: "false" },
+    });
+    expect(events).toContainEqual({
+      type: "status",
+      text: "Fast mode is unavailable for the current model.",
+    });
+    frame("omp-test", { type: "agent_end" });
+    await running.turn;
+  });
+
   it("reflects command-driven model/settings and session changes in MonoCode", async () => {
     const running = await started();
     frame("omp-test", {

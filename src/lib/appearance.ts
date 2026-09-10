@@ -16,6 +16,7 @@ const TRANSCRIPT_ANCHOR_KEY = "monocode.transcriptAnchor";
 const CHAT_BACKGROUND_PATH_KEY = "monocode.chatBackgroundPath";
 const CHAT_BACKGROUND_OPACITY_KEY = "monocode.chatBackgroundOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
+const CHANGES_VIEW_KEY = "monocode.changesView";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
 
@@ -26,6 +27,7 @@ export type ColorScheme = "dark" | "light";
 export type ThemePreference = ColorScheme | "system";
 export type TranscriptLayout = "full" | "chat";
 export type ChatBackgroundScope = "empty" | "all";
+export type ChangesView = "list" | "tree";
 
 export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";
 
@@ -33,6 +35,8 @@ export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";
 export const SCHEME_CHANGE_EVENT = "monocode:schemechange";
 
 export const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = "full";
+
+export const CHANGES_VIEW_DEFAULT: ChangesView = "list";
 
 export const TRANSCRIPT_ANCHOR_DEFAULT = true;
 
@@ -504,6 +508,27 @@ export function saveTranscriptLayout(value: TranscriptLayout) {
       detail: next,
     }),
   );
+}
+
+function isChangesView(value: unknown): value is ChangesView {
+  return value === "list" || value === "tree";
+}
+
+export function loadChangesView(): ChangesView {
+  try {
+    const raw = localStorage.getItem(CHANGES_VIEW_KEY);
+    return isChangesView(raw) ? raw : CHANGES_VIEW_DEFAULT;
+  } catch {
+    return CHANGES_VIEW_DEFAULT;
+  }
+}
+
+export function saveChangesView(value: ChangesView) {
+  try {
+    localStorage.setItem(CHANGES_VIEW_KEY, value);
+  } catch {
+    // private mode / quota
+  }
 }
 
 export function loadTranscriptAnchor(): boolean {
