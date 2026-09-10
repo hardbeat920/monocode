@@ -392,6 +392,100 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
       1,
     );
   });
+
+  it("surfaces displayed OMP advisor notes and hides internal messages", async () => {
+    const running = await started();
+    const advisor = {
+      role: "custom",
+      customType: "advisor",
+      display: true,
+      content: "raw advisory envelope",
+      details: {
+        notes: [
+          { note: "Minor note", severity: "nit" },
+          { note: "Stop here", severity: "blocker" },
+        ],
+      },
+    };
+    frame("omp-test", { type: "message_start", message: advisor });
+    frame("omp-test", { type: "message_end", message: advisor });
+    frame("omp-test", {
+      type: "message_start",
+      message: {
+        role: "custom",
+        customType: "xdev-mount-notice",
+        display: false,
+        content: "internal mount details",
+      },
+    });
+    frame("omp-test", { type: "advisor_yielded" });
+
+    expect(events).toContainEqual({
+      type: "interjection",
+      text: "Minor note\n\nStop here",
+      customType: "advisor",
+      severity: "blocker",
+    });
+    expect(
+      events.filter((event) => event.type === "interjection"),
+    ).toHaveLength(1);
+    expect(
+      events.some(
+        (event) => "text" in event && event.text === "internal mount details",
+      ),
+    ).toBe(false);
+    frame("omp-test", { type: "agent_end" });
+    await running.turn;
+  });
+
+  it("uses generic content for other displayed OMP custom messages", async () => {
+    const running = await started();
+    frame("omp-test", {
+      type: "message_start",
+      message: {
+        role: "custom",
+        customType: "extension-notice",
+        display: true,
+        content: [
+          { type: "text", text: "Extension changed the plan." },
+          { type: "image", data: "ignored", mimeType: "image/png" },
+          { type: "text", text: "Review it." },
+        ],
+      },
+    });
+
+    expect(events).toContainEqual({
+      type: "interjection",
+      text: "Extension changed the plan.\nReview it.",
+      customType: "extension-notice",
+    });
+    frame("omp-test", { type: "agent_end" });
+    await running.turn;
+  });
+
+  it("does not reinterpret Pi custom messages as OMP interjections", async () => {
+    const turn = sendPiTurn({
+      ...input("pi-test", "hello"),
+      model: "pi:default",
+    });
+    await vi.waitFor(() =>
+      expect(transport.requests.some((r) => r.command.type === "prompt")).toBe(
+        true,
+      ),
+    );
+    frame("pi-test", {
+      type: "message_start",
+      message: {
+        role: "custom",
+        customType: "advisor",
+        display: true,
+        content: "Pi-owned custom frame",
+      },
+    });
+    expect(events.some((event) => event.type === "interjection")).toBe(false);
+    frame("pi-test", { type: "agent_end" });
+    await turn;
+  });
 });
 
 describe("OMP live command inventories", () => {

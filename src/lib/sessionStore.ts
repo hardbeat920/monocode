@@ -7,6 +7,7 @@ import type {
   HarnessId,
   HandoffMeta,
   HandoffStatus,
+  InterjectionMeta,
   LinkedWorkItem,
   RuntimeMode,
   SecondOpinionMeta,
@@ -402,7 +403,32 @@ function sanitizeBlock(block: Block): Block | null {
   if (secondOpinion) next.secondOpinion = secondOpinion;
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  // Interjection chrome survives restarts only on system blocks; a malformed
+  // payload keeps the ordinary system row rather than losing its body.
+  if (block.role === "system") {
+    const interjection = sanitizeInterjection(block.interjection);
+    if (interjection) next.interjection = interjection;
+  }
   return next;
+}
+
+function sanitizeInterjection(
+  value: Block["interjection"],
+): InterjectionMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const customType =
+    typeof record.customType === "string" ? record.customType.trim() : "";
+  if (!customType) return undefined;
+  const severity = record.severity;
+  return {
+    customType,
+    ...(severity === "nit" || severity === "concern" || severity === "blocker"
+      ? { severity }
+      : {}),
+  };
 }
 
 function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {

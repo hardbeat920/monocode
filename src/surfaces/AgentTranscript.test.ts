@@ -84,4 +84,25 @@ describe("AgentTranscript collapsed work", () => {
       markup.indexOf('aria-label="Worked for 1s"'),
     );
   });
+
+  it("renders an advisor interjection between answered work phases", () => {
+    const markup = render([
+      tool("before"),
+      { id: "answer", role: "assistant", text: "Complete answer." },
+      {
+        id: "advisor",
+        role: "system",
+        text: "Check the fallback.",
+        interjection: { customType: "advisor", severity: "concern" },
+      },
+      tool("after"),
+      { id: "ack", role: "assistant", text: "Checked." },
+    ]);
+
+    expect(markup).toContain("Complete answer.");
+    expect(markup).toContain('aria-label="Interjection: Advisor"');
+    expect(markup).toContain("Concern");
+    expect(markup).toContain("Check the fallback.");
+    expect(markup).toContain("Checked.");
+  });
 });

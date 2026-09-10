@@ -161,6 +161,55 @@ describe("status blocks", () => {
   });
 });
 
+describe("interjection blocks", () => {
+  it("seals assistant streams on both sides of the boundary", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Complete answer.",
+    });
+    session = applyHarnessEvent(session, {
+      type: "interjection",
+      text: "Check the fallback.",
+      customType: "advisor",
+    });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Checked.",
+    });
+
+    expect(session.blocks.slice(1)).toMatchObject([
+      { role: "assistant", text: "Complete answer.", streaming: false },
+      { role: "system", interjection: { customType: "advisor" } },
+      { role: "assistant", text: "Checked.", streaming: true },
+    ]);
+  });
+
+  it("appends every interjection as a distinct persisted boundary", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "interjection",
+      text: "Check the fallback.",
+      customType: "advisor",
+      severity: "concern",
+    });
+    session = applyHarnessEvent(session, {
+      type: "interjection",
+      text: "Check the fallback.",
+      customType: "advisor",
+      severity: "concern",
+    });
+
+    const interjections = session.blocks.filter((block) => block.interjection);
+    expect(interjections).toHaveLength(2);
+    expect(interjections[0]).toMatchObject({
+      role: "system",
+      text: "Check the fallback.",
+      interjection: { customType: "advisor", severity: "concern" },
+    });
+  });
+});
+
 describe("task list updates", () => {
   it("updates one structured checklist instead of appending plan cards", () => {
     let session = appendUser(newSession("codex", "/tmp"), "fix it");
@@ -454,17 +503,26 @@ describe("applyHarnessEvent context", () => {
 describe("tool enrichment", () => {
   it("retains Edit and Write previews when a tool completes without repeating its input", () => {
     for (const [name, input] of [
-      ["Edit", { file_path: "/notes.md", old_string: "old", new_string: "new" }],
+      [
+        "Edit",
+        { file_path: "/notes.md", old_string: "old", new_string: "new" },
+      ],
       ["Write", { file_path: "/notes.md", content: "  content\n" }],
       ["Write", { file_path: "/notes.md", content: "" }],
     ] as const) {
       const preview = previewFromTool(name, input)!;
       let session = applyHarnessEvent(newSession("claude", "/repo"), {
-        type: "tool.started", callId: "edit", title: name, kind: "edit",
-        status: "pending", preview,
+        type: "tool.started",
+        callId: "edit",
+        title: name,
+        kind: "edit",
+        status: "pending",
+        preview,
       });
       session = applyHarnessEvent(session, {
-        type: "tool.updated", callId: "edit", status: "completed",
+        type: "tool.updated",
+        callId: "edit",
+        status: "completed",
       });
       expect(session.blocks[0].tool?.preview).toMatchObject(preview);
       expect(session.blocks[0].tool?.preview?.lines).toEqual(preview.lines);

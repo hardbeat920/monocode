@@ -677,6 +677,27 @@ describe("foldableWork", () => {
     expect(foldableWork(turn)).toEqual({ start: 3, end: 3 });
   });
 
+  it("uses an interjection as a hard boundary between answered work phases", () => {
+    const turn = items([
+      shell("before"),
+      note("answer", "The complete answer."),
+      {
+        id: "advisor",
+        role: "system",
+        text: "Check the fallback.",
+        interjection: { customType: "advisor", severity: "nit" },
+      },
+      shell("after"),
+      note("ack", "Checked."),
+    ]);
+    const fold = foldableWork(turn)!;
+
+    expect(fold).toEqual({ start: 3, end: 3 });
+    expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
+      "after",
+    ]);
+  });
+
   it("leaves an approval attached to earlier work outside the fold", () => {
     const turn = items([
       shell("pending", "pending", { requestId: 1 }),

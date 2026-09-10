@@ -102,11 +102,28 @@ export function applyHarnessEvent(
         ...session,
         ...(event.model ? { model: event.model } : {}),
         ...(event.modelSettings
-          ? { modelSettings: { ...session.modelSettings, ...event.modelSettings } }
+          ? {
+              modelSettings: {
+                ...session.modelSettings,
+                ...event.modelSettings,
+              },
+            }
           : {}),
       };
     case "status":
       return appendStatus(session, event.text);
+    case "interjection":
+      // A visible boundary the user must not miss, so unlike status it never
+      // deduplicates and never reads as turn lifecycle.
+      return appendBlock(session, {
+        id: crypto.randomUUID(),
+        role: "system",
+        text: event.text,
+        interjection: {
+          customType: event.customType,
+          ...(event.severity ? { severity: event.severity } : {}),
+        },
+      });
     default:
       return session;
   }

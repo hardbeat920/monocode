@@ -76,6 +76,53 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("keeps valid interjection chrome only on system blocks", () => {
+    const session = newSession("pi", "/tmp/project");
+    session.blocks = [
+      {
+        id: "i1",
+        role: "system",
+        text: "Review the fallback.",
+        interjection: { customType: " advisor ", severity: "blocker" },
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        text: "Not chrome",
+        interjection: { customType: "advisor", severity: "nit" },
+      },
+    ];
+
+    const persisted = sanitizeSessionForPersist(session);
+    expect(persisted.blocks[0]).toMatchObject({
+      role: "system",
+      text: "Review the fallback.",
+      interjection: { customType: "advisor", severity: "blocker" },
+    });
+    expect(persisted.blocks[1]?.interjection).toBeUndefined();
+  });
+
+  it("drops malformed interjection metadata without dropping its system row", () => {
+    const session = newSession("pi", "/tmp/project");
+    session.blocks = [
+      {
+        id: "i1",
+        role: "system",
+        text: "Still visible",
+        interjection: {
+          customType: " ",
+          severity: "unknown",
+        } as unknown as Block["interjection"],
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]).toEqual({
+      id: "i1",
+      role: "system",
+      text: "Still visible",
+    });
+  });
+
   it("keeps a second-opinion card on the user turn", () => {
     const session = newSession("codex", "/tmp/project");
     session.blocks = [

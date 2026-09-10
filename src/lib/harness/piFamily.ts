@@ -612,6 +612,64 @@ async function runTurn(
   }
 }
 
+/**
+ * OMP's advisor and extensions interject mid-turn. Frames marked display:true
+ * exist so clients can show them: structured advisor notes replace the raw
+ * advisory envelope when present, and even a blank body stays a labeled
+ * boundary so the segments around it never silently merge.
+ */
+function customMessageText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value
+    .flatMap((part) => {
+      const record = asRecord(part);
+      return record?.type === "text" && typeof record.text === "string"
+        ? [record.text]
+        : [];
+    })
+    .join("\n");
+}
+
+function interjectionFromCustomMessage(
+  message: Record<string, unknown>,
+): Extract<HarnessEvent, { type: "interjection" }> | undefined {
+  if (message.display !== true) return undefined;
+  const customType = stringField(message, "customType") ?? "custom";
+  if (customType === "advisor") {
+    const notes = asRecord(message.details)?.notes;
+    const bodies: string[] = [];
+    let severity: Extract<HarnessEvent, { type: "interjection" }>["severity"];
+    if (Array.isArray(notes)) {
+      for (const raw of notes) {
+        const note = asRecord(raw);
+        const body = stringField(note, "note");
+        if (!body) continue;
+        bodies.push(body);
+        // Keep the highest severity the retained notes actually carry.
+        const level = note?.severity;
+        if (level === "blocker") severity = "blocker";
+        else if (level === "concern" && severity !== "blocker") {
+          severity = "concern";
+        } else if (level === "nit" && !severity) severity = "nit";
+      }
+    }
+    if (bodies.length > 0) {
+      return {
+        type: "interjection",
+        text: bodies.join("\n\n"),
+        customType,
+        ...(severity ? { severity } : {}),
+      };
+    }
+  }
+  return {
+    type: "interjection",
+    text: customMessageText(message.content),
+    customType,
+  };
+}
+
 function handleFrame(
   flavor: PiFlavor,
   sessionId: string,
@@ -649,6 +707,20 @@ function handleFrame(
 
   const type = stringField(rec, "type");
   if (flavor.id === "omp") {
+    // OMP emits persisted custom_message entries on the live RPC stream as a
+    // message_start/message_end pair. Render the start once; consume the end
+    // and hidden custom messages so none can leak through a generic path.
+    if (type === "message_start" || type === "message_end") {
+      const message = asRecord(rec.message);
+      if (message?.role === "custom") {
+        if (type === "message_start") {
+          const interjection = interjectionFromCustomMessage(message);
+          if (interjection) live.onEvent(interjection);
+        }
+        return;
+      }
+    }
+    if (type === "advisor_yielded") return;
     if (type === "session_info_update") {
       const providerSessionId = stringField(rec, "sessionId");
       if (providerSessionId) {
