@@ -1401,7 +1401,15 @@ export default function App({
     }
 
     if (tab) {
-      const cwd = workspaceTabCwd(tab, sessionsRef.current);
+      const focusedSession = nextFocusedId
+        ? sessionsRef.current.find((session) => session.id === nextFocusedId)
+        : undefined;
+      const focusedTab = nextFocusedId
+        ? { ...tab, focusedId: nextFocusedId }
+        : tab;
+      const cwd =
+        focusedSession?.cwd ??
+        (focusedTab ? workspaceTabCwd(focusedTab, sessionsRef.current) : null);
       if (cwd && looksLikeProject(cwd)) {
         const normalized = normalizeProjectPath(cwd);
         if (!sameProjectPath(normalized, projectCwdRef.current)) {
