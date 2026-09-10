@@ -363,7 +363,7 @@ function MenuRow({
       }`}
     >
       <Icon className="size-3.5 shrink-0 text-content/55" strokeWidth={1.75} />
-      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      <span className="min-w-0 flex-1 truncate leading-label">{item.label}</span>
       {item.shortcut ? (
         <span className="shrink-0 text-[11px] text-content/40">
           {item.shortcut}

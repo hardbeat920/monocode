@@ -6,6 +6,8 @@
 @custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
 
 @theme {
+  /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
+  --leading-label: 1.4;
   --color-background-base: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness)
   );

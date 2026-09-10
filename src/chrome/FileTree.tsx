@@ -971,7 +971,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
             <FileTypeIcon name={entry.name} isDir={entry.isDir} isOpen={open} />
           </span>
           <span
-            className={`min-w-0 truncate ${
+            className={`min-w-0 truncate leading-label ${
               entry.ignored ? "italic text-content/50" : (gitColor ?? "")
             }`}
           >

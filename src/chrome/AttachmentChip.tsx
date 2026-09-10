@@ -46,7 +46,7 @@ export function AttachmentChip({ attachment, onRemove }: Props) {
             <span className="grid size-5 shrink-0 place-items-center">
               <FileTypeIcon name={attachment.name} isDir={false} size={16} />
             </span>
-            <span className="min-w-0 max-w-[140px] truncate text-[11px] leading-none text-content/80">
+            <span className="min-w-0 max-w-[140px] truncate text-[11px] leading-label text-content/80">
               {attachment.name}
             </span>
           </>

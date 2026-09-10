@@ -118,7 +118,7 @@ export function FileMentionPicker({
                   )}
                 </span>
                 <span
-                  className={`min-w-0 flex-1 truncate ${
+                  className={`min-w-0 flex-1 truncate leading-label ${
                     highlighted ? "text-mention" : ""
                   }`}
                 >
@@ -134,7 +134,7 @@ export function FileMentionPicker({
                     Note
                   </span>
                 ) : dir ? (
-                  <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] text-content/40">
+                  <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] leading-label text-content/40">
                     <MatchText
                       text={dir}
                       positions={file.positions.filter((pos) => pos < slash)}
