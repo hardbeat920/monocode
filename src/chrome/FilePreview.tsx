@@ -59,9 +59,16 @@ type Props = {
   status: Status;
   cwd?: string;
   onOpenFile?: (path: string) => void;
+  variant?: "card" | "popover";
 };
 
-export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
+export function FilePreview({
+  preview,
+  status,
+  cwd,
+  onOpenFile,
+  variant = "card",
+}: Props) {
   const path = preview.path;
   const filePath = path ? (resolveWorkspacePath(path, cwd) ?? path) : undefined;
   const fileName = preview.fileName || fileNameOf(path);
@@ -71,9 +78,9 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
         line.kind === "add" || line.kind === "del" || line.kind === "context",
     )
     .slice(0, MAX_PREVIEW_LINES);
-  const showDiff = lines.some(
-    (line) => line.kind === "add" || line.kind === "del",
-  );
+  const showDiff =
+    preview.contentOnly ||
+    lines.some((line) => line.kind === "add" || line.kind === "del");
   const added = preview.additions ?? 0;
   const deleted = preview.deletions ?? 0;
   const label = path
@@ -81,7 +88,13 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
     : fileName || preview.title || "File";
 
   return (
-    <div className="overflow-hidden rounded-[10px] border border-content/10 bg-content/6">
+    <div
+      className={
+        variant === "card"
+          ? "overflow-hidden rounded-[10px] border border-content/10 bg-content/6"
+          : "min-w-0"
+      }
+    >
       <div className="flex items-center gap-2 px-2.5 py-2">
         <FileTypeIcon name={fileName || "file"} isDir={false} />
         {filePath && onOpenFile ? (
@@ -118,12 +131,26 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
       {showDiff ? (
         <>
           <div className="h-px bg-content/10" />
-          <div>
+          <div
+            className={
+              variant === "popover"
+                ? "max-h-45 select-text overflow-auto overscroll-contain"
+                : undefined
+            }
+            tabIndex={variant === "popover" ? 0 : undefined}
+            aria-label={variant === "popover" ? "Preview lines" : undefined}
+          >
+            {preview.contentOnly && !lines.length ? (
+              <p className="px-3 py-2 font-mono text-xs text-content/50">
+                Empty file
+              </p>
+            ) : null}
             {lines.map((line, index) => (
               <PreviewLine
                 key={`${line.number ?? index}-${line.kind}-${index}`}
                 line={line}
                 showGutter
+                scrollable={variant === "popover"}
               />
             ))}
           </div>
@@ -136,9 +163,11 @@ export function FilePreview({ preview, status, cwd, onOpenFile }: Props) {
 function PreviewLine({
   line,
   showGutter,
+  scrollable = false,
 }: {
   line: ToolPreviewLine;
   showGutter: boolean;
+  scrollable?: boolean;
 }) {
   const bg =
     line.kind === "add"
@@ -161,7 +190,9 @@ function PreviewLine({
         : "text-transparent";
 
   return (
-    <div className={`relative flex items-baseline ${bg}`}>
+    <div
+      className={`relative flex items-baseline ${scrollable ? "w-max min-w-full" : ""} ${bg}`}
+    >
       <span className={`absolute inset-y-0 left-0 w-0.5 ${bar}`} />
       <span className="w-7 shrink-0 pr-1 text-right font-mono text-[10px] text-content/35">
         {line.number ?? " "}
@@ -173,7 +204,9 @@ function PreviewLine({
           {mark}
         </span>
       ) : null}
-      <span className="min-w-0 flex-1 truncate pr-2 font-mono text-[11px] leading-4.5">
+      <span
+        className={`min-w-0 flex-1 pr-2 font-mono text-[11px] leading-4.5 ${scrollable ? "whitespace-pre" : "truncate"}`}
+      >
         {highlight(line.text, line.kind === "context")}
       </span>
     </div>

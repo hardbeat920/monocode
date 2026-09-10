@@ -64,6 +64,10 @@ import { languageForPath, schemeExtensions } from "./editorChrome";
 import { preserveEditorViewport, replaceEditorDoc } from "./editorDoc";
 import { editorMatching, editorTyping, tryExpandEmmet } from "./editorEditing";
 import {
+  EditorSelectionMenu,
+  type EditorSelectionTarget,
+} from "./EditorSelectionMenu";
+import {
   diffActiveChunkIndex,
   diffLineStatsForView,
   diffNavigablePositions,
@@ -504,6 +508,8 @@ function CodeMirrorEditor({
   } | null>(null);
   const [commentTarget, setCommentTarget] =
     useState<DiffCommentComposerTarget | null>(null);
+  const [selectionTarget, setSelectionTarget] =
+    useState<EditorSelectionTarget | null>(null);
   activeRef.current = active;
   onDirtyChangeRef.current = onDirtyChange;
   onErrorCountChangeRef.current = onErrorCountChange;
@@ -682,6 +688,11 @@ function CodeMirrorEditor({
           ]),
         ),
         EditorView.updateListener.of((update) => {
+          if (update.selectionSet) {
+            setSelectionTarget(editorSelectionTarget(update.view, commentPath));
+          } else if (update.docChanged) {
+            setSelectionTarget(null);
+          }
           if (!update.docChanged) return;
           onDocChangeRef.current?.(update.state.doc.toString());
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
@@ -730,6 +741,7 @@ function CodeMirrorEditor({
       viewRef.current = null;
       savedDocumentRef.current = null;
       setChunkNav(null);
+      setSelectionTarget(null);
       view.destroy();
     };
   }, [lockOverscroll, path, showDiff, syncChunkNav]);
@@ -818,6 +830,10 @@ function CodeMirrorEditor({
     view.focus();
   }, [active, path]);
 
+  useEffect(() => {
+    if (!active) setSelectionTarget(null);
+  }, [active]);
+
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -840,8 +856,52 @@ function CodeMirrorEditor({
           onDismiss={() => setCommentTarget(null)}
         />
       ) : null}
+      <EditorSelectionMenu
+        selection={selectionTarget}
+        onDismiss={() => setSelectionTarget(null)}
+      />
     </>
   );
+}
+
+function editorSelectionTarget(
+  view: EditorView,
+  path: string,
+): EditorSelectionTarget | null {
+  if (view.state.selection.ranges.length !== 1) return null;
+  const selection = view.state.selection.main;
+  if (selection.empty) return null;
+
+  const text = view.state.sliceDoc(selection.from, selection.to);
+  if (!text.trim()) return null;
+  const coordinates = view.coordsAtPos(
+    selection.head,
+    selection.head === selection.from ? 1 : -1,
+  );
+  if (!coordinates) return null;
+
+  const viewport = view.scrollDOM.getBoundingClientRect();
+  if (
+    coordinates.bottom < viewport.top ||
+    coordinates.top > viewport.bottom ||
+    coordinates.right < viewport.left ||
+    coordinates.left > viewport.right
+  ) {
+    return null;
+  }
+
+  const lastSelectedPosition = Math.max(selection.from, selection.to - 1);
+  return {
+    path,
+    startLine: view.state.doc.lineAt(selection.from).number,
+    endLine: view.state.doc.lineAt(lastSelectedPosition).number,
+    anchor: new DOMRect(
+      coordinates.left,
+      coordinates.top,
+      Math.max(1, coordinates.right - coordinates.left),
+      Math.max(1, coordinates.bottom - coordinates.top),
+    ),
+  };
 }
 
 function DiffChunkNav({

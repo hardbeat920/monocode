@@ -160,7 +160,7 @@ function SkillList({
           >
             <span className="flex min-w-0 items-baseline gap-2">
               <span
-                className={`truncate font-mono text-[13px] ${
+                className={`truncate text-[13px] ${
                   highlighted ? "font-medium text-skill" : ""
                 }`}
               >

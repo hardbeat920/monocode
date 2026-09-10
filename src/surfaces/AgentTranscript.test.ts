@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Block } from "../lib/session";
@@ -14,8 +14,14 @@ function tool(id: string, approval?: Block["approval"]): Block {
   };
 }
 
-function render(blocks: Block[], busy = false) {
-  return renderToStaticMarkup(createElement(AgentTranscript, { blocks, busy }));
+function render(
+  blocks: Block[],
+  busy = false,
+  latestTurnAccessory?: ReactNode,
+) {
+  return renderToStaticMarkup(
+    createElement(AgentTranscript, { blocks, busy, latestTurnAccessory }),
+  );
 }
 
 describe("AgentTranscript collapsed work", () => {
@@ -53,5 +59,29 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("hidden-detail-approval");
     expect(markup).toContain("Please approve the command.");
     expect(markup.includes('aria-label="Show the work"')).toBe(false);
+  });
+
+  it("places a session accessory after the latest reply and before its action row", () => {
+    const markup = render(
+      [
+        {
+          id: "user",
+          role: "user",
+          text: "Change the files",
+          startedAt: 1_000,
+          durationMs: 500,
+        },
+        { id: "answer", role: "assistant", text: "Done changing files." },
+      ],
+      false,
+      createElement("aside", { "data-test-review": true }, "Changed files"),
+    );
+
+    expect(markup.indexOf("Done changing files.")).toBeLessThan(
+      markup.indexOf("Changed files"),
+    );
+    expect(markup.indexOf("Changed files")).toBeLessThan(
+      markup.indexOf('aria-label="Worked for 1s"'),
+    );
   });
 });

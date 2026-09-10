@@ -7,9 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-09-10
+
+### Added
+
+- GitLab joins the Inbox alongside GitHub and Linear. Connect GitLab.com or a self-managed instance from Settings, then browse and filter issues and merge requests, inspect details, comments, assignees, labels, and diffs, post comments, and start or discuss work without leaving MonoCode.
+- Sessions started from a GitHub Inbox item, or whose first prompt references a GitHub issue or pull request, remember that work item. Session cards link back to it, Inbox rows show related thread counts, and issue or pull request details link to every matching current or archived thread.
+- Settings → Skills lists file-based skills from MonoCode, the current project, personal folders, and supported harnesses. Filter or refresh the catalog, enable and disable individual skills, create a starter project or personal `SKILL.md`, and copy or reveal a skill's path. In #137 by @imnakul.
+- Edit and Write activity in agent transcripts shows the tool's exact diff or written content in an accessible hover and keyboard-focus preview; click through to open the full file or diff.
+- Right-click file tabs to open a file in its default app, reveal it in the system file manager, copy its name or absolute or project-relative path, or close the tab.
+- Selecting code in the editor opens an **Add to chat** action that inserts the file and selected line range into the composer without copying the code itself.
+- Press a mouse's middle button or scroll wheel on a workspace, file, or terminal tab to close it without selecting a background tab first. Existing unsaved-file and running-terminal confirmations still apply, and the sole blank workspace tab remains open. In #154 by @50BytesOfJohn.
+
+### Changed
+
+- The Settings model picker now uses MonoCode's theme-aware popover, with keyboard navigation, active-option announcements, and reliable focus restoration instead of the operating system's native select menu. In #149 by @ardevdevts.
+- Skill names, sources, paths, and creation controls use the same sans-serif interface typography as the rest of Settings.
+
 ### Fixed
 
-- Prevented truncated labels in tabs and context menus from clipping the bottoms of letters on Windows.
+- Renaming a session remains editable when its agent is working, including when the turn starts after rename mode opens. In #143 by @yankawai.
+- Disabling a project skill allows an enabled personal skill with the same name to take its place; disabling either path no longer hides the wrong skill.
+- Empty sessions update their displayed project label immediately when the tab group's custom label is changed or cleared.
 
 ## [0.1.41] - 2026-09-09
 
@@ -644,7 +663,14 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.35...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.42...HEAD
+[0.1.42]: https://github.com/hardbeat920/monocode/compare/v0.1.41...v0.1.42
+[0.1.41]: https://github.com/hardbeat920/monocode/compare/v0.1.40...v0.1.41
+[0.1.40]: https://github.com/hardbeat920/monocode/compare/v0.1.39...v0.1.40
+[0.1.39]: https://github.com/hardbeat920/monocode/compare/v0.1.38...v0.1.39
+[0.1.38]: https://github.com/hardbeat920/monocode/compare/v0.1.37...v0.1.38
+[0.1.37]: https://github.com/hardbeat920/monocode/compare/v0.1.36...v0.1.37
+[0.1.36]: https://github.com/hardbeat920/monocode/compare/v0.1.35...v0.1.36
 [0.1.35]: https://github.com/hardbeat920/monocode/compare/v0.1.34...v0.1.35
 [0.1.34]: https://github.com/hardbeat920/monocode/compare/v0.1.33...v0.1.34
 [0.1.33]: https://github.com/hardbeat920/monocode/compare/v0.1.32...v0.1.33

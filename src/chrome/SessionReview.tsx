@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "./icons";
+import { ChevronDown, ChevronRight, FileDiff } from "./icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   keepSessionChanges,
@@ -80,16 +80,28 @@ export function SessionReview({
   }, [enabled, load, sessionId, busy]);
 
   useEffect(() => {
-    if (files.length <= 1) setExpanded(false);
+    if (files.length <= 3) setExpanded(false);
   }, [files.length]);
 
-  if (files.length === 0) return null;
+  useEffect(() => {
+    if (busy) setFiles([]);
+  }, [busy]);
 
-  const disabled = busy || acting != null;
-  const many = files.length > 1;
-  const first = files[0];
-  if (!first) return null;
+  // The card represents the result of a turn. Keep it out of the live turn,
+  // then refresh and reveal it once the turn has settled.
+  if (busy || files.length === 0) return null;
+
+  const disabled = acting != null;
   const canUndoAll = !undoLocked && files.every((file) => file.undoable);
+  const visibleFiles = expanded ? files : files.slice(0, 3);
+  const hiddenFileCount = files.length - visibleFiles.length;
+  const totals = files.reduce(
+    (sum, file) => ({
+      additions: sum.additions + file.additions,
+      deletions: sum.deletions + file.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
 
   const run = (action: "keep" | "undo") => {
     if (disabled) return;
@@ -111,38 +123,24 @@ export function SessionReview({
   };
 
   return (
-    <div className="px-2" data-session-review-shell>
+    <div className="px-4 pt-1 pb-2 font-sans" data-session-review-shell>
       <div
-        className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
+        className="overflow-hidden rounded-xl border border-content/12 bg-content/3"
         data-session-review
       >
-        <div className="flex min-w-0 items-center gap-2">
-          {many ? (
-            <button
-              type="button"
-              title={expanded ? "Collapse files" : "Expand files"}
-              aria-expanded={expanded}
-              onClick={() => setExpanded((open) => !open)}
-              className="flex min-w-0 flex-1 items-center gap-1 py-0.5 text-left text-content/70 hover:text-content"
-            >
-              {expanded ? (
-                <ChevronDown className="size-3.5 shrink-0" strokeWidth={1.75} />
-              ) : (
-                <ChevronRight
-                  className="size-3.5 shrink-0"
-                  strokeWidth={1.75}
-                />
-              )}
-              <span className="truncate text-[12px]">{files.length} Files</span>
-            </button>
-          ) : (
-            <FileLabel
-              file={first}
-              sessionId={sessionId}
-              cwd={cwd}
-              onOpenDiff={onOpenDiff}
-            />
-          )}
+        <div className="flex min-w-0 items-center gap-2.5 px-3 py-2.5">
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-content/8 text-content/55">
+            <FileDiff className="size-4" strokeWidth={1.75} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[12px] font-medium text-content/80">
+              Changed {files.length} {files.length === 1 ? "file" : "files"}
+            </div>
+            <div className="flex items-center gap-1.5 font-mono text-[11px] font-semibold -mt-0.5">
+              <span className="text-emerald-400">+{totals.additions}</span>
+              <span className="text-red-400">-{totals.deletions}</span>
+            </div>
+          </div>
           <div className="flex shrink-0 items-center gap-0.5">
             <button
               type="button"
@@ -155,74 +153,66 @@ export function SessionReview({
               }
               disabled={disabled || !canUndoAll}
               onClick={() => run("undo")}
-              className="h-6 rounded-md px-1.5  text-[11px] text-content/55 hover:bg-content/10 hover:text-content disabled:opacity-40"
+              className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content disabled:opacity-35"
             >
-              Undo All
+              Undo
             </button>
             <button
               type="button"
-              title="Keep all session changes"
+              title="Keep all session changes and dismiss this card"
               disabled={disabled}
               onClick={() => run("keep")}
-              className="h-6 rounded-md px-1.5  text-[11px] text-content/55 hover:bg-content/10 hover:text-content disabled:opacity-40"
+              className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content disabled:opacity-35"
             >
-              Keep All
+              Keep
             </button>
             <button
               type="button"
               title="Review changes"
               onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
-              className="h-6 rounded-md bg-content/15 px-2 text-[11px] text-content/80 hover:bg-content/20 hover:text-content"
+              className="h-7 rounded-md border border-content/12 bg-content/8 px-2.5 text-[11px] font-medium text-content/75 hover:bg-content/12 hover:text-content"
             >
               Review
             </button>
           </div>
         </div>
-        {many && expanded ? (
-          <ul className="scrollbar-none mt-1 max-h-40 overflow-y-auto">
-            {files.map((file) => (
-              <li key={file.relative}>
-                <FileRow
-                  file={file}
-                  sessionId={sessionId}
-                  cwd={cwd}
-                  onOpenDiff={onOpenDiff}
-                />
-              </li>
-            ))}
-          </ul>
+        <ul
+          className={`scrollbar-none border-t border-content/10 py-1 ${
+            expanded ? "max-h-64 overflow-y-auto" : ""
+          }`}
+        >
+          {visibleFiles.map((file) => (
+            <li key={file.relative}>
+              <FileRow
+                file={file}
+                sessionId={sessionId}
+                cwd={cwd}
+                onOpenDiff={onOpenDiff}
+              />
+            </li>
+          ))}
+        </ul>
+        {files.length > 3 ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((open) => !open)}
+            className="flex h-8 w-full items-center gap-1.5 border-t border-content/10 px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
+          >
+            {expanded ? (
+              <ChevronDown className="size-3.5" strokeWidth={1.75} />
+            ) : (
+              <ChevronRight className="size-3.5" strokeWidth={1.75} />
+            )}
+            <span>
+              {expanded
+                ? "Show fewer files"
+                : `Show ${hiddenFileCount} more ${hiddenFileCount === 1 ? "file" : "files"}`}
+            </span>
+          </button>
         ) : null}
       </div>
     </div>
-  );
-}
-
-function FileLabel({
-  file,
-  sessionId,
-  cwd,
-  onOpenDiff,
-}: {
-  file: CheckpointFile;
-  sessionId: string;
-  cwd: string;
-  onOpenDiff: (
-    path?: string,
-    session?: { sessionId: string; cwd: string },
-  ) => void;
-}) {
-  const name = basename(file.relative);
-  return (
-    <button
-      type="button"
-      title={file.relative}
-      onClick={() => onOpenDiff(file.path, { sessionId, cwd })}
-      className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left text-content/80 hover:text-content"
-    >
-      <FileTypeIcon name={name} isDir={false} size={14} />
-      <span className="min-w-0 truncate font-mono text-[12px]">{name}</span>
-      <DiffCounts file={file} />
-    </button>
   );
 }
 
@@ -246,11 +236,11 @@ function FileRow({
       type="button"
       title={file.relative}
       onClick={() => onOpenDiff(file.path, { sessionId, cwd })}
-      className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-1 text-left text-content/80 hover:bg-content/10 hover:text-content"
+      className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-content/65 hover:bg-content/5 hover:text-content"
     >
-      <FileTypeIcon name={name} isDir={false} size={16} />
+      <FileTypeIcon name={name} isDir={false} size={15} />
       <span className="min-w-0 flex-1 truncate font-mono text-[12px]">
-        {name}
+        {file.relative}
       </span>
       <DiffCounts file={file} />
     </button>
@@ -265,16 +255,10 @@ function DiffCounts({ file }: { file: CheckpointFile }) {
       </span>
     );
   }
-  if (file.additions <= 0 && file.deletions <= 0) return null;
   return (
-    <span className="shrink-0 font-mono text-[11px] font-semibold">
-      {file.additions > 0 ? (
-        <span className="text-emerald-400">+{file.additions}</span>
-      ) : null}
-      {file.additions > 0 && file.deletions > 0 ? " " : null}
-      {file.deletions > 0 ? (
-        <span className="text-red-400">-{file.deletions}</span>
-      ) : null}
+    <span className="flex shrink-0 gap-2 font-mono text-[11px] font-semibold">
+      <span className="text-emerald-400">+{file.additions}</span>
+      <span className="text-red-400">-{file.deletions}</span>
     </span>
   );
 }

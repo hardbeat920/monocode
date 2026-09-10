@@ -1316,11 +1316,6 @@ html.theme-light .popover-backdrop {
   }
 }
 
-[data-session-review-shell] + [data-message-queue] [data-message-queue-card] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
 /* Graph node cutouts so lane strokes do not show through the circles. */
 .git-history-item svg {
   display: block;

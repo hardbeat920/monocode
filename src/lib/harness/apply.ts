@@ -679,6 +679,7 @@ function samePreview(a?: ToolPreview, b?: ToolPreview): boolean {
     a.fileName === b.fileName &&
     a.additions === b.additions &&
     a.deletions === b.deletions &&
+    a.contentOnly === b.contentOnly &&
     a.startLine === b.startLine &&
     a.output === b.output &&
     a.lines === b.lines
@@ -692,6 +693,7 @@ function fillPreview(
   title?: string,
 ): ToolPreview | undefined {
   if (
+    preview?.contentOnly ||
     preview?.lines?.some((line) => line.kind === "add" || line.kind === "del")
   ) {
     return preview;

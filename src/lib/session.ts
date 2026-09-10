@@ -112,6 +112,8 @@ export type ToolPreview = {
   startLine?: number;
   additions?: number;
   deletions?: number;
+  /** Write supplied new contents without the previous file to compare. */
+  contentOnly?: boolean;
   query?: string;
   lines?: ToolPreviewLine[];
   output?: string;
