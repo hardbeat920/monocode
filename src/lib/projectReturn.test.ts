@@ -43,15 +43,15 @@ describe("project return memory", () => {
     const alpha = reconcileProjectReturn({ ...state, activeTabId: "tab-a2" });
     const beta = reconcileProjectReturn({ ...state, memory: alpha });
     expect([...beta]).toEqual([
-      ["/alpha", "tab-a2"],
-      ["/beta", "tab-b2"],
+      ["/alpha", "a2"],
+      ["/beta", "b2"],
     ]);
     const changed = reconcileProjectReturn({
       ...state,
       memory: beta,
       activeTabId: "tab-a1",
     });
-    expect(changed.get("/alpha")).toBe("tab-a1");
+    expect(changed.get("/alpha")).toBe("a1");
     const history = recordTabVisit(emptyTabVisitHistory("tab-a2"), "tab-b2");
     const back = tabVisitBack(history);
     expect(back).not.toBeNull();
@@ -60,8 +60,8 @@ describe("project return memory", () => {
       memory: changed,
       activeTabId: back?.current ?? "",
     });
-    expect(returned.get("/alpha")).toBe("tab-a2");
-    expect(returned.get("/beta")).toBe("tab-b2");
+    expect(returned.get("/alpha")).toBe("a2");
+    expect(returned.get("/beta")).toBe("b2");
     expect(state.memory.size).toBe(0);
     expect(alpha.size).toBe(1);
   });
@@ -81,13 +81,13 @@ describe("project return memory", () => {
   it("prunes removed and retargeted tabs without changing the input map", () => {
     const state = workspace();
     const memory = new Map([
-      ["/alpha", "tab-a2"],
+      ["/alpha", "a2"],
       ["/gone", "missing"],
-      ["/beta", "tab-b2"],
+      ["/beta", "b2"],
     ]);
     state.sessions[1].cwd = "/gamma";
     expect([...reconcileProjectReturn({ ...state, memory })]).toEqual([
-      ["/beta", "tab-b2"],
+      ["/beta", "b2"],
     ]);
     expect(memory.size).toBe(3);
   });
@@ -108,7 +108,7 @@ describe("project return memory", () => {
     });
     expect(
       planProjectReturn({ ...state, tabs, memory, projectPath: "/gamma" }),
-    ).toEqual({ action: "activate", tabId: tab.id });
+    ).toEqual({ action: "activate", tabId: tab.id, paneId: "editor" });
     expect(tab.focusedId).toBe("editor");
   });
 
@@ -116,10 +116,10 @@ describe("project return memory", () => {
     const state = workspace();
     state.sessions[1].cwd = "C:/Work/Alpha/";
     const memory = reconcileProjectReturn({ ...state, activeTabId: "tab-a2" });
-    expect(memory.get("c:/work/alpha")).toBe("tab-a2");
+    expect(memory.get("c:/work/alpha")).toBe("a2");
     expect(
       planProjectReturn({ ...state, memory, projectPath: "c:\\work\\ALPHA" }),
-    ).toEqual({ action: "activate", tabId: "tab-a2" });
+    ).toEqual({ action: "activate", tabId: "tab-a2", paneId: "a2" });
     expect(
       planProjectReturn({ ...state, memory, projectPath: "/elsewhere/Alpha" }),
     ).toEqual({ action: "create" });
@@ -128,8 +128,8 @@ describe("project return memory", () => {
   it("validates the result of actual session removal and preserves close replacement", () => {
     const state = workspace();
     const memory = new Map([
-      ["/alpha", "tab-a2"],
-      ["/beta", "tab-b2"],
+      ["/alpha", "a2"],
+      ["/beta", "b2"],
     ]);
     const removed = removeSessionFromWorkspace({
       ...state,
@@ -140,7 +140,7 @@ describe("project return memory", () => {
     const next = reconcileProjectReturn({ ...removed, memory });
     expect(
       planProjectReturn({ ...removed, memory: next, projectPath: "/alpha" }),
-    ).toEqual({ action: "activate", tabId: "tab-a1" });
+    ).toEqual({ action: "activate", tabId: "tab-a1", paneId: "a1" });
     const activeRemoved = removeSessionFromWorkspace({
       ...state,
       activeTabId: "tab-a2",
@@ -150,7 +150,7 @@ describe("project return memory", () => {
     });
     expect(
       reconcileProjectReturn({ ...activeRemoved, memory }).get("/alpha"),
-    ).toBe(activeRemoved.activeTabId);
+    ).toBe("a1");
   });
 
   it("returns to the focused session after actual pane placement", () => {
@@ -169,7 +169,7 @@ describe("project return memory", () => {
     if (!placed) throw new Error("Expected placed workspace");
     const memory = reconcileProjectReturn({
       ...placed,
-      memory: new Map([["/alpha", "tab-a2"]]),
+      memory: new Map([["/alpha", "a2"]]),
     });
     const beta = reconcileProjectReturn({
       ...placed,
@@ -182,7 +182,7 @@ describe("project return memory", () => {
       activeTabId: "tab-b2",
       projectPath: "/alpha",
     });
-    expect(decision).toEqual({ action: "activate", tabId: "tab-a1" });
+    expect(decision).toEqual({ action: "activate", tabId: "tab-a1", paneId: "a2" });
     expect(placed.tabs.find((tab) => tab.id === "tab-a1")?.focusedId).toBe(
       "a2",
     );
@@ -190,7 +190,7 @@ describe("project return memory", () => {
 
   it("drops a removed project's choice rather than reopening it", () => {
     const state = workspace();
-    const memory = new Map([["/alpha", "tab-a2"]]);
+    const memory = new Map([["/alpha", "a2"]]);
     const remaining = {
       ...state,
       tabs: state.tabs.filter((tab) => tab.id.startsWith("tab-b")),
@@ -219,6 +219,7 @@ describe("project selection", () => {
     expect(planProjectReturn({ ...state, projectPath: "/alpha" })).toEqual({
       action: "activate",
       tabId: "tab-a1",
+      paneId: "a1",
     });
   });
 
@@ -231,7 +232,7 @@ describe("project selection", () => {
   it("selects the first destination tab without a remembered choice", () => {
     expect(
       planProjectReturn({ ...workspace(), projectPath: "/alpha" }),
-    ).toEqual({ action: "activate", tabId: "tab-a1" });
+    ).toEqual({ action: "activate", tabId: "tab-a1", paneId: "a1" });
   });
 
   it("prefers an existing destination over a blank source", () => {
@@ -240,18 +241,20 @@ describe("project selection", () => {
     expect(planProjectReturn({ ...state, projectPath: "/alpha" })).toEqual({
       action: "activate",
       tabId: "tab-a1",
+      paneId: "a1",
     });
   });
 
   it("returns to A2 and B2 independently of tab order", () => {
     const state = workspace();
     state.memory = new Map([
-      ["/alpha", "tab-a2"],
-      ["/beta", "tab-b2"],
+      ["/alpha", "a2"],
+      ["/beta", "b2"],
     ]);
     expect(planProjectReturn({ ...state, projectPath: "/alpha" })).toEqual({
       action: "activate",
       tabId: "tab-a2",
+      paneId: "a2",
     });
     expect(
       planProjectReturn({
@@ -259,14 +262,14 @@ describe("project selection", () => {
         activeTabId: "tab-a2",
         projectPath: "/beta",
       }),
-    ).toEqual({ action: "activate", tabId: "tab-b2" });
+    ).toEqual({ action: "activate", tabId: "tab-b2", paneId: "b2" });
     expect(
       planProjectReturn({
         ...state,
         tabs: [...state.tabs].reverse(),
         projectPath: "/alpha",
       }),
-    ).toEqual({ action: "activate", tabId: "tab-a2" });
+    ).toEqual({ action: "activate", tabId: "tab-a2", paneId: "a2" });
   });
 
   it("reuses a blank only when the destination has no open tab", () => {

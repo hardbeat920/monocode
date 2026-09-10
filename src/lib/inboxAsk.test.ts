@@ -149,7 +149,7 @@ describe("inbox sessions", () => {
     expect(parsed.projectReturnTargets).toEqual([]);
     expect(
       hydrateWorkspaceSnapshot(parsed, new Map())?.projectReturnMemory?.get(project.cwd),
-    ).toBe(tab.id);
+    ).toBe(project.id);
     expect(
       parseWorkspaceSnapshot({
         ...legacy,

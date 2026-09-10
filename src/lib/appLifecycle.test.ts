@@ -56,8 +56,8 @@ describe("project choices through lifecycle saves", () => {
       id: `tab-${session.id}`,
     }));
     const memory = new Map([
-      ["/alpha", "tab-a2"],
-      ["/beta", "tab-b2"],
+      ["/alpha", "a2"],
+      ["/beta", "b2"],
     ]);
     return {
       sessions,
@@ -139,8 +139,8 @@ describe("project choices through lifecycle saves", () => {
     );
     try {
       await handleQuitRequested();
-      expect(lastSavedMemory()?.get("/alpha")).toBe("tab-a1");
-      expect(lastSavedMemory()?.get("/beta")).toBe("tab-b2");
+      expect(lastSavedMemory()?.get("/alpha")).toBe("a1");
+      expect(lastSavedMemory()?.get("/beta")).toBe("b2");
     } finally {
       release();
     }

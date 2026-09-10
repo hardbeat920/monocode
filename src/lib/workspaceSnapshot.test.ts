@@ -41,8 +41,8 @@ describe("project return snapshots", () => {
     return {
       ...collectWorkspaceSnapshot(tabs, sessions, "tab-b2", "/beta", new Map()),
       projectReturnTargets: [
-        { projectPath: "/alpha", tabId: "tab-a2" },
-        { projectPath: "/beta", tabId: "tab-b2" },
+        { projectPath: "/alpha", tabId: "a2" },
+        { projectPath: "/beta", tabId: "b2" },
       ],
     };
   }
@@ -58,8 +58,8 @@ describe("project return snapshots", () => {
       id: `tab-${session.id}`,
     }));
     const memory = new Map([
-      ["/alpha", "tab-a2"],
-      ["/beta", "tab-b2"],
+      ["/alpha", "a2"],
+      ["/beta", "b2"],
       ["/gone", "missing"],
     ]);
     const snapshot = collectWorkspaceSnapshot(
@@ -71,23 +71,23 @@ describe("project return snapshots", () => {
     );
     const restored = hydrateWorkspaceSnapshot(snapshot, new Map());
     expect([...(restored?.projectReturnMemory ?? [])]).toEqual([
-      ["/alpha", "tab-a2"],
-      ["/beta", "tab-b2"],
+      ["/alpha", "a2"],
+      ["/beta", "b2"],
     ]);
     expect(memory.size).toBe(3);
   });
 
   it("restores both project choices, not just the active tab", () => {
     const restored = hydrateWorkspaceSnapshot(saved(), new Map());
-    expect(restored?.projectReturnMemory?.get("/alpha")).toBe("tab-a2");
-    expect(restored?.projectReturnMemory?.get("/beta")).toBe("tab-b2");
+    expect(restored?.projectReturnMemory?.get("/alpha")).toBe("a2");
+    expect(restored?.projectReturnMemory?.get("/beta")).toBe("b2");
   });
 
   it("loads old snapshots and seeds only the active project", () => {
     const { projectReturnTargets: _targets, ...old } = saved();
     const restored = hydrateWorkspaceSnapshot(old, new Map());
     expect([...(restored?.projectReturnMemory ?? [])]).toEqual([
-      ["/beta", "tab-b2"],
+      ["/beta", "b2"],
     ]);
   });
 
@@ -100,14 +100,14 @@ describe("project return snapshots", () => {
         42,
         {},
         { projectPath: "/alpha", tabId: 12 },
-        { projectPath: "/alpha/", tabId: "tab-a1" },
-        { projectPath: "/alpha", tabId: "tab-a2" },
+        { projectPath: "/alpha/", tabId: "a1" },
+        { projectPath: "/alpha", tabId: "a2" },
         { projectPath: "/gone", tabId: "missing" },
-        { projectPath: "/beta", tabId: "tab-a1" },
+        { projectPath: "/beta", tabId: "a1" },
       ],
     });
     expect(parsed?.projectReturnTargets).toEqual([
-      { projectPath: "/alpha", tabId: "tab-a2" },
+      { projectPath: "/alpha", tabId: "a2" },
     ]);
   });
 
@@ -118,7 +118,7 @@ describe("project return snapshots", () => {
       hydrateWorkspaceSnapshot(raw, new Map())?.projectReturnMemory?.get(
         "/beta",
       ),
-    ).toBe("tab-b2");
+    ).toBe("b2");
   });
 
   it.each([null, "broken", {}])(
@@ -130,7 +130,7 @@ describe("project return snapshots", () => {
       );
       expect(restored?.tabs).toHaveLength(4);
       expect([...(restored?.projectReturnMemory ?? [])]).toEqual([
-        ["/beta", "tab-b2"],
+        ["/beta", "b2"],
       ]);
     },
   );
@@ -141,7 +141,7 @@ describe("project return snapshots", () => {
       new Map([["a2", chat("a2", "/moved")]]),
     );
     expect(restored?.projectReturnMemory?.has("/alpha")).toBe(false);
-    expect(restored?.projectReturnMemory?.get("/beta")).toBe("tab-b2");
+    expect(restored?.projectReturnMemory?.get("/beta")).toBe("b2");
   });
 });
 

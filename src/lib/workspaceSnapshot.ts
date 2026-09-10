@@ -51,7 +51,7 @@ export type WorkspaceSnapshot = {
   activeTabId: string;
   projectCwd: string;
   projectTerminals: ProjectTerminalDock[];
-  projectReturnTargets?: { projectPath: string; tabId: string }[];
+  projectReturnTargets?: { projectPath: string; tabId?: string; paneId?: string }[];
 };
 
 export function collectWorkspaceSnapshot(
@@ -85,9 +85,9 @@ function withProjectReturnTargets(
   });
   return {
     ...snapshot,
-    projectReturnTargets: [...valid].map(([projectPath, tabId]) => ({
+    projectReturnTargets: [...valid].map(([projectPath, paneId]) => ({
       projectPath,
-      tabId,
+      tabId: paneId,
     })),
   };
 }
@@ -97,15 +97,16 @@ function parseProjectReturnTargets(raw: unknown): ProjectReturnMemory {
   if (!Array.isArray(raw)) return memory;
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    if (
-      !("projectPath" in entry) ||
-      typeof entry.projectPath !== "string" ||
-      !entry.projectPath.trim() ||
-      !("tabId" in entry) ||
-      typeof entry.tabId !== "string" ||
-      !entry.tabId.trim()
-    ) continue;
-    memory.set(pathKey(entry.projectPath), entry.tabId);
+    if (!("projectPath" in entry)) continue;
+    const projectPath = (entry as { projectPath?: unknown }).projectPath;
+    if (typeof projectPath !== "string" || !projectPath.trim()) continue;
+
+    const remembered =
+      (entry as { paneId?: unknown }).paneId ??
+      (entry as { tabId?: unknown }).tabId;
+    if (typeof remembered !== "string" || !remembered.trim()) continue;
+
+    memory.set(pathKey(projectPath), remembered.trim());
   }
   return memory;
 }
