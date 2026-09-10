@@ -142,8 +142,8 @@ function parseWorkspaceFileReference(
   }
 
   value = slash(value);
-  // Check the decoded path too: /%2Fhost and encoded backslashes are network paths.
-  if (decodeUrl && !fileUrl && value.startsWith("//")) return undefined;
+  // File URLs can also decode to UNC paths. Windows accepts mixed separators.
+  if ((decodeUrl || fileUrl) && /^[\\/]{2}/.test(value)) return undefined;
   // A bare filename's :line[:column] suffix must be removed before this check.
   if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[A-Za-z]:\//.test(value))
     return undefined;

@@ -60,6 +60,7 @@ describe("workspace file references", () => {
     "https://example.com/src/main.ts",
     "//example.com/main.ts",
     "/%2Fhost/share/file.md",
+    "/%5Chost/share/file.md",
     "%2f%2fhost/share/file.md:12",
     "%5C%5Chost/share/file.md",
     "\\\\host\\share\\file.md",
@@ -86,6 +87,23 @@ describe("workspace file references", () => {
     expect(resolveWorkspacePath("main.ts:12:3", "/repo")).toBe("/repo/main.ts");
     expect(resolveWorkspacePath("/%2Fhost/share/file.md", "/repo")).toBe(
       "/%2Fhost/share/file.md",
+    );
+  });
+
+  it.each([
+    "file://localhost/%2Fhost/share/file.md",
+    "file://localhost/%5Chost/share/file.md",
+    "file:////host/share/file.md",
+    "file:///%2fhost/share/file.md:12",
+    "file://%5C%5Chost/share/file.md",
+  ])("rejects a network file URL through either resolver: %s", (href) => {
+    expect(resolveWorkspaceFileReference(href, "/repo")).toBeUndefined();
+    expect(resolveWorkspacePath(href, "/repo")).toBeUndefined();
+  });
+
+  it("keeps native UNC filesystem paths separate from untrusted URLs", () => {
+    expect(resolveWorkspacePath("//server/share/file.md", "C:/repo")).toBe(
+      "//server/share/file.md",
     );
   });
 });

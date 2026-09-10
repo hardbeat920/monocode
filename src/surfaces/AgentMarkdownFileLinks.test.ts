@@ -133,6 +133,25 @@ describe("markdown file navigation", () => {
     });
   });
 
+  it.each([
+    "[Source](file://localhost/%2Fhost/share/file.md)",
+    "`file://localhost/%2Fhost/share/file.md`",
+    "`file://localhost/%5Chost/share/file.md`",
+    "```12:16:file://localhost/%2Fhost/share/file.md\nexample\n```",
+  ])(
+    "does not pass a network file URL to the native file opener: %s",
+    async (text) => {
+      await render(text);
+      expect(
+        container.querySelector('code[role="link"], .markdown-code-path-link'),
+      ).toBeNull();
+      for (const link of container.querySelectorAll<HTMLAnchorElement>("a")) {
+        await act(async () => link.click());
+      }
+      expect(onOpenFile).not.toHaveBeenCalled();
+    },
+  );
+
   it("opens a code citation at the first displayed source line", async () => {
     await render("```12:16:src/main.ts\nexport const answer = 42;\n```");
     const link = container.querySelector<HTMLButtonElement>(
