@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-09-09
+
+### Added
+
+- **Mavis / MiniMax Code (mcode) provider.** Spawns `mcode acp` over stdio using the existing Agent Client Protocol client. `mcode:minimax-m3` (native id `minimax/MiniMax-M3`) is registered as a first-class model in the picker alongside claude / codex / cursor / grok / opencode / pi / omp / fx; the user only needs `mcode` installed and `mcode login` done. Auto-approve of `session/request_permission` matches `mcode`'s default code mode. Tauri command `harness_resolve_mcode` mirrors the `harness_resolve_fx` pattern; resolves `~/.minimax-code/bin/mcode` first, then PATH.
+- **Glass UI on Linux + light mode.** `backdrop-filter: blur(var(--sidebar-blur)) saturate(140%)` is now applied to the sidebar and body pane; the same blur-radius slider that drives macOS/Windows native vibrancy publishes `--sidebar-blur` to the document root, so it also drives the CSS blur on Linux. The Main pane glass / Sidebar opacity / Blur radius controls are no longer disabled in light mode. A `@supports not (backdrop-filter)` fallback paints a layered noise + radial-light + rim-edge that reads as frosted glass on compositors that can't blur. `body-glass` no longer multiplies sidebar opacity by 100%; it now rides at 78% so the chat area sits a touch more translucent than the sidebar.
+- **pnpm with hoisted peers.** `.npmrc` adds `shamefully-hoist=true`, `auto-install-peers=true`, `strict-peer-dependencies=false` so the CodeMirror core packages (`@codemirror/state`, `view`, `language`, `autocomplete`, `commands`) and `mermaid` are reachable from `src/` on pnpm's strict layout.
+
+### Changed
+
+- **Cross-platform Tauri base config.** Removed the macOS-only `titleBarStyle: "Overlay"`, `hiddenTitle: true`, and `transparent: true` from `src-tauri/tauri.conf.json` — these were leaking into Linux dev builds and combining with the runtime `set_decorations(false)` to make the GTK compositor eat mouse events before React saw them. Restored them in a new `src-tauri/tauri.macos.conf.json` so the macOS look is unchanged.
+- **Tauri plugin-updater sync.** `@tauri-apps/plugin-updater` bumped to `^2.11.0` and `tauri-plugin-updater` (Rust) to `2.11.0` to clear the `pnpm tauri build` "mismatched Tauri packages" error.
+
+### Fixed
+
+- `pnpm tauri dev` on Linux now actually delivers clicks to the WebView (the original report that "hue, sidebar opacity, blur radius, saturation, main pane glass don't respond" on this fork). Root cause was the unaltered macOS base config; fixed by the cross-platform split above.
+- Favorites tab now actually shows the mcode model after starring it. Root cause was `HARNESS_ORDER` in `src/lib/models.ts` not including `mcode`, so the master `allModels()` index used by `findModel()` dropped the saved id.
+
 ## [0.1.41] - 2026-09-09
 
 ### Added

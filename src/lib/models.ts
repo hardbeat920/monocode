@@ -170,6 +170,12 @@ export const MODELS: AgentModel[] = [
     name: "GLM 5.2 Fast",
     nativeId: "zai/glm-5.2-fast",
   },
+  {
+    id: "mcode:minimax-m3",
+    harness: "mcode",
+    name: "MiniMax-M3",
+    nativeId: "minimax/MiniMax-M3",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -181,6 +187,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   pi: "pi:default",
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
+  mcode: "mcode:minimax-m3",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -206,6 +213,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "pi",
   "omp",
   "fx",
+  "mcode",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];

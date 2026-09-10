@@ -175,6 +175,12 @@ export function applyThemeTint(hue: number, saturation: number) {
 export function initAppearance() {
   document.documentElement.classList.toggle("is-mac", IS_MAC);
   document.documentElement.classList.toggle("has-native-glass", HAS_NATIVE_GLASS);
+  // Publish the saved blur to CSS before the first paint so the glass
+  // surfaces have the right backdrop-filter radius from the start.
+  document.documentElement.style.setProperty(
+    "--sidebar-blur",
+    `${loadSidebarBlur()}px`,
+  );
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemePreference(loadThemePreference());
   watchSystemColorScheme();
@@ -297,7 +303,11 @@ export function applySidebarBlur(value: number) {
   const next = Math.round(
     clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX),
   );
+  // macOS/Windows: the OS owns the blur. Linux: drive the CSS
+  // `backdrop-filter` from the same slider so the setting actually
+  // changes the visible blur there too.
   void invoke("set_window_background_blur", { radius: next });
+  document.documentElement.style.setProperty("--sidebar-blur", `${next}px`);
   return next;
 }
 
