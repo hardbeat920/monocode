@@ -4,6 +4,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newEditorPane, newFileTab } from "../lib/layout";
+import { invalidateWatchedFiles } from "../lib/fileWatch";
 import { FilePane } from "./FilePane";
 
 const invoke = vi.hoisted(() =>
@@ -112,6 +113,32 @@ describe("file pane source navigation", () => {
           view.state.doc.lineAt(view.state.selection.main.head).number,
         ).toBe(3),
       ),
+    );
+  });
+
+  it("reapplies the requested location when a pending file reload adds its line", async () => {
+    invoke.mockResolvedValueOnce("first line");
+    const view = await render("/repo/growing.txt", 3);
+    await act(async () =>
+      vi.waitFor(() => {
+        expect(view.state.doc.lines).toBe(1);
+        expect(view.state.selection.main.head).toBe(1);
+      }),
+    );
+    await act(async () => {
+      invalidateWatchedFiles(["/repo/growing.txt"]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    await act(async () =>
+      vi.waitFor(() => {
+        expect(view.state.doc.lines).toBe(3);
+        expect(
+          view.state.doc.lineAt(view.state.selection.main.head).number,
+        ).toBe(3);
+        expect(view.state.selection.main.head).toBe(
+          view.state.doc.line(3).from + 1,
+        );
+      }),
     );
   });
 

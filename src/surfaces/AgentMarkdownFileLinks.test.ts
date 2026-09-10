@@ -82,14 +82,45 @@ describe("markdown file navigation", () => {
     });
   });
 
+  it.each(["`main.ts:12`", "[Source](main.ts:12)"])(
+    "opens a bare filename with a line number: %s",
+    async (text) => {
+      await render(text);
+      const link = container.querySelector<HTMLElement>('code[role="link"], a');
+      expect(link).not.toBeNull();
+      await act(async () => link!.click());
+      expect(onOpenFile).toHaveBeenCalledWith("/repo/main.ts", { line: 12 });
+    },
+  );
+
+  it.each([
+    "/%2Fhost/share/file.md",
+    "%2F%2Fhost/share/file.md:12",
+    "%5C%5Chost/share/file.md",
+  ])(
+    "does not open an encoded network path as a local file: %s",
+    async (href) => {
+      await render(`[Source](${href})`);
+      for (const link of container.querySelectorAll<HTMLAnchorElement>("a")) {
+        await act(async () => link.click());
+      }
+      expect(onOpenFile).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["./docs/guide.md#installation", "/repo/docs/guide.md"],
     ["./report%23L2.md#installation", "/repo/report#L2.md"],
-  ])("opens %s without treating the heading anchor as part of its filename", async (href, path) => {
-    await render(`[Guide](${href})`);
-    await act(async () => container.querySelector<HTMLAnchorElement>("a")!.click());
-    expect(onOpenFile).toHaveBeenCalledWith(path, undefined);
-  });
+  ])(
+    "opens %s without treating the heading anchor as part of its filename",
+    async (href, path) => {
+      await render(`[Guide](${href})`);
+      await act(async () =>
+        container.querySelector<HTMLAnchorElement>("a")!.click(),
+      );
+      expect(onOpenFile).toHaveBeenCalledWith(path, undefined);
+    },
+  );
 
   it("opens absolute file URLs at the referenced line", async () => {
     await render("[Source](file:///Users/me/My%20Project/main.ts#L4)");

@@ -111,12 +111,7 @@ function parseWorkspaceFileReference(
   decodeUrl: boolean,
 ) {
   let value = href.trim();
-  if (
-    !value ||
-    (/^[a-z][a-z0-9+.-]*:/i.test(value) &&
-      !value.startsWith("file://") &&
-      !/^[A-Za-z]:[\\/]/.test(value))
-  ) return undefined;
+  if (!value) return undefined;
 
   // Strip heading anchors before decoding, keeping encoded '#' in filenames.
   if (decodeUrl) {
@@ -134,7 +129,6 @@ function parseWorkspaceFileReference(
   if (location) value = value.slice(0, location.index);
 
   const fileUrl = value.startsWith("file://");
-  if (decodeUrl && !fileUrl && value.startsWith("//")) return undefined;
   if (fileUrl) {
     value = value.slice("file://".length);
     if (value.startsWith("localhost/")) value = value.slice("localhost".length);
@@ -148,6 +142,9 @@ function parseWorkspaceFileReference(
   }
 
   value = slash(value);
+  // Check the decoded path too: /%2Fhost and encoded backslashes are network paths.
+  if (decodeUrl && !fileUrl && value.startsWith("//")) return undefined;
+  // A bare filename's :line[:column] suffix must be removed before this check.
   if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[A-Za-z]:\//.test(value))
     return undefined;
   if (!value || value === "." || value.startsWith("#") || value.startsWith("?") || value.includes("://")) {
