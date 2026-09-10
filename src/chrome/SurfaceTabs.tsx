@@ -269,6 +269,15 @@ export function SurfaceTabs({
             } ${dragging ? "opacity-40" : ""} ${
               canDrag ? "cursor-grab active:cursor-grabbing" : ""
             }`}
+            onMouseDownCapture={(event) => {
+              if (event.button === 1) event.preventDefault();
+            }}
+            onAuxClick={(event) => {
+              if (event.button !== 1) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onCloseFile(file.id);
+            }}
             onPointerDown={(event) => {
               if (event.button !== 0) return;
               if (
