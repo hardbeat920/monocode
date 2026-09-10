@@ -310,7 +310,8 @@ async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
       ...command,
     }));
   }
-  const discovered = await listSkills(context.cwd);
+  const disabledPaths = loadDisabledSkillPaths();
+  const discovered = await listSkills(context.cwd, disabledPaths);
   const disabled = disabledSkillPathSet();
   return mergeCatalog(discovered.filter((skill) => !disabled.has(skill.path)));
 }
