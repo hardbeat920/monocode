@@ -141,9 +141,7 @@ export function ExplorerMenu({
                     : "text-content hover:bg-content/5"
             }`}
           >
-            <span className="min-w-0 flex-1 truncate leading-label">
-              {item.label}
-            </span>
+            <span className="min-w-0 flex-1 truncate">{item.label}</span>
             {item.checked ? (
               <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
             ) : item.shortcut ? (

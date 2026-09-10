@@ -1692,7 +1692,7 @@ function SidebarProjectPicker({
               active={busy}
             />
           )}
-          <span className="min-w-0 truncate font-medium leading-label text-content/90">
+          <span className="min-w-0 truncate font-medium text-content/90">
             {label}
           </span>
           <ChevronDown

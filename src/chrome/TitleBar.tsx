@@ -327,12 +327,11 @@ function TitleTabItem({
             <FileTypeIcon name={fileIcon} isDir={false} size={14} />
           </span>
         )}
-        {/* 1.4 leaves room for descenders and fits two 10px lines plus the
-            2px gap within the 30px tab. */}
-        <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+        {/* Keep two-line tabs compact while leaving room for descenders. */}
+        <span className="flex min-w-0 flex-1 flex-col justify-center">
           <span className="flex min-w-0 items-center gap-1">
             <span
-              className={`min-w-0 truncate leading-label ${
+              className={`min-w-0 truncate leading-tight ${
                 meta
                   ? "text-[13px] @min-[11rem]:text-[10px] @min-[11rem]:font-medium"
                   : "text-[13px]"
@@ -349,7 +348,7 @@ function TitleTabItem({
             ) : null}
           </span>
           {meta ? (
-            <span className="hidden min-w-0 truncate text-[10px] leading-label text-content/45 @min-[11rem]:block">
+            <span className="hidden min-w-0 truncate text-[10px] leading-tight text-content/45 @min-[11rem]:block">
               {meta}
             </span>
           ) : null}

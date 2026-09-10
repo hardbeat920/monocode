@@ -198,7 +198,7 @@ function RefPill({ refInfo }: { refInfo: GraphRef }) {
       {local ? (
         <GitBranch className="size-2.5 shrink-0" strokeWidth={2} />
       ) : null}
-      <span className="min-w-0 truncate leading-label">{refInfo.name}</span>
+      <span className="min-w-0 truncate">{refInfo.name}</span>
     </span>
   );
 }

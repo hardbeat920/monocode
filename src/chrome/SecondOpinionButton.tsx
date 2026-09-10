@@ -357,7 +357,7 @@ export function SecondOpinionButton({
                     }`}
                   >
                     <HarnessIcon harness={harness} className="size-3.5" />
-                    <span className="min-w-0 flex-1 truncate leading-label">
+                    <span className="min-w-0 flex-1 truncate">
                       {HARNESS_TITLE[harness]}
                     </span>
                     {modelsFor(harness).length > 0 ? (
@@ -407,7 +407,7 @@ export function SecondOpinionButton({
                         : "text-content hover:bg-content/5"
                     }`}
                   >
-                    <span className="min-w-0 flex-1 truncate leading-label">
+                    <span className="min-w-0 flex-1 truncate">
                       {model.name}
                     </span>
                     {model.id === preferred ? (

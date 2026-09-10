@@ -1064,7 +1064,7 @@ function ChangeDirRow({
           )}
         </span>
         <FileTypeIcon name={dir.name} isDir isOpen={open} size={16} />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-label">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
           {dir.name}
         </span>
         <span
@@ -1192,7 +1192,7 @@ function ChangeRow({
         >
           {tree ? <span className="size-4 shrink-0" /> : null}
           <FileTypeIcon name={name} isDir={false} size={16} />
-          <span className="min-w-0 flex-1 truncate leading-label">
+          <span className="min-w-0 flex-1 truncate">
             <span className="text-[13px] font-medium">{name}</span>
             {dir ? (
               <span className="ml-1.5 text-[11px] text-content/40">{dir}</span>

@@ -170,7 +170,7 @@ function FilterItem({
       className="flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-none text-content hover:bg-content/5"
     >
       {icon}
-      <span className="min-w-0 flex-1 truncate leading-label">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
       {checked ? (
         <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
       ) : null}

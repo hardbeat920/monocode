@@ -509,7 +509,7 @@ function ResultList({
             <span className="grid size-4 shrink-0 place-items-center">
               {row.icon}
             </span>
-            <span className="min-w-0 flex-1 truncate leading-label">{row.title}</span>
+            <span className="min-w-0 flex-1 truncate">{row.title}</span>
             {row.meta ? (
               <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] text-content/40">
                 {row.meta}

@@ -45,7 +45,7 @@ export function RailAction({
         className={`size-4 shrink-0 opacity-70 ${badge != null ? "ml-4" : ""}`}
         strokeWidth={1.75}
       />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium leading-label">
+      <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
         {label}
       </span>
       {dot ? (
@@ -87,7 +87,7 @@ export function RailSearch({
       } disabled:cursor-default disabled:opacity-40`}
     >
       <Icon className="size-4 shrink-0 opacity-70" strokeWidth={1.75} />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium leading-label">
+      <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
         {label}
       </span>
       {shortcut ? (
