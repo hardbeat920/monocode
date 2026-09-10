@@ -268,8 +268,10 @@ function RunningTerminalChip({
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => toggle(terminal.id)}
             >
-              <span className="min-w-0 flex-1 truncate">{terminal.process}</span>
-              <span className="max-w-[7rem] shrink-0 truncate text-[11px] text-content/40">
+              <span className="min-w-0 flex-1 truncate leading-label">
+                {terminal.process}
+              </span>
+              <span className="max-w-[7rem] shrink-0 truncate text-[11px] leading-label text-content/40">
                 {terminal.label}
               </span>
             </button>

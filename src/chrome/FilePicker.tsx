@@ -304,7 +304,7 @@ function FileList({
             <span className="shrink-0">
               <FileTypeIcon name={file.name} isDir={false} />
             </span>
-            <span className="min-w-0 flex-1 truncate">
+            <span className="min-w-0 flex-1 truncate leading-label">
               <MatchText
                 text={file.name}
                 positions={file.positions

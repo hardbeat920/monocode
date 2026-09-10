@@ -6,6 +6,8 @@
 @custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
 
 @theme {
+  /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
+  --leading-label: 1.4;
   --color-background-base: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness)
   );
@@ -74,13 +76,6 @@ html:not(.is-mac) #root {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-}
-
-/* Leave room for descenders while keeping two 10px lines and their 2px gap
-   within a 30px tab. Stay outside Tailwind's layers to override both direct
-   and inherited leading-none utilities. */
-.truncate {
-  line-height: 1.4;
 }
 
 html:not(.is-mac) ::-webkit-scrollbar {

@@ -136,7 +136,7 @@ export function SidebarUpdate({
         )}
       </span>
       <span className="min-w-0 flex-1 flex items-center">
-        <span className="block truncate text-[12px] font-medium leading-tight">
+        <span className="block truncate text-[12px] font-medium leading-label">
           {label}
         </span>
         <span className="ml-auto block text-[11px] text-content/40">

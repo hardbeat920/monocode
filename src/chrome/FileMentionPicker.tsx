@@ -118,7 +118,7 @@ export function FileMentionPicker({
                   )}
                 </span>
                 <span
-                  className={`min-w-0 flex-1 truncate ${
+                  className={`min-w-0 flex-1 truncate leading-label ${
                     highlighted ? "text-mention" : ""
                   }`}
                 >
