@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { persistableAttachment } from "./attachments";
 import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
+import { ompSessionInterjections } from "./fs";
+import { backfillOmpInterjections } from "./ompInterjections";
 import type {
   Block,
   HarnessId,
@@ -274,7 +276,23 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     sessionId,
   });
   if (!record) return null;
-  return recordToSession(record);
+  const session = recordToSession(record);
+  if (session.harness !== "omp" || !session.providerSessionId) return session;
+  try {
+    const anchors = await ompSessionInterjections(session.providerSessionId);
+    const blocks = backfillOmpInterjections(session.blocks, anchors);
+    if (blocks !== session.blocks) {
+      session.blocks = blocks;
+      // Persist before exposing the restored session to a new live turn.
+      // Re-reading the source on later loads allows partial repairs to retry;
+      // deterministic IDs ensure already repaired transcripts are not written.
+      await upsertSession(session);
+    }
+  } catch {
+    // Source logs may be absent/unreadable. Even a failed write must not stop
+    // restore; the recovered in-memory boundaries can still be displayed.
+  }
+  return session;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

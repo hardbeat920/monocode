@@ -1,6 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { slash } from "./paths";
+import type { InterjectionMeta } from "./session";
+
+export type OmpInterjectionAnchor = InterjectionMeta & {
+  id: string;
+  afterAssistantText: string;
+  /** One-based occurrence among assistant messages with exactly this text. */
+  afterOccurrence: number;
+  text: string;
+  /** Full text of a directly following text-only answer, if present. */
+  followingAssistantText?: string | null;
+};
+
+export function ompSessionInterjections(
+  providerSessionId: string,
+): Promise<OmpInterjectionAnchor[]> {
+  return invoke<OmpInterjectionAnchor[]>("omp_session_interjections", {
+    providerSessionId,
+  });
+}
 
 export type FsEntry = {
   name: string;

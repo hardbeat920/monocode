@@ -267,6 +267,7 @@ pub fn run() {
             fs::read_binary_file,
             fs::write_attachment,
             fs::read_text_file,
+            fs::omp_session_interjections,
             fs::write_text_file,
             skills::list_skills,
             search::search_project,
