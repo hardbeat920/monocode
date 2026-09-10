@@ -720,7 +720,10 @@ function handleFrame(
         return;
       }
     }
-    if (type === "advisor_yielded") return;
+    if (type === "advisor_yielded") {
+      live.onEvent({ type: "status", text: "Advisor reviewed this turn" });
+      return;
+    }
     if (type === "session_info_update") {
       const providerSessionId = stringField(rec, "sessionId");
       if (providerSessionId) {

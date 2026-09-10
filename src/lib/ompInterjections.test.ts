@@ -90,6 +90,51 @@ describe("OMP persisted interjection repair", () => {
     ]);
     expect(backfillOmpInterjections(repaired, [anchor, second])).toBe(repaired);
   });
+
+  it("preserves a split continuation after an existing live boundary and a new anchor", () => {
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "First.Second." },
+      { id: "live", role: "system", text: anchor.text, interjection: { customType: "advisor", severity: "concern" } },
+    ];
+    const first = { ...anchor, afterAssistantText: "First.Second." };
+    const second = { ...anchor, id: "second", afterAssistantText: "First.", followingAssistantText: "Second.", text: "Another review." };
+    const repaired = backfillOmpInterjections(blocks, [first, second]);
+    expect(repaired.map(block => [block.role, block.text])).toEqual([
+      ["assistant", "First."], ["system", anchor.text],
+      ["system", second.text], ["assistant", "Second."],
+    ]);
+    expect(backfillOmpInterjections(repaired, [first, second])).toBe(repaired);
+    expect(backfillOmpInterjections(blocks, [first, second])).toEqual(repaired);
+    expect(blocks[0].text).toBe("First.Second.");
+  });
+
+  it("matches subsequent anchors against a continuation created in the same pass", () => {
+    const blocks: Block[] = [{ id: "a", role: "assistant", text: "First.Second." }];
+    const first = { ...anchor, afterAssistantText: "First.", followingAssistantText: "Second." };
+    const second = { ...anchor, id: "second", afterAssistantText: "Second.", text: "Second review." };
+    const repaired = backfillOmpInterjections(blocks, [first, second]);
+    expect(repaired.map(block => [block.role, block.text])).toEqual([
+      ["assistant", "First."], ["system", first.text],
+      ["assistant", "Second."], ["system", second.text],
+    ]);
+    expect(backfillOmpInterjections(repaired, [first, second])).toBe(repaired);
+  });
+
+  it("keeps all adjacent live notes before a recovered continuation", () => {
+    const first = { ...anchor, afterAssistantText: "First.", followingAssistantText: "Second." };
+    const second = { ...first, id: "second", text: "Second review." };
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "First.Second." },
+      { id: "live-1", role: "system", text: first.text, interjection: { customType: "advisor", severity: "concern" } },
+      { id: "live-2", role: "system", text: second.text, interjection: { customType: "advisor", severity: "concern" } },
+    ];
+    const repaired = backfillOmpInterjections(blocks, [first, second]);
+    expect(repaired.map(block => [block.role, block.text])).toEqual([
+      ["assistant", "First."], ["system", first.text],
+      ["system", second.text], ["assistant", "Second."],
+    ]);
+    expect(backfillOmpInterjections(repaired, [first, second])).toBe(repaired);
+  });
 });
 
 describe("persisted session loading", () => {

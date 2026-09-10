@@ -438,6 +438,17 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
     await running.turn;
   });
 
+  it("emits a transient status when the OMP advisor yields", async () => {
+    const running = await started();
+    const start = events.length;
+    frame("omp-test", { type: "advisor_yielded" });
+    expect(events.slice(start)).toEqual([
+      { type: "status", text: expect.any(String) },
+    ]);
+    frame("omp-test", { type: "agent_end" });
+    await running.turn;
+  });
+
   it("uses generic content for other displayed OMP custom messages", async () => {
     const running = await started();
     frame("omp-test", {
