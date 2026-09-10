@@ -71,8 +71,21 @@ export function applyHarnessEvent(
           requestId: event.requestId,
           questions: event.questions,
           ...(event.title ? { title: event.title } : {}),
+          ...(event.autoResolveAt != null
+            ? { autoResolveAt: event.autoResolveAt }
+            : {}),
         },
       };
+    case "question.updated":
+      return session.pendingQuestion?.requestId === event.requestId
+        ? {
+            ...session,
+            pendingQuestion: {
+              ...session.pendingQuestion,
+              autoResolveAt: event.autoResolveAt,
+            },
+          }
+        : session;
     case "question.resolved":
       return session.pendingQuestion?.requestId === event.requestId
         ? { ...session, pendingQuestion: undefined }

@@ -143,6 +143,7 @@ import {
   promoteLastAssistantToPlan,
   respondHarnessApproval,
   respondHarnessQuestion,
+  keepHarnessQuestionOpen,
   sendHarnessTurn,
   steerHarnessTurn,
   startHarnessBridge,
@@ -4477,6 +4478,14 @@ export default function App({
     [],
   );
 
+  const onQuestionInteraction = useCallback(
+    (sessionId: string, requestId: number) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (session) keepHarnessQuestionOpen(session.harness, sessionId, requestId);
+    },
+    [],
+  );
+
   const onOpenApprovalSession = useCallback(
     (sessionId: string) => {
       if (!focusOpenSession(sessionId)) {
@@ -5113,6 +5122,7 @@ export default function App({
     onHandoffCardDismiss,
     onApproval,
     onQuestionReply,
+    onQuestionInteraction,
     onOpenFile,
     onOpenDiff,
     onOpenPlan,

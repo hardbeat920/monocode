@@ -20,6 +20,7 @@ const {
   compactCodexContext,
   bindCodexSession,
   cancelCodexTurn,
+  keepCodexQuestionOpen,
   respondCodexApproval,
   respondCodexQuestion,
   sendCodexTurn,
@@ -504,10 +505,17 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
-  it.each(["allow", "deny"] as const)(
-    "shows MCP confirmation and sends %s",
-    async (decision) => {
-      const { events, turn } = await startTurn("codex-live");
+  it.each([
+    { decision: "allow", boolean: false },
+    { decision: "deny", boolean: false },
+    { decision: "allow", boolean: true },
+    { decision: "deny", boolean: true },
+  ] as const)(
+    "shows MCP confirmation in Full Access and sends $decision, boolean=$boolean",
+    async ({ decision, boolean }) => {
+      const { events, turn } = await startTurn("codex-live", {
+        runtimeMode: "full-access",
+      });
       onLine!(
         JSON.stringify({
           id: 91,
@@ -516,7 +524,13 @@ describe("codex live turn sequence", () => {
             serverName: "example",
             mode: "form",
             message: "Read this source?",
-            requestedSchema: { type: "object", properties: {} },
+            requestedSchema: boolean
+              ? {
+                  type: "object",
+                  properties: { approved: { type: "boolean" } },
+                  required: ["approved"],
+                }
+              : { type: "object", properties: {} },
           },
         }),
       );
@@ -530,9 +544,172 @@ describe("codex live turn sequence", () => {
       await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
       expect(parse().find((m) => m.id === 91)?.result).toEqual({
         action: decision === "allow" ? "accept" : "decline",
-        content: decision === "allow" ? {} : null,
+        content:
+          decision === "allow" ? (boolean ? { approved: true } : {}) : null,
         _meta: null,
       });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
+
+  it.each([false, true, undefined])(
+    "honors isBlocking=%s without relying on deprecated autoResolutionMs",
+    async (isBlocking) => {
+      const { events, turn } = await startTurn("codex-live");
+      vi.useFakeTimers();
+      onLine!(
+        JSON.stringify({
+          id: 91,
+          method: "item/tool/requestUserInput",
+          params: {
+            isBlocking,
+            autoResolutionMs: 1,
+            questions: [
+              { id: "q", question: "Choose a source", options: null },
+            ],
+          },
+        }),
+      );
+      const question = events.find((event) => event.type === "question.asked")!;
+      expect(question.autoResolveAt).toBe(
+        isBlocking === false ? Date.now() + 120_000 : undefined,
+      );
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(parse().some((m) => m.id === 91)).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      if (isBlocking === false) {
+        expect(parse().find((m) => m.id === 91)?.result).toEqual({
+          answers: {},
+        });
+        expect(events).toContainEqual({
+          type: "question.resolved",
+          requestId: question.requestId,
+          decision: "skipped",
+        });
+      } else {
+        expect(parse().some((m) => m.id === 91)).toBe(false);
+      }
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
+
+  it("keeps an optional question open after interaction and preserves its answer", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    vi.useFakeTimers();
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "item/tool/requestUserInput",
+        params: {
+          isBlocking: false,
+          questions: [{ id: "q", question: "Choose a source", options: null }],
+        },
+      }),
+    );
+    const question = events.find((event) => event.type === "question.asked")!;
+    await vi.advanceTimersByTimeAsync(60_000);
+    keepCodexQuestionOpen("codex-live", question.requestId);
+    await vi.advanceTimersByTimeAsync(240_000);
+    expect(parse().some((m) => m.id === 91)).toBe(false);
+    const state = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/repo", "codex:gpt-5.4", "supervised"),
+    );
+    expect(state.pendingQuestion?.autoResolveAt).toBeUndefined();
+    respondCodexQuestion("codex-live", question.requestId, {
+      kind: "answered",
+      answers: {},
+      custom: { q: "chosen source" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      answers: { q: { answers: ["chosen source"] } },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("starts each queued optional question's deadline when it is shown", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    vi.useFakeTimers();
+    for (const id of [91, 92])
+      onLine!(
+        JSON.stringify({
+          id,
+          method: "item/tool/requestUserInput",
+          params: {
+            isBlocking: false,
+            questions: [{ id: "q", question: `Question ${id}`, options: null }],
+          },
+        }),
+      );
+    expect(
+      events.filter((event) => event.type === "question.asked"),
+    ).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(parse().filter((m) => m.id === 91)).toHaveLength(1);
+    expect(parse().some((m) => m.id === 92)).toBe(false);
+    const questions = events.filter((event) => event.type === "question.asked");
+    expect(questions).toHaveLength(2);
+    expect(questions[1].autoResolveAt).toBe(Date.now() + 120_000);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(parse().filter((m) => m.id === 92)).toHaveLength(1);
+    expect(
+      events.reduce(
+        applyHarnessEvent,
+        newSession("codex", "/repo", "codex:gpt-5.4", "supervised"),
+      ).pendingQuestion,
+    ).toBeUndefined();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each(["answer", "server", "stop", "complete"])(
+    "clears optional question timers on %s without a late reply",
+    async (action) => {
+      const { events, turn } = await startTurn("codex-live");
+      vi.useFakeTimers();
+      onLine!(
+        JSON.stringify({
+          id: 91,
+          method: "item/tool/requestUserInput",
+          params: {
+            isBlocking: false,
+            questions: [
+              { id: "q", question: "Choose a source", options: null },
+            ],
+          },
+        }),
+      );
+      const question = events.find((event) => event.type === "question.asked")!;
+      if (action === "answer")
+        respondCodexQuestion("codex-live", question.requestId, {
+          kind: "skipped",
+        });
+      if (action === "server")
+        notify("serverRequest/resolved", { threadId: "thr_1", requestId: 91 });
+      if (action === "stop") await stopCodexSession("codex-live");
+      if (action === "complete")
+        notify("turn/completed", {
+          turn: { id: "turn_1", status: "completed" },
+        });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(240_000);
+      respondCodexQuestion("codex-live", question.requestId, {
+        kind: "answered",
+        answers: {},
+        custom: { q: "too late" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(parse().filter((m) => m.id === 91)).toHaveLength(
+        action === "answer" ? 1 : 0,
+      );
+      expect(
+        events.filter((event) => event.type === "question.resolved"),
+      ).toHaveLength(1);
       notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
       await turn;
     },

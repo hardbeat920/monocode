@@ -22,6 +22,7 @@ import {
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "./jsonRpc";
 import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
+import { codexMcpConfirmation } from "./codexElicitation";
 import { joinStreamText, snapshotRemainder } from "./streamText";
 import type {
   ApprovalDecision,
@@ -43,8 +44,14 @@ type PendingApproval = {
 type PendingQuestion = {
   rpcId: JsonRpcId;
   event: Extract<HarnessEvent, { type: "question.asked" }>;
+  isBlocking: boolean;
+  timer?: ReturnType<typeof setTimeout>;
   resolve: (reply: UserQuestionReply | "cancelled") => void;
 };
+
+// Match Codex's non-blocking question policy: a minute of grace, then a
+// minute of countdown. Interaction keeps the question open for the user.
+const QUESTION_AUTO_RESOLVE_MS = 120_000;
 
 type Live = {
   rpc: JsonRpcClient;
@@ -187,9 +194,21 @@ export function respondCodexQuestion(
   liveByThread.get(sessionId)?.questions.get(requestId)?.resolve(reply);
 }
 
+export function keepCodexQuestionOpen(sessionId: string, requestId: number): void {
+  const live = liveByThread.get(sessionId);
+  const pending = live?.questions.get(requestId);
+  if (!live || !pending || pending.timer === undefined) return;
+  clearTimeout(pending.timer);
+  pending.timer = undefined;
+  live.onEvent({ type: "question.updated", requestId });
+}
+
 function clearServerRequests(live: Live): void {
   for (const pending of live.approvals.values()) pending.resolve("cancelled");
-  for (const pending of live.questions.values()) pending.resolve("cancelled");
+  for (const pending of live.questions.values()) {
+    clearTimeout(pending.timer);
+    pending.resolve("cancelled");
+  }
   live.approvals.clear();
   live.questions.clear();
   live.visibleQuestionId = null;
@@ -203,7 +222,17 @@ function showNextQuestion(live: Live): void {
     return;
   const next = live.questions.entries().next().value;
   live.visibleQuestionId = next?.[0] ?? null;
-  if (next) live.onEvent(next[1].event);
+  if (next) {
+    const pending = next[1];
+    if (!pending.isBlocking) {
+      pending.event.autoResolveAt = Date.now() + QUESTION_AUTO_RESOLVE_MS;
+      pending.timer = setTimeout(
+        () => pending.resolve({ kind: "skipped" }),
+        QUESTION_AUTO_RESOLVE_MS,
+      );
+    }
+    live.onEvent(pending.event);
+  }
 }
 
 export async function cancelCodexTurn(sessionId: string): Promise<void> {
@@ -626,8 +655,15 @@ async function handleServerRequest(
       callId: stringField(asRecord(params), "itemId"),
     };
     const outcome = new Promise<UserQuestionReply | "cancelled">((resolve) => {
-      live.questions.set(uiId, { rpcId: id, event, resolve });
+      live.questions.set(uiId, {
+        rpcId: id,
+        event,
+        resolve,
+        // Older servers omit this field and must keep their blocking behavior.
+        isBlocking: asRecord(params)?.isBlocking !== false,
+      });
     }).finally(() => {
+      clearTimeout(live.questions.get(uiId)?.timer);
       live.questions.delete(uiId);
     });
     showNextQuestion(live);
@@ -649,16 +685,7 @@ async function handleServerRequest(
   }
 
   if (method === "mcpServer/elicitation/request") {
-    const rec = asRecord(params);
-    const schema = asRecord(rec?.requestedSchema);
-    const properties = asRecord(schema?.properties);
-    const confirmation =
-      ["form", "openai/form", "openaiForm"].includes(String(rec?.mode)) &&
-      schema?.type === "object" &&
-      properties != null &&
-      Object.keys(properties).length === 0 &&
-      (schema.required == null ||
-        (Array.isArray(schema.required) && schema.required.length === 0));
+    const confirmation = codexMcpConfirmation(params);
     if (!confirmation || live.cancelled || live.muteUpdates) {
       if (!live.cancelled && !live.muteUpdates)
         live.onEvent({
@@ -679,14 +706,14 @@ async function handleServerRequest(
       type: "approval.requested",
       requestId: uiId,
       kind: "other",
-      title: `${stringField(rec, "serverName") ?? "MCP"}: ${stringField(rec, "message") ?? "Approve request"}`,
+      title: confirmation.title,
     });
     const decision = await pending;
     live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
     if (decision !== "cancelled")
       await live.rpc.respond(id, {
         action: decision === "allow" ? "accept" : "decline",
-        content: decision === "allow" ? {} : null,
+        content: decision === "allow" ? confirmation.content : null,
         _meta: null,
       });
     return;

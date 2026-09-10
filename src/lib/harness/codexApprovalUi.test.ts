@@ -68,6 +68,8 @@ describe("Codex requests reach the chat and notifications", () => {
               prompt: session.pendingQuestion,
               onReply: (id, reply) =>
                 codexAdapter.respondQuestion!(session.id, id, reply),
+              onInteraction: (id) =>
+                codexAdapter.keepQuestionOpen!(session.id, id),
             })
           : null,
         createElement(ApprovalToasts, {
@@ -146,6 +148,7 @@ describe("Codex requests reach the chat and notifications", () => {
     container.remove();
     localStorage.clear();
     __codexTestReset();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -233,4 +236,122 @@ describe("Codex requests reach the chat and notifications", () => {
     });
     expect(document.querySelector(".approval-toast")).toBeNull();
   });
+
+  it.each(["Allow", "Deny"])(
+    "shows a required Boolean MCP confirmation and sends %s",
+    async (choice) => {
+      await act(async () =>
+        onLine(
+          JSON.stringify({
+            id: 91,
+            method: "mcpServer/elicitation/request",
+            params: {
+              mode: "form",
+              serverName: "example",
+              message: "Confirm access",
+              requestedSchema: {
+                type: "object",
+                properties: {
+                  approved: { type: "boolean", title: "Read this source?" },
+                },
+                required: ["approved"],
+              },
+            },
+          }),
+        ),
+      );
+      expect(container.textContent).toContain("Read this source?");
+      expect(sent.some((m) => m.id === 91)).toBe(false);
+      expect(invoke).toHaveBeenCalledWith(
+        "show_notification",
+        expect.objectContaining({
+          body: expect.stringContaining("Read this source?"),
+        }),
+      );
+      await act(async () => {
+        Array.from(document.querySelectorAll(".approval-toast button"))
+          .find((button) => button.textContent?.trim() === choice)!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(sent.find((m) => m.id === 91)?.result).toEqual({
+        action: choice === "Allow" ? "accept" : "decline",
+        content: choice === "Allow" ? { approved: true } : null,
+        _meta: null,
+      });
+      expect(document.querySelector(".approval-toast")).toBeNull();
+    },
+  );
+
+  it.each(["timeout", "click", "keydown", "paste"])(
+    "handles optional question %s in the real form",
+    async (action) => {
+      vi.useFakeTimers();
+      await act(async () =>
+        onLine(
+          JSON.stringify({
+            id: 91,
+            method: "item/tool/requestUserInput",
+            params: {
+              isBlocking: false,
+              questions: [
+                {
+                  id: "q",
+                  question: "Choose a source",
+                  options: [{ label: "Local" }, { label: "Remote" }],
+                },
+              ],
+            },
+          }),
+        ),
+      );
+      expect(container.textContent).toContain("Optional question");
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(container.textContent).toContain(
+        "Continues without an answer in 60s",
+      );
+      if (action !== "timeout") {
+        const option = Array.from(container.querySelectorAll("button")).find(
+          (b) => b.textContent?.trim() === "Local",
+        )!;
+        await act(async () => {
+          option.dispatchEvent(
+            action === "keydown"
+              ? new KeyboardEvent("keydown", {
+                  key: "ArrowDown",
+                  bubbles: true,
+                })
+              : new Event(action, { bubbles: true }),
+          );
+        });
+        expect(session.pendingQuestion?.autoResolveAt).toBeUndefined();
+        expect(container.textContent).not.toContain(
+          "Continues without an answer",
+        );
+      }
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      if (action === "timeout") {
+        expect(sent.find((m) => m.id === 91)?.result).toEqual({ answers: {} });
+        expect(document.querySelector("[data-question-form]")).toBeNull();
+        expect(document.querySelector(".approval-toast")).toBeNull();
+      } else {
+        expect(sent.some((m) => m.id === 91)).toBe(false);
+        expect(document.querySelector("[data-question-form]")).not.toBeNull();
+        if (action === "click") {
+          await act(async () => {
+            Array.from(container.querySelectorAll("button"))
+              .find((b) => b.textContent?.trim() === "Continue")!
+              .click();
+          });
+          expect(sent.find((m) => m.id === 91)?.result).toEqual({
+            answers: { q: { answers: ["Local"] } },
+          });
+        }
+      }
+      expect(
+        invoke.mock.calls.filter(
+          ([command]) => command === "show_notification",
+        ),
+      ).toHaveLength(1);
+    },
+  );
 });
