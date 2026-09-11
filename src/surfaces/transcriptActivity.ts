@@ -605,6 +605,10 @@ export type WorkFold = { start: number; end: number };
  * approval. As the turn streams, each new paragraph folds the work and running
  * commentary before it, leaving the final answer visible. A late approval can
  * reopen that boundary so its controls remain available.
+ *
+ * Persisted interjections (system blocks with interjection chrome) are neither
+ * prose nor work, so they stop the fold: an answer the harness already showed
+ * never folds behind an interjection that arrived after it.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;

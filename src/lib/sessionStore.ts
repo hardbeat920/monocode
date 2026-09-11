@@ -2,11 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { persistableAttachment } from "./attachments";
 import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
+import { ompActiveAssistantTexts, ompSessionInterjections } from "./fs";
+import { backfillOmpInterjections, ompStatusSplitTexts } from "./ompInterjections";
 import type {
   Block,
   HarnessId,
   HandoffMeta,
   HandoffStatus,
+  InterjectionMeta,
   LinkedWorkItem,
   RuntimeMode,
   SecondOpinionMeta,
@@ -273,7 +276,27 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     sessionId,
   });
   if (!record) return null;
-  return recordToSession(record);
+  const session = recordToSession(record);
+  if (session.harness !== "omp" || !session.providerSessionId) return session;
+  try {
+    const anchors = await ompSessionInterjections(session.providerSessionId);
+    // Missing source order must not prevent the existing anchored repair.
+    const source = ompStatusSplitTexts(session.blocks).length
+      ? await ompActiveAssistantTexts(session.providerSessionId).catch(() => [])
+      : [];
+    const blocks = backfillOmpInterjections(session.blocks, anchors, source);
+    if (blocks !== session.blocks) {
+      session.blocks = blocks;
+      // Persist before exposing the restored session to a new live turn.
+      // Re-reading the source on later loads allows partial repairs to retry;
+      // deterministic IDs ensure already repaired transcripts are not written.
+      await upsertSession(session);
+    }
+  } catch {
+    // Source logs may be absent/unreadable. Even a failed write must not stop
+    // restore; the recovered in-memory boundaries can still be displayed.
+  }
+  return session;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
@@ -402,7 +425,32 @@ function sanitizeBlock(block: Block): Block | null {
   if (secondOpinion) next.secondOpinion = secondOpinion;
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  // Interjection chrome survives restarts only on system blocks; a malformed
+  // payload keeps the ordinary system row rather than losing its body.
+  if (block.role === "system") {
+    const interjection = sanitizeInterjection(block.interjection);
+    if (interjection) next.interjection = interjection;
+  }
   return next;
+}
+
+function sanitizeInterjection(
+  value: Block["interjection"],
+): InterjectionMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const customType =
+    typeof record.customType === "string" ? record.customType.trim() : "";
+  if (!customType) return undefined;
+  const severity = record.severity;
+  return {
+    customType,
+    ...(severity === "nit" || severity === "concern" || severity === "blocker"
+      ? { severity }
+      : {}),
+  };
 }
 
 function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {

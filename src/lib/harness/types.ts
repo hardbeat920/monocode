@@ -1,5 +1,6 @@
 import type {
   Attachment,
+  InterjectionMeta,
   RuntimeMode,
   TaskListItem,
   ToolPreview,
@@ -18,6 +19,7 @@ export type HarnessEvent =
       modelSettings?: Record<string, string>;
     }
   | { type: "status"; text: string }
+  | ({ type: "interjection"; text: string } & InterjectionMeta)
   | { type: "message.delta"; text: string }
   | { type: "message.completed" }
   | { type: "reasoning.delta"; text: string }
