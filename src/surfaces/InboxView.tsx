@@ -15,6 +15,7 @@ import {
   ListFilter,
   LoaderCircle,
   MessageMultiple,
+  Plus,
   RefreshCw,
   Search,
   type IconComponent,
@@ -30,6 +31,7 @@ import {
   InboxFiltersMenu,
   INBOX_FILTER_MENU_WIDTH,
 } from "../chrome/InboxFiltersMenu";
+import { InboxConnectMenu } from "../chrome/InboxConnectMenu";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { ProjectLogoIcon } from "../chrome/ProjectLogoIcon";
 import { ProjectMascot } from "../chrome/ProjectMascot";
@@ -67,14 +69,21 @@ import {
 } from "../lib/githubTasks";
 import {
   applyInboxFilters,
+  connectableInboxSources,
   hasActiveInboxFilters,
+  loadInboxConnections,
   linearProjectOptions,
   inboxFetchState,
   loadInboxFilters,
   loadInboxSource,
   pruneInboxFilters,
   saveInboxFilters,
+  resolveInboxSource,
+  saveInboxConnections,
   saveInboxSource,
+  visibleInboxSources,
+  INBOX_SOURCE_LABELS,
+  type ConnectableInboxSource,
   type InboxFilters,
   type InboxSource,
 } from "../lib/inboxFilters";
@@ -96,6 +105,7 @@ import {
 } from "../lib/inboxSeen";
 import {
   LINEAR_CHANGE_EVENT,
+  linearConnected,
   linearIssueComment,
   linearIssueDetails,
   linearIssueThread,
@@ -109,6 +119,7 @@ import {
 } from "../lib/linear";
 import {
   GITLAB_CHANGE_EVENT,
+  gitlabConnected,
   gitlabMrDiff,
   gitlabWorkItemComment,
   gitlabWorkItemDetails,
@@ -232,8 +243,7 @@ function InboxSourceTab({
   selected: boolean;
   onSelect: (source: InboxSource) => void;
 }) {
-  const label =
-    source === "linear" ? "Linear" : source === "gitlab" ? "GitLab" : "GitHub";
+  const label = INBOX_SOURCE_LABELS[source];
   return (
     <button
       type="button"
@@ -298,6 +308,8 @@ type Props = {
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   /** Session-card destination to reveal after the Inbox list loads. */
   target?: LinkedWorkItem | null;
+  /** Opens Settings on the card where the given source is connected. */
+  onOpenIntegrations: (source: ConnectableInboxSource) => void;
 };
 
 export function InboxView({
@@ -313,6 +325,7 @@ export function InboxView({
   sessions = [],
   onOpenSession,
   target = null,
+  onOpenIntegrations,
 }: Props) {
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const listLock = useLockOverscroll<HTMLDivElement>();
@@ -341,7 +354,12 @@ export function InboxView({
   );
   const [targetItem, setTargetItem] = useState<InboxItem | null>(null);
   const [filters, setFilters] = useState(loadInboxFilters);
-  const [source, setSource] = useState(loadInboxSource);
+  const [connections, setConnections] = useState(loadInboxConnections);
+  const [source, setSource] = useState(() =>
+    resolveInboxSource(loadInboxSource(), connections),
+  );
+  const [connectMenuOpen, setConnectMenuOpen] = useState(false);
+  const connectButtonRef = useRef<HTMLButtonElement | null>(null);
   const [filterMenu, setFilterMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -409,11 +427,15 @@ export function InboxView({
         setFilterMenu(null);
         return;
       }
+      if (connectMenuOpen) {
+        setConnectMenuOpen(false);
+        return;
+      }
       onCloseRef.current?.();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [filterMenu]);
+  }, [connectMenuOpen, filterMenu]);
 
   useEffect(() => {
     const onChange = () => {
@@ -429,6 +451,64 @@ export function InboxView({
     window.addEventListener(GITLAB_CHANGE_EVENT, onChange);
     return () => window.removeEventListener(GITLAB_CHANGE_EVENT, onChange);
   }, []);
+
+  // The mount read does the real work: opening Settings unmounts this view, so
+  // a token set there lands on the way back in. Reads can also overlap, and
+  // only the newest may write, or a slow earlier answer restores a stale one.
+  useEffect(() => {
+    let cancelled = false;
+    let latest = 0;
+    const read = () => {
+      const generation = ++latest;
+      void Promise.allSettled([linearConnected(), gitlabConnected()]).then(
+        ([linear, gitlab]) => {
+          if (cancelled || generation !== latest) return;
+          setConnections((prev) => ({
+            linear:
+              linear.status === "fulfilled"
+                ? linear.value.connected
+                : prev.linear,
+            gitlab:
+              gitlab.status === "fulfilled"
+                ? gitlab.value.connected
+                : prev.gitlab,
+          }));
+        },
+      );
+    };
+    read();
+    window.addEventListener(LINEAR_CHANGE_EVENT, read);
+    window.addEventListener(GITLAB_CHANGE_EVENT, read);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(LINEAR_CHANGE_EVENT, read);
+      window.removeEventListener(GITLAB_CHANGE_EVENT, read);
+    };
+  }, []);
+
+  useEffect(() => {
+    saveInboxConnections(connections);
+  }, [connections]);
+
+  // The initial source is resolved against cached status, so storage can still
+  // name a provider this view has already fallen back from.
+  useEffect(() => {
+    saveInboxSource(source);
+    // Mount only: the temporary switch to GitHub for a linked target must not
+    // be persisted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Disconnecting can pull the tab out from under the current selection.
+  useEffect(() => {
+    const next = resolveInboxSource(source, connections);
+    if (next === source) return;
+    setSource(next);
+    saveInboxSource(next);
+  }, [connections, source]);
+
+  const visibleSources = visibleInboxSources(connections);
+  const connectableSources = connectableInboxSources(connections);
 
   // The roster has to come from Linear, not from the fetched issues: hiding a
   // team drops its issues, so a derived list could never offer it back.
@@ -614,26 +694,39 @@ export function InboxView({
       ref={resize.setPaneRef}
       className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
     >
-      <div
-        role="tablist"
-        aria-label="Inbox source"
-        className="flex h-9 shrink-0 items-center gap-px border-b border-content/10 px-2"
-      >
-        <InboxSourceTab
-          source="github"
-          selected={source === "github"}
-          onSelect={onSourceChange}
-        />
-        <InboxSourceTab
-          source="linear"
-          selected={source === "linear"}
-          onSelect={onSourceChange}
-        />
-        <InboxSourceTab
-          source="gitlab"
-          selected={source === "gitlab"}
-          onSelect={onSourceChange}
-        />
+      <div className="flex h-9 shrink-0 items-center gap-px border-b border-content/10 px-2">
+        <div
+          role="tablist"
+          aria-label="Inbox source"
+          className="flex min-w-0 flex-1 items-center gap-px"
+        >
+          {visibleSources.map((option) => (
+            <InboxSourceTab
+              key={option}
+              source={option}
+              selected={source === option}
+              onSelect={onSourceChange}
+            />
+          ))}
+        </div>
+        {connectableSources.length > 0 ? (
+          <button
+            ref={connectButtonRef}
+            type="button"
+            aria-label="Connect an inbox source"
+            aria-haspopup="menu"
+            aria-expanded={connectMenuOpen}
+            title="Connect an inbox source"
+            onClick={() => setConnectMenuOpen((open) => !open)}
+            className={`grid size-6 shrink-0 place-items-center rounded-md ${
+              connectMenuOpen
+                ? "bg-content/10 text-content"
+                : "text-content/40 hover:bg-content/5 hover:text-content"
+            }`}
+          >
+            <Plus className="size-3.5" strokeWidth={1.75} />
+          </button>
+        ) : null}
       </div>
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2">
         <div className="relative flex h-7 min-w-0 flex-1 items-center">
@@ -787,6 +880,16 @@ export function InboxView({
     />
   ) : null;
 
+  const connectPortal =
+    connectMenuOpen && connectableSources.length > 0 ? (
+      <InboxConnectMenu
+        anchor={connectButtonRef}
+        sources={connectableSources}
+        onConnect={onOpenIntegrations}
+        onClose={() => setConnectMenuOpen(false)}
+      />
+    ) : null;
+
   return (
     <div
       role="region"
@@ -842,6 +945,7 @@ export function InboxView({
         </div>
       </div>
       {filtersPortal}
+      {connectPortal}
     </div>
   );
 }

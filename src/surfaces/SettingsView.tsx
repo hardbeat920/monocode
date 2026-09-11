@@ -194,8 +194,17 @@ import {
 
 import { SkillsPage } from "./SkillsPage";
 
+export type SettingsAnchor = "gitlab" | "linear";
+
+const ANCHOR_IDS: Record<SettingsAnchor, string> = {
+  gitlab: "settings-gitlab",
+  linear: "settings-linear",
+};
+
 type Props = {
   section: SettingsSectionId;
+  /** Card to scroll to; the General page is too long to land at the top. */
+  anchor?: SettingsAnchor | null;
   cwd: string;
   sessions: SessionSummary[];
   besideRail?: boolean;
@@ -210,6 +219,7 @@ type Props = {
 
 export function SettingsView({
   section,
+  anchor = null,
   cwd,
   sessions,
   besideRail = false,
@@ -222,6 +232,12 @@ export function SettingsView({
   onOpenWhatsNew,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  useEffect(() => {
+    if (!anchor) return;
+    document.getElementById(ANCHOR_IDS[anchor])?.scrollIntoView({
+      block: "start",
+    });
+  }, [anchor]);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const appearance = useAppearanceSettings();
@@ -539,10 +555,10 @@ function GeneralPage({
         />
       </Row>
 
-      <Heading title="GitLab" />
+      <Heading title="GitLab" id={ANCHOR_IDS.gitlab} />
       <GitlabSettings />
 
-      <Heading title="Linear" />
+      <Heading title="Linear" id={ANCHOR_IDS.linear} />
       <LinearSettings />
 
       <Heading title="About" />
@@ -1716,9 +1732,18 @@ function PageHeader({
   );
 }
 
-function Heading({ title, first = false }: { title: string; first?: boolean }) {
+function Heading({
+  title,
+  first = false,
+  id,
+}: {
+  title: string;
+  first?: boolean;
+  id?: string;
+}) {
   return (
     <h2
+      id={id}
       className={`pb-1 text-[15px] font-semibold text-content ${
         first ? "" : "pt-8"
       }`}
