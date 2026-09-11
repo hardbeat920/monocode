@@ -44,8 +44,7 @@ function openMenu(element: Element) {
   );
 }
 
-async function pick(label: string) {
-  const link = container.querySelector("a")!;
+async function pick(label: string, link = container.querySelector("a")!) {
   const menu = openMenu(link)!;
   const item = Array.from(
     menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
@@ -129,4 +128,40 @@ describe("AgentMarkdown file link context menu", () => {
     const menu = openMenu(container.querySelector("code")!);
     expect(menu?.textContent).toContain("Open in MonoCode");
   });
+
+  it.each([
+    ["[Source](src/main.ts#L12)", "a", { line: 12 }],
+    ["`src/main.ts:12:3`", "code", { line: 12, column: 3 }],
+    [
+      "```12:16:src/main.ts\nexport const answer = 42;\n```",
+      ".markdown-code-path-link",
+      { line: 12 },
+    ],
+  ] as const)(
+    "preserves the source location when opening %s through the menu",
+    async (text, selector, navigation) => {
+      props = { ...props, text };
+      render();
+      const link = container.querySelector(selector)!;
+
+      await pick("Open in MonoCode", link);
+      expect(props.onOpenFile).toHaveBeenCalledWith(
+        "/repo/src/main.ts",
+        navigation,
+      );
+      await pick("Copy Path", link);
+      expect(actions.copyText).toHaveBeenCalledWith("/repo/src/main.ts");
+    },
+  );
+
+  it.each(["currentTime/read", "file://localhost/%2Fhost/share/file.md"])(
+    "does not expose file actions for %s",
+    (value) => {
+      props = { ...props, text: `\`${value}\`` };
+      render();
+      expect(openMenu(container.querySelector("code")!)).toBeNull();
+      expect(props.onOpenFile).not.toHaveBeenCalled();
+      expect(actions.openPath).not.toHaveBeenCalled();
+    },
+  );
 });
