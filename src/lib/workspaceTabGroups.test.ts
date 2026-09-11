@@ -48,7 +48,7 @@ describe("focusedWorkspaceTabCwd", () => {
       const pane = { id: "surface", files: [file], activeFileId: file.id };
       const mixed: WorkspaceTab = {
         ...tab("mixed", "chat"),
-        layout: splitPane(newTab("chat").layout, "chat", "h", pane.id),
+        layout: splitPane(newTab("chat").layout, "chat", "right", pane.id),
         editorPanes: kind === "editor" ? [pane] : [],
         terminalPanes: kind === "terminal" ? [pane] : [],
       };
@@ -77,7 +77,7 @@ describe("focusedWorkspaceTabCwd", () => {
   it("prefers the focused chat over the first chat", () => {
     const mixed = {
       ...tab("mixed", "first"),
-      layout: splitPane(newTab("first").layout, "first", "h", "second"),
+      layout: splitPane(newTab("first").layout, "first", "right", "second"),
       focusedId: "second",
     };
     expect(
