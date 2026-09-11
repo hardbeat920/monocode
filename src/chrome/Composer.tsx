@@ -96,7 +96,6 @@ import { InboxMiniCard } from "./InboxMiniCard";
 import { NoteMiniCard } from "./NoteMiniCard";
 import { HandoffMiniCard } from "./HandoffMiniCard";
 import { ModelPicker } from "./ModelPicker";
-import { ModelSettings } from "./ModelSettings";
 import { QuestionForm } from "./QuestionForm";
 import { SkillPicker } from "./SkillPicker";
 import { projectKey } from "../lib/paths";
@@ -1495,15 +1494,12 @@ export function Composer({
                 <ModelPicker
                   harness={harness}
                   model={model}
+                  values={modelSettings}
                   hotkeys={hotkeys && enabled}
                   onChange={onModelChange}
-                  onClose={() => ref.current?.focus()}
-                />
-                <ModelSettings
-                  harness={harness}
-                  model={model}
-                  values={modelSettings}
-                  onChange={(settings) => onModelSettingsChange?.(settings)}
+                  onSettingsChange={(settings) =>
+                    onModelSettingsChange?.(settings)
+                  }
                   onClose={() => ref.current?.focus()}
                 />
                 {harness !== "fx" ? (
