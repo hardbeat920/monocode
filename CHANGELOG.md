@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.43] - 2026-09-11
+
+### Added
+
+- Settings → Inbox now reports whether the GitHub CLI is installed and authenticated, alongside the existing GitLab and Linear connection controls. The Inbox shows only connected sources, falls back safely when one is disconnected, and offers an **Add connection** menu that opens the matching Settings card. In #166 by @goujandev.
+- Use `/add-to-folder` in the composer to place the current session in an existing sidebar folder or create a new folder without interrupting the prompt.
+- Ungrouped pinned sessions now appear in a dedicated **Pinned** sidebar section that can be collapsed independently for each project and expands automatically while searching.
+- Click an image attachment in the composer to inspect it in a full-screen preview; close it with Escape, the close button, or the backdrop, and focus returns to the attachment.
+- Right-click file links, inline file paths, and code-block paths in agent messages to open them in MonoCode or the default app, reveal them in the system file manager, or copy their absolute or project-relative path.
+- macOS releases now include separate signed packages for Apple Silicon and Intel Macs.
+
+### Changed
+
+- The session change-review card now appears after the latest completed reply instead of above the composer, stays hidden while a turn is running, summarizes total additions and deletions, and shows up to three changed files before offering to expand the list.
+- File mentions created from an editor selection use the concise `@file (line…)` form, and the line location is highlighted as part of the mention.
+- Inbox item identity, metadata, related threads, actions, and pull-request tabs remain pinned while descriptions, comments, and diffs scroll beneath them.
+- Navigation, menu, tab, and file labels use tighter, more consistent line heights.
+- Windows no longer shows a redundant centered title between the tab strip and native window controls.
+
+### Fixed
+
+- Codex Full Access approvals no longer block a turn, native Codex questions and supported MCP confirmations appear in the shared input UI, optional questions show their timeout and remain open after interaction, and access-mode changes made during a turn are applied to the next turn. Pending-input notifications also track concurrent requests individually and clear correctly when Codex resolves or cancels them. In #139 by @gettyeuro.
+- A failed provider connection is retired so the next prompt can reconnect cleanly. In-progress tools and approvals are settled as failed or cancelled, while failed subagents expand automatically and show the provider's error details instead of leaving a session looking stuck or successfully completed.
+- Truncated labels preserve letter descenders across tabs, navigation, menus, file views, and search results. In #119 by @ognjeeen.
+- The project logo picker opens in the selected project's directory instead of an unrelated location. In #163 by @ognjeeen.
+
 ## [0.1.42] - 2026-09-10
 
 ### Added
@@ -663,7 +689,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.42...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.43...HEAD
+[0.1.43]: https://github.com/hardbeat920/monocode/compare/v0.1.42...v0.1.43
 [0.1.42]: https://github.com/hardbeat920/monocode/compare/v0.1.41...v0.1.42
 [0.1.41]: https://github.com/hardbeat920/monocode/compare/v0.1.40...v0.1.41
 [0.1.40]: https://github.com/hardbeat920/monocode/compare/v0.1.39...v0.1.40
