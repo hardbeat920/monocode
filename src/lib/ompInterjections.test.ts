@@ -285,6 +285,14 @@ describe("OMP persisted interjection repair", () => {
     expect(backfillOmpInterjections(blocks, [{ ...anchor, afterAssistantText: "First.Second.", afterOccurrence: 2 }])).toBe(blocks);
     expect(backfillOmpInterjections(blocks, [{ ...anchor, followingAssistantText: "First.Second." }])).toBe(blocks);
   });
+
+  it("caps ten identical splits at the verified occurrence bound", () => {
+    const blocks = Array.from({ length: 10 }, (_, i) => split(String(i))).flat();
+    const repaired = backfillOmpInterjections(blocks, [], [{ text: "First.Second.", occurrences: 3 }]);
+    expect(repaired.filter(block => block.role === "assistant" && block.text === "First.Second.")).toHaveLength(3);
+    expect(repaired.filter(block => block.id.endsWith("-end"))).toHaveLength(7);
+    expect(backfillOmpInterjections(repaired, [], [{ text: "First.Second.", occurrences: 3 }])).toBe(repaired);
+  });
 });
 
 describe("persisted session loading", () => {

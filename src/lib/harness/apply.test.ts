@@ -123,6 +123,54 @@ describe("streamed markdown", () => {
     expect(session.blocks.at(-1)!.id).not.toBe(id);
   });
 
+  it("does not resume a sealed assistant through status after an interjection", () => {
+    let session = newSession("omp", "/tmp");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "First." });
+    const id = session.blocks[0].id;
+    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
+    session = applyHarnessEvent(session, { type: "status", text: "Advisor reviewed this turn" });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Second." });
+    expect(session.blocks.map(block => block.text)).toEqual([
+      "First.", "Review", "Advisor reviewed this turn", "Second.",
+    ]);
+    expect(session.blocks[0]).toMatchObject({ id, streaming: false, text: "First." });
+    expect(session.blocks.at(-1)!.id).not.toBe(id);
+  });
+
+  it("keeps stacked interjections as hard boundaries", () => {
+    let session = newSession("omp", "/tmp");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "First." });
+    session = applyHarnessEvent(session, { type: "interjection", text: "One", customType: "advisor" });
+    session = applyHarnessEvent(session, { type: "interjection", text: "Two", customType: "advisor" });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Second." });
+    expect(session.blocks.map(block => [block.role, block.text])).toEqual([
+      ["assistant", "First."], ["system", "One"], ["system", "Two"], ["assistant", "Second."],
+    ]);
+  });
+
+  it("seals open reasoning at an interjection", () => {
+    let session = newSession("omp", "/tmp");
+    session = applyHarnessEvent(session, { type: "reasoning.delta", text: "Think" });
+    const id = session.blocks[0].id;
+    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
+    session = applyHarnessEvent(session, { type: "reasoning.delta", text: " more" });
+    expect(session.blocks[0]).toMatchObject({ id, text: "Think", streaming: false });
+    expect(session.blocks.at(-1)).toMatchObject({ role: "reasoning", text: " more", streaming: true });
+    expect(session.blocks.at(-1)!.id).not.toBe(id);
+  });
+
+  it("continues open prose through many status rows", () => {
+    let session = newSession("omp", "/tmp");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Hel" });
+    const id = session.blocks[0].id;
+    for (const text of ["A", "B", "C", "D", "E"]) {
+      session = applyHarnessEvent(session, { type: "status", text });
+    }
+    session = applyHarnessEvent(session, { type: "message.delta", text: "lo" });
+    expect(session.blocks[0]).toMatchObject({ id, text: "Hello", streaming: true });
+    expect(session.blocks.filter(block => block.role === "system")).toHaveLength(5);
+  });
+
   it("continues reasoning across status but seals it when a tool starts", () => {
     let session = newSession("omp", "/tmp");
     session = applyHarnessEvent(session, { type: "reasoning.delta", text: "Think" });
