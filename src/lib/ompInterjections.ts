@@ -12,9 +12,33 @@ function sourceOrder(a: BoundaryNode, b: BoundaryNode): number {
   return a.index - b.index || a.offset - b.offset;
 }
 
+/** Collect only shapes whose trailing fragment can be removed without data loss. */
+export function ompStatusSplitTexts(blocks: Block[]): string[] {
+  const texts: string[] = [];
+  for (let index = 0; index < blocks.length; index++) {
+    const end = statusSplitEnd(blocks, index);
+    if (end !== undefined) texts.push(blocks[index].text + blocks[end].text);
+  }
+  return texts;
+}
+
+function statusSplitEnd(blocks: Block[], index: number): number | undefined {
+  const first = blocks[index];
+  if (first.role !== "assistant" || !first.text || first.streaming) return;
+  let end = index + 1;
+  while (blocks[end]?.role === "system" && !blocks[end].interjection) end++;
+  const last = blocks[end];
+  if (
+    end > index + 1 && last?.role === "assistant" && last.text && !last.streaming &&
+    Object.keys(last).every(key => ["id", "role", "text", "streaming"].includes(key))
+  ) return end;
+}
+
 /** Undo a status-only split only with a complete, exactly equal source message. */
-function mergeStatusSplits(blocks: Block[], anchors: readonly OmpInterjectionAnchor[]): Block[] {
-  const texts = new Set<string>();
+function mergeStatusSplits(
+  blocks: Block[], anchors: readonly OmpInterjectionAnchor[], verifiedTexts: readonly string[],
+): Block[] {
+  const texts = new Set(verifiedTexts);
   for (const anchor of anchors) {
     texts.add(anchor.afterAssistantText);
     if (anchor.afterAssistantTextConcat !== undefined) texts.add(anchor.afterAssistantTextConcat);
@@ -24,21 +48,12 @@ function mergeStatusSplits(blocks: Block[], anchors: readonly OmpInterjectionAnc
   let repaired: Block[] | undefined;
   for (let index = 0; index < blocks.length; index++) {
     const first = blocks[index];
-    let end = index + 1;
-    if (first.role === "assistant" && first.text && !first.streaming) {
-      while (blocks[end]?.role === "system" && !blocks[end].interjection) end++;
-      const last = blocks[end];
-      if (
-        end > index + 1 && last?.role === "assistant" && last.text && !last.streaming &&
-        // Never discard metadata carried by the removed fragment.
-        Object.keys(last).every(key => ["id", "role", "text", "streaming"].includes(key)) &&
-        texts.has(first.text + last.text)
-      ) {
-        repaired ??= blocks.slice(0, index);
-        repaired.push({ ...first, text: first.text + last.text }, ...blocks.slice(index + 1, end));
-        index = end;
-        continue;
-      }
+    const end = statusSplitEnd(blocks, index);
+    if (end !== undefined && texts.has(first.text + blocks[end].text)) {
+      repaired ??= blocks.slice(0, index);
+      repaired.push({ ...first, text: first.text + blocks[end].text }, ...blocks.slice(index + 1, end));
+      index = end;
+      continue;
     }
     repaired?.push(first);
   }
@@ -53,9 +68,10 @@ function mergeStatusSplits(blocks: Block[], anchors: readonly OmpInterjectionAnc
 export function backfillOmpInterjections(
   blocks: Block[],
   anchors: readonly OmpInterjectionAnchor[],
+  verifiedTexts: readonly string[] = [],
 ): Block[] {
-  if (anchors.length === 0) return blocks;
-  const merged = mergeStatusSplits(blocks, anchors);
+  const merged = mergeStatusSplits(blocks, anchors, verifiedTexts);
+  if (anchors.length === 0) return merged;
   const positions = new Map<string, BoundaryNode[]>();
   const ids = new Map<string, BoundaryNode>();
   const nodes = merged.map((block, index): BoundaryNode => ({ block, index, offset: 0 }));

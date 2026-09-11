@@ -25,6 +25,13 @@ export function ompSessionInterjections(
   });
 }
 
+export function ompVerifyAssistantTexts(
+  providerSessionId: string,
+  texts: string[],
+): Promise<boolean[]> {
+  return invoke<boolean[]>("omp_verify_assistant_texts", { providerSessionId, texts });
+}
+
 export type FsEntry = {
   name: string;
   path: string;

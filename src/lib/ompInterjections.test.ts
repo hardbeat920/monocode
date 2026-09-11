@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OmpInterjectionAnchor } from "./fs";
-import { backfillOmpInterjections } from "./ompInterjections";
+import { backfillOmpInterjections, ompStatusSplitTexts } from "./ompInterjections";
 import { newSession, type Block } from "./session";
 import { getSession } from "./sessionStore";
 import { foldableWork, foldedBlocks, groupTurnItems, groupTurns } from "../surfaces/transcriptActivity";
@@ -213,6 +213,22 @@ describe("OMP persisted interjection repair", () => {
     expect(repaired.map(block => block.id)).toEqual(["a", "status", "c", "omp-interjection-review"]);
     expect(backfillOmpInterjections(repaired, [{ ...anchor, afterOccurrence: 2 }])).toBe(repaired);
   });
+
+  it("keeps streaming fragments and metadata even with verified full text", () => {
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "status", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "Second." },
+    ];
+    for (const index of [0, 2]) {
+      const streaming = blocks.map((block, i) => i === index ? { ...block, streaming: true } : block);
+      expect(ompStatusSplitTexts(streaming)).toEqual([]);
+      expect(backfillOmpInterjections(streaming, [], ["First.Second."])).toBe(streaming);
+    }
+    const metadata = blocks.map(block => block.id === "b" ? { ...block, durationMs: 10 } : block);
+    expect(ompStatusSplitTexts(metadata)).toEqual([]);
+    expect(backfillOmpInterjections(metadata, [], ["First.Second."])).toBe(metadata);
+  });
 });
 
 describe("persisted session loading", () => {
@@ -238,6 +254,36 @@ describe("persisted session loading", () => {
     const second = await getSession(record.id);
     expect(second!.blocks).toEqual(first!.blocks);
     expect(writes).toBe(1);
+  });
+
+  it.each([true, false])("repairs unanchored status splits only when verified: %s", async verified => {
+    let record = { ...stored(), blocks: [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "status", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "Second." },
+      { id: "u", role: "user", text: "Continue" },
+    ] as Block[] };
+    const original = record.blocks;
+    let writes = 0;
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "session_get") return record;
+      if (command === "omp_session_interjections") return [];
+      if (command === "omp_verify_assistant_texts") {
+        expect(args.texts).toEqual(["First.Second."]);
+        return [verified];
+      }
+      if (command === "session_upsert") {
+        writes++;
+        record = { ...record, ...args.session };
+        return record;
+      }
+      throw new Error(command);
+    });
+    const first = await getSession(record.id);
+    expect(first!.blocks).toEqual(verified
+      ? [{ ...original[0], text: "First.Second." }, original[1], original[3]] : original);
+    expect((await getSession(record.id))!.blocks).toEqual(first!.blocks);
+    expect(writes).toBe(verified ? 1 : 0);
   });
 
   it("leaves other harnesses and unbound OMP sessions untouched", async () => {

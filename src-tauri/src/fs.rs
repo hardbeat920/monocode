@@ -47,6 +47,24 @@ pub struct OmpInterjectionAnchor {
 pub fn omp_session_interjections(
     provider_session_id: String,
 ) -> Result<Vec<OmpInterjectionAnchor>, String> {
+    let Some(path) = omp_session_path(&provider_session_id)? else {
+        return Ok(Vec::new());
+    };
+    parse_omp_interjections(&path)
+}
+
+#[tauri::command(async)]
+pub fn omp_verify_assistant_texts(
+    provider_session_id: String,
+    texts: Vec<String>,
+) -> Result<Vec<bool>, String> {
+    let Some(path) = omp_session_path(&provider_session_id)? else {
+        return Ok(vec![false; texts.len()]);
+    };
+    verify_omp_assistant_texts(&path, &texts)
+}
+
+fn omp_session_path(provider_session_id: &str) -> Result<Option<PathBuf>, String> {
     if provider_session_id.is_empty()
         || !provider_session_id
             .bytes()
@@ -58,10 +76,7 @@ pub fn omp_session_interjections(
         .map(PathBuf::from)
         .ok_or("Home directory is unavailable")?
         .join(".omp/agent/sessions");
-    let Some(path) = find_omp_session_file(&root, &provider_session_id) else {
-        return Ok(Vec::new());
-    };
-    parse_omp_interjections(&path)
+    Ok(find_omp_session_file(&root, provider_session_id))
 }
 
 fn find_omp_session_file(root: &Path, provider_session_id: &str) -> Option<PathBuf> {
@@ -115,13 +130,8 @@ fn omp_message_text(value: &serde_json::Value, separator: &str) -> String {
         .join(separator)
 }
 
-fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, String> {
+fn read_omp_entries(path: &Path) -> Result<Vec<serde_json::Value>, String> {
     let file = std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut assistants: HashMap<&str, (String, usize, String, usize)> = HashMap::new();
-    let mut occurrences: HashMap<String, usize> = HashMap::new();
-    let mut concat_occurrences: HashMap<String, usize> = HashMap::new();
-    let mut out: Vec<OmpInterjectionAnchor> = Vec::new();
-
     let mut entries = Vec::new();
     for line in BufReader::new(file).lines() {
         let Ok(line) = line else { continue };
@@ -130,6 +140,10 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
         };
         entries.push(value);
     }
+    Ok(entries)
+}
+
+fn omp_active_ids(entries: &[serde_json::Value]) -> HashSet<&str> {
     let nodes: HashMap<_, _> = entries
         .iter()
         .filter_map(|value| value["id"].as_str().map(|id| (id, value)))
@@ -142,6 +156,43 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
         }
         cursor = nodes.get(id).and_then(|value| value["parentId"].as_str());
     }
+    active
+}
+
+fn verify_omp_assistant_texts(path: &Path, texts: &[String]) -> Result<Vec<bool>, String> {
+    let entries = read_omp_entries(path)?;
+    let active = omp_active_ids(&entries);
+    let mut pending: HashSet<&str> = texts.iter().map(String::as_str).collect();
+    for value in &entries {
+        if pending.is_empty() {
+            break;
+        }
+        if value["type"] == "message"
+            && value["message"]["role"] == "assistant"
+            && value["id"].as_str().is_some_and(|id| active.contains(id))
+        {
+            let content = &value["message"]["content"];
+            pending.remove(omp_message_text(content, "\n").as_str());
+            pending.remove(omp_message_text(content, "").as_str());
+        }
+    }
+    Ok(texts
+        .iter()
+        .map(|text| !pending.contains(text.as_str()))
+        .collect())
+}
+
+fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, String> {
+    let entries = read_omp_entries(path)?;
+    let nodes: HashMap<_, _> = entries
+        .iter()
+        .filter_map(|value| value["id"].as_str().map(|id| (id, value)))
+        .collect();
+    let active = omp_active_ids(&entries);
+    let mut assistants: HashMap<&str, (String, usize, String, usize)> = HashMap::new();
+    let mut occurrences: HashMap<String, usize> = HashMap::new();
+    let mut concat_occurrences: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<OmpInterjectionAnchor> = Vec::new();
     // Metadata and compaction participate in ancestry, not anchor text.
     // Keep file order for occurrences and notes, but exclude abandoned branches.
     for value in &entries {
@@ -4194,6 +4245,38 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn omp_assistant_verification_requires_exact_active_message_text() {
+        let dir = tmp("omp-verification");
+        let path = dir.0.join("session.jsonl");
+        let records = [
+            serde_json::json!({"type":"message","id":"u","message":{"role":"user","content":"User only"}}),
+            serde_json::json!({"type":"message","id":"abandoned","parentId":"u","message":{"role":"assistant","content":"Off branch"}}),
+            serde_json::json!({"type":"message","id":"a","parentId":"u","message":{"role":"assistant","content":[{"type":"text","text":"First."},{"type":"thinking","thinking":"Hidden"},{"type":"text","text":"Second."}]}}),
+            serde_json::json!({"type":"message","id":"b","parentId":"a","message":{"role":"assistant","content":"Plain"}}),
+            serde_json::json!({"type":"custom_message","id":"note","parentId":"b","content":"Note only"}),
+        ];
+        let jsonl = records.iter().map(|v| format!("{v}\n")).collect::<String>();
+        std::fs::write(&path, jsonl).unwrap();
+        let texts = [
+            "First.\nSecond.",
+            "First.Second.",
+            "Plain",
+            "Off branch",
+            "User only",
+            "Note only",
+            "First.",
+            " First.Second.",
+            "First. Second.",
+            "First.Second.",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            verify_omp_assistant_texts(&path, &texts).unwrap(),
+            [true, true, true, false, false, false, false, false, false, true]
+        );
+    }
 
     #[test]
     fn omp_interjections_require_displayed_assistant_anchors() {
