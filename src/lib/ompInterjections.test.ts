@@ -135,6 +135,48 @@ describe("OMP persisted interjection repair", () => {
     ]);
     expect(backfillOmpInterjections(repaired, [first, second])).toBe(repaired);
   });
+
+  it("adds tool-result and chained notes around an already repaired boundary without changing IDs", () => {
+    const before = backfillOmpInterjections(oldBlocks(), [anchor]);
+    const earlier = { ...anchor, id: "tool-note", text: "Tool review" };
+    const later = { ...anchor, id: "chained-note", text: "Another review" };
+    const repaired = backfillOmpInterjections(before, [earlier, anchor, later]);
+    expect(repaired.filter(block => block.interjection).map(block => block.id)).toEqual([
+      "omp-interjection-tool-note", "omp-interjection-review", "omp-interjection-chained-note",
+    ]);
+    expect(foldedIds(repaired)).toEqual(["r2", "t2"]);
+    expect(repaired.filter(block => !block.interjection)).toEqual(oldBlocks());
+    expect(backfillOmpInterjections(repaired, [earlier, anchor, later])).toBe(repaired);
+  });
+
+  it("matches both multipart representations with separate occurrences and exact split evidence", () => {
+    const multipart = {
+      ...anchor, afterAssistantText: "One\nTwo", afterAssistantTextConcat: "OneTwo",
+      afterOccurrence: 1, afterConcatOccurrence: 2,
+      followingAssistantText: "Three\nFour", followingAssistantTextConcat: "ThreeFour",
+    };
+    const blocks: Block[] = [
+      { id: "earlier", role: "assistant", text: "OneTwo" },
+      { id: "target", role: "assistant", text: "OneTwoThreeFour" },
+    ];
+    const repaired = backfillOmpInterjections(blocks, [multipart]);
+    expect(repaired.map(block => block.text)).toEqual(["OneTwo", "OneTwo", anchor.text, "ThreeFour"]);
+    expect(backfillOmpInterjections(repaired, [multipart])).toBe(repaired);
+    const legacy: Block[] = [{ id: "target", role: "assistant", text: "One\nTwoThree\nFour" }];
+    expect(backfillOmpInterjections(legacy, [multipart]).map(block => block.text)).toEqual([
+      "One\nTwo", anchor.text, "Three\nFour",
+    ]);
+    expect(backfillOmpInterjections(blocks, [{ ...multipart, followingAssistantTextConcat: "Three" }])).toBe(blocks);
+  });
+
+  it("restores an entire note chain when only its last note has exact split evidence", () => {
+    const first = { ...anchor, afterAssistantText: "First." };
+    const last = { ...first, id: "last", text: "Last note", followingAssistantText: "Second." };
+    const blocks: Block[] = [{ id: "a", role: "assistant", text: "First.Second." }];
+    const repaired = backfillOmpInterjections(blocks, [first, last]);
+    expect(repaired.map(block => block.text)).toEqual(["First.", first.text, last.text, "Second."]);
+    expect(backfillOmpInterjections(repaired, [first, last])).toBe(repaired);
+  });
 });
 
 describe("persisted session loading", () => {

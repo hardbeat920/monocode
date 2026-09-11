@@ -42,16 +42,38 @@ export function backfillOmpInterjections(
   const matchedLive = new Set<BoundaryNode>();
   const boundaryEnds = new Map<BoundaryNode, BoundaryNode>();
   let previous: BoundaryNode | undefined;
+  // A chain's final note alone has a directly linked continuation. Its exact
+  // split evidence also locates earlier notes sealing that same source message.
+  const continuations = new Map<string, Map<number, string>>();
+  function rememberContinuation(text: string, occurrence: number, following?: string | null) {
+    if (!following) return;
+    let byOccurrence = continuations.get(text);
+    if (!byOccurrence) continuations.set(text, byOccurrence = new Map());
+    byOccurrence.set(occurrence, following);
+  }
+  for (const anchor of anchors) {
+    rememberContinuation(anchor.afterAssistantText, anchor.afterOccurrence, anchor.followingAssistantText);
+    if (anchor.afterAssistantTextConcat !== undefined) {
+      rememberContinuation(anchor.afterAssistantTextConcat, anchor.afterConcatOccurrence ?? anchor.afterOccurrence, anchor.followingAssistantTextConcat);
+    }
+  }
   let changed = false;
   for (const anchor of anchors) {
-    const exact = positions.get(anchor.afterAssistantText) ?? [];
-    const combined = anchor.followingAssistantText
-      ? positions.get(anchor.afterAssistantText + anchor.followingAssistantText) ?? []
-      : [];
-    const candidates = combined.length
-      ? [...exact, ...combined].sort(sourceOrder)
-      : exact;
-    const node = candidates[anchor.afterOccurrence - 1];
+    // Keep legacy newline matches and IDs; live streams concatenate text parts.
+    // Each representation has its own occurrence count, never fuzzy matching.
+    function match(text: string, occurrence: number, following?: string | null) {
+      following ??= continuations.get(text)?.get(occurrence);
+      const exact = positions.get(text) ?? [];
+      const combined = following ? positions.get(text + following) ?? [] : [];
+      const candidates = combined.length ? [...exact, ...combined].sort(sourceOrder) : exact;
+      return candidates[occurrence - 1];
+    }
+    let afterText = anchor.afterAssistantText;
+    let node = match(afterText, anchor.afterOccurrence, anchor.followingAssistantText);
+    if (!node && anchor.afterAssistantTextConcat !== undefined) {
+      afterText = anchor.afterAssistantTextConcat;
+      node = match(afterText, anchor.afterConcatOccurrence ?? anchor.afterOccurrence, anchor.followingAssistantTextConcat);
+    }
     if (!node || (previous && sourceOrder(node, previous) < 0)) continue;
     previous = node;
     const id = `omp-interjection-${anchor.id}`;
@@ -96,9 +118,9 @@ export function backfillOmpInterjections(
       changed = true;
     }
     boundaryEnds.set(node, boundary);
-    if (node.block.text !== anchor.afterAssistantText) {
+    if (node.block.text !== afterText) {
       const text = node.block.text;
-      const split = anchor.afterAssistantText.length;
+      const split = afterText.length;
       let end = boundary;
       while (end.next?.block.role === "system" && end.next.block.interjection) {
         end = end.next;
@@ -117,7 +139,7 @@ export function backfillOmpInterjections(
       // Index it now so later source anchors can target it in this same pass.
       end.next = continuation;
       positions.set(text, positions.get(text)!.filter(match => match !== node));
-      node.block = { ...node.block, text: anchor.afterAssistantText };
+      node.block = { ...node.block, text: afterText };
       addPosition(node);
       addPosition(continuation);
       ids.set(continuation.block.id, continuation);

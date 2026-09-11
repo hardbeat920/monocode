@@ -28,9 +28,12 @@ pub struct OmpInterjectionAnchor {
     id: String,
     after_assistant_text: String,
     after_occurrence: usize,
+    after_assistant_text_concat: String,
+    after_concat_occurrence: usize,
     /// A directly following text-only answer can have been coalesced into the
     /// parent block by old builds. Require both full texts before splitting it.
     following_assistant_text: Option<String>,
+    following_assistant_text_concat: Option<String>,
     text: String,
     custom_type: String,
     severity: Option<String>,
@@ -95,7 +98,7 @@ fn find_omp_session_file(root: &Path, provider_session_id: &str) -> Option<PathB
     None
 }
 
-fn omp_message_text(value: &serde_json::Value) -> String {
+fn omp_message_text(value: &serde_json::Value, separator: &str) -> String {
     if let Some(text) = value.as_str() {
         return text.to_owned();
     }
@@ -109,20 +112,42 @@ fn omp_message_text(value: &serde_json::Value) -> String {
                 .flatten()
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join(separator)
 }
 
 fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, String> {
     let file = std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut assistants: HashMap<String, (String, usize)> = HashMap::new();
+    let mut assistants: HashMap<&str, (String, usize, String, usize)> = HashMap::new();
     let mut occurrences: HashMap<String, usize> = HashMap::new();
+    let mut concat_occurrences: HashMap<String, usize> = HashMap::new();
     let mut out: Vec<OmpInterjectionAnchor> = Vec::new();
 
+    let mut entries = Vec::new();
     for line in BufReader::new(file).lines() {
         let Ok(line) = line else { continue };
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
+        entries.push(value);
+    }
+    let nodes: HashMap<_, _> = entries
+        .iter()
+        .filter_map(|value| value["id"].as_str().map(|id| (id, value)))
+        .collect();
+    let mut active = HashSet::new();
+    let mut cursor = entries.last().and_then(|value| value["id"].as_str());
+    while let Some(id) = cursor {
+        if !active.insert(id) {
+            break;
+        }
+        cursor = nodes.get(id).and_then(|value| value["parentId"].as_str());
+    }
+    // Metadata and compaction participate in ancestry, not anchor text.
+    // Keep file order for occurrences and notes, but exclude abandoned branches.
+    for value in &entries {
+        if !value["id"].as_str().is_some_and(|id| active.contains(id)) {
+            continue;
+        }
         match value.get("type").and_then(serde_json::Value::as_str) {
             Some("message")
                 if value
@@ -133,7 +158,8 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
                 let Some(id) = value.get("id").and_then(serde_json::Value::as_str) else {
                     continue;
                 };
-                let text = omp_message_text(&value["message"]["content"]);
+                let text = omp_message_text(&value["message"]["content"], "\n");
+                let concat_text = omp_message_text(&value["message"]["content"], "");
                 if text.trim().is_empty() {
                     continue;
                 }
@@ -146,11 +172,14 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
                             == Some(anchor.id.as_str())
                     {
                         anchor.following_assistant_text = Some(text.clone());
+                        anchor.following_assistant_text_concat = Some(concat_text.clone());
                     }
                 }
                 let occurrence = occurrences.entry(text.clone()).or_default();
                 *occurrence += 1;
-                assistants.insert(id.to_owned(), (text, *occurrence));
+                let concat_occurrence = concat_occurrences.entry(concat_text.clone()).or_default();
+                *concat_occurrence += 1;
+                assistants.insert(id, (text, *occurrence, concat_text, *concat_occurrence));
             }
             Some("custom_message")
                 if value.get("display").and_then(serde_json::Value::as_bool) == Some(true) =>
@@ -162,7 +191,30 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
                 else {
                     continue;
                 };
-                let Some((after_assistant_text, after_occurrence)) = assistants.get(parent_id)
+                let mut ancestor = Some(parent_id);
+                let mut seen = HashSet::new();
+                let mut assistant = None;
+                while let Some(id) = ancestor {
+                    if !active.contains(id) || !seen.insert(id) {
+                        break;
+                    }
+                    if let Some(found) = assistants.get(id) {
+                        assistant = Some(found);
+                        break;
+                    }
+                    let Some(parent) = nodes.get(id) else { break };
+                    if matches!(
+                        parent
+                            .pointer("/message/role")
+                            .and_then(serde_json::Value::as_str),
+                        Some("user" | "assistant")
+                    ) {
+                        break;
+                    }
+                    ancestor = parent["parentId"].as_str();
+                }
+                let Some((after_assistant_text, after_occurrence, concat_text, concat_occurrence)) =
+                    assistant
                 else {
                     continue;
                 };
@@ -193,15 +245,20 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
                     }
                 }
                 let text = if note_bodies.is_empty() {
-                    omp_message_text(&value["content"])
+                    omp_message_text(&value["content"], "\n")
                 } else {
                     note_bodies.join("\n\n")
                 };
+                // Tool results, metadata and note chains seal the same preceding
+                // assistant prose. Notes resolving there stack in source order.
                 out.push(OmpInterjectionAnchor {
                     id: id.to_owned(),
                     after_assistant_text: after_assistant_text.clone(),
                     after_occurrence: *after_occurrence,
+                    after_assistant_text_concat: concat_text.clone(),
+                    after_concat_occurrence: *concat_occurrence,
                     following_assistant_text: None,
+                    following_assistant_text_concat: None,
                     text,
                     custom_type,
                     severity,
@@ -4147,10 +4204,10 @@ mod tests {
             concat!(
                 "{\"type\":\"message\",\"id\":\"u\",\"message\":{\"role\":\"user\",\"content\":\"Go\"}}\n",
                 "{\"type\":\"custom_message\",\"id\":\"orphan\",\"parentId\":\"u\",\"display\":true}\n",
-                "{\"type\":\"message\",\"id\":\"a1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Answer\"}]}}\n",
+                "{\"type\":\"message\",\"id\":\"a1\",\"parentId\":\"orphan\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Answer\"}]}}\n",
                 "{\"type\":\"custom_message\",\"id\":\"hidden\",\"parentId\":\"a1\",\"display\":false}\n",
                 "invalid partial line\n",
-                "{\"type\":\"message\",\"id\":\"a2\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Answer\"}]}}\n",
+                "{\"type\":\"message\",\"id\":\"a2\",\"parentId\":\"hidden\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Answer\"}]}}\n",
                 "{\"type\":\"custom_message\",\"id\":\"review\",\"parentId\":\"a2\",\"display\":true,\"customType\":\"advisor\",\"details\":{\"notes\":[{\"note\":\"First\",\"severity\":\"nit\"},{\"note\":\"Second\",\"severity\":\"blocker\"}]}}\n",
                 "{\"type\":\"message\",\"id\":\"a3\",\"parentId\":\"review\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Checked\"}]}}\n",
             ),
@@ -4184,6 +4241,63 @@ mod tests {
         let anchors = parse_omp_interjections(&path).unwrap();
         assert_eq!(anchors[0].following_assistant_text, None);
         assert_eq!(anchors[0].text, "Check");
+    }
+    #[test]
+    fn omp_interjections_follow_active_ancestry_and_keep_text_forms() {
+        let dir = tmp("omp-interjections-ancestry");
+        let path = dir.0.join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"message\",\"id\":\"a\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"One\"},{\"type\":\"text\",\"text\":\"Two\"}]}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"abandoned\",\"parentId\":\"a\",\"display\":true,\"content\":\"Wrong branch\"}\n",
+                "{\"type\":\"message\",\"id\":\"t\",\"parentId\":\"a\",\"message\":{\"role\":\"toolResult\",\"content\":\"Done\"}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"first\",\"parentId\":\"t\",\"display\":true,\"content\":\"First\"}\n",
+                "{\"type\":\"custom_message\",\"id\":\"second\",\"parentId\":\"first\",\"display\":true,\"content\":\"Second\"}\n",
+                "{\"type\":\"compaction\",\"id\":\"meta\",\"parentId\":\"second\"}\n",
+                "{\"type\":\"custom_message\",\"id\":\"third\",\"parentId\":\"meta\",\"display\":true,\"content\":\"Third\"}\n",
+                "{\"type\":\"message\",\"id\":\"b\",\"parentId\":\"third\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Three\"},{\"type\":\"text\",\"text\":\"Four\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let anchors = parse_omp_interjections(&path).unwrap();
+        assert_eq!(
+            anchors.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+        for anchor in &anchors {
+            assert_eq!(anchor.after_assistant_text, "One\nTwo");
+            assert_eq!(anchor.after_assistant_text_concat, "OneTwo");
+            assert_eq!(anchor.after_occurrence, 1);
+            assert_eq!(anchor.after_concat_occurrence, 1);
+        }
+        assert_eq!(anchors[0].following_assistant_text, None);
+        assert_eq!(anchors[1].following_assistant_text, None);
+        assert_eq!(
+            anchors[2].following_assistant_text.as_deref(),
+            Some("Three\nFour")
+        );
+        assert_eq!(
+            anchors[2].following_assistant_text_concat.as_deref(),
+            Some("ThreeFour")
+        );
+    }
+
+    #[test]
+    fn omp_interjections_do_not_cross_users_or_empty_assistant_messages() {
+        let dir = tmp("omp-interjections-barriers");
+        let path = dir.0.join("session.jsonl");
+        for role in ["user", "assistant"] {
+            let records = [
+                serde_json::json!({"type":"message","id":"a","message":{"role":"assistant","content":"Earlier"}}),
+                serde_json::json!({"type":"message","id":"barrier","parentId":"a","message":{"role":role,"content":[]}}),
+                serde_json::json!({"type":"message","id":"tool","parentId":"barrier","message":{"role":"toolResult","content":"Done"}}),
+                serde_json::json!({"type":"custom_message","id":"note","parentId":"tool","display":true,"content":"Note"}),
+            ];
+            let jsonl = records.map(|record| record.to_string()).join("\n");
+            std::fs::write(&path, jsonl).unwrap();
+            assert!(parse_omp_interjections(&path).unwrap().is_empty());
+        }
     }
 
     #[test]

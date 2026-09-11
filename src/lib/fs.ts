@@ -8,9 +8,13 @@ export type OmpInterjectionAnchor = InterjectionMeta & {
   afterAssistantText: string;
   /** One-based occurrence among assistant messages with exactly this text. */
   afterOccurrence: number;
+  /** Direct-concat live representation, with its own exact-text occurrence. */
+  afterAssistantTextConcat?: string;
+  afterConcatOccurrence?: number;
   text: string;
   /** Full text of a directly following text-only answer, if present. */
   followingAssistantText?: string | null;
+  followingAssistantTextConcat?: string | null;
 };
 
 export function ompSessionInterjections(
