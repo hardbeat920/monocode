@@ -346,8 +346,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (code) => {
       rpc.close(new Error("Codex app-server exited"));
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const live = liveRef.current;
+      if (!live?.muteUpdates) {
+        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
       live?.turnFailed?.(new Error("Codex app-server exited"));
       if (live) {
         clearServerRequests(live);

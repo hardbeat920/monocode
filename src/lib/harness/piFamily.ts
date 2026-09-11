@@ -493,8 +493,10 @@ async function startLive(
     (code) => {
       rpc.close(new Error(`${flavor.label} exited`));
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const current = liveRef.current;
+      if (!current?.muteUpdates) {
+        (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
       if (current) {
         for (const question of current.questions.values())
           question.resolve({ kind: "skipped" });

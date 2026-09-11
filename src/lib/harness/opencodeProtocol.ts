@@ -303,7 +303,16 @@ export function detailFromToolPart(part: OpenCodePart): string | undefined {
   const state = part.state ?? {};
   const status = typeof state.status === "string" ? state.status : "";
   if (status === "completed" && typeof state.output === "string") return state.output;
-  if (status === "error" && typeof state.error === "string") return state.error;
+  if (status === "error") {
+    if (typeof state.error === "string") return state.error;
+    const error = asRecord(state.error);
+    const data = asRecord(error?.data);
+    return (
+      stringField(data, "message") ??
+      stringField(error, "message") ??
+      stringField(asRecord(error?.error), "message")
+    );
+  }
   if (status === "running" && typeof state.title === "string") return state.title;
   return undefined;
 }

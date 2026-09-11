@@ -2,14 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
+let onExit: ((code?: number | null) => void) | undefined;
 
 vi.mock("./child", () => ({
   resolveClaudeBinary: async () => ({ path: "/fake/claude" }),
   spawnChild: async () => undefined,
   killChild: async () => undefined,
   unwatchChild: () => undefined,
-  watchChild: (_id: string, line: (l: string) => void) => {
+  watchChild: (
+    _id: string,
+    line: (l: string) => void,
+    exit: (code?: number | null) => void,
+  ) => {
     onLine = line;
+    onExit = exit;
   },
   writeChild: async (_id: string, line: string) => {
     sent.push(line);
@@ -80,6 +86,7 @@ async function startTurn(
 beforeEach(() => {
   sent.length = 0;
   onLine = undefined;
+  onExit = undefined;
   __claudeTestReset();
 });
 
@@ -239,6 +246,43 @@ describe("claude subagents", () => {
           event.text.includes("I will grep for tokens"),
       ),
     ).toBe(false);
+  });
+
+  it("routes an unexpected provider exit to the turn that is actually running", async () => {
+    const first = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+
+    const secondEvents: HarnessEvent[] = [];
+    const userMessages = parse().filter(
+      (message) => message.type === "user",
+    ).length;
+    const second = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      text: "try again",
+      attachments: [],
+      onEvent: (event) => secondEvents.push(event),
+    });
+    await waitFor(
+      () =>
+        parse().filter((message) => message.type === "user").length >
+        userMessages,
+      "second user prompt",
+    );
+
+    onExit?.(1);
+    await expect(second).rejects.toThrow("Claude Code exited");
+    expect(first.events.some((event) => event.type === "session.ended")).toBe(
+      false,
+    );
+    expect(secondEvents).toContainEqual({ type: "session.ended", code: 1 });
+    expect(secondEvents).toContainEqual({
+      type: "session.error",
+      message: "Claude Code exited",
+    });
   });
 });
 

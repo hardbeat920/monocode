@@ -103,7 +103,7 @@ export function applyHarnessEvent(
     case "plan":
       return upsertPlan(session, event);
     case "session.error":
-      return appendBlock(stopStreaming(session), {
+      return appendBlock(failStreaming(session), {
         id: crypto.randomUUID(),
         role: "system",
         text: event.message,
@@ -352,6 +352,45 @@ export function stopStreaming(session: Session): Session {
     busy: false,
     pendingQuestion: undefined,
     blocks: stampTurnDuration(session.blocks.map(stopBlockProgress)),
+  };
+}
+
+/**
+ * A terminal provider failure also settles work whose final tool event was
+ * lost with the transport. Leaving those calls `in_progress` hides the real
+ * failure behind a neutral completed-turn summary.
+ */
+function failStreaming(session: Session): Session {
+  const openTools = new Set(
+    session.blocks.flatMap((block) => {
+      if (block.role !== "tool" && block.role !== "approval") return [];
+      const status = block.tool?.status?.toLowerCase() ?? "";
+      return block.streaming ||
+        status === "in_progress" ||
+        status === "pending" ||
+        status === "running"
+        ? [block.id]
+        : [];
+    }),
+  );
+  const stopped = stopStreaming(session);
+  return {
+    ...stopped,
+    blocks: stopped.blocks.map((block) => {
+      const open = openTools.has(block.id);
+      const pendingApproval = !!block.approval && !block.approval.decided;
+      if (!open && !pendingApproval) return block;
+      return {
+        ...block,
+        streaming: false,
+        ...(block.tool && open
+          ? { tool: { ...block.tool, status: "failed" } }
+          : {}),
+        ...(block.approval && !block.approval.decided
+          ? { approval: { ...block.approval, decided: "cancelled" as const } }
+          : {}),
+      };
+    }),
   };
 }
 

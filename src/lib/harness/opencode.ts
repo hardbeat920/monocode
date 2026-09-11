@@ -314,8 +314,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (code) => {
       serverExited = code;
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const live = liveRef.current;
+      if (!live?.muteUpdates) {
+        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
+      if (live) live.muteUpdates = true;
       live?.turnFailed?.(new Error("OpenCode server exited"));
       if (live) {
         live.turnDone = null;
@@ -385,10 +388,31 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       },
       (error) => {
         if (live.muteUpdates || live.cancelled) return;
-        if (error) {
-          live.onEvent({ type: "session.error", message: error });
-          live.turnFailed?.(new Error(error));
-        }
+        const message =
+          error?.trim() || "OpenCode event stream ended unexpectedly.";
+        // prompt_async has no response body to await; the SSE stream is its
+        // only completion channel. Reusing a Live after this point accepts the
+        // next prompt but can never observe it, which looks like a dead thread.
+        liveByThread.delete(input.sessionId);
+        const failed = live.turnFailed;
+        live.turnDone = null;
+        live.turnFailed = null;
+        live.muteUpdates = true;
+        for (const pending of live.approvals.values()) pending.resolve("deny");
+        live.approvals.clear();
+        for (const pending of live.questions.values())
+          pending.resolve({ kind: "skipped" });
+        live.questions.clear();
+        unwatchChild(input.sessionId);
+        void killChild(input.sessionId)
+          .catch(() => undefined)
+          .then(() => {
+            if (failed) {
+              failed(new Error(message));
+            } else {
+              live.onEvent({ type: "session.error", message });
+            }
+          });
       },
     );
 
@@ -750,7 +774,13 @@ function emitTool(live: Live, part: OpenCodePart): void {
         : status === "completed"
           ? "completed"
           : status,
-    detail,
+    detail:
+      detail ??
+      (status === "error"
+        ? kind === "agent"
+          ? "Subagent failed."
+          : "Tool failed."
+        : undefined),
     preview,
   });
 }
@@ -901,4 +931,11 @@ function waitForServerUrl(
     };
     tick();
   });
+}
+
+/** Exported for tests. */
+export function __openCodeTestReset(): void {
+  liveByThread.clear();
+  resumeByThread.clear();
+  cancelledThreads.clear();
 }

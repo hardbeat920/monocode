@@ -322,6 +322,18 @@ export function hasRunningSubagent(blocks: Block[]): boolean {
   );
 }
 
+/** A failed delegated call must stay visible even when the work trail folds. */
+export function subagentFailureSummary(blocks: Block[]): string | undefined {
+  const failed = blocks.filter(
+    (block) =>
+      isToolBlock(block) &&
+      isAgentTool(block.tool?.kind, block.text || block.tool?.title) &&
+      toolCallState(block) === "rejected",
+  ).length;
+  if (failed === 0) return undefined;
+  return failed === 1 ? "Subagent failed" : `${failed} subagents failed`;
+}
+
 /**
  * What a run of tool calls was for. Reads and searches are one thing — looking
  * around — so a grep followed by the file it turned up stays one group.
@@ -571,6 +583,8 @@ export function workKind(steps: Block[]): ActivityPhaseKind {
  * calls add up to.
  */
 export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
+  const failure = subagentFailureSummary(phase.steps);
+  if (failure) return failure;
   if (phase.headline) {
     const summary = proseSummary(phase.headline.text);
     if (summary) return summary;

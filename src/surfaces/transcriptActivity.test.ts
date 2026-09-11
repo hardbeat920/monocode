@@ -15,6 +15,7 @@ import {
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  subagentFailureSummary,
   toolCallLabel,
   turnCopyText,
 } from "./transcriptActivity";
@@ -618,6 +619,18 @@ describe("running subagents", () => {
     expect(activityStillRunning([agent("ag")])).toBe(true);
     expect(hasRunningSubagent([agent("ag", "completed")])).toBe(false);
     expect(activityStillRunning([agent("ag", "completed")])).toBe(false);
+  });
+
+  it("surfaces failed subagents in activity summaries", () => {
+    expect(subagentFailureSummary([agent("one", "failed")])).toBe(
+      "Subagent failed",
+    );
+    expect(
+      subagentFailureSummary([agent("one", "failed"), agent("two", "error")]),
+    ).toBe("2 subagents failed");
+    expect(
+      activityPhaseTitle(buildActivityPhases([agent("one", "failed")])[0]),
+    ).toBe("Subagent failed");
   });
 });
 
