@@ -3263,6 +3263,8 @@ export default function App({
       });
       switch (decision.action) {
         case "keep":
+          setProjectCwd(normalized);
+          setRecents(rememberProject(normalized));
           return;
         case "reuse-blank":
           onCwdChange(decision.sessionId, normalized);
