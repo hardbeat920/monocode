@@ -1,4 +1,4 @@
-import type { OmpInterjectionAnchor } from "./fs";
+import type { OmpAssistantTextEvidence, OmpInterjectionAnchor } from "./fs";
 import type { Block } from "./session";
 
 interface BoundaryNode {
@@ -36,24 +36,44 @@ function statusSplitEnd(blocks: Block[], index: number): number | undefined {
 
 /** Undo a status-only split only with a complete, exactly equal source message. */
 function mergeStatusSplits(
-  blocks: Block[], anchors: readonly OmpInterjectionAnchor[], verifiedTexts: readonly string[],
+  blocks: Block[], anchors: readonly OmpInterjectionAnchor[], verifiedTexts: readonly OmpAssistantTextEvidence[],
 ): Block[] {
-  const texts = new Set(verifiedTexts);
-  for (const anchor of anchors) {
-    texts.add(anchor.afterAssistantText);
-    if (anchor.afterAssistantTextConcat !== undefined) texts.add(anchor.afterAssistantTextConcat);
-    if (anchor.followingAssistantText) texts.add(anchor.followingAssistantText);
-    if (anchor.followingAssistantTextConcat) texts.add(anchor.followingAssistantTextConcat);
+  const counts = new Map<string, number>();
+  for (const { text, occurrences } of verifiedTexts) {
+    counts.set(text, Math.max(counts.get(text) ?? 0, occurrences));
   }
+  const anchored = new Map<string, Set<number>>();
+  function remember(text: string, occurrence: number) {
+    let occurrences = anchored.get(text);
+    if (!occurrences) anchored.set(text, occurrences = new Set());
+    occurrences.add(occurrence);
+  }
+  for (const anchor of anchors) {
+    remember(anchor.afterAssistantText, anchor.afterOccurrence);
+    if (anchor.afterAssistantTextConcat !== undefined) {
+      remember(anchor.afterAssistantTextConcat, anchor.afterConcatOccurrence ?? anchor.afterOccurrence);
+    }
+    // Following text has no occurrence index: it is split-boundary evidence
+    // only, never authority to merge an unrelated status split.
+  }
+  const seen = new Map<string, number>();
   let repaired: Block[] | undefined;
   for (let index = 0; index < blocks.length; index++) {
     const first = blocks[index];
     const end = statusSplitEnd(blocks, index);
-    if (end !== undefined && texts.has(first.text + blocks[end].text)) {
-      repaired ??= blocks.slice(0, index);
-      repaired.push({ ...first, text: first.text + blocks[end].text }, ...blocks.slice(index + 1, end));
-      index = end;
-      continue;
+    if (end !== undefined) {
+      const text = first.text + blocks[end].text;
+      const occurrence = (seen.get(text) ?? 0) + 1;
+      if (occurrence <= (counts.get(text) ?? 0) || anchored.get(text)?.has(occurrence)) {
+        repaired ??= blocks.slice(0, index);
+        repaired.push({ ...first, text }, ...blocks.slice(index + 1, end));
+        seen.set(text, occurrence);
+        index = end;
+        continue;
+      }
+    }
+    if (first.role === "assistant" && !first.streaming) {
+      seen.set(first.text, (seen.get(first.text) ?? 0) + 1);
     }
     repaired?.push(first);
   }
@@ -68,7 +88,7 @@ function mergeStatusSplits(
 export function backfillOmpInterjections(
   blocks: Block[],
   anchors: readonly OmpInterjectionAnchor[],
-  verifiedTexts: readonly string[] = [],
+  verifiedTexts: readonly OmpAssistantTextEvidence[] = [],
 ): Block[] {
   const merged = mergeStatusSplits(blocks, anchors, verifiedTexts);
   if (anchors.length === 0) return merged;

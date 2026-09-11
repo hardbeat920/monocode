@@ -286,7 +286,7 @@ export async function getSession(sessionId: string): Promise<Session | null> {
       ? await ompVerifyAssistantTexts(session.providerSessionId, candidates).catch(() => [])
       : [];
     const blocks = backfillOmpInterjections(
-      session.blocks, anchors, candidates.filter((_, index) => verified[index] === true),
+      session.blocks, anchors, candidates.map((text, index) => ({ text, occurrences: verified[index] ?? 0 })),
     );
     if (blocks !== session.blocks) {
       session.blocks = blocks;

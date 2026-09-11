@@ -209,9 +209,10 @@ describe("OMP persisted interjection repair", () => {
       { id: "b", role: "assistant", text: "answer." },
       { id: "c", role: "assistant", text: anchor.afterAssistantText },
     ];
-    const repaired = backfillOmpInterjections(blocks, [{ ...anchor, afterOccurrence: 2 }]);
+    const evidence = [{ text: anchor.afterAssistantText, occurrences: 1 }];
+    const repaired = backfillOmpInterjections(blocks, [{ ...anchor, afterOccurrence: 2 }], evidence);
     expect(repaired.map(block => block.id)).toEqual(["a", "status", "c", "omp-interjection-review"]);
-    expect(backfillOmpInterjections(repaired, [{ ...anchor, afterOccurrence: 2 }])).toBe(repaired);
+    expect(backfillOmpInterjections(repaired, [{ ...anchor, afterOccurrence: 2 }], evidence)).toBe(repaired);
   });
 
   it("keeps streaming fragments and metadata even with verified full text", () => {
@@ -223,11 +224,66 @@ describe("OMP persisted interjection repair", () => {
     for (const index of [0, 2]) {
       const streaming = blocks.map((block, i) => i === index ? { ...block, streaming: true } : block);
       expect(ompStatusSplitTexts(streaming)).toEqual([]);
-      expect(backfillOmpInterjections(streaming, [], ["First.Second."])).toBe(streaming);
+      expect(backfillOmpInterjections(streaming, [], [{ text: "First.Second.", occurrences: 1 }])).toBe(streaming);
     }
     const metadata = blocks.map(block => block.id === "b" ? { ...block, durationMs: 10 } : block);
     expect(ompStatusSplitTexts(metadata)).toEqual([]);
-    expect(backfillOmpInterjections(metadata, [], ["First.Second."])).toBe(metadata);
+    expect(backfillOmpInterjections(metadata, [], [{ text: "First.Second.", occurrences: 1 }])).toBe(metadata);
+  });
+
+  function split(id: string): Block[] {
+    return [
+      { id, role: "assistant", text: "First." },
+      { id: `${id}-status`, role: "system", text: "Reviewed" },
+      { id: `${id}-end`, role: "assistant", text: "Second." },
+    ];
+  }
+
+  it.each(["verified", "anchor", "concat"] as const)("uses one source occurrence only once: %s", source => {
+    const blocks = [...split("a"), ...split("b")];
+    const anchors = source === "verified" ? [] : [{
+      ...anchor,
+      afterAssistantText: source === "concat" ? "First.\nSecond." : "First.Second.",
+      afterAssistantTextConcat: "First.Second.",
+      afterOccurrence: source === "concat" ? 2 : 1,
+      afterConcatOccurrence: 1,
+    }];
+    const evidence = source === "verified" ? [{ text: "First.Second.", occurrences: 1 }] : [];
+    const repaired = backfillOmpInterjections(blocks, anchors, evidence);
+    expect(repaired.find(block => block.id === "a")!.text).toBe("First.Second.");
+    expect(repaired.filter(block => block.id.startsWith("b"))).toEqual(split("b"));
+    expect(backfillOmpInterjections(repaired, anchors, evidence)).toBe(repaired);
+  });
+
+  it.each([false, true])("counts an unsplit answer before a later candidate, anchored: %s", anchored => {
+    const blocks: Block[] = [{ id: "complete", role: "assistant", text: "First.Second." }, ...split("a")];
+    const anchors = anchored ? [{ ...anchor, afterAssistantText: "First.Second." }] : [];
+    const repaired = backfillOmpInterjections(blocks, anchors, [{ text: "First.Second.", occurrences: 1 }]);
+    expect(repaired.filter(block => block.id.startsWith("a"))).toEqual(split("a"));
+  });
+
+  it("repairs two splits only with two verified occurrences", () => {
+    const blocks = [...split("a"), ...split("b")];
+    const evidence = [{ text: "First.Second.", occurrences: 2 }];
+    const repaired = backfillOmpInterjections(blocks, [], evidence);
+    expect(repaired.map(block => block.id)).toEqual(["a", "a-status", "b", "b-status"]);
+    expect(repaired.filter(block => block.role === "assistant").map(block => block.text)).toEqual(["First.Second.", "First.Second."]);
+    expect(backfillOmpInterjections(repaired, [], evidence)).toBe(repaired);
+  });
+
+  it("keeps anchor and verified evidence for the same occurrence from adding together", () => {
+    const blocks = [...split("a"), ...split("b")];
+    const anchors = [{ ...anchor, afterAssistantText: "First.Second." }];
+    const evidence = [{ text: "First.Second.", occurrences: 1 }, { text: "First.Second.", occurrences: 1 }];
+    const repaired = backfillOmpInterjections(blocks, anchors, evidence);
+    expect(repaired.filter(block => block.id.startsWith("b"))).toEqual(split("b"));
+    expect(backfillOmpInterjections(repaired, anchors, evidence)).toBe(repaired);
+  });
+
+  it("does not bind a later anchor occurrence or unnumbered following text to an earlier split", () => {
+    const blocks = split("a");
+    expect(backfillOmpInterjections(blocks, [{ ...anchor, afterAssistantText: "First.Second.", afterOccurrence: 2 }])).toBe(blocks);
+    expect(backfillOmpInterjections(blocks, [{ ...anchor, followingAssistantText: "First.Second." }])).toBe(blocks);
   });
 });
 
@@ -270,7 +326,7 @@ describe("persisted session loading", () => {
       if (command === "omp_session_interjections") return [];
       if (command === "omp_verify_assistant_texts") {
         expect(args.texts).toEqual(["First.Second."]);
-        return [verified];
+        return [verified ? 1 : 0];
       }
       if (command === "session_upsert") {
         writes++;
@@ -284,6 +340,34 @@ describe("persisted session loading", () => {
       ? [{ ...original[0], text: "First.Second." }, original[1], original[3]] : original);
     expect((await getSession(record.id))!.blocks).toEqual(first!.blocks);
     expect(writes).toBe(verified ? 1 : 0);
+  });
+
+  it.each([false, true])("loads duplicate text without reusing occupied source evidence, complete first: %s", async complete => {
+    const first: Block[] = complete ? [{ id: "a", role: "assistant", text: "First.Second." }] : [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "s1", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "Second." },
+    ];
+    const later: Block[] = [
+      { id: "c", role: "assistant", text: "First." },
+      { id: "s2", role: "system", text: "Reviewed" },
+      { id: "d", role: "assistant", text: "Second." },
+    ];
+    const record = { ...stored(), blocks: [...first, ...later] };
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "session_get") return record;
+      if (command === "omp_session_interjections") return [];
+      if (command === "omp_verify_assistant_texts") {
+        expect(args.texts).toEqual(complete ? ["First.Second."] : ["First.Second.", "First.Second."]);
+        return args.texts.map(() => 1);
+      }
+      if (command === "session_upsert") return args.session;
+      throw new Error(command);
+    });
+    const loaded = (await getSession(record.id))!;
+    expect(loaded.blocks[0]).toMatchObject({ id: "a", text: "First.Second." });
+    expect(loaded.blocks.slice(-3)).toEqual(later);
+    expect(loaded.blocks).toHaveLength(complete ? 4 : 5);
   });
 
   it("leaves other harnesses and unbound OMP sessions untouched", async () => {

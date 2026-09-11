@@ -25,11 +25,19 @@ export function ompSessionInterjections(
   });
 }
 
+/** Active exact-text occurrences, not independent votes for duplicate requests.
+ * Newline and concat representations are counted separately; take their max.
+ */
+export interface OmpAssistantTextEvidence {
+  text: string;
+  occurrences: number;
+}
+
 export function ompVerifyAssistantTexts(
   providerSessionId: string,
   texts: string[],
-): Promise<boolean[]> {
-  return invoke<boolean[]>("omp_verify_assistant_texts", { providerSessionId, texts });
+): Promise<number[]> {
+  return invoke<number[]>("omp_verify_assistant_texts", { providerSessionId, texts });
 }
 
 export type FsEntry = {

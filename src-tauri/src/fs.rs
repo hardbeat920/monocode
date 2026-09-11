@@ -57,9 +57,9 @@ pub fn omp_session_interjections(
 pub fn omp_verify_assistant_texts(
     provider_session_id: String,
     texts: Vec<String>,
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<usize>, String> {
     let Some(path) = omp_session_path(&provider_session_id)? else {
-        return Ok(vec![false; texts.len()]);
+        return Ok(vec![0; texts.len()]);
     };
     verify_omp_assistant_texts(&path, &texts)
 }
@@ -159,26 +159,40 @@ fn omp_active_ids(entries: &[serde_json::Value]) -> HashSet<&str> {
     active
 }
 
-fn verify_omp_assistant_texts(path: &Path, texts: &[String]) -> Result<Vec<bool>, String> {
+// Return occurrence bounds, not a boolean vote per candidate. Duplicate
+// requests share the same bound; the persisted walk accounts for occupancy.
+fn verify_omp_assistant_texts(path: &Path, texts: &[String]) -> Result<Vec<usize>, String> {
     let entries = read_omp_entries(path)?;
     let active = omp_active_ids(&entries);
-    let mut pending: HashSet<&str> = texts.iter().map(String::as_str).collect();
+    let requested: HashSet<&str> = texts.iter().map(String::as_str).collect();
+    let mut occurrences = HashMap::<String, usize>::new();
+    let mut concat_occurrences = HashMap::<String, usize>::new();
     for value in &entries {
-        if pending.is_empty() {
-            break;
-        }
         if value["type"] == "message"
             && value["message"]["role"] == "assistant"
             && value["id"].as_str().is_some_and(|id| active.contains(id))
         {
             let content = &value["message"]["content"];
-            pending.remove(omp_message_text(content, "\n").as_str());
-            pending.remove(omp_message_text(content, "").as_str());
+            let text = omp_message_text(content, "\n");
+            let concat = omp_message_text(content, "");
+            if requested.contains(text.as_str()) {
+                *occurrences.entry(text).or_default() += 1;
+            }
+            if requested.contains(concat.as_str()) {
+                *concat_occurrences.entry(concat).or_default() += 1;
+            }
         }
     }
     Ok(texts
         .iter()
-        .map(|text| !pending.contains(text.as_str()))
+        .map(|text| {
+            // The two forms are alternatives, never two source occurrences.
+            occurrences
+                .get(text)
+                .copied()
+                .unwrap_or(0)
+                .max(concat_occurrences.get(text).copied().unwrap_or(0))
+        })
         .collect())
 }
 
@@ -4274,7 +4288,31 @@ mod tests {
         .map(str::to_owned);
         assert_eq!(
             verify_omp_assistant_texts(&path, &texts).unwrap(),
-            [true, true, true, false, false, false, false, false, false, true]
+            [1, 1, 1, 0, 0, 0, 0, 0, 0, 1]
+        );
+        let count = verify_omp_assistant_texts(&path, &texts).unwrap()[1];
+        assert_eq!([1, 2].map(|occurrence| occurrence <= count), [true, false]);
+    }
+
+    #[test]
+    fn omp_assistant_verification_counts_active_occurrences_not_join_forms() {
+        let dir = tmp("omp-verification-occurrences");
+        let path = dir.0.join("session.jsonl");
+        let records = [
+            serde_json::json!({"type":"message","id":"a","message":{"role":"assistant","content":"Same"}}),
+            serde_json::json!({"type":"message","id":"off","parentId":"a","message":{"role":"assistant","content":"Same"}}),
+            serde_json::json!({"type":"message","id":"b","parentId":"a","message":{"role":"assistant","content":[{"type":"text","text":"Same"}]}}),
+        ];
+        std::fs::write(
+            &path,
+            records.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let counts = verify_omp_assistant_texts(&path, &["Same".into(), "Same".into()]).unwrap();
+        assert_eq!(counts, [2, 2]);
+        assert_eq!(
+            [1, 2, 3].map(|occurrence| occurrence <= counts[0]),
+            [true, true, false]
         );
     }
 

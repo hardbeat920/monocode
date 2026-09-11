@@ -92,21 +92,35 @@ describe("streamed markdown", () => {
     expect(session.blocks[0]?.text).toBe("I'll read the file");
   });
 
-  it("continues open prose through status and interjection rows, then completes it", () => {
+  it("continues open prose through status rows, then completes it", () => {
     let session = newSession("omp", "/tmp");
     session = applyHarnessEvent(session, { type: "message.delta", text: "contributor（" });
     const id = session.blocks[0].id;
     session = applyHarnessEvent(session, { type: "status", text: "Advisor reviewed this turn" });
-    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
     session = applyHarnessEvent(session, { type: "message.delta", text: "邮箱归属链已验证）" });
     expect(session.blocks.map(block => block.text)).toEqual([
-      "contributor（邮箱归属链已验证）", "Advisor reviewed this turn", "Review",
+      "contributor（邮箱归属链已验证）", "Advisor reviewed this turn",
     ]);
     expect(session.blocks[0]).toMatchObject({ id, streaming: true });
     session = applyHarnessEvent(session, { type: "message.completed" });
     session = applyHarnessEvent(session, { type: "message.delta", text: "Next message." });
     expect(session.blocks[0].streaming).toBe(false);
-    expect(session.blocks[3]).toMatchObject({ role: "assistant", text: "Next message." });
+    expect(session.blocks[2]).toMatchObject({ role: "assistant", text: "Next message." });
+  });
+
+  it.each([false, true])("seals open prose at an interjection, with preceding status: %s", status => {
+    let session = newSession("omp", "/tmp");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "contributor（" });
+    const id = session.blocks[0].id;
+    if (status) session = applyHarnessEvent(session, { type: "status", text: "Reviewed" });
+    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
+    expect(session.blocks[0]).toMatchObject({ id, streaming: false });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "邮箱归属链已验证）" });
+    expect(session.blocks.map(block => block.text)).toEqual([
+      "contributor（", ...(status ? ["Reviewed"] : []), "Review", "邮箱归属链已验证）",
+    ]);
+    expect(session.blocks.at(-1)).toMatchObject({ role: "assistant", streaming: true });
+    expect(session.blocks.at(-1)!.id).not.toBe(id);
   });
 
   it("continues reasoning across status but seals it when a tool starts", () => {

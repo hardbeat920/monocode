@@ -478,11 +478,11 @@ function appendStatus(session: Session, text: string): Session {
 function appendBlock(session: Session, block: Block): Session {
   return {
     ...session,
-    blocks: [...(block.role === "system" ? session.blocks : sealLastStream(session.blocks)), block],
+    blocks: [...(block.role === "system" && !block.interjection ? session.blocks : sealLastStream(session.blocks)), block],
   };
 }
 
-/** Status and interjection rows do not end an open prose stream. */
+/** Only ordinary status rows leave an open prose stream intact. */
 function patchStreaming(
   session: Session,
   role: "assistant" | "reasoning",
@@ -491,7 +491,7 @@ function patchStreaming(
 ): Session {
   if (!text && role === "reasoning") return session;
   let index = session.blocks.length - 1;
-  while (index >= 0 && session.blocks[index].role === "system") index--;
+  while (index >= 0 && session.blocks[index].role === "system" && !session.blocks[index].interjection) index--;
   const last = session.blocks[index];
   if (last?.role === role && (index === session.blocks.length - 1 || last.streaming)) {
     const nextText = joinStreamText(last.text, text);
@@ -749,7 +749,7 @@ function findToolIndex(
 
 function sealLastStream(blocks: Block[]): Block[] {
   let index = blocks.length - 1;
-  while (index >= 0 && blocks[index].role === "system") index--;
+  while (index >= 0 && blocks[index].role === "system" && !blocks[index].interjection) index--;
   const last = blocks[index];
   if (
     !last?.streaming ||
