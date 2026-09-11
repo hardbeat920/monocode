@@ -91,6 +91,40 @@ describe("streamed markdown", () => {
     expect(session.blocks).toHaveLength(1);
     expect(session.blocks[0]?.text).toBe("I'll read the file");
   });
+
+  it("continues open prose through status and interjection rows, then completes it", () => {
+    let session = newSession("omp", "/tmp");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "contributor（" });
+    const id = session.blocks[0].id;
+    session = applyHarnessEvent(session, { type: "status", text: "Advisor reviewed this turn" });
+    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "邮箱归属链已验证）" });
+    expect(session.blocks.map(block => block.text)).toEqual([
+      "contributor（邮箱归属链已验证）", "Advisor reviewed this turn", "Review",
+    ]);
+    expect(session.blocks[0]).toMatchObject({ id, streaming: true });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Next message." });
+    expect(session.blocks[0].streaming).toBe(false);
+    expect(session.blocks[3]).toMatchObject({ role: "assistant", text: "Next message." });
+  });
+
+  it("continues reasoning across status but seals it when a tool starts", () => {
+    let session = newSession("omp", "/tmp");
+    session = applyHarnessEvent(session, { type: "reasoning.delta", text: "Think" });
+    session = applyHarnessEvent(session, { type: "status", text: "Reviewing" });
+    session = applyHarnessEvent(session, { type: "reasoning.delta", text: " more" });
+    expect(session.blocks[0]).toMatchObject({ text: "Think more", streaming: true });
+    session = applyHarnessEvent(session, { type: "tool.started", callId: "call", title: "Read" });
+    expect(session.blocks[0].streaming).toBe(false);
+    session = applyHarnessEvent(session, { type: "status", text: "Waiting" });
+    session = applyHarnessEvent(session, { type: "tool.updated", callId: "call", status: "completed" });
+    expect(session.blocks.filter(block => block.role === "tool")).toMatchObject([
+      { streaming: false, tool: { callId: "call", status: "completed" } },
+    ]);
+    session = applyHarnessEvent(session, { type: "reasoning.delta", text: "New thought" });
+    expect(session.blocks.at(-1)).toMatchObject({ role: "reasoning", text: "New thought" });
+  });
 });
 
 describe("appendSteerUser", () => {
@@ -162,12 +196,13 @@ describe("status blocks", () => {
 });
 
 describe("interjection blocks", () => {
-  it("seals assistant streams on both sides of the boundary", () => {
+  it("keeps a boundary between completed assistant messages", () => {
     let session = appendUser(newSession("pi", "/tmp"), "go");
     session = applyHarnessEvent(session, {
       type: "message.delta",
       text: "Complete answer.",
     });
+    session = applyHarnessEvent(session, { type: "message.completed" });
     session = applyHarnessEvent(session, {
       type: "interjection",
       text: "Check the fallback.",

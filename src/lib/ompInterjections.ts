@@ -12,6 +12,39 @@ function sourceOrder(a: BoundaryNode, b: BoundaryNode): number {
   return a.index - b.index || a.offset - b.offset;
 }
 
+/** Undo a status-only split only with a complete, exactly equal source message. */
+function mergeStatusSplits(blocks: Block[], anchors: readonly OmpInterjectionAnchor[]): Block[] {
+  const texts = new Set<string>();
+  for (const anchor of anchors) {
+    texts.add(anchor.afterAssistantText);
+    if (anchor.afterAssistantTextConcat !== undefined) texts.add(anchor.afterAssistantTextConcat);
+    if (anchor.followingAssistantText) texts.add(anchor.followingAssistantText);
+    if (anchor.followingAssistantTextConcat) texts.add(anchor.followingAssistantTextConcat);
+  }
+  let repaired: Block[] | undefined;
+  for (let index = 0; index < blocks.length; index++) {
+    const first = blocks[index];
+    let end = index + 1;
+    if (first.role === "assistant" && first.text && !first.streaming) {
+      while (blocks[end]?.role === "system" && !blocks[end].interjection) end++;
+      const last = blocks[end];
+      if (
+        end > index + 1 && last?.role === "assistant" && last.text && !last.streaming &&
+        // Never discard metadata carried by the removed fragment.
+        Object.keys(last).every(key => ["id", "role", "text", "streaming"].includes(key)) &&
+        texts.has(first.text + last.text)
+      ) {
+        repaired ??= blocks.slice(0, index);
+        repaired.push({ ...first, text: first.text + last.text }, ...blocks.slice(index + 1, end));
+        index = end;
+        continue;
+      }
+    }
+    repaired?.push(first);
+  }
+  return repaired ?? blocks;
+}
+
 /** Restore omitted boundaries, not turns: live interjections also stay mid-turn.
  * Exact text and one-based occurrence avoid inventing boundaries for progress
  * prose. Split coalesced blocks only when both complete source messages
@@ -22,9 +55,10 @@ export function backfillOmpInterjections(
   anchors: readonly OmpInterjectionAnchor[],
 ): Block[] {
   if (anchors.length === 0) return blocks;
+  const merged = mergeStatusSplits(blocks, anchors);
   const positions = new Map<string, BoundaryNode[]>();
   const ids = new Map<string, BoundaryNode>();
-  const nodes = blocks.map((block, index): BoundaryNode => ({ block, index, offset: 0 }));
+  const nodes = merged.map((block, index): BoundaryNode => ({ block, index, offset: 0 }));
   function addPosition(node: BoundaryNode) {
     const matches = positions.get(node.block.text);
     if (matches) {
@@ -57,7 +91,7 @@ export function backfillOmpInterjections(
       rememberContinuation(anchor.afterAssistantTextConcat, anchor.afterConcatOccurrence ?? anchor.afterOccurrence, anchor.followingAssistantTextConcat);
     }
   }
-  let changed = false;
+  let changed = merged !== blocks;
   for (const anchor of anchors) {
     // Keep legacy newline matches and IDs; live streams concatenate text parts.
     // Each representation has its own occurrence count, never fuzzy matching.

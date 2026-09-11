@@ -476,10 +476,13 @@ function appendStatus(session: Session, text: string): Session {
 }
 
 function appendBlock(session: Session, block: Block): Session {
-  return { ...session, blocks: [...sealLastStream(session.blocks), block] };
+  return {
+    ...session,
+    blocks: [...(block.role === "system" ? session.blocks : sealLastStream(session.blocks)), block],
+  };
 }
 
-/** Append to the latest block only when it is the same role; never splice into an earlier one. */
+/** Status and interjection rows do not end an open prose stream. */
 function patchStreaming(
   session: Session,
   role: "assistant" | "reasoning",
@@ -487,12 +490,14 @@ function patchStreaming(
   streaming: boolean,
 ): Session {
   if (!text && role === "reasoning") return session;
-  const last = session.blocks[session.blocks.length - 1];
-  if (last?.role === role) {
+  let index = session.blocks.length - 1;
+  while (index >= 0 && session.blocks[index].role === "system") index--;
+  const last = session.blocks[index];
+  if (last?.role === role && (index === session.blocks.length - 1 || last.streaming)) {
     const nextText = joinStreamText(last.text, text);
     if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
-    blocks[blocks.length - 1] = {
+    blocks[index] = {
       ...last,
       text: nextText,
       streaming,
@@ -743,7 +748,9 @@ function findToolIndex(
 }
 
 function sealLastStream(blocks: Block[]): Block[] {
-  const last = blocks[blocks.length - 1];
+  let index = blocks.length - 1;
+  while (index >= 0 && blocks[index].role === "system") index--;
+  const last = blocks[index];
   if (
     !last?.streaming ||
     (last.role !== "assistant" && last.role !== "reasoning")
@@ -751,7 +758,7 @@ function sealLastStream(blocks: Block[]): Block[] {
     return blocks.slice();
   }
   const next = blocks.slice();
-  next[next.length - 1] = { ...last, streaming: false };
+  next[index] = { ...last, streaming: false };
   return next;
 }
 

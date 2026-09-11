@@ -177,6 +177,42 @@ describe("OMP persisted interjection repair", () => {
     expect(repaired.map(block => block.text)).toEqual(["First.", first.text, last.text, "Second."]);
     expect(backfillOmpInterjections(repaired, [first, last])).toBe(repaired);
   });
+
+  it("merges status-split prose with exact source evidence before placing later anchors", () => {
+    const first = { ...anchor, afterAssistantText: "First.Second.", followingAssistantText: "Later." };
+    const later = { ...anchor, id: "later", afterAssistantText: "Later." };
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "status", role: "system", text: "Advisor reviewed this turn" },
+      { id: "b", role: "assistant", text: "Second." },
+      { id: "c", role: "assistant", text: "Later." },
+    ];
+    const repaired = backfillOmpInterjections(blocks, [first, later]);
+    expect(repaired.map(block => [block.id, block.text])).toEqual([
+      ["a", "First.Second."], ["omp-interjection-review", anchor.text],
+      ["status", blocks[1].text], ["c", "Later."], ["omp-interjection-later", anchor.text],
+    ]);
+    expect(backfillOmpInterjections(repaired, [first, later])).toBe(repaired);
+    expect(blocks[0].text).toBe("First.");
+    expect(backfillOmpInterjections(blocks, [{ ...first, afterAssistantText: "First. Second." }])).toBe(blocks);
+    const interleaved = blocks.map(block => block.id === "status"
+      ? { ...block, interjection: { customType: "advisor" } } : block);
+    expect(backfillOmpInterjections(interleaved, [first])).toBe(interleaved);
+    const metadata = blocks.map(block => block.id === "b" ? { ...block, durationMs: 10 } : block);
+    expect(backfillOmpInterjections(metadata, [first])).toBe(metadata);
+  });
+
+  it("counts merged messages in exact source occurrence order", () => {
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "The complete " },
+      { id: "status", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "answer." },
+      { id: "c", role: "assistant", text: anchor.afterAssistantText },
+    ];
+    const repaired = backfillOmpInterjections(blocks, [{ ...anchor, afterOccurrence: 2 }]);
+    expect(repaired.map(block => block.id)).toEqual(["a", "status", "c", "omp-interjection-review"]);
+    expect(backfillOmpInterjections(repaired, [{ ...anchor, afterOccurrence: 2 }])).toBe(repaired);
+  });
 });
 
 describe("persisted session loading", () => {
