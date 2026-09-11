@@ -12,45 +12,226 @@ function sourceOrder(a: BoundaryNode, b: BoundaryNode): number {
   return a.index - b.index || a.offset - b.offset;
 }
 
-/** Collect only shapes whose trailing fragment can be removed without data loss. */
+/** For each block index, the next fragment index in a status-split chain
+ * (0 when none): every intervening row is a non-interjection system row and
+ * the next other row is a clean assistant block. */
+function chainHops(blocks: Block[]): Int32Array {
+  const hop = new Int32Array(blocks.length);
+  let nextNonStatus = blocks.length;
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index];
+    if (block.role === "system" && !block.interjection) continue;
+    const last = nextNonStatus < blocks.length ? blocks[nextNonStatus] : undefined;
+    if (
+      block.role === "assistant" && block.text && !block.streaming &&
+      nextNonStatus > index + 1 && last?.role === "assistant" && last.text &&
+      !last.streaming &&
+      Object.keys(last).every(key => ["id", "role", "text", "streaming"].includes(key))
+    ) hop[index] = nextNonStatus;
+    nextNonStatus = index;
+  }
+  return hop;
+}
+
+/** Collect only shapes whose trailing fragments can be removed without data loss. */
 export function ompStatusSplitTexts(blocks: Block[]): string[] {
+  const hop = chainHops(blocks);
   const texts: string[] = [];
+  let previous = -1;
   for (let index = 0; index < blocks.length; index++) {
-    const end = statusSplitEnd(blocks, index);
-    if (end !== undefined) texts.push(blocks[index].text + blocks[end].text);
+    const block = blocks[index];
+    if (block.role === "system" && !block.interjection) continue;
+    if (hop[index] && (previous < 0 || hop[previous] !== index)) {
+      let text = block.text;
+      for (let next = hop[index]; next; next = hop[next]) text += blocks[next].text;
+      texts.push(text);
+    }
+    previous = index;
   }
   return texts;
 }
 
-function statusSplitEnd(blocks: Block[], index: number): number | undefined {
-  const first = blocks[index];
-  if (first.role !== "assistant" || !first.text || first.streaming) return;
-  let end = index + 1;
-  while (blocks[end]?.role === "system" && !blocks[end].interjection) end++;
-  const last = blocks[end];
-  if (
-    end > index + 1 && last?.role === "assistant" && last.text && !last.streaming &&
-    Object.keys(last).every(key => ["id", "role", "text", "streaming"].includes(key))
-  ) return end;
+/** Positions of every source text under both join forms; one message, one slot. */
+function sourcePositions(source: readonly OmpAssistantText[]): Map<string, number[]> {
+  const positions = new Map<string, number[]>();
+  source.forEach((message, slot) => {
+    const list = positions.get(message.text);
+    if (list) list.push(slot);
+    else positions.set(message.text, [slot]);
+    if (message.concat !== message.text) {
+      const concatList = positions.get(message.concat);
+      if (concatList) concatList.push(slot);
+      else positions.set(message.concat, [slot]);
+    }
+  });
+  return positions;
 }
 
-function sameMessage(message: OmpAssistantText | undefined, text: string): boolean {
-  return message !== undefined && (message.text === text || message.concat === text);
+function slotAt(positions: Map<string, number[]>, text: string, from: number, limit: number): number {
+  const list = positions.get(text);
+  if (!list) return limit;
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid] < from) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < list.length ? list[lo] : limit;
 }
 
-/** Undo a status-only split only when the next unused source message is that
- * exact complete text. A cursor over the ordered active-path messages, not a
- * count of equal texts, decides which source slot each block occupies: when
- * the next message is the first fragment itself, the pair are two messages.
- * Anchors count occurrences without position and never authorize a merge.
+type AlignmentScore = readonly [number, number]; // [items matched, consumed slot sum]
+
+function beats(a: AlignmentScore, b: AlignmentScore): boolean {
+  return a[0] > b[0] || (a[0] === b[0] && a[1] < b[1]);
+}
+
+/** Undo status-only splits through the best in-order alignment between the
+ * persisted assistant sequence and the ordered active-path source messages.
+ * Every assistant block claims its earliest free source slot; a split
+ * candidate may instead weld a prefix of its fragments into one slot by
+ * their combined text. An alignment scores (blocks + source messages
+ * matched, then earliest consumed positions), decided per candidate against
+ * the optimal continuation: a weld never wins when the fragments explain
+ * themselves as real messages — including when the matching combined text is
+ * a message the transcript simply never stored — and equal matches resolve
+ * toward explaining earlier source slots. Anchors never authorize a merge.
+ * Pathological inputs fall back to the cursor rule.
  */
 function mergeStatusSplits(blocks: Block[], source: readonly OmpAssistantText[]): Block[] {
+  const limit = source.length;
+  const width = limit + 1;
+  const positions = sourcePositions(source);
+  const maxText = source.reduce(
+    (max, message) => Math.max(max, message.text.length, message.concat.length), 0);
+  const nextSlot = (text: string, from: number) => slotAt(positions, text, from, limit);
+  const bindable = (block: Block) =>
+    block.role === "assistant" && !block.streaming && !!block.text;
+  const hop = chainHops(blocks);
+  try {
+    // Best continuation score for blocks[i..] against source[j..]: inert
+    // rows and single blocks are forced, so only split candidates branch.
+    const memo = new Map<number, AlignmentScore>();
+    let depth = 0;
+    let built = 0;
+    const score = (i: number, j: number): AlignmentScore => {
+      const key = i * width + j;
+      const hit = memo.get(key);
+      if (hit !== undefined) return hit;
+      if (depth > 2_000 || memo.size > 500_000) throw new Error("alignment budget");
+      depth++;
+      try {
+        let matched = 0;
+        let consumed = 0;
+        while (i < blocks.length) {
+          const block = blocks[i];
+          if (!bindable(block)) {
+            i++;
+            continue;
+          }
+          if (!hop[i]) {
+            const own = nextSlot(block.text, j);
+            if (own < limit) {
+              j = own + 1;
+              matched += 2;
+              consumed += own;
+            }
+            i++;
+            continue;
+          }
+          const own = nextSlot(block.text, j);
+          const tail = score(i + 1, own < limit ? own + 1 : j);
+          let best: AlignmentScore = own < limit
+            ? [tail[0] + 2, tail[1] + own]
+            : tail;
+          let combined = block.text;
+          for (let f = hop[i], t = 1; f && combined.length <= maxText; f = hop[f], t++) {
+            combined += blocks[f].text;
+            built += blocks[f].text.length;
+            if (built > 4_000_000) throw new Error("alignment budget");
+            // A weld that lands behind the first fragment's own slot would
+            // reorder evidence backward — the earlier exact claim wins.
+            const mergeSlot = nextSlot(combined, j);
+            if (mergeSlot < limit && (own >= limit || mergeSlot <= own)) {
+              const rest = score(f + 1, mergeSlot + 1);
+              const candidate: AlignmentScore = [rest[0] + t + 2, rest[1] + mergeSlot];
+              if (!beats(best, candidate)) best = candidate;
+            }
+          }
+          const total: AlignmentScore = [matched + best[0], consumed + best[1]];
+          memo.set(key, total);
+          return total;
+        }
+        const total: AlignmentScore = [matched, consumed];
+        memo.set(key, total);
+        return total;
+      } finally {
+        depth--;
+      }
+    };
+    let cursor = 0;
+    let repaired: Block[] | undefined;
+    for (let index = 0; index < blocks.length; index++) {
+      const first = blocks[index];
+      if (bindable(first) && hop[index]) {
+        const own = nextSlot(first.text, cursor);
+        const tail = score(index + 1, own < limit ? own + 1 : cursor);
+        let best: AlignmentScore = own < limit ? [tail[0] + 2, tail[1] + own] : tail;
+        let chosen: { last: number; slot: number; text: string } | undefined;
+        let combined = first.text;
+        for (let f = hop[index], t = 1; f && combined.length <= maxText; f = hop[f], t++) {
+          combined += blocks[f].text;
+          built += blocks[f].text.length;
+          if (built > 4_000_000) throw new Error("alignment budget");
+          const mergeSlot = nextSlot(combined, cursor);
+          if (mergeSlot < limit && (own >= limit || mergeSlot <= own)) {
+            const rest = score(f + 1, mergeSlot + 1);
+            const candidate: AlignmentScore = [rest[0] + t + 2, rest[1] + mergeSlot];
+            if (!beats(best, candidate)) {
+              best = candidate;
+              chosen = { last: f, slot: mergeSlot, text: combined };
+            }
+          }
+        }
+        if (chosen) {
+          repaired ??= blocks.slice(0, index);
+          repaired.push(
+            { ...first, text: chosen.text },
+            ...blocks.slice(index + 1, chosen.last).filter(block => block.role === "system"),
+          );
+          cursor = chosen.slot + 1;
+          index = chosen.last;
+          continue;
+        }
+        if (own < limit) cursor = own + 1;
+      } else if (bindable(first)) {
+        const own = nextSlot(first.text, cursor);
+        if (own < limit) cursor = own + 1;
+      }
+      repaired?.push(first);
+    }
+    return repaired ?? blocks;
+  } catch {
+    return mergeStatusSplitsLinear(blocks, source);
+  }
+}
+
+/** Fallback when the full alignment exceeds its budget: weld only the first
+ * fragment pair when its combined text is exactly the next unconsumed slot. */
+function mergeStatusSplitsLinear(blocks: Block[], source: readonly OmpAssistantText[]): Block[] {
+  const positions = sourcePositions(source);
+  const limit = source.length;
+  const nextSlot = (text: string, from: number) => slotAt(positions, text, from, limit);
+  const hop = chainHops(blocks);
   let cursor = 0;
   let repaired: Block[] | undefined;
   for (let index = 0; index < blocks.length; index++) {
     const first = blocks[index];
-    const end = statusSplitEnd(blocks, index);
-    if (end !== undefined && sameMessage(source[cursor], first.text + blocks[end].text)) {
+    const end = hop[index] || undefined;
+    if (
+      end !== undefined && cursor < limit &&
+      nextSlot(first.text + blocks[end].text, cursor) === cursor
+    ) {
       repaired ??= blocks.slice(0, index);
       repaired.push({ ...first, text: first.text + blocks[end].text }, ...blocks.slice(index + 1, end));
       cursor++;
@@ -58,11 +239,8 @@ function mergeStatusSplits(blocks: Block[], source: readonly OmpAssistantText[])
       continue;
     }
     if (first.role === "assistant" && !first.streaming) {
-      // A complete block occupies its own slot. Only skip forward past source
-      // messages the transcript never stored, so later splits stay aligned.
-      let slot = cursor;
-      while (slot < source.length && !sameMessage(source[slot], first.text)) slot++;
-      if (slot < source.length) cursor = slot + 1;
+      const own = nextSlot(first.text, cursor);
+      if (own < limit) cursor = own + 1;
     }
     repaired?.push(first);
   }

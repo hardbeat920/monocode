@@ -237,6 +237,87 @@ describe("OMP persisted interjection repair", () => {
     expect(backfillOmpInterjections(repaired, anchors, messages)).toBe(repaired);
   });
 
+  it("keeps a split whose fragments are later source messages when the combined text was never persisted", () => {
+    const blocks = split("a");
+    const messages = source("First.Second.", "First.", "Second.");
+    expect(backfillOmpInterjections(blocks, [], messages)).toBe(blocks);
+    const tail: Block[] = [...blocks, { id: "c", role: "assistant", text: "First.Second." }];
+    const messagesTail = source("First.Second.", "First.", "Second.", "First.Second.");
+    expect(backfillOmpInterjections(tail, [], messagesTail)).toBe(tail);
+  });
+
+  it("prefers the alignment that explains every block when fragment slots are claimed by later pairs", () => {
+    const blocks: Block[] = [
+      ...split("p1"),
+      { id: "m", role: "assistant", text: "Marker." },
+      ...split("p2"),
+      { id: "tail", role: "assistant", text: "First.Second." },
+    ];
+    const messages = source("First.Second.", "Marker.", "First.", "Second.", "First.Second.");
+    const repaired = backfillOmpInterjections(blocks, [], messages);
+    expect(repaired.map(block => [block.id, block.text])).toEqual([
+      ["p1", "First.Second."], ["p1-status", "Reviewed"], ["m", "Marker."],
+      ["p2", "First."], ["p2-status", "Reviewed"], ["p2-end", "Second."], ["tail", "First.Second."],
+    ]);
+  });
+
+  it("repairs a status chain as one message in a single idempotent pass", () => {
+    const chained: Block[] = [
+      { id: "a", role: "assistant", text: "A." },
+      { id: "a-s1", role: "system", text: "Reviewed" },
+      { id: "a-b", role: "assistant", text: "B." },
+      { id: "a-s2", role: "system", text: "Reviewed" },
+      { id: "a-c", role: "assistant", text: "C." },
+    ];
+    const repaired = backfillOmpInterjections(chained, [], source("A.B.", "A.B.C."));
+    expect(repaired.map(block => [block.id, block.text])).toEqual([
+      ["a", "A.B.C."], ["a-s1", "Reviewed"], ["a-s2", "Reviewed"],
+    ]);
+    expect(backfillOmpInterjections(repaired, [], source("A.B.", "A.B.C."))).toBe(repaired);
+  });
+
+  it("welds only the pair when a chain's middle fragment ends a real message", () => {
+    const chained: Block[] = [
+      { id: "a", role: "assistant", text: "A." },
+      { id: "a-s1", role: "system", text: "Reviewed" },
+      { id: "a-b", role: "assistant", text: "B." },
+      { id: "a-s2", role: "system", text: "Reviewed" },
+      { id: "a-c", role: "assistant", text: "C." },
+    ];
+    const repaired = backfillOmpInterjections(chained, [], source("A.B.", "C."));
+    expect(repaired.map(block => [block.id, block.text])).toEqual([
+      ["a", "A.B."], ["a-s1", "Reviewed"], ["a-s2", "Reviewed"], ["a-c", "C."],
+    ]);
+  });
+
+  it("never re-welds a block that already claimed an earlier source slot", () => {
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "a-status", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "Second." },
+      { id: "c", role: "assistant", text: "Third." },
+    ];
+    const messages = source("First.Second.", "First.Second.Third.");
+    const once = backfillOmpInterjections(blocks, [], messages);
+    expect(once.map(block => [block.id, block.text])).toEqual([
+      ["a", "First.Second."], ["a-status", "Reviewed"], ["c", "Third."],
+    ]);
+    expect(backfillOmpInterjections(once, [], messages)).toBe(once);
+  });
+
+  it("keeps a split whose fragments are separated later source messages", () => {
+    const blocks = split("a");
+    const messages = source("First.Second.", "Unrelated.", "First.", "Second.");
+    expect(backfillOmpInterjections(blocks, [], messages)).toBe(blocks);
+  });
+
+  it("still merges a true split when only one fragment is a later source message", () => {
+    for (const messages of [source("First.Second.", "First."), source("First.Second.", "Second.")]) {
+      const repaired = backfillOmpInterjections(split("a"), [], messages);
+      expect(repaired.map(block => block.text)).toEqual(["First.Second.", "Reviewed"]);
+    }
+  });
+
   it("leaves a split whose first fragment is its own source message and anchors the later complete answer", () => {
     const blocks: Block[] = [
       { id: "a", role: "assistant", text: "The complete " },
