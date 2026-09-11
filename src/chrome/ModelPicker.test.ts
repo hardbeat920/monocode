@@ -32,6 +32,8 @@ vi.mock("./Popover", () => ({
     minHeight?: number;
     maxHeight?: number;
     style?: CSSProperties;
+    anchor?: unknown;
+    side?: string;
     "aria-label"?: string;
     "data-model-picker"?: boolean;
   }) =>
@@ -45,6 +47,15 @@ vi.mock("./Popover", () => ({
         style: props.style,
         "data-min-height": props.minHeight,
         "data-max-height": props.maxHeight,
+        "data-anchor-element":
+          props.anchor instanceof HTMLElement ||
+          (typeof props.anchor === "object" &&
+            props.anchor != null &&
+            "current" in props.anchor &&
+            props.anchor.current instanceof HTMLElement)
+            ? "true"
+            : "false",
+        "data-side": props.side,
         "aria-label": props["aria-label"],
         "data-model-picker": props["data-model-picker"] ? "" : undefined,
       },
@@ -53,6 +64,7 @@ vi.mock("./Popover", () => ({
 }));
 
 import { ModelPicker } from "./ModelPicker";
+import { saveRecentModelChoice } from "../lib/models";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -74,6 +86,27 @@ afterEach(() => {
 function hover(element: Element) {
   act(() => {
     element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+  });
+}
+
+function contextMenu(element: Element) {
+  act(() => {
+    element.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 120,
+        clientY: 80,
+      }),
+    );
+  });
+}
+
+function keyDown(target: EventTarget, key: string) {
+  act(() => {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+    );
   });
 }
 
@@ -205,5 +238,89 @@ describe("model picker", () => {
         .querySelector('[role="tab"][aria-label="Grok Build"]')
         ?.getAttribute("aria-selected"),
     ).toBe("true");
+  });
+
+  it("quick-switches between recently used models on right-click", () => {
+    saveRecentModelChoice("claude", "claude:opus-5");
+    saveRecentModelChoice("cursor", "cursor:composer-2.5");
+    const onChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "grok",
+          model: "grok:grok-4.6",
+          values: { effort: "high" },
+          hotkeys: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    contextMenu(trigger);
+
+    const recentMenu = container.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Recently used models"]',
+    )!;
+    expect(recentMenu.dataset.anchorElement).toBe("true");
+    expect(recentMenu.dataset.side).toBe("top");
+    const recentItems = [
+      ...recentMenu.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitemradio"]',
+      ),
+    ];
+    expect(recentItems).toHaveLength(3);
+    const grokModel = recentItems.find((item) =>
+      item.textContent?.includes("Grok 4.6"),
+    )!;
+    const claudeModel = recentItems.find((item) =>
+      item.textContent?.includes("Opus 5"),
+    )!;
+    const cursorModel = recentItems.find((item) =>
+      item.textContent?.includes("Composer 2.5"),
+    )!;
+    expect(cursorModel.textContent).toContain("Cursor");
+    expect(cursorModel.querySelector("svg")).not.toBeNull();
+
+    // The composer can retain focus after opening its toolbar menu. Recent
+    // model navigation still needs to own these keys in that state.
+    trigger.focus();
+    expect(grokModel.className).toContain("bg-content/10");
+    keyDown(trigger, "ArrowUp");
+    expect(claudeModel.className).toContain("bg-content/10");
+    keyDown(trigger, "ArrowDown");
+    expect(grokModel.className).toContain("bg-content/10");
+    keyDown(trigger, "ArrowDown");
+    expect(cursorModel.className).toContain("bg-content/10");
+
+    keyDown(trigger, "Enter");
+    expect(onChange).toHaveBeenCalledWith("cursor", "cursor:composer-2.5");
+    expect(
+      container.querySelector(
+        '[role="menu"][aria-label="Recently used models"]',
+      ),
+    ).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: ".",
+          code: "Period",
+          metaKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+    expect(
+      container.querySelector(
+        '[role="menu"][aria-label="Recently used models"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[role="menu"][aria-label="Model and effort"]'),
+    ).toBeNull();
   });
 });

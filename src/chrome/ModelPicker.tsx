@@ -1,6 +1,7 @@
 import { Check, ChevronDown, ChevronRight, Search, Star } from "./icons";
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -14,6 +15,7 @@ import {
   getModelSnapshot,
   getPickerVisibilitySnapshot,
   loadFavoriteModels,
+  loadRecentModelChoices,
   modelsFor,
   resolveModel,
   saveFavoriteModels,
@@ -53,6 +55,8 @@ type Props = {
 type MenuEntry = { kind: "setting"; setting: ModelSetting } | { kind: "model" };
 
 type Submenu = { kind: "setting"; setting: ModelSetting } | { kind: "models" };
+
+type RecentMenu = { models: AgentModel[] };
 
 const MENU_WIDTH = 250;
 const MODEL_MENU_WIDTH = 310;
@@ -114,6 +118,15 @@ function settingValueLabel(
   );
 }
 
+function recentMenuModels(current: AgentModel): AgentModel[] {
+  const models = loadRecentModelChoices().flatMap((choice) => {
+    const item = findModel(choice.model);
+    return item?.harness === choice.harness ? [item] : [];
+  });
+  if (!models.some((item) => item.id === current.id)) models.push(current);
+  return models.slice(0, 6);
+}
+
 export function ModelPicker({
   harness,
   model,
@@ -143,19 +156,26 @@ export function ModelPicker({
   const [active, setActive] = useState(0);
   const [activeModel, setActiveModel] = useState(0);
   const [activeSetting, setActiveSetting] = useState(0);
+  const [recentMenu, setRecentMenu] = useState<RecentMenu | null>(null);
+  const [recentActive, setRecentActive] = useState(0);
   const [submenu, setSubmenu] = useState<Submenu | null>(null);
   const [activeRow, setActiveRow] = useState<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   const [favorites, setFavorites] = useState(loadFavoriteModels);
+  const recentMenuId = useId();
   const button = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
   const openRef = useRef(open);
+  const recentOpenRef = useRef(recentMenu != null);
+  const currentRef = useRef<AgentModel | null>(null);
   const lastHotkey = useRef(0);
   onCloseRef.current = onClose;
   openRef.current = open;
+  recentOpenRef.current = recentMenu != null;
 
   const current = resolveModel(harness, model);
+  currentRef.current = current;
   const settings = useMemo(() => {
     void catalogVersion;
     return pickerSettings(current);
@@ -211,20 +231,44 @@ export function ModelPicker({
 
   const dismiss = (restore: boolean) => {
     setOpen(false);
+    setRecentMenu(null);
     setSubmenu(null);
     if (restore) onCloseRef.current?.();
   };
 
   const togglePicker = () => {
     if (openRef.current) dismiss(true);
-    else setOpen(true);
+    else {
+      setRecentMenu(null);
+      setOpen(true);
+    }
+  };
+
+  const openRecentMenu = () => {
+    const selected = currentRef.current;
+    if (!selected) return;
+    const models = recentMenuModels(selected);
+    const selectedIndex = models.findIndex((item) => item.id === selected.id);
+    setOpen(false);
+    setSubmenu(null);
+    setRecentActive(selectedIndex >= 0 ? selectedIndex : 0);
+    setRecentMenu({ models });
+  };
+
+  const toggleRecentMenu = () => {
+    if (recentOpenRef.current) {
+      setRecentMenu(null);
+      onCloseRef.current?.();
+    } else {
+      openRecentMenu();
+    }
   };
 
   const toggleFromHotkey = () => {
     const now = performance.now();
     if (now - lastHotkey.current < 80) return;
     lastHotkey.current = now;
-    togglePicker();
+    toggleRecentMenu();
   };
 
   useEffect(() => {
@@ -330,6 +374,32 @@ export function ModelPicker({
     onChange(item.harness, item.id);
     dismiss(true);
   };
+
+  useEffect(() => {
+    if (!recentMenu) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setRecentActive(
+          (index) =>
+            (index + direction + recentMenu.models.length) %
+            recentMenu.models.length,
+        );
+        return;
+      }
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const item = recentMenu.models[recentActive];
+      if (item) pickModel(item);
+    };
+
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recentActive, recentMenu]);
 
   const pickSetting = (setting: ModelSetting, value: string) => {
     setSetting(setting, value);
@@ -441,12 +511,17 @@ export function ModelPicker({
       <button
         ref={button}
         type="button"
-        title={`${HARNESS_TITLE[current.harness]} · ${current.name} (${MOD}.)`}
+        title={`${HARNESS_TITLE[current.harness]} · ${current.name} · Recent models: right-click or ${MOD}.`}
         aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}`}
         aria-keyshortcuts={`${MOD}.`}
-        aria-expanded={open}
+        aria-expanded={open || recentMenu != null}
         aria-haspopup="menu"
         onMouseDown={(event) => event.preventDefault()}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openRecentMenu();
+        }}
         onClick={() => togglePicker()}
         className={`flex h-6.5 max-w-40 items-center gap-1 rounded-md px-1.5 ${
           open
@@ -654,6 +729,71 @@ export function ModelPicker({
             />
           ) : null}
         </>
+      ) : null}
+
+      {recentMenu ? (
+        <Popover
+          anchor={button}
+          side="top"
+          width={MENU_WIDTH}
+          autoFocus
+          onDismiss={() => setRecentMenu(null)}
+          role="menu"
+          aria-label="Recently used models"
+          aria-activedescendant={`${recentMenuId}-${recentActive}`}
+          tabIndex={-1}
+          onContextMenu={(event) => event.preventDefault()}
+          data-model-picker
+          className="p-1 font-sans"
+        >
+          {recentMenu.models.map((item, index) => {
+            const selected = item.id === current.id;
+            const highlighted = index === recentActive;
+            const disabled = !isHarnessAvailable(item.harness);
+            return (
+              <button
+                key={item.id}
+                id={`${recentMenuId}-${index}`}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
+                disabled={disabled}
+                title={
+                  disabled ? harnessUnavailableHint(item.harness) : undefined
+                }
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setRecentActive(index)}
+                onClick={() => pickModel(item)}
+                className={`flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left disabled:cursor-not-allowed ${
+                  disabled
+                    ? "text-content/30"
+                    : highlighted
+                      ? "bg-content/10 text-content"
+                      : "text-content hover:bg-content/5"
+                }`}
+              >
+                <HarnessIcon
+                  harness={item.harness}
+                  className="size-4 shrink-0"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] leading-4">
+                    {item.name}
+                  </span>
+                  <span className="block truncate text-[11px] leading-4 text-content/45">
+                    {HARNESS_TITLE[item.harness]}
+                  </span>
+                </span>
+                {selected ? (
+                  <Check
+                    className="size-3.5 shrink-0 text-content/55"
+                    strokeWidth={2}
+                  />
+                ) : null}
+              </button>
+            );
+          })}
+        </Popover>
       ) : null}
     </>
   );
