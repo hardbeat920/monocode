@@ -112,6 +112,7 @@ describe("inbox sessions", () => {
       [project, session],
       tab.id,
       project.cwd,
+      new Map(),
     );
     expect(snapshot.sessions.map((entry) => entry.id)).toEqual([project.id]);
     const restored = hydrateWorkspaceSnapshot(
@@ -139,11 +140,16 @@ describe("inbox sessions", () => {
       activeTabId: askTab.id,
       projectCwd: project.cwd,
       projectTerminals: [],
+      projectReturnTargets: [{ projectPath: project.cwd, tabId: askTab.id }],
     };
     const parsed = parseWorkspaceSnapshot(legacy)!;
     expect(parsed.tabs).toEqual([tab]);
     expect(parsed.activeTabId).toBe(tab.id);
     expect(parsed.sessions.map((entry) => entry.id)).toEqual([project.id]);
+    expect(parsed.projectReturnTargets).toEqual([]);
+    expect(
+      hydrateWorkspaceSnapshot(parsed, new Map())?.projectReturnMemory?.get(project.cwd),
+    ).toBe(project.id);
     expect(
       parseWorkspaceSnapshot({
         ...legacy,
