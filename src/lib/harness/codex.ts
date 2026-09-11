@@ -560,6 +560,12 @@ function handleNotification(live: Live, method: string, params: unknown): void {
   // turn/completed (and turn/aborted) settle sendCodexTurn, which is what the
   // UI uses for busy / stop / "Working for".
   const mapped = mapCodexNotification(method, params);
+  if (mapped.diagnostic) {
+    console.debug(
+      `[monocode] codex ${live.threadId} ${method}`,
+      mapped.diagnostic,
+    );
+  }
   const snapshot = method === "item/completed";
   for (const event of mapped.events) {
     if (event.type === "message.delta") {

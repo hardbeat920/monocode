@@ -419,6 +419,67 @@ describe("mapCodexNotification", () => {
     expect(mapped.activeTurnId).toBeNull();
   });
 
+  it.each([
+    { error: { message: "Reconnecting... 1/5" }, willRetry: true },
+    { message: "Temporary service interruption", willRetry: true },
+  ])("keeps retry notifications diagnostic-only: %j", (params) => {
+    expect(mapCodexNotification("error", params)).toEqual({
+      events: [],
+      diagnostic: params.error?.message ?? params.message,
+    });
+  });
+
+  it.each([false, undefined, "true"])(
+    "keeps errors visible unless willRetry is explicitly true: %s",
+    (willRetry) => {
+      for (const message of [
+        "Reconnecting... 5/5",
+        "Falling back from WebSockets to HTTPS transport. Connection failed",
+        "Unauthorized",
+        "quota exceeded",
+      ]) {
+        expect(
+          mapCodexNotification("error", { error: { message }, willRetry }),
+        ).toEqual({ events: [{ type: "session.error", message }] });
+      }
+    },
+  );
+
+  it.each([
+    "Falling back from WebSockets to HTTPS transport",
+    "Falling back from WebSockets to HTTPS transport. unexpected status 404 Not Found",
+    "Falling back from WebSockets to HTTPS transport: connection closed",
+  ])(
+    "keeps the known runtime fallback warning diagnostic-only: %s",
+    (message) => {
+      expect(mapCodexNotification("warning", { message })).toEqual({
+        events: [],
+        diagnostic: message,
+      });
+    },
+  );
+
+  it.each([
+    "Reconnecting to the MCP server failed",
+    "Proxy error: Falling back from WebSockets to HTTPS transport failed",
+    "Falling back from WebSockets to HTTPS transport is disabled",
+    "An unrelated runtime warning",
+  ])("preserves other runtime warnings: %s", (message) => {
+    expect(mapCodexNotification("warning", { message })).toEqual({
+      events: [{ type: "status", text: message }],
+    });
+  });
+
+  it.each(["summary", "message", "details"])(
+    "preserves configuration warnings from %s even with fallback wording",
+    (field) => {
+      const message = "Falling back from WebSockets to HTTPS transport.";
+      expect(
+        mapCodexNotification("configWarning", { [field]: message }),
+      ).toEqual({ events: [{ type: "status", text: message }] });
+    },
+  );
+
   it("maps failed turns to session.error", () => {
     const mapped = mapCodexNotification("turn/completed", {
       turn: {
