@@ -13,6 +13,7 @@ export type Note = {
   slug: string;
   title: string;
   body: string;
+  tags: string[];
   sourceSessionId?: string;
   sourceCwd?: string;
   createdAt: number;
@@ -23,6 +24,7 @@ export type NoteUpsert = {
   id: string;
   title: string;
   body: string;
+  tags: string[];
   sourceSessionId?: string;
   sourceCwd?: string;
 };
@@ -52,6 +54,8 @@ export function noteCardMeta(card: NoteComposerCard): NoteCardMeta {
 export const ADD_NOTE_TO_CHAT_EVENT = "monocode:add-note-to-chat";
 
 const MAX_TITLE = 200;
+export const MAX_NOTE_TAGS = 20;
+export const MAX_NOTE_TAG_LENGTH = 48;
 const MAX_NOTE_PICKER = 8;
 const NOTE_SLUG_RE = /(^|\s)@note\/([A-Za-z0-9_-]+)/g;
 
@@ -105,6 +109,7 @@ export async function deleteNote(id: string): Promise<void> {
 export async function createNote(input: {
   title?: string;
   body?: string;
+  tags?: string[];
   sourceSessionId?: string;
   sourceCwd?: string;
 }): Promise<Note> {
@@ -113,9 +118,32 @@ export async function createNote(input: {
     id: crypto.randomUUID(),
     title: (input.title ?? noteTitle(body)).slice(0, MAX_TITLE),
     body,
-    ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
+    tags: normalizeNoteTags(input.tags ?? []),
+    ...(input.sourceSessionId
+      ? { sourceSessionId: input.sourceSessionId }
+      : {}),
     ...(input.sourceCwd ? { sourceCwd: input.sourceCwd } : {}),
   });
+}
+
+/** Canonical, case-insensitive tags for storage and filtering. */
+export function normalizeNoteTags(tags: readonly string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const input of tags) {
+    const tag = input
+      .trim()
+      .replace(/^#+/, "")
+      .replace(/\s+/g, "-")
+      .toLowerCase()
+      .slice(0, MAX_NOTE_TAG_LENGTH)
+      .replace(/-+$/g, "");
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    normalized.push(tag);
+    if (normalized.length === MAX_NOTE_TAGS) break;
+  }
+  return normalized;
 }
 
 export function isNoteMentionPath(path: string): boolean {
@@ -155,11 +183,17 @@ export function rankNoteFiles(
   for (const note of notes) {
     const titleHit = fuzzyMatch(needle, note.title);
     const slugHit = titleHit ? null : fuzzyMatch(needle, note.slug);
-    const hit = titleHit ?? slugHit;
+    const tagHit =
+      titleHit || slugHit
+        ? null
+        : note.tags
+            .map((tag) => fuzzyMatch(needle.replace(/^#/, ""), tag))
+            .find(Boolean);
+    const hit = titleHit ?? slugHit ?? tagHit;
     if (!hit) continue;
     scored.push({
       note,
-      score: titleHit ? hit.score + 400 : hit.score,
+      score: titleHit ? hit.score + 400 : tagHit ? hit.score + 200 : hit.score,
       positions: titleHit ? hit.positions : [],
     });
   }
@@ -315,6 +349,7 @@ export function composeNoteMessage(
       slug: card.slug,
       title: card.title,
       body: card.body,
+      tags: [],
       createdAt: 0,
       updatedAt: 0,
     },
