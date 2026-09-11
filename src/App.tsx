@@ -304,6 +304,12 @@ import { preparePrompt } from "./lib/promptPreparation";
 import { warmNativeSkills, isNativeCommandPrompt } from "./lib/skills";
 import { nativeSkillContextForSession } from "./lib/sessionSkills";
 import {
+  loadSessionFolders,
+  placeSessionInFolder,
+  saveSessionFolders,
+  type SessionFolderTarget,
+} from "./lib/sessionFolders";
+import {
   ADD_NOTE_TO_CHAT_EVENT,
   composeNoteMessage,
   noteCardMeta,
@@ -3240,6 +3246,27 @@ export default function App({
     if (path) onSelectProject(path);
   }, [onSelectProject]);
 
+  const onPlaceSessionInFolder = useCallback(
+    (sessionId: string, target: SessionFolderTarget) => {
+      const source = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      if (!source || !looksLikeProject(source.cwd)) return;
+      const folders = loadSessionFolders(source.cwd);
+      if (
+        target.kind === "existing" &&
+        !folders.some((folder) => folder.id === target.folderId)
+      ) {
+        return;
+      }
+      saveSessionFolders(
+        source.cwd,
+        placeSessionInFolder(folders, sessionId, target),
+      );
+    },
+    [],
+  );
+
   const onRemoveProject = useCallback(
     (path: string, options: { purgeData: boolean }) => {
       const normalized = normalizeProjectPath(path);
@@ -5298,6 +5325,7 @@ export default function App({
     onSubmit,
     onStop,
     onCompactContext,
+    onPlaceSessionInFolder,
     onDeleteQueuedMessage,
     onEditQueuedMessage,
     onQueuedMessageEditingChange,

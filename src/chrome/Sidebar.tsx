@@ -75,6 +75,7 @@ import {
   setFolderCollapsed,
   setFolderColor,
   setFolderCustomColor,
+  subscribeSessionFolders,
   ungroupedSessions,
   type SessionFolder,
   type SessionListDropTarget,
@@ -536,6 +537,14 @@ function SidebarComponent({
     setSessionDrop(null);
     pendingFolderSessionIds.current.clear();
   }, [cwd]);
+
+  useEffect(
+    () =>
+      subscribeSessionFolders(cwd, () => {
+        setSessionFolders(loadSessionFolders(cwd));
+      }),
+    [cwd],
+  );
 
   useEffect(() => {
     if (pending || status === "error") return;

@@ -11,6 +11,7 @@ import {
   folderShellFill,
   loadSessionFolders,
   mergeFolderSessionSummaries,
+  placeSessionInFolder,
   pruneSessionFolders,
   removeSessionFromFolder,
   renameFolder,
@@ -212,6 +213,29 @@ describe("folder mutations", () => {
     const next = addSessionToFolder(folders, "dst", "a");
     expect(next.map((entry) => entry.id)).toEqual(["dst"]);
     expect(next[0]?.sessionIds).toEqual(["b", "a"]);
+  });
+
+  it("places the current session in an existing expanded folder", () => {
+    const folders = [folder("work", ["a"], { collapsed: true })];
+    expect(
+      placeSessionInFolder(folders, "b", {
+        kind: "existing",
+        folderId: "work",
+      }),
+    ).toEqual([folder("work", ["a", "b"], { collapsed: false })]);
+  });
+
+  it("creates a named folder for the current session", () => {
+    const folders = placeSessionInFolder([], "a", {
+      kind: "new",
+      name: "  Launch work  ",
+    });
+    expect(folders).toHaveLength(1);
+    expect(folders[0]).toMatchObject({
+      name: "Launch work",
+      sessionIds: ["a"],
+      collapsed: false,
+    });
   });
 
   it("is a no-op when adding a session already in that folder", () => {

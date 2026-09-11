@@ -6,6 +6,7 @@ import { orderByIds } from "./reorder";
 import { TAB_GROUP_COLORS } from "./tabGroups";
 
 const KEY = "monocode.sessionFolders";
+const CHANGE_EVENT = "monocode:session-folders-change";
 
 export type SessionFolder = {
   id: string;
@@ -17,6 +18,10 @@ export type SessionFolder = {
   /** Custom hex from the folder color picker. Wins over `colorIndex`. */
   customColor?: string;
 };
+
+export type SessionFolderTarget =
+  | { kind: "existing"; folderId: string }
+  | { kind: "new"; name: string };
 
 export type SessionListDropTarget =
   | { kind: "folder"; id: string }
@@ -177,6 +182,23 @@ export function addSessionToFolder(
       };
     }),
   );
+}
+
+export function placeSessionInFolder(
+  folders: SessionFolder[],
+  sessionId: string,
+  target: SessionFolderTarget,
+): SessionFolder[] {
+  if (target.kind === "existing") {
+    return setFolderCollapsed(
+      addSessionToFolder(folders, target.folderId, sessionId),
+      target.folderId,
+      false,
+    );
+  }
+  const name = target.name.trim();
+  if (!name) return folders;
+  return createFolderWithSessions(folders, [sessionId], name).folders;
 }
 
 export function removeSessionFromFolder(
@@ -394,9 +416,29 @@ export function saveSessionFolders(cwd: string, folders: SessionFolder[]): void 
     if (folders.length === 0) delete store[key];
     else store[key] = folders;
     localStorage.setItem(KEY, JSON.stringify(store));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(CHANGE_EVENT, { detail: { cwd: key } }),
+      );
+    }
   } catch {
     // private mode / quota
   }
+}
+
+export function subscribeSessionFolders(
+  cwd: string,
+  onChange: () => void,
+): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const key = storageKey(cwd);
+  if (!key) return () => undefined;
+  const listener = (event: Event) => {
+    const changed = (event as CustomEvent<{ cwd?: string }>).detail?.cwd;
+    if (changed === key) onChange();
+  };
+  window.addEventListener(CHANGE_EVENT, listener);
+  return () => window.removeEventListener(CHANGE_EVENT, listener);
 }
 
 function storageKey(cwd: string): string | null {
