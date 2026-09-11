@@ -321,7 +321,7 @@ export function SkillsPage({
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            className="min-w-0 flex-1 truncate rounded text-left font-sans text-[12px] text-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                            className="mr-auto min-w-0 truncate rounded text-left font-sans text-[12px] text-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                             title={`Preview ${skill.name}`}
                             ref={registerPreviewButton(`name:${skill.path}`)}
                             aria-controls={previewOpen ? previewId : undefined}
