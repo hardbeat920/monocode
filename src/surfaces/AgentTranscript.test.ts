@@ -61,7 +61,7 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup.includes('aria-label="Show the work"')).toBe(false);
   });
 
-  it("opens failed subagent work and labels the failure at turn level", () => {
+  it("opens failed subagent work but keeps provider details collapsed", () => {
     const markup = render([
       { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
       {
@@ -79,7 +79,8 @@ describe("AgentTranscript collapsed work", () => {
     ]);
 
     expect(markup).toContain("Subagent failed");
-    expect(markup).toContain("Child process disconnected");
+    expect(markup).not.toContain("Child process disconnected");
+    expect(markup).toContain("Show error details for Inspect auth");
     expect(markup).toContain('aria-label="Hide the work"');
   });
 

@@ -1725,36 +1725,63 @@ function ActivityToolRow({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
+  const [errorOpen, setErrorOpen] = useState(false);
   const label = toolCallLabel(block, cwd);
   const state = toolCallState(block);
   const pending = needsApproval(block);
+  const errorDetail =
+    !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
+  const row = (
+    <>
+      {bare ? null : <ActivityToolIcon state={state} live={live} />}
+      <ToolCallSummary
+        label={label}
+        preview={block.tool?.preview}
+        cwd={cwd}
+        chip={bare}
+        failed={state === "rejected"}
+        status={state}
+        onOpenFile={onOpenFile}
+        onOpenDiff={onOpenDiff}
+      />
+      {pending ? null : <ToolCallStatusIcon state={state} />}
+      {errorDetail ? (
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+          strokeWidth={1.75}
+        />
+      ) : null}
+    </>
+  );
+
   return (
     <div className="flex min-w-0 flex-col">
-      <div
-        aria-label={`Tool call: ${label}`}
-        className="flex min-w-0 items-center gap-1.5 py-1"
-      >
-        {bare ? null : <ActivityToolIcon state={state} live={live} />}
-        <ToolCallSummary
-          label={label}
-          preview={block.tool?.preview}
-          cwd={cwd}
-          chip={bare}
-          failed={state === "rejected"}
-          status={state}
-          onOpenFile={onOpenFile}
-          onOpenDiff={onOpenDiff}
-        />
-        {pending ? null : <ToolCallStatusIcon state={state} />}
-      </div>
+      {errorDetail ? (
+        <button
+          type="button"
+          aria-expanded={errorOpen}
+          aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
+          onClick={() => setErrorOpen((value) => !value)}
+          className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
+        >
+          {row}
+        </button>
+      ) : (
+        <div
+          aria-label={`Tool call: ${label}`}
+          className="flex min-w-0 items-center gap-1.5 py-1"
+        >
+          {row}
+        </div>
+      )}
       {pending ? (
         <ApprovalControls block={block} onApproval={onApproval} />
       ) : null}
-      {!pending && state === "rejected" && block.tool?.detail ? (
+      {errorOpen && errorDetail ? (
         <pre
           className={`min-w-0 whitespace-pre-wrap break-words py-1 font-mono text-[12px] leading-5 text-red-400/80 ${bare ? "" : "pl-5"}`}
         >
-          {block.tool.detail}
+          {errorDetail}
         </pre>
       ) : null}
     </div>
