@@ -29,6 +29,7 @@ export type MentionTextPart = {
 };
 
 const MENTION_TOKEN_RE = /(^|\s)@(\S+)/g;
+const LINE_LOCATION_RE = /^ \((?:line \d+|lines \d+[-–]\d+)\)/;
 const TRAILING_PUNCTUATION = new Set([
   ",",
   ";",
@@ -260,9 +261,11 @@ function scanMentions(
     if (isMarkdownBlockquotePosition(text, start)) continue;
     const resolved = resolveLabel(raw, labels);
     if (!resolved) continue;
+    const mentionEnd = start + 1 + resolved.label.length;
+    const location = text.slice(mentionEnd).match(LINE_LOCATION_RE)?.[0] ?? "";
     hits.push({
       start,
-      end: start + 1 + resolved.label.length,
+      end: mentionEnd + location.length,
       label: resolved.label,
       file: resolved.file,
     });

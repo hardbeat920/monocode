@@ -38,9 +38,10 @@ describe("runtimeModeToCodexConfig", () => {
     });
   });
 
-  it("maps full-access to never + danger-full-access", () => {
+  it("allows explicit escalation requests in full-access", () => {
     expect(runtimeModeToCodexConfig("full-access")).toMatchObject({
-      approvalPolicy: "never",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandbox: "danger-full-access",
       sandboxPolicy: { type: "dangerFullAccess" },
     });
@@ -101,7 +102,7 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
     });
     expect(turn).toMatchObject({
       approvalPolicy: "never",
-      approvalsReviewer: "auto_review",
+      approvalsReviewer: "user",
       sandboxPolicy: { type: "readOnly" },
       collaborationMode: {
         mode: "plan",
@@ -109,6 +110,24 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
       },
     });
   });
+
+  it.each(["supervised", "auto-accept-edits", "auto", "full-access"] as const)(
+    "preserves the selected reviewer in %s plan turns",
+    (runtimeMode) => {
+      expect(
+        buildTurnStartParams({
+          threadId: "thr_1",
+          runtimeMode,
+          intent: "plan",
+          prompt: "inspect",
+        }),
+      ).toMatchObject({
+        approvalPolicy: "never",
+        approvalsReviewer: runtimeMode === "auto" ? "auto_review" : "user",
+        sandboxPolicy: { type: "readOnly" },
+      });
+    },
+  );
 
   it("builds steer input with expected turn id", () => {
     const steer = buildTurnSteerParams({
@@ -317,6 +336,48 @@ describe("mapCodexNotification", () => {
       callId: "sa_1",
       kind: "agent",
       status: "failed",
+      detail: "Subagent interrupted.",
+    });
+  });
+
+  it("maps current collab-agent failures with their provider detail", () => {
+    const started = mapCodexNotification("item/started", {
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "wait",
+        status: "inProgress",
+        receiverThreadIds: ["thr_a", "thr_b"],
+        agentsStates: {},
+      },
+    });
+    expect(started.events[0]).toMatchObject({
+      type: "tool.started",
+      callId: "collab_1",
+      title: "Wait for 2 subagents",
+      kind: "agent",
+      status: "in_progress",
+    });
+
+    const failed = mapCodexNotification("item/completed", {
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "wait",
+        status: "completed",
+        receiverThreadIds: ["thr_a", "thr_b"],
+        agentsStates: {
+          thr_a: { status: "completed", message: "done" },
+          thr_b: { status: "errored", message: "worker disconnected" },
+        },
+      },
+    });
+    expect(failed.events[0]).toMatchObject({
+      type: "tool.updated",
+      callId: "collab_1",
+      kind: "agent",
+      status: "failed",
+      detail: "worker disconnected",
     });
   });
 
@@ -370,6 +431,16 @@ describe("mapCodexNotification", () => {
     expect(mapped.events).toContainEqual({
       type: "session.error",
       message: "quota exceeded",
+    });
+  });
+
+  it("does not silently complete a failed turn with no error payload", () => {
+    const mapped = mapCodexNotification("turn/completed", {
+      turn: { id: "turn_1", status: "failed" },
+    });
+    expect(mapped.events).toContainEqual({
+      type: "session.error",
+      message: "Codex turn failed.",
     });
   });
 

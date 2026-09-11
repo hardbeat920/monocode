@@ -24,7 +24,7 @@ export type NativeCommandProvider = {
   rawSlashCommands?: boolean;
 };
 
-const RESERVED_COMMANDS = new Set(["plan", "compact"]);
+const RESERVED_COMMANDS = new Set(["plan", "compact", "add-to-folder"]);
 
 export function nativeCommandInvocation(
   harness: HarnessId,

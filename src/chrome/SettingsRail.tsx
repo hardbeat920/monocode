@@ -2,22 +2,23 @@ import {
   Archive,
   ArrowLeft,
   Bot,
+  Inbox,
   Keyboard,
   Palette,
   SlidersHorizontal,
+  Sparkles,
   type IconComponent,
 } from "./icons";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import {
-  SETTINGS_SECTIONS,
-  type SettingsSectionId,
-} from "../lib/settings";
+import { SETTINGS_SECTIONS, type SettingsSectionId } from "../lib/settings";
 
 const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   general: SlidersHorizontal,
   appearance: Palette,
   keybindings: Keyboard,
   providers: Bot,
+  inbox: Inbox,
+  skills: Sparkles,
   archive: Archive,
 };
 

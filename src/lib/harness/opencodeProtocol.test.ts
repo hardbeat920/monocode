@@ -8,6 +8,7 @@ import {
   buildOpenCodePermissionRules,
   compareSemver,
   contextUsedFromMessageInfo,
+  detailFromToolPart,
   inferDefaultAgent,
   inferDefaultVariant,
   isOpenCodeDefaultTitle,
@@ -38,6 +39,22 @@ describe("parseOpenCodeModelSlug", () => {
 describe("tool kinds", () => {
   it("classifies todo writes as internal task activity", () => {
     expect(toolKindFromName("todowrite")).toBe("tasks");
+  });
+});
+
+describe("tool failure details", () => {
+  it("extracts nested provider errors instead of dropping them", () => {
+    expect(
+      detailFromToolPart({
+        id: "agent-1",
+        type: "tool",
+        tool: "task",
+        state: {
+          status: "error",
+          error: { data: { message: "worker disconnected" } },
+        },
+      }),
+    ).toBe("worker disconnected");
   });
 });
 

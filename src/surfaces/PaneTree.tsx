@@ -34,6 +34,7 @@ import {
 } from "../lib/session";
 import { FilePane } from "./FilePane";
 import { SessionPane } from "./SessionPane";
+import type { SessionFolderTarget } from "../lib/sessionFolders";
 
 type Shared = {
   visible: boolean;
@@ -70,6 +71,10 @@ type Shared = {
   ) => void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
+  onPlaceSessionInFolder: (
+    sessionId: string,
+    target: SessionFolderTarget,
+  ) => void;
   onDeleteQueuedMessage: (sessionId: string, messageId: string) => void;
   onEditQueuedMessage: (
     sessionId: string,
@@ -92,6 +97,7 @@ type Shared = {
     requestId: number,
     reply: UserQuestionReply,
   ) => void;
+  onQuestionInteraction?: (sessionId: string, requestId: number) => void;
   onOpenFile: (path: string) => void;
   editorNavigation?: EditorNavigationTarget | null;
   onOpenDiff: (
@@ -160,6 +166,7 @@ function PaneTreeComponent({
   onSubmit,
   onStop,
   onCompactContext,
+  onPlaceSessionInFolder,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   onQueuedMessageEditingChange,
@@ -170,6 +177,7 @@ function PaneTreeComponent({
   onHandoffCardDismiss,
   onApproval,
   onQuestionReply,
+  onQuestionInteraction,
   onOpenFile,
   editorNavigation,
   onOpenDiff,
@@ -372,6 +380,7 @@ function PaneTreeComponent({
                 onSubmit={onSubmit}
                 onStop={onStop}
                 onCompactContext={onCompactContext}
+                onPlaceSessionInFolder={onPlaceSessionInFolder}
                 onDeleteQueuedMessage={onDeleteQueuedMessage}
                 onEditQueuedMessage={onEditQueuedMessage}
                 onQueuedMessageEditingChange={onQueuedMessageEditingChange}
@@ -382,6 +391,7 @@ function PaneTreeComponent({
                 onHandoffCardDismiss={onHandoffCardDismiss}
                 onApproval={onApproval}
                 onQuestionReply={onQuestionReply}
+                onQuestionInteraction={onQuestionInteraction}
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}

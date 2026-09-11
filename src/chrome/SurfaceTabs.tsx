@@ -1,10 +1,13 @@
+import { openPath } from "@tauri-apps/plugin-opener";
 import { GitCompare, GripVertical, Terminal, X } from "./icons";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { useLayoutEffect, useRef } from "react";
-import { basename } from "../lib/fs";
+import { useLayoutEffect, useRef, useState } from "react";
+import { copyText } from "../lib/clipboard";
+import { basename, revealPath } from "../lib/fs";
 import {
   isChangesTab,
   isCommitTab,
+  isFilesystemTab,
   isPlanTab,
   isReleaseNotesTab,
   isReviewTab,
@@ -12,10 +15,13 @@ import {
   isTerminalTab,
   type FilePaneTab,
 } from "../lib/layout";
+import { displayPath } from "../lib/paths";
+import { IS_MAC, IS_WIN } from "../lib/platform";
 import { releaseNotesTitle } from "../lib/releaseNotes";
 import { terminalTabLabel } from "../lib/terminalTab";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useSortable } from "../hooks/useSortable";
+import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
 
 type Props = {
@@ -37,6 +43,42 @@ export type SurfaceTabPresentation = {
   iconName: string;
   tooltip: string;
 };
+
+type SurfaceTabMenu = {
+  x: number;
+  y: number;
+  fileId: string;
+};
+
+const REVEAL_LABEL = IS_MAC
+  ? "Reveal in Finder"
+  : IS_WIN
+    ? "Reveal in File Explorer"
+    : "Open Containing Folder";
+
+export function surfaceTabMenuItems(file: FilePaneTab): ExplorerMenuItem[] {
+  const close: ExplorerMenuItem = {
+    kind: "item",
+    id: "close",
+    label: "Close",
+  };
+  if (!isFilesystemTab(file) || isChangesTab(file)) return [close];
+
+  return [
+    { kind: "item", id: "open-default", label: "Open in Default App" },
+    { kind: "item", id: "reveal", label: REVEAL_LABEL },
+    { kind: "sep" },
+    { kind: "item", id: "copy-path", label: "Copy Path" },
+    {
+      kind: "item",
+      id: "copy-relative-path",
+      label: "Copy Relative Path",
+    },
+    { kind: "item", id: "copy-name", label: "Copy File Name" },
+    { kind: "sep" },
+    close,
+  ];
+}
 
 export function surfaceTabPresentation(
   file: FilePaneTab,
@@ -120,9 +162,47 @@ export function SurfaceTabs({
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeTabRef = useRef<HTMLDivElement | null>(null);
+  const [menu, setMenu] = useState<SurfaceTabMenu | null>(null);
   const fileIds = files.map((file) => file.id);
   const sortable = useSortable(fileIds, onReorder);
   const canDrag = files.length > 1;
+  const menuFile = menu
+    ? files.find((file) => file.id === menu.fileId)
+    : undefined;
+
+  const onMenuPick = (id: string) => {
+    if (!menuFile) return;
+    setMenu(null);
+    if (id === "close") {
+      onCloseFile(menuFile.id);
+      return;
+    }
+    if (!isFilesystemTab(menuFile) || isChangesTab(menuFile)) return;
+
+    let action: Promise<void>;
+    switch (id) {
+      case "open-default":
+        action = openPath(menuFile.path);
+        break;
+      case "reveal":
+        action = revealPath(menuFile.path);
+        break;
+      case "copy-path":
+        action = copyText(menuFile.path);
+        break;
+      case "copy-relative-path":
+        action = copyText(displayPath(menuFile.path, menuFile.cwd));
+        break;
+      case "copy-name":
+        action = copyText(basename(menuFile.path));
+        break;
+      default:
+        return;
+    }
+    void action.catch((error) => {
+      console.error(`Failed to run file-tab action ${id}:`, error);
+    });
+  };
 
   useLayoutEffect(() => {
     if (sortable.draggingId) return;
@@ -189,6 +269,15 @@ export function SurfaceTabs({
             } ${dragging ? "opacity-40" : ""} ${
               canDrag ? "cursor-grab active:cursor-grabbing" : ""
             }`}
+            onMouseDownCapture={(event) => {
+              if (event.button === 1) event.preventDefault();
+            }}
+            onAuxClick={(event) => {
+              if (event.button !== 1) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onCloseFile(file.id);
+            }}
             onPointerDown={(event) => {
               if (event.button !== 0) return;
               if (
@@ -198,6 +287,16 @@ export function SurfaceTabs({
               }
               onSelectFile(file.id);
               sortable.onItemPointerDown(file.id, event);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onSelectFile(file.id);
+              setMenu({
+                x: event.clientX,
+                y: event.clientY,
+                fileId: file.id,
+              });
             }}
           >
             {showStart ? (
@@ -278,6 +377,16 @@ export function SurfaceTabs({
       ) : null}
       </div>
       {trailing}
+      {menu && menuFile ? (
+        <ExplorerMenu
+          x={menu.x}
+          y={menu.y}
+          items={surfaceTabMenuItems(menuFile)}
+          ariaLabel="File tab actions"
+          onPick={onMenuPick}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }

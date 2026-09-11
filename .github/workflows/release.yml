@@ -21,6 +21,8 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Write Apple API key
         env:
@@ -100,7 +102,7 @@ jobs:
           );
           NODE
 
-      - name: Build, sign, and notarize
+      - name: Build, sign, and notarize macOS packages
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -109,7 +111,29 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --bundles app,dmg --config "$RUNNER_TEMP/tauri.release.conf.json"
+        run: |
+          set -euo pipefail
+          npx tauri build --target aarch64-apple-darwin --bundles app,dmg --config "$RUNNER_TEMP/tauri.release.conf.json"
+          npx tauri build --target x86_64-apple-darwin --bundles app,dmg --config "$RUNNER_TEMP/tauri.release.conf.json"
+
+      - name: Verify macOS package architectures and signatures
+        run: |
+          set -euo pipefail
+          verify_app() {
+            local app="$1"
+            local expected_arch="$2"
+            local executable
+            local actual_arch
+            executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+            actual_arch=$(lipo -archs "$app/Contents/MacOS/$executable")
+            if [[ "$actual_arch" != "$expected_arch" ]]; then
+              echo "Expected $app to contain only $expected_arch, got: $actual_arch" >&2
+              exit 1
+            fi
+            codesign --verify --deep --strict --verbose=2 "$app"
+          }
+          verify_app "target/aarch64-apple-darwin/release/bundle/macos/MonoCode.app" arm64
+          verify_app "target/x86_64-apple-darwin/release/bundle/macos/MonoCode.app" x86_64
 
       - name: Download Linux packages
         uses: actions/download-artifact@v4
@@ -135,30 +159,58 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           BUNDLE="target/release/bundle"
-          TAR=$(find "$BUNDLE/macos" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)
-          SIG="${TAR}.sig"
-          DMG=$(find "$BUNDLE/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          ARM_BUNDLE="target/aarch64-apple-darwin/release/bundle"
+          INTEL_BUNDLE="target/x86_64-apple-darwin/release/bundle"
           shopt -s nullglob
+          ARM_TARS=("$ARM_BUNDLE"/macos/*.app.tar.gz)
+          ARM_DMGS=("$ARM_BUNDLE"/dmg/*.dmg)
+          INTEL_TARS=("$INTEL_BUNDLE"/macos/*.app.tar.gz)
+          INTEL_DMGS=("$INTEL_BUNDLE"/dmg/*.dmg)
           WINDOWS_INSTALLERS=("$BUNDLE"/nsis/*.exe)
           WINDOWS_SIGNATURES=("$BUNDLE"/nsis/*.exe.sig)
+          if (( ${#ARM_TARS[@]} != 1 || ${#ARM_DMGS[@]} != 1 )); then
+            echo "Expected exactly one Apple Silicon updater archive and DMG" >&2
+            exit 1
+          fi
+          if (( ${#INTEL_TARS[@]} != 1 || ${#INTEL_DMGS[@]} != 1 )); then
+            echo "Expected exactly one Intel updater archive and DMG" >&2
+            exit 1
+          fi
           if (( ${#WINDOWS_INSTALLERS[@]} != 1 || ${#WINDOWS_SIGNATURES[@]} != 1 )); then
             echo "Expected exactly one Windows installer and updater signature" >&2
             exit 1
           fi
+          ARM_TAR="${ARM_TARS[0]}"
+          ARM_SIG="${ARM_TAR}.sig"
+          ARM_DMG="${ARM_DMGS[0]}"
+          INTEL_TAR="${INTEL_TARS[0]}"
+          INTEL_SIG="${INTEL_TAR}.sig"
+          INTEL_DMG="${INTEL_DMGS[0]}"
           WINDOWS_INSTALLER="${WINDOWS_INSTALLERS[0]}"
           WINDOWS_SIGNATURE="${WINDOWS_SIGNATURES[0]}"
+          for artifact in "$ARM_SIG" "$INTEL_SIG"; do
+            if [[ ! -f "$artifact" ]]; then
+              echo "Missing release artifact: $artifact" >&2
+              exit 1
+            fi
+          done
           BASE="${R2_PUBLIC_BASE_URL%/}"
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           RELEASE_PREFIX="releases/${VERSION}"
-          TAR_KEY="${RELEASE_PREFIX}/MonoCode.app.tar.gz"
-          SIG_KEY="${TAR_KEY}.sig"
-          DMG_KEY="${RELEASE_PREFIX}/MonoCode_${VERSION}_aarch64.dmg"
+          ARM_TAR_KEY="${RELEASE_PREFIX}/MonoCode.app.tar.gz"
+          ARM_SIG_KEY="${ARM_TAR_KEY}.sig"
+          ARM_DMG_KEY="${RELEASE_PREFIX}/MonoCode_${VERSION}_aarch64.dmg"
+          INTEL_TAR_KEY="${RELEASE_PREFIX}/MonoCode_x64.app.tar.gz"
+          INTEL_SIG_KEY="${INTEL_TAR_KEY}.sig"
+          INTEL_DMG_KEY="${RELEASE_PREFIX}/MonoCode_${VERSION}_x64.dmg"
           WINDOWS_INSTALLER_KEY="${RELEASE_PREFIX}/MonoCode_${VERSION}_x64-setup.exe"
           WINDOWS_SIGNATURE_KEY="${WINDOWS_INSTALLER_KEY}.sig"
 
           VERSION="$VERSION" \
-            SIG="$SIG" \
-            TAR_URL="$BASE/$TAR_KEY" \
+            ARM_SIG="$ARM_SIG" \
+            ARM_TAR_URL="$BASE/$ARM_TAR_KEY" \
+            INTEL_SIG="$INTEL_SIG" \
+            INTEL_TAR_URL="$BASE/$INTEL_TAR_KEY" \
             WINDOWS_SIGNATURE="$WINDOWS_SIGNATURE" \
             WINDOWS_INSTALLER_URL="$BASE/$WINDOWS_INSTALLER_KEY" \
             node <<'NODE'
@@ -172,8 +224,16 @@ jobs:
                 pub_date: new Date().toISOString(),
                 platforms: {
                   "darwin-aarch64": {
-                    signature: fs.readFileSync(process.env.SIG, "utf8").trim(),
-                    url: process.env.TAR_URL,
+                    signature: fs
+                      .readFileSync(process.env.ARM_SIG, "utf8")
+                      .trim(),
+                    url: process.env.ARM_TAR_URL,
+                  },
+                  "darwin-x86_64": {
+                    signature: fs
+                      .readFileSync(process.env.INTEL_SIG, "utf8")
+                      .trim(),
+                    url: process.env.INTEL_TAR_URL,
                   },
                   "windows-x86_64": {
                     signature: fs
@@ -192,14 +252,18 @@ jobs:
           brew list awscli >/dev/null 2>&1 || brew install awscli
           IMMUTABLE_CACHE="public,max-age=31536000,immutable"
           NO_CACHE="no-store,max-age=0,must-revalidate"
-          aws s3 cp "$DMG" "s3://${R2_BUCKET_NAME}/${DMG_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
-          aws s3 cp "$TAR" "s3://${R2_BUCKET_NAME}/${TAR_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
-          aws s3 cp "$SIG" "s3://${R2_BUCKET_NAME}/${SIG_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/${ARM_DMG_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$ARM_TAR" "s3://${R2_BUCKET_NAME}/${ARM_TAR_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$ARM_SIG" "s3://${R2_BUCKET_NAME}/${ARM_SIG_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/${INTEL_DMG_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$INTEL_TAR" "s3://${R2_BUCKET_NAME}/${INTEL_TAR_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$INTEL_SIG" "s3://${R2_BUCKET_NAME}/${INTEL_SIG_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp "$WINDOWS_INSTALLER" "s3://${R2_BUCKET_NAME}/${WINDOWS_INSTALLER_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp "$WINDOWS_SIGNATURE" "s3://${R2_BUCKET_NAME}/${WINDOWS_SIGNATURE_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
-          # Keep the website's stable DMG link, but never let the CDN retain an
-          # older release under this mutable name.
-          aws s3 cp "$DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+          # Keep stable links for both architectures, but never let the CDN
+          # retain an older release under these mutable names.
+          aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" --content-type "application/json" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
 
       - name: GitHub Release
@@ -209,23 +273,36 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           BUNDLE="target/release/bundle"
-          TAR="$BUNDLE/macos/MonoCode.app.tar.gz"
-          SIG="${TAR}.sig"
-          DMG="$BUNDLE/dmg/MonoCode_${VERSION}_aarch64.dmg"
+          ARM_BUNDLE="target/aarch64-apple-darwin/release/bundle"
+          INTEL_BUNDLE="target/x86_64-apple-darwin/release/bundle"
+          ARM_TAR="$ARM_BUNDLE/macos/MonoCode.app.tar.gz"
+          ARM_SIG="${ARM_TAR}.sig"
+          ARM_DMG="$ARM_BUNDLE/dmg/MonoCode_${VERSION}_aarch64.dmg"
+          INTEL_TAR="$INTEL_BUNDLE/macos/MonoCode.app.tar.gz"
+          INTEL_SIG="${INTEL_TAR}.sig"
+          INTEL_DMG="$INTEL_BUNDLE/dmg/MonoCode_${VERSION}_x64.dmg"
           DEB="$BUNDLE/linux/MonoCode_${VERSION}_amd64.deb"
           APPIMAGE="$BUNDLE/linux/MonoCode_${VERSION}_amd64.AppImage"
           NSIS="$BUNDLE/nsis/MonoCode_${VERSION}_x64-setup.exe"
           NSIS_SIG="${NSIS}.sig"
-          for artifact in "$DMG" "$TAR" "$SIG" "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"; do
+          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"; do
             if [[ ! -f "$artifact" ]]; then
               echo "Missing release artifact: $artifact" >&2
               exit 1
             fi
           done
+          RELEASE_ASSETS="$RUNNER_TEMP/github-release-assets"
+          mkdir -p "$RELEASE_ASSETS"
+          cp "$ARM_TAR" "$RELEASE_ASSETS/MonoCode.app.tar.gz"
+          cp "$ARM_SIG" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
+          cp "$INTEL_TAR" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz"
+          cp "$INTEL_SIG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
           gh release create "$GITHUB_REF_NAME" \
             --title "MonoCode $VERSION" \
             --notes "See CHANGELOG.md for details." \
-            "$DMG" "$TAR" "$SIG" "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"
+            "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig" \
+            "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig" \
+            "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"
 
   linux:
     name: Linux packages

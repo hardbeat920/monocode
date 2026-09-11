@@ -6,6 +6,8 @@
 @custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
 
 @theme {
+  /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
+  --leading-label: 1.4;
   --color-background-base: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness)
   );
@@ -1312,11 +1314,6 @@ html.theme-light .popover-backdrop {
     animation: none;
     opacity: 0.7;
   }
-}
-
-[data-session-review-shell] + [data-message-queue] [data-message-queue-card] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 /* Graph node cutouts so lane strokes do not show through the circles. */

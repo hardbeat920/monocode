@@ -546,6 +546,49 @@ pub struct GitHubWorkItem {
     pub repo: String,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubStatus {
+    pub connected: bool,
+    pub installed: bool,
+    pub authenticated: bool,
+}
+
+/// Whether the GitHub CLI is installed and has an active authenticated account.
+#[tauri::command]
+pub async fn git_github_status() -> Result<GitHubStatus, String> {
+    tauri::async_runtime::spawn_blocking(git_github_status_for)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn git_github_status_for() -> GitHubStatus {
+    let Some(program) = crate::harness::resolve_gui_binary("gh") else {
+        return GitHubStatus {
+            connected: false,
+            installed: false,
+            authenticated: false,
+        };
+    };
+    let mut cmd = Command::new(program);
+    cmd.args(["auth", "status", "--active", "--hostname", "github.com"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .env("GIT_PAGER", "cat");
+    crate::harness::apply_gui_env(&mut cmd);
+    crate::hide_window_console(&mut cmd);
+    let authenticated = cmd
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    GitHubStatus {
+        connected: authenticated,
+        installed: true,
+        authenticated,
+    }
+}
+
 /// `owner/repo` for the GitHub remote of this working copy, via `gh`.
 #[tauri::command]
 pub async fn git_github_repo(cwd: String) -> Result<String, String> {

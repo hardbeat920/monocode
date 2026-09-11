@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession } from "../session";
+import { previewFromTool } from "./claudeProtocol";
 import {
   appendUser,
   applyHarnessEvent,
@@ -53,6 +54,33 @@ describe("turn duration", () => {
     });
     expect(session.busy).toBe(false);
     expect(session.blocks[0]?.durationMs).toBe(7_000);
+  });
+
+  it("marks orphaned subagent work failed when the provider dies", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "delegate it");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "agent-1",
+      title: "Inspect auth",
+      kind: "agent",
+      status: "in_progress",
+    });
+    session = applyHarnessEvent(session, {
+      type: "session.error",
+      message: "Codex app-server exited",
+    });
+
+    expect(session.busy).toBe(false);
+    expect(
+      session.blocks.find((block) => block.tool?.callId === "agent-1"),
+    ).toMatchObject({
+      streaming: false,
+      tool: { kind: "agent", status: "failed" },
+    });
+    expect(session.blocks.at(-1)).toMatchObject({
+      role: "system",
+      text: "Codex app-server exited",
+    });
   });
 });
 
@@ -451,6 +479,34 @@ describe("applyHarnessEvent context", () => {
 });
 
 describe("tool enrichment", () => {
+  it("retains Edit and Write previews when a tool completes without repeating its input", () => {
+    for (const [name, input] of [
+      [
+        "Edit",
+        { file_path: "/notes.md", old_string: "old", new_string: "new" },
+      ],
+      ["Write", { file_path: "/notes.md", content: "  content\n" }],
+      ["Write", { file_path: "/notes.md", content: "" }],
+    ] as const) {
+      const preview = previewFromTool(name, input)!;
+      let session = applyHarnessEvent(newSession("claude", "/repo"), {
+        type: "tool.started",
+        callId: "edit",
+        title: name,
+        kind: "edit",
+        status: "pending",
+        preview,
+      });
+      session = applyHarnessEvent(session, {
+        type: "tool.updated",
+        callId: "edit",
+        status: "completed",
+      });
+      expect(session.blocks[0].tool?.preview).toMatchObject(preview);
+      expect(session.blocks[0].tool?.preview?.lines).toEqual(preview.lines);
+    }
+  });
+
   it("fills in a bare Read row when approval carries the path", () => {
     let session = newSession("cursor", "/repo");
     session = applyHarnessEvent(session, {

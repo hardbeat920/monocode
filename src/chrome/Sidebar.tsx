@@ -64,17 +64,20 @@ import {
   folderAccent,
   folderContaining,
   folderShellFill,
+  loadPinnedSessionsCollapsed,
   loadSessionFolders,
   mergeFolderSessionSummaries,
   pruneSessionFolders,
   removeSessionFromFolder,
   renameFolder,
   reorderSessionFolders,
+  savePinnedSessionsCollapsed,
   saveSessionFolders,
   sessionListNavigationIds,
   setFolderCollapsed,
   setFolderColor,
   setFolderCustomColor,
+  subscribeSessionFolders,
   ungroupedSessions,
   type SessionFolder,
   type SessionListDropTarget,
@@ -357,6 +360,9 @@ function SidebarComponent({
   const [sessionFolders, setSessionFolders] = useState<SessionFolder[]>(() =>
     loadSessionFolders(cwd),
   );
+  const [pinnedSessionsCollapsed, setPinnedSessionsCollapsed] = useState(() =>
+    loadPinnedSessionsCollapsed(cwd),
+  );
   const [sessionDrop, setSessionDrop] = useState<SessionListDropTarget | null>(
     null,
   );
@@ -438,11 +444,13 @@ function SidebarComponent({
     visibleSessions,
     sessionFolders,
     ungroupedVisible,
+    pinnedSessionsCollapsed,
   );
   const sessionListEntries = buildSessionList(
     visibleSessions,
     sessionFolders,
     shownUngrouped,
+    pinnedSessionsCollapsed,
   );
   const sessionNavigationIds = sessionListNavigationIds(
     fullSessionListEntries,
@@ -531,11 +539,20 @@ function SidebarComponent({
 
   useEffect(() => {
     setSessionFolders(loadSessionFolders(cwd));
+    setPinnedSessionsCollapsed(loadPinnedSessionsCollapsed(cwd));
     setRenamingFolderId(null);
     setFolderMenu(null);
     setSessionDrop(null);
     pendingFolderSessionIds.current.clear();
   }, [cwd]);
+
+  useEffect(
+    () =>
+      subscribeSessionFolders(cwd, () => {
+        setSessionFolders(loadSessionFolders(cwd));
+      }),
+    [cwd],
+  );
 
   useEffect(() => {
     if (pending || status === "error") return;
@@ -1057,7 +1074,9 @@ function SidebarComponent({
           {isChangesTab && hasChangeStats ? (
             <DiffStat additions={changeAdditions} deletions={changeDeletions} />
           ) : (
-            <span className="block truncate">{TAB_LABELS[itemId]}</span>
+            <span className="block truncate leading-label">
+              {TAB_LABELS[itemId]}
+            </span>
           )}
         </button>
       </div>
@@ -1225,14 +1244,56 @@ function SidebarComponent({
               ) : (
                 <ul className="flex flex-col gap-0.5 p-1.5">
                   {sessionListEntries.map((entry, index) => {
-                    if (entry.kind === "divider") {
+                    if (entry.kind === "pinned") {
+                      const expanded = searchNarrowed || !entry.collapsed;
+                      const beforeUngrouped =
+                        sessionListEntries[index + 1]?.kind === "session";
                       return (
                         <li
-                          key={`divider-${index}`}
-                          aria-hidden
-                          className="mx-1 my-1 list-none"
+                          key="pinned-sessions"
+                          data-pinned-sessions
+                          className={`relative ${
+                            expanded || beforeUngrouped ? "mb-1.5" : ""
+                          }`}
                         >
-                          <div className="h-px bg-content/10" />
+                          <div className="overflow-hidden rounded-md bg-content/5">
+                            <FolderRow
+                              folder={{ name: "Pinned" }}
+                              sessions={entry.sessions}
+                              expanded={expanded}
+                              dropTarget={false}
+                              busy={entry.sessions.some((session) =>
+                                busySessionIds.has(session.id),
+                              )}
+                              done={entry.sessions.some((session) =>
+                                unseenFinishedIds.has(session.id),
+                              )}
+                              needsApproval={entry.sessions.some((session) =>
+                                approvalSessionIds.has(session.id),
+                              )}
+                              groupIcon={
+                                <Pin
+                                  className="size-3.5 text-content"
+                                  strokeWidth={1.75}
+                                />
+                              }
+                              onToggle={() => {
+                                if (searchNarrowed) return;
+                                const collapsed = !entry.collapsed;
+                                setPinnedSessionsCollapsed(collapsed);
+                                savePinnedSessionsCollapsed(cwd, collapsed);
+                              }}
+                            />
+                            {expanded ? (
+                              <ul className="flex flex-col gap-px p-1">
+                                {entry.sessions.map((session) => (
+                                  <li key={session.id}>
+                                    {renderSessionCard(session, true)}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </div>
                         </li>
                       );
                     }
@@ -1971,12 +2032,13 @@ function FolderRow({
   busy,
   done,
   needsApproval,
+  groupIcon,
   onPointerDown,
   onToggle,
   onContextMenu,
   onRename,
 }: {
-  folder: SessionFolder;
+  folder: Pick<SessionFolder, "name" | "colorIndex" | "customColor">;
   sessions: SessionSummary[];
   expanded: boolean;
   dropTarget: boolean;
@@ -1984,10 +2046,11 @@ function FolderRow({
   busy: boolean;
   done: boolean;
   needsApproval: boolean;
+  groupIcon?: ReactNode;
   onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onToggle: () => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onRename: () => void;
+  onContextMenu?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onRename?: () => void;
 }) {
   const count = sessions.length;
   const accent = folderAccent(folder.colorIndex, folder.customColor);
@@ -2001,7 +2064,7 @@ function FolderRow({
       onClick={onToggle}
       onContextMenu={onContextMenu}
       onKeyDown={(event) => {
-        if (event.key === "F2") {
+        if (event.key === "F2" && onRename) {
           event.preventDefault();
           onRename();
         }
@@ -2026,13 +2089,26 @@ function FolderRow({
         style={accent ? { color: accent } : undefined}
       >
         {expanded ? (
-          <ChevronDown className="size-3.5 text-content" strokeWidth={1.75} />
+          groupIcon ? (
+            <>
+              <span className="group-hover:hidden group-focus-visible:hidden">
+                {groupIcon}
+              </span>
+              <ChevronDown
+                className="hidden size-3.5 text-content group-hover:block group-focus-visible:block"
+                strokeWidth={1.75}
+              />
+            </>
+          ) : (
+            <ChevronDown className="size-3.5 text-content" strokeWidth={1.75} />
+          )
         ) : (
           <>
-            <Folder
-              className={`size-3.5 group-hover:hidden group-focus-visible:hidden text-content`}
-              strokeWidth={1.75}
-            />
+            <span className="group-hover:hidden group-focus-visible:hidden">
+              {groupIcon ?? (
+                <Folder className="size-3.5 text-content" strokeWidth={1.75} />
+              )}
+            </span>
             <ChevronRight
               className="hidden size-3.5 group-hover:block group-focus-visible:block text-content"
               strokeWidth={1.75}

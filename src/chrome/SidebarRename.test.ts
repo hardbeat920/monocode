@@ -224,3 +224,39 @@ describe("sidebar session rename", () => {
     );
   });
 });
+
+describe("sidebar pinned sessions", () => {
+  it("renders them as a collapsible folder-style group without a divider", () => {
+    props.sessions = [
+      { ...props.sessions[0], pinned: true },
+      {
+        ...props.sessions[0],
+        id: "session-2",
+        title: formatSessionTitle("codex", "Unpinned conversation"),
+        updatedAt: props.sessions[0].updatedAt - 1,
+      },
+    ];
+    act(() => render());
+
+    const group = container.querySelector<HTMLElement>(
+      "[data-pinned-sessions]",
+    )!;
+    const toggle = group.querySelector<HTMLButtonElement>(
+      'button[title="Pinned"]',
+    )!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      group.querySelector('[data-session-card="session-1"]'),
+    ).not.toBeNull();
+    expect(container.querySelector("li[aria-hidden]")).toBeNull();
+
+    act(() => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(group.querySelector('[data-session-card="session-1"]')).toBeNull();
+    expect(
+      JSON.parse(
+        localStorage.getItem("monocode.pinnedSessionsCollapsed") ?? "{}",
+      ),
+    ).toEqual({ "/workspace/project": true });
+  });
+});

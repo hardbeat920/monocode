@@ -32,7 +32,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { WindowControls } from "./WindowControls";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import type { RecentProject } from "../lib/recents";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 
@@ -268,6 +268,15 @@ function TitleTabItem({
         event.stopPropagation();
         onContextMenu(tab.id, event);
       }}
+      onMouseDownCapture={(event) => {
+        if (event.button === 1) event.preventDefault();
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1 || !closable) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose(tab.id);
+      }}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
@@ -318,10 +327,11 @@ function TitleTabItem({
             <FileTypeIcon name={fileIcon} isDir={false} size={14} />
           </span>
         )}
-        <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+        {/* Keep two-line tabs compact while leaving room for descenders. */}
+        <span className="flex min-w-0 flex-1 flex-col justify-center">
           <span className="flex min-w-0 items-center gap-1">
             <span
-              className={`min-w-0 truncate leading-none ${
+              className={`min-w-0 truncate leading-tight ${
                 meta
                   ? "text-[13px] @min-[11rem]:text-[10px] @min-[11rem]:font-medium"
                   : "text-[13px]"
@@ -338,7 +348,7 @@ function TitleTabItem({
             ) : null}
           </span>
           {meta ? (
-            <span className="hidden min-w-0 truncate text-[10px] leading-none text-content/45 @min-[11rem]:block">
+            <span className="hidden min-w-0 truncate text-[10px] leading-tight text-content/45 @min-[11rem]:block">
               {meta}
             </span>
           ) : null}
@@ -842,13 +852,13 @@ function TitleBarComponent({
           </div>
         </div>
 
-        {IS_MAC ? null : (
+        {!IS_MAC && !IS_WIN ? (
           <div className="flex min-w-0 flex-1 items-center justify-center px-4">
             <span className="pointer-events-none truncate text-[11.5px] font-medium text-content/40 select-none">
               {systemTitle}
             </span>
           </div>
-        )}
+        ) : null}
         {trailingControls}
       </div>
       {tabMenu && contextTab ? (

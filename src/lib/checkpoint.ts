@@ -6,7 +6,7 @@ export type CheckpointFile = {
   status: string;
   additions: number;
   deletions: number;
-  /** False when exact line ownership overlaps another session. */
+  /** False when changes between this session's edits prevent an exact diff. */
   exact: boolean;
   /** False when restoring could overwrite a change made outside this session. */
   undoable: boolean;

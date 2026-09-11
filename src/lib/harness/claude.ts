@@ -397,8 +397,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
     (code) => {
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const current = liveRef.current;
+      if (!current?.muteUpdates) {
+        (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
       current?.turnFailed?.(new Error("Claude Code exited"));
       current?.initDone?.();
       if (current) {
@@ -1101,7 +1103,13 @@ function completeAgentTask(
   const task = live.agentTasks.get(taskId);
   live.agentTasks.delete(taskId);
   if (task) {
-    upsertAgentTool(live, task.toolUseId, task.description, status, detail);
+    upsertAgentTool(
+      live,
+      task.toolUseId,
+      task.description,
+      status,
+      detail ?? (status === "failed" ? "Subagent failed." : undefined),
+    );
   }
   maybeFinishTurn(live);
 }

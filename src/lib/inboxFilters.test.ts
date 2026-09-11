@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyInboxFilters,
   DEFAULT_INBOX_FILTERS,
@@ -13,6 +13,11 @@ import {
   LINEAR_NO_PROJECT,
   linearProjectOptions,
   pruneInboxFilters,
+  connectableInboxSources,
+  loadInboxConnections,
+  resolveInboxSource,
+  saveInboxConnections,
+  visibleInboxSources,
 } from "./inboxFilters";
 import type { InboxItem } from "./githubTasks";
 
@@ -464,5 +469,156 @@ describe("pruneInboxFilters", () => {
       ["/tmp/web"],
     );
     expect(pruned.hiddenProjects).toEqual(["/tmp/web"]);
+  });
+});
+
+describe("visibleInboxSources", () => {
+  it("drops sources that are known to be disconnected", () => {
+    expect(
+      visibleInboxSources({ github: false, linear: false, gitlab: false }),
+    ).toEqual([]);
+    expect(
+      visibleInboxSources({ github: true, linear: false, gitlab: false }),
+    ).toEqual(["github"]);
+    expect(
+      visibleInboxSources({ github: false, linear: true, gitlab: false }),
+    ).toEqual(["linear"]);
+    expect(
+      visibleInboxSources({ github: true, linear: true, gitlab: true }),
+    ).toEqual(["github", "linear", "gitlab"]);
+  });
+
+  it("keeps unresolved sources visible so tabs do not flash away", () => {
+    expect(
+      visibleInboxSources({ github: null, linear: null, gitlab: null }),
+    ).toEqual(["github", "linear", "gitlab"]);
+  });
+});
+
+describe("connectableInboxSources", () => {
+  it("offers only the sources confirmed to be disconnected", () => {
+    expect(
+      connectableInboxSources({ github: true, linear: false, gitlab: true }),
+    ).toEqual(["linear"]);
+    expect(
+      connectableInboxSources({
+        github: false,
+        linear: false,
+        gitlab: false,
+      }),
+    ).toEqual(["github", "linear", "gitlab"]);
+  });
+
+  it("offers nothing while the checks are unresolved", () => {
+    expect(
+      connectableInboxSources({ github: null, linear: null, gitlab: null }),
+    ).toEqual([]);
+  });
+});
+
+describe("resolveInboxSource", () => {
+  it("falls back to the first visible source when the selection disconnects", () => {
+    expect(
+      resolveInboxSource("linear", {
+        github: true,
+        linear: false,
+        gitlab: true,
+      }),
+    ).toBe("github");
+    expect(
+      resolveInboxSource("github", {
+        github: false,
+        linear: false,
+        gitlab: true,
+      }),
+    ).toBe("gitlab");
+  });
+
+  it("keeps GitHub as an internal fallback when every source is disconnected", () => {
+    expect(
+      resolveInboxSource("linear", {
+        github: false,
+        linear: false,
+        gitlab: false,
+      }),
+    ).toBe("github");
+  });
+
+  it("leaves a still-visible selection alone", () => {
+    expect(
+      resolveInboxSource("linear", {
+        github: false,
+        linear: true,
+        gitlab: false,
+      }),
+    ).toBe("linear");
+    expect(
+      resolveInboxSource("github", {
+        github: true,
+        linear: false,
+        gitlab: false,
+      }),
+    ).toBe("github");
+  });
+});
+
+function mockLocalStorage() {
+  const data = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+    removeItem: (key: string) => {
+      data.delete(key);
+    },
+    clear: () => {
+      data.clear();
+    },
+    key: (index: number) => [...data.keys()][index] ?? null,
+    get length() {
+      return data.size;
+    },
+  };
+  Object.defineProperty(globalThis, "localStorage", {
+    value: storage,
+    configurable: true,
+  });
+}
+
+describe("inbox connection cache", () => {
+  const KEY = "monocode.inboxConnections";
+  beforeEach(mockLocalStorage);
+
+  it("round-trips the last known connect state", () => {
+    saveInboxConnections({ github: true, linear: true, gitlab: false });
+    expect(loadInboxConnections()).toEqual({
+      github: true,
+      linear: true,
+      gitlab: false,
+    });
+  });
+
+  it("reads unknown when nothing is stored", () => {
+    expect(loadInboxConnections()).toEqual({
+      github: null,
+      linear: null,
+      gitlab: null,
+    });
+  });
+
+  it("reads unknown rather than trusting a malformed value", () => {
+    localStorage.setItem(KEY, "not json");
+    expect(loadInboxConnections()).toEqual({
+      github: null,
+      linear: null,
+      gitlab: null,
+    });
+    localStorage.setItem(KEY, '{"linear":"yes"}');
+    expect(loadInboxConnections()).toEqual({
+      github: null,
+      linear: null,
+      gitlab: null,
+    });
   });
 });
