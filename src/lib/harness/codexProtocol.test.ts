@@ -38,9 +38,10 @@ describe("runtimeModeToCodexConfig", () => {
     });
   });
 
-  it("maps full-access to never + danger-full-access", () => {
+  it("allows explicit escalation requests in full-access", () => {
     expect(runtimeModeToCodexConfig("full-access")).toMatchObject({
-      approvalPolicy: "never",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandbox: "danger-full-access",
       sandboxPolicy: { type: "dangerFullAccess" },
     });
@@ -101,7 +102,7 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
     });
     expect(turn).toMatchObject({
       approvalPolicy: "never",
-      approvalsReviewer: "auto_review",
+      approvalsReviewer: "user",
       sandboxPolicy: { type: "readOnly" },
       collaborationMode: {
         mode: "plan",
@@ -109,6 +110,24 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
       },
     });
   });
+
+  it.each(["supervised", "auto-accept-edits", "auto", "full-access"] as const)(
+    "preserves the selected reviewer in %s plan turns",
+    (runtimeMode) => {
+      expect(
+        buildTurnStartParams({
+          threadId: "thr_1",
+          runtimeMode,
+          intent: "plan",
+          prompt: "inspect",
+        }),
+      ).toMatchObject({
+        approvalPolicy: "never",
+        approvalsReviewer: runtimeMode === "auto" ? "auto_review" : "user",
+        sandboxPolicy: { type: "readOnly" },
+      });
+    },
+  );
 
   it("builds steer input with expected turn id", () => {
     const steer = buildTurnSteerParams({

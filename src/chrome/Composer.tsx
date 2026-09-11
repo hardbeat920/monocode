@@ -163,6 +163,7 @@ type Props = {
   onNoteCardDismiss?: () => void;
   onHandoffCardDismiss?: () => void;
   onQuestionReply?: (requestId: number, reply: UserQuestionReply) => void;
+  onQuestionInteraction?: (requestId: number) => void;
   onSubmit: (
     text: string,
     attachments: Attachment[],
@@ -417,6 +418,7 @@ export function Composer({
   onNoteCardDismiss,
   onHandoffCardDismiss,
   onQuestionReply,
+  onQuestionInteraction,
   onSubmit,
   onStop,
   onCompactContext,
@@ -1063,7 +1065,11 @@ export function Composer({
       onMouseDown={onFocus}
     >
       {question && onQuestionReply ? (
-        <QuestionForm prompt={question} onReply={onQuestionReply} />
+        <QuestionForm
+          prompt={question}
+          onReply={onQuestionReply}
+          onInteraction={onQuestionInteraction}
+        />
       ) : null}
       {children}
       <MessageQueue
@@ -1388,6 +1394,7 @@ export function Composer({
                 {harness !== "fx" ? (
                   <AccessPicker
                     value={runtimeMode}
+                    busy={busy}
                     onChange={onRuntimeModeChange}
                     onClose={() => ref.current?.focus()}
                   />

@@ -143,6 +143,7 @@ import {
   promoteLastAssistantToPlan,
   respondHarnessApproval,
   respondHarnessQuestion,
+  keepHarnessQuestionOpen,
   sendHarnessTurn,
   steerHarnessTurn,
   startHarnessBridge,
@@ -277,6 +278,7 @@ import {
   probeNotificationPermission,
   setWindowFocused,
 } from "./lib/notifications";
+import { useInputNotifications } from "./hooks/useInputNotifications";
 import { playCue } from "./lib/sounds";
 import { archiveFocusedSession } from "./lib/archiveShortcut";
 import {
@@ -986,22 +988,7 @@ export default function App({
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
 
-  const notifiedApprovalIdsRef = useRef<ReadonlySet<string>>(new Set());
-  useEffect(() => {
-    const previous = notifiedApprovalIdsRef.current;
-    notifiedApprovalIdsRef.current = approvalSessionIds;
-    for (const id of approvalSessionIds) {
-      if (previous.has(id)) continue;
-      const session = sessionsRef.current.find((s) => s.id === id);
-      if (session) {
-        void notifySession(
-          session,
-          "needsInput",
-          id === activeSessionIdRef.current,
-        );
-      }
-    }
-  }, [approvalSessionIds]);
+  useInputNotifications(sessions, activeSessionId);
 
   // Cache the OS decision so a turn ending later can skip a denied banner.
   useEffect(() => {
@@ -4599,6 +4586,14 @@ export default function App({
     [],
   );
 
+  const onQuestionInteraction = useCallback(
+    (sessionId: string, requestId: number) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (session) keepHarnessQuestionOpen(session.harness, sessionId, requestId);
+    },
+    [],
+  );
+
   const onOpenApprovalSession = useCallback(
     (sessionId: string) => {
       if (!focusOpenSession(sessionId)) {
@@ -5288,6 +5283,7 @@ export default function App({
     onHandoffCardDismiss,
     onApproval,
     onQuestionReply,
+    onQuestionInteraction,
     onOpenFile,
     onOpenDiff,
     onOpenPlan,

@@ -103,7 +103,54 @@ export function shouldNotify({
   return permission === "granted" || permission === "prompt";
 }
 
-export type NotificationEvent = "finished" | "needsInput";
+export type InputNotificationEvent = {
+  kind: "approval" | "question";
+  requestId: number;
+};
+export type NotificationEvent = "finished" | InputNotificationEvent;
+
+type PendingInputNotification = {
+  session: Session;
+  event: InputNotificationEvent;
+};
+
+/** Track each request, including a new request in an already-waiting session. */
+export function pendingInputNotifications(
+  sessions: Session[],
+): Map<string, PendingInputNotification> {
+  const pending = new Map<string, PendingInputNotification>();
+  for (const session of sessions) {
+    if (session.inboxAsk) continue;
+    for (const block of session.blocks) {
+      if (block.approval && !block.approval.decided) {
+        pending.set(
+          JSON.stringify([session.id, "approval", block.approval.requestId]),
+          {
+            session,
+            event: { kind: "approval", requestId: block.approval.requestId },
+          },
+        );
+      }
+    }
+    if (session.pendingQuestion) {
+      pending.set(
+        JSON.stringify([
+          session.id,
+          "question",
+          session.pendingQuestion.requestId,
+        ]),
+        {
+          session,
+          event: {
+            kind: "question",
+            requestId: session.pendingQuestion.requestId,
+          },
+        },
+      );
+    }
+  }
+  return pending;
+}
 
 /** App name, then the session title, then the reply itself. */
 export type NotificationText = { title: string; subtitle: string; body: string };
@@ -117,19 +164,24 @@ export function notificationText(
   const title = "MonoCode";
   const subtitle = sessionDisplayTitle(session.title, session.harness);
   const harness = HARNESS_TITLE[session.harness];
-  if (event === "needsInput") {
-    const question = session.pendingQuestion;
-    if (question) {
-      const prompt = question.title || question.questions[0]?.prompt;
+  if (event !== "finished") {
+    if (event.kind === "question") {
+      const question =
+        session.pendingQuestion?.requestId === event.requestId
+          ? session.pendingQuestion
+          : undefined;
+      const prompt = question?.title || question?.questions[0]?.prompt;
       return {
         title,
         subtitle,
         body: clip(prompt || `${harness} has a question for you`),
       };
     }
-    const pending = [...session.blocks]
-      .reverse()
-      .find((block) => block.approval && !block.approval.decided);
+    const pending = session.blocks.find(
+      (block) =>
+        block.approval?.requestId === event.requestId &&
+        !block.approval.decided,
+    );
     const what = pending?.tool?.title || pending?.text;
     return {
       title,

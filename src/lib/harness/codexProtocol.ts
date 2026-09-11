@@ -49,7 +49,9 @@ export function runtimeModeToCodexConfig(mode: RuntimeMode): CodexThreadConfig {
       };
     case "full-access":
       return {
-        approvalPolicy: "never",
+        // Explicit escalations still need an approval round-trip. "never"
+        // rejects them before the client's full-access handler can allow them.
+        approvalPolicy: "on-request",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
         sandboxPolicy: { type: "dangerFullAccess" },
@@ -112,7 +114,7 @@ export function buildTurnStartParams(input: {
       ? {
           approvalPolicy: "never",
           sandbox: "read-only",
-          approvalsReviewer: "auto_review",
+          approvalsReviewer: runtimeConfig.approvalsReviewer,
           sandboxPolicy: { type: "readOnly" },
         }
       : runtimeConfig;
