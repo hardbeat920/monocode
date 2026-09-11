@@ -220,6 +220,7 @@ import {
   filterTabsForProject,
   planWorkspaceTabClose,
   workspaceTabCwd,
+  focusedWorkspaceTabCwd,
 } from "./lib/workspaceTabGroups";
 import { runSessionRemoval } from "./lib/sessionRemoval";
 import {
@@ -1401,15 +1402,10 @@ export default function App({
     }
 
     if (tab) {
-      const focusedSession = nextFocusedId
-        ? sessionsRef.current.find((session) => session.id === nextFocusedId)
-        : undefined;
       const focusedTab = nextFocusedId
         ? { ...tab, focusedId: nextFocusedId }
         : tab;
-      const cwd =
-        focusedSession?.cwd ??
-        (focusedTab ? workspaceTabCwd(focusedTab, sessionsRef.current) : null);
+      const cwd = focusedWorkspaceTabCwd(focusedTab, sessionsRef.current);
       if (cwd && looksLikeProject(cwd)) {
         const normalized = normalizeProjectPath(cwd);
         if (!sameProjectPath(normalized, projectCwdRef.current)) {

@@ -27,6 +27,16 @@ export function workspaceTabCwd(
   return null;
 }
 
+export function focusedWorkspaceTabCwd(
+  tab: WorkspaceTab,
+  sessions: readonly Pick<Session, "id" | "cwd">[],
+): string | null {
+  const session = sessions.find((entry) => entry.id === tab.focusedId);
+  return (
+    session?.cwd ?? focusedFileTab(tab)?.cwd ?? workspaceTabCwd(tab, sessions)
+  );
+}
+
 export function workspaceTabProject(
   tab: WorkspaceTab,
   sessions: Session[],

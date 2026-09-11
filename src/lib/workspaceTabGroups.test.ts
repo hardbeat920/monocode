@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { leafIds, newTab, type WorkspaceTab } from "./layout";
+import {
+  leafIds,
+  newFileTab,
+  newTerminalFile,
+  newTab,
+  splitPane,
+  type WorkspaceTab,
+} from "./layout";
+import { planProjectReturn } from "./projectReturn";
 import type { Session } from "./session";
 import {
   applyPlaceSessionOnPane,
@@ -8,6 +16,8 @@ import {
   planWorkspaceTabClose,
   replaceGroupInTabOrder,
   workspaceTabProject,
+  focusedWorkspaceTabCwd,
+  workspaceTabCwd,
 } from "./workspaceTabGroups";
 
 function session(id: string, cwd: string): Session {
@@ -25,6 +35,67 @@ function session(id: string, cwd: string): Session {
 function tab(id: string, sessionId: string): WorkspaceTab {
   return { ...newTab(sessionId), id };
 }
+
+describe("focusedWorkspaceTabCwd", () => {
+  it.each(["editor", "terminal"] as const)(
+    "uses the restored %s pane's project instead of the first chat's project",
+    (kind) => {
+      const sessions = [session("chat", "/alpha")];
+      const file =
+        kind === "editor"
+          ? newFileTab("/beta/readme.md", "/beta")
+          : newTerminalFile("/beta");
+      const pane = { id: "surface", files: [file], activeFileId: file.id };
+      const mixed: WorkspaceTab = {
+        ...tab("mixed", "chat"),
+        layout: splitPane(newTab("chat").layout, "chat", "h", pane.id),
+        editorPanes: kind === "editor" ? [pane] : [],
+        terminalPanes: kind === "terminal" ? [pane] : [],
+      };
+      const decision = planProjectReturn({
+        tabs: [mixed],
+        sessions,
+        memory: new Map([["/beta", pane.id]]),
+        activeTabId: mixed.id,
+        projectPath: "/beta",
+      });
+      expect(decision).toEqual({
+        action: "activate",
+        tabId: mixed.id,
+        paneId: pane.id,
+      });
+      if (decision.action !== "activate" || !decision.paneId) {
+        throw new Error("Expected pane activation");
+      }
+      const focusedTab = { ...mixed, focusedId: decision.paneId };
+      expect(workspaceTabCwd(focusedTab, sessions)).toBe("/alpha");
+      expect(focusedWorkspaceTabCwd(focusedTab, sessions)).toBe("/beta");
+      expect(mixed.focusedId).toBe("chat");
+    },
+  );
+
+  it("prefers the focused chat over the first chat", () => {
+    const mixed = {
+      ...tab("mixed", "first"),
+      layout: splitPane(newTab("first").layout, "first", "h", "second"),
+      focusedId: "second",
+    };
+    expect(
+      focusedWorkspaceTabCwd(mixed, [
+        session("first", "/alpha"),
+        session("second", "/beta"),
+      ]),
+    ).toBe("/beta");
+  });
+
+  it("retains the tab fallback when the focused pane has no cwd", () => {
+    const mixed = { ...tab("mixed", "chat"), focusedId: "missing" };
+    expect(focusedWorkspaceTabCwd(mixed, [session("chat", "/alpha")])).toBe(
+      "/alpha",
+    );
+    expect(focusedWorkspaceTabCwd(mixed, [])).toBeNull();
+  });
+});
 
 describe("workspaceTabProject", () => {
   it("reads project from the tab session cwd", () => {
