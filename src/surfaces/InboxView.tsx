@@ -1411,7 +1411,7 @@ export function InboxDetail({
     <div className="flex h-full min-h-0 min-w-0 flex-col">
       <div
         data-inbox-detail-header
-        className="relative z-10 shrink-0 border-b border-content/10 bg-background-base"
+        className="relative z-10 shrink-0 border-b border-content/10"
       >
         <div
           className={`mx-auto flex w-full max-w-5xl flex-col gap-2.5 px-8 pt-5 ${
@@ -1450,6 +1450,98 @@ export function InboxDetail({
             >
               {item.title}
             </h1>
+            <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[12px] text-content/50">
+              {authorName ? (
+                <InboxPerson
+                  name={authorName}
+                  avatarUrl={inboxPersonAvatarUrl(
+                    item.provider,
+                    authorName,
+                    details?.authorAvatarUrl,
+                  )}
+                  size={16}
+                />
+              ) : null}
+              {showAssignment ? (
+                <>
+                  {authorName ? <span aria-hidden>·</span> : null}
+                  {extraAssignees.length > 0 ? (
+                    <span className="flex min-w-0 items-center gap-2 overflow-hidden">
+                      {extraAssignees.map((person) => (
+                        <InboxPerson
+                          key={person.login}
+                          name={person.login}
+                          avatarUrl={inboxPersonAvatarUrl(
+                            item.provider,
+                            person.login,
+                            person.avatarUrl,
+                          )}
+                          size={16}
+                        />
+                      ))}
+                    </span>
+                  ) : (
+                    <span>Unassigned</span>
+                  )}
+                </>
+              ) : null}
+              {formatRelativeTime(item.updatedAt) ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span>Updated {formatRelativeTime(item.updatedAt)}</span>
+                </>
+              ) : null}
+              {baseRef && headRef ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="inline-flex min-w-0 items-center gap-1">
+                    <GitCompare
+                      className="size-3 shrink-0"
+                      strokeWidth={1.75}
+                    />
+                    <span className="min-w-0 truncate">
+                      {baseRef} ← {headRef}
+                    </span>
+                  </span>
+                </>
+              ) : null}
+              {reviewLabel ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className={reviewClass}>{reviewLabel}</span>
+                </>
+              ) : null}
+            </div>
+            {relatedSessions.length > 0 ? (
+              <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                <span className="mr-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] text-content/45">
+                  <MessageMultiple className="size-3.5" strokeWidth={1.75} />
+                  Related {relatedSessions.length === 1 ? "thread" : "threads"}
+                </span>
+                {relatedSessions.map((session) => {
+                  const title = sessionDisplayTitle(
+                    session.title,
+                    session.harness,
+                  );
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      title={`Open thread: ${title}`}
+                      onClick={() => void onOpenSession?.(session.id)}
+                      className="inline-flex min-w-0 max-w-64 items-center gap-1 rounded-md bg-content/5 px-2 py-1 text-[11px] text-content/70 hover:bg-content/10 hover:text-content"
+                    >
+                      <span className="truncate">{title}</span>
+                      {session.archived ? (
+                        <span className="shrink-0 text-content/40">
+                          Archived
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             <div className="flex flex-wrap items-center gap-2 pt-0.5">
               {onStart && item.kind !== "pr" ? (
                 <>
@@ -1548,113 +1640,13 @@ export function InboxDetail({
         className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none"
       >
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-8 py-5">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-content/50">
-              {authorName ? (
-                <InboxPerson
-                  name={authorName}
-                  avatarUrl={inboxPersonAvatarUrl(
-                    item.provider,
-                    authorName,
-                    details?.authorAvatarUrl,
-                  )}
-                  size={16}
-                />
-              ) : null}
-              {showAssignment ? (
-                <>
-                  {authorName ? <span aria-hidden>·</span> : null}
-                  {extraAssignees.length > 0 ? (
-                    <span className="flex min-w-0 flex-wrap items-center gap-2">
-                      {extraAssignees.map((person) => (
-                        <InboxPerson
-                          key={person.login}
-                          name={person.login}
-                          avatarUrl={inboxPersonAvatarUrl(
-                            item.provider,
-                            person.login,
-                            person.avatarUrl,
-                          )}
-                          size={16}
-                        />
-                      ))}
-                    </span>
-                  ) : (
-                    <span>Unassigned</span>
-                  )}
-                </>
-              ) : null}
-              {linear ? null : (
-                <>
-                  <span aria-hidden>·</span>
-                  <span>{projectName(item.projectPath)}</span>
-                </>
-              )}
-              {formatRelativeTime(item.updatedAt) ? (
-                <>
-                  <span aria-hidden>·</span>
-                  <span>Updated {formatRelativeTime(item.updatedAt)}</span>
-                </>
-              ) : null}
-              {baseRef && headRef ? (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className="inline-flex min-w-0 items-center gap-1">
-                    <GitCompare
-                      className="size-3 shrink-0"
-                      strokeWidth={1.75}
-                    />
-                    <span className="min-w-0 truncate">
-                      {baseRef} ← {headRef}
-                    </span>
-                  </span>
-                </>
-              ) : null}
-              {reviewLabel ? (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className={reviewClass}>{reviewLabel}</span>
-                </>
-              ) : null}
+          {item.labels.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {item.labels.map((label) => (
+                <InboxLabel key={label.name} label={label} />
+              ))}
             </div>
-            {item.labels.length > 0 ? (
-              <div className="flex flex-wrap gap-1">
-                {item.labels.map((label) => (
-                  <InboxLabel key={label.name} label={label} />
-                ))}
-              </div>
-            ) : null}
-            {relatedSessions.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="mr-0.5 inline-flex items-center gap-1 text-[11px] text-content/45">
-                  <MessageMultiple className="size-3.5" strokeWidth={1.75} />
-                  Related {relatedSessions.length === 1 ? "thread" : "threads"}
-                </span>
-                {relatedSessions.map((session) => {
-                  const title = sessionDisplayTitle(
-                    session.title,
-                    session.harness,
-                  );
-                  return (
-                    <button
-                      key={session.id}
-                      type="button"
-                      title={`Open thread: ${title}`}
-                      onClick={() => void onOpenSession?.(session.id)}
-                      className="inline-flex max-w-64 items-center gap-1 rounded-md bg-content/5 px-2 py-1 text-[11px] text-content/70 hover:bg-content/10 hover:text-content"
-                    >
-                      <span className="truncate">{title}</span>
-                      {session.archived ? (
-                        <span className="shrink-0 text-content/40">
-                          Archived
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
+          ) : null}
           {isPr && tab === "code" ? (
             diffLoading ? (
               <div className="flex justify-center py-10 text-content/40">
