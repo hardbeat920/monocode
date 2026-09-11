@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectKey } from "./paths";
-import { clearProjectLogo, droppableLogoFile } from "./projectLogos";
-import { saveTabGroupLogo } from "./tabGroups";
+import {
+  clearProjectLogo,
+  droppableLogoFile,
+  pickAndSetProjectLogo,
+} from "./projectLogos";
+import { loadTabGroupLogos, saveTabGroupLogo } from "./tabGroups";
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), open: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: mocks.invoke,
   convertFileSrc: (path: string) => path,
 }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
 
 function mockLocalStorage() {
   const data = new Map<string, string>();
@@ -44,6 +48,46 @@ const FINANCE = projectKey("/Users/me/cortex-finance/agentbase");
 const CORTEX = projectKey("/Users/me/cortex/agentbase");
 // Both migrated projects still point at the one file saved under the old key.
 const SHARED = "/logos/agentbase.png";
+
+describe("pickAndSetProjectLogo", () => {
+  beforeEach(() => {
+    mockLocalStorage();
+    mockWindow();
+    mocks.invoke.mockReset();
+    mocks.open.mockReset();
+  });
+
+  it.each([
+    ["D:\\Work\\My Project", "d:/work/my project"],
+    ["D:\\", "d:"],
+    ["/Users/me/My Project", "/Users/me/My Project"],
+    ["\\\\server\\share\\My Project", "//server/share/my project"],
+  ])(
+    "opens in %s and saves the logo under its project key",
+    async (directory, key) => {
+      const sourcePath = "C:\\Pictures\\logo.png";
+      const savedPath = "/logos/saved.png";
+      mocks.open.mockResolvedValue(sourcePath);
+      mocks.invoke.mockResolvedValue(savedPath);
+
+      const result = await pickAndSetProjectLogo(directory);
+
+      expect(mocks.open).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultPath: directory,
+          directory: false,
+          multiple: false,
+        }),
+      );
+      expect(mocks.invoke).toHaveBeenCalledWith("save_project_logo", {
+        project: key,
+        sourcePath,
+      });
+      expect(result).toBe(savedPath);
+      expect(loadTabGroupLogos()[key]).toBe(savedPath);
+    },
+  );
+});
 
 describe("droppableLogoFile", () => {
   it("keeps a file another project still shows", () => {

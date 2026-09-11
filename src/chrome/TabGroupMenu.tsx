@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { normalizeHex } from "../lib/colorUtils";
+import { projectKey } from "../lib/paths";
 import { clearProjectLogo, pickAndSetProjectLogo } from "../lib/projectLogos";
 import { PROJECT_MASCOTS, projectMascot } from "../lib/projectMascots";
 import { TAB_GROUP_COLORS } from "../lib/tabGroups";
@@ -49,6 +50,7 @@ type Props = {
   customColor: string | null;
   currentColor: string;
   logoPath: string | null;
+  /** Original project directory for the logo picker. */
   logoProject?: string | null;
   /** Explicit mascot pick; null means the one hashed from `mascotProject`. */
   mascotName: string | null;
@@ -218,7 +220,7 @@ export function TabGroupMenu({
               aria-label="Remove project logo"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                void clearProjectLogo(logoProject).then(onLogoChange);
+                void clearProjectLogo(projectKey(logoProject)).then(onLogoChange);
               }}
               className="grid size-7 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content"
             >
