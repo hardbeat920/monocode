@@ -25,6 +25,55 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("keeps each completed turn's recorded model label", () => {
+    const blocks: Block[] = [
+      {
+        id: "user",
+        role: "user",
+        text: "Remember this",
+        durationMs: 9_000,
+        turnModel: {
+          harness: "claude",
+          id: "claude:sonnet-5",
+          name: "Claude Sonnet 5",
+        },
+      },
+      { id: "answer", role: "assistant", text: "Remembered." },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        harness: "claude",
+        model: "claude:opus-5",
+      }),
+    );
+
+    expect(markup).toContain("Claude Sonnet 5 worked for 9s");
+    expect(markup).not.toContain("Claude Opus 5 worked for 9s");
+  });
+
+  it("does not assign the current model to a legacy completed turn", () => {
+    const blocks: Block[] = [
+      {
+        id: "user",
+        role: "user",
+        text: "Old prompt",
+        durationMs: 9_000,
+      },
+      { id: "answer", role: "assistant", text: "Old answer." },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        harness: "claude",
+        model: "claude:opus-5",
+      }),
+    );
+
+    expect(markup).toContain("Worked for 9s");
+    expect(markup).not.toContain("Claude Opus 5 worked for 9s");
+  });
+
   it("renders the summary and answer without mounting a large completed tool trail", () => {
     const blocks: Block[] = [
       { id: "user", role: "user", text: "Check the project" },

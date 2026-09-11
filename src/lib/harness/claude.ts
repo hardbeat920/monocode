@@ -335,9 +335,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     return existing;
   }
   if (existing) {
-    if (existing.cwd !== input.cwd || existing.settingsKey !== settingsKey) {
-      resumeByThread.delete(input.sessionId);
-    }
+    // Model and launch-setting changes require a fresh Claude process, but
+    // they must resume the same provider conversation. Only a cwd change
+    // invalidates the stored session because Claude sessions are cwd-bound.
+    if (existing.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
     await stopClaudeSession(input.sessionId);
   }
 

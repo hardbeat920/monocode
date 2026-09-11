@@ -13,6 +13,7 @@ import type {
   Session,
   TaskListMeta,
   PlanBlockMeta,
+  TurnModel,
 } from "./session";
 import { HARNESSES, RUNTIME_MODES } from "./session";
 
@@ -377,6 +378,8 @@ function sanitizeBlock(block: Block): Block | null {
   }
   if (block.startedAt != null) next.startedAt = block.startedAt;
   if (block.durationMs != null) next.durationMs = block.durationMs;
+  const turnModel = sanitizeTurnModel(block.turnModel);
+  if (block.role === "user" && turnModel) next.turnModel = turnModel;
   if (block.tool) next.tool = block.tool;
   if (block.approval?.decided) {
     next.approval = {
@@ -403,6 +406,25 @@ function sanitizeBlock(block: Block): Block | null {
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
   return next;
+}
+
+function sanitizeTurnModel(value: unknown): TurnModel | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const harness = record.harness;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (
+    typeof harness !== "string" ||
+    !HARNESSES.includes(harness as HarnessId) ||
+    !id ||
+    !name
+  ) {
+    return undefined;
+  }
+  return { harness: harness as HarnessId, id, name };
 }
 
 function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {

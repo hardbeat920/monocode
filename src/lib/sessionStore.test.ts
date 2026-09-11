@@ -20,6 +20,28 @@ describe("isPersistableId", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("persists model provenance recorded on a user turn", () => {
+    const session = newSession("claude", "/tmp/project", "claude:opus-5");
+    session.blocks = [
+      {
+        id: "u1",
+        role: "user",
+        text: "remember this",
+        turnModel: {
+          harness: "claude",
+          id: "claude:opus-5",
+          name: "Claude Opus 5",
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]?.turnModel).toEqual({
+      harness: "claude",
+      id: "claude:opus-5",
+      name: "Claude Opus 5",
+    });
+  });
+
   it("persists a canonical GitHub work-item identity", () => {
     const session = newSession("codex", "/tmp/project");
     session.blocks = [{ id: "u1", role: "user", text: "fix PR #42" }];
