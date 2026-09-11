@@ -55,7 +55,15 @@ describe("tool error disclosure", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).not.toContain("Server.setupListenHandle");
 
-    act(() => trigger?.click());
+    const failedRow = container.querySelector<HTMLElement>(
+      '[aria-label^="Failed tool call:"]',
+    );
+    const message = Array.from(failedRow?.querySelectorAll("span") ?? []).find(
+      (element) => element.textContent?.includes("npm run dev"),
+    );
+    expect(message).not.toBeNull();
+
+    act(() => message?.click());
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("Server.setupListenHandle");
 

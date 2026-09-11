@@ -1731,47 +1731,55 @@ function ActivityToolRow({
   const pending = needsApproval(block);
   const errorDetail =
     !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
-  const row = (
-    <>
-      {bare ? null : <ActivityToolIcon state={state} live={live} />}
-      <ToolCallSummary
-        label={label}
-        preview={block.tool?.preview}
-        cwd={cwd}
-        chip={bare}
-        failed={state === "rejected"}
-        status={state}
-        onOpenFile={onOpenFile}
-        onOpenDiff={onOpenDiff}
-      />
-      {pending ? null : <ToolCallStatusIcon state={state} />}
-      {errorDetail ? (
-        <ChevronRight
-          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
-          strokeWidth={1.75}
-        />
-      ) : null}
-    </>
+  const summary = (
+    <ToolCallSummary
+      label={label}
+      preview={block.tool?.preview}
+      cwd={cwd}
+      chip={bare}
+      failed={state === "rejected"}
+      status={state}
+      onOpenFile={onOpenFile}
+      onOpenDiff={onOpenDiff}
+    />
   );
 
   return (
     <div className="flex min-w-0 flex-col">
       {errorDetail ? (
-        <button
-          type="button"
-          aria-expanded={errorOpen}
-          aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
-          onClick={() => setErrorOpen((value) => !value)}
-          className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
+        <div
+          aria-label={`Failed tool call: ${label}`}
+          className="group flex min-w-0 items-center gap-1.5 py-1"
         >
-          {row}
-        </button>
+          {bare ? null : <ActivityToolIcon state={state} live={live} />}
+          <div
+            className="flex min-w-0 flex-1 cursor-pointer"
+            onClick={() => setErrorOpen((value) => !value)}
+          >
+            {summary}
+          </div>
+          <ToolCallStatusIcon state={state} />
+          <button
+            type="button"
+            aria-expanded={errorOpen}
+            aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
+            onClick={() => setErrorOpen((value) => !value)}
+            className="-m-1 shrink-0 rounded p-1"
+          >
+            <ChevronRight
+              className={`size-3.5 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+              strokeWidth={1.75}
+            />
+          </button>
+        </div>
       ) : (
         <div
           aria-label={`Tool call: ${label}`}
           className="flex min-w-0 items-center gap-1.5 py-1"
         >
-          {row}
+          {bare ? null : <ActivityToolIcon state={state} live={live} />}
+          {summary}
+          {pending ? null : <ToolCallStatusIcon state={state} />}
         </div>
       )}
       {pending ? (
