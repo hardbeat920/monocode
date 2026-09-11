@@ -453,21 +453,17 @@ export function InboxView({
     return () => window.removeEventListener(GITLAB_CHANGE_EVENT, onChange);
   }, []);
 
-  // The mount read is what does the work: opening Settings unmounts this view,
-  // so a token set there lands on the way back in. The listeners only keep a
-  // provider honest if it broadcasts while the inbox is up.
-  //
-  // Each read is an async command, so the first paint lands before either
-  // answer does. That is what seeding from loadInboxConnections is for.
-  //
-  // The two reads stay independent: a failing Linear check must not discard
-  // the GitLab answer, so each provider keeps its own previous value.
+  // The mount read does the real work: opening Settings unmounts this view, so
+  // a token set there lands on the way back in. Reads can also overlap, and
+  // only the newest may write, or a slow earlier answer restores a stale one.
   useEffect(() => {
     let cancelled = false;
+    let latest = 0;
     const read = () => {
+      const generation = ++latest;
       void Promise.allSettled([linearConnected(), gitlabConnected()]).then(
         ([linear, gitlab]) => {
-          if (cancelled) return;
+          if (cancelled || generation !== latest) return;
           setConnections((prev) => ({
             linear:
               linear.status === "fulfilled"
@@ -494,6 +490,15 @@ export function InboxView({
   useEffect(() => {
     saveInboxConnections(connections);
   }, [connections]);
+
+  // The initial source is resolved against cached status, so storage can still
+  // name a provider this view has already fallen back from.
+  useEffect(() => {
+    saveInboxSource(source);
+    // Mount only: the temporary switch to GitHub for a linked target must not
+    // be persisted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Disconnecting can pull the tab out from under the current selection.
   useEffect(() => {

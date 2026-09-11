@@ -7,10 +7,6 @@ import { Popover, type PopoverAnchor } from "./Popover";
 
 const WIDTH = 188;
 
-/**
- * The "+" flyout off the inbox source strip. Disconnected providers lose their
- * tab but stay discoverable here, one click from where they are set up.
- */
 export function InboxConnectMenu({
   anchor,
   sources,

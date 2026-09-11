@@ -194,7 +194,6 @@ import {
 
 import { SkillsPage } from "./SkillsPage";
 
-/** A General-page card a deep link can open Settings on. */
 export type SettingsAnchor = "gitlab" | "linear";
 
 const ANCHOR_IDS: Record<SettingsAnchor, string> = {
@@ -204,10 +203,7 @@ const ANCHOR_IDS: Record<SettingsAnchor, string> = {
 
 type Props = {
   section: SettingsSectionId;
-  /**
-   * Card to scroll to once the section renders. The General page is long, so
-   * "Connect GitLab" has to land on the card, not the top of the page.
-   */
+  /** Card to scroll to; the General page is too long to land at the top. */
   anchor?: SettingsAnchor | null;
   cwd: string;
   sessions: SessionSummary[];

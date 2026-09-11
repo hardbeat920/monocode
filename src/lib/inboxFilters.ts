@@ -56,7 +56,6 @@ export const DEFAULT_INBOX_FILTERS: InboxFilters = {
 
 export type InboxSource = InboxProvider;
 
-/** The sources that carry a token this app holds, so have a connect step. */
 export type ConnectableInboxSource = "linear" | "gitlab";
 
 /** `null` means the status check has not resolved yet. */
@@ -71,7 +70,6 @@ export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
   gitlab: "GitLab",
 };
 
-/** GitHub needs no connect step, so it is always offered. */
 export function visibleInboxSources(
   connections: InboxSourceConnections,
 ): InboxSource[] {
@@ -81,7 +79,6 @@ export function visibleInboxSources(
   return sources;
 }
 
-/** The gated sources a user could still connect, for the "+" menu. */
 export function connectableInboxSources(
   connections: InboxSourceConnections,
 ): ConnectableInboxSource[] {
@@ -91,7 +88,6 @@ export function connectableInboxSources(
   return sources;
 }
 
-/** Falls back to GitHub when the selected source loses its tab. */
 export function resolveInboxSource(
   source: InboxSource,
   connections: InboxSourceConnections,
@@ -130,9 +126,8 @@ function connectFlag(value: unknown): boolean | null {
 }
 
 /**
- * The status reads are async commands, so a cold start would paint every tab
- * and then drop two. Seeding from the last known answer keeps that first paint
- * right for the returning user; a wrong guess corrects itself on the read.
+ * Seeded from the last known answer so a returning user does not watch every
+ * tab paint and then drop two. A wrong guess corrects itself on the read.
  */
 export function loadInboxConnections(): InboxSourceConnections {
   try {
