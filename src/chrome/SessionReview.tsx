@@ -251,7 +251,7 @@ function DiffCounts({ file }: { file: CheckpointFile }) {
   if (!file.exact) {
     return (
       <span className="shrink-0 text-[11px] font-medium text-amber-300/80">
-        Shared file
+        Mixed changes
       </span>
     );
   }
