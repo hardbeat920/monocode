@@ -123,6 +123,12 @@ export type InboxQuery = Omit<GithubWorkItemQuery, "kind"> & {
 
 export type InboxProviderErrors = Partial<Record<InboxProvider, string>>;
 
+export type GithubStatus = {
+  connected: boolean;
+  installed: boolean;
+  authenticated: boolean;
+};
+
 export type InboxListResult = {
   items: InboxItem[];
   errors: InboxProviderErrors;
@@ -201,6 +207,10 @@ export function inboxListIsFresh(
     inboxListCache?.key === key &&
     now - inboxListCache.fetchedAt < INBOX_CACHE_FRESH_MS
   );
+}
+
+export function githubStatus(): Promise<GithubStatus> {
+  return invoke<GithubStatus>("git_github_status");
 }
 
 export async function githubRepo(cwd: string): Promise<string> {

@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowDownCircle,
   Check,
@@ -134,7 +135,11 @@ import {
   saveSessionSidebarFilters,
 } from "../lib/sessionFilters";
 import type { SessionSummary } from "../lib/sessionStore";
-import { clearInboxCache } from "../lib/githubTasks";
+import {
+  clearInboxCache,
+  githubStatus,
+  type GithubStatus,
+} from "../lib/githubTasks";
 import {
   disconnectGitlab,
   gitlabConnected,
@@ -194,9 +199,10 @@ import {
 
 import { SkillsPage } from "./SkillsPage";
 
-export type SettingsAnchor = "gitlab" | "linear";
+export type SettingsAnchor = "github" | "gitlab" | "linear";
 
 const ANCHOR_IDS: Record<SettingsAnchor, string> = {
+  github: "settings-github",
   gitlab: "settings-gitlab",
   linear: "settings-linear",
 };
@@ -305,6 +311,7 @@ export function SettingsView({
           ) : null}
           {section === "keybindings" ? <KeybindingsPage /> : null}
           {section === "providers" ? <ProvidersPage /> : null}
+          {section === "inbox" ? <InboxPage /> : null}
           {section === "skills" ? <SkillsPage key={cwd} cwd={cwd} /> : null}
           {section === "archive" ? (
             <ArchivePage
@@ -555,14 +562,97 @@ function GeneralPage({
         />
       </Row>
 
+      <Heading title="About" />
+      <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
+    </>
+  );
+}
+
+function InboxPage() {
+  return (
+    <>
+      <Heading title="GitHub" id={ANCHOR_IDS.github} first />
+      <GithubSettings />
+
       <Heading title="GitLab" id={ANCHOR_IDS.gitlab} />
       <GitlabSettings />
 
       <Heading title="Linear" id={ANCHOR_IDS.linear} />
       <LinearSettings />
+    </>
+  );
+}
 
-      <Heading title="About" />
-      <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
+function GithubSettings() {
+  const [status, setStatus] = useState<GithubStatus | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef(0);
+
+  const checkStatus = useCallback(async () => {
+    const generation = ++request.current;
+    setChecking(true);
+    setError(null);
+    try {
+      const next = await githubStatus();
+      if (generation === request.current) setStatus(next);
+    } catch (err: unknown) {
+      if (generation === request.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (generation === request.current) setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkStatus();
+    return () => {
+      request.current += 1;
+    };
+  }, [checkStatus]);
+
+  const description = status?.connected
+    ? "GitHub CLI is installed and authenticated. MonoCode uses it for GitHub inbox items."
+    : status?.installed
+      ? "Run gh auth login in a terminal, complete the sign-in flow, then check again."
+      : "Install GitHub CLI from cli.github.com, run gh auth login in a terminal, then check again.";
+  const label = checking
+    ? "Checking"
+    : status?.connected
+      ? "Connected"
+      : status?.installed
+        ? "Sign in required"
+        : "Not installed";
+
+  return (
+    <>
+      <Row
+        label={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark provider="github" className="size-4 shrink-0" />
+            Connection
+          </span>
+        }
+        description={description}
+      >
+        <span className="text-[12px] text-content/50">{label}</span>
+        {!checking && !status?.installed ? (
+          <SecondaryButton
+            onClick={() => {
+              void openUrl("https://cli.github.com/").catch(() => {});
+            }}
+          >
+            Installation guide
+          </SecondaryButton>
+        ) : null}
+        <SecondaryButton onClick={() => void checkStatus()} disabled={checking}>
+          {checking ? "Checking" : "Check again"}
+        </SecondaryButton>
+      </Row>
+      {error ? (
+        <p className="pb-2 text-[12px] text-red-400/90">{error}</p>
+      ) : null}
     </>
   );
 }

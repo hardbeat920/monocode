@@ -41,6 +41,7 @@ import { useDragResize } from "../hooks/useDragResize";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import {
+  githubStatus,
   githubPrDiff,
   githubReviewDecisionLabel,
   githubWorkItem,
@@ -460,21 +461,27 @@ export function InboxView({
     let latest = 0;
     const read = () => {
       const generation = ++latest;
-      void Promise.allSettled([linearConnected(), gitlabConnected()]).then(
-        ([linear, gitlab]) => {
-          if (cancelled || generation !== latest) return;
-          setConnections((prev) => ({
-            linear:
-              linear.status === "fulfilled"
-                ? linear.value.connected
-                : prev.linear,
-            gitlab:
-              gitlab.status === "fulfilled"
-                ? gitlab.value.connected
-                : prev.gitlab,
-          }));
-        },
-      );
+      void Promise.allSettled([
+        githubStatus(),
+        linearConnected(),
+        gitlabConnected(),
+      ]).then(([github, linear, gitlab]) => {
+        if (cancelled || generation !== latest) return;
+        setConnections((prev) => ({
+          github:
+            github.status === "fulfilled"
+              ? github.value.connected
+              : prev.github,
+          linear:
+            linear.status === "fulfilled"
+              ? linear.value.connected
+              : prev.linear,
+          gitlab:
+            gitlab.status === "fulfilled"
+              ? gitlab.value.connected
+              : prev.gitlab,
+        }));
+      });
     };
     read();
     window.addEventListener(LINEAR_CHANGE_EVENT, read);
@@ -509,6 +516,8 @@ export function InboxView({
 
   const visibleSources = visibleInboxSources(connections);
   const connectableSources = connectableInboxSources(connections);
+  const sourceAvailable = visibleSources.includes(source);
+  const noSourcesConnected = visibleSources.length === 0;
 
   // The roster has to come from Linear, not from the fetched issues: hiding a
   // team drops its issues, so a derived list could never offer it back.
@@ -600,6 +609,7 @@ export function InboxView({
   }, [cwd, items, target, targetSelectionKey]);
 
   const visibleItems = useMemo(() => {
+    if (!sourceAvailable) return [];
     const visible = applyInboxFilters(
       items,
       activeFilters,
@@ -615,18 +625,28 @@ export function InboxView({
         : null);
     if (!targeted || visible.includes(targeted)) return visible;
     return [targeted, ...visible];
-  }, [activeFilters, items, searchInput, source, target, targetItem]);
+  }, [
+    activeFilters,
+    items,
+    searchInput,
+    source,
+    sourceAvailable,
+    target,
+    targetItem,
+  ]);
 
   const inboxSeenTick = useInboxSeenTick();
   const sourceEntries = useMemo(
     () =>
-      items
-        .filter((item) => item.provider === source)
-        .map((item) => ({
-          key: inboxItemKey(item),
-          updatedAt: item.updatedAt,
-        })),
-    [items, source],
+      sourceAvailable
+        ? items
+            .filter((item) => item.provider === source)
+            .map((item) => ({
+              key: inboxItemKey(item),
+              updatedAt: item.updatedAt,
+            }))
+        : [],
+    [items, source, sourceAvailable],
   );
   const sourceHasUnseen = useMemo(
     () => sourceEntries.some(isInboxEntryUnseen),
@@ -695,20 +715,23 @@ export function InboxView({
       className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
     >
       <div className="flex h-9 shrink-0 items-center gap-px border-b border-content/10 px-2">
-        <div
-          role="tablist"
-          aria-label="Inbox source"
-          className="flex min-w-0 flex-1 items-center gap-px"
-        >
-          {visibleSources.map((option) => (
-            <InboxSourceTab
-              key={option}
-              source={option}
-              selected={source === option}
-              onSelect={onSourceChange}
-            />
-          ))}
-        </div>
+        {visibleSources.length > 0 ? (
+          <div
+            role="tablist"
+            aria-label="Inbox source"
+            className="flex min-w-0 basis-0 items-center gap-px"
+            style={{ flexGrow: visibleSources.length }}
+          >
+            {visibleSources.map((option) => (
+              <InboxSourceTab
+                key={option}
+                source={option}
+                selected={source === option}
+                onSelect={onSourceChange}
+              />
+            ))}
+          </div>
+        ) : null}
         {connectableSources.length > 0 ? (
           <button
             ref={connectButtonRef}
@@ -718,73 +741,80 @@ export function InboxView({
             aria-expanded={connectMenuOpen}
             title="Connect an inbox source"
             onClick={() => setConnectMenuOpen((open) => !open)}
-            className={`grid size-6 shrink-0 place-items-center rounded-md ${
+            className={`flex h-6 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px] leading-none ${
               connectMenuOpen
                 ? "bg-content/10 text-content"
                 : "text-content/40 hover:bg-content/5 hover:text-content"
             }`}
           >
-            <Plus className="size-3.5" strokeWidth={1.75} />
+            <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
+            <span className="min-w-0 truncate">Add connection</span>
           </button>
         ) : null}
       </div>
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2">
-        <div className="relative flex h-7 min-w-0 flex-1 items-center">
-          <Search className="pointer-events-none absolute left-2 size-3 shrink-0 opacity-50" />
-          <input
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-            placeholder="Filter inbox"
-            aria-label="Filter inbox"
-            spellCheck={false}
-            autoComplete="off"
-            className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
-          />
-        </div>
-        <button
-          type="button"
-          title="Filter inbox"
-          aria-label="Filter inbox"
-          aria-expanded={!!filterMenu}
-          aria-haspopup="menu"
-          onClick={onFilterButtonClick}
-          className={`grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content ${
-            filterMenu || filtersActive ? "bg-content/10 text-content" : ""
-          }`}
-        >
-          <ListFilter className="size-3" strokeWidth={1.75} />
-        </button>
-        <button
-          type="button"
-          title="Mark all as read"
-          aria-label="Mark all as read"
-          disabled={!sourceHasUnseen}
-          onClick={() => markInboxItemsSeen(sourceEntries)}
-          className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
-        >
-          <CheckCheck className="size-3.5" strokeWidth={1.75} />
-        </button>
-        <button
-          type="button"
-          aria-label="Refresh"
-          onClick={() => setRefresh((value) => value + 1)}
-          className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
-        >
-          {loading || revalidating ? (
-            <LoaderCircle
-              className="size-3.5 animate-spin"
-              strokeWidth={1.75}
+      {noSourcesConnected ? null : (
+        <div className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2">
+          <div className="relative flex h-7 min-w-0 flex-1 items-center">
+            <Search className="pointer-events-none absolute left-2 size-3 shrink-0 opacity-50" />
+            <input
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Filter inbox"
+              aria-label="Filter inbox"
+              spellCheck={false}
+              autoComplete="off"
+              className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
             />
-          ) : (
-            <RefreshCw className="size-3.5" strokeWidth={1.75} />
-          )}
-        </button>
-      </div>
+          </div>
+          <button
+            type="button"
+            title="Filter inbox"
+            aria-label="Filter inbox"
+            aria-expanded={!!filterMenu}
+            aria-haspopup="menu"
+            onClick={onFilterButtonClick}
+            className={`grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content ${
+              filterMenu || filtersActive ? "bg-content/10 text-content" : ""
+            }`}
+          >
+            <ListFilter className="size-3" strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            title="Mark all as read"
+            aria-label="Mark all as read"
+            disabled={!sourceHasUnseen}
+            onClick={() => markInboxItemsSeen(sourceEntries)}
+            className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
+          >
+            <CheckCheck className="size-3.5" strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            aria-label="Refresh"
+            onClick={() => setRefresh((value) => value + 1)}
+            className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
+          >
+            {loading || revalidating ? (
+              <LoaderCircle
+                className="size-3.5 animate-spin"
+                strokeWidth={1.75}
+              />
+            ) : (
+              <RefreshCw className="size-3.5" strokeWidth={1.75} />
+            )}
+          </button>
+        </div>
+      )}
       <div
         ref={listLock}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none"
       >
-        {sourceError && visibleItems.length === 0 ? (
+        {noSourcesConnected ? (
+          <p className="px-3 py-3 text-[12px] text-content/50">
+            Add a connection to start using the Inbox.
+          </p>
+        ) : sourceError && visibleItems.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">{sourceError}</p>
         ) : loading && items.length === 0 ? (
           <div className="flex justify-center py-10 text-content/40">

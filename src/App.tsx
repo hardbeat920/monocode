@@ -4807,7 +4807,7 @@ export default function App({
   const onOpenSettings = useCallback(() => openSettings(), [openSettings]);
 
   const onOpenInboxIntegrations = useCallback(
-    (source: ConnectableInboxSource) => openSettings("general", source),
+    (source: ConnectableInboxSource) => openSettings("inbox", source),
     [openSettings],
   );
 

@@ -226,6 +226,7 @@ pub fn run() {
             fs::git_range_context,
             fs::git_pr_status,
             fs::git_pr_create,
+            fs::git_github_status,
             fs::git_github_repo,
             fs::git_github_work_item,
             fs::git_github_work_items,
