@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { persistableAttachment } from "./attachments";
 import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
-import { ompSessionInterjections, ompVerifyAssistantTexts } from "./fs";
+import { ompActiveAssistantTexts, ompSessionInterjections } from "./fs";
 import { backfillOmpInterjections, ompStatusSplitTexts } from "./ompInterjections";
 import type {
   Block,
@@ -280,14 +280,11 @@ export async function getSession(sessionId: string): Promise<Session | null> {
   if (session.harness !== "omp" || !session.providerSessionId) return session;
   try {
     const anchors = await ompSessionInterjections(session.providerSessionId);
-    const candidates = ompStatusSplitTexts(session.blocks);
-    // Missing verification must not prevent the existing anchored repair.
-    const verified = candidates.length
-      ? await ompVerifyAssistantTexts(session.providerSessionId, candidates).catch(() => [])
+    // Missing source order must not prevent the existing anchored repair.
+    const source = ompStatusSplitTexts(session.blocks).length
+      ? await ompActiveAssistantTexts(session.providerSessionId).catch(() => [])
       : [];
-    const blocks = backfillOmpInterjections(
-      session.blocks, anchors, candidates.map((text, index) => ({ text, occurrences: verified[index] ?? 0 })),
-    );
+    const blocks = backfillOmpInterjections(session.blocks, anchors, source);
     if (blocks !== session.blocks) {
       session.blocks = blocks;
       // Persist before exposing the restored session to a new live turn.

@@ -25,19 +25,16 @@ export function ompSessionInterjections(
   });
 }
 
-/** Active exact-text occurrences, not independent votes for duplicate requests.
- * Newline and concat representations are counted separately; take their max.
+/** One active-path assistant message in source order. Its newline and concat
+ * representations are alternative forms of the same message, not two messages.
  */
-export interface OmpAssistantTextEvidence {
+export interface OmpAssistantText {
   text: string;
-  occurrences: number;
+  concat: string;
 }
 
-export function ompVerifyAssistantTexts(
-  providerSessionId: string,
-  texts: string[],
-): Promise<number[]> {
-  return invoke<number[]>("omp_verify_assistant_texts", { providerSessionId, texts });
+export function ompActiveAssistantTexts(providerSessionId: string): Promise<OmpAssistantText[]> {
+  return invoke<OmpAssistantText[]>("omp_active_assistant_texts", { providerSessionId });
 }
 
 export type FsEntry = {

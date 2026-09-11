@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OmpInterjectionAnchor } from "./fs";
+import type { OmpAssistantText, OmpInterjectionAnchor } from "./fs";
 import { backfillOmpInterjections, ompStatusSplitTexts } from "./ompInterjections";
 import { newSession, type Block } from "./session";
 import { getSession } from "./sessionStore";
@@ -178,7 +178,12 @@ describe("OMP persisted interjection repair", () => {
     expect(backfillOmpInterjections(repaired, [first, last])).toBe(repaired);
   });
 
-  it("merges status-split prose with exact source evidence before placing later anchors", () => {
+  /** Ordered active-path source messages; a string is one message in both forms. */
+  function source(...messages: (string | OmpAssistantText)[]): OmpAssistantText[] {
+    return messages.map(message => typeof message === "string" ? { text: message, concat: message } : message);
+  }
+
+  it("merges status-split prose with the next source message before placing later anchors", () => {
     const first = { ...anchor, afterAssistantText: "First.Second.", followingAssistantText: "Later." };
     const later = { ...anchor, id: "later", afterAssistantText: "Later." };
     const blocks: Block[] = [
@@ -187,35 +192,66 @@ describe("OMP persisted interjection repair", () => {
       { id: "b", role: "assistant", text: "Second." },
       { id: "c", role: "assistant", text: "Later." },
     ];
-    const repaired = backfillOmpInterjections(blocks, [first, later]);
+    const messages = source("First.Second.", "Later.");
+    const repaired = backfillOmpInterjections(blocks, [first, later], messages);
     expect(repaired.map(block => [block.id, block.text])).toEqual([
       ["a", "First.Second."], ["omp-interjection-review", anchor.text],
       ["status", blocks[1].text], ["c", "Later."], ["omp-interjection-later", anchor.text],
     ]);
-    expect(backfillOmpInterjections(repaired, [first, later])).toBe(repaired);
+    expect(backfillOmpInterjections(repaired, [first, later], messages)).toBe(repaired);
     expect(blocks[0].text).toBe("First.");
-    expect(backfillOmpInterjections(blocks, [{ ...first, afterAssistantText: "First. Second." }])).toBe(blocks);
+    expect(backfillOmpInterjections(blocks, [{ ...first, afterAssistantText: "First. Second." }], source("First. Second.", "Later."))).toBe(blocks);
     const interleaved = blocks.map(block => block.id === "status"
       ? { ...block, interjection: { customType: "advisor" } } : block);
-    expect(backfillOmpInterjections(interleaved, [first])).toBe(interleaved);
+    expect(backfillOmpInterjections(interleaved, [first], messages)).toBe(interleaved);
     const metadata = blocks.map(block => block.id === "b" ? { ...block, durationMs: 10 } : block);
-    expect(backfillOmpInterjections(metadata, [first])).toBe(metadata);
+    expect(backfillOmpInterjections(metadata, [first], messages)).toBe(metadata);
   });
 
-  it("counts merged messages in exact source occurrence order", () => {
+  it("never merges on anchor occurrences alone", () => {
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "status", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "Second." },
+    ];
+    const anchors = [{ ...anchor, afterAssistantText: "First.Second.", afterAssistantTextConcat: "First.Second.", afterConcatOccurrence: 1 }];
+    expect(backfillOmpInterjections(blocks, anchors)).toBe(blocks);
+    expect(backfillOmpInterjections(blocks, [{ ...anchors[0], afterAssistantText: "First.\nSecond.", afterOccurrence: 2 }])).toBe(blocks);
+    const repaired = backfillOmpInterjections(blocks, anchors, source("First.Second."));
+    expect(repaired.map(block => block.id)).toEqual(["a", "omp-interjection-review", "status"]);
+  });
+
+  it("keeps a split whose fragments are the next two source messages before the real complete answer", () => {
+    const blocks: Block[] = [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "status", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "Second." },
+      { id: "c", role: "assistant", text: "First.Second." },
+    ];
+    const messages = source("First.", "Second.", "First.Second.");
+    expect(ompStatusSplitTexts(blocks)).toEqual(["First.Second."]);
+    expect(backfillOmpInterjections(blocks, [], messages)).toBe(blocks);
+    const anchors = [{ ...anchor, afterAssistantText: "First.Second." }];
+    const repaired = backfillOmpInterjections(blocks, anchors, messages);
+    expect(repaired.map(block => block.id)).toEqual(["a", "status", "b", "c", "omp-interjection-review"]);
+    expect(backfillOmpInterjections(repaired, anchors, messages)).toBe(repaired);
+  });
+
+  it("leaves a split whose first fragment is its own source message and anchors the later complete answer", () => {
     const blocks: Block[] = [
       { id: "a", role: "assistant", text: "The complete " },
       { id: "status", role: "system", text: "Reviewed" },
       { id: "b", role: "assistant", text: "answer." },
       { id: "c", role: "assistant", text: anchor.afterAssistantText },
     ];
-    const evidence = [{ text: anchor.afterAssistantText, occurrences: 1 }];
-    const repaired = backfillOmpInterjections(blocks, [{ ...anchor, afterOccurrence: 2 }], evidence);
-    expect(repaired.map(block => block.id)).toEqual(["a", "status", "c", "omp-interjection-review"]);
-    expect(backfillOmpInterjections(repaired, [{ ...anchor, afterOccurrence: 2 }], evidence)).toBe(repaired);
+    const messages = source("The complete ", "answer.", anchor.afterAssistantText);
+    const repaired = backfillOmpInterjections(blocks, [anchor], messages);
+    expect(repaired.map(block => block.id)).toEqual(["a", "status", "b", "c", "omp-interjection-review"]);
+    expect(backfillOmpInterjections(repaired, [anchor], messages)).toBe(repaired);
+    expect(backfillOmpInterjections(blocks, [{ ...anchor, afterOccurrence: 2 }], messages)).toBe(blocks);
   });
 
-  it("keeps streaming fragments and metadata even with verified full text", () => {
+  it("keeps streaming fragments and metadata even with a matching source message", () => {
     const blocks: Block[] = [
       { id: "a", role: "assistant", text: "First." },
       { id: "status", role: "system", text: "Reviewed" },
@@ -224,11 +260,11 @@ describe("OMP persisted interjection repair", () => {
     for (const index of [0, 2]) {
       const streaming = blocks.map((block, i) => i === index ? { ...block, streaming: true } : block);
       expect(ompStatusSplitTexts(streaming)).toEqual([]);
-      expect(backfillOmpInterjections(streaming, [], [{ text: "First.Second.", occurrences: 1 }])).toBe(streaming);
+      expect(backfillOmpInterjections(streaming, [], source("First.Second."))).toBe(streaming);
     }
     const metadata = blocks.map(block => block.id === "b" ? { ...block, durationMs: 10 } : block);
     expect(ompStatusSplitTexts(metadata)).toEqual([]);
-    expect(backfillOmpInterjections(metadata, [], [{ text: "First.Second.", occurrences: 1 }])).toBe(metadata);
+    expect(backfillOmpInterjections(metadata, [], source("First.Second."))).toBe(metadata);
   });
 
   function split(id: string): Block[] {
@@ -239,45 +275,53 @@ describe("OMP persisted interjection repair", () => {
     ];
   }
 
-  it.each(["verified", "anchor", "concat"] as const)("uses one source occurrence only once: %s", source => {
+  it.each([
+    ["newline", { text: "First.\nSecond.", concat: "First.Second." }],
+    ["concat", { text: "First.Second.", concat: "First.Second." }],
+  ])("consumes one source message for one split, form: %s", (_form, message) => {
     const blocks = [...split("a"), ...split("b")];
-    const anchors = source === "verified" ? [] : [{
-      ...anchor,
-      afterAssistantText: source === "concat" ? "First.\nSecond." : "First.Second.",
-      afterAssistantTextConcat: "First.Second.",
-      afterOccurrence: source === "concat" ? 2 : 1,
-      afterConcatOccurrence: 1,
-    }];
-    const evidence = source === "verified" ? [{ text: "First.Second.", occurrences: 1 }] : [];
-    const repaired = backfillOmpInterjections(blocks, anchors, evidence);
+    const messages = source(message);
+    const repaired = backfillOmpInterjections(blocks, [], messages);
     expect(repaired.find(block => block.id === "a")!.text).toBe("First.Second.");
     expect(repaired.filter(block => block.id.startsWith("b"))).toEqual(split("b"));
-    expect(backfillOmpInterjections(repaired, anchors, evidence)).toBe(repaired);
+    expect(backfillOmpInterjections(repaired, [], messages)).toBe(repaired);
   });
 
-  it.each([false, true])("counts an unsplit answer before a later candidate, anchored: %s", anchored => {
+  it("merges a true split followed by a different complete message", () => {
+    const blocks: Block[] = [...split("a"), { id: "c", role: "assistant", text: "Later." }];
+    const repaired = backfillOmpInterjections(blocks, [], source("First.Second.", "Later."));
+    expect(repaired.map(block => [block.id, block.text])).toEqual([
+      ["a", "First.Second."], ["a-status", "Reviewed"], ["c", "Later."],
+    ]);
+  });
+
+  it.each([false, true])("lets an unsplit answer occupy its source slot before a later candidate, anchored: %s", anchored => {
     const blocks: Block[] = [{ id: "complete", role: "assistant", text: "First.Second." }, ...split("a")];
     const anchors = anchored ? [{ ...anchor, afterAssistantText: "First.Second." }] : [];
-    const repaired = backfillOmpInterjections(blocks, anchors, [{ text: "First.Second.", occurrences: 1 }]);
+    const repaired = backfillOmpInterjections(blocks, anchors, source("First.Second."));
     expect(repaired.filter(block => block.id.startsWith("a"))).toEqual(split("a"));
+    const both = backfillOmpInterjections(blocks, anchors, source("First.Second.", "First.Second."));
+    expect(both.filter(block => block.role === "assistant").map(block => [block.id, block.text])).toEqual([
+      ["complete", "First.Second."], ["a", "First.Second."],
+    ]);
   });
 
-  it("repairs two splits only with two verified occurrences", () => {
+  it("repairs two splits only with two source messages", () => {
     const blocks = [...split("a"), ...split("b")];
-    const evidence = [{ text: "First.Second.", occurrences: 2 }];
-    const repaired = backfillOmpInterjections(blocks, [], evidence);
+    const messages = source("First.Second.", "First.Second.");
+    const repaired = backfillOmpInterjections(blocks, [], messages);
     expect(repaired.map(block => block.id)).toEqual(["a", "a-status", "b", "b-status"]);
     expect(repaired.filter(block => block.role === "assistant").map(block => block.text)).toEqual(["First.Second.", "First.Second."]);
-    expect(backfillOmpInterjections(repaired, [], evidence)).toBe(repaired);
+    expect(backfillOmpInterjections(repaired, [], messages)).toBe(repaired);
   });
 
-  it("keeps anchor and verified evidence for the same occurrence from adding together", () => {
+  it("keeps anchor evidence from adding to the source sequence", () => {
     const blocks = [...split("a"), ...split("b")];
     const anchors = [{ ...anchor, afterAssistantText: "First.Second." }];
-    const evidence = [{ text: "First.Second.", occurrences: 1 }, { text: "First.Second.", occurrences: 1 }];
-    const repaired = backfillOmpInterjections(blocks, anchors, evidence);
+    const messages = source("First.Second.");
+    const repaired = backfillOmpInterjections(blocks, anchors, messages);
     expect(repaired.filter(block => block.id.startsWith("b"))).toEqual(split("b"));
-    expect(backfillOmpInterjections(repaired, anchors, evidence)).toBe(repaired);
+    expect(backfillOmpInterjections(repaired, anchors, messages)).toBe(repaired);
   });
 
   it("does not bind a later anchor occurrence or unnumbered following text to an earlier split", () => {
@@ -286,12 +330,19 @@ describe("OMP persisted interjection repair", () => {
     expect(backfillOmpInterjections(blocks, [{ ...anchor, followingAssistantText: "First.Second." }])).toBe(blocks);
   });
 
-  it("caps ten identical splits at the verified occurrence bound", () => {
+  it("merges ten identical splits only against the three source messages in order", () => {
     const blocks = Array.from({ length: 10 }, (_, i) => split(String(i))).flat();
-    const repaired = backfillOmpInterjections(blocks, [], [{ text: "First.Second.", occurrences: 3 }]);
-    expect(repaired.filter(block => block.role === "assistant" && block.text === "First.Second.")).toHaveLength(3);
+    const messages = source("First.Second.", "First.Second.", "First.Second.");
+    const repaired = backfillOmpInterjections(blocks, [], messages);
+    expect(repaired.filter(block => block.role === "assistant" && block.text === "First.Second.").map(block => block.id)).toEqual(["0", "1", "2"]);
     expect(repaired.filter(block => block.id.endsWith("-end"))).toHaveLength(7);
-    expect(backfillOmpInterjections(repaired, [], [{ text: "First.Second.", occurrences: 3 }])).toBe(repaired);
+    expect(backfillOmpInterjections(repaired, [], messages)).toBe(repaired);
+  });
+
+  it("realigns a complete block past source messages the transcript never stored", () => {
+    const blocks: Block[] = [{ id: "complete", role: "assistant", text: "Intro." }, ...split("a")];
+    const repaired = backfillOmpInterjections(blocks, [], source("Setup.", "Intro.", "First.Second."));
+    expect(repaired.map(block => block.id)).toEqual(["complete", "a", "a-status"]);
   });
 });
 
@@ -332,9 +383,9 @@ describe("persisted session loading", () => {
     mocks.invoke.mockImplementation(async (command, args) => {
       if (command === "session_get") return record;
       if (command === "omp_session_interjections") return [];
-      if (command === "omp_verify_assistant_texts") {
-        expect(args.texts).toEqual(["First.Second."]);
-        return [verified ? 1 : 0];
+      if (command === "omp_active_assistant_texts") {
+        expect(args).toEqual({ providerSessionId: "provider" });
+        return verified ? [{ text: "First.Second.", concat: "First.Second." }] : [];
       }
       if (command === "session_upsert") {
         writes++;
@@ -365,10 +416,7 @@ describe("persisted session loading", () => {
     mocks.invoke.mockImplementation(async (command, args) => {
       if (command === "session_get") return record;
       if (command === "omp_session_interjections") return [];
-      if (command === "omp_verify_assistant_texts") {
-        expect(args.texts).toEqual(complete ? ["First.Second."] : ["First.Second.", "First.Second."]);
-        return args.texts.map(() => 1);
-      }
+      if (command === "omp_active_assistant_texts") return [{ text: "First.Second.", concat: "First.Second." }];
       if (command === "session_upsert") return args.session;
       throw new Error(command);
     });
@@ -376,6 +424,27 @@ describe("persisted session loading", () => {
     expect(loaded.blocks[0]).toMatchObject({ id: "a", text: "First.Second." });
     expect(loaded.blocks.slice(-3)).toEqual(later);
     expect(loaded.blocks).toHaveLength(complete ? 4 : 5);
+  });
+
+  it("loads a split of two source messages before their concatenation unchanged", async () => {
+    const record = { ...stored(), blocks: [
+      { id: "a", role: "assistant", text: "First." },
+      { id: "status", role: "system", text: "Reviewed" },
+      { id: "b", role: "assistant", text: "Second." },
+      { id: "c", role: "assistant", text: "First.Second." },
+    ] as Block[] };
+    const commands: string[] = [];
+    mocks.invoke.mockImplementation(async command => {
+      commands.push(command);
+      if (command === "session_get") return record;
+      if (command === "omp_session_interjections") return [];
+      if (command === "omp_active_assistant_texts") {
+        return ["First.", "Second.", "First.Second."].map(text => ({ text, concat: text }));
+      }
+      throw new Error(command);
+    });
+    expect((await getSession(record.id))!.blocks).toEqual(record.blocks);
+    expect(commands).toEqual(["session_get", "omp_session_interjections", "omp_active_assistant_texts"]);
   });
 
   it("leaves other harnesses and unbound OMP sessions untouched", async () => {

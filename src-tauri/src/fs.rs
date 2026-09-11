@@ -39,6 +39,14 @@ pub struct OmpInterjectionAnchor {
     severity: Option<String>,
 }
 
+/// One active-path assistant message in file order. Both join forms of its
+/// text parts are alternatives for the same message, never two messages.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct OmpAssistantText {
+    text: String,
+    concat: String,
+}
+
 /// Recover displayed OMP custom messages that older MonoCode builds omitted
 /// from their persisted transcript. The provider id is already stored with the
 /// session; matching the original JSONL keeps the repair deterministic instead
@@ -54,14 +62,13 @@ pub fn omp_session_interjections(
 }
 
 #[tauri::command(async)]
-pub fn omp_verify_assistant_texts(
+pub fn omp_active_assistant_texts(
     provider_session_id: String,
-    texts: Vec<String>,
-) -> Result<Vec<usize>, String> {
+) -> Result<Vec<OmpAssistantText>, String> {
     let Some(path) = omp_session_path(&provider_session_id)? else {
-        return Ok(vec![0; texts.len()]);
+        return Ok(Vec::new());
     };
-    verify_omp_assistant_texts(&path, &texts)
+    active_omp_assistant_texts(&path)
 }
 
 fn omp_session_path(provider_session_id: &str) -> Result<Option<PathBuf>, String> {
@@ -159,40 +166,26 @@ fn omp_active_ids(entries: &[serde_json::Value]) -> HashSet<&str> {
     active
 }
 
-// Return occurrence bounds, not a boolean vote per candidate. Duplicate
-// requests share the same bound; the persisted walk accounts for occupancy.
-fn verify_omp_assistant_texts(path: &Path, texts: &[String]) -> Result<Vec<usize>, String> {
+// Return the ordered sequence, not per-text counts: a status split may only
+// be merged with the message at its own source position.
+fn active_omp_assistant_texts(path: &Path) -> Result<Vec<OmpAssistantText>, String> {
     let entries = read_omp_entries(path)?;
     let active = omp_active_ids(&entries);
-    let requested: HashSet<&str> = texts.iter().map(String::as_str).collect();
-    let mut occurrences = HashMap::<String, usize>::new();
-    let mut concat_occurrences = HashMap::<String, usize>::new();
-    for value in &entries {
-        if value["type"] == "message"
-            && value["message"]["role"] == "assistant"
-            && value["id"].as_str().is_some_and(|id| active.contains(id))
-        {
-            let content = &value["message"]["content"];
-            let text = omp_message_text(content, "\n");
-            let concat = omp_message_text(content, "");
-            if requested.contains(text.as_str()) {
-                *occurrences.entry(text).or_default() += 1;
-            }
-            if requested.contains(concat.as_str()) {
-                *concat_occurrences.entry(concat).or_default() += 1;
-            }
-        }
-    }
-    Ok(texts
+    Ok(entries
         .iter()
-        .map(|text| {
-            // The two forms are alternatives, never two source occurrences.
-            occurrences
-                .get(text)
-                .copied()
-                .unwrap_or(0)
-                .max(concat_occurrences.get(text).copied().unwrap_or(0))
+        .filter(|value| {
+            value["type"] == "message"
+                && value["message"]["role"] == "assistant"
+                && value["id"].as_str().is_some_and(|id| active.contains(id))
         })
+        .map(|value| {
+            let content = &value["message"]["content"];
+            OmpAssistantText {
+                text: omp_message_text(content, "\n"),
+                concat: omp_message_text(content, ""),
+            }
+        })
+        .filter(|message| !message.text.trim().is_empty())
         .collect())
 }
 
@@ -4260,59 +4253,60 @@ mod tests {
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+    fn assistant_text(text: &str, concat: &str) -> OmpAssistantText {
+        OmpAssistantText {
+            text: text.into(),
+            concat: concat.into(),
+        }
+    }
+
     #[test]
-    fn omp_assistant_verification_requires_exact_active_message_text() {
-        let dir = tmp("omp-verification");
+    fn omp_active_assistant_texts_keep_active_message_order_with_both_forms() {
+        let dir = tmp("omp-active-texts");
         let path = dir.0.join("session.jsonl");
         let records = [
             serde_json::json!({"type":"message","id":"u","message":{"role":"user","content":"User only"}}),
             serde_json::json!({"type":"message","id":"abandoned","parentId":"u","message":{"role":"assistant","content":"Off branch"}}),
             serde_json::json!({"type":"message","id":"a","parentId":"u","message":{"role":"assistant","content":[{"type":"text","text":"First."},{"type":"thinking","thinking":"Hidden"},{"type":"text","text":"Second."}]}}),
-            serde_json::json!({"type":"message","id":"b","parentId":"a","message":{"role":"assistant","content":"Plain"}}),
+            serde_json::json!({"type":"message","id":"tool","parentId":"a","message":{"role":"assistant","content":[{"type":"toolCall","name":"read"}]}}),
+            serde_json::json!({"type":"message","id":"b","parentId":"tool","message":{"role":"assistant","content":"Plain"}}),
             serde_json::json!({"type":"custom_message","id":"note","parentId":"b","content":"Note only"}),
         ];
         let jsonl = records.iter().map(|v| format!("{v}\n")).collect::<String>();
         std::fs::write(&path, jsonl).unwrap();
-        let texts = [
-            "First.\nSecond.",
-            "First.Second.",
-            "Plain",
-            "Off branch",
-            "User only",
-            "Note only",
-            "First.",
-            " First.Second.",
-            "First. Second.",
-            "First.Second.",
-        ]
-        .map(str::to_owned);
         assert_eq!(
-            verify_omp_assistant_texts(&path, &texts).unwrap(),
-            [1, 1, 1, 0, 0, 0, 0, 0, 0, 1]
+            active_omp_assistant_texts(&path).unwrap(),
+            [
+                assistant_text("First.\nSecond.", "First.Second."),
+                assistant_text("Plain", "Plain"),
+            ]
         );
-        let count = verify_omp_assistant_texts(&path, &texts).unwrap()[1];
-        assert_eq!([1, 2].map(|occurrence| occurrence <= count), [true, false]);
     }
 
     #[test]
-    fn omp_assistant_verification_counts_active_occurrences_not_join_forms() {
-        let dir = tmp("omp-verification-occurrences");
+    fn omp_active_assistant_texts_repeat_equal_messages_in_file_order() {
+        let dir = tmp("omp-active-texts-repeats");
         let path = dir.0.join("session.jsonl");
         let records = [
-            serde_json::json!({"type":"message","id":"a","message":{"role":"assistant","content":"Same"}}),
-            serde_json::json!({"type":"message","id":"off","parentId":"a","message":{"role":"assistant","content":"Same"}}),
-            serde_json::json!({"type":"message","id":"b","parentId":"a","message":{"role":"assistant","content":[{"type":"text","text":"Same"}]}}),
+            serde_json::json!({"type":"message","id":"a","message":{"role":"assistant","content":"First."}}),
+            serde_json::json!({"type":"message","id":"off","parentId":"a","message":{"role":"assistant","content":"First.Second."}}),
+            serde_json::json!({"type":"message","id":"b","parentId":"a","message":{"role":"assistant","content":[{"type":"text","text":"Second."}]}}),
+            serde_json::json!({"type":"message","id":"c","parentId":"b","message":{"role":"assistant","content":"First.Second."}}),
+            serde_json::json!({"type":"message","id":"d","parentId":"c","message":{"role":"assistant","content":"First.Second."}}),
         ];
         std::fs::write(
             &path,
             records.iter().map(|v| format!("{v}\n")).collect::<String>(),
         )
         .unwrap();
-        let counts = verify_omp_assistant_texts(&path, &["Same".into(), "Same".into()]).unwrap();
-        assert_eq!(counts, [2, 2]);
         assert_eq!(
-            [1, 2, 3].map(|occurrence| occurrence <= counts[0]),
-            [true, true, false]
+            active_omp_assistant_texts(&path).unwrap(),
+            [
+                assistant_text("First.", "First."),
+                assistant_text("Second.", "Second."),
+                assistant_text("First.Second.", "First.Second."),
+                assistant_text("First.Second.", "First.Second."),
+            ]
         );
     }
 

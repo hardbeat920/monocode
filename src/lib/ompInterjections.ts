@@ -1,4 +1,4 @@
-import type { OmpAssistantTextEvidence, OmpInterjectionAnchor } from "./fs";
+import type { OmpAssistantText, OmpInterjectionAnchor } from "./fs";
 import type { Block } from "./session";
 
 interface BoundaryNode {
@@ -34,46 +34,35 @@ function statusSplitEnd(blocks: Block[], index: number): number | undefined {
   ) return end;
 }
 
-/** Undo a status-only split only with a complete, exactly equal source message. */
-function mergeStatusSplits(
-  blocks: Block[], anchors: readonly OmpInterjectionAnchor[], verifiedTexts: readonly OmpAssistantTextEvidence[],
-): Block[] {
-  const counts = new Map<string, number>();
-  for (const { text, occurrences } of verifiedTexts) {
-    counts.set(text, Math.max(counts.get(text) ?? 0, occurrences));
-  }
-  const anchored = new Map<string, Set<number>>();
-  function remember(text: string, occurrence: number) {
-    let occurrences = anchored.get(text);
-    if (!occurrences) anchored.set(text, occurrences = new Set());
-    occurrences.add(occurrence);
-  }
-  for (const anchor of anchors) {
-    remember(anchor.afterAssistantText, anchor.afterOccurrence);
-    if (anchor.afterAssistantTextConcat !== undefined) {
-      remember(anchor.afterAssistantTextConcat, anchor.afterConcatOccurrence ?? anchor.afterOccurrence);
-    }
-    // Following text has no occurrence index: it is split-boundary evidence
-    // only, never authority to merge an unrelated status split.
-  }
-  const seen = new Map<string, number>();
+function sameMessage(message: OmpAssistantText | undefined, text: string): boolean {
+  return message !== undefined && (message.text === text || message.concat === text);
+}
+
+/** Undo a status-only split only when the next unused source message is that
+ * exact complete text. A cursor over the ordered active-path messages, not a
+ * count of equal texts, decides which source slot each block occupies: when
+ * the next message is the first fragment itself, the pair are two messages.
+ * Anchors count occurrences without position and never authorize a merge.
+ */
+function mergeStatusSplits(blocks: Block[], source: readonly OmpAssistantText[]): Block[] {
+  let cursor = 0;
   let repaired: Block[] | undefined;
   for (let index = 0; index < blocks.length; index++) {
     const first = blocks[index];
     const end = statusSplitEnd(blocks, index);
-    if (end !== undefined) {
-      const text = first.text + blocks[end].text;
-      const occurrence = (seen.get(text) ?? 0) + 1;
-      if (occurrence <= (counts.get(text) ?? 0) || anchored.get(text)?.has(occurrence)) {
-        repaired ??= blocks.slice(0, index);
-        repaired.push({ ...first, text }, ...blocks.slice(index + 1, end));
-        seen.set(text, occurrence);
-        index = end;
-        continue;
-      }
+    if (end !== undefined && sameMessage(source[cursor], first.text + blocks[end].text)) {
+      repaired ??= blocks.slice(0, index);
+      repaired.push({ ...first, text: first.text + blocks[end].text }, ...blocks.slice(index + 1, end));
+      cursor++;
+      index = end;
+      continue;
     }
     if (first.role === "assistant" && !first.streaming) {
-      seen.set(first.text, (seen.get(first.text) ?? 0) + 1);
+      // A complete block occupies its own slot. Only skip forward past source
+      // messages the transcript never stored, so later splits stay aligned.
+      let slot = cursor;
+      while (slot < source.length && !sameMessage(source[slot], first.text)) slot++;
+      if (slot < source.length) cursor = slot + 1;
     }
     repaired?.push(first);
   }
@@ -88,9 +77,9 @@ function mergeStatusSplits(
 export function backfillOmpInterjections(
   blocks: Block[],
   anchors: readonly OmpInterjectionAnchor[],
-  verifiedTexts: readonly OmpAssistantTextEvidence[] = [],
+  source: readonly OmpAssistantText[] = [],
 ): Block[] {
-  const merged = mergeStatusSplits(blocks, anchors, verifiedTexts);
+  const merged = mergeStatusSplits(blocks, source);
   if (anchors.length === 0) return merged;
   const positions = new Map<string, BoundaryNode[]>();
   const ids = new Map<string, BoundaryNode>();

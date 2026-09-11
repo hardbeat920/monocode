@@ -268,7 +268,7 @@ pub fn run() {
             fs::write_attachment,
             fs::read_text_file,
             fs::omp_session_interjections,
-            fs::omp_verify_assistant_texts,
+            fs::omp_active_assistant_texts,
             fs::write_text_file,
             skills::list_skills,
             search::search_project,
