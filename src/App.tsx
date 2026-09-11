@@ -320,7 +320,8 @@ import { SessionPane } from "./surfaces/SessionPane";
 import { SessionSurface } from "./surfaces/SessionSurface";
 import { ProjectTerminalDock } from "./surfaces/ProjectTerminalDock";
 import { SearchView } from "./surfaces/SearchView";
-import { SettingsView } from "./surfaces/SettingsView";
+import { SettingsView, type SettingsAnchor } from "./surfaces/SettingsView";
+import type { ConnectableInboxSource } from "./lib/inboxFilters";
 import { InboxView } from "./surfaces/InboxView";
 import type { InboxSessionPortal } from "./surfaces/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "./lib/inboxAsk";
@@ -639,6 +640,9 @@ export default function App({
   const [whatsNewVersion, setWhatsNewVersion] = useState<string | null>(null);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionId>(loadSettingsSection);
+  const [settingsAnchor, setSettingsAnchor] = useState<SettingsAnchor | null>(
+    null,
+  );
   const [editorNavigation, setEditorNavigation] =
     useState<EditorNavigationTarget | null>(null);
   const editorNavigationToken = useRef(0);
@@ -4789,19 +4793,28 @@ export default function App({
     setNotesViewOpen(false);
   }, []);
 
-  const openSettings = useCallback((section?: SettingsSectionId) => {
-    setFilePickerOpen(false);
-    setSearchViewOpen(false);
-    setInboxViewOpen(false);
-    setNotesViewOpen(false);
-    if (section) {
-      setSettingsSection(section);
-      saveSettingsSection(section);
-    }
-    setSettingsOpen(true);
-  }, []);
+  const openSettings = useCallback(
+    (section?: SettingsSectionId, anchor?: SettingsAnchor) => {
+      setFilePickerOpen(false);
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      if (section) {
+        setSettingsSection(section);
+        saveSettingsSection(section);
+      }
+      setSettingsAnchor(anchor ?? null);
+      setSettingsOpen(true);
+    },
+    [],
+  );
 
   const onOpenSettings = useCallback(() => openSettings(), [openSettings]);
+
+  const onOpenInboxIntegrations = useCallback(
+    (source: ConnectableInboxSource) => openSettings("general", source),
+    [openSettings],
+  );
 
   const onCloseSettings = useCallback(() => {
     setSettingsOpen(false);
@@ -5613,6 +5626,7 @@ export default function App({
             sessions={inboxRelatedSessions}
             onOpenSession={onOpenInboxSession}
             target={inboxTarget}
+            onOpenIntegrations={onOpenInboxIntegrations}
           />
         ) : null}
         {notesViewOpen ? (
@@ -5626,6 +5640,7 @@ export default function App({
         {settingsOpen ? (
           <SettingsView
             section={settingsSection}
+            anchor={settingsAnchor}
             cwd={sidebarCwd}
             sessions={sidebarHistory}
             besideRail

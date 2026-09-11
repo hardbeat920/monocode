@@ -56,8 +56,57 @@ export const DEFAULT_INBOX_FILTERS: InboxFilters = {
 
 export type InboxSource = InboxProvider;
 
+/** The sources that carry a token this app holds, so have a connect step. */
+export type ConnectableInboxSource = "linear" | "gitlab";
+
+/** `null` means the status check has not resolved yet. */
+export type InboxSourceConnections = Record<
+  ConnectableInboxSource,
+  boolean | null
+>;
+
+export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
+  github: "GitHub",
+  linear: "Linear",
+  gitlab: "GitLab",
+};
+
+/** GitHub needs no connect step, so it is always offered. */
+export function visibleInboxSources(
+  connections: InboxSourceConnections,
+): InboxSource[] {
+  const sources: InboxSource[] = ["github"];
+  if (connections.linear !== false) sources.push("linear");
+  if (connections.gitlab !== false) sources.push("gitlab");
+  return sources;
+}
+
+/** The gated sources a user could still connect, for the "+" menu. */
+export function connectableInboxSources(
+  connections: InboxSourceConnections,
+): ConnectableInboxSource[] {
+  const sources: ConnectableInboxSource[] = [];
+  if (connections.linear === false) sources.push("linear");
+  if (connections.gitlab === false) sources.push("gitlab");
+  return sources;
+}
+
+/** Falls back to GitHub when the selected source loses its tab. */
+export function resolveInboxSource(
+  source: InboxSource,
+  connections: InboxSourceConnections,
+): InboxSource {
+  return visibleInboxSources(connections).includes(source) ? source : "github";
+}
+
 const FILTERS_KEY = "monocode.inboxFilters";
 const SOURCE_KEY = "monocode.inboxSource";
+const CONNECTIONS_KEY = "monocode.inboxConnections";
+
+const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
+  linear: null,
+  gitlab: null,
+};
 
 export function loadInboxSource(): InboxSource {
   try {
@@ -71,6 +120,38 @@ export function loadInboxSource(): InboxSource {
 export function saveInboxSource(source: InboxSource) {
   try {
     localStorage.setItem(SOURCE_KEY, source);
+  } catch {
+    // private mode / quota
+  }
+}
+
+function connectFlag(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+/**
+ * The status reads are async commands, so a cold start would paint every tab
+ * and then drop two. Seeding from the last known answer keeps that first paint
+ * right for the returning user; a wrong guess corrects itself on the read.
+ */
+export function loadInboxConnections(): InboxSourceConnections {
+  try {
+    const raw = localStorage.getItem(CONNECTIONS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return UNKNOWN_CONNECTIONS;
+    const record = parsed as Record<string, unknown>;
+    return {
+      linear: connectFlag(record.linear),
+      gitlab: connectFlag(record.gitlab),
+    };
+  } catch {
+    return UNKNOWN_CONNECTIONS;
+  }
+}
+
+export function saveInboxConnections(connections: InboxSourceConnections) {
+  try {
+    localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
   } catch {
     // private mode / quota
   }
