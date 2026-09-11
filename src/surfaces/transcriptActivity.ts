@@ -16,6 +16,16 @@ export type ToolCallState = "pending" | "accepted" | "rejected";
 export type TurnItem =
   { type: "block"; block: Block } | { type: "activity"; blocks: Block[] };
 
+/** File paths backed by structured tool events in this transcript. */
+export function transcriptFilePaths(blocks: readonly Block[]): string[] {
+  const paths = new Set<string>();
+  for (const block of blocks) {
+    const path = block.tool?.preview?.path?.trim();
+    if (path) paths.add(path);
+  }
+  return [...paths];
+}
+
 export function needsApproval(block: Block): boolean {
   return !!block.approval && !block.approval.decided;
 }

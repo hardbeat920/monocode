@@ -185,9 +185,17 @@ export function rankProjectFiles(
 export async function resolveOpenablePath(
   cwd: string,
   href: string,
+  candidatePaths: readonly string[] = [],
 ): Promise<string | undefined> {
   const direct = resolveWorkspacePath(href, cwd);
   if (!direct) return undefined;
+  const relHint = relativePathHint(href, cwd, direct);
+  const referenced = resolveReferencedPath(
+    candidatePaths,
+    cwd,
+    direct,
+    relHint,
+  );
 
   let files: ProjectFile[];
   try {
@@ -195,9 +203,9 @@ export async function resolveOpenablePath(
   } catch {
     // The index only disambiguates shortened paths. Let the editor read the
     // direct path and show its own error if that file is unavailable too.
-    return direct;
+    return referenced ?? direct;
   }
-  if (files.length === 0) return direct;
+  if (files.length === 0) return referenced ?? direct;
 
   const byPath = new Map(
     files.map((file) => [normalizeEditorPath(file.path), file]),
@@ -206,7 +214,6 @@ export async function resolveOpenablePath(
   const exact = byPath.get(normalizedDirect);
   if (exact) return exact.path;
 
-  const relHint = relativePathHint(href, cwd, direct);
   const exactRelative = files.find(
     (file) =>
       file.relative === relHint ||
@@ -224,10 +231,40 @@ export async function resolveOpenablePath(
 
   const baseName = relHint.split("/").filter(Boolean).pop() ?? relHint;
   const byName = files.filter((file) => file.name === baseName);
-  if (byName.length === 0) return direct;
+  if (byName.length === 0) return referenced ?? direct;
   if (byName.length === 1) return byName[0].path;
 
   return pickOpenableFile(byName, cwd, relHint).path;
+}
+
+function resolveReferencedPath(
+  paths: readonly string[],
+  cwd: string,
+  direct: string,
+  relHint: string,
+): string | undefined {
+  const candidates = new Map<string, string>();
+  for (const path of paths) {
+    const resolved = resolveWorkspacePath(path, cwd);
+    if (!resolved) continue;
+    candidates.set(normalizeEditorPath(resolved), resolved);
+  }
+
+  const exact = candidates.get(normalizeEditorPath(direct));
+  if (exact) return exact;
+
+  const normalizedHint = normalizeEditorPath(relHint);
+  const suffixMatches = [...candidates].filter(([normalized]) =>
+    normalized.endsWith(`/${normalizedHint}`),
+  );
+  if (suffixMatches.length === 1) return suffixMatches[0][1];
+
+  const baseName = normalizedHint.split("/").filter(Boolean).pop();
+  if (!baseName) return undefined;
+  const nameMatches = [...candidates].filter(
+    ([normalized]) => normalized.split("/").pop() === baseName,
+  );
+  return nameMatches.length === 1 ? nameMatches[0][1] : undefined;
 }
 
 function relativePathHint(href: string, cwd: string, direct: string): string {

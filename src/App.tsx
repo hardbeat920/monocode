@@ -3527,10 +3527,14 @@ export default function App({
   }, []);
 
   const onOpenFile = useCallback<OpenFileFn>(
-    (path, navigation) => {
+    (path, navigation, hints) => {
       void (async () => {
         const resolved =
-          (await resolveOpenablePath(gitCwdRef.current, path)) ?? path;
+          (await resolveOpenablePath(
+            gitCwdRef.current,
+            path,
+            hints?.candidatePaths,
+          )) ?? path;
         rememberOpenedFile(sidebarCwdRef.current, resolved);
         const tab = tabsRef.current.find((entry) => entry.id === activeTabId);
         if (!tab) return;

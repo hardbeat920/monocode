@@ -46,8 +46,9 @@ import {
 import { copyText } from "../lib/clipboard";
 import { playCue } from "../lib/sounds";
 import { legacyTaskListFromText } from "../lib/taskList";
-import { displayPath, resolveWorkspacePath } from "../lib/paths";
+import { displayPath, pathKey, resolveWorkspacePath } from "../lib/paths";
 import { resolveModel } from "../lib/models";
+import type { OpenFileFn } from "../lib/search";
 import { harnessForTurn } from "../lib/secondOpinion";
 import { Shimmer } from "./Shimmer";
 import {
@@ -86,6 +87,7 @@ import {
   nestedScrollAbsorbsWheel,
   proseSummary,
   subagentFailureSummary,
+  transcriptFilePaths,
   toolCallLabel,
   toolCallState,
   turnCopyText,
@@ -112,7 +114,7 @@ type Props = {
   onAddToChat?: (text: string) => void;
   onSaveNote?: (text: string) => void;
   onSaveSelectionNote?: (text: string) => void;
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: OpenFileFn;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
@@ -139,7 +141,7 @@ function AgentTranscriptComponent({
   onAddToChat,
   onSaveNote,
   onSaveSelectionNote,
-  onOpenFile,
+  onOpenFile: onOpenFileProp,
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
@@ -184,6 +186,23 @@ function AgentTranscriptComponent({
   const currentModelName = harness
     ? resolveModel(harness, model).name
     : undefined;
+  const filePaths = useMemo(() => transcriptFilePaths(blocks), [blocks]);
+  const handleOpenFile = useCallback<OpenFileFn>(
+    (path, navigation) => {
+      const exactToolPath = filePaths.some((candidate) => {
+        const resolved = resolveWorkspacePath(candidate, cwd);
+        return resolved ? pathKey(resolved) === pathKey(path) : false;
+      });
+      if (filePaths.length === 0 || exactToolPath) {
+        if (navigation) onOpenFileProp?.(path, navigation);
+        else onOpenFileProp?.(path);
+        return;
+      }
+      onOpenFileProp?.(path, navigation, { candidatePaths: filePaths });
+    },
+    [cwd, filePaths, onOpenFileProp],
+  );
+  const onOpenFile = onOpenFileProp ? handleOpenFile : undefined;
   const waitingForApproval = hasPendingApproval(blocks) || pendingQuestion;
   const preparingHandoff = blocks.some(
     (block) =>

@@ -16,6 +16,7 @@ import {
   nestedScrollAbsorbsWheel,
   proseSummary,
   subagentFailureSummary,
+  transcriptFilePaths,
   toolCallLabel,
   turnCopyText,
 } from "./transcriptActivity";
@@ -85,6 +86,19 @@ function note(id: string, text: string): Block {
 function thought(id: string, text = "Weighing the options."): Block {
   return { id, role: "reasoning", text };
 }
+
+describe("transcriptFilePaths", () => {
+  it("returns unique structured file paths without scraping prose", () => {
+    expect(
+      transcriptFilePaths([
+        edit("edit", "/other/project/platform/backup.yaml"),
+        read("read", "/other/project/platform/backup.yaml"),
+        search("search"),
+        note("note", "/untrusted/prose/backup.yaml"),
+      ]),
+    ).toEqual(["/other/project/platform/backup.yaml"]);
+  });
+});
 
 describe("groupTurnItems", () => {
   it("keeps consecutive shell calls in one activity stack", () => {
