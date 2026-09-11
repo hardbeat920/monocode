@@ -9,12 +9,14 @@ import {
   folderAccent,
   folderContaining,
   folderShellFill,
+  loadPinnedSessionsCollapsed,
   loadSessionFolders,
   mergeFolderSessionSummaries,
   placeSessionInFolder,
   pruneSessionFolders,
   removeSessionFromFolder,
   renameFolder,
+  savePinnedSessionsCollapsed,
   saveSessionFolders,
   sessionListNavigationIds,
   setFolderCollapsed,
@@ -115,11 +117,13 @@ describe("buildSessionList", () => {
       entries.map((entry) =>
         entry.kind === "folder"
           ? entry.folder.name
-          : entry.kind === "session"
-            ? entry.session.id
-            : "divider",
+          : entry.kind === "pinned"
+            ? `Pinned:${entry.sessions.map((session) => session.id).join(",")}`
+            : entry.kind === "session"
+              ? entry.session.id
+              : entry.kind,
       ),
-    ).toEqual(["Work", "pin", "divider", "new"]);
+    ).toEqual(["Work", "Pinned:pin", "new"]);
   });
 
   it("hides folders whose members are not in the visible set", () => {
@@ -156,16 +160,20 @@ describe("buildSessionList", () => {
     ]);
   });
 
-  it("keeps the pin split among ungrouped sessions when there are no folders", () => {
-    const sessions = [
-      summary("pin", { pinned: true }),
-      summary("rest"),
-    ];
-    expect(
-      buildSessionList(sessions, [], sessions).map((entry) =>
-        entry.kind === "session" ? entry.session.id : entry.kind,
-      ),
-    ).toEqual(["pin", "divider", "rest"]);
+  it("groups pinned sessions without a divider", () => {
+    const sessions = [summary("pin", { pinned: true }), summary("rest")];
+    const entries = buildSessionList(sessions, [], sessions);
+    expect(entries).toEqual([
+      { kind: "pinned", collapsed: false, sessions: [sessions[0]] },
+      { kind: "session", session: sessions[1] },
+    ]);
+  });
+
+  it("omits collapsed pinned sessions from keyboard navigation", () => {
+    const sessions = [summary("pin", { pinned: true }), summary("rest")];
+    const entries = buildSessionList(sessions, [], sessions, true);
+    expect(sessionListNavigationIds(entries, false)).toEqual(["rest"]);
+    expect(sessionListNavigationIds(entries, true)).toEqual(["pin", "rest"]);
   });
 
   it("exposes the full visible navigation order without pagination", () => {
@@ -448,5 +456,15 @@ describe("session folder persistence", () => {
     saveSessionFolders("/tmp/project", [folder("g", ["a"])]);
     saveSessionFolders("/tmp/project", []);
     expect(localStorage.getItem("monocode.sessionFolders")).toBe("{}");
+  });
+
+  it("round-trips the pinned group collapsed state per project", () => {
+    savePinnedSessionsCollapsed("/tmp/project/", true);
+    expect(loadPinnedSessionsCollapsed("/tmp/project")).toBe(true);
+    expect(loadPinnedSessionsCollapsed("/tmp/other")).toBe(false);
+
+    savePinnedSessionsCollapsed("/tmp/project", false);
+    expect(loadPinnedSessionsCollapsed("/tmp/project")).toBe(false);
+    expect(localStorage.getItem("monocode.pinnedSessionsCollapsed")).toBe("{}");
   });
 });

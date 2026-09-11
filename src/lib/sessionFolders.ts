@@ -7,6 +7,7 @@ import { TAB_GROUP_COLORS } from "./tabGroups";
 
 const KEY = "monocode.sessionFolders";
 const CHANGE_EVENT = "monocode:session-folders-change";
+const PINNED_COLLAPSED_KEY = "monocode.pinnedSessionsCollapsed";
 
 export type SessionFolder = {
   id: string;
@@ -33,8 +34,12 @@ export type SessionListEntry =
       folder: SessionFolder;
       sessions: SessionSummary[];
     }
-  | { kind: "session"; session: SessionSummary }
-  | { kind: "divider" };
+  | {
+      kind: "pinned";
+      collapsed: boolean;
+      sessions: SessionSummary[];
+    }
+  | { kind: "session"; session: SessionSummary };
 
 type StoredFolder = {
   id?: unknown;
@@ -95,14 +100,14 @@ export function mergeFolderSessionSummaries(
 }
 
 /**
- * Folders first (stored order), then ungrouped sessions. A divider still
- * splits pinned and unpinned ungrouped cards — the same split the flat
- * list already used.
+ * Folders first (stored order), then pinned ungrouped sessions in their own
+ * synthetic folder, followed by the remaining ungrouped sessions.
  */
 export function buildSessionList(
   visible: SessionSummary[],
   folders: SessionFolder[],
   ungrouped: SessionSummary[],
+  pinnedCollapsed = false,
 ): SessionListEntry[] {
   const byId = new Map(visible.map((session) => [session.id, session]));
   const entries: SessionListEntry[] = [];
@@ -116,11 +121,17 @@ export function buildSessionList(
     members.sort(compareSessionSummaries);
     entries.push({ kind: "folder", folder, sessions: members });
   }
-  for (let index = 0; index < ungrouped.length; index += 1) {
-    const session = ungrouped[index];
-    const prev = ungrouped[index - 1];
-    if (prev?.pinned && !session.pinned) entries.push({ kind: "divider" });
-    entries.push({ kind: "session", session });
+
+  const pinned = ungrouped.filter((session) => session.pinned);
+  if (pinned.length > 0) {
+    entries.push({
+      kind: "pinned",
+      collapsed: pinnedCollapsed,
+      sessions: pinned,
+    });
+  }
+  for (const session of ungrouped) {
+    if (!session.pinned) entries.push({ kind: "session", session });
   }
   return entries;
 }
@@ -133,6 +144,12 @@ export function sessionListNavigationIds(
   for (const entry of entries) {
     if (entry.kind === "session") {
       ids.push(entry.session.id);
+      continue;
+    }
+    if (entry.kind === "pinned") {
+      if (!entry.collapsed || expandCollapsed) {
+        ids.push(...entry.sessions.map((session) => session.id));
+      }
       continue;
     }
     if (entry.kind !== "folder") continue;
@@ -421,6 +438,45 @@ export function saveSessionFolders(cwd: string, folders: SessionFolder[]): void 
         new CustomEvent(CHANGE_EVENT, { detail: { cwd: key } }),
       );
     }
+  } catch {
+    // private mode / quota
+  }
+}
+
+export function loadPinnedSessionsCollapsed(cwd: string): boolean {
+  const key = storageKey(cwd);
+  if (!key) return false;
+  try {
+    const raw = localStorage.getItem(PINNED_COLLAPSED_KEY);
+    if (!raw) return false;
+    const parsed: unknown = JSON.parse(raw);
+    return Boolean(
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>)[key] === true,
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function savePinnedSessionsCollapsed(
+  cwd: string,
+  collapsed: boolean,
+): void {
+  const key = storageKey(cwd);
+  if (!key) return;
+  try {
+    const raw = localStorage.getItem(PINNED_COLLAPSED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    const store =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? { ...(parsed as Record<string, unknown>) }
+        : {};
+    if (collapsed) store[key] = true;
+    else delete store[key];
+    localStorage.setItem(PINNED_COLLAPSED_KEY, JSON.stringify(store));
   } catch {
     // private mode / quota
   }
