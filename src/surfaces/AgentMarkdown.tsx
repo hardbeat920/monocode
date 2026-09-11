@@ -810,7 +810,7 @@ function inlineFileName(value: string): string | undefined {
     "",
   );
   const fileName = withoutLocation.split(/[/\\]/).filter(Boolean).pop();
-  if (!fileName || !/^[\w@+().-]+$/.test(fileName)) return undefined;
+  if (!fileName || !/^[\w%@+().-]+$/.test(fileName)) return undefined;
 
   if (isExtensionlessFileName(fileName)) {
     return fileName;

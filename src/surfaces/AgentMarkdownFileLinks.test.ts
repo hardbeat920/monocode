@@ -71,6 +71,25 @@ describe("markdown file navigation", () => {
     });
   });
 
+  it.each([
+    ["docs/my%20file.md", "/repo/docs/my file.md", undefined],
+    [
+      "docs/my%20file.md:12:3",
+      "/repo/docs/my file.md",
+      { line: 12, column: 3 },
+    ],
+    ["docs/progress%25.md", "/repo/docs/progress%.md", undefined],
+  ] as const)(
+    "opens the encoded inline file reference %s",
+    async (reference, path, navigation) => {
+      await render(`\`${reference}\``);
+      const link = container.querySelector<HTMLElement>('code[role="link"]');
+      expect(link).not.toBeNull();
+      await act(async () => link!.click());
+      expect(onOpenFile).toHaveBeenCalledWith(path, navigation);
+    },
+  );
+
   it("decodes spaces in markdown file links and preserves the source line", async () => {
     await render("[Guide](<docs/My Guide.md#L7-L9>)");
     expect(container.innerHTML).toContain("<a");
@@ -137,6 +156,7 @@ describe("markdown file navigation", () => {
     "[Source](file://localhost/%2Fhost/share/file.md)",
     "`file://localhost/%2Fhost/share/file.md`",
     "`file://localhost/%5Chost/share/file.md`",
+    "`%2F%2Fhost%2Fshare%2Ffile.md`",
     "```12:16:file://localhost/%2Fhost/share/file.md\nexample\n```",
   ])(
     "does not pass a network file URL to the native file opener: %s",
