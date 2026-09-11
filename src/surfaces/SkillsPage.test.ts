@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -105,6 +105,60 @@ afterEach(() => {
 });
 
 describe("Settings skill preview", () => {
+  it.each(["document", "error"])(
+    "never shows the previous %s under a newly selected skill while its read is pending",
+    async (previousState) => {
+      const pending = deferred<string>();
+      const frames: string[] = [];
+      await act(async () =>
+        root.render(
+          createElement(
+            Profiler,
+            {
+              id: "skill-preview",
+              // Observe committed DOM before passive effects clear stale state.
+              onRender: () => {
+                const panel = container.querySelector(
+                  '[aria-label="Skill preview"]',
+                );
+                if (panel?.querySelector("h2")?.textContent === "Other guide") {
+                  frames.push(panel.textContent ?? "");
+                }
+              },
+            },
+            createElement(SkillsPage, { cwd: "D:/repo" }),
+          ),
+        ),
+      );
+      if (previousState === "document") {
+        vi.mocked(invoke).mockResolvedValueOnce("# Previous document");
+      } else {
+        vi.mocked(invoke).mockRejectedValueOnce(
+          new Error("Previous read failed"),
+        );
+      }
+      await click("Project guide");
+      const previousText =
+        previousState === "document"
+          ? "Previous document"
+          : "Previous read failed";
+      expect(
+        container.querySelector('[aria-label="Skill preview"]')?.textContent,
+      ).toContain(previousText);
+      vi.mocked(invoke).mockImplementationOnce(() => pending.promise);
+      await click("Other guide");
+      expect(frames.length).toBeGreaterThan(0);
+      for (const frame of frames) {
+        expect(frame).not.toContain(previousText);
+        expect(frame).toContain("Loading skill");
+      }
+      await act(async () => pending.resolve("# Selected document"));
+      expect(
+        container.querySelector('[aria-label="Skill preview"] h1')?.textContent,
+      ).toBe("Selected document");
+    },
+  );
+
   it.each(["Project guide", "Preview skill Project guide"])(
     "restores focus to %s after refreshing the list",
     async (label) => {

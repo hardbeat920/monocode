@@ -67,6 +67,10 @@ export function SkillsPage({
     trigger: "name" | "icon",
   ): void => {
     previewOpener.current = `${trigger}:${skill.path}`;
+    if (previewSkill?.path !== skill.path) {
+      setPreviewText(null);
+      setPreviewError(null);
+    }
     setPreviewSkill(skill);
   };
 
