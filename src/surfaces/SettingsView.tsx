@@ -250,13 +250,14 @@ export function SettingsView({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       event.stopPropagation();
       onCloseRef.current();
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    // Let dialogs and other Settings controls handle Escape first.
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   return (
@@ -294,38 +295,50 @@ export function SettingsView({
         {IS_MAC ? null : <WindowControls />}
       </div>
 
-      <div
-        ref={lockOverscroll}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-none"
-      >
-        <div className="mx-auto w-full max-w-5xl px-8 py-8">
-          <PageHeader
-            title={settingsSectionLabel(section)}
-            description={settingsSectionDescription(section)}
-          />
-          {section === "general" ? (
-            <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
-          ) : null}
-          {section === "appearance" ? (
-            <AppearancePage appearance={appearance} />
-          ) : null}
-          {section === "keybindings" ? <KeybindingsPage /> : null}
-          {section === "providers" ? <ProvidersPage /> : null}
-          {section === "inbox" ? <InboxPage /> : null}
-          {section === "skills" ? <SkillsPage key={cwd} cwd={cwd} /> : null}
-          {section === "archive" ? (
-            <ArchivePage
-              cwd={cwd}
-              sessions={sessions}
-              onOpenSession={onOpenSession}
-              onArchiveSession={onArchiveSession}
-              onDeleteSession={onDeleteSession}
-              onRestoreProject={onRestoreProject}
-              onDeleteProject={onDeleteProject}
+      {section === "skills" ? (
+        <SkillsPage
+          key={cwd}
+          cwd={cwd}
+          header={
+            <PageHeader
+              title={settingsSectionLabel(section)}
+              description={settingsSectionDescription(section)}
             />
-          ) : null}
+          }
+        />
+      ) : (
+        <div
+          ref={lockOverscroll}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-none"
+        >
+          <div className="mx-auto w-full max-w-5xl px-8 py-8">
+            <PageHeader
+              title={settingsSectionLabel(section)}
+              description={settingsSectionDescription(section)}
+            />
+            {section === "general" ? (
+              <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
+            ) : null}
+            {section === "appearance" ? (
+              <AppearancePage appearance={appearance} />
+            ) : null}
+            {section === "keybindings" ? <KeybindingsPage /> : null}
+            {section === "providers" ? <ProvidersPage /> : null}
+            {section === "inbox" ? <InboxPage /> : null}
+            {section === "archive" ? (
+              <ArchivePage
+                cwd={cwd}
+                sessions={sessions}
+                onOpenSession={onOpenSession}
+                onArchiveSession={onArchiveSession}
+                onDeleteSession={onDeleteSession}
+                onRestoreProject={onRestoreProject}
+                onDeleteProject={onDeleteProject}
+              />
+            ) : null}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

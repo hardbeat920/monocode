@@ -551,20 +551,26 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   streaming,
   cwd,
   onOpenFile,
+  header,
 }: {
   text: string;
   streaming?: boolean;
   cwd?: string;
   onOpenFile?: OpenFileFn;
+  header?: ReactNode;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
 
   return (
     <div
       ref={lockOverscroll}
+      tabIndex={0}
+      role="region"
+      aria-label="Markdown preview"
       className="markdown-preview h-full overflow-y-auto overscroll-none [overflow-anchor:none]"
     >
       <div className="px-6 py-8">
+        {header}
         <AgentMarkdown
           text={text}
           streaming={streaming}
@@ -586,6 +592,9 @@ export const MarkdownSource = memo(function MarkdownSource({
   return (
     <div
       ref={lockOverscroll}
+      tabIndex={0}
+      role="region"
+      aria-label="Markdown source"
       className="markdown-preview h-full overflow-y-auto overscroll-none [overflow-anchor:none]"
     >
       <pre className="min-h-full min-w-0 whitespace-pre-wrap wrap-break-word px-4 py-3 font-mono text-[13px] leading-5 text-content/85">
