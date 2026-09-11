@@ -56,6 +56,7 @@ import {
   subscribeChatBackgroundPath,
 } from "../lib/appearance";
 import type { SessionFolderTarget } from "../lib/sessionFolders";
+import type { OpenFileFn } from "../lib/search";
 
 type Props = {
   session: Session;
@@ -112,7 +113,7 @@ type Props = {
     reply: UserQuestionReply,
   ) => void;
   onQuestionInteraction?: (sessionId: string, requestId: number) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onOpenDiff: (
     path?: string,
     session?: { sessionId: string; cwd: string },

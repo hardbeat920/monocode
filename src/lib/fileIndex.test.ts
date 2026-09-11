@@ -77,6 +77,27 @@ describe("resolveOpenablePath", () => {
     expect(resolved).toBe(files[2].path);
   });
 
+  it("uses a unique tool path when a short link is outside the project cwd", async () => {
+    const path = "/Users/me/other/project/platform/backup.yaml";
+    const resolved = await resolveOpenablePath(cwd, "backup.yaml", [path]);
+    expect(resolved).toBe(path);
+  });
+
+  it("does not guess between ambiguous tool paths", async () => {
+    const resolved = await resolveOpenablePath(cwd, "backup.yaml", [
+      "/Users/me/one/backup.yaml",
+      "/Users/me/two/backup.yaml",
+    ]);
+    expect(resolved).toBe(`${cwd}/backup.yaml`);
+  });
+
+  it("prefers an indexed project file over a transcript path", async () => {
+    const resolved = await resolveOpenablePath(cwd, "App.tsx", [
+      "/Users/me/other/App.tsx",
+    ]);
+    expect(resolved).toBe(files[1].path);
+  });
+
   it("still opens a direct file when the optional project index is unavailable", async () => {
     list.mockRejectedValue(new Error("Project scan unavailable"));
     await expect(resolveOpenablePath(cwd, "apps/desktop/src/main.tsx"))
