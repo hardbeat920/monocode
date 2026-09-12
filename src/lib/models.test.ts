@@ -10,6 +10,7 @@ import {
   loadHiddenPickerProviders,
   loadLastModelChoice,
   loadLastModelSettings,
+  loadRecentModelChoices,
   mergeModelSettings,
   modelPickerTabs,
   preferredModelId,
@@ -19,6 +20,7 @@ import {
   saveLastModelChoice,
   saveLastModelSettings,
   savePickerProviderVisible,
+  saveRecentModelChoice,
   setHarnessModels,
   showProviderInModelPicker,
   stepModelPickerTab,
@@ -220,6 +222,26 @@ describe("provider defaults", () => {
       harness: "cursor",
       model: defaultModelId("cursor"),
     });
+  });
+
+  it("keeps the six most recently used unique models", () => {
+    saveRecentModelChoice("claude", "claude:opus-5");
+    saveRecentModelChoice("cursor", "cursor:composer-2.5");
+    saveRecentModelChoice("grok", "grok:grok-4.6");
+    saveRecentModelChoice("opencode", "opencode:glm-5");
+    saveRecentModelChoice("pi", "pi:default");
+    saveRecentModelChoice("omp", "omp:default");
+    saveRecentModelChoice("fx", "fx:zai/glm-5.2-fast");
+    saveRecentModelChoice("cursor", "cursor:composer-2.5");
+
+    expect(loadRecentModelChoices()).toEqual([
+      { harness: "cursor", model: "cursor:composer-2.5" },
+      { harness: "fx", model: "fx:zai/glm-5.2-fast" },
+      { harness: "omp", model: "omp:default" },
+      { harness: "pi", model: "pi:default" },
+      { harness: "opencode", model: "opencode:glm-5" },
+      { harness: "grok", model: "grok:grok-4.6" },
+    ]);
   });
 });
 

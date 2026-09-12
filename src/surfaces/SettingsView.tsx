@@ -548,7 +548,7 @@ function GeneralPage({
       </Row>
       <Row
         label="Notifications"
-        description="Notify when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session."
+        description="Notify when a reminder is due, or when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session."
       >
         {notificationsEnabled && notificationPermission === "denied" ? (
           <NotificationsBlocked />

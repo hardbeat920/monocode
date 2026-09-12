@@ -81,6 +81,7 @@ beforeEach(() => {
     fileErrorCounts: new Map(),
     onSelectFile: vi.fn(),
     onCloseFile: vi.fn(),
+    onCloseOtherFiles: vi.fn(),
     onReorder: vi.fn(),
   };
   container = document.createElement("div");
@@ -105,6 +106,7 @@ describe("file tab context menu", () => {
     expect(menu.textContent).toContain("Copy Relative Path");
     expect(menu.textContent).toContain("Copy File Name");
     expect(menu.textContent).toContain("Close");
+    expect(menu.textContent).toContain("Close Others");
   });
 
   it("runs path, external-open, reveal, and close actions for the tab", async () => {
@@ -130,5 +132,25 @@ describe("file tab context menu", () => {
 
     await pick("Close");
     expect(props.onCloseFile).toHaveBeenCalledWith("second");
+
+    await pick("Close Others");
+    expect(props.onCloseOtherFiles).toHaveBeenCalledWith("second");
+  });
+
+  it("disables Close Others when the selected tab is the only tab", () => {
+    props = { ...props, files: [files[0]], activeFileId: "first" };
+    render();
+    const tab = container.querySelector<HTMLButtonElement>(
+      '[role="tab"][title="/repo/README.md"]',
+    )!;
+    act(() => {
+      tab.parentElement!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+    const item = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) => button.textContent === "Close Others");
+    expect(item?.disabled).toBe(true);
   });
 });

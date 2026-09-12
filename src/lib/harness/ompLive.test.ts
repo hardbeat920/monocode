@@ -32,7 +32,7 @@ import {
   steerOmpTurn,
   forgetOmpSession,
 } from "./omp";
-import { sendPiTurn, forgetPiSession } from "./pi";
+import { sendPiTurn, steerPiTurn, forgetPiSession } from "./pi";
 import { ompCommandProvider, respondQuestion } from "./piFamily";
 import { OMP_FLAVOR } from "./piFlavor";
 import type { HarnessEvent, SendTurnInput } from "./types";
@@ -127,6 +127,56 @@ async function started(turnInput = input()) {
 }
 
 describe("OMP command lifecycle over the real RPC multiplexer", () => {
+  it.each([
+    ["pi", sendPiTurn, steerPiTurn],
+    ["omp", sendOmpTurn, steerOmpTurn],
+  ] as const)(
+    "delivers attachment-only prompts and steering through %s",
+    async (flavor, send, steer) => {
+      const sessionId = `${flavor}-attachments`;
+      const attachments = [
+        {
+          id: "pdf",
+          name: "report.pdf",
+          kind: "file" as const,
+          mimeType: "application/pdf",
+          size: 100,
+          path: "/tmp/report.pdf",
+        },
+      ];
+      const turnInput = {
+        ...input(sessionId, ""),
+        model: `${flavor}:default`,
+        attachments,
+      };
+      const turn = send(turnInput);
+      void turn.catch(() => undefined);
+      try {
+        await vi.waitFor(() =>
+          expect(
+            transport.requests.some(
+              (r) => r.sessionId === sessionId && r.command.type === "prompt",
+            ),
+          ).toBe(true),
+        );
+        expect(
+          transport.requests.find(
+            (r) => r.sessionId === sessionId && r.command.type === "prompt",
+          )?.command.message,
+        ).toBe('Attached file (read from disk): "/tmp/report.pdf"');
+        await steer(turnInput);
+        expect(
+          transport.requests.find(
+            (r) => r.sessionId === sessionId && r.command.type === "steer",
+          )?.command.message,
+        ).toBe('Attached file (read from disk): "/tmp/report.pdf"');
+      } finally {
+        frame(sessionId, { type: "agent_end" });
+        await turn;
+      }
+    },
+  );
+
   it("applies fast mode through OMP RPC before prompting", async () => {
     const running = await started({
       ...input(),

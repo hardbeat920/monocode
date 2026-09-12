@@ -20,6 +20,7 @@ export class OpenCodeHttpError extends Error {
 
 export type OpenCodeSession = {
   id: string;
+  parentID?: string;
   directory?: string;
   title?: string;
 };

@@ -10,14 +10,18 @@ import {
   noteSourceProject,
   noteSlugsInText,
   notesAsProjectFiles,
+  normalizeNoteTags,
   noteTitle,
   rankNoteFiles,
   type Note,
 } from "./notes";
 
-function note(partial: Partial<Note> & Pick<Note, "id" | "slug" | "title">): Note {
+function note(
+  partial: Partial<Note> & Pick<Note, "id" | "slug" | "title">,
+): Note {
   return {
     body: "",
+    tags: [],
     createdAt: 1,
     updatedAt: 1,
     ...partial,
@@ -37,6 +41,14 @@ describe("noteTitle", () => {
 
   it("returns Untitled when empty", () => {
     expect(noteTitle("   \n```\ncode\n```\n")).toBe("Untitled");
+  });
+});
+
+describe("normalizeNoteTags", () => {
+  it("normalizes, deduplicates, and drops empty tags", () => {
+    expect(
+      normalizeNoteTags([" Ideas ", "#Project Docs", "ideas", "###"]),
+    ).toEqual(["ideas", "project-docs"]);
   });
 });
 
@@ -64,9 +76,9 @@ describe("noteSourceProject", () => {
 
 describe("note mentions", () => {
   it("collects unique @note/slug tokens", () => {
-    expect(noteSlugsInText("See @note/auth and @note/auth plus @note/plan-2.")).toEqual(
-      ["auth", "plan-2"],
-    );
+    expect(
+      noteSlugsInText("See @note/auth and @note/auth plus @note/plan-2."),
+    ).toEqual(["auth", "plan-2"]);
   });
 
   it("injects referenced bodies after the prompt", () => {
@@ -92,9 +104,9 @@ describe("note mentions", () => {
       relative: "note/auth",
     });
     expect(isNoteMentionPath(files[0]!.path)).toBe(true);
-    expect(noteMentionLabel(note({ id: "abc", slug: "auth", title: "Auth" }))).toBe(
-      "note/auth",
-    );
+    expect(
+      noteMentionLabel(note({ id: "abc", slug: "auth", title: "Auth" })),
+    ).toBe("note/auth");
   });
 });
 
@@ -171,12 +183,26 @@ describe("rankNoteFiles", () => {
       "note:b",
     ]);
   });
+
+  it("fuzzy-matches tags", () => {
+    const tagged = [
+      note({
+        id: "a",
+        slug: "reference",
+        title: "Reference",
+        tags: ["important-links"],
+      }),
+    ];
+    expect(rankNoteFiles(tagged, "important").map((file) => file.path)).toEqual(
+      ["note:a"],
+    );
+  });
 });
 
 describe("noteMentionLabel", () => {
   it("prefixes the slug", () => {
-    expect(noteMentionLabel(note({ id: "n", slug: "auth", title: "Auth" }))).toBe(
-      "note/auth",
-    );
+    expect(
+      noteMentionLabel(note({ id: "n", slug: "auth", title: "Auth" })),
+    ).toBe("note/auth");
   });
 });

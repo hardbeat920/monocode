@@ -1,4 +1,5 @@
 import type { Attachment, RuntimeMode, ToolPreview } from "../session";
+import { attachmentPath } from "../attachments";
 import { isTaskListToolName } from "../taskList";
 import { extractToolPreview } from "./preview";
 import type { HarnessEvent } from "./types";
@@ -164,12 +165,10 @@ export function toOpenCodeFileParts(
     url: string;
   }> = [];
   for (const attachment of attachments ?? []) {
-    const url = attachment.path
-      ? toFileUrl(attachment.path)
-      : attachment.data
+    const url =
+      !attachment.path && attachment.data
         ? `data:${attachment.mimeType};base64,${attachment.data}`
-        : null;
-    if (!url) continue;
+        : toFileUrl(attachmentPath(attachment));
     parts.push({
       type: "file",
       mime: attachment.mimeType,
@@ -373,7 +372,13 @@ export function eventSessionId(event: Record<string, unknown>): string | undefin
   const sessionID = stringField(properties, "sessionID");
   if (sessionID) return sessionID;
   const info = asRecord(properties.info);
-  return stringField(info, "id");
+  return (
+    stringField(info, "sessionID") ??
+    stringField(asRecord(properties.part), "sessionID") ??
+    (typeof event.type === "string" && event.type.startsWith("session.")
+      ? stringField(info, "id")
+      : undefined)
+  );
 }
 
 export function textDeltaEvent(

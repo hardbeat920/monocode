@@ -1,5 +1,5 @@
 import { nativeModelId } from "../models";
-import type { Attachment, RuntimeMode } from "../session";
+import type { RuntimeMode } from "../session";
 import { questionPromptTitle, type UserQuestionReply } from "../userQuestion";
 import {
   killChild,
@@ -37,12 +37,14 @@ type ApprovalOutcome = ApprovalDecision | "cancelled";
 
 type PendingApproval = {
   rpcId: JsonRpcId;
+  threadId: string;
   kind: CodexApprovalKind;
   resolve: (decision: ApprovalOutcome) => void;
 };
 
 type PendingQuestion = {
   rpcId: JsonRpcId;
+  threadId: string;
   event: Extract<HarnessEvent, { type: "question.asked" }>;
   isBlocking: boolean;
   timer?: ReturnType<typeof setTimeout>;
@@ -158,12 +160,11 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const turnId = live.activeTurnId;
   if (!turnId) throw new Error("No active turn to steer");
 
-  const attachments = await codexAttachments(input.attachments ?? []);
   const params = buildTurnSteerParams({
     threadId: live.threadId,
     expectedTurnId: turnId,
     prompt: input.text.trim() || undefined,
-    attachments,
+    attachments: input.attachments,
   });
   if (
     !params.input ||
@@ -320,6 +321,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
+        const turn = live?.turnDone;
         // The external clock can be requested before thread/start or resume
         // returns, so it must not depend on the live session being bound.
         const response =
@@ -329,11 +331,17 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
               ? handleServerRequest(live, id, method, params)
               : undefined;
         void response?.catch((error: unknown) => {
-          if (!live?.muteUpdates)
+          if (live?.muteUpdates || (live && live.turnDone !== turn)) return;
+          const failure =
+            error instanceof Error ? error : new Error(String(error));
+          if (live?.turnFailed) {
+            live.turnFailed(failure);
+          } else {
             (live?.onEvent ?? input.onEvent)({
               type: "session.error",
-              message: error instanceof Error ? error.message : String(error),
+              message: failure.message,
             });
+          }
         });
       },
     },
@@ -467,25 +475,19 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const model = nativeModelId(input.model);
   const effort = input.modelSettings?.reasoningEffort;
   const serviceTier = input.modelSettings?.serviceTier;
-  const attachments = await codexAttachments(input.attachments ?? []);
 
   const params = buildTurnStartParams({
     threadId: live.threadId,
     runtimeMode: input.runtimeMode,
     prompt: input.text.trim() || undefined,
-    attachments,
+    attachments: input.attachments,
     model,
     effort,
     serviceTier,
     intent: input.intent,
   });
 
-  if (
-    (!params.input ||
-      (Array.isArray(params.input) && params.input.length === 0)) &&
-    !input.text.trim() &&
-    attachments.length === 0
-  ) {
+  if (Array.isArray(params.input) && params.input.length === 0) {
     return;
   }
 
@@ -544,22 +546,39 @@ async function runCompaction(live: Live): Promise<void> {
 }
 
 function handleNotification(live: Live, method: string, params: unknown): void {
+  const rec = asRecord(params);
   if (method === "serverRequest/resolved") {
-    const rec = asRecord(params);
-    if (rec?.threadId !== live.threadId) return;
     for (const pending of live.approvals.values()) {
-      if (pending.rpcId === rec.requestId) pending.resolve("cancelled");
+      if (
+        pending.rpcId === rec?.requestId &&
+        pending.threadId === rec?.threadId
+      )
+        pending.resolve("cancelled");
     }
     for (const pending of live.questions.values()) {
-      if (pending.rpcId === rec.requestId) pending.resolve("cancelled");
+      if (
+        pending.rpcId === rec?.requestId &&
+        pending.threadId === rec?.threadId
+      )
+        pending.resolve("cancelled");
     }
     return;
   }
+  // Child requests use this connection too, but their transcript and lifecycle
+  // notifications must not change the parent's turn or clear its approvals.
+  const threadId = stringField(rec, "threadId");
+  if (threadId && threadId !== live.threadId) return;
   // A Codex turn is a sequence of items. Completing an agentMessage does not
   // mean the turn is over — more tools and messages can still arrive. Only
   // turn/completed (and turn/aborted) settle sendCodexTurn, which is what the
   // UI uses for busy / stop / "Working for".
   const mapped = mapCodexNotification(method, params);
+  if (mapped.diagnostic) {
+    console.debug(
+      `[monocode] codex ${live.threadId} ${method}`,
+      mapped.diagnostic,
+    );
+  }
   const snapshot = method === "item/completed";
   for (const event of mapped.events) {
     if (event.type === "message.delta") {
@@ -632,6 +651,7 @@ async function handleServerRequest(
   method: string,
   params: unknown,
 ): Promise<void> {
+  const threadId = stringField(asRecord(params), "threadId") ?? live.threadId;
   if (method === "item/tool/requestUserInput") {
     if (live.cancelled || live.muteUpdates) {
       await live.rpc.respond(id, { answers: {} });
@@ -659,6 +679,7 @@ async function handleServerRequest(
     const outcome = new Promise<UserQuestionReply | "cancelled">((resolve) => {
       live.questions.set(uiId, {
         rpcId: id,
+        threadId,
         event,
         resolve,
         // Older servers omit this field and must keep their blocking behavior.
@@ -702,7 +723,7 @@ async function handleServerRequest(
       return;
     }
     const uiId = live.nextApprovalUiId++;
-    const pending = waitApproval(live, uiId, id, "permissions");
+    const pending = waitApproval(live, uiId, id, "permissions", threadId);
     // MCP consent must carry the user's decision, including in Full Access.
     live.onEvent({
       type: "approval.requested",
@@ -764,7 +785,7 @@ async function handleServerRequest(
       return;
     }
     if (live.runtimeMode === "supervised") {
-      const pending = waitApproval(live, uiId, id, mapped.kind);
+      const pending = waitApproval(live, uiId, id, mapped.kind, threadId);
       live.onEvent(mapped.event);
       const decision = await pending;
       live.onEvent({
@@ -801,7 +822,7 @@ async function handleServerRequest(
     return;
   }
 
-  const pending = waitApproval(live, uiId, id, mapped.kind);
+  const pending = waitApproval(live, uiId, id, mapped.kind, threadId);
   live.onEvent(mapped.event);
   const decision = await pending;
   live.onEvent({
@@ -820,9 +841,10 @@ function waitApproval(
   uiId: number,
   rpcId: JsonRpcId,
   kind: CodexApprovalKind,
+  threadId: string,
 ): Promise<ApprovalOutcome> {
   return new Promise<ApprovalOutcome>((resolve) => {
-    live.approvals.set(uiId, { rpcId, kind, resolve });
+    live.approvals.set(uiId, { rpcId, threadId, kind, resolve });
   }).finally(() => {
     live.approvals.delete(uiId);
   });
@@ -841,21 +863,6 @@ function autoApproval(
   // auto-accept-edits: auto file changes, ask for commands.
   if (kind === "file-change") return "allow";
   return null;
-}
-
-async function codexAttachments(
-  files: Attachment[],
-): Promise<Array<{ type: "image"; url: string }>> {
-  const out: Array<{ type: "image"; url: string }> = [];
-  for (const file of files) {
-    if (!file.data) continue;
-    if (!file.mimeType.startsWith("image/")) continue;
-    out.push({
-      type: "image",
-      url: `data:${file.mimeType};base64,${file.data}`,
-    });
-  }
-  return out;
 }
 
 /** Exported for tests. */

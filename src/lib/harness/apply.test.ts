@@ -21,6 +21,18 @@ afterEach(() => {
 });
 
 describe("turn duration", () => {
+  it("records the selected provider and model on a user turn", () => {
+    const session = appendUser(
+      newSession("claude", "/tmp", "claude:opus-5"),
+      "hi",
+    );
+    expect(session.blocks[0]?.turnModel).toEqual({
+      harness: "claude",
+      id: "claude:opus-5",
+      name: "Claude Opus 5",
+    });
+  });
+
   it("stamps how long the agent worked when the turn ends", () => {
     now = 1_000;
     let session = appendUser(newSession("cursor", "/tmp"), "hi");
@@ -135,6 +147,10 @@ describe("appendSteerUser", () => {
     expect(session.blocks[2]).toMatchObject({
       role: "user",
       text: "focus on tests",
+      turnModel: {
+        harness: "cursor",
+        id: session.model,
+      },
     });
     expect(session.blocks[2]?.startedAt).toBeUndefined();
     expect(session.busy).toBe(true);

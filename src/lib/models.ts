@@ -189,6 +189,8 @@ const HIDDEN_PICKER_PROVIDERS_KEY = "monocode.hiddenPickerProviders";
 const LAST_MODEL_KEY = "monocode.lastModel";
 const LAST_MODEL_SETTINGS_KEY = "monocode.lastModelSettings";
 const DEFAULT_MODELS_KEY = "monocode.defaultModels";
+const RECENT_MODELS_KEY = "monocode.recentModels";
+const RECENT_MODEL_LIMIT = 6;
 
 export type ModelPickerTab = "favorites" | HarnessId;
 
@@ -622,6 +624,57 @@ export function saveLastModelChoice(harness: HarnessId, model: string) {
   } catch {
     // private mode / quota
   }
+}
+
+export function loadRecentModelChoices(): LastModelChoice[] {
+  try {
+    const raw = localStorage.getItem(RECENT_MODELS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const choices: LastModelChoice[] = [];
+    for (const item of parsed) {
+      if (
+        typeof item !== "object" ||
+        item == null ||
+        !("harness" in item) ||
+        !("model" in item) ||
+        typeof (item as LastModelChoice).harness !== "string" ||
+        typeof (item as LastModelChoice).model !== "string" ||
+        !isHarnessId((item as LastModelChoice).harness)
+      ) {
+        continue;
+      }
+      const choice = item as LastModelChoice;
+      const key = `${choice.harness}\0${choice.model}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      choices.push(choice);
+      if (choices.length === RECENT_MODEL_LIMIT) break;
+    }
+    return choices;
+  } catch {
+    return [];
+  }
+}
+
+export function saveRecentModelChoice(
+  harness: HarnessId,
+  model: string,
+): LastModelChoice[] {
+  const next = [
+    { harness, model },
+    ...loadRecentModelChoices().filter(
+      (choice) => choice.harness !== harness || choice.model !== model,
+    ),
+  ].slice(0, RECENT_MODEL_LIMIT);
+  try {
+    localStorage.setItem(RECENT_MODELS_KEY, JSON.stringify(next));
+  } catch {
+    // private mode / quota
+  }
+  return next;
 }
 
 function parseStringRecord(value: unknown): Record<string, string> {

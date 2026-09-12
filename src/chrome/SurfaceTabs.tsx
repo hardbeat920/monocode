@@ -31,6 +31,7 @@ type Props = {
   fileErrorCounts: Map<string, number>;
   onSelectFile: (fileId: string) => void;
   onCloseFile: (fileId: string) => void;
+  onCloseOtherFiles: (fileId: string) => void;
   onReorder: (ids: string[]) => void;
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
   label?: string;
@@ -56,13 +57,24 @@ const REVEAL_LABEL = IS_MAC
     ? "Reveal in File Explorer"
     : "Open Containing Folder";
 
-export function surfaceTabMenuItems(file: FilePaneTab): ExplorerMenuItem[] {
+export function surfaceTabMenuItems(
+  file: FilePaneTab,
+  canCloseOthers = true,
+): ExplorerMenuItem[] {
   const close: ExplorerMenuItem = {
     kind: "item",
     id: "close",
     label: "Close",
   };
-  if (!isFilesystemTab(file) || isChangesTab(file)) return [close];
+  const closeOthers: ExplorerMenuItem = {
+    kind: "item",
+    id: "close-others",
+    label: "Close Others",
+    disabled: !canCloseOthers,
+  };
+  if (!isFilesystemTab(file) || isChangesTab(file)) {
+    return [close, closeOthers];
+  }
 
   return [
     { kind: "item", id: "open-default", label: "Open in Default App" },
@@ -77,6 +89,7 @@ export function surfaceTabMenuItems(file: FilePaneTab): ExplorerMenuItem[] {
     { kind: "item", id: "copy-name", label: "Copy File Name" },
     { kind: "sep" },
     close,
+    closeOthers,
   ];
 }
 
@@ -155,6 +168,7 @@ export function SurfaceTabs({
   fileErrorCounts,
   onSelectFile,
   onCloseFile,
+  onCloseOtherFiles,
   onReorder,
   onPaneDragStart,
   label = "Open files",
@@ -175,6 +189,10 @@ export function SurfaceTabs({
     setMenu(null);
     if (id === "close") {
       onCloseFile(menuFile.id);
+      return;
+    }
+    if (id === "close-others") {
+      onCloseOtherFiles(menuFile.id);
       return;
     }
     if (!isFilesystemTab(menuFile) || isChangesTab(menuFile)) return;
@@ -381,7 +399,7 @@ export function SurfaceTabs({
         <ExplorerMenu
           x={menu.x}
           y={menu.y}
-          items={surfaceTabMenuItems(menuFile)}
+          items={surfaceTabMenuItems(menuFile, files.length > 1)}
           ariaLabel="File tab actions"
           onPick={onMenuPick}
           onClose={() => setMenu(null)}

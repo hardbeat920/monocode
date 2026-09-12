@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-09-12
+
+### Added
+
+- Set a reminder from a session's menu using a preset or custom date and time. MonoCode persists scheduled reminders, delivers a notification when one is due, keeps reminder notices available in the session, and shows the scheduled time when cancelling one.
+- The model picker remembers the six most recently used models. Right-click the current model or press Command/Ctrl+Period to switch among them quickly.
+- Notes support normalized tags that can be edited and searched, and selected text from an agent transcript can be saved directly as a note.
+- File and terminal tab menus include **Close Others**, with confirmation before closing unsaved files or running terminals.
+
+### Changed
+
+- Model selection and model settings now share one searchable, keyboard-accessible picker with nested menus, provider tabs, favorites, and inline setting controls.
+- Returning to a project restores its last active session, editor, or terminal instead of choosing a different pane. In #144 by @kinsomicrote.
+- Failed tool activity stays concise by default and can be expanded directly from its transcript summary to inspect the error.
+- Transcripts preserve the provider and model used for each turn, including across reloads, handoffs, second opinions, and Claude model switches.
+
+### Fixed
+
+- Markdown file links distinguish document headings from local paths, handle bare and percent-encoded filenames, reject encoded network paths, and navigate to the requested source location reliably after reload. In #146 by @yankawai.
+- Codex transport retries and fallback diagnostics no longer appear as transcript events, while terminal errors and unrelated runtime warnings remain visible.
+- Background tabs preserve the composer's measured height, so returning to a tab no longer collapses a multi-line draft to one row. In #182 by @goujandev.
+- File attachments now reach Codex, Claude Code, Pi, and omp through a local-path fallback when they cannot be sent inline, including attachment-only messages and mid-turn follow-ups. ACP resource links and OpenCode file parts keep their native formats. Fixes #174.
+- Approvals and questions from nested Claude, Codex, and OpenCode sessions route to the correct active parent session, queue safely when several arrive, and surface reply failures instead of leaving the turn stuck.
+- Files selected from search, the file picker, or the filesystem open by their exact path instead of being redirected by fuzzy path matching.
+- Web links in agent messages now open in the system browser instead of relying on unavailable in-webview navigation. Fixes #175.
+
 ## [0.1.43] - 2026-09-11
 
 ### Added
@@ -689,7 +715,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.43...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.44...HEAD
+[0.1.44]: https://github.com/hardbeat920/monocode/compare/v0.1.43...v0.1.44
 [0.1.43]: https://github.com/hardbeat920/monocode/compare/v0.1.42...v0.1.43
 [0.1.42]: https://github.com/hardbeat920/monocode/compare/v0.1.41...v0.1.42
 [0.1.41]: https://github.com/hardbeat920/monocode/compare/v0.1.40...v0.1.41

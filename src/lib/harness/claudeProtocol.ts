@@ -4,6 +4,7 @@ import type {
   TaskListItem,
   ToolPreview,
 } from "../session";
+import { attachmentPathText } from "../attachments";
 import { isTaskListToolName, taskListFromToolInput } from "../taskList";
 import {
   questionPromptTitle,
@@ -180,8 +181,12 @@ export function buildClaudeUserMessage(input: {
   const content: Array<Record<string, unknown>> = [];
   if (text) content.push({ type: "text", text });
   for (const attachment of input.attachments ?? []) {
-    const block = imageContentBlock(attachment);
-    if (block) content.push(block);
+    content.push(
+      imageContentBlock(attachment) ?? {
+        type: "text",
+        text: attachmentPathText(attachment),
+      },
+    );
   }
   return {
     type: "user",

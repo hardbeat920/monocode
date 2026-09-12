@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
+const writeChild = vi.fn(async (_id: string, line: string) => {
+  sent.push(line);
+});
 
 vi.mock("./child", () => ({
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
@@ -11,9 +14,7 @@ vi.mock("./child", () => ({
   watchChild: (_id: string, line: (l: string) => void) => {
     onLine = line;
   },
-  writeChild: async (_id: string, line: string) => {
-    sent.push(line);
-  },
+  writeChild,
 }));
 
 const {
@@ -106,6 +107,7 @@ describe("codex live turn sequence", () => {
   beforeEach(() => {
     sent.length = 0;
     onLine = undefined;
+    writeChild.mockClear();
   });
 
   afterEach(async () => {
@@ -113,6 +115,69 @@ describe("codex live turn sequence", () => {
     vi.restoreAllMocks();
     await stopCodexSession("codex-live");
     __codexTestReset();
+  });
+
+  it("keeps retries and HTTP fallback out of a successful turn's transcript", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const { events, turn } = await startTurn("codex-live");
+    const settled = vi.fn();
+    void turn.then(settled);
+    const beforeRetries = [...events];
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      notify("error", {
+        threadId: "thr_1",
+        turnId: "turn_1",
+        error: { message: `Reconnecting... ${attempt}/5` },
+        willRetry: true,
+      });
+    }
+    const fallback =
+      "Falling back from WebSockets to HTTPS transport. unexpected status 404 Not Found: Unknown endpoint: GET /v1/responses, url: ws://127.0.0.1:19101/v1/responses";
+    notify("warning", { threadId: "thr_1", message: fallback });
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(events).toEqual(beforeRetries);
+    expect(debug).toHaveBeenCalledTimes(6);
+    expect(debug).toHaveBeenCalledWith(expect.any(String), fallback);
+
+    notify("item/agentMessage/delta", { delta: "The answer" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    expect(settled).toHaveBeenCalledOnce();
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/repo", "codex:gpt-5.4", "supervised"),
+    );
+    expect(session.blocks).toMatchObject([
+      { role: "assistant", text: "The answer", streaming: false },
+    ]);
+  });
+
+  it("still surfaces a terminal failure after transport retries", async () => {
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+    const { events, turn } = await startTurn("codex-live");
+    notify("error", {
+      error: { message: "Reconnecting... 5/5" },
+      willRetry: true,
+    });
+    const message =
+      "Response stream disconnected after too many failed attempts";
+    notify("error", { error: { message }, willRetry: false });
+    expect(events).toContainEqual({ type: "session.error", message });
+    notify("turn/completed", {
+      turn: { id: "turn_1", status: "failed", error: { message } },
+    });
+    await turn;
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/repo", "codex:gpt-5.4", "supervised"),
+    );
+    expect(session.blocks).toContainEqual(
+      expect.objectContaining({ role: "system", text: message }),
+    );
+    expect(
+      session.blocks.some((block) => block.text.includes("Reconnecting")),
+    ).toBe(false);
   });
 
   it.each([false, true])(
@@ -263,6 +328,227 @@ describe("codex live turn sequence", () => {
     });
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it.each(["allow", "deny"] as const)(
+    "keeps a child approval answerable after a sibling completes: %s",
+    async (decision) => {
+      const { events, turn } = await startTurn("codex-live");
+      const settled = vi.fn();
+      void turn.then(settled);
+      onLine!(
+        JSON.stringify({
+          id: "child_approval",
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thr_child",
+            turnId: "turn_child",
+            itemId: "child_read",
+            command: "cat ~/.gitconfig",
+          },
+        }),
+      );
+      const approval = events.find(
+        (event) => event.type === "approval.requested",
+      )!;
+      expect(approval).toMatchObject({ callId: "child_read" });
+      const before = [...events];
+      notify("turn/started", {
+        threadId: "thr_sibling",
+        turn: { id: "turn_sibling" },
+      });
+      notify("item/agentMessage/delta", {
+        threadId: "thr_sibling",
+        delta: "Child-only text",
+      });
+      notify("turn/completed", {
+        threadId: "thr_sibling",
+        turn: { id: "turn_sibling", status: "completed" },
+      });
+      notify("error", {
+        threadId: "thr_sibling",
+        error: { message: "Child failed" },
+        willRetry: false,
+      });
+      await Promise.resolve();
+      expect(events).toEqual(before);
+      expect(settled).not.toHaveBeenCalled();
+      respondCodexApproval("codex-live", approval.requestId, decision);
+      await waitFor(
+        () => parse().some((message) => message.id === "child_approval"),
+        "child decision",
+      );
+      expect(
+        parse().find((message) => message.id === "child_approval")?.result,
+      ).toEqual({
+        decision: decision === "allow" ? "accept" : "decline",
+      });
+      notify("turn/completed", {
+        threadId: "thr_1",
+        turn: { id: "turn_1", status: "completed" },
+      });
+      await turn;
+    },
+  );
+
+  it("clears a server-resolved child approval using its owning thread", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: "child_approval",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thr_child",
+          itemId: "child_read",
+          command: "cat ~/.gitconfig",
+        },
+      }),
+    );
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    notify("serverRequest/resolved", {
+      threadId: "thr_1",
+      requestId: "child_approval",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.some((event) => event.type === "approval.resolved")).toBe(
+      false,
+    );
+    notify("serverRequest/resolved", {
+      threadId: "thr_child",
+      requestId: "child_approval",
+    });
+    await waitFor(
+      () => events.some((event) => event.type === "approval.resolved"),
+      "child cleanup",
+    );
+    expect(events).toContainEqual({
+      type: "approval.resolved",
+      requestId: approval.requestId,
+      decision: "cancelled",
+    });
+    expect(parse().some((message) => message.id === "child_approval")).toBe(
+      false,
+    );
+    notify("turn/completed", {
+      threadId: "thr_1",
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+  });
+
+  it.each(["allow", "deny"] as const)(
+    "answers a child's filesystem permission request: %s",
+    async (decision) => {
+      const { events, turn } = await startTurn("codex-live");
+      const permissions = { fileSystem: { read: ["/home/user/.gitconfig"] } };
+      onLine!(
+        JSON.stringify({
+          id: "child_permissions",
+          method: "item/permissions/requestApproval",
+          params: {
+            threadId: "thr_child",
+            turnId: "turn_child",
+            itemId: "child_read",
+            permissions,
+          },
+        }),
+      );
+      const approval = events.find(
+        (event) => event.type === "approval.requested",
+      )!;
+      respondCodexApproval("codex-live", approval.requestId, decision);
+      await waitFor(
+        () => parse().some((message) => message.id === "child_permissions"),
+        "filesystem permission response",
+      );
+      expect(
+        parse().find((message) => message.id === "child_permissions")?.result,
+      ).toEqual(
+        decision === "allow"
+          ? { scope: "turn", permissions }
+          : { permissions: {} },
+      );
+      notify("turn/completed", {
+        threadId: "thr_1",
+        turn: { id: "turn_1", status: "completed" },
+      });
+      await turn;
+    },
+  );
+
+  it("advances the question queue when the server resolves a child's request", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    for (const id of ["child_a", "child_b"]) {
+      onLine!(
+        JSON.stringify({
+          id,
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: id,
+            questions: [{ id: "q", question: id, isOther: true, options: [] }],
+          },
+        }),
+      );
+    }
+    notify("serverRequest/resolved", {
+      threadId: "child_a",
+      requestId: "child_a",
+    });
+    await waitFor(
+      () =>
+        events.filter((event) => event.type === "question.asked").length === 2,
+      "second child question",
+    );
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/repo"),
+    );
+    expect(session.pendingQuestion?.questions[0].prompt).toBe("child_b");
+    expect(parse().some((message) => message.id === "child_a")).toBe(false);
+    respondCodexQuestion("codex-live", session.pendingQuestion!.requestId, {
+      kind: "skipped",
+    });
+    await waitFor(
+      () => parse().some((message) => message.id === "child_b"),
+      "second child response",
+    );
+    notify("turn/completed", {
+      threadId: "thr_1",
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+  });
+
+  it("fails the active turn if a child permission reply cannot be delivered", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: "child_approval",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thr_child",
+          itemId: "child_read",
+          command: "cat ~/.gitconfig",
+        },
+      }),
+    );
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    let outcome: unknown;
+    void turn.catch((error) => {
+      outcome = error;
+    });
+    writeChild.mockRejectedValueOnce(new Error("Broken pipe"));
+    respondCodexApproval("codex-live", approval.requestId, "allow");
+    await waitFor(() => outcome instanceof Error, "failed permission delivery");
+    expect(outcome).toMatchObject({ message: "Broken pipe" });
+    expect(events).toContainEqual({
+      type: "session.error",
+      message: "Broken pipe",
+    });
   });
 
   it.each([undefined, "plan"] as const)(
