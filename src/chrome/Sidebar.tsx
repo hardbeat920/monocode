@@ -140,7 +140,11 @@ import { ProjectMascot } from "./ProjectMascot";
 import { Popover } from "./Popover";
 import { SessionFiltersMenu } from "./SessionFiltersMenu";
 import { sessionReminderPresets } from "./sessionReminderPresets";
-import { reminderTime, type SessionReminder } from "../lib/sessionReminders";
+import {
+  formatReminderTime,
+  reminderTime,
+  type SessionReminder,
+} from "../lib/sessionReminders";
 import { SessionsEmpty } from "./SessionsEmpty";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
 import { SourceControl } from "./SourceControl";
@@ -689,6 +693,13 @@ function SidebarComponent({
     return session ? [session] : [];
   });
   const multipleMenuSessions = menuSessionIds.length > 1;
+  const menuReminderTimes = [
+    ...new Set(
+      reminders
+        .filter((reminder) => menuSessionIds.includes(reminder.sessionId))
+        .map((reminder) => reminder.dueAt),
+    ),
+  ];
   const allMenuSessionsPinned =
     menuSessions.length > 0 && menuSessions.every((session) => session.pinned);
   const allMenuSessionsArchived =
@@ -713,12 +724,16 @@ function SidebarComponent({
     { kind: "item", id: "ungroup", label: "Ungroup" },
   ];
   const sessionMenuItems: ExplorerMenuItem[] = [
-    ...(onCancelReminders && menuSessionIds.some((id) => reminderIds.has(id))
+    ...(onCancelReminders && menuReminderTimes.length > 0
       ? [
           {
             kind: "item" as const,
             id: "reminder:cancel",
             label: "Cancel reminder",
+            description:
+              menuReminderTimes.length === 1
+                ? formatReminderTime(menuReminderTimes[0])
+                : "Multiple reminder times",
           },
           { kind: "sep" as const },
         ]

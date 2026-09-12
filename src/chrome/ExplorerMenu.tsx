@@ -15,6 +15,7 @@ type MenuAction = {
   kind: "item";
   id: string;
   label: string;
+  description?: string;
   shortcut?: string;
   disabled?: boolean;
   danger?: boolean;
@@ -214,7 +215,7 @@ export function ExplorerMenu({
             onPick(item.id);
           }
         }}
-        className={`flex h-7 w-full items-center gap-3 rounded-lg px-2 text-left text-[13px] leading-none ${
+        className={`flex ${item.description ? "py-1.5" : "h-7"} w-full items-center gap-3 rounded-lg px-2 text-left text-[13px] leading-none ${
           item.disabled
             ? "text-content/30"
             : item.danger
@@ -226,7 +227,14 @@ export function ExplorerMenu({
                 : "text-content hover:bg-content/5"
         }`}
       >
-        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{item.label}</span>
+          {item.description ? (
+            <span className="mt-1 block text-[11px] leading-snug text-content/50">
+              {item.description}
+            </span>
+          ) : null}
+        </span>
         {hasSubmenu ? (
           <ChevronRight
             className="size-3.5 shrink-0 text-content/50"

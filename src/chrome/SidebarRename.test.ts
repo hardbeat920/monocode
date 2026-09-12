@@ -3,6 +3,7 @@ import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../lib/session";
+import { formatReminderTime } from "../lib/sessionReminders";
 import { Sidebar } from "./Sidebar";
 
 // Keep native services out of these menu/input interaction tests.
@@ -334,7 +335,9 @@ describe("sidebar session reminders", () => {
     const cancel = document.querySelector<HTMLButtonElement>(
       '[aria-label="Session actions"] [role="menuitem"]',
     )!;
-    expect(cancel.textContent).toBe("Cancel reminder");
+    expect(cancel.textContent).toBe(
+      `Cancel reminder${formatReminderTime(props.reminders[0].dueAt)}`,
+    );
     act(() => cancel.click());
     expect(props.onCancelReminders).toHaveBeenCalledExactlyOnceWith([
       "session-1",
