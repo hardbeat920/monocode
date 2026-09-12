@@ -2459,9 +2459,8 @@ fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<String, 
     if let Some(patch) = git_run(root, &["diff", &context, &three_dot]) {
         return Ok(patch);
     }
-    git_run(root, &["diff", &context, base, head]).ok_or_else(|| {
-        format!("git diff failed for {base}...{head}")
-    })
+    git_run(root, &["diff", &context, base, head])
+        .ok_or_else(|| format!("git diff failed for {base}...{head}"))
 }
 
 fn ensure_git_commit(root: &Path, oid: &str) -> Result<(), String> {
@@ -2469,10 +2468,7 @@ fn ensure_git_commit(root: &Path, oid: &str) -> Result<(), String> {
     if git_output(root, &["cat-file", "-e", &spec]).is_some() {
         return Ok(());
     }
-    let _ = git_output(
-        root,
-        &["fetch", "--no-tags", "--depth", "1", "origin", oid],
-    );
+    let _ = git_output(root, &["fetch", "--no-tags", "--depth", "1", "origin", oid]);
     if git_output(root, &["cat-file", "-e", &spec]).is_some() {
         return Ok(());
     }
