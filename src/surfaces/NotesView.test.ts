@@ -241,3 +241,63 @@ it("lets the user retry a project change after saving fails", async () => {
   expect(stored.sourceCwd).toBe("/work/portognjeeen");
   expect(container.textContent).not.toContain("Disk full");
 });
+
+it("keeps a completed move after returning to the note while it saves", async () => {
+  const second = {
+    ...stored,
+    id: "second-note",
+    slug: "second",
+    title: "Second",
+  };
+  const save = invoke.getMockImplementation()!;
+  let finishMove!: () => void;
+  const moving = new Promise<void>((resolve) => {
+    finishMove = resolve;
+  });
+  invoke.mockImplementation(async (command, args) => {
+    if (command === "notes_list") return [{ ...stored }, { ...second }];
+    if (
+      command === "notes_upsert" &&
+      args.note.sourceCwd === "/work/portognjeeen"
+    )
+      await moving;
+    return save(command, args);
+  });
+  const selectNote = async (title: string) => {
+    const button = [
+      ...container.querySelectorAll<HTMLButtonElement>("li button"),
+    ].find((item) => item.textContent?.includes(title));
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+  };
+
+  await render();
+  await chooseProject();
+  await selectNote("Second");
+  await selectNote("Plan");
+  await act(async () => finishMove());
+  expect(stored.sourceCwd).toBe("/work/portognjeeen");
+  expect(projectButton()?.textContent).toContain("portognjeeen");
+  await selectNote("Second");
+  expect(stored.sourceCwd).toBe("/work/portognjeeen");
+});
+
+it("clears a failed move error when the saved project is selected again", async () => {
+  await render();
+  invoke.mockRejectedValueOnce(new Error("Disk full"));
+  await chooseProject();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Disk full",
+  );
+
+  await act(async () => projectButton()!.click());
+  const original = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ].find((item) => item.title === "/work/Edefyn");
+  expect(original).toBeDefined();
+  await act(async () => original!.click());
+
+  expect(stored.sourceCwd).toBe("/work/Edefyn");
+  expect(projectButton()?.textContent).toContain("Edefyn");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});

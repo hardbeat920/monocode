@@ -543,14 +543,18 @@ function NoteEditor({
   const [title, setTitle] = useState(note.title);
   const [body, setBody] = useState(note.body);
   const [tags, setTags] = useState(note.tags);
-  const [sourceCwd, setSourceCwd] = useState(note.sourceCwd);
+  // Keep only an unsaved choice locally so completed moves survive reopening.
+  const [projectChange, setProjectChange] = useState<{ path: string } | null>(
+    null,
+  );
+  const sourceCwd = projectChange?.path ?? note.sourceCwd;
   const [saveError, setSaveError] = useState<string | null>(null);
   const [imageDrag, setImageDrag] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const titleRef = useRef(title);
   const bodyRef = useRef(body);
   const tagsRef = useRef(tags);
-  const sourceCwdRef = useRef(sourceCwd);
+  const projectChangeRef = useRef(projectChange);
   const noteRef = useRef(note);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const sourceFieldRef = useRef<HTMLTextAreaElement>(null);
@@ -562,7 +566,7 @@ function NoteEditor({
   titleRef.current = title;
   bodyRef.current = body;
   tagsRef.current = tags;
-  sourceCwdRef.current = sourceCwd;
+  projectChangeRef.current = projectChange;
   noteRef.current = note;
   onSavedRef.current = onSaved;
   const project = noteSourceProject(sourceCwd);
@@ -580,23 +584,31 @@ function NoteEditor({
     const nextTitle = titleRef.current.trim() || noteTitle(bodyRef.current);
     const nextBody = bodyRef.current;
     const nextTags = tagsRef.current;
-    const nextCwd = sourceCwdRef.current;
+    const nextProject = projectChangeRef.current;
     if (
       nextTitle === current.title &&
       nextBody === current.body &&
       sameTags(nextTags, current.tags) &&
-      nextCwd === current.sourceCwd
-    )
+      (!nextProject || nextProject.path === current.sourceCwd)
+    ) {
+      projectChangeRef.current = null;
+      setProjectChange(null);
+      setSaveError(null);
       return;
+    }
     try {
       const saved = await upsertNote({
         id: current.id,
         title: nextTitle,
         body: nextBody,
         tags: nextTags,
-        sourceCwd: nextCwd,
+        ...(nextProject ? { sourceCwd: nextProject.path } : {}),
       });
       noteRef.current = saved;
+      if (projectChangeRef.current === nextProject) {
+        projectChangeRef.current = null;
+        setProjectChange(null);
+      }
       setSaveError(null);
       if (
         titleRef.current.trim() === "" ||
@@ -782,8 +794,9 @@ function NoteEditor({
               chevron
               buttonClassName="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-content/60 hover:text-content"
               onCwdChange={(path) => {
-                sourceCwdRef.current = path;
-                setSourceCwd(path);
+                const change = { path };
+                projectChangeRef.current = change;
+                setProjectChange(change);
                 void saveNow();
               }}
             >
