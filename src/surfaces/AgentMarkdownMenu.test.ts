@@ -7,11 +7,13 @@ import { AgentMarkdown } from "./AgentMarkdown";
 const actions = vi.hoisted(() => ({
   copyText: vi.fn(async () => {}),
   openPath: vi.fn(async () => {}),
+  openUrl: vi.fn(async () => {}),
   revealPath: vi.fn(async () => {}),
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openPath: actions.openPath,
+  openUrl: actions.openUrl,
 }));
 
 vi.mock("../lib/clipboard", () => ({
@@ -115,6 +117,26 @@ describe("AgentMarkdown file link context menu", () => {
 
     const menu = openMenu(container.querySelector("a")!);
     expect(menu).toBeNull();
+  });
+
+  it("opens external web links in the default browser", async () => {
+    props = {
+      text: "[Website](https://example.com/docs)",
+      cwd: "/repo",
+      onOpenFile: vi.fn(),
+    };
+    render();
+
+    const link = container.querySelector<HTMLAnchorElement>("a")!;
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => link.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(actions.openUrl).toHaveBeenCalledWith("https://example.com/docs");
+    expect(props.onOpenFile).not.toHaveBeenCalled();
   });
 
   it("also recognizes inline-code file references", () => {

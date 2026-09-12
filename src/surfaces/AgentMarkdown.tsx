@@ -1,6 +1,6 @@
 import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContext,
   isValidElement,
@@ -229,8 +229,11 @@ function MarkdownLink({
           onOpenFile(file.path, file.navigation);
           return;
         }
-        if (!href || !/^https?:\/\//i.test(href)) {
-          event.preventDefault();
+        event.preventDefault();
+        if (href && /^https?:\/\//i.test(href)) {
+          void openUrl(href).catch((error) => {
+            console.error("Failed to open web link:", error);
+          });
         }
       }}
       onContextMenu={(event) => {
