@@ -95,6 +95,18 @@ describe("foldUnifiedLines", () => {
       "c11",
     ]);
   });
+
+  it("keeps every line visible when context is unlimited", () => {
+    const lines: UnifiedLine[] = [
+      ...rangeContext(1, 8),
+      { kind: "del", text: "old", oldNumber: 9, newNumber: null },
+      { kind: "add", text: "new", oldNumber: null, newNumber: 9 },
+      ...rangeContext(10, 16),
+    ];
+    const blocks = foldUnifiedLines(lines, Number.POSITIVE_INFINITY);
+    expect(blocks.map((block) => block.kind)).toEqual(["hunk"]);
+    expect(blocks[0]?.kind === "hunk" && blocks[0].lines).toEqual(lines);
+  });
 });
 
 describe("blocksFromLines", () => {

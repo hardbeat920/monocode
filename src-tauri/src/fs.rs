@@ -741,11 +741,19 @@ pub struct GitHubPrDiff {
 const MAX_PR_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
 /// Unified diff and file stats for a pull request, via `gh`.
+/// When `full_context` is true, prefer a large-context `git diff` between the PR OIDs.
 #[tauri::command]
-pub async fn git_github_pr_diff(cwd: String, number: i64) -> Result<GitHubPrDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || git_github_pr_diff_for(&expand_home(&cwd), number))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn git_github_pr_diff(
+    cwd: String,
+    number: i64,
+    full_context: Option<bool>,
+) -> Result<GitHubPrDiff, String> {
+    let full_context = full_context.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_pr_diff_for(&expand_home(&cwd), number, full_context)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -2391,18 +2399,30 @@ fn github_avatar_url(login: &str) -> String {
     format!("https://avatars.githubusercontent.com/{encoded}?s=64")
 }
 
-fn git_github_pr_diff_for(root: &Path, number: i64) -> Result<GitHubPrDiff, String> {
+const PR_FULL_CONTEXT_LINES: &str = "999999";
+
+fn git_github_pr_diff_for(
+    root: &Path,
+    number: i64,
+    full_context: bool,
+) -> Result<GitHubPrDiff, String> {
     if number <= 0 {
         return Err("Invalid pull request number".into());
     }
     let number = number.to_string();
-    let json = gh_run(
-        root,
-        &["pr", "view", &number, "--json", "files,additions,deletions"],
-        false,
-    )?;
+    let fields = if full_context {
+        "files,additions,deletions,baseRefOid,headRefOid"
+    } else {
+        "files,additions,deletions"
+    };
+    let json = gh_run(root, &["pr", "view", &number, "--json", fields], false)?;
     let mut diff = parse_github_pr_diff_meta(&json)?;
-    let patch = gh_run(root, &["pr", "diff", &number], true)?;
+    let patch = if full_context {
+        let (base, head) = parse_github_pr_oids(&json)?;
+        git_diff_full_context(root, &base, &head)?
+    } else {
+        gh_run(root, &["pr", "diff", &number], true)?
+    };
     if patch.len() > MAX_PR_DIFF_BYTES {
         diff.truncated = true;
     } else {
@@ -2413,6 +2433,52 @@ fn git_github_pr_diff_for(root: &Path, number: i64) -> Result<GitHubPrDiff, Stri
         diff.deletions = diff.files.iter().map(|file| file.deletions).sum();
     }
     Ok(diff)
+}
+
+fn parse_github_pr_oids(json: &str) -> Result<(String, String), String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Row {
+        base_ref_oid: String,
+        head_ref_oid: String,
+    }
+    let row: Row = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let base = row.base_ref_oid.trim();
+    let head = row.head_ref_oid.trim();
+    if base.is_empty() || head.is_empty() {
+        return Err("Pull request is missing base or head commit".into());
+    }
+    Ok((base.to_string(), head.to_string()))
+}
+
+fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<String, String> {
+    ensure_git_commit(root, base)?;
+    ensure_git_commit(root, head)?;
+    let context = format!("-U{PR_FULL_CONTEXT_LINES}");
+    let three_dot = format!("{base}...{head}");
+    if let Some(patch) = git_run(root, &["diff", &context, &three_dot]) {
+        return Ok(patch);
+    }
+    git_run(root, &["diff", &context, base, head]).ok_or_else(|| {
+        format!("git diff failed for {base}...{head}")
+    })
+}
+
+fn ensure_git_commit(root: &Path, oid: &str) -> Result<(), String> {
+    let spec = format!("{oid}^{{commit}}");
+    if git_output(root, &["cat-file", "-e", &spec]).is_some() {
+        return Ok(());
+    }
+    let _ = git_output(
+        root,
+        &["fetch", "--no-tags", "--depth", "1", "origin", oid],
+    );
+    if git_output(root, &["cat-file", "-e", &spec]).is_some() {
+        return Ok(());
+    }
+    Err(format!(
+        "Missing git commit {oid}. Fetch the pull request refs and try again."
+    ))
 }
 
 fn parse_github_pr_diff_meta(json: &str) -> Result<GitHubPrDiff, String> {
@@ -5363,6 +5429,56 @@ mod tests {
         assert_eq!(diff.files[0].additions, 4);
         assert_eq!(diff.patch, "");
         assert!(!diff.truncated);
+    }
+
+    #[test]
+    fn parse_github_pr_oids_reads_base_and_head() {
+        let json = r#"{
+            "baseRefOid": "aaa111",
+            "headRefOid": "bbb222",
+            "files": []
+        }"#;
+        assert_eq!(
+            parse_github_pr_oids(json).unwrap(),
+            ("aaa111".into(), "bbb222".into())
+        );
+    }
+
+    #[test]
+    fn git_diff_full_context_includes_distant_lines() {
+        let dir = tmp("git-full-context");
+        let original = (1..=40)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        if !init_git_commit(&dir.0, &[("big.txt", &original)]) {
+            return;
+        }
+        let base = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let updated = original.replace("line-30", "LINE-30");
+        std::fs::write(dir.0.join("big.txt"), &updated).unwrap();
+        if !git(&dir.0, &["add", "."]) || !git(&dir.0, &["commit", "-m", "edit"]) {
+            return;
+        }
+        let head = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let patch = git_diff_full_context(&dir.0, &base, &head).unwrap();
+        assert!(
+            patch.contains("line-1"),
+            "expected distant context in patch:\n{patch}"
+        );
+        assert!(patch.contains("LINE-30"), "expected changed line:\n{patch}");
+        let default = git_run(&dir.0, &["diff", &base, &head]).unwrap_or_default();
+        assert!(
+            !default.contains("line-1"),
+            "default context should omit distant lines"
+        );
     }
 
     #[test]

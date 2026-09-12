@@ -451,25 +451,36 @@ export function githubReviewStateLabel(state: string): string {
   }
 }
 
-export function prDiffCacheKey(cwd: string, number: number): string {
-  return `${normalizeProjectPath(cwd)}:pr:${number}`;
+export function prDiffCacheKey(
+  cwd: string,
+  number: number,
+  fullContext = false,
+): string {
+  return `${normalizeProjectPath(cwd)}:pr:${number}${fullContext ? ":full" : ""}`;
 }
 
 export function peekGithubPrDiff(
   cwd: string,
   number: number,
+  fullContext = false,
 ): GithubPrDiff | null {
-  return prDiffByKey.get(prDiffCacheKey(cwd, number)) ?? null;
+  return prDiffByKey.get(prDiffCacheKey(cwd, number, fullContext)) ?? null;
 }
 
 export async function githubPrDiff(
   cwd: string,
   number: number,
+  options?: { fullContext?: boolean },
 ): Promise<GithubPrDiff> {
-  const key = prDiffCacheKey(cwd, number);
+  const fullContext = options?.fullContext === true;
+  const key = prDiffCacheKey(cwd, number, fullContext);
   const pending = prDiffInflight.get(key);
   if (pending) return pending;
-  const promise = invoke<GithubPrDiff>("git_github_pr_diff", { cwd, number })
+  const promise = invoke<GithubPrDiff>("git_github_pr_diff", {
+    cwd,
+    number,
+    fullContext,
+  })
     .then((diff) => {
       prDiffByKey.set(key, diff);
       return diff;
