@@ -20,8 +20,10 @@ import { FilePicker } from "./chrome/FilePicker";
 import { UsageFooter } from "./chrome/UsageFooter";
 import { useProjectBranches } from "./hooks/useProjectBranches";
 import {
+  loadAllProjectsView,
   loadProjectRailOpen,
   loadSidebarTabOrder,
+  saveAllProjectsView,
   saveProjectRailOpen,
   type SidebarTabId,
 } from "./lib/appearance";
@@ -209,6 +211,7 @@ import {
 import { removeProjectData } from "./lib/projectData";
 import {
   archiveProject,
+  collectRailProjects,
   forgetProject,
   lastProjectPath,
   loadRecents,
@@ -366,6 +369,7 @@ import {
   mergeHistorySummary,
   mergeProjectHistorySummary,
   replaceProjectHistory,
+  historyAcrossProjects,
   historyWithLiveSessions,
   summaryFromSession,
 } from "./lib/sessionHistory";
@@ -627,7 +631,8 @@ export default function App({
     [],
   );
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
-  const tabCloseScope = "project" as const;
+  const [allProjectsView, setAllProjectsView] = useState(loadAllProjectsView);
+  const tabCloseScope = allProjectsView ? "workspace" : "project";
   const currentProjectDock = findProjectTerminal(projectTerminals, projectCwd);
   const dockVisible = !!currentProjectDock?.open;
   const [sidebarTab, setSidebarTab] = useState<SidebarTabId>(
@@ -942,6 +947,10 @@ export default function App({
     projectCwd;
   const sidebarCwdRef = useRef(sidebarCwd);
   sidebarCwdRef.current = sidebarCwd;
+  /** A project not listed yet stays out, or its one row would pass for a full list. */
+  const isCachedHistoryCwd = (cwd: string) =>
+    cwd === sidebarCwdRef.current ||
+    loadedProjectsRef.current.has(normalizeProjectPath(cwd));
   const sidebarCwdKey =
     sidebarCwd && sidebarCwd !== "~" ? normalizeProjectPath(sidebarCwd) : null;
   const historyFailed =
@@ -1169,6 +1178,30 @@ export default function App({
     void refreshHistory(sidebarCwd);
   }, [sidebarCwd, refreshHistory]);
 
+  const railProjectPaths = useMemo(
+    () =>
+      [...collectRailProjects(recents, sidebarCwd).values()].map((p) => p.path),
+    [recents, sidebarCwd],
+  );
+
+  // The all-projects list needs every rail project's rows, not only the ones
+  // visited so far this run.
+  useEffect(() => {
+    if (!allProjectsView) return;
+    for (const path of railProjectPaths) {
+      const key = normalizeProjectPath(path);
+      if (loadedProjectsRef.current.has(key)) continue;
+      void listSessionsByProject(path)
+        .then((rows) => {
+          setHistory((current) => replaceProjectHistory(current, path, rows));
+          setLoadedProjects((prev) =>
+            prev.has(key) ? prev : new Set(prev).add(key),
+          );
+        })
+        .catch(() => undefined);
+    }
+  }, [allProjectsView, railProjectPaths]);
+
   useEffect(() => {
     if (!inboxViewOpen) return;
     let cancelled = false;
@@ -1200,7 +1233,7 @@ export default function App({
       .then((summary) => {
         if (!summary) return;
         lastPersisted.current.set(session.id, fingerprint);
-        if (summary.cwd === sidebarCwdRef.current) {
+        if (isCachedHistoryCwd(summary.cwd)) {
           setHistory((current) => mergeProjectHistorySummary(current, summary));
         }
       })
@@ -1260,7 +1293,7 @@ export default function App({
           const summary = await upsertSession(session).catch(() => null);
           if (!summary) return;
           lastPersisted.current.set(session.id, fingerprint);
-          if (summary.cwd === sidebarCwdRef.current) {
+          if (isCachedHistoryCwd(summary.cwd)) {
             setHistory((current) =>
               mergeProjectHistorySummary(current, summary),
             );
@@ -2316,30 +2349,28 @@ export default function App({
     [onClosePane, onCloseTab, tabCloseScope],
   );
 
-  const deckProjectTabs = useMemo(() => {
+  const stripTabs = useMemo(() => {
+    if (allProjectsView) return tabs;
     // A projectless session belongs to no project, so it stands on its own
     // rather than trailing the last project's tabs.
     const active = tabs.find((tab) => tab.id === activeTabId);
     if (active && !workspaceTabCwd(active, sessions)) return [active];
     return filterTabsForProject(tabs, sessions, projectCwd);
-  }, [activeTabId, tabs, sessions, projectCwd]);
+  }, [activeTabId, allProjectsView, tabs, sessions, projectCwd]);
 
   const onNext = useCallback(() => {
-    const index = deckProjectTabs.findIndex((t) => t.id === activeTabId);
-    if (index >= 0)
-      activateTab(deckProjectTabs[(index + 1) % deckProjectTabs.length].id);
-  }, [activateTab, activeTabId, deckProjectTabs]);
+    const index = stripTabs.findIndex((t) => t.id === activeTabId);
+    if (index >= 0) activateTab(stripTabs[(index + 1) % stripTabs.length].id);
+  }, [activateTab, activeTabId, stripTabs]);
 
   const onPrev = useCallback(() => {
-    const index = deckProjectTabs.findIndex((t) => t.id === activeTabId);
+    const index = stripTabs.findIndex((t) => t.id === activeTabId);
     if (index >= 0) {
       activateTab(
-        deckProjectTabs[
-          (index - 1 + deckProjectTabs.length) % deckProjectTabs.length
-        ].id,
+        stripTabs[(index - 1 + stripTabs.length) % stripTabs.length].id,
       );
     }
-  }, [activateTab, activeTabId, deckProjectTabs]);
+  }, [activateTab, activeTabId, stripTabs]);
 
   const onVisitBack = useCallback(() => {
     const openIds = new Set(tabsRef.current.map((tab) => tab.id));
@@ -2371,13 +2402,10 @@ export default function App({
 
   const onActivate = useCallback(
     (slot: number) => {
-      const tab =
-        slot < 0
-          ? deckProjectTabs[deckProjectTabs.length - 1]
-          : deckProjectTabs[slot];
+      const tab = slot < 0 ? stripTabs[stripTabs.length - 1] : stripTabs[slot];
       if (tab) activateTab(tab.id);
     },
-    [activateTab, deckProjectTabs],
+    [activateTab, stripTabs],
   );
 
   const onFocusPane = useCallback(
@@ -2746,6 +2774,14 @@ export default function App({
       if (focusOpenSession(sessionId)) return;
       const session = await ensureOpenSession(sessionId);
       if (!session || session.inboxAsk) return;
+      // The all-projects list offers other projects' chats too.
+      if (
+        looksLikeProject(session.cwd) &&
+        !sameProjectPath(session.cwd, projectCwdRef.current)
+      ) {
+        setProjectCwd(normalizeProjectPath(session.cwd));
+        setRecents(rememberProject(session.cwd));
+      }
       if (replaceBlankPaneWithSession(session)) return;
       const tab = newTab(session.id);
       appendTab(tab, session.cwd);
@@ -3342,6 +3378,16 @@ export default function App({
     },
     [activateTab, appendTab, onCwdChange, readProjectReturnMemory],
   );
+
+  const onAllProjectsViewChange = useCallback((all: boolean) => {
+    if (all) {
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+    }
+    setAllProjectsView(all);
+    saveAllProjectsView(all);
+  }, []);
 
   const pickProject = useCallback(async () => {
     const path = await pickFolder();
@@ -4760,7 +4806,7 @@ export default function App({
     [onOpenApprovalSession],
   );
 
-  const nextTitleTabs: TitleTab[] = deckProjectTabs.map((tab) =>
+  const nextTitleTabs: TitleTab[] = stripTabs.map((tab) =>
     toTitleTab(tab, sessions, dirtyFiles),
   );
   tabProjectsRef.current = new Map(
@@ -4779,17 +4825,35 @@ export default function App({
     [history, sidebarCwd],
   );
 
+  const sidebarGitHint = useMemo(
+    () => ({
+      ...(projectBranches?.current ? { branch: projectBranches.current } : {}),
+      ...(sidebarCwd && sidebarCwd !== "~"
+        ? { repo: projectName(sidebarCwd) }
+        : {}),
+    }),
+    [projectBranches, sidebarCwd],
+  );
   const sidebarHistory = useMemo(
     () =>
-      historyWithLiveSessions(history, sessions, sidebarCwd, {
-        ...(projectBranches?.current
-          ? { branch: projectBranches.current }
-          : {}),
-        ...(sidebarCwd && sidebarCwd !== "~"
-          ? { repo: projectName(sidebarCwd) }
-          : {}),
-      }),
-    [history, projectBranches, sessions, sidebarCwd],
+      allProjectsView
+        ? historyAcrossProjects(history, sessions, railProjectPaths, (cwd) =>
+            sameProjectPath(cwd, sidebarCwd) ? sidebarGitHint : undefined,
+          )
+        : historyWithLiveSessions(
+            history,
+            sessions,
+            sidebarCwd,
+            sidebarGitHint,
+          ),
+    [
+      allProjectsView,
+      history,
+      railProjectPaths,
+      sessions,
+      sidebarCwd,
+      sidebarGitHint,
+    ],
   );
   const inboxRelatedSessions = useMemo(() => {
     const byId = new Map<string, SessionSummary>();
@@ -4825,19 +4889,20 @@ export default function App({
       sessions
         .filter(
           (session) =>
-            !session.inboxAsk && sameProjectPath(session.cwd, sidebarCwd),
+            !session.inboxAsk &&
+            (allProjectsView || sameProjectPath(session.cwd, sidebarCwd)),
         )
         .map((session) =>
-          summaryFromSession(session, {
-            ...(projectBranches?.current
-              ? { branch: projectBranches.current }
-              : {}),
-            ...(sidebarCwd && sidebarCwd !== "~"
-              ? { repo: projectName(sidebarCwd) }
-              : {}),
-          }),
+          summaryFromSession(
+            session,
+            sameProjectPath(session.cwd, sidebarCwd)
+              ? sidebarGitHint
+              : looksLikeProject(session.cwd)
+                ? { repo: projectName(session.cwd) }
+                : undefined,
+          ),
         ),
-    [projectBranches, sessions, sidebarCwd],
+    [allProjectsView, sessions, sidebarCwd, sidebarGitHint],
   );
 
   const onToggleSidebar = useCallback(() => {
@@ -5518,6 +5583,8 @@ export default function App({
         onSelectProject={onSelectProject}
         onOpenProject={pickProject}
         onRemoveProject={onRemoveProject}
+        allProjectsView={allProjectsView}
+        onAllProjectsViewChange={onAllProjectsViewChange}
         onNew={onNew}
         openSessions={openProjectSessions}
         onNewTerminal={onNewTerminal}
@@ -5614,6 +5681,7 @@ export default function App({
             onGoToFile={onGoToFile}
             recents={recents}
             onSelectProject={onSelectProject}
+            showProject={allProjectsView}
           />
 
           <main className="relative min-h-0 min-w-0 flex-1">

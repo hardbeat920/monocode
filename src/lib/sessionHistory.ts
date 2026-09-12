@@ -1,5 +1,5 @@
 import { fuzzyMatch } from "./fuzzy";
-import { projectName } from "./paths";
+import { pathKey, projectName } from "./paths";
 import { sameProjectPath } from "./recents";
 import { sessionDisplayTitle, sessionNeedsInput, type Session } from "./session";
 import { shouldPersistSession, type SessionSummary } from "./sessionStore";
@@ -154,4 +154,32 @@ export function historyWithLiveSessions(
     rows = mergeHistorySummary(rows, summaryFromSession(session, sessionHint));
   }
   return [...rows].sort(compareSessionSummaries);
+}
+
+/** `historyWithLiveSessions` for several projects, merged into one list. */
+export function historyAcrossProjects(
+  history: SessionSummary[],
+  sessions: Session[],
+  cwds: Iterable<string>,
+  gitFor?: (cwd: string) => SessionGitHint | undefined,
+): SessionSummary[] {
+  // One pass over `history`: filtering it once per project made each render
+  // cost projects × rows, and this reruns on every streamed update.
+  const byProject = new Map<string, { cwd: string; rows: SessionSummary[] }>();
+  for (const cwd of cwds) byProject.set(pathKey(cwd), { cwd, rows: [] });
+  for (const entry of history) {
+    byProject.get(pathKey(entry.cwd))?.rows.push(entry);
+  }
+  const rows: SessionSummary[] = [];
+  for (const project of byProject.values()) {
+    rows.push(
+      ...historyWithLiveSessions(
+        project.rows,
+        sessions,
+        project.cwd,
+        gitFor?.(project.cwd),
+      ),
+    );
+  }
+  return rows.sort(compareSessionSummaries);
 }

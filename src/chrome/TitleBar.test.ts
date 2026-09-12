@@ -82,11 +82,28 @@ describe("tabCopy", () => {
     expect(copy.headline).toBe("New session");
     expect(copy.meta).toBe("");
   });
+
+  it("leads the meta line with the project when asked", () => {
+    const single = tabCopy(tab({ title: "Only chat" }), true);
+    expect(single.meta).toBe("agent-terminal");
+
+    const split = tabCopy(
+      tab({ multiPane: true, title: "Chat", files: ["a.ts"] }),
+      true,
+    );
+    expect(split.meta).toBe("agent-terminal · a.ts");
+
+    const projectless = tabCopy(tab({ project: "~", title: "Chat" }), true);
+    expect(projectless.meta).toBe("");
+  });
 });
 
 describe("tabStripOverflow", () => {
   it("hides both chevrons when the strip fits", () => {
-    expect(tabStripOverflow(0, 400, 400)).toEqual({ left: false, right: false });
+    expect(tabStripOverflow(0, 400, 400)).toEqual({
+      left: false,
+      right: false,
+    });
   });
 
   it("shows only the right chevron at the start", () => {
@@ -94,11 +111,17 @@ describe("tabStripOverflow", () => {
   });
 
   it("shows both chevrons in the middle", () => {
-    expect(tabStripOverflow(200, 400, 800)).toEqual({ left: true, right: true });
+    expect(tabStripOverflow(200, 400, 800)).toEqual({
+      left: true,
+      right: true,
+    });
   });
 
   it("shows only the left chevron at the end", () => {
-    expect(tabStripOverflow(400, 400, 800)).toEqual({ left: true, right: false });
+    expect(tabStripOverflow(400, 400, 800)).toEqual({
+      left: true,
+      right: false,
+    });
   });
 });
 

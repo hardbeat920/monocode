@@ -236,6 +236,8 @@ type Props = {
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
+  allProjectsView?: boolean;
+  onAllProjectsViewChange?: (all: boolean) => void;
   onNew?: () => string | void;
   onNewTerminal?: () => void;
   onSearch?: () => void;
@@ -314,6 +316,8 @@ function SidebarComponent({
   onSelectProject,
   onOpenProject,
   onRemoveProject,
+  allProjectsView,
+  onAllProjectsViewChange,
   onNew,
   onSearch,
   onOpenInbox,
@@ -1668,6 +1672,8 @@ function SidebarComponent({
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
           onRemoveProject={onRemoveProject}
+          allProjectsView={allProjectsView}
+          onAllProjectsViewChange={onAllProjectsViewChange}
           settingsOpen={settingsOpen}
           settingsSection={settingsSection}
           onOpenSettings={onOpenSettings}

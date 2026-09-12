@@ -11,12 +11,20 @@ import {
   Pin,
   PinOff,
   File,
+  Folders,
   Plus,
   Search,
   Settings,
   Trash2,
 } from "./icons";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useDragResize } from "../hooks/useDragResize";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
@@ -125,6 +133,9 @@ type Props = {
   onSelectProject: (path: string) => void;
   onOpenProject: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
+  /** Title bar shows every project's tabs instead of the selected one's. */
+  allProjectsView?: boolean;
+  onAllProjectsViewChange?: (all: boolean) => void;
   liveAgents?: LiveAgent[];
   activeSessionId?: string;
   onSelectAgent?: (sessionId: string) => void;
@@ -158,6 +169,8 @@ export function ProjectRail({
   onSelectProject,
   onOpenProject,
   onRemoveProject,
+  allProjectsView = false,
+  onAllProjectsViewChange,
   liveAgents = [],
   activeSessionId,
   onSelectAgent,
@@ -356,16 +369,22 @@ export function ProjectRail({
     setRemoving(null);
   };
 
+  const selectProject = (path: string) => {
+    onAllProjectsViewChange?.(false);
+    onSelectProject(path);
+  };
+
   const pinnedIds = sections.pinned.map((item) => item.path);
   const projectIds = sections.projects.map((item) => item.path);
   const pinnedSortable = useSortable(pinnedIds, onReorderPinned, {
     axis: "y",
-    onActivate: onSelectProject,
+    onActivate: selectProject,
   });
   const projectSortable = useSortable(projectIds, onReorderProjects, {
     axis: "y",
-    onActivate: onSelectProject,
+    onActivate: selectProject,
   });
+  const overlayActive = searchActive || inboxActive || notesActive;
   return (
     <nav
       ref={resize.setPaneRef}
@@ -440,8 +459,8 @@ export function ProjectRail({
                 busy={busy}
                 sortable={pinnedSortable}
                 pinned
-                searchActive={searchActive || inboxActive || notesActive}
-                onSelect={onSelectProject}
+                selectionHidden={overlayActive || allProjectsView}
+                onSelect={selectProject}
                 onTogglePin={onTogglePin}
                 onContextMenu={onProjectContextMenu}
                 onOpenMenu={openProjectMenu}
@@ -462,8 +481,17 @@ export function ProjectRail({
               busy={busy}
               sortable={projectSortable}
               pinned={false}
-              searchActive={searchActive || inboxActive || notesActive}
-              onSelect={onSelectProject}
+              selectionHidden={overlayActive || allProjectsView}
+              leading={
+                onAllProjectsViewChange && allProjects.size > 0 ? (
+                  <AllProjectsCard
+                    selected={allProjectsView && !overlayActive}
+                    busy={busy.size > 0}
+                    onSelect={() => onAllProjectsViewChange(true)}
+                  />
+                ) : null
+              }
+              onSelect={selectProject}
               onTogglePin={onTogglePin}
               onContextMenu={onProjectContextMenu}
               onOpenMenu={openProjectMenu}
@@ -789,7 +817,8 @@ function ProjectSection({
   busy,
   sortable,
   pinned,
-  searchActive,
+  selectionHidden,
+  leading,
   onSelect,
   onTogglePin,
   onContextMenu,
@@ -808,7 +837,8 @@ function ProjectSection({
   busy: Set<string>;
   sortable: SortableHandle;
   pinned: boolean;
-  searchActive: boolean;
+  selectionHidden: boolean;
+  leading?: ReactNode;
   onSelect: (path: string) => void;
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
@@ -837,6 +867,7 @@ function ProjectSection({
           </button>
         ) : null}
       </div>
+      {leading}
       {items.length === 0 && emptyLabel ? (
         <p className="px-4 pb-1 text-[11px] leading-tight text-content/40">
           {emptyLabel}
@@ -847,7 +878,7 @@ function ProjectSection({
           <ProjectCard
             key={item.path}
             item={item}
-            selected={!searchActive && sameProjectPath(item.path, cwd)}
+            selected={!selectionHidden && sameProjectPath(item.path, cwd)}
             busy={isBusyPath(item.path, busy)}
             pinned={pinned}
             sortable={sortable}
@@ -870,6 +901,44 @@ function ProjectSection({
 
 const nameClassName =
   "min-w-0 flex-1 truncate text-sm font-medium leading-tight";
+
+function AllProjectsCard({
+  selected,
+  busy,
+  onSelect,
+}: {
+  selected: boolean;
+  busy: boolean;
+  onSelect: () => void;
+}) {
+  const label = "All projects";
+  return (
+    <div className="flex flex-col px-2 pb-px">
+      <button
+        type="button"
+        title="Show open tabs from every project"
+        aria-current={selected ? "true" : undefined}
+        onClick={onSelect}
+        className={`flex h-8 cursor-default items-center gap-2 rounded-md px-2 text-left ${
+          selected
+            ? "bg-content/12 text-content"
+            : "opacity-65 hover:bg-content/5 hover:text-content"
+        }`}
+      >
+        <span className="grid size-4 shrink-0 place-items-center">
+          <Folders className="size-3.5" strokeWidth={1.75} />
+        </span>
+        {busy ? (
+          <Shimmer as="span" duration={1.4} className={nameClassName}>
+            {label}
+          </Shimmer>
+        ) : (
+          <span className={nameClassName}>{label}</span>
+        )}
+      </button>
+    </div>
+  );
+}
 
 function ProjectCard({
   item,
