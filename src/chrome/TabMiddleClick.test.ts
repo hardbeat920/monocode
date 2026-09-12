@@ -12,6 +12,14 @@ let root: Root;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  document.documentElement.style.setProperty(
+    "--motion-reorder-duration",
+    "160ms",
+  );
+  document.documentElement.style.setProperty(
+    "--motion-ease-out",
+    "cubic-bezier(0.22, 1, 0.36, 1)",
+  );
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -20,6 +28,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  document.documentElement.removeAttribute("style");
   vi.unstubAllGlobals();
 });
 
@@ -109,6 +118,60 @@ function renderTabs(
 describe.each(["workspace", "file", "terminal"] as const)(
   "%s tab mouse gestures",
   (kind) => {
+    it("moves neighboring tabs during a drag and saves the order after settling", () => {
+      vi.useFakeTimers();
+      const { tab, onReorder } = renderTabs(kind);
+      const second = tab.parentElement!;
+      const first = container.querySelector(
+        '[aria-label="Close first"]',
+      )!.parentElement!;
+      [first, second].forEach((element, index) => {
+        vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+          new DOMRect(index * 100, 0, 100, 32),
+        );
+        const captured = new Set<number>();
+        element.setPointerCapture = (id) => {
+          captured.add(id);
+        };
+        element.hasPointerCapture = (id) => captured.has(id);
+        element.releasePointerCapture = (id) => {
+          captured.delete(id);
+        };
+      });
+      const pointer = (target: EventTarget, type: string, clientX: number) => {
+        act(() =>
+          target.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              button: 0,
+              pointerId: 1,
+              clientX,
+              clientY: 16,
+            }),
+          ),
+        );
+      };
+      try {
+        pointer(tab, "pointerdown", 150);
+        pointer(window, "pointermove", 30);
+        act(() => vi.advanceTimersByTime(32));
+        expect(first.style.transform).toBe("translate3d(100px, 0, 0)");
+        expect(second.style.transform).toBe("translate3d(-100px, 0, 0)");
+        expect(onReorder).not.toHaveBeenCalled();
+        pointer(window, "pointerup", 30);
+        expect(onReorder).not.toHaveBeenCalled();
+        act(() => vi.runAllTimers());
+        expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+          ["second", "first"],
+          "second",
+        );
+      } finally {
+        act(() => window.dispatchEvent(new Event("blur")));
+        act(() => vi.runAllTimers());
+        vi.useRealTimers();
+      }
+    });
+
     it.each(["first", "second"])(
       "closes on middle release without selecting, active tab is %s",
       (activeId) => {
