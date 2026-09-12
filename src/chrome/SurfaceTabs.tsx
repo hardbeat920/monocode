@@ -7,6 +7,7 @@ import {
   isCommitTab,
   isPlanTab,
   isReleaseNotesTab,
+  isSubagentTab,
   isReviewTab,
   isSessionChangesTab,
   isTerminalTab,
@@ -48,6 +49,16 @@ export function surfaceTabPresentation(
       label: title,
       iconName: "CHANGELOG.md",
       tooltip: title,
+    };
+  }
+
+  if (isSubagentTab(file)) {
+    const name = file.subagent.title.trim() || "Subagent";
+    return {
+      name,
+      label: name,
+      iconName: "agent",
+      tooltip: `Subagent — ${name}`,
     };
   }
 

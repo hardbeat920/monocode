@@ -16,6 +16,7 @@ import {
   newCommitTab,
   newFileTab,
   newPlanTab,
+  newSubagentTab,
   newReleaseNotesWorkspaceTab,
   newSessionChangesTab,
   newTab,
@@ -112,6 +113,9 @@ describe("editorTabKey", () => {
       ),
     ).toBe(`commit:${cwd}:abc1234deadbeef`);
     expect(editorTabKey(newPlanTab("s", "b", "Plan", cwd))).toBe("plan:b");
+    expect(editorTabKey(newSubagentTab("s", "b", "Explore", cwd))).toBe(
+      "subagent:b",
+    );
     const terminal = newTerminalFile(cwd);
     expect(editorTabKey(terminal)).toBe(`terminal:${terminal.id}`);
     expect(isTerminalTab(terminal)).toBe(true);

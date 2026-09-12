@@ -114,6 +114,7 @@ function removeSessionDocuments(
       pane.files.some(
         (file) =>
           file.plan?.sessionId === sessionId ||
+          file.subagent?.sessionId === sessionId ||
           (isSessionChangesTab(file) &&
             file.sessionChanges.sessionId === sessionId),
       ),
@@ -128,6 +129,7 @@ function removeSessionDocuments(
     const files = pane.files.filter(
       (file) =>
         file.plan?.sessionId !== sessionId &&
+        file.subagent?.sessionId !== sessionId &&
         (!isSessionChangesTab(file) ||
           file.sessionChanges.sessionId !== sessionId),
     );

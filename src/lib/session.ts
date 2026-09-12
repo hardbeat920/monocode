@@ -94,6 +94,12 @@ export type SecondOpinionMeta = {
   kind?: "handoff";
 };
 
+export type SubagentStep = {
+  id: string;
+  title: string;
+  kind?: string;
+};
+
 export type ToolPreviewKind = "read" | "write" | "shell" | "search";
 
 export type ToolPreviewLineKind = "add" | "del" | "context";
@@ -161,6 +167,10 @@ export type Block = {
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    /** Native model id a subagent reported running under. */
+    model?: string;
+    /** What a subagent has done so far, oldest first. */
+    steps?: SubagentStep[];
   };
   approval?: {
     requestId: number;

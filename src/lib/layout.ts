@@ -36,6 +36,12 @@ export type PlanTabSource = {
   title: string;
 };
 
+export type SubagentTabSource = {
+  sessionId: string;
+  blockId: string;
+  title: string;
+};
+
 export type CommitTabSource = {
   sha: string;
   shortSha: string;
@@ -51,6 +57,8 @@ export type FilePaneTab = {
   path: string;
   cwd: string;
   plan?: PlanTabSource;
+  /** Live view of one subagent's work, read from its session block. */
+  subagent?: SubagentTabSource;
   releaseNotes?: ReleaseNotesTabSource;
   review?: boolean;
   /** Single working-tree review of every changed file (unified diff). */
@@ -171,6 +179,20 @@ export function newPlanTab(
   };
 }
 
+export function newSubagentTab(
+  sessionId: string,
+  blockId: string,
+  title: string,
+  cwd: string,
+): FilePaneTab {
+  return {
+    id: crypto.randomUUID(),
+    path: `subagent:${blockId}`,
+    cwd,
+    subagent: { sessionId, blockId, title },
+  };
+}
+
 export function newReleaseNotesWorkspaceTab(
   releaseNotes: ReleaseNotesTabSource,
 ): WorkspaceTab {
@@ -287,6 +309,12 @@ export function isPlanTab(
   return !!file.plan;
 }
 
+export function isSubagentTab(
+  file: FilePaneTab,
+): file is FilePaneTab & { subagent: SubagentTabSource } {
+  return !!file.subagent;
+}
+
 export function isReleaseNotesTab(
   file: FilePaneTab,
 ): file is FilePaneTab & { releaseNotes: ReleaseNotesTabSource } {
@@ -304,7 +332,12 @@ export function isTerminalTab(file: FilePaneTab): boolean {
 }
 
 export function isVirtualDocumentTab(file: FilePaneTab): boolean {
-  return isPlanTab(file) || isReleaseNotesTab(file) || isCommitTab(file);
+  return (
+    isPlanTab(file) ||
+    isSubagentTab(file) ||
+    isReleaseNotesTab(file) ||
+    isCommitTab(file)
+  );
 }
 
 export function isFilesystemTab(file: FilePaneTab): boolean {
@@ -384,6 +417,7 @@ export function isSessionChangesTab(
 export function editorTabKey(file: FilePaneTab): string {
   if (file.terminal) return `terminal:${file.id}`;
   if (file.plan) return `plan:${file.plan.blockId}`;
+  if (file.subagent) return `subagent:${file.subagent.blockId}`;
   if (file.releaseNotes) return `release-notes:${file.releaseNotes.version}`;
   if (file.commit) return `commit:${file.cwd}:${file.commit.sha}`;
   if (file.sessionChanges)

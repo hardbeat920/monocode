@@ -11,6 +11,7 @@ import {
   isPlanTab,
   isReleaseNotesTab,
   isReviewTab,
+  isSubagentTab,
   isSessionChangesTab,
   isTerminalTab,
   type EditorPane,
@@ -30,6 +31,7 @@ import { CommitDiff } from "./CommitDiff";
 import { FileEditor } from "./FileEditor";
 import { ReleaseNotesSurface } from "./ReleaseNotesSurface";
 import { SessionChangesDiff } from "./SessionChangesDiff";
+import { SubagentSurface } from "./SubagentSurface";
 import { TerminalView } from "./TerminalView";
 import { WorkingTreeDiff } from "./WorkingTreeDiff";
 
@@ -154,6 +156,8 @@ function FilePaneComponent({
                   onUpdatePlan={onUpdatePlan}
                   onBuildPlan={onBuildPlan}
                 />
+              ) : isSubagentTab(file) ? (
+                <SubagentSurface file={file} sessions={sessions} />
               ) : isReleaseNotesTab(file) ? (
                 <ReleaseNotesSurface source={file.releaseNotes} />
               ) : isTerminalTab(file) ? (

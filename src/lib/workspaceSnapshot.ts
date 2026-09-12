@@ -9,6 +9,7 @@ import {
   type FilePaneTab,
   type LayoutNode,
   type PlanTabSource,
+  type SubagentTabSource,
   type SessionChangesSource,
   type WorkspaceTab,
 } from "./layout";
@@ -401,6 +402,9 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
   if (typeof value.path !== "string" || !value.path) return null;
   if (typeof value.cwd !== "string" || !value.cwd) return null;
   const plan = sanitizePlan(value.plan);
+  const hasSubagent = "subagent" in value;
+  const subagent = sanitizePlan(value.subagent) as SubagentTabSource | undefined;
+  if (hasSubagent && !subagent) return null;
   const hasReleaseNotes = "releaseNotes" in value;
   const releaseNotes = sanitizeReleaseNotes(value.releaseNotes);
   const hasCommit = "commit" in value;
@@ -446,6 +450,7 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
     path: value.path,
     cwd: value.cwd,
     ...(plan ? { plan } : {}),
+    ...(subagent ? { subagent } : {}),
     ...(releaseNotes ? { releaseNotes } : {}),
     ...(commit ? { commit } : {}),
     ...(sessionChanges ? { sessionChanges, review: true } : {}),

@@ -11,6 +11,7 @@ import {
 } from "./child";
 import {
   askUserQuestionAllowInput,
+  asRecord,
   assistantTextBlocks,
   assistantToolUses,
   contextFromResult,
@@ -593,7 +594,7 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
   const started = toolStartFromEvent(rec);
   if (started) {
     if (subagent) {
-      noteSubagentTool(live, rec, started.name, started.input);
+      noteSubagentTool(live, rec, started.id, started.name, started.input);
       return;
     }
     const tool: InFlightTool = {
@@ -643,9 +644,11 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
 
 function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   if (isSubagentMessage(rec)) {
+    noteSubagentModel(live, rec);
     for (const use of assistantToolUses(rec)) {
-      noteSubagentTool(live, rec, use.name, use.input);
+      noteSubagentTool(live, rec, use.id, use.name, use.input);
     }
+    noteSubagentText(live, rec);
     return;
   }
 
@@ -1014,23 +1017,72 @@ function handleToolProgress(live: Live, rec: Record<string, unknown>): void {
   });
 }
 
+function subagentParent(
+  live: Live,
+  rec: Record<string, unknown>,
+): InFlightTool | undefined {
+  const parentId = stringField(rec, "parent_tool_use_id");
+  if (!parentId) return undefined;
+  const parent = live.toolsById.get(parentId);
+  return parent && isAgentToolName(parent.name) ? parent : undefined;
+}
+
 function noteSubagentTool(
   live: Live,
   rec: Record<string, unknown>,
+  id: string,
   name: string,
   input: Record<string, unknown>,
 ): void {
-  const parentId = stringField(rec, "parent_tool_use_id");
-  if (!parentId) return;
-  const parent = live.toolsById.get(parentId);
-  if (!parent || !isAgentToolName(parent.name)) return;
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  const title = toolTitle(name, input);
   live.onEvent({
     type: "tool.updated",
     callId: parent.id,
     title: parent.title,
     kind: "agent",
     status: "in_progress",
-    detail: toolTitle(name, input),
+    detail: title,
+    step: { id, title, kind: toolKindFromName(name) },
+  });
+}
+
+function noteSubagentModel(live: Live, rec: Record<string, unknown>): void {
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  const model = stringField(asRecord(rec.message) ?? {}, "model");
+  if (!model) return;
+  live.onEvent({
+    type: "tool.updated",
+    callId: parent.id,
+    title: parent.title,
+    kind: "agent",
+    status: "in_progress",
+    model,
+  });
+}
+
+const SUBAGENT_TEXT_STEP_CHARS = 160;
+
+function noteSubagentText(live: Live, rec: Record<string, unknown>): void {
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  const text = assistantTextBlocks(rec).join("").trim();
+  if (!text) return;
+  const firstLine = text.split("\n").find((line) => line.trim()) ?? text;
+  const title =
+    firstLine.length > SUBAGENT_TEXT_STEP_CHARS
+      ? `${firstLine.slice(0, SUBAGENT_TEXT_STEP_CHARS)}…`
+      : firstLine;
+  const messageId = stringField(asRecord(rec.message) ?? {}, "id") ?? title;
+  live.onEvent({
+    type: "tool.updated",
+    callId: parent.id,
+    title: parent.title,
+    kind: "agent",
+    status: "in_progress",
+    step: { id: `text:${messageId}`, title, kind: "message" },
   });
 }
 

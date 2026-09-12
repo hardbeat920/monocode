@@ -554,3 +554,118 @@ describe("clarifying questions", () => {
     expect(session.pendingQuestion).toBeUndefined();
   });
 });
+
+describe("subagent steps", () => {
+  it("accumulates steps and model on the agent block without duplicates", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "agent1",
+      title: "Explore",
+      kind: "agent",
+      status: "in_progress",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      kind: "agent",
+      status: "in_progress",
+      model: "claude-haiku-4-5-20251001",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      kind: "agent",
+      status: "in_progress",
+      step: { id: "s1", title: "Grep sessionStore", kind: "search" },
+    });
+    const before = session;
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      kind: "agent",
+      status: "in_progress",
+      step: { id: "s1", title: "Grep sessionStore", kind: "search" },
+    });
+    expect(session).toBe(before);
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      kind: "agent",
+      status: "completed",
+      step: { id: "s2", title: "Read App.tsx", kind: "read" },
+    });
+    const block = session.blocks.find((b) => b.tool?.callId === "agent1");
+    expect(block?.tool?.model).toBe("claude-haiku-4-5-20251001");
+    expect(block?.tool?.steps?.map((s) => s.id)).toEqual(["s1", "s2"]);
+    expect(block?.tool?.status).toBe("completed");
+  });
+});
+
+describe("subagent title", () => {
+  it("keeps the spawn description when progress reports rename it", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "agent1",
+      title: "Find where sessions are persisted",
+      kind: "agent",
+      status: "in_progress",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      title: "Explore: find where sessions are persisted and how snapshots work",
+      kind: "agent",
+      status: "in_progress",
+      detail: "Grep sessionStore",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      title: "Subagent",
+      kind: "agent",
+      status: "completed",
+    });
+    const block = session.blocks.find((b) => b.tool?.callId === "agent1");
+    expect(block?.tool?.title).toBe("Find where sessions are persisted");
+    expect(block?.text).toBe("Find where sessions are persisted");
+    expect(block?.tool?.detail).toBe("Grep sessionStore");
+  });
+});
+
+describe("subagent placeholder title", () => {
+  it("replaces the placeholder once the spawn description arrives", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "agent1",
+      title: "Subagent",
+      kind: "agent",
+      status: "in_progress",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      title: "Explore subagent",
+      kind: "agent",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      title: "Find where tabs are reordered",
+      kind: "agent",
+      status: "in_progress",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent1",
+      title: "Subagent",
+      kind: "agent",
+      status: "completed",
+    });
+    const block = session.blocks.find((b) => b.tool?.callId === "agent1");
+    expect(block?.tool?.title).toBe("Find where tabs are reordered");
+  });
+});

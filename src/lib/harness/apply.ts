@@ -2,6 +2,7 @@ import type {
   Attachment,
   Block,
   Session,
+  SubagentStep,
   TaskListItem,
   ToolPreview,
 } from "../session";
@@ -9,6 +10,7 @@ import { mergeContextUsage } from "../contextUsage";
 import { displayPath } from "../paths";
 import {
   composeToolTitle,
+  isAgentTool,
   isFileTool,
   isWeakToolTitle,
   mergeToolPreview,
@@ -49,6 +51,8 @@ export function applyHarnessEvent(
         status: event.status,
         detail: event.detail,
         preview: event.preview,
+        model: event.model,
+        step: event.step,
         streaming: event.status !== "completed" && event.status !== "failed",
       });
     case "approval.requested":
@@ -588,6 +592,8 @@ function upsertTool(
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    model?: string;
+    step?: SubagentStep;
     streaming: boolean;
   },
 ): Session {
@@ -613,11 +619,26 @@ function upsertTool(
         status: patch.status,
         ...(detail ? { detail } : {}),
         ...(preview ? { preview } : {}),
+        ...(patch.model ? { model: patch.model } : {}),
+        ...(patch.step ? { steps: [patch.step] } : {}),
       },
     });
   }
   const prev = session.blocks[index];
   const detail = capToolDetail(patch.detail) ?? prev.tool?.detail;
+  const model = patch.model ?? prev.tool?.model;
+  // A subagent keeps the name it was spawned with; progress reports must not
+  // rename it mid-flight the way a file tool's label refines as input streams.
+  if (
+    isAgentTool(patch.kind ?? prev.tool?.kind) &&
+    patch.title &&
+    prev.tool?.title &&
+    !isWeakToolTitle(prev.tool.title) &&
+    !isPlaceholderAgentTitle(prev.tool.title)
+  ) {
+    patch = { ...patch, title: prev.tool.title };
+  }
+  const steps = appendStep(prev.tool?.steps, patch.step);
   const preview = fillPreview(
     mergeToolPreview(patch.preview, prev.tool?.preview),
     detail,
@@ -639,6 +660,8 @@ function upsertTool(
     prev.tool?.kind === kind &&
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
+    prev.tool?.model === model &&
+    prev.tool?.steps === steps &&
     samePreview(prev.tool?.preview, preview)
   ) {
     return session;
@@ -655,9 +678,37 @@ function upsertTool(
       status,
       ...(detail ? { detail } : {}),
       ...(preview ? { preview } : {}),
+      ...(model ? { model } : {}),
+      ...(steps ? { steps } : {}),
     },
   };
   return { ...session, blocks };
+}
+
+/** Names the harness invents before the spawn description has streamed in. */
+function isPlaceholderAgentTitle(value: string): boolean {
+  return /^(subagent|agent|task)$/i.test(value.trim()) || /\bsubagent$/i.test(value.trim());
+}
+
+const MAX_SUBAGENT_STEPS = 200;
+
+function appendStep(
+  prev: SubagentStep[] | undefined,
+  step: SubagentStep | undefined,
+): SubagentStep[] | undefined {
+  if (!step) return prev;
+  const existing = prev?.findIndex((row) => row.id === step.id) ?? -1;
+  if (existing >= 0) {
+    const current = prev![existing];
+    if (current.title === step.title && current.kind === step.kind) return prev;
+    const next = prev!.slice();
+    next[existing] = step;
+    return next;
+  }
+  const next = [...(prev ?? []), step];
+  return next.length > MAX_SUBAGENT_STEPS
+    ? next.slice(next.length - MAX_SUBAGENT_STEPS)
+    : next;
 }
 
 const MAX_TOOL_DETAIL_CHARS = 8_000;

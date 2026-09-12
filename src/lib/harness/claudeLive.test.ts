@@ -240,6 +240,64 @@ describe("claude subagents", () => {
       ),
     ).toBe(false);
   });
+
+  it("records subagent model, tool calls, and text as steps on the parent", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_agent",
+            name: "Agent",
+            input: { description: "Explore", subagent_type: "explore" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "assistant",
+      parent_tool_use_id: "toolu_agent",
+      message: {
+        id: "msg_sub_1",
+        model: "claude-haiku-4-5-20251001",
+        content: [
+          { type: "text", text: "Looking at the store first" },
+          {
+            type: "tool_use",
+            id: "toolu_sub_1",
+            name: "Grep",
+            input: { pattern: "sessionStore" },
+          },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    const updates = events.filter(
+      (event) => event.type === "tool.updated" && event.callId === "toolu_agent",
+    );
+    expect(updates.some((event) => event.type === "tool.updated" && event.model === "claude-haiku-4-5-20251001")).toBe(true);
+    const steps = updates.flatMap((event) =>
+      event.type === "tool.updated" && event.step ? [event.step] : [],
+    );
+    expect(steps.map((step) => step.id)).toEqual(["toolu_sub_1", "text:msg_sub_1"]);
+    expect(steps[0].kind).toBe("search");
+    expect(steps[1]).toEqual({
+      id: "text:msg_sub_1",
+      title: "Looking at the store first",
+      kind: "message",
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message.delta" &&
+          event.text.includes("Looking at the store first"),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("claude plan permissions", () => {

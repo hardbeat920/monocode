@@ -1,6 +1,7 @@
 import type {
   Attachment,
   RuntimeMode,
+  SubagentStep,
   TaskListItem,
   ToolPreview,
   TurnIntent,
@@ -42,6 +43,10 @@ export type HarnessEvent =
       preview?: ToolPreview;
       /** Every path affected when one structured edit changes multiple files. */
       paths?: string[];
+      /** Native model id a subagent reported. */
+      model?: string;
+      /** One more thing a subagent did. */
+      step?: SubagentStep;
     }
   | {
       type: "approval.requested";

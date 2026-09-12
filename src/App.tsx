@@ -66,6 +66,7 @@ import {
   neighborLeafId,
   newFileTab,
   newPlanTab,
+  newSubagentTab,
   newTab,
   newTerminalFile,
   newTerminalWorkspaceTab,
@@ -266,6 +267,8 @@ import {
 } from "./lib/sessionStore";
 import { syncDockBadge } from "./lib/dockBadge";
 import { liveAgentsFromSessions } from "./lib/liveAgents";
+import { countRunningSubagents, subagentsFromSessions } from "./lib/subagents";
+import { AgentsPanel } from "./chrome/AgentsPanel";
 import { hiddenApprovalNotices } from "./lib/approvalToast";
 import { nextUnseenFinishedSessions } from "./lib/sessionDone";
 import {
@@ -615,6 +618,7 @@ export default function App({
   const [inboxAskPortal, setInboxAskPortal] = useState<InboxSessionPortal | null>(null);
   const openingInboxSessions = useRef(new Map<string, Promise<string>>());
   const [notesViewOpen, setNotesViewOpen] = useState(false);
+  const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const notesEnabled = useSyncExternalStore(
     subscribeNotesEnabled,
     loadNotesEnabled,
@@ -1010,6 +1014,15 @@ export default function App({
   }
   const unseenFinishedIds = unseenFinishedRef.current;
 
+  const subagentGroups = useMemo(() => subagentsFromSessions(sessions), [sessions]);
+  const runningSubagents = useMemo(
+    () => countRunningSubagents(subagentGroups),
+    [subagentGroups],
+  );
+  const onToggleAgentsPanel = useCallback(
+    () => setAgentsPanelOpen((open) => !open),
+    [],
+  );
   const liveAgents = useMemo(
     () =>
       liveAgentsEnabled
@@ -3373,6 +3386,36 @@ export default function App({
     [activeTabId],
   );
 
+  const onOpenSubagent = useCallback(
+    (sessionId: string, blockId: string) => {
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      const block = session?.blocks.find((entry) => entry.id === blockId);
+      if (!session || !block) return;
+      // Land in the tab that shows the session so the subagent opens beside it.
+      const tab =
+        tabsRef.current.find((entry) =>
+          leafIds(entry.layout).includes(sessionId),
+        ) ?? tabsRef.current.find((entry) => entry.id === activeTabId);
+      if (!tab) return;
+      const file = newSubagentTab(
+        session.id,
+        block.id,
+        block.tool?.title || block.text || "Subagent",
+        session.cwd,
+      );
+      setTabs((prev) =>
+        prev.map((entry) =>
+          entry.id === tab.id ? openEditorTab(entry, file) : entry,
+        ),
+      );
+      if (tab.id !== activeTabId) activateTab(tab.id);
+      setComposerFocused(false);
+    },
+    [activeTabId, activateTab],
+  );
+
   const onFileDirtyChange = useCallback((fileId: string, dirty: boolean) => {
     setDirtyFiles((prev) => {
       if (prev.has(fileId) === dirty) return prev;
@@ -5225,6 +5268,16 @@ export default function App({
         onDismissUpdate={() => setUpdateNotice(null)}
       />
 
+      {agentsPanelOpen ? (
+        <AgentsPanel
+          groups={subagentGroups}
+          activeSessionId={active?.id}
+          onSelectSession={onSelectLiveAgent}
+          onOpenSubagent={onOpenSubagent}
+          onClose={onToggleAgentsPanel}
+        />
+      ) : null}
+
       <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           className={
@@ -5287,6 +5340,9 @@ export default function App({
             projectTerminalActive={
               !!currentProjectDock && currentProjectDock.pane.files.length > 0
             }
+            onToggleAgents={onToggleAgentsPanel}
+            agentsActive={agentsPanelOpen}
+            runningAgents={runningSubagents}
             onOpenSettings={onOpenSettings}
             onOpenInbox={onOpenInbox}
             onOpenNotes={notesEnabled ? onOpenNotes : undefined}
@@ -5610,13 +5666,16 @@ function toTitleTab(
       ? `terminal:${file.id}`
       : file.plan
         ? `plan:${file.plan.blockId}`
-        : file.releaseNotes
+        : file.subagent
+          ? `subagent:${file.subagent.blockId}`
+          : file.releaseNotes
           ? `release-notes:${file.releaseNotes.version}`
           : file.path;
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
     files.push(
       file.plan?.title?.trim() ||
+        file.subagent?.title?.trim() ||
         (file.releaseNotes
           ? releaseNotesTitle(file.releaseNotes.version)
           : file.terminal

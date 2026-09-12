@@ -1,4 +1,5 @@
 import {
+  Bot,
   ChevronLeft,
   ChevronRight,
   Inbox,
@@ -73,6 +74,9 @@ type Props = {
   onNewTerminal?: () => void;
   onShowTerminal?: () => void;
   projectTerminalActive?: boolean;
+  onToggleAgents?: () => void;
+  agentsActive?: boolean;
+  runningAgents?: number;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
@@ -539,6 +543,9 @@ function TitleBarComponent({
   onNewTerminal,
   onShowTerminal,
   projectTerminalActive = false,
+  onToggleAgents,
+  agentsActive = false,
+  runningAgents = 0,
   onOpenSettings,
   onOpenInbox,
   onOpenNotes,
@@ -734,6 +741,23 @@ function TitleBarComponent({
             }
           >
             <Terminal className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        ) : null}
+        {!projectless && onToggleAgents ? (
+          <IconButton
+            label={runningAgents ? `Agents (${runningAgents} working)` : "Agents"}
+            active={agentsActive}
+            onClick={onToggleAgents}
+          >
+            <span className="relative">
+              <Bot className="size-3.5" strokeWidth={1.75} />
+              {runningAgents > 0 ? (
+                <span
+                  aria-hidden
+                  className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-accent"
+                />
+              ) : null}
+            </span>
           </IconButton>
         ) : null}
         {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
