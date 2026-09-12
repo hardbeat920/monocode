@@ -3,7 +3,7 @@ import { subscribeDirsChanged } from "./fileTree";
 import { scorePath, type FuzzyHit } from "./fuzzy";
 import { resolveWorkspacePath, slash } from "./paths";
 import { looksLikeProject } from "./recents";
-import { normalizeEditorPath } from "./search";
+import { normalizeEditorPath, type FileOpenOptions } from "./search";
 
 const MAX_RECENTS = 30;
 const MAX_RESULTS = 80;
@@ -228,6 +228,16 @@ export async function resolveOpenablePath(
   if (byName.length === 1) return byName[0].path;
 
   return pickOpenableFile(byName, cwd, relHint).path;
+}
+
+/** Resolve shortened references while preserving paths selected from file UI. */
+export async function resolveFileOpenRequest(
+  cwd: string,
+  path: string,
+  options?: FileOpenOptions,
+): Promise<string> {
+  if (options?.exact) return path;
+  return (await resolveOpenablePath(cwd, path)) ?? path;
 }
 
 function relativePathHint(href: string, cwd: string, direct: string): string {

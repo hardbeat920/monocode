@@ -41,6 +41,7 @@ import {
 import { IS_MAC, MOD } from "../lib/platform";
 import { resolveModel } from "../lib/models";
 import { prettyParent, projectKey, projectName } from "../lib/paths";
+import type { OpenFileFn } from "../lib/search";
 import { sessionDisplayTitle } from "../lib/session";
 import { nextUnseenFinishedSessions } from "../lib/sessionDone";
 import {
@@ -211,7 +212,7 @@ type Props = {
   onCancelReminders?: (sessionIds: readonly string[]) => void;
   onDeleteSession?: (sessionId: string) => void;
   onDeleteSessions?: (sessionIds: readonly string[]) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onOpenTerminal?: (cwd: string) => void;
   onFileMoved?: (from: string, to: string) => void;
   onFileDeleted?: (path: string) => void;
@@ -1569,7 +1570,10 @@ function SidebarComponent({
               selectedPath={selectedDiffPath}
               selectedKind={selectedDiffKind}
               selectedSha={selectedCommitSha}
-              onOpenFile={onOpenDiff ?? onOpenFile}
+              onOpenFile={
+                onOpenDiff ??
+                ((path) => onOpenFile(path, undefined, { exact: true }))
+              }
               onOpenAllChanges={onOpenAllChanges ?? (() => {})}
               onOpenCommit={onOpenCommit ?? (() => {})}
             />

@@ -6,6 +6,7 @@ import {
   loadProjectFiles,
   peekProjectFiles,
   rememberOpenedFile,
+  resolveFileOpenRequest,
   resolveOpenablePath,
   subscribeProjectFiles,
 } from "./fileIndex";
@@ -81,6 +82,14 @@ describe("resolveOpenablePath", () => {
     list.mockRejectedValue(new Error("Project scan unavailable"));
     await expect(resolveOpenablePath(cwd, "apps/desktop/src/main.tsx"))
       .resolves.toBe(files[2].path);
+  });
+
+  it("preserves an exact path even when it is absent from the project index", async () => {
+    const ignored = `${cwd}/ignored/App.tsx`;
+    await expect(
+      resolveFileOpenRequest(cwd, ignored, { exact: true }),
+    ).resolves.toBe(ignored);
+    expect(list).not.toHaveBeenCalled();
   });
 });
 
