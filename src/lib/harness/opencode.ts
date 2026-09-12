@@ -79,6 +79,7 @@ type Live = {
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
   nextApprovalUiId: number;
+  sessionParentById: Map<string, string | undefined>;
   partById: Map<string, OpenCodePart>;
   emittedTextByPartId: Map<string, string>;
   messageRoleById: Map<string, "user" | "assistant" | "hidden">;
@@ -362,6 +363,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       approvals: new Map(),
       questions: new Map(),
       nextApprovalUiId: 1,
+      sessionParentById: new Map(),
       partById: new Map(),
       emittedTextByPartId: new Map(),
       messageRoleById: new Map(),
@@ -384,7 +386,17 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       input.sessionId,
       (event) => {
         if (live.muteUpdates) return;
-        handleEvent(live, event);
+        const turn = live.turns;
+        void handleEvent(live, event).catch((error: unknown) => {
+          if (live.muteUpdates || live.turns !== turn) return;
+          // An ancestry lookup failure must be visible, otherwise a child can
+          // remain blocked on a request that never reaches the approval UI.
+          live.onEvent({
+            type: "session.error",
+            message: `Could not route OpenCode event: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          finishActiveTurn(live);
+        });
       },
       (error) => {
         if (live.muteUpdates || live.cancelled) return;
@@ -513,12 +525,30 @@ async function runCompaction(
   await live.client.summarizeSession(live.openCodeSessionId, model);
 }
 
-function handleEvent(live: Live, event: Record<string, unknown>): void {
-  const payloadSessionId = eventSessionId(event);
-  if (payloadSessionId && payloadSessionId !== live.openCodeSessionId) return;
-
+async function handleEvent(
+  live: Live,
+  event: Record<string, unknown>,
+): Promise<void> {
   const type = typeof event.type === "string" ? event.type : "";
   const properties = asRecord(event.properties) ?? {};
+  // Session lifecycle events establish ancestry, including nested subagents.
+  // Record them before applying the parent transcript's session filter.
+  if (type === "session.created" || type === "session.updated") {
+    const info = asRecord(properties.info);
+    const id = stringField(info, "id");
+    if (id) live.sessionParentById.set(id, stringField(info, "parentID"));
+    return;
+  }
+
+  const payloadSessionId = eventSessionId(event);
+  if (payloadSessionId && payloadSessionId !== live.openCodeSessionId) {
+    // Only blocking interactions are forwarded from descendants. In particular,
+    // a child's idle/error event must never finish the parent's active turn.
+    if (type !== "permission.asked" && type !== "question.asked") return;
+    const turn = live.turns;
+    if (!(await isDescendantSession(live, payloadSessionId))) return;
+    if (live.muteUpdates || live.turns !== turn) return;
+  }
 
   switch (type) {
     case "message.updated": {
@@ -575,6 +605,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
       const id =
         stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
+      if ([...live.approvals.values()].some((pending) => pending.id === id)) break;
       const permission = stringField(properties, "permission") ?? "tool";
       const patterns = Array.isArray(properties.patterns)
         ? properties.patterns.filter(
@@ -583,6 +614,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
         : [];
       const metadata = asRecord(properties.metadata) ?? {};
       const callId =
+        stringField(asRecord(properties.tool), "callID") ??
         stringField(properties, "callID") ??
         stringField(properties, "toolCallId") ??
         stringField(metadata, "callID") ??
@@ -629,6 +661,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
           .catch(() => undefined);
         break;
       }
+      void waitApproval(live, uiId, id);
       if (callId) {
         live.onEvent({
           type: "tool.updated",
@@ -646,22 +679,22 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
         callId,
         preview,
       });
-      void waitApproval(live, uiId, id);
       break;
     }
     case "question.asked": {
       const id =
         stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
+      if ([...live.questions.values()].some((pending) => pending.id === id)) break;
       const questions = questionsFromUnknown(properties);
       const uiId = live.nextApprovalUiId++;
+      void waitQuestion(live, uiId, id, questions);
       live.onEvent({
         type: "question.asked",
         requestId: uiId,
         title: questionPromptTitle(questions) || "OpenCode question",
         questions,
       });
-      void waitQuestion(live, uiId, id, questions);
       break;
     }
     case "session.status": {
@@ -689,6 +722,26 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
     default:
       break;
   }
+}
+
+async function isDescendantSession(
+  live: Live,
+  sessionId: string,
+): Promise<boolean> {
+  const visited = new Set<string>();
+  let current: string | undefined = sessionId;
+  while (current && !visited.has(current)) {
+    if (current === live.openCodeSessionId) return true;
+    visited.add(current);
+    if (!live.sessionParentById.has(current)) {
+      // Resumed children may predate the SSE subscription. Resolve their
+      // ancestry from the server instead of relying on session.created alone.
+      const session = await live.client.getSession(current);
+      live.sessionParentById.set(current, session.parentID);
+    }
+    current = live.sessionParentById.get(current);
+  }
+  return false;
 }
 
 export function openCodeAgentForTurn(input: {

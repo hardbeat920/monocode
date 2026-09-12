@@ -9,6 +9,7 @@ import {
   compareSemver,
   contextUsedFromMessageInfo,
   detailFromToolPart,
+  eventSessionId,
   inferDefaultAgent,
   inferDefaultVariant,
   isOpenCodeDefaultTitle,
@@ -20,6 +21,42 @@ import {
   toOpenCodePermissionReply,
   toolKindFromName,
 } from "./opencodeProtocol";
+
+describe("eventSessionId", () => {
+  it.each([
+    {
+      type: "permission.asked",
+      properties: { id: "permission_1", sessionID: "session_1" },
+    },
+    {
+      type: "session.created",
+      properties: { info: { id: "session_1", parentID: "session_parent" } },
+    },
+    {
+      type: "message.updated",
+      properties: { info: { id: "message_1", sessionID: "session_1" } },
+    },
+    {
+      type: "message.part.updated",
+      properties: { part: { id: "part_1", sessionID: "session_1" } },
+    },
+    {
+      type: "message.part.delta",
+      properties: { sessionID: "session_1", partID: "part_1" },
+    },
+  ])("extracts the owning session for $type", (event) => {
+    expect(eventSessionId(event)).toBe("session_1");
+  });
+
+  it("does not mistake message IDs for session IDs", () => {
+    expect(
+      eventSessionId({
+        type: "message.updated",
+        properties: { info: { id: "message_1" } },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("parseOpenCodeModelSlug", () => {
   it("splits provider/model", () => {

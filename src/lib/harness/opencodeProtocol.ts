@@ -372,7 +372,13 @@ export function eventSessionId(event: Record<string, unknown>): string | undefin
   const sessionID = stringField(properties, "sessionID");
   if (sessionID) return sessionID;
   const info = asRecord(properties.info);
-  return stringField(info, "id");
+  return (
+    stringField(info, "sessionID") ??
+    stringField(asRecord(properties.part), "sessionID") ??
+    (typeof event.type === "string" && event.type.startsWith("session.")
+      ? stringField(info, "id")
+      : undefined)
+  );
 }
 
 export function textDeltaEvent(
