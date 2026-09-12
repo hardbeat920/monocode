@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  historyAcrossProjects,
   historyWithLiveSessions,
   filterSessionsByArchive,
   filterSessionsByQuery,
@@ -123,6 +124,26 @@ describe("historyWithLiveSessions", () => {
 
     const rows = historyWithLiveSessions(history, [], "/tmp/project-a");
     expect(rows.map((row) => row.id)).toEqual(["a1"]);
+  });
+});
+
+describe("historyAcrossProjects", () => {
+  it("merges the listed projects newest first and skips the rest", () => {
+    const history = [
+      summary("a1", "/tmp/project-a", 1),
+      summary("b1", "/tmp/project-b", 3),
+      summary("c1", "/tmp/project-c", 5),
+    ];
+    const live = newSession("cursor", "/tmp/project-b");
+    live.blocks = [{ id: "u1", role: "user", text: "hello" }];
+    live.busy = true;
+
+    const rows = historyAcrossProjects(
+      history,
+      [live],
+      ["/tmp/project-a", "/tmp/project-b"],
+    );
+    expect(rows.map((row) => row.id)).toEqual([live.id, "b1", "a1"]);
   });
 });
 

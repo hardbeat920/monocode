@@ -29,6 +29,8 @@ type Props = {
   buttonClassName?: string;
   /** Chevron on the trailing edge; flips when the menu is open. */
   chevron?: boolean;
+  /** Filled chip matching the composer's model and access pickers. */
+  pill?: boolean;
   children?: ReactNode;
   onCwdChange: (path: string) => void;
   onNewTerminal?: () => void;
@@ -58,6 +60,7 @@ export function CwdPicker({
   className,
   buttonClassName,
   chevron = false,
+  pill = false,
   children,
   onCwdChange,
   onNewTerminal,
@@ -204,13 +207,15 @@ export function CwdPicker({
         }}
         onKeyDown={onKeyDown}
         className={
-          buttonClassName
-            ? `${buttonClassName} ${
-                open ? "bg-content/10 text-content" : "hover:bg-content/5"
-              } disabled:opacity-40`
-            : `flex min-w-0 items-center gap-1.5 ${
-                open ? "text-content" : "text-content/50 hover:text-content"
-              } disabled:opacity-40`
+          pill
+            ? "flex h-6.5 min-w-0 max-w-40 items-center gap-1 rounded-md bg-content/10 px-1.5 text-content hover:bg-content/15 disabled:opacity-40"
+            : buttonClassName
+              ? `${buttonClassName} ${
+                  open ? "bg-content/10 text-content" : "hover:bg-content/5"
+                } disabled:opacity-40`
+              : `flex min-w-0 items-center gap-1.5 ${
+                  open ? "text-content" : "text-content/50 hover:text-content"
+                } disabled:opacity-40`
         }
       >
         {children ?? (

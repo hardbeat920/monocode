@@ -295,7 +295,11 @@ export const SessionPane = memo(function SessionPane({
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
   const isEmpty = session.blocks.length === 0;
-  const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
+  // A fresh session can still move to another project; once it has a turn,
+  // switching opens a new tab instead (see onCwdChange). Split panes share
+  // their tab's project, so only a projectless one may pick.
+  const showProjectPicker =
+    isEmpty && (!inSplit || !looksLikeProject(session.cwd));
   const dockComposer = !isEmpty || inSplit || !!session.inboxAsk;
   const draftRef = useRef<string | undefined>(undefined);
   const composer = (
@@ -314,8 +318,7 @@ export const SessionPane = memo(function SessionPane({
       compactSupported={canCompactHarnessContext(session.harness)}
       recents={recents}
       hideProjectPicker={
-        !!session.inboxAsk ||
-        (hideProjectPicker ? !showDeckProjectPicker : false)
+        !!session.inboxAsk || (hideProjectPicker ? !showProjectPicker : false)
       }
       hideBranchPicker={!!session.inboxAsk}
       hideTopBar={!!session.inboxAsk}

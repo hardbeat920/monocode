@@ -82,6 +82,8 @@ type Props = {
   onGoToFile?: () => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
+  /** Tabs from several projects share the strip, so each names its project. */
+  showProject?: boolean;
 };
 
 function sessionMeta(tab: Tab): string {
@@ -90,7 +92,10 @@ function sessionMeta(tab: Tab): string {
   return "";
 }
 
-export function tabCopy(tab: Tab): {
+export function tabCopy(
+  tab: Tab,
+  showProject = false,
+): {
   headline: string;
   meta: string;
   tooltip: string;
@@ -125,6 +130,7 @@ export function tabCopy(tab: Tab): {
     if (sessions) metaParts.push(sessions);
   }
 
+  if (showProject && project !== "~") metaParts.unshift(project);
   const meta = metaParts.join(" · ");
 
   const tooltipParts = [project];
@@ -222,6 +228,7 @@ function TitleTabItem({
   active,
   closable,
   canDrag,
+  showProject,
   sortable,
   onSelect,
   onClose,
@@ -232,6 +239,7 @@ function TitleTabItem({
   index: number;
   active: boolean;
   closable: boolean;
+  showProject: boolean;
   canDrag: boolean;
   sortable: SortableApi;
   onSelect: (id: string) => void;
@@ -240,7 +248,7 @@ function TitleTabItem({
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
   const dragging = canDrag && sortable.draggingId === tab.id;
-  const { headline, meta, tooltip } = tabCopy(tab);
+  const { headline, meta, tooltip } = tabCopy(tab, showProject);
   const fileIcon = tab.files[0];
   const showStart =
     canDrag &&
@@ -558,6 +566,7 @@ function TitleBarComponent({
   onGoToFile,
   recents = [],
   onSelectProject,
+  showProject = false,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
   const sortable = useSortable(tabIds, onReorder);
@@ -829,6 +838,7 @@ function TitleBarComponent({
                   active={tab.id === activeId}
                   closable={titleTabClosable(tab, tabs.length)}
                   canDrag={canDrag}
+                  showProject={showProject}
                   sortable={sortable}
                   onSelect={onSelect}
                   onClose={onClose}
