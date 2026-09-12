@@ -4,6 +4,7 @@ mod chat_background;
 mod checkpoint;
 mod cursor_store;
 mod fs;
+mod gitlab;
 mod harness;
 mod inbox_media;
 mod linear;
@@ -15,6 +16,7 @@ mod notifications;
 mod project_logo;
 mod pty;
 mod rate_limits;
+mod reminders;
 mod search;
 mod session_store;
 mod skills;
@@ -173,6 +175,7 @@ pub fn run() {
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
+            reminders::init(app.handle());
             checkpoint::init(app.handle())?;
             menu::install(app.handle())?;
             #[cfg(target_os = "macos")]
@@ -201,6 +204,13 @@ pub fn run() {
             notifications::request_notification_permission,
             notifications::show_notification,
             notifications::open_notification_settings,
+            reminders::reminder_list,
+            reminders::reminder_set,
+            reminders::reminder_clear,
+            reminders::reminder_configure,
+            reminders::reminder_take_open,
+            reminders::reminder_register_window,
+            reminders::reminder_open,
             fs::list_dir,
             fs::list_project_files,
             fs::git_diff_stats,
@@ -225,13 +235,23 @@ pub fn run() {
             fs::git_range_context,
             fs::git_pr_status,
             fs::git_pr_create,
+            fs::git_github_status,
             fs::git_github_repo,
+            fs::git_github_work_item,
             fs::git_github_work_items,
             fs::git_github_work_item_details,
             fs::git_github_work_item_thread,
             fs::git_github_work_item_comment,
             fs::git_github_pr_diff,
             inbox_media::fetch_inbox_media,
+            gitlab::gitlab_status,
+            gitlab::gitlab_set_config,
+            gitlab::gitlab_repo,
+            gitlab::gitlab_list_work_items,
+            gitlab::gitlab_work_item_details,
+            gitlab::gitlab_work_item_thread,
+            gitlab::gitlab_work_item_comment,
+            gitlab::gitlab_mr_diff,
             linear::linear_status,
             linear::linear_set_token,
             linear::linear_list_teams,
@@ -287,6 +307,7 @@ pub fn run() {
             pty::pty_kill_all,
             session_store::session_upsert,
             session_store::session_list_by_project,
+            session_store::session_list_linked,
             session_store::session_search,
             session_store::session_get,
             session_store::session_delete,

@@ -1,6 +1,8 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowDownCircle,
   Check,
+  ChevronDown,
   ImagePlus,
   Loader,
   RefreshCw,
@@ -10,13 +12,16 @@ import {
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import { HarnessIcon } from "../chrome/HarnessIcon";
+import { Popover } from "../chrome/Popover";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
@@ -130,7 +135,16 @@ import {
   saveSessionSidebarFilters,
 } from "../lib/sessionFilters";
 import type { SessionSummary } from "../lib/sessionStore";
-import { clearInboxCache } from "../lib/githubTasks";
+import {
+  clearInboxCache,
+  githubStatus,
+  type GithubStatus,
+} from "../lib/githubTasks";
+import {
+  disconnectGitlab,
+  gitlabConnected,
+  saveGitlabConfig,
+} from "../lib/gitlab";
 import {
   disconnectLinear,
   LINEAR_CHANGE_EVENT,
@@ -183,8 +197,20 @@ import {
   type UpdaterSnapshot,
 } from "../lib/updater";
 
+import { SkillsPage } from "./SkillsPage";
+
+export type SettingsAnchor = "github" | "gitlab" | "linear";
+
+const ANCHOR_IDS: Record<SettingsAnchor, string> = {
+  github: "settings-github",
+  gitlab: "settings-gitlab",
+  linear: "settings-linear",
+};
+
 type Props = {
   section: SettingsSectionId;
+  /** Card to scroll to; the General page is too long to land at the top. */
+  anchor?: SettingsAnchor | null;
   cwd: string;
   sessions: SessionSummary[];
   besideRail?: boolean;
@@ -199,6 +225,7 @@ type Props = {
 
 export function SettingsView({
   section,
+  anchor = null,
   cwd,
   sessions,
   besideRail = false,
@@ -211,6 +238,12 @@ export function SettingsView({
   onOpenWhatsNew,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  useEffect(() => {
+    if (!anchor) return;
+    document.getElementById(ANCHOR_IDS[anchor])?.scrollIntoView({
+      block: "start",
+    });
+  }, [anchor]);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const appearance = useAppearanceSettings();
@@ -278,6 +311,8 @@ export function SettingsView({
           ) : null}
           {section === "keybindings" ? <KeybindingsPage /> : null}
           {section === "providers" ? <ProvidersPage /> : null}
+          {section === "inbox" ? <InboxPage /> : null}
+          {section === "skills" ? <SkillsPage key={cwd} cwd={cwd} /> : null}
           {section === "archive" ? (
             <ArchivePage
               cwd={cwd}
@@ -500,7 +535,7 @@ function GeneralPage({
       </Row>
       <Row
         label="Notifications"
-        description="Notify when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session."
+        description="Notify when a reminder is due, or when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session."
       >
         {notificationsEnabled && notificationPermission === "denied" ? (
           <NotificationsBlocked />
@@ -527,11 +562,223 @@ function GeneralPage({
         />
       </Row>
 
-      <Heading title="Linear" />
-      <LinearSettings />
-
       <Heading title="About" />
       <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
+    </>
+  );
+}
+
+function InboxPage() {
+  return (
+    <>
+      <Heading title="GitHub" id={ANCHOR_IDS.github} first />
+      <GithubSettings />
+
+      <Heading title="GitLab" id={ANCHOR_IDS.gitlab} />
+      <GitlabSettings />
+
+      <Heading title="Linear" id={ANCHOR_IDS.linear} />
+      <LinearSettings />
+    </>
+  );
+}
+
+function GithubSettings() {
+  const [status, setStatus] = useState<GithubStatus | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef(0);
+
+  const checkStatus = useCallback(async () => {
+    const generation = ++request.current;
+    setChecking(true);
+    setError(null);
+    try {
+      const next = await githubStatus();
+      if (generation === request.current) setStatus(next);
+    } catch (err: unknown) {
+      if (generation === request.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (generation === request.current) setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkStatus();
+    return () => {
+      request.current += 1;
+    };
+  }, [checkStatus]);
+
+  const description = status?.connected
+    ? "GitHub CLI is installed and authenticated. MonoCode uses it for GitHub inbox items."
+    : status?.installed
+      ? "Run gh auth login in a terminal, complete the sign-in flow, then check again."
+      : "Install GitHub CLI from cli.github.com, run gh auth login in a terminal, then check again.";
+  const label = checking
+    ? "Checking"
+    : status?.connected
+      ? "Connected"
+      : status?.installed
+        ? "Sign in required"
+        : "Not installed";
+
+  return (
+    <>
+      <Row
+        label={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark provider="github" className="size-4 shrink-0" />
+            Connection
+          </span>
+        }
+        description={description}
+      >
+        <span className="text-[12px] text-content/50">{label}</span>
+        {!checking && !status?.installed ? (
+          <SecondaryButton
+            onClick={() => {
+              void openUrl("https://cli.github.com/").catch(() => {});
+            }}
+          >
+            Installation guide
+          </SecondaryButton>
+        ) : null}
+        <SecondaryButton onClick={() => void checkStatus()} disabled={checking}>
+          {checking ? "Checking" : "Check again"}
+        </SecondaryButton>
+      </Row>
+      {error ? (
+        <p className="pb-2 text-[12px] text-red-400/90">{error}</p>
+      ) : null}
+    </>
+  );
+}
+
+function GitlabSettings() {
+  const [url, setUrl] = useState("https://gitlab.com");
+  const [token, setToken] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void gitlabConnected()
+      .then((status) => {
+        if (cancelled) return;
+        setConnected(status.connected);
+        setUrl(status.url);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled)
+          setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSave = async () => {
+    if (!token.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await saveGitlabConfig(url, token);
+      setUrl(status.url);
+      setToken("");
+      setConnected(status.connected);
+      clearInboxCache();
+    } catch (err: unknown) {
+      setConnected(false);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDisconnect = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await disconnectGitlab(url);
+      setConnected(false);
+      setUrl(status.url);
+      clearInboxCache();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Row
+        label={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark provider="gitlab" className="size-4 shrink-0" />
+            Connection
+          </span>
+        }
+        description="Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it."
+      >
+        {connected ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="max-w-56 truncate text-[12px] text-content/50">
+              {url}
+            </span>
+            <SecondaryButton
+              onClick={() => void onDisconnect()}
+              disabled={busy}
+            >
+              Disconnect
+            </SecondaryButton>
+          </div>
+        ) : (
+          <div className="flex min-w-0 items-center gap-2">
+            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+              <input
+                type="url"
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                placeholder="https://gitlab.com"
+                aria-label="GitLab URL"
+                autoComplete="url"
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+              />
+            </label>
+            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+              <input
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void onSave();
+                }}
+                placeholder="glpat-…"
+                aria-label="GitLab access token"
+                autoComplete="off"
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+              />
+            </label>
+            <SecondaryButton
+              onClick={() => void onSave()}
+              disabled={busy || !token.trim()}
+            >
+              {busy ? "Saving" : "Connect"}
+            </SecondaryButton>
+          </div>
+        )}
+      </Row>
+      {error ? (
+        <p className="pb-2 text-[12px] text-red-400/90">{error}</p>
+      ) : null}
     </>
   );
 }
@@ -767,12 +1014,12 @@ function UpdateRow({
         </SecondaryButton>
         <SecondaryButton onClick={() => void onClick()} disabled={busy}>
           {busy ? (
-          <Loader className="size-3.5 animate-spin" aria-hidden />
-        ) : hasUpdate ? (
-          <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
-        ) : (
-          <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
-        )}
+            <Loader className="size-3.5 animate-spin" aria-hidden />
+          ) : hasUpdate ? (
+            <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
+          ) : (
+            <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
+          )}
           {hasUpdate ? "Download" : "Check for updates"}
         </SecondaryButton>
       </div>
@@ -1575,9 +1822,18 @@ function PageHeader({
   );
 }
 
-function Heading({ title, first = false }: { title: string; first?: boolean }) {
+function Heading({
+  title,
+  first = false,
+  id,
+}: {
+  title: string;
+  first?: boolean;
+  id?: string;
+}) {
   return (
     <h2
+      id={id}
       className={`pb-1 text-[15px] font-semibold text-content ${
         first ? "" : "pt-8"
       }`}
@@ -1629,7 +1885,9 @@ function Segmented<T extends string>({
       role="radiogroup"
       aria-label={label}
       className="inline-grid shrink-0 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
-      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+      style={{
+        gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+      }}
     >
       {options.map((option) => (
         <button
@@ -1750,6 +2008,7 @@ function Toggle({
   );
 }
 
+/** Theme-aware dropdown for a Settings row: a trigger button opening a Popover listbox. Used instead of a native select, whose option popup is OS-rendered and unreadable in dark mode on Windows/Linux. */
 function Select({
   label,
   value,
@@ -1761,19 +2020,151 @@ function Select({
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(() =>
+    Math.max(
+      0,
+      options.findIndex((option) => option.value === value),
+    ),
+  );
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const activeOption = useRef<HTMLButtonElement>(null);
+  const listId = useId();
+  const selected = options.find((option) => option.value === value);
+  const activeId =
+    options[active] != null ? `${listId}-opt-${active}` : undefined;
+
+  useEffect(() => {
+    if (!open) return;
+    setActive(
+      Math.max(
+        0,
+        options.findIndex((option) => option.value === value),
+      ),
+    );
+  }, [open, value, options]);
+
+  useEffect(() => {
+    if (!open) return;
+    activeOption.current?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  const pick = (next: string) => {
+    onChange(next);
+    setOpen(false);
+    trigger.current?.focus();
+  };
+
+  const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => Math.min(options.length - 1, i + 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => Math.max(0, i - 1));
+      return;
+    }
+    if (e.key === "Home") {
+      e.preventDefault();
+      setActive(0);
+      return;
+    }
+    if (e.key === "End") {
+      e.preventDefault();
+      setActive(options.length - 1);
+      return;
+    }
+    if (e.key === "Tab") {
+      const option = options[active];
+      if (option && option.value !== value) onChange(option.value);
+      setOpen(false);
+      trigger.current?.focus();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const option = options[active];
+      if (option) pick(option.value);
+    }
+  };
+
   return (
-    <select
-      aria-label={label}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      className="max-w-52 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-[12px] text-content outline-none hover:border-content/20"
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
+    <div ref={root} className="relative max-w-52">
+      <button
+        type="button"
+        ref={trigger}
+        aria-label={`${label}: ${selected?.label ?? value}`}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20"
+      >
+        <span className="min-w-0 flex-1 truncate">
+          {selected ? selected.label : value}
+        </span>
+        <ChevronDown
+          className={`size-3.5 shrink-0 text-content/50 transition-transform ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.75}
+        />
+      </button>
+      {open ? (
+        <Popover
+          anchor={root}
+          side="bottom"
+          align="end"
+          width={280}
+          maxHeight={320}
+          autoFocus
+          onDismiss={(reason) => {
+            setOpen(false);
+            if (reason === "escape") trigger.current?.focus();
+          }}
+          role="listbox"
+          aria-label={label}
+          aria-activedescendant={activeId}
+          tabIndex={-1}
+          onKeyDown={onMenuKey}
+          className="overflow-y-auto overscroll-contain p-1"
+        >
+          {options.map((option, index) => {
+            const isSelected = option.value === value;
+            const highlighted = index === active;
+            return (
+              <button
+                key={option.value}
+                ref={highlighted ? activeOption : undefined}
+                type="button"
+                id={`${listId}-opt-${index}`}
+                role="option"
+                tabIndex={-1}
+                aria-selected={isSelected}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => pick(option.value)}
+                className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] ${
+                  highlighted || isSelected
+                    ? "bg-content/10 text-content"
+                    : "text-content hover:bg-content/5"
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {option.label}
+                </span>
+                {isSelected ? (
+                  <Check
+                    className="size-3.5 shrink-0"
+                    strokeWidth={2.25}
+                  />
+                ) : null}
+              </button>
+            );
+          })}
+        </Popover>
+      ) : null}
+    </div>
   );
 }
 

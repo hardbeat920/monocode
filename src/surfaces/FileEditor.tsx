@@ -64,6 +64,10 @@ import { languageForPath, schemeExtensions } from "./editorChrome";
 import { preserveEditorViewport, replaceEditorDoc } from "./editorDoc";
 import { editorMatching, editorTyping, tryExpandEmmet } from "./editorEditing";
 import {
+  EditorSelectionMenu,
+  type EditorSelectionTarget,
+} from "./EditorSelectionMenu";
+import {
   diffActiveChunkIndex,
   diffLineStatsForView,
   diffNavigablePositions,
@@ -120,6 +124,17 @@ export function FileEditor({
   const markdown = isMarkdownPath(path);
   const svg = isSvgPath(path);
   const [mode, setMode] = useMarkdownMode(path);
+  const sourceNavigationToken = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (
+      !navigation ||
+      (!markdown && !svg) ||
+      sourceNavigationToken.current === navigation.token
+    )
+      return;
+    sourceNavigationToken.current = navigation.token;
+    setMode("source");
+  }, [markdown, svg, navigation, setMode]);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveGeneration = useRef(0);
   const loadGeneration = useRef(0);
@@ -492,6 +507,8 @@ function CodeMirrorEditor({
   const onStageGitRef = useRef(onStageGit);
   const onDocChangeRef = useRef(onDocChange);
   const valueRef = useRef(value);
+  const navigationTokenRef = useRef<number | undefined>(undefined);
+  const pendingNavigationRef = useRef<EditorNavigationRequest | null>(null);
   const gitOriginalRef = useRef(gitOriginal);
   const chunkNavPinnedRef = useRef<number | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -504,6 +521,8 @@ function CodeMirrorEditor({
   } | null>(null);
   const [commentTarget, setCommentTarget] =
     useState<DiffCommentComposerTarget | null>(null);
+  const [selectionTarget, setSelectionTarget] =
+    useState<EditorSelectionTarget | null>(null);
   activeRef.current = active;
   onDirtyChangeRef.current = onDirtyChange;
   onErrorCountChangeRef.current = onErrorCountChange;
@@ -682,12 +701,32 @@ function CodeMirrorEditor({
           ]),
         ),
         EditorView.updateListener.of((update) => {
+          if (
+            update.transactions.some(
+              (tr) =>
+                (tr.selection || tr.docChanged) &&
+                !tr.annotation(diskReload) &&
+                !tr.annotation(sourceNavigation),
+            )
+          ) {
+            pendingNavigationRef.current = null;
+          }
+          if (update.selectionSet) {
+            setSelectionTarget(editorSelectionTarget(update.view, commentPath));
+          } else if (update.docChanged) {
+            setSelectionTarget(null);
+          }
           if (!update.docChanged) return;
           onDocChangeRef.current?.(update.state.doc.toString());
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
             return;
           }
           markDirty();
+        }),
+        EditorView.domEventHandlers({
+          blur: () => {
+            pendingNavigationRef.current = null;
+          },
         }),
         showDiff
           ? EditorView.updateListener.of((update) => {
@@ -730,6 +769,7 @@ function CodeMirrorEditor({
       viewRef.current = null;
       savedDocumentRef.current = null;
       setChunkNav(null);
+      setSelectionTarget(null);
       view.destroy();
     };
   }, [lockOverscroll, path, showDiff, syncChunkNav]);
@@ -781,26 +821,35 @@ function CodeMirrorEditor({
   }, [showDiff, syncChunkNav, value]);
 
   useEffect(() => {
-    if (!navigation) return;
+    if (!navigation) {
+      pendingNavigationRef.current = null;
+      return;
+    }
+    if (navigationTokenRef.current !== navigation.token) {
+      navigationTokenRef.current = navigation.token;
+      pendingNavigationRef.current = navigation;
+    }
+    const pending = pendingNavigationRef.current;
+    if (!pending) return;
     const view = viewRef.current;
     if (!view) return;
 
     let cancelled = false;
     const run = () => {
-      if (cancelled) return;
-      if (view.state.doc.lines < navigation.line) {
-        requestAnimationFrame(run);
-        return;
+      if (cancelled || pendingNavigationRef.current !== pending) return;
+      revealNavigation(view, pending);
+      // Retry a clamped location only while its line has not arrived and
+      // the user has not moved the caret, edited the file, or left the editor.
+      if (pending.line <= view.state.doc.lines) {
+        pendingNavigationRef.current = null;
       }
-      if (cancelled) return;
-      revealNavigation(view, navigation);
     };
     requestAnimationFrame(() => requestAnimationFrame(run));
 
     return () => {
       cancelled = true;
     };
-  }, [navigation]);
+  }, [navigation, value]);
 
   useEffect(() => {
     if (!active) return;
@@ -817,6 +866,10 @@ function CodeMirrorEditor({
     }
     view.focus();
   }, [active, path]);
+
+  useEffect(() => {
+    if (!active) setSelectionTarget(null);
+  }, [active]);
 
   return (
     <>
@@ -840,8 +893,52 @@ function CodeMirrorEditor({
           onDismiss={() => setCommentTarget(null)}
         />
       ) : null}
+      <EditorSelectionMenu
+        selection={selectionTarget}
+        onDismiss={() => setSelectionTarget(null)}
+      />
     </>
   );
+}
+
+function editorSelectionTarget(
+  view: EditorView,
+  path: string,
+): EditorSelectionTarget | null {
+  if (view.state.selection.ranges.length !== 1) return null;
+  const selection = view.state.selection.main;
+  if (selection.empty) return null;
+
+  const text = view.state.sliceDoc(selection.from, selection.to);
+  if (!text.trim()) return null;
+  const coordinates = view.coordsAtPos(
+    selection.head,
+    selection.head === selection.from ? 1 : -1,
+  );
+  if (!coordinates) return null;
+
+  const viewport = view.scrollDOM.getBoundingClientRect();
+  if (
+    coordinates.bottom < viewport.top ||
+    coordinates.top > viewport.bottom ||
+    coordinates.right < viewport.left ||
+    coordinates.left > viewport.right
+  ) {
+    return null;
+  }
+
+  const lastSelectedPosition = Math.max(selection.from, selection.to - 1);
+  return {
+    path,
+    startLine: view.state.doc.lineAt(selection.from).number,
+    endLine: view.state.doc.lineAt(lastSelectedPosition).number,
+    anchor: new DOMRect(
+      coordinates.left,
+      coordinates.top,
+      Math.max(1, coordinates.right - coordinates.left),
+      Math.max(1, coordinates.bottom - coordinates.top),
+    ),
+  };
 }
 
 function DiffChunkNav({
@@ -927,11 +1024,13 @@ function revealNavigation(view: EditorView, target: EditorNavigation) {
   view.dispatch({
     selection: { anchor },
     effects: EditorView.scrollIntoView(anchor, { y: "center" }),
+    annotations: sourceNavigation.of(true),
   });
   view.focus();
 }
 
 const diskReload = Annotation.define<boolean>();
+const sourceNavigation = Annotation.define<boolean>();
 
 function indentOrInsertTab(view: EditorView): boolean {
   const { state, dispatch } = view;

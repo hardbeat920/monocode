@@ -13,12 +13,25 @@ import {
 type Props = {
   prompt: UserQuestionPrompt;
   onReply: (requestId: number, reply: UserQuestionReply) => void;
+  onInteraction?: (requestId: number) => void;
 };
 
-export function QuestionForm({ prompt, onReply }: Props) {
+export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    if (prompt.autoResolveAt == null) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [prompt.requestId, prompt.autoResolveAt]);
+
+  const interact = () => {
+    if (prompt.autoResolveAt != null) onInteraction?.(prompt.requestId);
+  };
 
   useEffect(() => {
     setStep(0);
@@ -72,7 +85,15 @@ export function QuestionForm({ prompt, onReply }: Props) {
   const title = question.header?.trim() || prompt.title?.trim() || "Question";
 
   return (
-    <div className="px-1.5 pb-1.5" data-question-form>
+    <div
+      className="px-1.5 pb-1.5"
+      data-question-form
+      onPointerDownCapture={interact}
+      onClickCapture={interact}
+      onKeyDownCapture={interact}
+      onPasteCapture={interact}
+      onChangeCapture={interact}
+    >
       <form
         className="rounded-lg border border-content/10 bg-content/3 px-3 py-2.5"
         onSubmit={(event) => {
@@ -138,7 +159,17 @@ export function QuestionForm({ prompt, onReply }: Props) {
             }}
           />
         </div>
-        <div className="mt-2.5 flex justify-end">
+        <div className="mt-2.5 flex items-center justify-end gap-2">
+          {prompt.autoResolveAt != null ? (
+            <span
+              className="mr-auto text-[11px] text-content/40"
+              title="Interact to keep this question open."
+            >
+              {prompt.autoResolveAt - now > 60_000
+                ? "Optional question"
+                : `Continues without an answer in ${Math.max(0, Math.ceil((prompt.autoResolveAt - now) / 1000))}s`}
+            </span>
+          ) : null}
           <button
             type="submit"
             disabled={!ready}

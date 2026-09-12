@@ -9,6 +9,7 @@ import {
 } from "./icons";
 import {
   createContext,
+  memo,
   useContext,
   useEffect,
   useRef,
@@ -51,6 +52,7 @@ import {
 } from "../lib/fs";
 import { displayPath, parentPath, rebasePath } from "../lib/paths";
 import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
+import type { OpenFileFn } from "../lib/search";
 import type { GitStatusMap } from "../hooks/useGitFileStatuses";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
@@ -65,7 +67,7 @@ const GIT_STATUS_COLOR: Record<string, string> = {
 
 type Props = {
   cwd: string;
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onOpenTerminal?: (cwd: string) => void;
   onFileMoved?: (from: string, to: string) => void;
   onFileDeleted?: (path: string) => void;
@@ -96,7 +98,7 @@ type TreeCtxValue = {
   gitStatuses?: GitStatusMap;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onCreateCommit: (id: number, raw: string) => Promise<void>;
   onCreateCancel: (id: number) => void;
   onRenameCommit: (path: string, raw: string) => Promise<void>;
@@ -212,7 +214,9 @@ function explorerItems(
   ];
 }
 
-export function FileTree({
+// Chat updates rerender the sidebar even when Files is hidden. Keep its tree
+// intact unless file-tree props, local state, or subscriptions actually change.
+export const FileTree = memo(function FileTree({
   cwd,
   onOpenFile,
   onOpenTerminal,
@@ -325,7 +329,7 @@ export function FileTree({
     expandDirs(touched);
     setSelectedPath(created);
     saveSelected(cwd, created);
-    if (!asFolder) onOpenFile(created);
+    if (!asFolder) onOpenFile(created, undefined, { exact: true });
   };
 
   const onRenameCancel = () => setRenaming(null);
@@ -723,7 +727,7 @@ export function FileTree({
       ) : null}
     </TreeCtx.Provider>
   );
-}
+});
 
 function HeaderIcon({
   label,
@@ -921,7 +925,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
   const onClick = () => {
     onSelect(entry.path);
     if (entry.isDir) onToggle(entry.path);
-    else onOpenFile(entry.path);
+    else onOpenFile(entry.path, undefined, { exact: true });
   };
 
   const siblings = (peekDir(parentPath(entry.path)) ?? [])

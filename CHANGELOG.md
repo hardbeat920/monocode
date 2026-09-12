@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-09-12
+
+### Added
+
+- Set a reminder from a session's menu using a preset or custom date and time. MonoCode persists scheduled reminders, delivers a notification when one is due, keeps reminder notices available in the session, and shows the scheduled time when cancelling one.
+- The model picker remembers the six most recently used models. Right-click the current model or press Command/Ctrl+Period to switch among them quickly.
+- Notes support normalized tags that can be edited and searched, and selected text from an agent transcript can be saved directly as a note.
+- File and terminal tab menus include **Close Others**, with confirmation before closing unsaved files or running terminals.
+
+### Changed
+
+- Model selection and model settings now share one searchable, keyboard-accessible picker with nested menus, provider tabs, favorites, and inline setting controls.
+- Returning to a project restores its last active session, editor, or terminal instead of choosing a different pane. In #144 by @kinsomicrote.
+- Failed tool activity stays concise by default and can be expanded directly from its transcript summary to inspect the error.
+- Transcripts preserve the provider and model used for each turn, including across reloads, handoffs, second opinions, and Claude model switches.
+
+### Fixed
+
+- Markdown file links distinguish document headings from local paths, handle bare and percent-encoded filenames, reject encoded network paths, and navigate to the requested source location reliably after reload. In #146 by @yankawai.
+- Codex transport retries and fallback diagnostics no longer appear as transcript events, while terminal errors and unrelated runtime warnings remain visible.
+- Background tabs preserve the composer's measured height, so returning to a tab no longer collapses a multi-line draft to one row. In #182 by @goujandev.
+- File attachments now reach Codex, Claude Code, Pi, and omp through a local-path fallback when they cannot be sent inline, including attachment-only messages and mid-turn follow-ups. ACP resource links and OpenCode file parts keep their native formats. Fixes #174.
+- Approvals and questions from nested Claude, Codex, and OpenCode sessions route to the correct active parent session, queue safely when several arrive, and surface reply failures instead of leaving the turn stuck.
+- Files selected from search, the file picker, or the filesystem open by their exact path instead of being redirected by fuzzy path matching.
+- Web links in agent messages now open in the system browser instead of relying on unavailable in-webview navigation. Fixes #175.
+
+## [0.1.43] - 2026-09-11
+
+### Added
+
+- Settings → Inbox now reports whether the GitHub CLI is installed and authenticated, alongside the existing GitLab and Linear connection controls. The Inbox shows only connected sources, falls back safely when one is disconnected, and offers an **Add connection** menu that opens the matching Settings card. In #166 by @goujandev.
+- Use `/add-to-folder` in the composer to place the current session in an existing sidebar folder or create a new folder without interrupting the prompt.
+- Ungrouped pinned sessions now appear in a dedicated **Pinned** sidebar section that can be collapsed independently for each project and expands automatically while searching.
+- Click an image attachment in the composer to inspect it in a full-screen preview; close it with Escape, the close button, or the backdrop, and focus returns to the attachment.
+- Right-click file links, inline file paths, and code-block paths in agent messages to open them in MonoCode or the default app, reveal them in the system file manager, or copy their absolute or project-relative path.
+- macOS releases now include separate signed packages for Apple Silicon and Intel Macs.
+
+### Changed
+
+- The session change-review card now appears after the latest completed reply instead of above the composer, stays hidden while a turn is running, summarizes total additions and deletions, and shows up to three changed files before offering to expand the list.
+- File mentions created from an editor selection use the concise `@file (line…)` form, and the line location is highlighted as part of the mention.
+- Inbox item identity, metadata, related threads, actions, and pull-request tabs remain pinned while descriptions, comments, and diffs scroll beneath them.
+- Navigation, menu, tab, and file labels use tighter, more consistent line heights.
+- Windows no longer shows a redundant centered title between the tab strip and native window controls.
+
+### Fixed
+
+- Codex Full Access approvals no longer block a turn, native Codex questions and supported MCP confirmations appear in the shared input UI, optional questions show their timeout and remain open after interaction, and access-mode changes made during a turn are applied to the next turn. Pending-input notifications also track concurrent requests individually and clear correctly when Codex resolves or cancels them. In #139 by @gettyeuro.
+- A failed provider connection is retired so the next prompt can reconnect cleanly. In-progress tools and approvals are settled as failed or cancelled, while failed subagents expand automatically and show the provider's error details instead of leaving a session looking stuck or successfully completed.
+- Truncated labels preserve letter descenders across tabs, navigation, menus, file views, and search results. In #119 by @ognjeeen.
+- The project logo picker opens in the selected project's directory instead of an unrelated location. In #163 by @ognjeeen.
+
+## [0.1.42] - 2026-09-10
+
+### Added
+
+- GitLab joins the Inbox alongside GitHub and Linear. Connect GitLab.com or a self-managed instance from Settings, then browse and filter issues and merge requests, inspect details, comments, assignees, labels, and diffs, post comments, and start or discuss work without leaving MonoCode.
+- Sessions started from a GitHub Inbox item, or whose first prompt references a GitHub issue or pull request, remember that work item. Session cards link back to it, Inbox rows show related thread counts, and issue or pull request details link to every matching current or archived thread.
+- Settings → Skills lists file-based skills from MonoCode, the current project, personal folders, and supported harnesses. Filter or refresh the catalog, enable and disable individual skills, create a starter project or personal `SKILL.md`, and copy or reveal a skill's path. In #137 by @imnakul.
+- Edit and Write activity in agent transcripts shows the tool's exact diff or written content in an accessible hover and keyboard-focus preview; click through to open the full file or diff.
+- Right-click file tabs to open a file in its default app, reveal it in the system file manager, copy its name or absolute or project-relative path, or close the tab.
+- Selecting code in the editor opens an **Add to chat** action that inserts the file and selected line range into the composer without copying the code itself.
+- Press a mouse's middle button or scroll wheel on a workspace, file, or terminal tab to close it without selecting a background tab first. Existing unsaved-file and running-terminal confirmations still apply, and the sole blank workspace tab remains open. In #154 by @50BytesOfJohn.
+
+### Changed
+
+- The Settings model picker now uses MonoCode's theme-aware popover, with keyboard navigation, active-option announcements, and reliable focus restoration instead of the operating system's native select menu. In #149 by @ardevdevts.
+- Skill names, sources, paths, and creation controls use the same sans-serif interface typography as the rest of Settings.
+
+### Fixed
+
+- Renaming a session remains editable when its agent is working, including when the turn starts after rename mode opens. In #143 by @yankawai.
+- Disabling a project skill allows an enabled personal skill with the same name to take its place; disabling either path no longer hides the wrong skill.
+- Empty sessions update their displayed project label immediately when the tab group's custom label is changed or cleared.
+
+## [0.1.41] - 2026-09-09
+
+### Added
+
+- OMP models support fast mode, including live RPC and configuration updates with a clear fallback when a model does not support it.
+
+### Changed
+
+- The file explorer avoids unnecessary rerenders and preserves unchanged file-icon DOM for smoother updates.
+- The Changes panel header consistently shows its label instead of replacing it with diff counts.
+
+### Fixed
+
+- The sidebar update control stays hidden when no update is available and prevents duplicate installs from concurrent clicks. In #132 by @fobsouza.
+
 ## [0.1.40] - 2026-09-08
 
 ### Added
@@ -625,7 +715,16 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.35...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.44...HEAD
+[0.1.44]: https://github.com/hardbeat920/monocode/compare/v0.1.43...v0.1.44
+[0.1.43]: https://github.com/hardbeat920/monocode/compare/v0.1.42...v0.1.43
+[0.1.42]: https://github.com/hardbeat920/monocode/compare/v0.1.41...v0.1.42
+[0.1.41]: https://github.com/hardbeat920/monocode/compare/v0.1.40...v0.1.41
+[0.1.40]: https://github.com/hardbeat920/monocode/compare/v0.1.39...v0.1.40
+[0.1.39]: https://github.com/hardbeat920/monocode/compare/v0.1.38...v0.1.39
+[0.1.38]: https://github.com/hardbeat920/monocode/compare/v0.1.37...v0.1.38
+[0.1.37]: https://github.com/hardbeat920/monocode/compare/v0.1.36...v0.1.37
+[0.1.36]: https://github.com/hardbeat920/monocode/compare/v0.1.35...v0.1.36
 [0.1.35]: https://github.com/hardbeat920/monocode/compare/v0.1.34...v0.1.35
 [0.1.34]: https://github.com/hardbeat920/monocode/compare/v0.1.33...v0.1.34
 [0.1.33]: https://github.com/hardbeat920/monocode/compare/v0.1.32...v0.1.33

@@ -33,6 +33,21 @@ function edit(id: string, path: string): Block {
 }
 
 describe("harnessForTurn", () => {
+  it("prefers provider provenance recorded on the turn", () => {
+    const turn: Block[] = [
+      {
+        ...user("u", "go"),
+        turnModel: {
+          harness: "claude",
+          id: "claude:opus-5",
+          name: "Claude Opus 5",
+        },
+      },
+      assistant("a", "done"),
+    ];
+    expect(harnessForTurn(turn, turn, "codex")).toBe("claude");
+  });
+
   it("uses the session harness when there was no handoff", () => {
     const turn = [user("u", "go"), assistant("a", "done")];
     expect(harnessForTurn(turn, turn, "claude")).toBe("claude");

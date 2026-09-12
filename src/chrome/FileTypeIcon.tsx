@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { memo, useMemo, useSyncExternalStore } from "react";
 
 type Props = {
   name: string;
@@ -41,7 +41,7 @@ function getSnapshot() {
 }
 
 /** Filename maps to the matching Material Icon Theme icon. */
-export function FileTypeIcon({
+export const FileTypeIcon = memo(function FileTypeIcon({
   name,
   isDir,
   isOpen = false,
@@ -49,6 +49,16 @@ export function FileTypeIcon({
   size = 16,
 }: Props) {
   const icons = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+  const iconName = icons
+    ? isDir
+      ? icons.getFolderIcon({ folderName: name, isOpen, isRoot })
+      : resolveFileIcon(icons, name)
+    : "";
+  const svg = icons?.getIconSvg(iconName) ?? "";
+  // React compares this prop by identity. A fresh object replaces the SVG
+  // subtree even when the glyph is unchanged (for example, on resize).
+  const markup = useMemo(() => ({ __html: svg }), [svg]);
 
   if (!icons) {
     return (
@@ -60,19 +70,15 @@ export function FileTypeIcon({
     );
   }
 
-  const iconName = isDir
-    ? icons.getFolderIcon({ folderName: name, isOpen, isRoot })
-    : resolveFileIcon(icons, name);
-
   return (
     <span
       aria-hidden
       className="material-icon inline-block shrink-0 align-middle"
       style={{ width: size, height: size }}
-      dangerouslySetInnerHTML={{ __html: icons.getIconSvg(iconName) ?? "" }}
+      dangerouslySetInnerHTML={markup}
     />
   );
-}
+});
 
 /**
  * The package only checks `fileExtension` when that prop is set — it does not

@@ -213,10 +213,10 @@ impl CheckpointStore {
         if !manifest.touched.contains(&relative) || !manifest.prepared.contains(&relative) {
             return Err("This file was not changed by the session".into());
         }
-        let foreign_touched = self.foreign_touched_paths(cwd, session_id);
-        if foreign_touched.contains(&relative) || manifest.diverged.contains(&relative) {
+        if manifest.diverged.contains(&relative) {
             return Err(
-                "Exact lines are unavailable because another session also changed this file".into(),
+                "Exact lines are unavailable because the file changed between this session's edits"
+                    .into(),
             );
         }
 
@@ -440,8 +440,8 @@ pub struct CheckpointFile {
     pub status: String,
     pub additions: i64,
     pub deletions: i64,
-    /// False when another session touched this path and exact line ownership
-    /// cannot be proven from filesystem snapshots alone.
+    /// False when the file changed between this session's own edit snapshots,
+    /// so its net line ownership cannot be reconstructed exactly.
     pub exact: bool,
     pub undoable: bool,
 }
@@ -633,21 +633,16 @@ fn diff_from_manifest_with(
         if !file_differs(dir, root, manifest, relative, &git_dirty) {
             continue;
         }
-        let exact = !foreign_touched.contains(relative) && !manifest.diverged.contains(relative);
-        let undoable = exact && after_matches_worktree(dir, root, manifest, relative);
+        // Review is always scoped to this session's captured before/after
+        // snapshots. A foreign claim can make restoring the file unsafe, but
+        // it does not make this session's recorded diff or counts inexact.
+        let exact = !manifest.diverged.contains(relative);
+        let undoable = exact
+            && !foreign_touched.contains(relative)
+            && after_matches_worktree(dir, root, manifest, relative);
         let session_change = manifest.stats.get(relative).map(|stats| {
-            let additions =
-                if foreign_touched.contains(relative) || manifest.diverged.contains(relative) {
-                    0
-                } else {
-                    stats.additions
-                };
-            let deletions =
-                if foreign_touched.contains(relative) || manifest.diverged.contains(relative) {
-                    0
-                } else {
-                    stats.deletions
-                };
+            let additions = if exact { stats.additions } else { 0 };
+            let deletions = if exact { stats.deletions } else { 0 };
             (stats.status.clone(), additions, deletions)
         });
         files.push(describe_change(
@@ -1414,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_refuses_a_file_claimed_by_two_sessions() {
+    fn shared_file_keeps_session_scoped_review_but_disables_unsafe_undo() {
         let repo = tmp("shared-file");
         if !init_git_commit(&repo.0, &[("app.ts", "head\n")]) {
             return;
@@ -1434,12 +1429,18 @@ mod tests {
 
         let s1 = store.status("s1", &cwd).unwrap();
         let s2 = store.status("s2", &cwd).unwrap();
-        assert!(!s1.files[0].exact);
-        assert!(!s2.files[0].exact);
+        assert!(s1.files[0].exact);
+        assert!(s2.files[0].exact);
+        assert_eq!((s1.files[0].additions, s1.files[0].deletions), (1, 1));
+        assert_eq!((s2.files[0].additions, s2.files[0].deletions), (1, 0));
         assert!(!s1.files[0].undoable);
         assert!(!s2.files[0].undoable);
-        assert!(store.file_diff("s1", &cwd, "app.ts").is_err());
-        assert!(store.file_diff("s2", &cwd, "app.ts").is_err());
+        let s1_diff = store.file_diff("s1", &cwd, "app.ts").unwrap();
+        assert_eq!(s1_diff.original, "head\n");
+        assert_eq!(s1_diff.current, "session-one\n");
+        let s2_diff = store.file_diff("s2", &cwd, "app.ts").unwrap();
+        assert_eq!(s2_diff.original, "session-one\n");
+        assert_eq!(s2_diff.current, "session-one\nsession-two\n");
         assert!(store.undo("s1", &cwd, None).is_err());
         assert_eq!(
             std::fs::read_to_string(repo.0.join("app.ts")).unwrap(),

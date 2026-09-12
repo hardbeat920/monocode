@@ -26,7 +26,6 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "grok",
   "opencode",
   "pi",
-  "omp",
   "fx",
 ]);
 
@@ -101,19 +100,6 @@ export function HarnessIcon({
           d="M1 1H22V14.4997H14.9998V21.2499H8.0002V28H1V1ZM8.0002 7.75014V14.4997H14.9998V7.75014H8.0002Z"
         />
         <path d="M22 15H28V28H22V15Z" />
-      </MonoIcon>
-    );
-  }
-  if (harness === "omp") {
-    return (
-      <MonoIcon className={className}>
-        <path d="M1 1H29V6.5H1V1Z" />
-        <path d="M5.5 6.5H10.5V28H5.5V6.5Z" />
-        <path d="M18.5 6.5H23.5V17H18.5V6.5Z" />
-        <path
-          fillRule="evenodd"
-          d="M15.5 17H26.5V25.5H15.5V17ZM19 20V22.5H20.5V20H19ZM22.5 20V22.5H24V20H22.5Z"
-        />
       </MonoIcon>
     );
   }

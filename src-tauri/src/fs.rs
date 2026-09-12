@@ -546,6 +546,49 @@ pub struct GitHubWorkItem {
     pub repo: String,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubStatus {
+    pub connected: bool,
+    pub installed: bool,
+    pub authenticated: bool,
+}
+
+/// Whether the GitHub CLI is installed and has an active authenticated account.
+#[tauri::command]
+pub async fn git_github_status() -> Result<GitHubStatus, String> {
+    tauri::async_runtime::spawn_blocking(git_github_status_for)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn git_github_status_for() -> GitHubStatus {
+    let Some(program) = crate::harness::resolve_gui_binary("gh") else {
+        return GitHubStatus {
+            connected: false,
+            installed: false,
+            authenticated: false,
+        };
+    };
+    let mut cmd = Command::new(program);
+    cmd.args(["auth", "status", "--active", "--hostname", "github.com"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .env("GIT_PAGER", "cat");
+    crate::harness::apply_gui_env(&mut cmd);
+    crate::hide_window_console(&mut cmd);
+    let authenticated = cmd
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    GitHubStatus {
+        connected: authenticated,
+        installed: true,
+        authenticated,
+    }
+}
+
 /// `owner/repo` for the GitHub remote of this working copy, via `gh`.
 #[tauri::command]
 pub async fn git_github_repo(cwd: String) -> Result<String, String> {
@@ -573,6 +616,22 @@ pub async fn git_github_work_items(
             &search,
             limit.unwrap_or(40),
         )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One issue or pull request by number, used when session navigation misses
+/// the existing Inbox cache.
+#[tauri::command]
+pub async fn git_github_work_item(
+    cwd: String,
+    repo: String,
+    kind: String,
+    number: i64,
+) -> Result<GitHubWorkItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_work_item_for(&expand_home(&cwd), &repo, &kind, number)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1656,6 +1715,34 @@ fn git_github_work_items_for(
     parse_github_work_items(&json, kind, &repo)
 }
 
+fn git_github_work_item_for(
+    root: &Path,
+    repo: &str,
+    kind: &str,
+    number: i64,
+) -> Result<GitHubWorkItem, String> {
+    let kind = kind.trim();
+    if kind != "issue" && kind != "pr" {
+        return Err("Unknown GitHub task kind".into());
+    }
+    if number <= 0 {
+        return Err("GitHub task number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
+    let number = number.to_string();
+    let fields = if kind == "pr" {
+        "number,title,url,state,updatedAt,labels,assignees,isDraft"
+    } else {
+        "number,title,url,state,updatedAt,labels,assignees"
+    };
+    let json = gh_checked(
+        root,
+        &[kind, "view", &number, "--repo", &repo, "--json", fields],
+    )?;
+    parse_github_work_item(&json, kind, &repo)
+}
+
 fn git_github_work_item_details_for(
     root: &Path,
     kind: &str,
@@ -2425,6 +2512,14 @@ fn parse_github_work_items(
             repo: repo.to_string(),
         })
         .collect())
+}
+
+fn parse_github_work_item(json: &str, kind: &str, repo: &str) -> Result<GitHubWorkItem, String> {
+    let wrapped = format!("[{json}]");
+    parse_github_work_items(&wrapped, kind, repo)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "GitHub did not return a work item".into())
 }
 
 fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
@@ -4975,6 +5070,22 @@ mod tests {
         assert!(items[0].draft);
         assert!(items[0].labels.is_empty());
         assert_eq!(items[0].repo, "acme/web");
+    }
+
+    #[test]
+    fn parse_github_work_item_reads_view_shape() {
+        let json = r#"{
+            "number": 12,
+            "title": "WIP checkout",
+            "url": "https://github.com/acme/web/pull/12",
+            "state": "OPEN",
+            "isDraft": true
+        }"#;
+        let item = parse_github_work_item(json, "pr", "acme/web").unwrap();
+        assert_eq!(item.number, 12);
+        assert_eq!(item.kind, "pr");
+        assert_eq!(item.repo, "acme/web");
+        assert!(item.draft);
     }
 
     #[test]

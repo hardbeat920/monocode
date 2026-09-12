@@ -79,7 +79,12 @@ export function InboxComments({
     0,
   );
   const label = count === 1 ? "1 comment" : `${count} comments`;
-  const moreOn = provider === "linear" ? "Linear" : "GitHub";
+  const moreOn =
+    provider === "linear"
+      ? "Linear"
+      : provider === "gitlab"
+        ? "GitLab"
+        : "GitHub";
 
   return (
     <section className="flex flex-col gap-3 border-t border-content/10 pt-5">
@@ -208,9 +213,7 @@ export function InboxCommentForm({
           </button>
         </div>
       </div>
-      {error ? (
-        <p className="text-[12px] text-red-400/90">{error}</p>
-      ) : null}
+      {error ? <p className="text-[12px] text-red-400/90">{error}</p> : null}
     </form>
   );
 }
@@ -280,7 +283,11 @@ function InboxComment({
               <button
                 type="button"
                 title={
-                  provider === "linear" ? "Open in Linear" : "Open on GitHub"
+                  provider === "linear"
+                    ? "Open in Linear"
+                    : provider === "gitlab"
+                      ? "Open on GitLab"
+                      : "Open on GitHub"
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"

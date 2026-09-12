@@ -6,10 +6,7 @@ import {
   type InboxProvider,
 } from "./githubTasks";
 import { normalizeProjectPath } from "./recents";
-import {
-  timeFilterStart,
-  type SessionTimeFilter,
-} from "./sessionFilters";
+import { timeFilterStart, type SessionTimeFilter } from "./sessionFilters";
 
 export type InboxTimeFilter = SessionTimeFilter;
 
@@ -59,13 +56,62 @@ export const DEFAULT_INBOX_FILTERS: InboxFilters = {
 
 export type InboxSource = InboxProvider;
 
+export type ConnectableInboxSource = InboxSource;
+
+/** `null` means the status check has not resolved yet. */
+export type InboxSourceConnections = Record<
+  ConnectableInboxSource,
+  boolean | null
+>;
+
+export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
+  github: "GitHub",
+  linear: "Linear",
+  gitlab: "GitLab",
+};
+
+export function visibleInboxSources(
+  connections: InboxSourceConnections,
+): InboxSource[] {
+  const sources: InboxSource[] = [];
+  if (connections.github !== false) sources.push("github");
+  if (connections.linear !== false) sources.push("linear");
+  if (connections.gitlab !== false) sources.push("gitlab");
+  return sources;
+}
+
+export function connectableInboxSources(
+  connections: InboxSourceConnections,
+): ConnectableInboxSource[] {
+  const sources: ConnectableInboxSource[] = [];
+  if (connections.github === false) sources.push("github");
+  if (connections.linear === false) sources.push("linear");
+  if (connections.gitlab === false) sources.push("gitlab");
+  return sources;
+}
+
+export function resolveInboxSource(
+  source: InboxSource,
+  connections: InboxSourceConnections,
+): InboxSource {
+  const visible = visibleInboxSources(connections);
+  return visible.includes(source) ? source : (visible[0] ?? "github");
+}
+
 const FILTERS_KEY = "monocode.inboxFilters";
 const SOURCE_KEY = "monocode.inboxSource";
+const CONNECTIONS_KEY = "monocode.inboxConnections";
+
+const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
+  github: null,
+  linear: null,
+  gitlab: null,
+};
 
 export function loadInboxSource(): InboxSource {
   try {
     const raw = localStorage.getItem(SOURCE_KEY);
-    return raw === "linear" ? "linear" : "github";
+    return raw === "linear" || raw === "gitlab" ? raw : "github";
   } catch {
     return "github";
   }
@@ -74,6 +120,38 @@ export function loadInboxSource(): InboxSource {
 export function saveInboxSource(source: InboxSource) {
   try {
     localStorage.setItem(SOURCE_KEY, source);
+  } catch {
+    // private mode / quota
+  }
+}
+
+function connectFlag(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+/**
+ * Seeded from the last known answer so a returning user does not watch every
+ * tab paint and then drop two. A wrong guess corrects itself on the read.
+ */
+export function loadInboxConnections(): InboxSourceConnections {
+  try {
+    const raw = localStorage.getItem(CONNECTIONS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return UNKNOWN_CONNECTIONS;
+    const record = parsed as Record<string, unknown>;
+    return {
+      github: connectFlag(record.github),
+      linear: connectFlag(record.linear),
+      gitlab: connectFlag(record.gitlab),
+    };
+  } catch {
+    return UNKNOWN_CONNECTIONS;
+  }
+}
+
+export function saveInboxConnections(connections: InboxSourceConnections) {
+  try {
+    localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
   } catch {
     // private mode / quota
   }
@@ -88,7 +166,8 @@ export function loadInboxFilters(): InboxFilters {
       assignedToMe: parsed.assignedToMe === true,
       hiddenProjects: Array.isArray(parsed.hiddenProjects)
         ? parsed.hiddenProjects.filter(
-            (path): path is string => typeof path === "string" && path.length > 0,
+            (path): path is string =>
+              typeof path === "string" && path.length > 0,
           )
         : [],
       hiddenLinearProjects: Array.isArray(parsed.hiddenLinearProjects)
@@ -312,5 +391,7 @@ function isGithubInboxKind(value: unknown): value is InboxKind {
 }
 
 function isTimeFilter(value: unknown): value is InboxTimeFilter {
-  return value === "all" || value === "today" || value === "7d" || value === "30d";
+  return (
+    value === "all" || value === "today" || value === "7d" || value === "30d"
+  );
 }

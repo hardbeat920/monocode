@@ -206,6 +206,27 @@ describe("fileMentionParts", () => {
     ]);
   });
 
+  it("includes an editor line location in the highlighted mention", () => {
+    expect(
+      fileMentionParts(
+        "@apps/web/src/App.tsx (lines 115-123)\n\nwhat is this?",
+        index.labels,
+      ),
+    ).toEqual([
+      {
+        text: "@apps/web/src/App.tsx (lines 115-123)",
+        file: files[1],
+      },
+      { text: "\n\nwhat is this?" },
+    ]);
+    expect(
+      fileMentionParts("check @Composer.tsx (line 7)", index.labels),
+    ).toEqual([
+      { text: "check " },
+      { text: "@Composer.tsx (line 7)", file: files[2] },
+    ]);
+  });
+
   it("highlights folder mentions, including a trailing slash", () => {
     const chrome = index.labels.get("src/chrome");
     expect(fileMentionParts("look in @src/chrome please", index.labels)).toEqual([

@@ -26,6 +26,7 @@ import { flushSync } from "react-dom";
 import { AttachmentChip } from "../chrome/AttachmentChip";
 import { FilePreview } from "../chrome/FilePreview";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
+import { ToolDiffPreview } from "../chrome/ToolDiffPreview";
 import { PlanPreview } from "../chrome/PlanPreview";
 import { TaskListPreview } from "../chrome/TaskListPreview";
 import {
@@ -84,6 +85,7 @@ import {
   needsApproval,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  subagentFailureSummary,
   toolCallLabel,
   toolCallState,
   turnCopyText,
@@ -109,6 +111,7 @@ type Props = {
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
   onSaveNote?: (text: string) => void;
+  onSaveSelectionNote?: (text: string) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -119,6 +122,8 @@ type Props = {
   onJumpToBottomReady?: (jump: () => void) => void;
   /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
   onRevealReady?: (reveal: (blockId: string) => boolean) => void;
+  /** Session-level output shown after the latest reply and before its action row. */
+  latestTurnAccessory?: ReactNode;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
 };
@@ -133,6 +138,7 @@ function AgentTranscriptComponent({
   onApproval,
   onAddToChat,
   onSaveNote,
+  onSaveSelectionNote,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -142,6 +148,7 @@ function AgentTranscriptComponent({
   onJumpToBottomChange,
   onJumpToBottomReady,
   onRevealReady,
+  latestTurnAccessory,
   visible = true,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -155,8 +162,8 @@ function AgentTranscriptComponent({
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURNS);
   // Turns whose folded work the reader has opened, by turn id.
   const [openWork, setOpenWork] = useState<Record<string, boolean>>({});
-  const toggleWork = useCallback((turnId: string) => {
-    setOpenWork((open) => ({ ...open, [turnId]: !open[turnId] }));
+  const toggleWork = useCallback((turnId: string, currentlyOpen: boolean) => {
+    setOpenWork((open) => ({ ...open, [turnId]: !currentlyOpen }));
   }, []);
   // Stretch the last turn after a send while this tab stays open. Closing
   // the tab is a new visit: the remount uses the true transcript height so
@@ -164,7 +171,7 @@ function AgentTranscriptComponent({
   const [anchorTurn, setAnchorTurn] = useState(!!busy);
   const { selection, dismissSelection } = useTranscriptSelection(
     scrollerEl,
-    onAddToChat !== undefined,
+    onAddToChat !== undefined || onSaveSelectionNote !== undefined,
   );
   const transcriptLayout = useTranscriptLayout();
   const promptAnchor = useTranscriptAnchor();
@@ -174,7 +181,9 @@ function AgentTranscriptComponent({
     seenUserId.current = lastUserId;
     if (lastUserId && !anchorTurn) setAnchorTurn(true);
   }
-  const modelName = harness ? resolveModel(harness, model).name : undefined;
+  const currentModelName = harness
+    ? resolveModel(harness, model).name
+    : undefined;
   const waitingForApproval = hasPendingApproval(blocks) || pendingQuestion;
   const preparingHandoff = blocks.some(
     (block) =>
@@ -385,29 +394,39 @@ function AgentTranscriptComponent({
                 (item) => item.type === "block" && isProseBlock(item.block),
               );
           const workStillRunning = activityStillRunning(turn);
+          // New turns carry immutable model provenance. Legacy turns do not,
+          // so omit their model instead of rewriting history from the picker.
+          const turnModel = userBlock?.turnModel;
           const turnHarness = harness
-            ? harnessForTurn(blocks, turn, harness)
+            ? (turnModel?.harness ?? harnessForTurn(blocks, turn, harness))
             : undefined;
           // Work the turn has already answered for folds away behind one line,
           // leaving the prompt and the answer to it.
           const turnId = turn[0].id;
           const fold = foldableWork(items);
-          const workOpen = !!openWork[turnId];
           const folded = fold ? foldedBlocks(items, fold) : [];
+          const subagentFailure = subagentFailureSummary(turn);
+          // Failures open once by default so their provider detail is not
+          // buried. An explicit click still lets the reader fold them away.
+          const workOpen = openWork[turnId] ?? !!subagentFailure;
           // The fold line is the turn's status line from the first token to
           // the last: the mark, and the clock beside it. It never moves, so a
           // turn settling does not shuffle the layout around the answer.
           const live = visible && !settled && !preparingHandoff;
-          const foldTitle: ReactNode = live ? (
+          const turnModelName =
+            turnModel?.name ?? (live ? currentModelName : undefined);
+          const foldTitle: ReactNode = subagentFailure ? (
+            subagentFailure
+          ) : live ? (
             <LiveFoldTitle
               startedAt={startedAt}
               paused={waitingForApproval}
               waitingLabel={pendingQuestion ? "Waiting for answers" : undefined}
               subagent={hasRunningSubagent(turn)}
-              modelName={modelName}
+              modelName={turnModelName}
             />
           ) : durationMs != null ? (
-            formatWorkingDuration(durationMs, true, false, modelName)
+            formatWorkingDuration(durationMs, true, false, turnModelName)
           ) : (
             workSummaryLine(folded)
           );
@@ -476,9 +495,10 @@ function AgentTranscriptComponent({
                 kind={workKind(folded)}
                 harness={turnHarness}
                 live={live}
+                failed={!!subagentFailure}
                 expandable={!!fold}
                 open={workOpen && !!fold}
-                onToggle={() => toggleWork(turnId)}
+                onToggle={() => toggleWork(turnId, workOpen)}
               />
             </TurnRow>
           );
@@ -529,11 +549,12 @@ function AgentTranscriptComponent({
                 return [foldLineRow, row];
               })}
               {foldLineAt >= items.length ? foldLineRow : null}
+              {isLastTurn && latestTurnAccessory ? latestTurnAccessory : null}
               {durationMs != null && settled ? (
                 <TurnDuration
                   elapsedMs={durationMs}
                   labelHidden={showFoldLine}
-                  modelName={modelName}
+                  modelName={turnModelName}
                   completedAt={
                     startedAt != null ? startedAt + durationMs : undefined
                   }
@@ -557,10 +578,11 @@ function AgentTranscriptComponent({
           );
         })}
       </div>
-      {onAddToChat ? (
+      {onAddToChat || onSaveSelectionNote ? (
         <TranscriptSelectionMenu
           selection={selection}
           onAddToChat={onAddToChat}
+          onAddToNotes={onSaveSelectionNote}
           onDismiss={dismissSelection}
         />
       ) : null}
@@ -1111,6 +1133,7 @@ function WorkFoldLine({
   kind,
   harness,
   live = false,
+  failed = false,
   expandable,
   open,
   onToggle,
@@ -1119,13 +1142,16 @@ function WorkFoldLine({
   kind: ActivityPhaseKind;
   harness?: HarnessId;
   live?: boolean;
+  failed?: boolean;
   expandable: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
   const icon = (
     <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-      {open ? (
+      {failed ? (
+        <X className="size-3.5 shrink-0 text-red-400" strokeWidth={2} />
+      ) : open ? (
         // Open, the chevron stays put: it is the way back, and hunting for it
         // under the cursor is no way to close what you opened.
         <ChevronRight
@@ -1157,7 +1183,11 @@ function WorkFoldLine({
   );
   // While the agent runs, the clock shimmers here rather than at the bottom,
   // which is now bare.
-  const label = live ? (
+  const label = failed ? (
+    <span className="min-w-0 flex-1 truncate font-sans text-sm text-red-400">
+      {title}
+    </span>
+  ) : live ? (
     title
   ) : (
     <span className="min-w-0 flex-1 truncate font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
@@ -1334,7 +1364,8 @@ function ActivityPhaseGroup({
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const waiting = phase.steps.some(needsApproval);
-  const open = waiting || (override ?? active);
+  const failed = !!subagentFailureSummary(phase.steps);
+  const open = waiting || (override ?? (active || failed));
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
   useLivePhaseScroll(liveScroller, active && open, phase.steps);
   const title = activityPhaseTitle(phase, active);
@@ -1704,36 +1735,72 @@ function ActivityToolRow({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
+  const [errorOpen, setErrorOpen] = useState(false);
   const label = toolCallLabel(block, cwd);
   const state = toolCallState(block);
   const pending = needsApproval(block);
-  const openFile = isEditTool(
-    block.tool?.kind,
-    block.text || block.tool?.title,
-    block.tool?.preview,
-  )
-    ? (onOpenDiff ?? onOpenFile)
-    : onOpenFile;
+  const errorDetail =
+    !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
+  const summary = (
+    <ToolCallSummary
+      label={label}
+      preview={block.tool?.preview}
+      cwd={cwd}
+      chip={bare}
+      failed={state === "rejected"}
+      status={state}
+      onOpenFile={onOpenFile}
+      onOpenDiff={onOpenDiff}
+    />
+  );
 
   return (
     <div className="flex min-w-0 flex-col">
-      <div
-        aria-label={`Tool call: ${label}`}
-        className="flex min-w-0 items-center gap-1.5 py-1"
-      >
-        {bare ? null : <ActivityToolIcon state={state} live={live} />}
-        <ToolCallSummary
-          label={label}
-          preview={block.tool?.preview}
-          cwd={cwd}
-          chip={bare}
-          failed={state === "rejected"}
-          onOpenFile={openFile}
-        />
-        {pending ? null : <ToolCallStatusIcon state={state} />}
-      </div>
+      {errorDetail ? (
+        <div
+          aria-label={`Failed tool call: ${label}`}
+          className="group flex min-w-0 items-center gap-1.5 py-1"
+        >
+          {bare ? null : <ActivityToolIcon state={state} live={live} />}
+          <div
+            className="flex min-w-0 flex-1 cursor-pointer"
+            onClick={() => setErrorOpen((value) => !value)}
+          >
+            {summary}
+          </div>
+          <ToolCallStatusIcon state={state} />
+          <button
+            type="button"
+            aria-expanded={errorOpen}
+            aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
+            onClick={() => setErrorOpen((value) => !value)}
+            className="-m-1 shrink-0 rounded p-1"
+          >
+            <ChevronRight
+              className={`size-3.5 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+              strokeWidth={1.75}
+            />
+          </button>
+        </div>
+      ) : (
+        <div
+          aria-label={`Tool call: ${label}`}
+          className="flex min-w-0 items-center gap-1.5 py-1"
+        >
+          {bare ? null : <ActivityToolIcon state={state} live={live} />}
+          {summary}
+          {pending ? null : <ToolCallStatusIcon state={state} />}
+        </div>
+      )}
       {pending ? (
         <ApprovalControls block={block} onApproval={onApproval} />
+      ) : null}
+      {errorOpen && errorDetail ? (
+        <pre
+          className={`min-w-0 whitespace-pre-wrap break-words py-1 font-mono text-[12px] leading-5 text-red-400/80 ${bare ? "" : "pl-5"}`}
+        >
+          {errorDetail}
+        </pre>
       ) : null}
     </div>
   );
@@ -1886,12 +1953,27 @@ function ToolCall({
   if (editTool) {
     return (
       <div className={frame}>
-        <FilePreview
-          preview={preview ?? stubFilePreview(block.tool?.kind, label)}
-          status={state}
-          cwd={cwd}
-          onOpenFile={onOpenDiff ?? onOpenFile}
-        />
+        {needsApproval(block) ? (
+          <FilePreview
+            preview={preview ?? stubFilePreview(block.tool?.kind, label)}
+            status={state}
+            cwd={cwd}
+            onOpenFile={onOpenDiff ?? onOpenFile}
+          />
+        ) : (
+          <div className="flex min-w-0 items-center gap-2 py-1">
+            <ToolCallIcon state={state} />
+            <ToolCallSummary
+              label={label}
+              preview={preview}
+              cwd={cwd}
+              failed={state === "rejected"}
+              status={state}
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+          </div>
+        )}
         <ApprovalControls block={block} onApproval={onApproval} />
       </div>
     );
@@ -1952,18 +2034,22 @@ function ToolCallSummary({
   preview,
   cwd,
   onOpenFile,
+  onOpenDiff,
   interactive = true,
   chip = false,
   failed = false,
+  status = "accepted",
 }: {
   label: string;
   preview?: ToolPreview;
   cwd?: string;
   onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
   interactive?: boolean;
   /** Sets the file off in a chip, for rows that lean on a rail for structure. */
   chip?: boolean;
   failed?: boolean;
+  status?: ToolCallState;
 }) {
   const parts = label.match(/^(Read|Find|Skill|List|Edit|Write)\s+(.+)$/);
   // A write preview carries the path itself, so edits get the same verb + file
@@ -2020,7 +2106,16 @@ function ToolCallSummary({
       .pop() ||
     "file";
   const filePath = resolveWorkspacePath(preview?.path || target, cwd);
-  const canOpen = interactive && !!onOpenFile && !!filePath;
+  const openFile =
+    action === "Edit" || action === "Write"
+      ? (onOpenDiff ?? onOpenFile)
+      : onOpenFile;
+  const canOpen = interactive && !!openFile && !!filePath;
+  const canPreview =
+    interactive &&
+    preview?.kind === "write" &&
+    (preview.contentOnly ||
+      preview.lines?.some((line) => line.kind !== "context"));
   const actionTone = failed ? "text-red-400" : "text-content/50";
   const targetTone = failed
     ? "text-red-400"
@@ -2034,7 +2129,24 @@ function ToolCallSummary({
         {action}
       </span>
       {isFile ? (
-        canOpen ? (
+        canPreview ? (
+          <ToolDiffPreview
+            preview={preview}
+            label={target}
+            status={status}
+            cwd={cwd}
+            onOpen={openFile && filePath ? () => openFile(filePath) : undefined}
+            onOpenFile={onOpenFile}
+            className={`-my-0.5 flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-left hover:text-sky-300 ${
+              chip
+                ? `max-w-full bg-content/6 hover:bg-content/10 ${targetTone}`
+                : `flex-1 hover:bg-content/6 ${targetTone}`
+            }`}
+          >
+            <FileTypeIcon name={fileName} isDir={false} />
+            <span className="min-w-0 truncate">{target}</span>
+          </ToolDiffPreview>
+        ) : canOpen ? (
           <button
             type="button"
             className={`-my-0.5 flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-left hover:text-sky-300 ${
@@ -2045,7 +2157,7 @@ function ToolCallSummary({
             title={preview?.path || target}
             onClick={(event) => {
               event.stopPropagation();
-              onOpenFile?.(filePath);
+              openFile?.(filePath);
             }}
           >
             <FileTypeIcon name={fileName} isDir={action === "List"} />

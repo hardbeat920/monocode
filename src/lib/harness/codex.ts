@@ -1,5 +1,6 @@
 import { nativeModelId } from "../models";
-import type { Attachment, RuntimeMode } from "../session";
+import type { RuntimeMode } from "../session";
+import { questionPromptTitle, type UserQuestionReply } from "../userQuestion";
 import {
   killChild,
   resolveCodexBinary,
@@ -15,10 +16,13 @@ import {
   isRecoverableThreadResumeError,
   mapApprovalRequest,
   mapCodexNotification,
+  stringField,
   toCodexApprovalDecision,
   type CodexApprovalKind,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "./jsonRpc";
+import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
+import { codexMcpConfirmation } from "./codexElicitation";
 import { joinStreamText, snapshotRemainder } from "./streamText";
 import type {
   ApprovalDecision,
@@ -29,11 +33,27 @@ import type {
   SteerTurnInput,
 } from "./types";
 
+type ApprovalOutcome = ApprovalDecision | "cancelled";
+
 type PendingApproval = {
   rpcId: JsonRpcId;
+  threadId: string;
   kind: CodexApprovalKind;
-  resolve: (decision: ApprovalDecision) => void;
+  resolve: (decision: ApprovalOutcome) => void;
 };
+
+type PendingQuestion = {
+  rpcId: JsonRpcId;
+  threadId: string;
+  event: Extract<HarnessEvent, { type: "question.asked" }>;
+  isBlocking: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  resolve: (reply: UserQuestionReply | "cancelled") => void;
+};
+
+// Match Codex's non-blocking question policy: a minute of grace, then a
+// minute of countdown. Interaction keeps the question open for the user.
+const QUESTION_AUTO_RESOLVE_MS = 120_000;
 
 type Live = {
   rpc: JsonRpcClient;
@@ -43,6 +63,8 @@ type Live = {
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
+  questions: Map<number, PendingQuestion>;
+  visibleQuestionId: number | null;
   nextApprovalUiId: number;
   cancelled: boolean;
   muteUpdates: boolean;
@@ -87,11 +109,11 @@ export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
   if (cancelledThreads.delete(input.sessionId)) return;
 
   live.onEvent = input.onEvent;
-  live.runtimeMode = input.runtimeMode;
-  live.planning = input.intent === "plan";
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
+      live.runtimeMode = input.runtimeMode;
+      live.planning = input.intent === "plan";
       live.cancelled = false;
       live.muteUpdates = false;
       try {
@@ -138,12 +160,11 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const turnId = live.activeTurnId;
   if (!turnId) throw new Error("No active turn to steer");
 
-  const attachments = await codexAttachments(input.attachments ?? []);
   const params = buildTurnSteerParams({
     threadId: live.threadId,
     expectedTurnId: turnId,
     prompt: input.text.trim() || undefined,
-    attachments,
+    attachments: input.attachments,
   });
   if (
     !params.input ||
@@ -166,6 +187,55 @@ export function respondCodexApproval(
   pending.resolve(decision);
 }
 
+export function respondCodexQuestion(
+  sessionId: string,
+  requestId: number,
+  reply: UserQuestionReply,
+): void {
+  liveByThread.get(sessionId)?.questions.get(requestId)?.resolve(reply);
+}
+
+export function keepCodexQuestionOpen(sessionId: string, requestId: number): void {
+  const live = liveByThread.get(sessionId);
+  const pending = live?.questions.get(requestId);
+  if (!live || !pending || pending.timer === undefined) return;
+  clearTimeout(pending.timer);
+  pending.timer = undefined;
+  live.onEvent({ type: "question.updated", requestId });
+}
+
+function clearServerRequests(live: Live): void {
+  for (const pending of live.approvals.values()) pending.resolve("cancelled");
+  for (const pending of live.questions.values()) {
+    clearTimeout(pending.timer);
+    pending.resolve("cancelled");
+  }
+  live.approvals.clear();
+  live.questions.clear();
+  live.visibleQuestionId = null;
+}
+
+function showNextQuestion(live: Live): void {
+  if (
+    live.visibleQuestionId !== null &&
+    live.questions.has(live.visibleQuestionId)
+  )
+    return;
+  const next = live.questions.entries().next().value;
+  live.visibleQuestionId = next?.[0] ?? null;
+  if (next) {
+    const pending = next[1];
+    if (!pending.isBlocking) {
+      pending.event.autoResolveAt = Date.now() + QUESTION_AUTO_RESOLVE_MS;
+      pending.timer = setTimeout(
+        () => pending.resolve({ kind: "skipped" }),
+        QUESTION_AUTO_RESOLVE_MS,
+      );
+    }
+    live.onEvent(pending.event);
+  }
+}
+
 export async function cancelCodexTurn(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   if (!live) {
@@ -174,10 +244,7 @@ export async function cancelCodexTurn(sessionId: string): Promise<void> {
   }
   live.cancelled = true;
   live.muteUpdates = true;
-  for (const [, pending] of live.approvals) {
-    pending.resolve("deny");
-  }
-  live.approvals.clear();
+  clearServerRequests(live);
   const turnId = live.activeTurnId;
   if (turnId) {
     await live.rpc
@@ -199,6 +266,7 @@ export async function stopCodexSession(sessionId: string): Promise<void> {
   liveByThread.delete(sessionId);
   if (live) {
     live.muteUpdates = true;
+    clearServerRequests(live);
     live.turnDone?.();
     live.turnDone = null;
     live.turnFailed = null;
@@ -227,7 +295,6 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   if (existing && existing.cwd === input.cwd) {
     existing.onEvent = input.onEvent;
-    existing.runtimeMode = input.runtimeMode;
     return existing;
   }
   if (existing) {
@@ -254,8 +321,28 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
-        if (!live) return;
-        void handleServerRequest(live, id, method, params);
+        const turn = live?.turnDone;
+        // The external clock can be requested before thread/start or resume
+        // returns, so it must not depend on the live session being bound.
+        const response =
+          method === "currentTime/read"
+            ? rpc.respond(id, { currentTimeAt: Math.floor(Date.now() / 1000) })
+            : live
+              ? handleServerRequest(live, id, method, params)
+              : undefined;
+        void response?.catch((error: unknown) => {
+          if (live?.muteUpdates || (live && live.turnDone !== turn)) return;
+          const failure =
+            error instanceof Error ? error : new Error(String(error));
+          if (live?.turnFailed) {
+            live.turnFailed(failure);
+          } else {
+            (live?.onEvent ?? input.onEvent)({
+              type: "session.error",
+              message: failure.message,
+            });
+          }
+        });
       },
     },
     { includeJsonrpc: false, label: "codex" },
@@ -267,10 +354,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (code) => {
       rpc.close(new Error("Codex app-server exited"));
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const live = liveRef.current;
+      if (!live?.muteUpdates) {
+        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
       live?.turnFailed?.(new Error("Codex app-server exited"));
       if (live) {
+        clearServerRequests(live);
         live.turnDone = null;
         live.turnFailed = null;
       }
@@ -287,6 +377,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         version: "0.1.0",
       },
       capabilities: {
+        // Required by collaborationMode (including Plan); currentTime/read is
+        // handled above even while the thread is starting or resuming.
         experimentalApi: true,
       },
     });
@@ -347,6 +439,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       planning: input.intent === "plan",
       onEvent: input.onEvent,
       approvals: new Map(),
+      questions: new Map(),
+      visibleQuestionId: null,
       nextApprovalUiId: 1,
       cancelled: false,
       muteUpdates: didResume,
@@ -381,25 +475,19 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const model = nativeModelId(input.model);
   const effort = input.modelSettings?.reasoningEffort;
   const serviceTier = input.modelSettings?.serviceTier;
-  const attachments = await codexAttachments(input.attachments ?? []);
 
   const params = buildTurnStartParams({
     threadId: live.threadId,
     runtimeMode: input.runtimeMode,
     prompt: input.text.trim() || undefined,
-    attachments,
+    attachments: input.attachments,
     model,
     effort,
     serviceTier,
     intent: input.intent,
   });
 
-  if (
-    (!params.input ||
-      (Array.isArray(params.input) && params.input.length === 0)) &&
-    !input.text.trim() &&
-    attachments.length === 0
-  ) {
+  if (Array.isArray(params.input) && params.input.length === 0) {
     return;
   }
 
@@ -458,11 +546,39 @@ async function runCompaction(live: Live): Promise<void> {
 }
 
 function handleNotification(live: Live, method: string, params: unknown): void {
+  const rec = asRecord(params);
+  if (method === "serverRequest/resolved") {
+    for (const pending of live.approvals.values()) {
+      if (
+        pending.rpcId === rec?.requestId &&
+        pending.threadId === rec?.threadId
+      )
+        pending.resolve("cancelled");
+    }
+    for (const pending of live.questions.values()) {
+      if (
+        pending.rpcId === rec?.requestId &&
+        pending.threadId === rec?.threadId
+      )
+        pending.resolve("cancelled");
+    }
+    return;
+  }
+  // Child requests use this connection too, but their transcript and lifecycle
+  // notifications must not change the parent's turn or clear its approvals.
+  const threadId = stringField(rec, "threadId");
+  if (threadId && threadId !== live.threadId) return;
   // A Codex turn is a sequence of items. Completing an agentMessage does not
   // mean the turn is over — more tools and messages can still arrive. Only
   // turn/completed (and turn/aborted) settle sendCodexTurn, which is what the
   // UI uses for busy / stop / "Working for".
   const mapped = mapCodexNotification(method, params);
+  if (mapped.diagnostic) {
+    console.debug(
+      `[monocode] codex ${live.threadId} ${method}`,
+      mapped.diagnostic,
+    );
+  }
   const snapshot = method === "item/completed";
   for (const event of mapped.events) {
     if (event.type === "message.delta") {
@@ -503,6 +619,7 @@ function publishCodexText(
 }
 
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
+  clearServerRequests(live);
   live.turnEndPending = false;
   live.activeTurnId = null;
   live.emittedAssistant = "";
@@ -534,30 +651,113 @@ async function handleServerRequest(
   method: string,
   params: unknown,
 ): Promise<void> {
+  const threadId = stringField(asRecord(params), "threadId") ?? live.threadId;
   if (method === "item/tool/requestUserInput") {
-    await live.rpc.respond(id, { answers: {} }).catch(() => undefined);
+    if (live.cancelled || live.muteUpdates) {
+      await live.rpc.respond(id, { answers: {} });
+      return;
+    }
+    let questions;
+    try {
+      questions = codexQuestions(params);
+    } catch (error) {
+      live.onEvent({
+        type: "status",
+        text: error instanceof Error ? error.message : String(error),
+      });
+      await live.rpc.respond(id, { answers: {} });
+      return;
+    }
+    const uiId = live.nextApprovalUiId++;
+    const event: Extract<HarnessEvent, { type: "question.asked" }> = {
+      type: "question.asked",
+      requestId: uiId,
+      title: questionPromptTitle(questions),
+      questions,
+      callId: stringField(asRecord(params), "itemId"),
+    };
+    const outcome = new Promise<UserQuestionReply | "cancelled">((resolve) => {
+      live.questions.set(uiId, {
+        rpcId: id,
+        threadId,
+        event,
+        resolve,
+        // Older servers omit this field and must keep their blocking behavior.
+        isBlocking: asRecord(params)?.isBlocking !== false,
+      });
+    }).finally(() => {
+      clearTimeout(live.questions.get(uiId)?.timer);
+      live.questions.delete(uiId);
+    });
+    showNextQuestion(live);
+    const reply = await outcome;
+    live.onEvent({
+      type: "question.resolved",
+      requestId: uiId,
+      decision:
+        reply === "cancelled"
+          ? "cancelled"
+          : reply.kind === "answered"
+            ? "answered"
+            : "skipped",
+    });
+    showNextQuestion(live);
+    if (reply !== "cancelled")
+      await live.rpc.respond(id, codexQuestionResponse(questions, reply));
+    return;
+  }
+
+  if (method === "mcpServer/elicitation/request") {
+    const confirmation = codexMcpConfirmation(params);
+    if (!confirmation || live.cancelled || live.muteUpdates) {
+      if (!live.cancelled && !live.muteUpdates)
+        live.onEvent({
+          type: "status",
+          text: "This MCP server requested a form or browser sign-in that MonoCode does not support yet. Complete it in the server's own interface.",
+        });
+      await live.rpc.respond(id, {
+        action: "cancel",
+        content: null,
+        _meta: null,
+      });
+      return;
+    }
+    const uiId = live.nextApprovalUiId++;
+    const pending = waitApproval(live, uiId, id, "permissions", threadId);
+    // MCP consent must carry the user's decision, including in Full Access.
+    live.onEvent({
+      type: "approval.requested",
+      requestId: uiId,
+      kind: "other",
+      title: confirmation.title,
+    });
+    const decision = await pending;
+    live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
+    if (decision !== "cancelled")
+      await live.rpc.respond(id, {
+        action: decision === "allow" ? "accept" : "decline",
+        content: decision === "allow" ? confirmation.content : null,
+        _meta: null,
+      });
     return;
   }
 
   const uiId = live.nextApprovalUiId++;
   const mapped = mapApprovalRequest(method, params, uiId);
   if (!mapped) {
-    // Unknown server request — decline/cancel safely when possible.
-    if (method.includes("requestApproval") || method.includes("Approval")) {
-      await live.rpc
-        .respond(id, { decision: "decline" })
-        .catch(() => undefined);
-      return;
-    }
-    if (method === "item/permissions/requestApproval") {
-      await live.rpc.respond(id, { permissions: {} }).catch(() => undefined);
-      return;
-    }
-    await live.rpc.respond(id, {}).catch(() => undefined);
+    // An empty success or invented denial hides protocol incompatibility.
+    live.onEvent({
+      type: "status",
+      text: `Unsupported Codex request: ${method}`,
+    });
+    await live.rpc.respondError(id, {
+      code: -32601,
+      message: `Unsupported method: ${method}`,
+    });
     return;
   }
 
-  if (live.planning) {
+  if (live.planning || live.cancelled || live.muteUpdates) {
     // Plan turns run in a non-escalating read-only sandbox. If an older
     // app-server still asks for broader access, deny it silently instead of
     // leaking a Supervised approval prompt into the user's selected mode.
@@ -585,13 +785,15 @@ async function handleServerRequest(
       return;
     }
     if (live.runtimeMode === "supervised") {
+      const pending = waitApproval(live, uiId, id, mapped.kind, threadId);
       live.onEvent(mapped.event);
-      const decision = await waitApproval(live, uiId, id, mapped.kind);
+      const decision = await pending;
       live.onEvent({
         type: "approval.resolved",
         requestId: uiId,
         decision,
       });
+      if (decision === "cancelled") return;
       if (decision === "allow") {
         const rec = asRecord(params);
         await live.rpc.respond(id, {
@@ -620,13 +822,15 @@ async function handleServerRequest(
     return;
   }
 
+  const pending = waitApproval(live, uiId, id, mapped.kind, threadId);
   live.onEvent(mapped.event);
-  const decision = await waitApproval(live, uiId, id, mapped.kind);
+  const decision = await pending;
   live.onEvent({
     type: "approval.resolved",
     requestId: uiId,
     decision,
   });
+  if (decision === "cancelled") return;
   await live.rpc.respond(id, {
     decision: toCodexApprovalDecision(decision, mapped.kind),
   });
@@ -637,9 +841,10 @@ function waitApproval(
   uiId: number,
   rpcId: JsonRpcId,
   kind: CodexApprovalKind,
-): Promise<ApprovalDecision> {
-  return new Promise<ApprovalDecision>((resolve) => {
-    live.approvals.set(uiId, { rpcId, kind, resolve });
+  threadId: string,
+): Promise<ApprovalOutcome> {
+  return new Promise<ApprovalOutcome>((resolve) => {
+    live.approvals.set(uiId, { rpcId, threadId, kind, resolve });
   }).finally(() => {
     live.approvals.delete(uiId);
   });
@@ -658,21 +863,6 @@ function autoApproval(
   // auto-accept-edits: auto file changes, ask for commands.
   if (kind === "file-change") return "allow";
   return null;
-}
-
-async function codexAttachments(
-  files: Attachment[],
-): Promise<Array<{ type: "image"; url: string }>> {
-  const out: Array<{ type: "image"; url: string }> = [];
-  for (const file of files) {
-    if (!file.data) continue;
-    if (!file.mimeType.startsWith("image/")) continue;
-    out.push({
-      type: "image",
-      url: `data:${file.mimeType};base64,${file.data}`,
-    });
-  }
-  return out;
 }
 
 /** Exported for tests. */

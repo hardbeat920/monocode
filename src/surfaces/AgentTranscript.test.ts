@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Block } from "../lib/session";
@@ -14,11 +14,66 @@ function tool(id: string, approval?: Block["approval"]): Block {
   };
 }
 
-function render(blocks: Block[], busy = false) {
-  return renderToStaticMarkup(createElement(AgentTranscript, { blocks, busy }));
+function render(
+  blocks: Block[],
+  busy = false,
+  latestTurnAccessory?: ReactNode,
+) {
+  return renderToStaticMarkup(
+    createElement(AgentTranscript, { blocks, busy, latestTurnAccessory }),
+  );
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("keeps each completed turn's recorded model label", () => {
+    const blocks: Block[] = [
+      {
+        id: "user",
+        role: "user",
+        text: "Remember this",
+        durationMs: 9_000,
+        turnModel: {
+          harness: "claude",
+          id: "claude:sonnet-5",
+          name: "Claude Sonnet 5",
+        },
+      },
+      { id: "answer", role: "assistant", text: "Remembered." },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        harness: "claude",
+        model: "claude:opus-5",
+      }),
+    );
+
+    expect(markup).toContain("Claude Sonnet 5 worked for 9s");
+    expect(markup).not.toContain("Claude Opus 5 worked for 9s");
+  });
+
+  it("does not assign the current model to a legacy completed turn", () => {
+    const blocks: Block[] = [
+      {
+        id: "user",
+        role: "user",
+        text: "Old prompt",
+        durationMs: 9_000,
+      },
+      { id: "answer", role: "assistant", text: "Old answer." },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        harness: "claude",
+        model: "claude:opus-5",
+      }),
+    );
+
+    expect(markup).toContain("Worked for 9s");
+    expect(markup).not.toContain("Claude Opus 5 worked for 9s");
+  });
+
   it("renders the summary and answer without mounting a large completed tool trail", () => {
     const blocks: Block[] = [
       { id: "user", role: "user", text: "Check the project" },
@@ -53,5 +108,52 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("hidden-detail-approval");
     expect(markup).toContain("Please approve the command.");
     expect(markup.includes('aria-label="Show the work"')).toBe(false);
+  });
+
+  it("opens failed subagent work but keeps provider details collapsed", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Inspect auth",
+        tool: {
+          callId: "agent-1",
+          kind: "agent",
+          status: "failed",
+          detail: "Child process disconnected",
+        },
+      },
+      { id: "answer", role: "assistant", text: "I could not finish." },
+    ]);
+
+    expect(markup).toContain("Subagent failed");
+    expect(markup).not.toContain("Child process disconnected");
+    expect(markup).toContain("Show error details for Inspect auth");
+    expect(markup).toContain('aria-label="Hide the work"');
+  });
+
+  it("places a session accessory after the latest reply and before its action row", () => {
+    const markup = render(
+      [
+        {
+          id: "user",
+          role: "user",
+          text: "Change the files",
+          startedAt: 1_000,
+          durationMs: 500,
+        },
+        { id: "answer", role: "assistant", text: "Done changing files." },
+      ],
+      false,
+      createElement("aside", { "data-test-review": true }, "Changed files"),
+    );
+
+    expect(markup.indexOf("Done changing files.")).toBeLessThan(
+      markup.indexOf("Changed files"),
+    );
+    expect(markup.indexOf("Changed files")).toBeLessThan(
+      markup.indexOf('aria-label="Worked for 1s"'),
+    );
   });
 });

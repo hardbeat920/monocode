@@ -86,6 +86,54 @@ export function extractToolPreview(
     }
   }
 
+  if (kind === "write") {
+    for (const input of inputs) {
+      for (const [oldKey, newKey] of [
+        ["old_string", "new_string"],
+        ["oldText", "newText"],
+        ["old_text", "new_text"],
+        ["oldString", "newString"],
+      ]) {
+        const before = input[oldKey];
+        const after = input[newKey];
+        if (typeof before !== "string" || typeof after !== "string") continue;
+        const built = compactDiff(before, after);
+        return {
+          kind,
+          title,
+          path,
+          fileName,
+          ...built,
+          // Replacement strings are excerpts, not the file from line one.
+          lines: built.lines.map(({ kind, text }) => ({ kind, text })),
+        };
+      }
+      if (
+        typeof input.content === "string" &&
+        (rawKind === "write" || /^write\b/i.test(title ?? "")) &&
+        input !== update &&
+        input !== tool
+      ) {
+        // Write may overwrite an existing file. Without its previous contents
+        // these are the written lines, not a claim that every line was added.
+        return {
+          kind,
+          title,
+          path,
+          fileName,
+          contentOnly: true,
+          lines: textLines(input.content)
+            .slice(0, MAX_PREVIEW_LINES)
+            .map((text, index) => ({
+              number: index + 1,
+              kind: "context",
+              text: capLine(text),
+            })),
+        };
+      }
+    }
+  }
+
   if (!path && kind !== "read" && kind !== "write") return undefined;
 
   return {
@@ -442,11 +490,12 @@ export function mergeToolPreview(
     startLine: next.startLine ?? prev.startLine,
     additions: next.additions ?? prev.additions,
     deletions: next.deletions ?? prev.deletions,
+    contentOnly: next.lines ? next.contentOnly : prev.contentOnly,
     query: next.query || prev.query,
     lines:
       next.kind === "read" || next.kind === "search"
         ? undefined
-        : next.lines?.length
+        : next.lines !== undefined
           ? next.lines
           : prev.kind === "read" || prev.kind === "search"
             ? undefined
@@ -638,8 +687,8 @@ function extractDiff(content: unknown): {
     }
     return {
       path: path ?? undefined,
-      oldText: coerceString(block.oldText) ?? coerceString(block.old_text),
-      newText: coerceString(block.newText) ?? coerceString(block.new_text),
+      oldText: textField(block.oldText) ?? textField(block.old_text),
+      newText: textField(block.newText) ?? textField(block.new_text),
     };
   }
   return undefined;
@@ -729,18 +778,16 @@ function compactDiff(
   oldText: string | undefined,
   newText: string,
 ): { lines: ToolPreviewLine[]; additions: number; deletions: number } {
-  const oldLines = (oldText ?? "").replace(/\r\n/g, "\n").split("\n");
-  const newLines = newText.replace(/\r\n/g, "\n").split("\n");
-  const cappedOld = oldLines.slice(0, 800);
-  const cappedNew = newLines.slice(0, 800);
+  const oldLines = textLines(oldText ?? "");
+  const newLines = textLines(newText);
   const hunks =
     oldText == null || oldText === ""
-      ? cappedNew.map((text, index) => ({
+      ? newLines.map((text, index) => ({
           number: index + 1,
           kind: "add" as const,
           text,
         }))
-      : greedyDiff(cappedOld, cappedNew);
+      : greedyDiff(oldLines, newLines);
 
   const additions = hunks.filter((line) => line.kind === "add").length;
   const deletions = hunks.filter((line) => line.kind === "del").length;
@@ -754,6 +801,17 @@ function compactDiff(
     additions,
     deletions,
   };
+}
+
+function textField(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function textLines(text: string): string[] {
+  if (!text) return [];
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
 }
 
 function greedyDiff(oldLines: string[], newLines: string[]): ToolPreviewLine[] {

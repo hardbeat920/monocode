@@ -6,6 +6,7 @@ import {
   loadProjectFiles,
   peekProjectFiles,
   rememberOpenedFile,
+  resolveFileOpenRequest,
   resolveOpenablePath,
   subscribeProjectFiles,
 } from "./fileIndex";
@@ -75,6 +76,20 @@ describe("resolveOpenablePath", () => {
   it("matches a relative project path", async () => {
     const resolved = await resolveOpenablePath(cwd, "apps/desktop/src/main.tsx");
     expect(resolved).toBe(files[2].path);
+  });
+
+  it("still opens a direct file when the optional project index is unavailable", async () => {
+    list.mockRejectedValue(new Error("Project scan unavailable"));
+    await expect(resolveOpenablePath(cwd, "apps/desktop/src/main.tsx"))
+      .resolves.toBe(files[2].path);
+  });
+
+  it("preserves an exact path even when it is absent from the project index", async () => {
+    const ignored = `${cwd}/ignored/App.tsx`;
+    await expect(
+      resolveFileOpenRequest(cwd, ignored, { exact: true }),
+    ).resolves.toBe(ignored);
+    expect(list).not.toHaveBeenCalled();
   });
 });
 

@@ -140,14 +140,7 @@ export function GitChangesPanel({
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
     >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-content/10 px-3">
-        {(index?.additions ?? 0) > 0 || (index?.deletions ?? 0) > 0 ? (
-          <DiffCounts
-            additions={index?.additions ?? 0}
-            deletions={index?.deletions ?? 0}
-          />
-        ) : (
-          <span className="text-[12px] font-medium text-content">Changes</span>
-        )}
+        <span className="text-[12px] font-medium text-content">Changes</span>
         {index?.branch ? (
           <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-content/50">
             <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
@@ -1270,26 +1263,6 @@ function IconAction({
     >
       {children}
     </button>
-  );
-}
-
-function DiffCounts({
-  additions,
-  deletions,
-}: {
-  additions: number;
-  deletions: number;
-}) {
-  if (additions <= 0 && deletions <= 0) return null;
-  return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-semibold tabular-nums">
-      {additions > 0 ? (
-        <span className="text-emerald-400">+{additions}</span>
-      ) : null}
-      {deletions > 0 ? (
-        <span className="text-red-400">-{deletions}</span>
-      ) : null}
-    </span>
   );
 }
 

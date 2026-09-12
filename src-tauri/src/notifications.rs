@@ -14,6 +14,16 @@ use tauri::AppHandle;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub const CLICK_EVENT: &str = "monocode:notification-click";
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn handle_click(app: &AppHandle, identifier: &str) {
+    use tauri::Emitter;
+    if let Some(reminder) = identifier.strip_prefix(crate::reminders::NOTIFICATION_PREFIX) {
+        crate::reminders::open_from_notification(app, reminder);
+    } else {
+        let _ = app.emit(CLICK_EVENT, identifier);
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub use platform::install_delegate;
 
@@ -83,9 +93,9 @@ mod platform {
         UNNotificationResponse, UNNotificationSetting, UNNotificationSettings, UNNotificationSound,
         UNUserNotificationCenter, UNUserNotificationCenterDelegate,
     };
-    use tauri::{AppHandle, Emitter};
+    use tauri::AppHandle;
 
-    use super::{Permission, CLICK_EVENT};
+    use super::Permission;
 
     /// Request identifiers carry the session so a click can find it without
     /// touching `userInfo`. Each request gets a fresh suffix: reusing one
@@ -307,7 +317,7 @@ mod platform {
             ) {
                 let identifier = response.notification().request().identifier().to_string();
                 if let Some(session_id) = session_from_identifier(&identifier) {
-                    let _ = self.ivars().app.emit(CLICK_EVENT, session_id);
+                    super::handle_click(&self.ivars().app, session_id);
                 }
                 completion.call(());
             }
@@ -412,9 +422,9 @@ mod platform {
 
 #[cfg(target_os = "linux")]
 mod platform {
-    use tauri::{AppHandle, Emitter};
+    use tauri::AppHandle;
 
-    use super::{Permission, CLICK_EVENT};
+    use super::Permission;
 
     pub(super) async fn permission() -> Permission {
         Permission::Granted
@@ -451,7 +461,7 @@ mod platform {
         std::thread::spawn(move || {
             handle.wait_for_action(|action| {
                 if action == "default" {
-                    let _ = app.emit(CLICK_EVENT, session_id.as_str());
+                    super::handle_click(&app, &session_id);
                 }
             });
         });

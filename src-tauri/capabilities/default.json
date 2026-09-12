@@ -16,6 +16,7 @@
     "core:window:allow-hide",
     "core:webview:allow-set-webview-zoom",
     "opener:default",
+    "opener:allow-open-path",
     "dialog:default",
     "updater:default",
     "process:default",

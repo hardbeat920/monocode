@@ -1,4 +1,5 @@
 import type { Attachment, ToolPreview } from "../session";
+import { attachmentPathText } from "../attachments";
 import type { AgentModel, ModelSetting } from "../models";
 import { isTaskListToolName } from "../taskList";
 import type { PiFlavor } from "./piFlavor";
@@ -180,19 +181,25 @@ export function piNativeId(provider: string, modelId: string): string {
   return `${provider}/${modelId}`;
 }
 
-export function toPiImages(attachments: Attachment[] | undefined): PiImage[] {
+function piPromptContent(text: string, attachments: Attachment[] = []) {
   const images: PiImage[] = [];
-  for (const attachment of attachments ?? []) {
-    if (attachment.kind !== "image" || !attachment.data) continue;
+  const parts = text ? [text] : [];
+  for (const attachment of attachments) {
     const mimeType = attachment.mimeType.trim().toLowerCase();
-    if (!SUPPORTED_PI_IMAGE_MIME_TYPES.has(mimeType)) continue;
-    images.push({
-      type: "image",
-      data: attachment.data,
-      mimeType,
-    });
+    if (
+      attachment.kind === "image" &&
+      attachment.data &&
+      SUPPORTED_PI_IMAGE_MIME_TYPES.has(mimeType)
+    ) {
+      images.push({ type: "image", data: attachment.data, mimeType });
+    } else {
+      parts.push(attachmentPathText(attachment));
+    }
   }
-  return images;
+  return {
+    message: parts.join("\n\n"),
+    ...(images.length > 0 ? { images } : {}),
+  };
 }
 
 export function buildPiPrompt(input: {
@@ -202,10 +209,8 @@ export function buildPiPrompt(input: {
 }): Record<string, unknown> {
   const command: Record<string, unknown> = {
     type: "prompt",
-    message: input.text,
+    ...piPromptContent(input.text, input.attachments),
   };
-  const images = toPiImages(input.attachments);
-  if (images.length > 0) command.images = images;
   if (input.streaming) command.streamingBehavior = "steer";
   return command;
 }
@@ -214,13 +219,10 @@ export function buildPiSteer(input: {
   text: string;
   attachments?: Attachment[];
 }): Record<string, unknown> {
-  const command: Record<string, unknown> = {
+  return {
     type: "steer",
-    message: input.text,
+    ...piPromptContent(input.text, input.attachments),
   };
-  const images = toPiImages(input.attachments);
-  if (images.length > 0) command.images = images;
-  return command;
 }
 
 export function parseRpcResponse(
@@ -686,13 +688,16 @@ export function modelsFromRpcData(
     seen.add(nativeId);
     const name = stringField(model, "name") || modelId;
     const contextWindow = numberField(model, "contextWindow");
-    const settings = thinkingSetting(model.reasoning === true);
+    const settings = [
+      thinkingSetting(model.reasoning === true),
+      flavor.id === "omp" ? fastModeSetting() : undefined,
+    ].filter((setting): setting is ModelSetting => setting != null);
     models.push({
       id: `${flavor.id}:${nativeId}`,
       harness: flavor.id,
       name,
       nativeId,
-      ...(settings ? { settings: [settings] } : {}),
+      ...(settings.length > 0 ? { settings } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     });
   }
@@ -710,6 +715,20 @@ export function thinkingSetting(reasoning: boolean): ModelSetting | undefined {
       value,
       label: thinkingLabel(value),
     })),
+  };
+}
+
+export function fastModeSetting(): ModelSetting {
+  return {
+    id: "fast",
+    label: "Fast",
+    description: "Use priority processing when the current model supports it",
+    kind: "toggle",
+    value: "false",
+    options: [
+      { value: "true", label: "On" },
+      { value: "false", label: "Off" },
+    ],
   };
 }
 

@@ -10,6 +10,8 @@ use crate::session_store::{now_millis, validate_id, SessionStore};
 
 const TITLE_MAX: usize = 200;
 const BODY_MAX: usize = 1_000_000;
+const TAG_MAX: usize = 48;
+const TAGS_MAX: usize = 20;
 const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const NOTE_ASSET_DIR: &str = "note-assets";
@@ -21,6 +23,7 @@ pub struct Note {
     pub slug: String,
     pub title: String,
     pub body: String,
+    pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,6 +38,8 @@ pub struct NoteUpsert {
     pub id: String,
     pub title: String,
     pub body: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub source_session_id: Option<String>,
     #[serde(default)]
@@ -55,6 +60,7 @@ pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
            slug TEXT NOT NULL UNIQUE,
            title TEXT NOT NULL,
            body TEXT NOT NULL DEFAULT '',
+           tags_json TEXT NOT NULL DEFAULT '[]',
            source_session_id TEXT,
            source_cwd TEXT,
            created_at INTEGER NOT NULL,
@@ -62,7 +68,19 @@ pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
          );
          CREATE INDEX IF NOT EXISTS notes_updated_idx
            ON notes (updated_at DESC, id);",
-    )
+    )?;
+    let tags_present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'tags_json'",
+        [],
+        |row| row.get(0),
+    )?;
+    if tags_present == 0 {
+        conn.execute(
+            "ALTER TABLE notes ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -252,7 +270,7 @@ fn remove_note_assets(app: &AppHandle, note_id: &str) -> Result<(), String> {
 
 fn list_notes(conn: &Connection) -> rusqlite::Result<Vec<Note>> {
     let mut stmt = conn.prepare(
-        "SELECT id, slug, title, body, source_session_id, source_cwd,
+        "SELECT id, slug, title, body, source_session_id, source_cwd, tags_json,
                 created_at, updated_at
          FROM notes
          ORDER BY updated_at DESC, id ASC",
@@ -263,7 +281,7 @@ fn list_notes(conn: &Connection) -> rusqlite::Result<Vec<Note>> {
 
 fn get_note(conn: &Connection, id: &str) -> rusqlite::Result<Option<Note>> {
     conn.query_row(
-        "SELECT id, slug, title, body, source_session_id, source_cwd,
+        "SELECT id, slug, title, body, source_session_id, source_cwd, tags_json,
                 created_at, updated_at
          FROM notes
          WHERE id = ?1",
@@ -276,6 +294,9 @@ fn get_note(conn: &Connection, id: &str) -> rusqlite::Result<Option<Note>> {
 fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
     let title = normalize_title(&note.title);
     let body = note.body.replace("\r\n", "\n").replace('\r', "\n");
+    let tags = normalize_tags(&note.tags);
+    let tags_json = serde_json::to_string(&tags)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     let source_session_id = note
         .source_session_id
         .as_deref()
@@ -300,15 +321,16 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
     if let Some((slug, created_at, existing_session, existing_cwd)) = existing {
         conn.execute(
             "UPDATE notes
-             SET title = ?1, body = ?2, updated_at = ?3
-             WHERE id = ?4",
-            params![title, body, now, note.id],
+             SET title = ?1, body = ?2, tags_json = ?3, updated_at = ?4
+             WHERE id = ?5",
+            params![title, body, tags_json, now, note.id],
         )?;
         Ok(Note {
             id: note.id.clone(),
             slug,
             title,
             body,
+            tags,
             source_session_id: existing_session,
             source_cwd: existing_cwd,
             created_at,
@@ -318,9 +340,9 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
         let slug = unique_slug(conn, &title)?;
         conn.execute(
             "INSERT INTO notes (
-               id, slug, title, body, source_session_id, source_cwd,
+               id, slug, title, body, source_session_id, source_cwd, tags_json,
                created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 note.id,
                 slug,
@@ -328,6 +350,7 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
                 body,
                 source_session_id,
                 source_cwd,
+                tags_json,
                 now,
                 now
             ],
@@ -337,6 +360,7 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
             slug,
             title,
             body,
+            tags,
             source_session_id: source_session_id.map(str::to_string),
             source_cwd: source_cwd.map(str::to_string),
             created_at: now,
@@ -351,16 +375,42 @@ fn delete_note(conn: &Connection, id: &str) -> rusqlite::Result<()> {
 }
 
 fn read_note(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
+    let tags_json: String = row.get(6)?;
+    let tags = serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default();
     Ok(Note {
         id: row.get(0)?,
         slug: row.get(1)?,
         title: row.get(2)?,
         body: row.get(3)?,
+        tags,
         source_session_id: row.get(4)?,
         source_cwd: row.get(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
+}
+
+fn normalize_tags(tags: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for input in tags {
+        let tag = input
+            .trim()
+            .trim_start_matches('#')
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("-")
+            .to_lowercase();
+        let tag: String = tag.chars().take(TAG_MAX).collect();
+        let tag = tag.trim_end_matches('-').to_string();
+        if tag.is_empty() || normalized.contains(&tag) {
+            continue;
+        }
+        normalized.push(tag);
+        if normalized.len() == TAGS_MAX {
+            break;
+        }
+    }
+    normalized
 }
 
 fn normalize_title(title: &str) -> String {
@@ -431,6 +481,7 @@ mod tests {
                 id: id.into(),
                 title: title.into(),
                 body: body.into(),
+                tags: Vec::new(),
                 source_session_id: None,
                 source_cwd: None,
             },
@@ -452,12 +503,41 @@ mod tests {
         assert_eq!(table, 1);
         let version: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM schema_migrations WHERE version = 10",
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 13",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn ensure_table_adds_tags_to_an_existing_notes_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+               id TEXT PRIMARY KEY,
+               slug TEXT NOT NULL UNIQUE,
+               title TEXT NOT NULL,
+               body TEXT NOT NULL DEFAULT '',
+               source_session_id TEXT,
+               source_cwd TEXT,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+
+        ensure_notes_table(&conn).unwrap();
+
+        let tags_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'tags_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tags_column, 1);
     }
 
     #[test]
@@ -486,6 +566,7 @@ mod tests {
                 id: "n1".into(),
                 title: "Alpha renamed".into(),
                 body: "changed".into(),
+                tags: vec!["Ideas".into(), "project docs".into(), "ideas".into()],
                 source_session_id: Some("sess-1".into()),
                 source_cwd: Some("/tmp/a".into()),
             },
@@ -494,6 +575,7 @@ mod tests {
         assert_eq!(updated.slug, "alpha");
         assert_eq!(updated.title, "Alpha renamed");
         assert_eq!(updated.body, "changed");
+        assert_eq!(updated.tags, vec!["ideas", "project-docs"]);
         assert_eq!(updated.created_at, first.created_at);
         assert!(updated.updated_at > first.updated_at);
         // Provenance is capture-time only; later edits must not rewrite it.

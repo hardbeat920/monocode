@@ -38,6 +38,12 @@ describe("inbox sessions", () => {
     expect(
       inboxAskKey({ provider: "linear", id: "issue-uuid" } as InboxItem),
     ).toBe("linear:issue-uuid");
+    expect(
+      inboxAskKey({
+        provider: "gitlab",
+        url: "https://gitlab.example.com/acme/app/-/merge_requests/42",
+      } as InboxItem),
+    ).toBe("gitlab:gitlab.example.com:/acme/app/-/merge_requests/42");
   });
 
   it("adds the remote-access instruction on follow-ups and leaves ordinary sessions alone", () => {
@@ -75,21 +81,40 @@ describe("inbox sessions", () => {
       busy: true,
       blocks: [
         { id: "u1", role: "user" as const, text: "Explain the PR" },
-        { id: "approval", role: "tool" as const, text: "Run command", approval: { requestId: 7 } },
+        {
+          id: "approval",
+          role: "tool" as const,
+          text: "Run command",
+          approval: { requestId: 7 },
+        },
       ],
     };
     const staleHistory = [summaryFromSession(session)];
-    expect(historyWithLiveSessions(staleHistory, [session], session.cwd)).toEqual([]);
-    expect(liveAgentsFromSessions([session], new Set([session.id]))).toEqual([]);
+    expect(
+      historyWithLiveSessions(staleHistory, [session], session.cwd),
+    ).toEqual([]);
+    expect(liveAgentsFromSessions([session], new Set([session.id]))).toEqual(
+      [],
+    );
     expect(hiddenApprovalNotices([session], "", [], true)).toEqual([]);
   });
 
   it("omits Ask from workspace snapshots and restart recovery", () => {
     const project = newSession("codex", "/project");
-    const session = { ...newSession("codex", "/other"), inboxAsk: context, busy: true };
+    const session = {
+      ...newSession("codex", "/other"),
+      inboxAsk: context,
+      busy: true,
+    };
     const tab = newTab(project.id);
-    const snapshot = collectWorkspaceSnapshot([tab], [project, session], tab.id, project.cwd);
-    expect(snapshot.sessions.map(entry => entry.id)).toEqual([project.id]);
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [project, session],
+      tab.id,
+      project.cwd,
+      new Map(),
+    );
+    expect(snapshot.sessions.map((entry) => entry.id)).toEqual([project.id]);
     const restored = hydrateWorkspaceSnapshot(
       snapshot,
       new Map([[session.id, session]]),
@@ -98,8 +123,10 @@ describe("inbox sessions", () => {
     expect(restored.tabs).toEqual([tab]);
     expect(restored.activeTabId).toBe(tab.id);
     expect(restored.projectCwd).toBe(project.cwd);
-    expect(restored.sessions.map(entry => entry.id)).toEqual([project.id]);
-    expect(workspaceFromResumed([project, session])!.sessions).toEqual([project]);
+    expect(restored.sessions.map((entry) => entry.id)).toEqual([project.id]);
+    expect(workspaceFromResumed([project, session])!.sessions).toEqual([
+      project,
+    ]);
   });
 
   it("drops Ask tabs and stubs saved by the earlier implementation", () => {
@@ -113,11 +140,22 @@ describe("inbox sessions", () => {
       activeTabId: askTab.id,
       projectCwd: project.cwd,
       projectTerminals: [],
+      projectReturnTargets: [{ projectPath: project.cwd, tabId: askTab.id }],
     };
     const parsed = parseWorkspaceSnapshot(legacy)!;
     expect(parsed.tabs).toEqual([tab]);
     expect(parsed.activeTabId).toBe(tab.id);
-    expect(parsed.sessions.map(entry => entry.id)).toEqual([project.id]);
-    expect(parseWorkspaceSnapshot({ ...legacy, tabs: [askTab], sessions: [session] })).toBeNull();
+    expect(parsed.sessions.map((entry) => entry.id)).toEqual([project.id]);
+    expect(parsed.projectReturnTargets).toEqual([]);
+    expect(
+      hydrateWorkspaceSnapshot(parsed, new Map())?.projectReturnMemory?.get(project.cwd),
+    ).toBe(project.id);
+    expect(
+      parseWorkspaceSnapshot({
+        ...legacy,
+        tabs: [askTab],
+        sessions: [session],
+      }),
+    ).toBeNull();
   });
 });

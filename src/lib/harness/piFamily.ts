@@ -83,6 +83,8 @@ type Live = {
   contextWindow?: number;
   nativeModel: string;
   thinking: string;
+  fastModeEnabled?: boolean;
+  fastModeRequested?: boolean;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
@@ -248,7 +250,7 @@ export async function compactContext(
     live = await ensureLive(flavor, input);
   } else {
     live.onEvent = input.onEvent;
-    await applyModel(live, input);
+    await applyModel(flavor, live, input);
   }
   if (state.cancelledThreads.delete(input.sessionId)) return;
 
@@ -291,7 +293,7 @@ export async function steerTurn(
     text: message,
     attachments: input.attachments,
   });
-  if (!message && !Array.isArray(command.images)) return;
+  if (!command.message && !Array.isArray(command.images)) return;
   await live.rpc.request(command);
 }
 
@@ -402,7 +404,7 @@ async function ensureLive(
     existing.planning === wantPlanning
   ) {
     existing.onEvent = input.onEvent;
-    await applyModel(existing, input);
+    await applyModel(flavor, existing, input);
     return existing;
   }
   if (existing) {
@@ -458,6 +460,8 @@ async function startLive(
     providerSessionId: resume ?? "",
     nativeModel: native,
     thinking: input.modelSettings?.thinking ?? "",
+    fastModeEnabled: undefined,
+    fastModeRequested: undefined,
     planning: input.intent === "plan",
     onEvent: input.onEvent,
     approvals: new Map(),
@@ -489,8 +493,10 @@ async function startLive(
     (code) => {
       rpc.close(new Error(`${flavor.label} exited`));
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const current = liveRef.current;
+      if (!current?.muteUpdates) {
+        (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
       if (current) {
         for (const question of current.questions.values())
           question.resolve({ kind: "skipped" });
@@ -527,7 +533,7 @@ async function startLive(
       INIT_TIMEOUT_MS,
     );
     bindState(flavor, input.sessionId, live, stateFrame.data);
-    await applyModel(live, input);
+    await applyModel(flavor, live, input);
     if (live.providerSessionId) {
       live.onEvent({
         type: "session.providerBound",
@@ -547,7 +553,7 @@ async function runTurn(
   live: Live,
   input: SendTurnInput,
 ): Promise<void> {
-  await applyModel(live, input);
+  await applyModel(flavor, live, input);
   live.emittedAssistant = "";
   live.emittedReasoning = "";
   live.turnError = null;
@@ -658,14 +664,31 @@ function handleFrame(
       const provider = stringField(model, "provider");
       const modelId = stringField(model, "id");
       const thinking = stringField(rec, "thinkingLevel");
+      const fastModeEnabled =
+        typeof rec.fastModeEnabled === "boolean"
+          ? rec.fastModeEnabled
+          : undefined;
       const native =
         provider && modelId ? piNativeId(provider, modelId) : undefined;
       if (native) live.nativeModel = native;
       if (isPiThinkingLevel(thinking)) live.thinking = thinking;
+      if (fastModeEnabled != null) {
+        live.fastModeEnabled = fastModeEnabled;
+        live.fastModeRequested = fastModeEnabled;
+      }
       live.onEvent({
         type: "session.configChanged",
         ...(native ? { model: `${flavor.id}:${native}` } : {}),
-        ...(isPiThinkingLevel(thinking) ? { modelSettings: { thinking } } : {}),
+        ...(isPiThinkingLevel(thinking) || fastModeEnabled != null
+          ? {
+              modelSettings: {
+                ...(isPiThinkingLevel(thinking) ? { thinking } : {}),
+                ...(fastModeEnabled != null
+                  ? { fast: String(fastModeEnabled) }
+                  : {}),
+              },
+            }
+          : {}),
       });
       return;
     }
@@ -957,6 +980,7 @@ async function handleExtensionUi(
 }
 
 async function applyModel(
+  flavor: PiFlavor,
   live: Live,
   input: HarnessSessionInput,
 ): Promise<void> {
@@ -986,6 +1010,40 @@ async function applyModel(
       .catch(() => undefined);
     live.thinking = thinking;
   }
+
+  const fast = input.modelSettings?.fast;
+  if (
+    flavor.id === "omp" &&
+    (fast === "true" || fast === "false") &&
+    (fast === "true") !== live.fastModeRequested
+  ) {
+    const enabled = fast === "true";
+    live.fastModeRequested = enabled;
+    try {
+      const response = await live.rpc.request({
+        type: "set_fast_mode",
+        enabled,
+      });
+      const data = asRecord(response.data);
+      live.fastModeEnabled =
+        typeof data?.enabled === "boolean" ? data.enabled : enabled;
+    } catch (error) {
+      if (enabled) {
+        live.fastModeEnabled = false;
+        live.onEvent({
+          type: "session.configChanged",
+          modelSettings: { fast: "false" },
+        });
+        live.onEvent({
+          type: "status",
+          text:
+            error instanceof Error
+              ? error.message
+              : "Fast mode is unavailable for the current model.",
+        });
+      }
+    }
+  }
 }
 
 function bindState(
@@ -1009,6 +1067,11 @@ function bindState(
   const modelId = stringField(model, "id");
   if (provider && modelId && !live.nativeModel) {
     live.nativeModel = piNativeId(provider, modelId);
+  }
+  const fastModeEnabled = asRecord(data)?.fastModeEnabled;
+  if (flavor.id === "omp" && typeof fastModeEnabled === "boolean") {
+    live.fastModeEnabled = fastModeEnabled;
+    live.fastModeRequested = fastModeEnabled;
   }
 }
 

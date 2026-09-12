@@ -10,8 +10,18 @@ type Props = {
 
 export function InboxMiniCard({ card, onDismiss }: Props) {
   const KindIcon = card.kind === "pr" ? GitPullRequest : CircleDot;
-  const kindLabel = card.kind === "pr" ? "Pull request" : "Issue";
-  const providerLabel = card.provider === "linear" ? "Linear" : "GitHub";
+  const kindLabel =
+    card.kind === "pr"
+      ? card.provider === "gitlab"
+        ? "Merge request"
+        : "Pull request"
+      : "Issue";
+  const providerLabel =
+    card.provider === "linear"
+      ? "Linear"
+      : card.provider === "gitlab"
+        ? "GitLab"
+        : "GitHub";
 
   return (
     <div className="px-3 pt-2">

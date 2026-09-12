@@ -1,4 +1,5 @@
 import type { HarnessId } from "../session";
+import type { GeneratedSessionTitle } from "../sessionTitle";
 import type { PrContent } from "../gitText";
 import { hasLiveCatalog } from "../models";
 import type { UserQuestionReply } from "../userQuestion";
@@ -42,6 +43,8 @@ export type HarnessAdapter = {
     requestId: number,
     reply: UserQuestionReply,
   ): void;
+  /** Keep a timed question open once the user starts answering it. */
+  keepQuestionOpen?(sessionId: string, requestId: number): void;
   /** Kill the child but keep resume state for later rebind. */
   stopSession(sessionId: string): Promise<void>;
   /** Drop resume state and kill the child (delete, harness switch, idle detach). */
@@ -51,7 +54,7 @@ export type HarnessAdapter = {
   /** Refresh the model catalog overlay when supported. */
   refreshCatalog?(): Promise<void>;
   /** Optional LLM tab title for the first turn. */
-  generateTitle?(input: TitleInput): Promise<string | null>;
+  generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
   generateCommitMessage?(cwd: string): Promise<string>;
   /** Optional LLM pull request title/body from branch diff context. */
@@ -204,6 +207,14 @@ export function respondHarnessQuestion(
   getHarness(harness)?.respondQuestion?.(sessionId, requestId, reply);
 }
 
+export function keepHarnessQuestionOpen(
+  harness: HarnessId,
+  sessionId: string,
+  requestId: number,
+): void {
+  getHarness(harness)?.keepQuestionOpen?.(sessionId, requestId);
+}
+
 export async function stopHarnessSession(
   harness: HarnessId,
   sessionId: string,
@@ -258,7 +269,7 @@ export async function refreshHarnessCatalogs(
 export async function generateHarnessTitle(
   harness: HarnessId,
   input: TitleInput,
-): Promise<string | null> {
+): Promise<GeneratedSessionTitle | null> {
   const adapter = getHarness(harness);
   if (!adapter?.generateTitle) return null;
   return adapter.generateTitle(input);

@@ -384,6 +384,33 @@ describe("tools and models", () => {
     expect(models[1]?.settings).toBeUndefined();
   });
 
+  it("adds fast mode to omp models without exposing it for Pi", () => {
+    const data = {
+      models: [
+        {
+          id: "claude-opus-4-1",
+          name: "Claude Opus 4.1",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ],
+    };
+    const omp = modelsFromRpcData(OMP_FLAVOR, data)[0];
+    const pi = modelsFromRpcData(PI_FLAVOR, data)[0];
+
+    expect(omp?.settings?.map((setting) => setting.id)).toEqual([
+      "thinking",
+      "fast",
+    ]);
+    expect(
+      omp?.settings?.find((setting) => setting.id === "fast"),
+    ).toMatchObject({
+      kind: "toggle",
+      value: "false",
+    });
+    expect(pi?.settings?.some((setting) => setting.id === "fast")).toBe(false);
+  });
+
   it("reads session and context stats", () => {
     expect(
       providerSessionIdFromState({

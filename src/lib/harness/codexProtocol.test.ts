@@ -38,9 +38,10 @@ describe("runtimeModeToCodexConfig", () => {
     });
   });
 
-  it("maps full-access to never + danger-full-access", () => {
+  it("allows explicit escalation requests in full-access", () => {
     expect(runtimeModeToCodexConfig("full-access")).toMatchObject({
-      approvalPolicy: "never",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandbox: "danger-full-access",
       sandboxPolicy: { type: "dangerFullAccess" },
     });
@@ -68,7 +69,16 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
       threadId: "thr_1",
       runtimeMode: "auto-accept-edits",
       prompt: "hello",
-      attachments: [{ type: "image", url: "data:image/png;base64,abc" }],
+      attachments: [
+        {
+          id: "img",
+          name: "shot.png",
+          kind: "image",
+          mimeType: "image/png",
+          size: 3,
+          data: "abc",
+        },
+      ],
       model: "gpt-5.4",
       effort: "high",
       serviceTier: "fast",
@@ -101,7 +111,7 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
     });
     expect(turn).toMatchObject({
       approvalPolicy: "never",
-      approvalsReviewer: "auto_review",
+      approvalsReviewer: "user",
       sandboxPolicy: { type: "readOnly" },
       collaborationMode: {
         mode: "plan",
@@ -109,6 +119,24 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
       },
     });
   });
+
+  it.each(["supervised", "auto-accept-edits", "auto", "full-access"] as const)(
+    "preserves the selected reviewer in %s plan turns",
+    (runtimeMode) => {
+      expect(
+        buildTurnStartParams({
+          threadId: "thr_1",
+          runtimeMode,
+          intent: "plan",
+          prompt: "inspect",
+        }),
+      ).toMatchObject({
+        approvalPolicy: "never",
+        approvalsReviewer: runtimeMode === "auto" ? "auto_review" : "user",
+        sandboxPolicy: { type: "readOnly" },
+      });
+    },
+  );
 
   it("builds steer input with expected turn id", () => {
     const steer = buildTurnSteerParams({
@@ -317,6 +345,48 @@ describe("mapCodexNotification", () => {
       callId: "sa_1",
       kind: "agent",
       status: "failed",
+      detail: "Subagent interrupted.",
+    });
+  });
+
+  it("maps current collab-agent failures with their provider detail", () => {
+    const started = mapCodexNotification("item/started", {
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "wait",
+        status: "inProgress",
+        receiverThreadIds: ["thr_a", "thr_b"],
+        agentsStates: {},
+      },
+    });
+    expect(started.events[0]).toMatchObject({
+      type: "tool.started",
+      callId: "collab_1",
+      title: "Wait for 2 subagents",
+      kind: "agent",
+      status: "in_progress",
+    });
+
+    const failed = mapCodexNotification("item/completed", {
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "wait",
+        status: "completed",
+        receiverThreadIds: ["thr_a", "thr_b"],
+        agentsStates: {
+          thr_a: { status: "completed", message: "done" },
+          thr_b: { status: "errored", message: "worker disconnected" },
+        },
+      },
+    });
+    expect(failed.events[0]).toMatchObject({
+      type: "tool.updated",
+      callId: "collab_1",
+      kind: "agent",
+      status: "failed",
+      detail: "worker disconnected",
     });
   });
 
@@ -358,6 +428,67 @@ describe("mapCodexNotification", () => {
     expect(mapped.activeTurnId).toBeNull();
   });
 
+  it.each([
+    { error: { message: "Reconnecting... 1/5" }, willRetry: true },
+    { message: "Temporary service interruption", willRetry: true },
+  ])("keeps retry notifications diagnostic-only: %j", (params) => {
+    expect(mapCodexNotification("error", params)).toEqual({
+      events: [],
+      diagnostic: params.error?.message ?? params.message,
+    });
+  });
+
+  it.each([false, undefined, "true"])(
+    "keeps errors visible unless willRetry is explicitly true: %s",
+    (willRetry) => {
+      for (const message of [
+        "Reconnecting... 5/5",
+        "Falling back from WebSockets to HTTPS transport. Connection failed",
+        "Unauthorized",
+        "quota exceeded",
+      ]) {
+        expect(
+          mapCodexNotification("error", { error: { message }, willRetry }),
+        ).toEqual({ events: [{ type: "session.error", message }] });
+      }
+    },
+  );
+
+  it.each([
+    "Falling back from WebSockets to HTTPS transport",
+    "Falling back from WebSockets to HTTPS transport. unexpected status 404 Not Found",
+    "Falling back from WebSockets to HTTPS transport: connection closed",
+  ])(
+    "keeps the known runtime fallback warning diagnostic-only: %s",
+    (message) => {
+      expect(mapCodexNotification("warning", { message })).toEqual({
+        events: [],
+        diagnostic: message,
+      });
+    },
+  );
+
+  it.each([
+    "Reconnecting to the MCP server failed",
+    "Proxy error: Falling back from WebSockets to HTTPS transport failed",
+    "Falling back from WebSockets to HTTPS transport is disabled",
+    "An unrelated runtime warning",
+  ])("preserves other runtime warnings: %s", (message) => {
+    expect(mapCodexNotification("warning", { message })).toEqual({
+      events: [{ type: "status", text: message }],
+    });
+  });
+
+  it.each(["summary", "message", "details"])(
+    "preserves configuration warnings from %s even with fallback wording",
+    (field) => {
+      const message = "Falling back from WebSockets to HTTPS transport.";
+      expect(
+        mapCodexNotification("configWarning", { [field]: message }),
+      ).toEqual({ events: [{ type: "status", text: message }] });
+    },
+  );
+
   it("maps failed turns to session.error", () => {
     const mapped = mapCodexNotification("turn/completed", {
       turn: {
@@ -370,6 +501,16 @@ describe("mapCodexNotification", () => {
     expect(mapped.events).toContainEqual({
       type: "session.error",
       message: "quota exceeded",
+    });
+  });
+
+  it("does not silently complete a failed turn with no error payload", () => {
+    const mapped = mapCodexNotification("turn/completed", {
+      turn: { id: "turn_1", status: "failed" },
+    });
+    expect(mapped.events).toContainEqual({
+      type: "session.error",
+      message: "Codex turn failed.",
     });
   });
 

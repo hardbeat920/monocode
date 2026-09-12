@@ -68,6 +68,12 @@ export type HarnessEvent =
       title?: string;
       questions: UserQuestion[];
       callId?: string;
+      autoResolveAt?: number;
+    }
+  | {
+      type: "question.updated";
+      requestId: number;
+      autoResolveAt?: number;
     }
   | {
       type: "question.resolved";

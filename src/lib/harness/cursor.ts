@@ -270,7 +270,10 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     (code) => {
       acp.close(new Error("Cursor CLI exited"));
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
+      const live = liveRef.current;
+      if (!live?.muteUpdates) {
+        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
     },
   );
 
@@ -916,6 +919,7 @@ function settleCursorBackgroundAgents(
       title: live.agentTools.get(callId),
       kind: "agent",
       status,
+      ...(status === "failed" ? { detail: "Subagent failed." } : {}),
     });
   }
   live.backgroundAgentTools.clear();
