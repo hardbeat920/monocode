@@ -2577,15 +2577,11 @@ export default function App({
       leafIds(entry.layout).includes(sessionId),
     );
     if (!tab) return false;
-    setActiveTabId(tab.id);
-    setTabs((prev) =>
-      prev.map((entry) =>
-        entry.id === tab.id ? { ...entry, focusedId: sessionId } : entry,
-      ),
-    );
-    setComposerFocused(true);
+    // Goes through activateTab so the current project follows a chat picked
+    // from another project (all-projects list, working agents).
+    activateTab(tab.id, sessionId);
     return true;
-  }, []);
+  }, [activateTab]);
 
   const replaceBlankPaneWithSession = useCallback((session: Session) => {
     const tab =
