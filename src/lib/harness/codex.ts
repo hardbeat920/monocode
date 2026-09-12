@@ -1,5 +1,5 @@
 import { nativeModelId } from "../models";
-import type { Attachment, RuntimeMode } from "../session";
+import type { RuntimeMode } from "../session";
 import { questionPromptTitle, type UserQuestionReply } from "../userQuestion";
 import {
   killChild,
@@ -158,12 +158,11 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const turnId = live.activeTurnId;
   if (!turnId) throw new Error("No active turn to steer");
 
-  const attachments = await codexAttachments(input.attachments ?? []);
   const params = buildTurnSteerParams({
     threadId: live.threadId,
     expectedTurnId: turnId,
     prompt: input.text.trim() || undefined,
-    attachments,
+    attachments: input.attachments,
   });
   if (
     !params.input ||
@@ -467,25 +466,19 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const model = nativeModelId(input.model);
   const effort = input.modelSettings?.reasoningEffort;
   const serviceTier = input.modelSettings?.serviceTier;
-  const attachments = await codexAttachments(input.attachments ?? []);
 
   const params = buildTurnStartParams({
     threadId: live.threadId,
     runtimeMode: input.runtimeMode,
     prompt: input.text.trim() || undefined,
-    attachments,
+    attachments: input.attachments,
     model,
     effort,
     serviceTier,
     intent: input.intent,
   });
 
-  if (
-    (!params.input ||
-      (Array.isArray(params.input) && params.input.length === 0)) &&
-    !input.text.trim() &&
-    attachments.length === 0
-  ) {
+  if (Array.isArray(params.input) && params.input.length === 0) {
     return;
   }
 
@@ -847,21 +840,6 @@ function autoApproval(
   // auto-accept-edits: auto file changes, ask for commands.
   if (kind === "file-change") return "allow";
   return null;
-}
-
-async function codexAttachments(
-  files: Attachment[],
-): Promise<Array<{ type: "image"; url: string }>> {
-  const out: Array<{ type: "image"; url: string }> = [];
-  for (const file of files) {
-    if (!file.data) continue;
-    if (!file.mimeType.startsWith("image/")) continue;
-    out.push({
-      type: "image",
-      url: `data:${file.mimeType};base64,${file.data}`,
-    });
-  }
-  return out;
 }
 
 /** Exported for tests. */

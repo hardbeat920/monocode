@@ -293,7 +293,7 @@ export async function steerTurn(
     text: message,
     attachments: input.attachments,
   });
-  if (!message && !Array.isArray(command.images)) return;
+  if (!command.message && !Array.isArray(command.images)) return;
   await live.rpc.request(command);
 }
 

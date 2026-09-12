@@ -69,7 +69,16 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
       threadId: "thr_1",
       runtimeMode: "auto-accept-edits",
       prompt: "hello",
-      attachments: [{ type: "image", url: "data:image/png;base64,abc" }],
+      attachments: [
+        {
+          id: "img",
+          name: "shot.png",
+          kind: "image",
+          mimeType: "image/png",
+          size: 3,
+          data: "abc",
+        },
+      ],
       model: "gpt-5.4",
       effort: "high",
       serviceTier: "fast",
