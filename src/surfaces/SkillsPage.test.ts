@@ -186,51 +186,85 @@ describe("Settings skill preview", () => {
     );
   });
 
-  it("lets Escape cancel Add skill before closing the preview or Settings", async () => {
-    const closeSettings = vi.fn();
-    await act(async () =>
-      root.render(
-        createElement(SettingsView, {
-          section: "skills",
-          cwd: "D:/repo",
-          sessions: [],
-          onClose: closeSettings,
-          onOpenSession: vi.fn(),
-          onArchiveSession: vi.fn(),
-          onDeleteSession: vi.fn(),
-          onOpenWhatsNew: vi.fn(),
-        }),
-      ),
-    );
-    await click("Project guide");
-    await click("Add skill");
-    expect(document.activeElement?.getAttribute("aria-label")).toBe(
-      "Skill name",
-    );
-    const escape = () =>
-      act(() =>
-        document.activeElement!.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "Escape",
-            bubbles: true,
-            cancelable: true,
+  it.each([
+    { control: "Skill name", preview: true },
+    ...["Project", "Personal", "Cancel", "Create"].flatMap((control) =>
+      [true, false].map((preview) => ({ control, preview })),
+    ),
+  ])(
+    "lets Escape cancel Add skill from $control before closing Settings (preview: $preview)",
+    async ({ control, preview }) => {
+      const closeSettings = vi.fn();
+      await act(async () =>
+        root.render(
+          createElement(SettingsView, {
+            section: "skills",
+            cwd: "D:/repo",
+            sessions: [],
+            onClose: closeSettings,
+            onOpenSession: vi.fn(),
+            onArchiveSession: vi.fn(),
+            onDeleteSession: vi.fn(),
+            onOpenWhatsNew: vi.fn(),
           }),
         ),
       );
-    escape();
-    expect(container.querySelector("form")).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Skill preview"]'),
-    ).not.toBeNull();
-    expect(document.activeElement === button("Add skill")).toBe(true);
-    expect(closeSettings).not.toHaveBeenCalled();
-    escape();
-    expect(container.querySelector('[aria-label="Skill preview"]')).toBeNull();
-    expect(document.activeElement === button("Project guide")).toBe(true);
-    expect(closeSettings).not.toHaveBeenCalled();
-    escape();
-    expect(closeSettings).toHaveBeenCalledOnce();
-  });
+      if (preview) await click("Project guide");
+      const previewPanel = container.querySelector(
+        '[aria-label="Skill preview"]',
+      );
+      await click("Add skill");
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(
+        "Skill name",
+      );
+      if (control !== "Skill name") {
+        const input = container.querySelector<HTMLInputElement>(
+          '[aria-label="Skill name"]',
+        )!;
+        act(() => {
+          Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            "value",
+          )!.set!.call(input, "escape-test");
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        const target = Array.from(
+          container.querySelectorAll<HTMLButtonElement>("form button"),
+        ).find((item) => item.textContent?.startsWith(control));
+        expect(target, `Form control: ${control}`).toBeDefined();
+        expect(target!.disabled).toBe(false);
+        act(() => target!.focus());
+        expect(document.activeElement).toBe(target);
+      }
+      const escape = () =>
+        act(() =>
+          document.activeElement!.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Escape",
+              bubbles: true,
+              cancelable: true,
+            }),
+          ),
+        );
+      escape();
+      expect(container.querySelector("form")).toBeNull();
+      expect(container.querySelector('[aria-label="Skill preview"]')).toBe(
+        previewPanel,
+      );
+      expect(document.activeElement === button("Add skill")).toBe(true);
+      expect(closeSettings).not.toHaveBeenCalled();
+      if (preview) {
+        escape();
+        expect(
+          container.querySelector('[aria-label="Skill preview"]'),
+        ).toBeNull();
+        expect(document.activeElement === button("Project guide")).toBe(true);
+        expect(closeSettings).not.toHaveBeenCalled();
+      }
+      escape();
+      expect(closeSettings).toHaveBeenCalledOnce();
+    },
+  );
 
   it("separates YAML metadata from Markdown headings, renders tables, and preserves the original source", async () => {
     const source =
@@ -279,46 +313,53 @@ describe("Settings skill preview", () => {
     expect(document.activeElement).toBe(button("Other guide"));
   });
 
-  it("Escape closes the preview before Settings", async () => {
-    const closeSettings = vi.fn();
-    await act(async () =>
-      root.render(
-        createElement(SettingsView, {
-          section: "skills",
-          cwd: "D:/repo",
-          sessions: [],
-          onClose: closeSettings,
-          onOpenSession: vi.fn(),
-          onArchiveSession: vi.fn(),
-          onDeleteSession: vi.fn(),
-          onOpenWhatsNew: vi.fn(),
-        }),
-      ),
-    );
-    await click("Project guide");
-    act(() =>
-      document.activeElement!.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        }),
-      ),
-    );
-    expect(document.querySelector('[aria-label="Skill preview"]')).toBeNull();
-    expect(closeSettings).not.toHaveBeenCalled();
-    expect(container.querySelector('[aria-label="Settings"]')).not.toBeNull();
-    act(() =>
-      document.activeElement!.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        }),
-      ),
-    );
-    expect(closeSettings).toHaveBeenCalledOnce();
-  });
+  it.each(["preview", "page background"])(
+    "Escape closes the preview before Settings from %s",
+    async (focus) => {
+      const closeSettings = vi.fn();
+      await act(async () =>
+        root.render(
+          createElement(SettingsView, {
+            section: "skills",
+            cwd: "D:/repo",
+            sessions: [],
+            onClose: closeSettings,
+            onOpenSession: vi.fn(),
+            onArchiveSession: vi.fn(),
+            onDeleteSession: vi.fn(),
+            onOpenWhatsNew: vi.fn(),
+          }),
+        ),
+      );
+      await click("Project guide");
+      if (focus === "page background") {
+        act(() => (document.activeElement as HTMLElement).blur());
+        expect(document.activeElement).toBe(document.body);
+      }
+      act(() =>
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(document.querySelector('[aria-label="Skill preview"]')).toBeNull();
+      expect(closeSettings).not.toHaveBeenCalled();
+      expect(container.querySelector('[aria-label="Settings"]')).not.toBeNull();
+      act(() =>
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(closeSettings).toHaveBeenCalledOnce();
+    },
+  );
 
   it("allows Tab to leave the preview and keeps the document keyboard-scrollable", async () => {
     await render();

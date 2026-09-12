@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ChevronDown, ChevronRight } from "../chrome/icons";
 import { MarkdownPreview } from "./AgentMarkdown";
 
 /** Keep the skill's YAML header readable without interpreting it as Markdown. */
@@ -21,8 +22,18 @@ export function SkillDocumentPreview({ text }: { text: string }) {
       text={document.body}
       header={
         document.metadata !== null ? (
-          <details className="mb-6 rounded-lg border border-content/10 bg-content/[0.03]">
-            <summary className="cursor-pointer rounded-lg px-3 py-2 text-[12px] text-content/60 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <details className="group/metadata mb-6 rounded-lg border border-content/10 bg-content/[0.03]">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] text-content/60 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent [&::-webkit-details-marker]:hidden">
+              <ChevronRight
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-content/50 group-open/metadata:hidden"
+                strokeWidth={1.75}
+              />
+              <ChevronDown
+                aria-hidden="true"
+                className="hidden size-3.5 shrink-0 text-content/50 group-open/metadata:block"
+                strokeWidth={1.75}
+              />
               Skill metadata
             </summary>
             <pre className="whitespace-pre-wrap break-words border-t border-content/10 px-3 py-2 font-mono text-[12px] leading-5 text-content/70">

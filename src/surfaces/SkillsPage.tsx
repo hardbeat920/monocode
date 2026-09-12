@@ -84,7 +84,16 @@ export function SkillsPage({
   useEffect(() => {
     if (!previewOpen) return;
     closePreview.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPreviewSkill(null);
+    };
+    // Handle body focus after controls, before Settings' window listener.
+    document.addEventListener("keydown", onKey);
     return () => {
+      document.removeEventListener("keydown", onKey);
       // A rescan replaces row elements, so restore by skill and trigger identity.
       const opener = previewButtons.current.get(previewOpener.current ?? "");
       const target = opener ?? filterInput.current;
@@ -197,16 +206,7 @@ export function SkillsPage({
   };
 
   return (
-    <div
-      className="@container/skills flex min-h-0 min-w-0 flex-1"
-      onKeyDown={(event) => {
-        if (!previewOpen || event.key !== "Escape" || event.defaultPrevented)
-          return;
-        event.preventDefault();
-        event.stopPropagation();
-        setPreviewSkill(null);
-      }}
-    >
+    <div className="@container/skills flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col @3xl/skills:flex-row">
         <div
           ref={lockOverscroll}
