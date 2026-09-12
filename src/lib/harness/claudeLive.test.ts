@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyHarnessEvent } from "./apply";
+import { newSession } from "../session";
 
 const sent: string[] = [];
 const spawned: string[][] = [];
 let onLine: ((line: string) => void) | undefined;
 let onExit: ((code?: number | null) => void) | undefined;
+const writeChild = vi.fn(async (_id: string, line: string) => {
+  sent.push(line);
+});
 
 vi.mock("./child", () => ({
   resolveClaudeBinary: async () => ({ path: "/fake/claude" }),
@@ -20,13 +25,13 @@ vi.mock("./child", () => ({
     onLine = line;
     onExit = exit;
   },
-  writeChild: async (_id: string, line: string) => {
-    sent.push(line);
-  },
+  writeChild,
 }));
 
 const {
   compactClaudeContext,
+  respondClaudeApproval,
+  respondClaudeQuestion,
   sendClaudeTurn,
   stopClaudeSession,
   __claudeTestReset,
@@ -91,6 +96,7 @@ beforeEach(() => {
   spawned.length = 0;
   onLine = undefined;
   onExit = undefined;
+  writeChild.mockClear();
   __claudeTestReset();
 });
 
@@ -142,6 +148,206 @@ describe("claude model switching", () => {
 });
 
 describe("claude subagents", () => {
+  it.each(["allow", "deny"] as const)(
+    "routes a child permission decision: %s",
+    async (decision) => {
+      const { events, turn } = await startTurn("s1");
+      emit({
+        type: "control_request",
+        request_id: "child_permission",
+        session_id: "sess_child",
+        parent_tool_use_id: "toolu_agent",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Read",
+          tool_use_id: "child_read",
+          input: { file_path: "/home/user/.gitconfig" },
+        },
+      });
+      const approval = events.find(
+        (event) => event.type === "approval.requested",
+      )!;
+      expect(approval).toMatchObject({ callId: "child_read" });
+      respondClaudeApproval("s1", approval.requestId, decision);
+      await waitFor(
+        () =>
+          parse().some(
+            (message) =>
+              (message.response as Record<string, unknown>)?.request_id ===
+              "child_permission",
+          ),
+        "child decision",
+      );
+      expect(
+        parse().find(
+          (message) =>
+            (message.response as Record<string, unknown>)?.request_id ===
+            "child_permission",
+        ),
+      ).toMatchObject({
+        type: "control_response",
+        response: { response: { behavior: decision } },
+      });
+      expect(
+        events.filter((event) => event.type === "session.providerBound").at(-1),
+      ).toMatchObject({ providerSessionId: "sess_1" });
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await turn;
+    },
+  );
+
+  it("keeps simultaneous child questions reachable in the single-question UI", async () => {
+    const { events, turn } = await startTurn("s1");
+    for (const id of ["child_a", "child_b"]) {
+      emit({
+        type: "control_request",
+        request_id: id,
+        parent_tool_use_id: `agent_${id}`,
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          input: {
+            questions: [
+              {
+                question: `Question from ${id}`,
+                options: [{ label: "Proceed" }],
+              },
+            ],
+          },
+        },
+      });
+    }
+    expect(
+      events.filter((event) => event.type === "question.asked"),
+    ).toHaveLength(1);
+    for (const id of ["child_a", "child_b"]) {
+      const session = events.reduce(
+        applyHarnessEvent,
+        newSession("claude", "/repo"),
+      );
+      const request = session.pendingQuestion!;
+      expect(request.questions[0].prompt).toBe(`Question from ${id}`);
+      respondClaudeQuestion(
+        "s1",
+        request.requestId,
+        id === "child_a"
+          ? {
+              kind: "answered",
+              answers: {
+                [request.questions[0].id]: [request.questions[0].options[0].id],
+              },
+            }
+          : { kind: "skipped" },
+      );
+      await waitFor(
+        () =>
+          parse().some(
+            (message) =>
+              (message.response as Record<string, unknown>)?.request_id === id,
+          ),
+        "question response",
+      );
+      expect(
+        parse().find(
+          (message) =>
+            (message.response as Record<string, unknown>)?.request_id === id,
+        ),
+      ).toMatchObject({
+        response: {
+          response: { behavior: id === "child_a" ? "allow" : "deny" },
+        },
+      });
+    }
+    expect(
+      events.reduce(applyHarnessEvent, newSession("claude", "/repo"))
+        .pendingQuestion,
+    ).toBeUndefined();
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it.each(["child_a", "child_b"])(
+    "preserves the remaining question when %s is cancelled by the server",
+    async (cancelled) => {
+      const { events, turn } = await startTurn("s1");
+      for (const id of ["child_a", "child_b"]) {
+        emit({
+          type: "control_request",
+          request_id: id,
+          parent_tool_use_id: `agent_${id}`,
+          request: {
+            subtype: "can_use_tool",
+            tool_name: "AskUserQuestion",
+            input: {
+              questions: [{ question: id, options: [{ label: "Proceed" }] }],
+            },
+          },
+        });
+      }
+      emit({ type: "control_cancel_request", request_id: cancelled });
+      await waitFor(
+        () => events.some((event) => event.type === "question.resolved"),
+        "cancelled question",
+      );
+      const session = events.reduce(
+        applyHarnessEvent,
+        newSession("claude", "/repo"),
+      );
+      const remaining = cancelled === "child_a" ? "child_b" : "child_a";
+      expect(session.pendingQuestion?.questions[0].prompt).toBe(remaining);
+      respondClaudeQuestion("s1", session.pendingQuestion!.requestId, {
+        kind: "skipped",
+      });
+      await waitFor(
+        () =>
+          parse().some(
+            (message) =>
+              (message.response as Record<string, unknown>)?.request_id ===
+              remaining,
+          ),
+        "remaining question response",
+      );
+      expect(
+        parse().some(
+          (message) =>
+            (message.response as Record<string, unknown>)?.request_id ===
+            cancelled,
+        ),
+      ).toBe(false);
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await turn;
+    },
+  );
+
+  it("fails the active turn if a child permission reply cannot be delivered", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "control_request",
+      request_id: "child_permission",
+      parent_tool_use_id: "toolu_agent",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Read",
+        input: { file_path: "/home/user/.gitconfig" },
+      },
+    });
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    let outcome: unknown;
+    void turn.catch((error) => {
+      outcome = error;
+    });
+    writeChild.mockRejectedValueOnce(new Error("Broken pipe"));
+    respondClaudeApproval("s1", approval.requestId, "allow");
+    await waitFor(() => outcome instanceof Error, "failed permission delivery");
+    expect(outcome).toMatchObject({ message: "Broken pipe" });
+    expect(events).toContainEqual({
+      type: "session.error",
+      message: "Broken pipe",
+    });
+  });
+
   it("stays busy after a parent result while a background subagent is running", async () => {
     const { events, turn } = await startTurn("s1");
     let settled = false;

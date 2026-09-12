@@ -178,6 +178,83 @@ describe("OpenCode event stream recovery", () => {
 });
 
 describe("OpenCode child permission routing", () => {
+  it("queues simultaneous child questions so each stays reachable", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    for (const id of ["child_a", "child_b"]) {
+      sessionCreated(id, "session_1");
+      onSseEvent?.({
+        type: "question.asked",
+        properties: {
+          id: `question_${id}`,
+          sessionID: id,
+          questions: [
+            {
+              question: `Question from ${id}`,
+              options: [{ label: "Proceed" }],
+            },
+          ],
+        },
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      events.filter((event) => event.type === "question.asked"),
+    ).toHaveLength(1);
+    for (const id of ["child_a", "child_b"]) {
+      const session = events.reduce(
+        applyHarnessEvent,
+        newSession("opencode", "/repo"),
+      );
+      const request = session.pendingQuestion!;
+      expect(request.questions[0].prompt).toBe(`Question from ${id}`);
+      respondOpenCodeQuestion("opencode-live", request.requestId, {
+        kind: "skipped",
+      });
+      await waitFor(
+        () =>
+          harnessHttp.mock.calls.some(([input]) =>
+            input.url.includes(`/question/question_${id}/reject`),
+          ),
+        "question response",
+      );
+    }
+    expect(
+      events.reduce(applyHarnessEvent, newSession("opencode", "/repo"))
+        .pendingQuestion,
+    ).toBeUndefined();
+    idle();
+    await done;
+  });
+
+  it("ends the turn visibly when a child approval reply fails", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    sessionCreated("session_child", "session_1");
+    askPermission("session_child");
+    await waitFor(
+      () => events.some((event) => event.type === "approval.requested"),
+      "child approval",
+    );
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    harnessHttp.mockResolvedValueOnce({
+      status: 500,
+      body: "Permission reply failed",
+    });
+    respondOpenCodeApproval("opencode-live", approval.requestId, "allow");
+    await waitFor(
+      () => events.some((event) => event.type === "session.error"),
+      "permission failure",
+    );
+    await done;
+    expect(events).toContainEqual({
+      type: "session.error",
+      message: "Could not route OpenCode event: Permission reply failed",
+    });
+  });
+
   it.each([
     ["session_1", "allow", "once"],
     ["session_1", "deny", "reject"],

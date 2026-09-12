@@ -78,6 +78,7 @@ type Live = {
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
+  visibleQuestionId: number | null;
   nextApprovalUiId: number;
   sessionParentById: Map<string, string | undefined>;
   partById: Map<string, OpenCodePart>;
@@ -362,6 +363,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       onEvent: input.onEvent,
       approvals: new Map(),
       questions: new Map(),
+      visibleQuestionId: null,
       nextApprovalUiId: 1,
       sessionParentById: new Map(),
       partById: new Map(),
@@ -386,11 +388,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       input.sessionId,
       (event) => {
         if (live.muteUpdates) return;
-        const turn = live.turns;
+        const turn = live.turnDone;
         void handleEvent(live, event).catch((error: unknown) => {
-          if (live.muteUpdates || live.turns !== turn) return;
-          // An ancestry lookup failure must be visible, otherwise a child can
-          // remain blocked on a request that never reaches the approval UI.
+          if (live.muteUpdates || live.turnDone !== turn) return;
+          // Failed ancestry lookups or replies must end the turn visibly;
+          // otherwise a child can remain blocked on an unanswered request.
           live.onEvent({
             type: "session.error",
             message: `Could not route OpenCode event: ${error instanceof Error ? error.message : String(error)}`,
@@ -545,9 +547,9 @@ async function handleEvent(
     // Only blocking interactions are forwarded from descendants. In particular,
     // a child's idle/error event must never finish the parent's active turn.
     if (type !== "permission.asked" && type !== "question.asked") return;
-    const turn = live.turns;
+    const turn = live.turnDone;
     if (!(await isDescendantSession(live, payloadSessionId))) return;
-    if (live.muteUpdates || live.turns !== turn) return;
+    if (live.muteUpdates || live.turnDone !== turn) return;
   }
 
   switch (type) {
@@ -656,12 +658,13 @@ async function handleEvent(
       if (live.planning) {
         const decision =
           kind === "read" || kind === "search" ? "allow" : "deny";
-        void live.client
-          .replyPermission(id, toOpenCodePermissionReply(decision))
-          .catch(() => undefined);
+        await live.client.replyPermission(
+          id,
+          toOpenCodePermissionReply(decision),
+        );
         break;
       }
-      void waitApproval(live, uiId, id);
+      const pending = waitApproval(live, uiId, id);
       if (callId) {
         live.onEvent({
           type: "tool.updated",
@@ -679,6 +682,7 @@ async function handleEvent(
         callId,
         preview,
       });
+      await pending;
       break;
     }
     case "question.asked": {
@@ -688,13 +692,9 @@ async function handleEvent(
       if ([...live.questions.values()].some((pending) => pending.id === id)) break;
       const questions = questionsFromUnknown(properties);
       const uiId = live.nextApprovalUiId++;
-      void waitQuestion(live, uiId, id, questions);
-      live.onEvent({
-        type: "question.asked",
-        requestId: uiId,
-        title: questionPromptTitle(questions) || "OpenCode question",
-        questions,
-      });
+      const pending = waitQuestion(live, uiId, id, questions);
+      showNextQuestion(live);
+      await pending;
       break;
     }
     case "session.status": {
@@ -848,9 +848,7 @@ async function waitApproval(
   });
   live.approvals.delete(uiId);
   live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
-  await live.client
-    .replyPermission(id, toOpenCodePermissionReply(decision))
-    .catch(() => undefined);
+  await live.client.replyPermission(id, toOpenCodePermissionReply(decision));
 }
 
 async function waitQuestion(
@@ -868,14 +866,34 @@ async function waitQuestion(
     requestId: uiId,
     decision: reply.kind,
   });
+  showNextQuestion(live);
   if (reply.kind !== "answered") {
-    await live.client.rejectQuestion(id).catch(() => undefined);
+    await live.client.rejectQuestion(id);
     return;
   }
   const answers = questions.map((question) =>
     selectedAnswerLabels(question, reply),
   );
-  await live.client.replyQuestion(id, answers).catch(() => undefined);
+  await live.client.replyQuestion(id, answers);
+}
+
+function showNextQuestion(live: Live): void {
+  if (live.muteUpdates || live.cancelled) return;
+  if (
+    live.visibleQuestionId !== null &&
+    live.questions.has(live.visibleQuestionId)
+  )
+    return;
+  const next = live.questions.entries().next().value;
+  live.visibleQuestionId = next?.[0] ?? null;
+  if (!next) return;
+  const [requestId, { questions }] = next;
+  live.onEvent({
+    type: "question.asked",
+    requestId,
+    title: questionPromptTitle(questions) || "OpenCode question",
+    questions,
+  });
 }
 
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
