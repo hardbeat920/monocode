@@ -52,7 +52,7 @@ import {
   type MentionIndex,
   type MentionToken,
 } from "../lib/fileMentions";
-import type { ProjectFile } from "../lib/fs";
+import { basename, type ProjectFile } from "../lib/fs";
 import {
   composeInboxMessage,
   type InboxComposerCard,
@@ -90,6 +90,7 @@ import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
 import { BranchPicker } from "./BranchPicker";
 import { CwdPicker } from "./CwdPicker";
+import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { FileMentionPicker } from "./FileMentionPicker";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { InboxMiniCard } from "./InboxMiniCard";
@@ -1277,17 +1278,6 @@ export function Composer({
           ) : null}
           {hideTopBar ? null : (
             <div className="flex min-w-0 items-center gap-2.5 px-3 pt-2.5">
-              {hideProjectPicker ? null : (
-                <CwdPicker
-                  cwd={cwd}
-                  recents={recents}
-                  projectLogoPath={projectLogoPath}
-                  enabled={enabled}
-                  onCwdChange={onCwdChange}
-                  onNewTerminal={onNewTerminal}
-                  onClose={() => ref.current?.focus()}
-                />
-              )}
               {hideBranchPicker ? null : (
                 <BranchPicker
                   cwd={cwd}
@@ -1480,7 +1470,7 @@ export function Composer({
                 if (
                   e.target instanceof Element &&
                   e.target.closest(
-                    "[data-model-picker], [data-access-picker], [data-model-settings]",
+                    "[data-model-picker], [data-access-picker], [data-model-settings], [data-cwd-picker], [data-cwd-submenu]",
                   )
                 ) {
                   return;
@@ -1491,6 +1481,27 @@ export function Composer({
               }}
             >
               <div className="flex shrink-0 items-center gap-1">
+                {hideProjectPicker ? null : (
+                  <CwdPicker
+                    cwd={cwd}
+                    recents={recents}
+                    projectLogoPath={projectLogoPath}
+                    enabled={enabled}
+                    pill
+                    chevron
+                    onCwdChange={onCwdChange}
+                    onNewTerminal={onNewTerminal}
+                    onClose={() => ref.current?.focus()}
+                  >
+                    <ProjectLogoIcon
+                      path={projectLogoPath}
+                      className="size-3.5 shrink-0"
+                    />
+                    <span className="min-w-0 truncate text-[11px]">
+                      {looksLikeProject(cwd) ? basename(cwd) : "Choose project"}
+                    </span>
+                  </CwdPicker>
+                )}
                 <ModelPicker
                   harness={harness}
                   model={model}
