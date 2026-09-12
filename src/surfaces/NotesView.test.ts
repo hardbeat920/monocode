@@ -237,9 +237,26 @@ it("lets the user retry a project change after saving fails", async () => {
     ...container.querySelectorAll<HTMLButtonElement>("button"),
   ].find((button) => button.textContent === "Retry");
   expect(retry, "An unsaved project choice needs a retry action").toBeDefined();
+  let failRetry!: (error: Error) => void;
+  const retrying = new Promise<never>((_, reject) => {
+    failRetry = reject;
+  });
+  invoke.mockImplementationOnce(() => retrying);
   await act(async () => retry!.click());
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(stored.sourceCwd).toBe("/work/Edefyn");
+
+  await act(async () => failRetry(new Error("Still no space")));
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Still no space",
+  );
+  const nextRetry = [
+    ...container.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Retry");
+  expect(nextRetry).toBeDefined();
+  await act(async () => nextRetry!.click());
   expect(stored.sourceCwd).toBe("/work/portognjeeen");
-  expect(container.textContent).not.toContain("Disk full");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });
 
 it("keeps a completed move after returning to the note while it saves", async () => {

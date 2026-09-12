@@ -566,7 +566,6 @@ function NoteEditor({
   titleRef.current = title;
   bodyRef.current = body;
   tagsRef.current = tags;
-  projectChangeRef.current = projectChange;
   noteRef.current = note;
   onSavedRef.current = onSaved;
   const project = noteSourceProject(sourceCwd);
@@ -873,7 +872,10 @@ function NoteEditor({
               <span>Could not save note: {saveError}</span>
               <button
                 type="button"
-                onClick={() => void saveNow()}
+                onClick={() => {
+                  setSaveError(null);
+                  void saveNow();
+                }}
                 className="shrink-0 underline hover:no-underline"
               >
                 Retry
