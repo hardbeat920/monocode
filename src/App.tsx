@@ -1835,6 +1835,34 @@ export default function App({
     void confirmCloseTerminal(file).then((ok) => ok && finishClose());
   }, []);
 
+  const onCloseOtherProjectTerminals = useCallback((fileId: string) => {
+    const projectPath = projectCwdRef.current;
+    const dock = findProjectTerminal(projectTerminalsRef.current, projectPath);
+    if (!dock?.pane.files.some((file) => file.id === fileId)) return;
+    const closingFiles = dock.pane.files.filter((file) => file.id !== fileId);
+    if (closingFiles.length === 0) return;
+    const closingIds = new Set(closingFiles.map((file) => file.id));
+
+    const finishClose = () => {
+      setProjectTerminals((prev) =>
+        mapProjectTerminal(prev, projectPath, (entry) => {
+          if (!entry.pane.files.some((file) => file.id === fileId)) {
+            return entry;
+          }
+          const files = entry.pane.files.filter(
+            (file) => !closingIds.has(file.id),
+          );
+          return {
+            ...entry,
+            pane: { ...entry.pane, files, activeFileId: fileId },
+          };
+        }),
+      );
+    };
+
+    void confirmCloseTerminals(closingFiles).then((ok) => ok && finishClose());
+  }, []);
+
   const onTerminalMetaChange = useCallback(
     (fileId: string, patch: TerminalMetaPatch) => {
       setProjectTerminals((prev) => patchProjectTerminals(prev, fileId, patch));
@@ -2171,6 +2199,66 @@ export default function App({
     },
     [activeTabId, onCloseTab, projectCwd, tabCloseScope],
   );
+
+  const onCloseOtherFiles = useCallback((paneId: string, fileId: string) => {
+    const tab = tabsRef.current.find((entry) => findSurfacePane(entry, paneId));
+    if (!tab) return;
+    const found = findSurfacePane(tab, paneId);
+    if (!found?.pane.files.some((file) => file.id === fileId)) return;
+    const closingFiles = found.pane.files.filter((file) => file.id !== fileId);
+    if (closingFiles.length === 0) return;
+    const closingIds = new Set(closingFiles.map((file) => file.id));
+    const unsaved = closingFiles.filter(
+      (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
+    );
+    const terminals = closingFiles.filter((file) => file.terminal);
+
+    const finishClose = () => {
+      setTabs((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== tab.id) return entry;
+          const current = findSurfacePane(entry, paneId);
+          if (!current?.pane.files.some((file) => file.id === fileId)) {
+            return entry;
+          }
+          return withSurfacePanes(
+            { ...entry, focusedId: paneId },
+            current.kind,
+            surfacePanes(entry, current.kind).map((pane) =>
+              pane.id === paneId
+                ? {
+                    ...pane,
+                    files: pane.files.filter(
+                      (file) => !closingIds.has(file.id),
+                    ),
+                    activeFileId: fileId,
+                  }
+                : pane,
+            ),
+          );
+        }),
+      );
+      setDirtyFiles((prev) => {
+        const next = new Set(prev);
+        for (const id of closingIds) next.delete(id);
+        return next;
+      });
+    };
+
+    void (async () => {
+      if (unsaved.length > 0) {
+        const ok = await confirmDiscardUnsaved(
+          "Close other tabs with unsaved files?",
+        );
+        if (!ok) return;
+      }
+      if (terminals.length > 0) {
+        const ok = await confirmCloseTerminals(terminals);
+        if (!ok) return;
+      }
+      finishClose();
+    })();
+  }, []);
 
   const onClearTabSession = useCallback(
     (id: string) => {
@@ -5648,6 +5736,7 @@ export default function App({
                       }
                       onSelectTerminal={onSelectProjectTerminal}
                       onCloseTerminal={onCloseProjectTerminal}
+                      onCloseOtherTerminals={onCloseOtherProjectTerminals}
                       onReorderTerminals={onReorderProjectTerminals}
                       onTerminalMetaChange={onTerminalMetaChange}
                     />
@@ -5697,6 +5786,7 @@ export default function App({
                           }
                           onSelectFile={onSelectFileSurface}
                           onCloseFile={onCloseFile}
+                          onCloseOtherFiles={onCloseOtherFiles}
                           onReorderFiles={onReorderFiles}
                           onFileDirtyChange={onFileDirtyChange}
                           onFileErrorCountChange={onFileErrorCountChange}

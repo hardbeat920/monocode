@@ -103,11 +103,12 @@ describe("surfaceTabMenuItems", () => {
         "Copy Relative Path",
         "Copy File Name",
         "Close",
+        "Close Others",
       ]);
     }
   });
 
-  it("only offers Close when a tab has no real file", () => {
+  it("offers close actions when a tab has no real file", () => {
     for (const file of [
       newChangesTab("/repo"),
       newCommitTab("/repo", {
@@ -120,7 +121,26 @@ describe("surfaceTabMenuItems", () => {
     ]) {
       expect(surfaceTabMenuItems(file)).toEqual([
         { kind: "item", id: "close", label: "Close" },
+        {
+          kind: "item",
+          id: "close-others",
+          label: "Close Others",
+          disabled: false,
+        },
       ]);
     }
+  });
+
+  it("disables Close Others when there are no sibling tabs", () => {
+    const items = surfaceTabMenuItems(
+      newFileTab("/repo/src/app.ts", "/repo"),
+      false,
+    );
+    expect(items.at(-1)).toEqual({
+      kind: "item",
+      id: "close-others",
+      label: "Close Others",
+      disabled: true,
+    });
   });
 });
