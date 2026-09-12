@@ -570,8 +570,10 @@ fn git_github_status_for() -> GitHubStatus {
             authenticated: false,
         };
     };
+    // Do not pass `--active`: it was added in gh 2.57 and older installs treat it as
+    // unknown, which made Settings report "Sign in required" despite a valid login.
     let mut cmd = Command::new(program);
-    cmd.args(["auth", "status", "--active", "--hostname", "github.com"])
+    cmd.args(["auth", "status", "--hostname", "github.com"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
