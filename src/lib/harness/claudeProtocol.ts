@@ -96,9 +96,15 @@ export function compareSemver(left: string, right: string): number {
   return 0;
 }
 
+/**
+ * Supervised maps onto a flag like every other mode. Sending nothing left the
+ * CLI free to fall back to `permissions.defaultMode` from the user's settings,
+ * so a session the picker called Supervised could silently run as `auto`.
+ * `default` is the value that asks; `manual` is its alias but needs CLI 2.1.200.
+ */
 export function runtimeModeToPermission(
   mode: RuntimeMode,
-): ClaudePermissionMode | undefined {
+): ClaudePermissionMode {
   switch (mode) {
     case "auto-accept-edits":
       return "acceptEdits";
@@ -107,7 +113,7 @@ export function runtimeModeToPermission(
     case "full-access":
       return "bypassPermissions";
     default:
-      return undefined;
+      return "default";
   }
 }
 

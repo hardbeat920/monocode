@@ -37,10 +37,20 @@ import {
 
 describe("runtimeModeToPermission", () => {
   it("maps runtime modes onto Claude permission flags", () => {
-    expect(runtimeModeToPermission("supervised")).toBeUndefined();
+    expect(runtimeModeToPermission("supervised")).toBe("default");
     expect(runtimeModeToPermission("auto-accept-edits")).toBe("acceptEdits");
     expect(runtimeModeToPermission("auto")).toBe("auto");
     expect(runtimeModeToPermission("full-access")).toBe("bypassPermissions");
+  });
+
+  it("sends supervised as a flag so settings cannot lower it", () => {
+    const args = buildClaudeSpawnArgs({
+      permissionMode: runtimeModeToPermission("supervised"),
+      sessionId: "sess-supervised",
+    });
+    expect(args).toEqual(
+      expect.arrayContaining(["--permission-mode", "default"]),
+    );
   });
 });
 
