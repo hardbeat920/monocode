@@ -141,8 +141,8 @@ describe("OpenCode subagent trails", () => {
   const part = (sessionID: string, value: Record<string, unknown>) => onSseEvent?.({
     type: "message.part.updated", properties: { part: { sessionID, ...value } },
   });
-  const message = (sessionID: string, id: string, role = "assistant", agent?: string) => onSseEvent?.({
-    type: "message.updated", properties: { info: { sessionID, id, role, agent } },
+  const message = (sessionID: string, id: string, role = "assistant", agent?: string, modelID?: string) => onSseEvent?.({
+    type: "message.updated", properties: { info: { sessionID, id, role, agent, modelID } },
   });
   const task = (callID: string, child: string) => part("session_1", {
     id: `part_${callID}`, type: "tool", tool: "task", callID,
@@ -154,7 +154,7 @@ describe("OpenCode subagent trails", () => {
     const { done } = await startTurn(events);
     sessionCreated("child_b", "session_1");
     sessionCreated("child_a", "session_1");
-    message("child_a", "msg_a");
+    message("child_a", "msg_a", "assistant", undefined, "claude-haiku-4-5");
     message("child_b", "msg_b");
     part("child_b", { id: "prose_b", messageID: "msg_b", type: "text", text: "Second child" });
     for (let i = 0; i < 70; i++) {
@@ -167,6 +167,7 @@ describe("OpenCode subagent trails", () => {
     idle();
     await done;
     const session = events.reduce(applyHarnessEvent, newSession("opencode", "/repo"));
+    expect(session.blocks.find((block) => block.tool?.callId === "a")?.agentRun?.model).toBe("claude-haiku-4-5");
     expect(session.blocks.find((block) => block.tool?.callId === "a")?.agentRun?.steps).toEqual([
       expect.objectContaining({ text: "First child 69" }),
     ]);

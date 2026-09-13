@@ -571,6 +571,9 @@ function handleCursorTask(live: Live, params: unknown): void {
     kind: "agent",
     status,
     ...(background ? { detail: cursorSubagentDetail(task) } : {}),
+    ...(stringField(task, "model")
+      ? { agentModel: stringField(task, "model") }
+      : {}),
   });
   // A completion notification often carries the first useful description.
   const cached = live.subagentRuns.get(callId);
@@ -876,6 +879,9 @@ function handleSessionUpdate(live: Live, params: unknown) {
       title,
       kind: toolKind,
       status: displayedStatus,
+      ...(agent && stringField(asRecord(rawInput) ?? {}, "model")
+        ? { agentModel: stringField(asRecord(rawInput) ?? {}, "model") }
+        : {}),
       detail,
       preview,
     });

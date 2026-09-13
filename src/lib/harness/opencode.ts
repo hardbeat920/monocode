@@ -84,6 +84,7 @@ type Live = {
   sessionParentById: Map<string, string | undefined>;
   /** Child session id -> the agent tool row that spawned it. */
   subagentSessions: Map<string, string>;
+  subagentModels: Map<string, string>;
   /** Child parts that arrived before their row was known. */
   pendingSubagent: Map<string, OpenCodePart[]>;
   partById: Map<string, OpenCodePart>;
@@ -372,6 +373,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       nextApprovalUiId: 1,
       sessionParentById: new Map(),
       subagentSessions: new Map(),
+      subagentModels: new Map(),
       pendingSubagent: new Map(),
       partById: new Map(),
       emittedTextByPartId: new Map(),
@@ -884,6 +886,8 @@ function bindSubagentSession(
 ): void {
   if (live.subagentSessions.get(sessionId) === callId) return;
   live.subagentSessions.set(sessionId, callId);
+  const model = live.subagentModels.get(sessionId);
+  if (model) live.onEvent({ type: "tool.updated", callId, kind: "agent", agentModel: model });
   const backlog = live.pendingSubagent.get(sessionId);
   live.pendingSubagent.delete(sessionId);
   for (const part of backlog ?? []) emitSubagentStep(live, callId, sessionId, part);
@@ -909,6 +913,14 @@ function handleSubagentEvent(
     const id = stringField(info, "id");
     const role = stringField(info, "role");
     const agent = stringField(info, "agent");
+    const model = stringField(info, "modelID");
+    // Nested agents share the outer trail, but have their own model.
+    if (role === "assistant" && model && !(agent && KNOWN_HIDDEN_AGENTS.has(agent)) &&
+        live.sessionParentById.get(sessionId) === live.openCodeSessionId) {
+      live.subagentModels.set(sessionId, model);
+      const callId = live.subagentSessions.get(sessionId);
+      if (callId) live.onEvent({ type: "tool.updated", callId, kind: "agent", agentModel: model });
+    }
     if (id && (role === "user" || role === "assistant")) {
       live.messageRoleById.set(id, agent && KNOWN_HIDDEN_AGENTS.has(agent) ? "hidden" : role);
       // Message metadata may follow the first part on a resumed stream.

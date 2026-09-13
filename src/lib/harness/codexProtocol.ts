@@ -746,6 +746,9 @@ function mapCollabAgentToolCall(
     callId,
     title,
     kind: spawns ? "agent" : "other",
+    ...(spawns && stringField(item, "model")
+      ? { agentModel: stringField(item, "model") }
+      : {}),
     status: settled ? (failed ? "failed" : "completed") : "in_progress",
     ...(detail ? { detail } : {}),
   };
@@ -838,6 +841,12 @@ export function mapCodexSubagentSteps(
   method: string,
   params: unknown,
 ): HarnessEvent[] {
+  if (method === "thread/started") {
+    const model = stringField(asRecord(asRecord(params)?.thread), "model");
+    return model
+      ? [{ type: "tool.updated", callId, kind: "agent", agentModel: model }]
+      : [];
+  }
   if (method !== "item/started" && method !== "item/completed") return [];
   const rec = asRecord(params);
   const item = asRecord(rec?.item);

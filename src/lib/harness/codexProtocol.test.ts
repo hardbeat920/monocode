@@ -349,6 +349,22 @@ describe("mapCodexNotification", () => {
     });
   });
 
+  it("retains the explicitly selected spawn model", () => {
+    const { events } = mapCodexNotification("item/completed", {
+      item: {
+        id: "spawn",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        model: "gpt-5.6-sol",
+        status: "completed",
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "agent",
+      agentModel: "gpt-5.6-sol",
+    });
+  });
+
   it("maps current collab-agent failures with their provider detail", () => {
     const started = mapCodexNotification("item/started", {
       item: {

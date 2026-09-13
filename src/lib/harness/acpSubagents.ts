@@ -154,7 +154,7 @@ export function acpAgentInfo(
   kind?: string,
   title?: string,
   nativeInput?: unknown,
-): { kind: "agent"; title: string } | undefined {
+): { kind: "agent"; title: string; agentModel?: string } | undefined {
   const input = record(
     nativeInput ??
       update.rawInput ??
@@ -169,5 +169,10 @@ export function acpAgentInfo(
   );
   if (!isAgentTool(kind, title) && !(name && isAgentToolName(name)))
     return undefined;
-  return { kind: "agent", title: agentToolTitle(input ?? {}, title) };
+  const model = text(input?.model);
+  return {
+    kind: "agent",
+    title: agentToolTitle(input ?? {}, title),
+    ...(model ? { agentModel: model } : {}),
+  };
 }

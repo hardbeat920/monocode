@@ -1375,6 +1375,9 @@ describe("codex subagents", () => {
 
   it("banks a child's opening moves until its row is known", async () => {
     const { events, turn } = await startTurn("s1");
+    notify("thread/started", {
+      thread: { id: "thr_child", model: "gpt-5.6-sol" },
+    });
     // Codex streams the child's first calls before the spawn item reports
     // which thread it created.
     notify("item/started", {
@@ -1401,6 +1404,14 @@ describe("codex subagents", () => {
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
 
+    const run = events
+      .reduce(applyHarnessEvent, newSession("codex", "/repo"))
+      .blocks.find((block) => block.tool?.callId === "sa_1")?.agentRun;
+    expect(run).toMatchObject({
+      name: "Explore Auth subagent",
+      model: "gpt-5.6-sol",
+    });
+    expect(run?.steps).toHaveLength(1);
     const steps = events.filter((event) => event.type === "agent.step");
     expect(steps.map((step) => [step.callId, step.kind, step.text])).toEqual([
       ["sa_1", "tool", "git diff"],

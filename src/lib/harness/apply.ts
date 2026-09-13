@@ -43,6 +43,7 @@ export function applyHarnessEvent(
         status: event.status,
         preview: event.preview,
         streaming: true,
+        agentModel: event.agentModel,
       });
     case "tool.updated":
       return upsertTool(session, {
@@ -53,6 +54,7 @@ export function applyHarnessEvent(
         detail: event.detail,
         preview: event.preview,
         streaming: event.status !== "completed" && event.status !== "failed",
+        agentModel: event.agentModel,
       });
     case "agent.step":
       return recordAgentStep(session, event);
@@ -120,7 +122,12 @@ export function applyHarnessEvent(
         ...session,
         ...(event.model ? { model: event.model } : {}),
         ...(event.modelSettings
-          ? { modelSettings: { ...session.modelSettings, ...event.modelSettings } }
+          ? {
+              modelSettings: {
+                ...session.modelSettings,
+                ...event.modelSettings,
+              },
+            }
           : {}),
       };
     case "status":
@@ -659,6 +666,7 @@ function upsertTool(
     detail?: string;
     preview?: ToolPreview;
     streaming: boolean;
+    agentModel?: string;
   },
 ): Session {
   const index = findToolIndex(session, patch);
@@ -676,6 +684,9 @@ function upsertTool(
       role: "tool",
       text: label,
       streaming: patch.streaming,
+      ...(patch.agentModel
+        ? { agentRun: { name: label, model: patch.agentModel, steps: [] } }
+        : {}),
       tool: {
         callId: patch.callId,
         title: label,
@@ -702,6 +713,7 @@ function upsertTool(
   );
   const kind = patch.kind ?? prev.tool?.kind;
   const status = patch.status ?? prev.tool?.status;
+  const agentName = prev.agentRun?.steps.length ? prev.agentRun.name : label;
   if (
     prev.text === label &&
     prev.streaming === patch.streaming &&
@@ -709,6 +721,8 @@ function upsertTool(
     prev.tool?.kind === kind &&
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
+    (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
+    (!prev.agentRun || prev.agentRun.name === agentName) &&
     samePreview(prev.tool?.preview, preview)
   ) {
     return session;
@@ -718,6 +732,16 @@ function upsertTool(
     ...prev,
     text: label,
     streaming: patch.streaming,
+    ...(patch.agentModel || prev.agentRun
+      ? {
+          agentRun: {
+            steps: prev.agentRun?.steps ?? [],
+            ...prev.agentRun,
+            name: agentName,
+            ...(patch.agentModel ? { model: patch.agentModel } : {}),
+          },
+        }
+      : {}),
     tool: {
       callId: patch.callId,
       title: label,
@@ -834,13 +858,14 @@ function recordAgentStep(
   }
 
   const next: AgentRunMeta = {
+    ...(run?.model ? { model: run.model } : {}),
     name:
       event.agentName ||
       run?.name ||
       prev.tool?.title ||
       prev.text ||
       "Subagent",
-    ...(event.agentType ?? run?.agentType
+    ...((event.agentType ?? run?.agentType)
       ? { agentType: event.agentType ?? run?.agentType }
       : {}),
     steps,
@@ -852,7 +877,8 @@ function recordAgentStep(
 }
 
 function sameAgentRun(a: AgentRunMeta, b: AgentRunMeta): boolean {
-  if (a.name !== b.name || a.agentType !== b.agentType) return false;
+  if (a.name !== b.name || a.agentType !== b.agentType || a.model !== b.model)
+    return false;
   if (a.steps.length !== b.steps.length) return false;
   return a.steps.every((step, index) => sameAgentStep(step, b.steps[index]));
 }

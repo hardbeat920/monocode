@@ -24,7 +24,11 @@ describe.each([
       kind: "other",
       title: "Task",
       status: "in_progress",
-      rawInput: { _toolName: "task", description: "Check auth" },
+      rawInput: {
+        _toolName: "task",
+        description: "Check auth",
+        model: "review-model",
+      },
     });
     const meta = { parentToolCallId: "spawn" };
     push({
@@ -59,6 +63,7 @@ describe.each([
       (entry) => entry.tool?.callId === "spawn",
     )!;
     expect(block.tool?.kind).toBe("agent");
+    expect(block.agentRun?.model).toBe("review-model");
     expect(block.text).toBe("Check auth");
     expect(block.agentRun?.steps).toHaveLength(2);
     expect(block.agentRun?.steps[0].text).toBe("Checking auth.");

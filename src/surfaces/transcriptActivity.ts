@@ -10,6 +10,7 @@ import {
 import { leafName } from "../lib/fileName";
 import { displayPath } from "../lib/paths";
 import type { Block } from "../lib/session";
+import { allModels } from "../lib/models";
 
 export type ToolCallState = "pending" | "accepted" | "rejected";
 
@@ -376,6 +377,16 @@ export function subagentName(block: Block): string {
   const space = cut.lastIndexOf(" ");
   const trimmed = space > MAX_SUBAGENT_NAME / 2 ? cut.slice(0, space) : cut;
   return `${trimmed.replace(/[\s,;:]+$/, "")}\u2026`;
+}
+
+export function subagentModelName(block: Block): string | undefined {
+  const id = block.agentRun?.model?.trim();
+  if (!id || /^(?:auto|default|inherit|unspecified)$/i.test(id))
+    return undefined;
+  return (
+    allModels().find((model) => model.id === id || model.nativeId === id)
+      ?.name ?? id
+  );
 }
 
 /**

@@ -54,6 +54,7 @@ export function cursorSubagentEvents(
       callId: run.toolCallId,
       kind: "agent",
       title: name,
+      ...(run.model ? { agentModel: run.model } : {}),
     },
   ];
   for (const step of run.steps) {

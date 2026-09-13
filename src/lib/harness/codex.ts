@@ -207,7 +207,10 @@ export function respondCodexQuestion(
   liveByThread.get(sessionId)?.questions.get(requestId)?.resolve(reply);
 }
 
-export function keepCodexQuestionOpen(sessionId: string, requestId: number): void {
+export function keepCodexQuestionOpen(
+  sessionId: string,
+  requestId: number,
+): void {
   const live = liveByThread.get(sessionId);
   const pending = live?.questions.get(requestId);
   if (!live || !pending || pending.timer === undefined) return;
@@ -582,7 +585,11 @@ function handleNotification(live: Live, method: string, params: unknown): void {
   // Child threads share this connection. Their lifecycle must not touch the
   // parent's turn or clear its approvals, but what they do is the inside of a
   // subagent — mirror it onto the row that spawned them.
-  const threadId = stringField(rec, "threadId");
+  const threadId =
+    stringField(rec, "threadId") ??
+    (method === "thread/started"
+      ? stringField(asRecord(rec?.thread), "id")
+      : undefined);
   if (threadId && threadId !== live.threadId) {
     handleSubagentNotification(live, threadId, method, params);
     return;
@@ -616,6 +623,15 @@ function handleNotification(live: Live, method: string, params: unknown): void {
     }
     live.onEvent(event);
   }
+  // Metadata and steps can arrive before the spawn. Create its row first.
+  for (const childId of codexSubagentThreadIds(asRecord(rec?.item) ?? {})) {
+    const owner = live.subagentThreads.get(childId);
+    if (!owner) continue;
+    const backlog = live.pendingSubagent.get(childId);
+    live.pendingSubagent.delete(childId);
+    for (const pending of backlog ?? [])
+      emitSubagentSteps(live, owner, pending.method, pending.params);
+  }
   settleSubagentRows(live, rec);
   if (mapped.activeTurnId !== undefined) {
     live.activeTurnId = mapped.activeTurnId;
@@ -634,7 +650,7 @@ function handleNotification(live: Live, method: string, params: unknown): void {
 const MAX_PENDING_SUBAGENT = 64;
 
 /**
- * Learns which agent row a child thread belongs to and replays its backlog.
+ * Learns which agent row a child thread belongs to.
  * Returns true when every thread this item names already belongs to another
  * row, which makes the item a second description of an agent we already show.
  */
@@ -659,15 +675,18 @@ function bindSubagentThreads(
   for (const childId of children) {
     const owner = live.subagentThreads.get(childId);
     if (owner) {
+      const model = stringField(item, "model");
+      if (model && item.tool === "spawnAgent")
+        live.onEvent({
+          type: "tool.updated",
+          callId: owner,
+          kind: "agent",
+          agentModel: model,
+        });
       if (owner !== callId) claimed += 1;
       continue;
     }
     live.subagentThreads.set(childId, callId);
-    const backlog = live.pendingSubagent.get(childId);
-    live.pendingSubagent.delete(childId);
-    for (const pending of backlog ?? []) {
-      emitSubagentSteps(live, callId, pending.method, pending.params);
-    }
   }
   return children.length > 0 && claimed === children.length;
 }
@@ -699,7 +718,12 @@ function handleSubagentNotification(
     emitSubagentSteps(live, callId, method, params);
     return;
   }
-  if (method !== "item/started" && method !== "item/completed") return;
+  if (
+    method !== "item/started" &&
+    method !== "item/completed" &&
+    method !== "thread/started"
+  )
+    return;
   const backlog = live.pendingSubagent.get(threadId) ?? [];
   if (backlog.length >= MAX_PENDING_SUBAGENT) return;
   backlog.push({ method, params });

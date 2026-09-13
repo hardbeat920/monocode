@@ -628,6 +628,49 @@ describe("clarifying questions", () => {
 });
 
 describe("subagent steps", () => {
+  it("keeps model metadata before steps arrive and preserves it through later updates", () => {
+    let session = applyHarnessEvent(newSession("codex", "/tmp"), {
+      type: "tool.started",
+      callId: "spawn",
+      kind: "agent",
+      title: "Review",
+      agentModel: "gpt-5.6-sol",
+    });
+    expect(session.blocks[0].agentRun).toEqual({
+      name: "Review",
+      model: "gpt-5.6-sol",
+      steps: [],
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "spawn",
+      title: "Review auth",
+    });
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "spawn",
+      stepId: "s1",
+      kind: "message",
+      text: "Checking auth",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "spawn",
+      agentModel: "gpt-5.6-terra",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "spawn",
+      status: "completed",
+    });
+    expect(session.blocks[0].agentRun).toMatchObject({
+      name: "Review auth",
+      model: "gpt-5.6-terra",
+      steps: [{ text: "Checking auth" }],
+    });
+    expect(session.blocks[0].tool?.status).toBe("completed");
+  });
+
   const spawn = () =>
     applyHarnessEvent(newSession("claude", "/tmp"), {
       type: "tool.started",

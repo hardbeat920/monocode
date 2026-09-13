@@ -499,6 +499,9 @@ function sanitizeAgentRun(value: unknown): AgentRunMeta | null {
   if (!name && steps.length === 0) return null;
   return {
     name: name || "Subagent",
+    ...(typeof record.model === "string" && record.model.trim()
+      ? { model: record.model.trim() }
+      : {}),
     ...(typeof record.agentType === "string" && record.agentType.trim()
       ? { agentType: record.agentType.trim() }
       : {}),

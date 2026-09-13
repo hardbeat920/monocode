@@ -30,6 +30,7 @@ pub struct CursorSubagentRun {
     agent_id: String,
     revision: String,
     agent_type: Option<String>,
+    model: Option<String>,
     prompt: Option<String>,
     steps: Vec<CursorSubagentStep>,
 }
@@ -138,7 +139,7 @@ fn lookup_subagent_runs(
             if known_revisions.get(agent_id) == Some(&revision) {
                 continue;
             }
-            let Ok((prompt, steps)) = read_subagent_steps(&connection, agent_id) else {
+            let Ok((prompt, steps, model)) = read_subagent_steps(&connection, agent_id) else {
                 continue;
             };
             runs.push(CursorSubagentRun {
@@ -151,6 +152,7 @@ fn lookup_subagent_runs(
                     .map(str::to_owned),
                 prompt,
                 steps,
+                model,
             });
         }
     }
@@ -184,7 +186,7 @@ fn read_cursor_metadata(connection: &Connection) -> Result<Value, String> {
 fn read_subagent_steps(
     connection: &Connection,
     agent_id: &str,
-) -> rusqlite::Result<(Option<String>, Vec<CursorSubagentStep>)> {
+) -> rusqlite::Result<(Option<String>, Vec<CursorSubagentStep>, Option<String>)> {
     // Filter before reading bytes: stores also contain large binary snapshots.
     let mut statement = connection.prepare(
         "SELECT id, data FROM blobs WHERE length(data) <= ?1 AND substr(data, 1, 1) = x'7b' ORDER BY rowid DESC LIMIT 600",
@@ -204,9 +206,20 @@ fn read_subagent_steps(
     let mut steps: Vec<CursorSubagentStep> = Vec::new();
     let mut tools = HashMap::new();
     let mut prompt = None;
+    let mut model = None;
     for (blob_id, message) in messages {
         let role = message.get("role").and_then(Value::as_str);
         let content = message.get("content");
+        if role == Some("assistant") {
+            if let Some(id) = message
+                .pointer("/providerOptions/cursor/systemPromptFingerprint/model")
+                .and_then(Value::as_str)
+            {
+                if !id.trim().is_empty() {
+                    model = Some(cap_text(id.trim(), 200));
+                }
+            }
+        }
         if role == Some("user") && prompt.is_none() {
             let text = cursor_content_text(content);
             if let Some((_, query)) = text.split_once("<user_query>") {
@@ -281,7 +294,7 @@ fn read_subagent_steps(
     if steps.len() > 300 {
         steps.drain(..steps.len() - 300);
     }
-    Ok((prompt, steps))
+    Ok((prompt, steps, model))
 }
 
 fn cursor_content_text(value: Option<&Value>) -> String {
@@ -632,7 +645,7 @@ mod tests {
         insert_message(
             &connection,
             "assistant-a",
-            serde_json::json!({"role":"assistant","id":"1","content":[
+            serde_json::json!({"role":"assistant","id":"1","providerOptions":{"cursor":{"systemPromptFingerprint":{"model":"grok-4.6"}}},"content":[
                 {"type":"text","text":"Inspecting."},
                 {"type":"reasoning","text":"","signature":"opaque-signature"},
                 {"type":"tool-call","toolCallId":"read","toolName":"Read","args":{"path":"/repo/acp.ts"}}
@@ -660,8 +673,9 @@ mod tests {
         connection
             .execute("INSERT INTO blobs VALUES ('binary', ?1)", [vec![0u8, 255]])
             .unwrap();
-        let (prompt, steps) = read_subagent_steps(&connection, "child").unwrap();
+        let (prompt, steps, model) = read_subagent_steps(&connection, "child").unwrap();
         assert_eq!(prompt.as_deref(), Some("Review ACP routing"));
+        assert_eq!(model.as_deref(), Some("grok-4.6"));
         assert_eq!(steps.len(), 4);
         assert_eq!(steps[0].id, "child:assistant-a:0");
         assert_eq!(steps[1].id, "child:tool:read");
@@ -688,7 +702,7 @@ mod tests {
             "oversized",
             serde_json::json!({"role":"assistant","content":[{"type":"text","text":"x".repeat(MAX_BLOB_BYTES)}]}),
         );
-        let (_, steps) = read_subagent_steps(&connection, "child").unwrap();
+        let (_, steps, _) = read_subagent_steps(&connection, "child").unwrap();
         assert_eq!(steps.len(), 300);
         assert_eq!(steps[0].text, "Message 5");
         assert_eq!(steps[299].text, "Message 304");

@@ -145,6 +145,7 @@ describe("AgentTranscript collapsed work", () => {
           tool: { callId: "agent-1", kind: "agent", status: "in_progress" },
           agentRun: {
             name: "Correctness review",
+            model: "claude-haiku-4-5",
             steps: [
               {
                 id: "s1",
@@ -160,6 +161,11 @@ describe("AgentTranscript collapsed work", () => {
           role: "tool",
           text: "Quality review",
           tool: { callId: "agent-2", kind: "agent", status: "in_progress" },
+          agentRun: {
+            name: "Quality review",
+            model: "custom-review-model",
+            steps: [],
+          },
         },
         tool("t1"),
         { id: "answer", role: "assistant", text: "Both reviewers agree." },
@@ -170,6 +176,8 @@ describe("AgentTranscript collapsed work", () => {
     // A row each, named, hopping while the run is live — no grouped header.
     expect(markup).toContain("Correctness review");
     expect(markup).toContain("Quality review");
+    expect(markup).toContain("Haiku 4.5");
+    expect(markup).toContain("custom-review-model");
     expect(markup).toContain("mascot-active");
     expect(markup).not.toContain("are working");
     // A row counts its agent's work; it does not echo the call in flight,
@@ -272,7 +280,12 @@ describe("AgentTranscript collapsed work", () => {
         agentRun: {
           name: "Correctness review",
           steps: [
-            { id: "s1", kind: "tool", text: "Read src/App.tsx", status: "completed" },
+            {
+              id: "s1",
+              kind: "tool",
+              text: "Read src/App.tsx",
+              status: "completed",
+            },
             { id: "s2", kind: "message", text: "Nothing to flag." },
           ],
         },

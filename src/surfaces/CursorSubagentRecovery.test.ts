@@ -40,6 +40,7 @@ it("reopens a saved Cursor placeholder as a named, expandable subagent with a st
           agentId: "child",
           toolCallId: "call-1",
           revision: "5",
+          model: "grok-4.6",
           prompt: "Perform a read-only code review of ACP routing in /repo.",
           steps: [
             {
@@ -83,6 +84,12 @@ it("reopens a saved Cursor placeholder as a named, expandable subagent with a st
     );
     expect(button).not.toBeNull();
     expect(button!.textContent).toContain("1 step");
+    expect(button!.textContent).toContain("Grok 4.6");
+    expect(
+      sanitizeSessionForPersist(session!).blocks.find(
+        (block) => block.tool?.callId === "call-1",
+      )?.agentRun?.model,
+    ).toBe("grok-4.6");
     expect(button!.getAttribute("aria-expanded")).toBe("false");
     act(() => button!.click());
     expect(button!.getAttribute("aria-expanded")).toBe("true");

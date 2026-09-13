@@ -25,6 +25,7 @@ export type HarnessEvent =
   | { type: "reasoning.completed" }
   | {
       type: "tool.started";
+      agentModel?: string;
       callId: string;
       title: string;
       kind?: string;
@@ -35,6 +36,7 @@ export type HarnessEvent =
     }
   | {
       type: "tool.updated";
+      agentModel?: string;
       callId: string;
       title?: string;
       kind?: string;

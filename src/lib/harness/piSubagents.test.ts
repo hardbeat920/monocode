@@ -16,6 +16,7 @@ describe("Pi subagent snapshots", () => {
           {
             agent: "scout",
             task: "Check auth",
+            model: "claude-haiku-4-5",
             exitCode: 0,
             messages: [
               {
@@ -54,6 +55,7 @@ describe("Pi subagent snapshots", () => {
       ...piSubagentEvents("spawn", {}, completed, true),
     ]);
     expect(session.blocks).toHaveLength(1);
+    expect(session.blocks[0].agentRun?.model).toBe("claude-haiku-4-5");
     expect(session.blocks[0].agentRun?.steps).toEqual([
       expect.objectContaining({
         kind: "reasoning",

@@ -11,6 +11,7 @@ export type StoredCursorSubagentRun = {
   agentId: string;
   revision: string;
   agentType?: string | null;
+  model?: string | null;
   prompt?: string | null;
   steps: Array<{
     id: string;

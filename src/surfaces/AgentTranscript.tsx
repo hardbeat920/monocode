@@ -87,6 +87,7 @@ import {
   nestedScrollAbsorbsWheel,
   proseSummary,
   subagentBrief,
+  subagentModelName,
   subagentName,
   subagentReport,
   toolCallLabel,
@@ -1596,6 +1597,7 @@ function SubagentPanel({
 }) {
   const name = subagentName(block);
   const brief = subagentBrief(block);
+  const model = subagentModelName(block);
   const state = toolCallState(block);
   const active = live && state === "pending";
   const steps = block.agentRun?.steps ?? [];
@@ -1629,9 +1631,14 @@ function SubagentPanel({
           {name}
         </span>
       )}
-      {status ? (
-        <span className="max-w-[45%] shrink-0 truncate font-sans text-[12px] text-content/40">
-          {status}
+      {model || status ? (
+        <span className="flex min-w-0 max-w-[55%] shrink-0 items-baseline gap-2 font-sans text-[12px] text-content/40">
+          {model ? (
+            <span className="truncate" title={`Model: ${model}`}>
+              {model}
+            </span>
+          ) : null}
+          {status ? <span className="shrink-0">{status}</span> : null}
         </span>
       ) : null}
     </span>

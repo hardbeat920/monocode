@@ -64,6 +64,14 @@ export function piSubagentEvents(
       stringField(entry, "agent") ??
       "Subagent";
     const agentType = stringField(entry, "agent");
+    const model =
+      stringField(entry, "model") ??
+      stringField(final, "model") ??
+      records(final.messages)
+        .filter((message) => message.role === "assistant")
+        .map((message) => stringField(message, "model"))
+        .filter(Boolean)
+        .slice(-1)[0];
     const report =
       stringField(final, "output") ??
       stringField(final, "errorMessage") ??
@@ -77,6 +85,7 @@ export function piSubagentEvents(
       kind: "agent",
       title: name,
       status,
+      ...(model ? { agentModel: model } : {}),
       ...(report ? { detail: report } : {}),
     });
     const emit = (

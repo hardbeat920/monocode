@@ -511,7 +511,10 @@ describe("claude subagents", () => {
             type: "tool_use",
             id: "toolu_agent",
             name: "Agent",
-            input: { description: "Correctness review", subagent_type: "explore" },
+            input: {
+              description: "Correctness review",
+              subagent_type: "explore",
+            },
           },
         ],
       },
@@ -521,6 +524,7 @@ describe("claude subagents", () => {
       parent_tool_use_id: "toolu_agent",
       message: {
         id: "msg_sub_1",
+        model: "claude-haiku-4-5",
         content: [
           { type: "thinking", thinking: "Start with the reducer." },
           { type: "text", text: "I will grep for tokens" },
@@ -549,6 +553,12 @@ describe("claude subagents", () => {
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
 
+    expect(
+      events
+        .reduce(applyHarnessEvent, newSession("claude", "/repo"))
+        .blocks.find((block) => block.tool?.callId === "toolu_agent")?.agentRun
+        ?.model,
+    ).toBe("claude-haiku-4-5");
     const steps = events.filter((event) => event.type === "agent.step");
     expect(steps.every((step) => step.callId === "toolu_agent")).toBe(true);
     expect(

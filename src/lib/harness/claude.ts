@@ -11,6 +11,7 @@ import {
 } from "./child";
 import {
   askUserQuestionAllowInput,
+  asRecord,
   assistantMessageId,
   assistantTextBlocks,
   assistantThinkingBlocks,
@@ -630,6 +631,9 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
       callId: tool.id,
       title: tool.title,
       kind: toolKindFromName(tool.name),
+      ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+        ? { agentModel: stringField(tool.input, "model") }
+        : {}),
       status: isAgentToolName(tool.name) ? "in_progress" : "pending",
       preview: previewFromTool(tool.name, tool.input),
     });
@@ -652,6 +656,9 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
       callId: tool.id,
       title: tool.title,
       kind: toolKindFromName(tool.name),
+      ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+        ? { agentModel: stringField(tool.input, "model") }
+        : {}),
       status: "pending",
       detail: summarizeToolRequest(tool.name, parsed),
       preview: previewFromTool(tool.name, parsed),
@@ -695,6 +702,9 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
       callId: tool.id,
       title: tool.title,
       kind: toolKindFromName(tool.name),
+      ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+        ? { agentModel: stringField(tool.input, "model") }
+        : {}),
       status: isAgentToolName(tool.name) ? "in_progress" : "pending",
       preview: previewFromTool(tool.name, tool.input),
     });
@@ -1143,6 +1153,14 @@ function noteSubagentNarration(
 ): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
+  const model = stringField(asRecord(rec.message), "model");
+  if (model)
+    live.onEvent({
+      type: "tool.updated",
+      callId: parent.id,
+      kind: "agent",
+      agentModel: model,
+    });
   const messageId = assistantMessageId(rec) ?? crypto.randomUUID();
   const thinking = assistantThinkingBlocks(rec).join("").trim();
   if (thinking) {

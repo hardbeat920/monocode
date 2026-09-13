@@ -21,6 +21,7 @@ import {
   subagentName,
   toolCallLabel,
   turnCopyText,
+  subagentModelName,
 } from "./transcriptActivity";
 
 function shell(
@@ -967,5 +968,20 @@ describe("proseSummary", () => {
     expect(
       proseSummary("```ts\nconst a = 1;\n```\n\n- Ran [checks](x.md)"),
     ).toBe("Ran checks");
+  });
+});
+
+describe("subagent model labels", () => {
+  it("keeps unknown model IDs and leaves unspecified models blank", () => {
+    const row = (model?: string): Block => ({
+      id: "agent",
+      role: "tool",
+      text: "Review",
+      agentRun: { name: "Review", model, steps: [] },
+    });
+    expect(subagentModelName(row("claude-haiku-4-5"))).toBe("Haiku 4.5");
+    expect(subagentModelName(row("custom-model-v2"))).toBe("custom-model-v2");
+    for (const model of [undefined, "", "auto", "inherit", "default"])
+      expect(subagentModelName(row(model))).toBeUndefined();
   });
 });

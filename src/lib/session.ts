@@ -144,6 +144,8 @@ export type AgentRunMeta = {
   name: string;
   /** Provider agent type, e.g. "code-reviewer". */
   agentType?: string;
+  /** Model reported for the child, which may differ from its parent. */
+  model?: string;
   steps: AgentStep[];
 };
 
