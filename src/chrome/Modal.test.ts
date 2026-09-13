@@ -9,6 +9,7 @@ describe("ModalPanel", () => {
       createElement(ModalPanel, {
         title: "Example",
         description: "A reusable shell",
+        closeDisabled: true,
         onClose: vi.fn(),
         children: "Body",
       }),
@@ -18,7 +19,9 @@ describe("ModalPanel", () => {
     expect(markup).toContain("modal-panel");
     expect(markup).toContain("Example");
     expect(markup).toContain("A reusable shell");
+    expect(markup).toContain('title="A reusable shell"');
     expect(markup).toContain("Body");
     expect(markup).toContain('aria-label="Close"');
+    expect(markup).toContain("disabled");
   });
 });

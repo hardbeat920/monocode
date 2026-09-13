@@ -1378,9 +1378,7 @@ export function Composer({
                     ? "Add a message, or send…"
                     : handoffCard
                       ? "Add context, or send to continue…"
-                      : shell
-                        ? "Ask, build, / for commands, @ for references... "
-                        : "Ask, build, / for commands, @ for references... "
+                      : "Ask, build, / for commands, @ for references…"
               }
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"

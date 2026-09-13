@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { normalizeHex } from "../lib/colorUtils";
+import { LAYER } from "../lib/layers";
 import { projectKey } from "../lib/paths";
 import { clearProjectLogo, pickAndSetProjectLogo } from "../lib/projectLogos";
 import { PROJECT_MASCOTS, projectMascot } from "../lib/projectMascots";
@@ -135,7 +136,8 @@ export function TabGroupMenu({
 }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(label);
-  const [customPickerOpen, setCustomPickerOpen] = useState(false);
+  const [customPickerAnchor, setCustomPickerAnchor] =
+    useState<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     input.current?.focus();
@@ -161,6 +163,8 @@ export function TabGroupMenu({
       anchor={{ x, y }}
       gap={0}
       width={MENU_WIDTH}
+      ignore="[data-custom-color-picker]"
+      dismissOnEscape={customPickerAnchor == null}
       onDismiss={onClose}
       role="menu"
       tabIndex={-1}
@@ -235,20 +239,38 @@ export function TabGroupMenu({
           colors={TAB_GROUP_COLORS}
           colorIndex={colorIndex}
           customColor={customColor}
-          customPickerOpen={customPickerOpen}
+          customPickerOpen={customPickerAnchor != null}
           onPickIndex={(index) => {
-            setCustomPickerOpen(false);
+            setCustomPickerAnchor(null);
             onColorChange(groupId, index === 0 ? null : index);
           }}
-          onToggleCustom={() => setCustomPickerOpen((open) => !open)}
+          onToggleCustom={(anchor) =>
+            setCustomPickerAnchor((current) =>
+              current == null ? anchor : null,
+            )
+          }
         />
       </div>
 
-      {customPickerOpen ? (
-        <ColorPickerPopover
-          value={customColor ?? normalizeHex(currentColor)}
-          onChange={(color) => onCustomColorChange(groupId, color)}
-        />
+      {customPickerAnchor ? (
+        <Popover
+          anchor={customPickerAnchor}
+          side="right"
+          align="start"
+          gap={6}
+          width={240}
+          layer={LAYER.submenu}
+          onDismiss={() => setCustomPickerAnchor(null)}
+          data-custom-color-picker
+          aria-label="Custom color picker"
+          className="p-2"
+        >
+          <ColorPickerPopover
+            value={customColor ?? normalizeHex(currentColor)}
+            onChange={(color) => onCustomColorChange(groupId, color)}
+            className=""
+          />
+        </Popover>
       ) : null}
 
       <div className="mb-2 px-0.5">

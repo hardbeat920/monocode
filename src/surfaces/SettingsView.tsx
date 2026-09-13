@@ -1440,7 +1440,7 @@ function ChatBackgroundCard({
               <div className="min-w-0">
                 <div className="text-[12px] text-content">Show on</div>
                 <p className="text-[11px] text-content/40">
-                  Empty sessions only, or every conversation.
+                  Empty sessions only, or all sessions.
                 </p>
               </div>
               <Segmented
@@ -1477,7 +1477,7 @@ function ChatBackgroundCard({
                   Session visibility
                 </div>
                 <p className="text-[11px] text-content/40">
-                  Background strength once the conversation has messages.
+                  Background strength once the session has messages.
                 </p>
               </div>
               <Slider
@@ -1596,7 +1596,7 @@ function ProvidersPage() {
         A provider is listed as installed once its CLI is found on your PATH.
         Uninstalled CLIs stay listed here but are omitted from the model picker.
         Turn off Show in picker to hide an installed provider from those tabs.
-        The model beside each provider is what new conversations use when that
+        The model beside each provider is what new sessions use when that
         provider is selected; Use by default picks the provider itself.
       </p>
       {HARNESSES.map((harness) => (
@@ -1672,6 +1672,7 @@ function ProviderRow({
         <Select
           label={`${HARNESS_TITLE[harness]} model`}
           value={current.id}
+          disabled={!available}
           onChange={(next) => onModelChange(harness, next)}
           options={models.map((item) => ({
             value: item.id,
@@ -1790,7 +1791,7 @@ function ArchivePage({
 
       <Row
         label="Show archived in the sidebar"
-        description="Keep archived conversations listed alongside the active ones."
+        description="Keep archived sessions listed alongside the active ones."
       >
         <Toggle
           label="Show archived in the sidebar"
@@ -1803,17 +1804,17 @@ function ArchivePage({
         title={
           looksLikeProject(cwd)
             ? `Archived in ${projectName(cwd)}`
-            : "Archived conversations"
+            : "Archived sessions"
         }
       />
 
       {!looksLikeProject(cwd) ? (
         <p className="py-3 text-[12px] text-content/45">
-          Open a project to see its archived conversations.
+          Open a project to see its archived sessions.
         </p>
       ) : archived.length === 0 ? (
         <p className="py-3 text-[12px] text-content/45">
-          No archived conversations in this project.
+          No archived sessions in this project.
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-content/10">
@@ -2092,11 +2093,13 @@ function Select({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
@@ -2177,8 +2180,9 @@ function Select({
         aria-label={`${label}: ${selected?.label ?? value}`}
         aria-expanded={open}
         aria-haspopup="listbox"
+        disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20"
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20 disabled:cursor-default disabled:opacity-40 disabled:hover:border-content/10"
       >
         <span className="min-w-0 flex-1 truncate">
           {selected ? selected.label : value}

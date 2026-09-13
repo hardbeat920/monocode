@@ -77,7 +77,7 @@ export function InboxDiscussionPanel({
           Ask · {inboxItemRef(item)}
         </span>
         <IconButton
-          label="Restart conversation"
+          label="Restart session"
           disabled={loading}
           onClick={() => {
             setLoading(true);

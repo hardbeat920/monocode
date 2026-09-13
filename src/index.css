@@ -53,6 +53,17 @@ html.theme-light {
   color-scheme: light;
 }
 
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[role="slider"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 75%, transparent);
+  outline-offset: 2px;
+}
+
 html,
 body,
 #root {

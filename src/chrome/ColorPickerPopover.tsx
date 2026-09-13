@@ -11,6 +11,7 @@ import { Pipette } from "./icons";
 type Props = {
   value: string;
   onChange: (hex: string) => void;
+  className?: string;
 };
 
 export function ColorSwatchRow({
@@ -28,9 +29,10 @@ export function ColorSwatchRow({
   customPickerOpen: boolean;
   customHighlighted?: boolean;
   onPickIndex: (index: number) => void;
-  onToggleCustom?: () => void;
+  onToggleCustom?: (anchor: HTMLButtonElement) => void;
 }) {
-  const pipetteActive = customHighlighted ?? (customColor != null || customPickerOpen);
+  const pipetteActive =
+    customHighlighted ?? (customColor != null || customPickerOpen);
   return (
     <div className="flex items-center justify-between gap-1 px-0.5">
       {colors.map((color, index) => {
@@ -66,7 +68,7 @@ export function ColorSwatchRow({
         aria-expanded={customPickerOpen}
         aria-pressed={customColor != null}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={onToggleCustom}
+        onClick={(event) => onToggleCustom?.(event.currentTarget)}
         className="grid size-5 place-items-center rounded-full"
       >
         <span
@@ -85,7 +87,10 @@ export function ColorSwatchRow({
           }
         >
           {!customColor ? (
-            <Pipette className="size-2 text-white drop-shadow-sm" strokeWidth={2.25} />
+            <Pipette
+              className="size-2 text-white drop-shadow-sm"
+              strokeWidth={2.25}
+            />
           ) : null}
         </span>
       </button>
@@ -93,7 +98,11 @@ export function ColorSwatchRow({
   );
 }
 
-export function ColorPickerPopover({ value, onChange }: Props) {
+export function ColorPickerPopover({
+  value,
+  onChange,
+  className = "mt-2 rounded-lg border border-content/10 bg-content/5 p-2",
+}: Props) {
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
@@ -178,7 +187,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
   const hueColor = hsvToHex(hsv.h, 100, 100);
 
   return (
-    <div className="mt-2 rounded-lg border border-content/10 bg-content/5 p-2">
+    <div className={className}>
       <div
         ref={svRef}
         role="slider"

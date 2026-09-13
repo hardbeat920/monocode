@@ -1061,8 +1061,8 @@ function SidebarComponent({
       ref={searchInputRef}
       type="text"
       value={searchQuery}
-      placeholder="Search conversations..."
-      aria-label="Search conversations"
+      placeholder="Search sessions…"
+      aria-label="Search sessions"
       spellCheck={false}
       autoComplete="off"
       autoCorrect="off"
@@ -1887,7 +1887,7 @@ function SidebarProjectPicker({
                   setQuery(event.target.value);
                   setActive(0);
                 }}
-                placeholder="Search projects..."
+                placeholder="Search projects…"
                 className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
               />
             </label>
@@ -2378,12 +2378,12 @@ function SessionCard({
       {needsApproval ? (
         <>
           <CircleAlert className="size-3" strokeWidth={1.75} />
-          <span>Need approval</span>
+          <span>Needs approval</span>
         </>
       ) : busy ? (
         <>
           <TerminalSpinner className="inline-block w-3 select-none text-center text-[11px] leading-none text-accent" />
-          <span>Working...</span>
+          <span>Working…</span>
         </>
       ) : done ? (
         <>
