@@ -2581,7 +2581,7 @@ function SessionCard({
         }}
         onContextMenu={onContextMenu}
         onKeyDown={onKeyDown}
-        className={`relative border flex w-full touch-none flex-col rounded-md px-2.5 text-left ${
+        className={`relative border flex w-full cursor-default select-none touch-none flex-col rounded-md px-2.5 text-left ${
           compact ? "py-1.5" : "py-2"
         } ${dragging ? "opacity-40" : ""} ${
           dropTarget
