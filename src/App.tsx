@@ -217,6 +217,7 @@ import { notifyDirsChanged } from "./lib/fileTree";
 import { nudgeWatchedFiles } from "./lib/fileWatch";
 import { type EditorNavigationTarget, type OpenFileFn } from "./lib/search";
 import {
+  defaultSessionChoice,
   mergeModelSettings,
   preferredModelSettings,
   resolveModel,
@@ -264,7 +265,6 @@ import {
   canReplaceSessionTitle,
   formatSessionTitle,
   sessionNeedsInput,
-  newDefaultSession,
   newSession,
   sessionDisplayTitle,
   sessionWorkCwd,
@@ -612,7 +612,8 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
 registerBuiltinHarnesses();
 
 function newAvailableDefaultSession(cwd?: string, runtimeMode?: RuntimeMode) {
-  return newDefaultSession(cwd, runtimeMode, isHarnessAvailable);
+  const { harness, model } = defaultSessionChoice(isHarnessAvailable);
+  return newSession(harness, cwd, model, runtimeMode);
 }
 
 export default function App({
@@ -967,31 +968,29 @@ export default function App({
   useEffect(() => {
     void probeHarnessAvailability().then(() => {
       if (windowTransfer || resumed) return;
-      const fallback = newAvailableDefaultSession(
-        seed.session.cwd,
-        seed.session.runtimeMode,
-      );
-      if (
-        fallback.harness === seed.session.harness &&
-        fallback.model === seed.session.model
-      ) {
-        return;
-      }
       setSessions((prev) =>
-        prev.map((session) =>
-          session.id === seed.session.id &&
-          session.blocks.length === 0 &&
-          session.harness === seed.session.harness &&
-          session.model === seed.session.model
-            ? {
-                ...session,
-                harness: fallback.harness,
-                model: fallback.model,
-                modelSettings: fallback.modelSettings,
-                title: fallback.title,
-              }
-            : session,
-        ),
+        prev.map((session) => {
+          if (
+            session.blocks.length > 0 ||
+            isHarnessAvailable(session.harness)
+          ) {
+            return session;
+          }
+          const fallback = newAvailableDefaultSession(
+            session.cwd,
+            session.runtimeMode,
+          );
+          return {
+            ...session,
+            harness: fallback.harness,
+            model: fallback.model,
+            modelSettings: fallback.modelSettings,
+            title:
+              session.title === HARNESS_LABEL[session.harness]
+                ? fallback.title
+                : session.title,
+          };
+        }),
       );
     });
     // Only the harnesses already in this window. Probing every installed CLI
