@@ -1229,6 +1229,7 @@ fn resolve_codex() -> Option<PathBuf> {
 
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/codex"));
+        candidates.push(home.join(".bun/bin/codex"));
         candidates.push(home.join(".npm-global/bin/codex"));
         candidates.push(home.join(".cargo/bin/codex"));
         candidates.push(home.join("n/bin/codex"));
