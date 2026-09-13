@@ -3926,7 +3926,13 @@ export default function App({
       void fetchClaudeRateLimits({ maxAgeMs: USAGE_SNAPSHOT_MAX_AGE_MS }).then(
         (limits) => {
           const session = sessionsRef.current.find((s) => s.id === sessionId);
-          if (!session || removingSessionIds.current.has(sessionId)) return;
+          if (
+            !session ||
+            session.harness !== "claude" ||
+            removingSessionIds.current.has(sessionId)
+          ) {
+            return;
+          }
           enqueueHarnessEvent(sessionId, {
             type: "status",
             text: formatUsageReport(

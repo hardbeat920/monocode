@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampUsedPercent,
+  errorRateLimits,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
@@ -142,7 +143,10 @@ describe("parseClaudeOAuthUsage", () => {
             group: "weekly",
             percent: 49,
             resets_at: "2026-09-15T08:00:00Z",
-            scope: { model: { id: null, display_name: "Fable" }, surface: null },
+            scope: {
+              model: { id: null, display_name: "Fable" },
+              surface: null,
+            },
           },
           {
             kind: "weekly_scoped",
@@ -173,6 +177,26 @@ describe("parseClaudeOAuthUsage", () => {
         },
       },
     ]);
+  });
+
+  it("keeps a scoped-only snapshot through a later error", () => {
+    const scopedOnly = parseClaudeOAuthUsage(
+      JSON.stringify({
+        limits: [
+          {
+            kind: "weekly_scoped",
+            percent: 49,
+            resets_at: "2026-09-15T08:00:00Z",
+            scope: { model: { display_name: "Fable" } },
+          },
+        ],
+      }),
+    );
+    expect(scopedOnly.session).toBeNull();
+    expect(scopedOnly.weeklyByModel).toHaveLength(1);
+    const failed = errorRateLimits("claude", "boom", scopedOnly);
+    expect(failed.status).toBe("error");
+    expect(failed.weeklyByModel).toEqual(scopedOnly.weeklyByModel);
   });
 
   it("leaves weeklyByModel empty without a limits array", () => {
@@ -319,9 +343,9 @@ describe("shouldFetchRateLimits", () => {
       error: "Codex CLI not found",
     };
     expect(isRateLimitSnapshotStale(disconnected, now)).toBe(false);
-    expect(
-      shouldFetchProvider(disconnected, { visible: true, now }),
-    ).toBe(false);
+    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
+      false,
+    );
     expect(
       shouldFetchRateLimits({
         visible: true,
@@ -339,9 +363,9 @@ describe("shouldFetchRateLimits", () => {
       updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
       error: "Claude not signed in",
     };
-    expect(
-      shouldFetchProvider(disconnected, { visible: true, now }),
-    ).toBe(false);
+    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
+      false,
+    );
     expect(
       shouldFetchRateLimits({
         visible: true,

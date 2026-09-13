@@ -532,7 +532,7 @@ export function Composer({
           skill.kind === "native" ||
           (skill.name !== PLAN_COMMAND.name &&
             skill.name !== COMPACT_COMMAND.name &&
-            skill.name !== USAGE_COMMAND.name &&
+            (harness !== "claude" || skill.name !== USAGE_COMMAND.name) &&
             skill.name !== SESSION_FOLDER_COMMAND.name),
       ),
     ],

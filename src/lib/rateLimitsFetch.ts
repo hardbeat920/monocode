@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "./fs";
 import {
   errorRateLimits,
-  isRateLimitSnapshotStale,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
   unavailableRateLimits,
@@ -38,15 +37,18 @@ export async function fetchClaudeRateLimits(options?: {
   if (
     options?.maxAgeMs != null &&
     lastClaudeSnapshot &&
-    !isRateLimitSnapshotStale(lastClaudeSnapshot, Date.now(), options.maxAgeMs)
+    lastClaudeSnapshot.updatedAt > 0 &&
+    Date.now() - lastClaudeSnapshot.updatedAt < options.maxAgeMs
   ) {
     return lastClaudeSnapshot;
   }
-  lastClaudeSnapshot = await fetchClaudeRateLimitsNow();
+  lastClaudeSnapshot = await fetchClaudeRateLimitsNow(lastClaudeSnapshot);
   return lastClaudeSnapshot;
 }
 
-async function fetchClaudeRateLimitsNow(): Promise<ProviderRateLimits> {
+async function fetchClaudeRateLimitsNow(
+  previous: ProviderRateLimits | null,
+): Promise<ProviderRateLimits> {
   try {
     const result = await invoke<ClaudeUsageFetch>("fetch_claude_usage");
     if (result.status === "ok" && result.body) {
@@ -61,11 +63,13 @@ async function fetchClaudeRateLimitsNow(): Promise<ProviderRateLimits> {
     return errorRateLimits(
       "claude",
       result.error?.trim() || "Claude usage unavailable",
+      previous,
     );
   } catch (error) {
     return errorRateLimits(
       "claude",
       error instanceof Error ? error.message : "Claude usage unavailable",
+      previous,
     );
   }
 }

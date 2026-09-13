@@ -88,7 +88,7 @@ export function fetchingRateLimits(
   provider: RateLimitProvider,
   previous?: ProviderRateLimits | null,
 ): ProviderRateLimits {
-  if (previous && (previous.session || previous.weekly)) {
+  if (previous && hasRateLimitData(previous)) {
     return { ...previous, status: "fetching" };
   }
   return {
@@ -120,7 +120,7 @@ export function errorRateLimits(
   error: string,
   previous?: ProviderRateLimits | null,
 ): ProviderRateLimits {
-  if (previous && (previous.session || previous.weekly)) {
+  if (previous && hasRateLimitData(previous)) {
     return {
       ...previous,
       error,
@@ -136,6 +136,10 @@ export function errorRateLimits(
     error,
     status: "error",
   };
+}
+
+function hasRateLimitData(limits: ProviderRateLimits): boolean {
+  return !!(limits.session || limits.weekly || limits.weeklyByModel?.length);
 }
 
 export function clampUsedPercent(value: number): number {
