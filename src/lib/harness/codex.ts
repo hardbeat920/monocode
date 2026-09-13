@@ -22,7 +22,10 @@ import {
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "./jsonRpc";
 import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
-import { codexMcpConfirmation } from "./codexElicitation";
+import {
+  codexMcpConfirmation,
+  isCodexComputerUseAccessConfirmation,
+} from "./codexElicitation";
 import { joinStreamText, snapshotRemainder } from "./streamText";
 import type {
   ApprovalDecision,
@@ -722,9 +725,21 @@ async function handleServerRequest(
       });
       return;
     }
+    if (
+      !live.planning &&
+      live.runtimeMode === "full-access" &&
+      isCodexComputerUseAccessConfirmation(params)
+    ) {
+      await live.rpc.respond(id, {
+        action: "accept",
+        content: confirmation.content,
+        _meta: null,
+      });
+      return;
+    }
     const uiId = live.nextApprovalUiId++;
     const pending = waitApproval(live, uiId, id, "permissions", threadId);
-    // MCP consent must carry the user's decision, including in Full Access.
+    // Other MCP consent must carry the user's decision, including in Full Access.
     live.onEvent({
       type: "approval.requested",
       requestId: uiId,

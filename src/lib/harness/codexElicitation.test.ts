@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { codexMcpConfirmation } from "./codexElicitation";
+import {
+  codexMcpConfirmation,
+  isCodexComputerUseAccessConfirmation,
+} from "./codexElicitation";
 
 const confirmation = {
   mode: "form",
@@ -59,5 +62,23 @@ describe("Codex MCP confirmations", () => {
 
   it("does not treat browser authorization as a confirmation", () => {
     expect(codexMcpConfirmation({ ...confirmation, mode: "url" })).toBeNull();
+  });
+
+  it("identifies computer-use app access without matching other confirmations", () => {
+    expect(
+      isCodexComputerUseAccessConfirmation({
+        ...confirmation,
+        serverName: "cua_repl",
+        message: 'Allow Computer Use to use "QuickTime Player"?',
+      }),
+    ).toBe(true);
+    expect(isCodexComputerUseAccessConfirmation(confirmation)).toBe(false);
+    expect(
+      isCodexComputerUseAccessConfirmation({
+        ...confirmation,
+        serverName: "cua_repl",
+        message: "Allow this form submission?",
+      }),
+    ).toBe(false);
   });
 });
