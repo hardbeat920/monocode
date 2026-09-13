@@ -1182,6 +1182,10 @@ function InboxCard({
   );
 }
 
+export function inboxShowsFullFileDiff(item: InboxItem): boolean {
+  return item.provider === "github" && item.kind === "pr";
+}
+
 export function InboxDetail({
   item,
   cwd,
@@ -1235,7 +1239,7 @@ export function InboxDetail({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"summary" | "code">("summary");
   const [diffMode, setDiffMode] = useState<"hunks" | "full">("hunks");
-  const fullFile = diffMode === "full";
+  const fullFile = inboxShowsFullFileDiff(item) && diffMode === "full";
   const [prDiff, setPrDiff] = useState<GithubPrDiff | null>(cachedDiff);
   const [diffLoading, setDiffLoading] = useState(isPr && cachedDiff == null);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -1792,7 +1796,7 @@ export function InboxDetail({
                   onSelect={() => setTab("code")}
                 />
               </div>
-              {tab === "code" ? (
+              {tab === "code" && inboxShowsFullFileDiff(item) ? (
                 <div
                   role="group"
                   aria-label="Diff context"

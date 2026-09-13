@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::ErrorKind;
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -2499,13 +2498,13 @@ fn git_github_pr_diff_for(
     };
     let json = gh_run(root, &["pr", "view", &number, "--json", fields], false)?;
     let mut diff = parse_github_pr_diff_meta(&json)?;
-    let patch = if full_context {
+    let (patch, truncated) = if full_context {
         let (base, head) = parse_github_pr_oids(&json)?;
         git_diff_full_context(root, &base, &head)?
     } else {
-        gh_run(root, &["pr", "diff", &number], true)?
+        (gh_run(root, &["pr", "diff", &number], true)?, false)
     };
-    if patch.len() > MAX_PR_DIFF_BYTES {
+    if truncated || patch.len() > MAX_PR_DIFF_BYTES {
         diff.truncated = true;
     } else {
         diff.patch = patch;
@@ -2533,16 +2532,40 @@ fn parse_github_pr_oids(json: &str) -> Result<(String, String), String> {
     Ok((base.to_string(), head.to_string()))
 }
 
-fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<String, String> {
+fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<(String, bool), String> {
     ensure_git_commit(root, base)?;
     ensure_git_commit(root, head)?;
+    ensure_merge_base(root, base, head)?;
     let context = format!("-U{PR_FULL_CONTEXT_LINES}");
     let three_dot = format!("{base}...{head}");
-    if let Some(patch) = git_run(root, &["diff", &context, &three_dot]) {
-        return Ok(patch);
+    let (bytes, truncated) =
+        git_output_capped(root, &["diff", &context, &three_dot], MAX_PR_DIFF_BYTES)
+            .ok_or_else(|| format!("git diff failed for {base}...{head}"))?;
+    if truncated {
+        return Ok((String::new(), true));
     }
-    git_run(root, &["diff", &context, base, head])
-        .ok_or_else(|| format!("git diff failed for {base}...{head}"))
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), false))
+}
+
+fn ensure_merge_base(root: &Path, base: &str, head: &str) -> Result<(), String> {
+    if merge_base_exists(root, base, head) {
+        return Ok(());
+    }
+    if let Some(remote) = github_fetch_remote(root) {
+        for deepen in ["50", "200", "800"] {
+            let _ = git_output(root, &["fetch", "--no-tags", "--deepen", deepen, &remote]);
+            if merge_base_exists(root, base, head) {
+                return Ok(());
+            }
+        }
+    }
+    Err(format!(
+        "Cannot find a merge base for {base} and {head}. Fetch more history and try again."
+    ))
+}
+
+fn merge_base_exists(root: &Path, base: &str, head: &str) -> bool {
+    git_output(root, &["merge-base", base, head]).is_some()
 }
 
 fn ensure_git_commit(root: &Path, oid: &str) -> Result<(), String> {
@@ -2550,13 +2573,83 @@ fn ensure_git_commit(root: &Path, oid: &str) -> Result<(), String> {
     if git_output(root, &["cat-file", "-e", &spec]).is_some() {
         return Ok(());
     }
-    let _ = git_output(root, &["fetch", "--no-tags", "--depth", "1", "origin", oid]);
+    if let Some(remote) = github_fetch_remote(root) {
+        let _ = git_output(root, &["fetch", "--no-tags", "--depth", "1", &remote, oid]);
+    }
     if git_output(root, &["cat-file", "-e", &spec]).is_some() {
         return Ok(());
     }
     Err(format!(
         "Missing git commit {oid}. Fetch the pull request refs and try again."
     ))
+}
+
+fn github_fetch_remote(root: &Path) -> Option<String> {
+    if let Some(name) = gh_resolved_remote(root) {
+        return Some(name);
+    }
+    if let Some(url) = gh_repo_view_url(root) {
+        if let Some(name) = remote_matching_github_url(root, &url) {
+            return Some(name);
+        }
+    }
+    git_remote_name(root)
+}
+
+fn gh_resolved_remote(root: &Path) -> Option<String> {
+    let listed = git_stdout(
+        root,
+        &["config", "--get-regexp", r"remote\..*\.gh-resolved"],
+    )?;
+    for line in listed.lines() {
+        let key = line.split_whitespace().next()?;
+        let name = key.strip_prefix("remote.")?.strip_suffix(".gh-resolved")?;
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn gh_repo_view_url(root: &Path) -> Option<String> {
+    let text = gh_stdout(root, &["repo", "view", "--json", "url"])?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("url")?
+        .as_str()
+        .map(str::to_owned)
+        .filter(|url| !url.trim().is_empty())
+}
+
+fn remote_matching_github_url(root: &Path, url: &str) -> Option<String> {
+    let remotes = git_stdout(root, &["remote", "-v"])?;
+    let wanted = normalize_github_remote_url(url);
+    for line in remotes.lines() {
+        let mut parts = line.split_whitespace();
+        let name = parts.next()?;
+        let remote_url = parts.next()?;
+        if normalize_github_remote_url(remote_url) == wanted {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn normalize_github_remote_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    if let Some((_, rest)) = trimmed.split_once("github.com:") {
+        return format!(
+            "github.com/{}",
+            rest.trim_start_matches('/').to_ascii_lowercase()
+        );
+    }
+    if let Some((_, rest)) = trimmed.split_once("github.com/") {
+        return format!(
+            "github.com/{}",
+            rest.trim_start_matches('/').to_ascii_lowercase()
+        );
+    }
+    trimmed.to_ascii_lowercase()
 }
 
 fn parse_github_pr_diff_meta(json: &str) -> Result<GitHubPrDiff, String> {
@@ -2850,14 +2943,57 @@ fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .ok()?;
-    if output.status.success() {
-        return Some(output.stdout);
-    }
-    // `git diff` exits 1 when the files differ.
-    if output.status.code() == Some(1) && args.first().copied() == Some("diff") {
+    if git_status_ok(&output.status, args) {
         return Some(output.stdout);
     }
     None
+}
+
+fn git_output_capped(root: &Path, args: &[&str], max_bytes: usize) -> Option<(Vec<u8>, bool)> {
+    let mut child = git_cmd()
+        .arg("--no-pager")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = match stdout.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        };
+        let remaining = max_bytes.saturating_sub(buf.len());
+        if n > remaining {
+            buf.extend_from_slice(&chunk[..remaining]);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Some((buf, true));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let status = child.wait().ok()?;
+    if git_status_ok(&status, args) {
+        Some((buf, false))
+    } else {
+        None
+    }
+}
+
+fn git_status_ok(status: &std::process::ExitStatus, args: &[&str]) -> bool {
+    status.success() || (status.code() == Some(1) && args.first().copied() == Some("diff"))
 }
 
 fn git_branch(root: &Path) -> Option<String> {
@@ -5567,7 +5703,8 @@ mod tests {
             .unwrap()
             .trim()
             .to_string();
-        let patch = git_diff_full_context(&dir.0, &base, &head).unwrap();
+        let (patch, truncated) = git_diff_full_context(&dir.0, &base, &head).unwrap();
+        assert!(!truncated);
         assert!(
             patch.contains("line-1"),
             "expected distant context in patch:\n{patch}"
@@ -5578,6 +5715,94 @@ mod tests {
             !default.contains("line-1"),
             "default context should omit distant lines"
         );
+    }
+
+    #[test]
+    fn git_diff_full_context_errors_without_a_merge_base() {
+        let dir = tmp("git-full-context-unrelated");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        let base = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        if !git(&dir.0, &["checkout", "--orphan", "other"]) {
+            return;
+        }
+        let _ = std::fs::remove_file(dir.0.join("a.txt"));
+        std::fs::write(dir.0.join("b.txt"), "beta\n").unwrap();
+        if !git(&dir.0, &["add", "."]) || !git(&dir.0, &["commit", "-m", "other"]) {
+            return;
+        }
+        let head = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        assert!(git_run(&dir.0, &["merge-base", &base, &head]).is_none());
+        let two_dot = git_run(&dir.0, &["diff", &base, &head]).unwrap_or_default();
+        assert!(
+            two_dot.contains("alpha") || two_dot.contains("beta"),
+            "two-dot should invent a comparison:\n{two_dot}"
+        );
+        let err = git_diff_full_context(&dir.0, &base, &head).unwrap_err();
+        assert!(
+            err.to_lowercase().contains("merge base"),
+            "expected merge-base error, got {err}"
+        );
+    }
+
+    #[test]
+    fn ensure_git_commit_fetches_from_gh_resolved_remote() {
+        let remote = tmp("git-full-context-upstream");
+        if !init_git_commit(&remote.0, &[("note.txt", "hello\n")]) {
+            return;
+        }
+        let oid = git_run(&remote.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let decoy = tmp("git-full-context-origin");
+        if !init_git_commit(&decoy.0, &[("other.txt", "decoy\n")]) {
+            return;
+        }
+        let local = tmp("git-full-context-local");
+        if !init_git_commit(&local.0, &[("local.txt", "local\n")]) {
+            return;
+        }
+        let upstream_url = remote.0.to_string_lossy().into_owned();
+        let origin_url = decoy.0.to_string_lossy().into_owned();
+        if !git(&local.0, &["remote", "add", "origin", &origin_url])
+            || !git(&local.0, &["remote", "add", "upstream", &upstream_url])
+            || !git(&local.0, &["config", "remote.upstream.gh-resolved", "base"])
+        {
+            return;
+        }
+        assert_eq!(github_fetch_remote(&local.0).as_deref(), Some("upstream"));
+        let spec = format!("{oid}^{{commit}}");
+        assert!(git_output(&local.0, &["cat-file", "-e", &spec]).is_none());
+        ensure_git_commit(&local.0, &oid).unwrap();
+        assert!(git_output(&local.0, &["cat-file", "-e", &spec]).is_some());
+    }
+
+    #[test]
+    fn git_output_capped_stops_before_buffering_the_rest() {
+        let dir = tmp("git-output-capped");
+        let big = "x".repeat(80_000);
+        if !init_git_commit(&dir.0, &[("big.txt", &format!("{big}\n"))]) {
+            return;
+        }
+        std::fs::write(dir.0.join("big.txt"), format!("y{big}\n")).unwrap();
+        if !git(&dir.0, &["add", "."]) || !git(&dir.0, &["commit", "-m", "edit"]) {
+            return;
+        }
+        let (bytes, truncated) =
+            git_output_capped(&dir.0, &["diff", "HEAD~1", "HEAD"], 1024).unwrap();
+        assert!(truncated);
+        assert!(bytes.len() <= 1024);
+        let (head, truncated) = git_output_capped(&dir.0, &["rev-parse", "HEAD"], 1024).unwrap();
+        assert!(!truncated);
+        assert!(!head.is_empty());
     }
 
     #[test]
