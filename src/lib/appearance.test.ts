@@ -14,6 +14,9 @@ import {
   loadTranscriptAnchor,
   saveTranscriptAnchor,
   TRANSCRIPT_ANCHOR_DEFAULT,
+  loadTranscriptCompact,
+  saveTranscriptCompact,
+  TRANSCRIPT_COMPACT_DEFAULT,
   loadThemePreference,
   saveThemePreference,
   resolveColorScheme,
@@ -23,6 +26,7 @@ import {
 const KEY = "monocode.transcriptLayout";
 const SCHEME_KEY = "monocode.colorScheme";
 const ANCHOR_KEY = "monocode.transcriptAnchor";
+const COMPACT_KEY = "monocode.transcriptCompact";
 const CHAT_BACKGROUND_PATH_KEY = "monocode.chatBackgroundPath";
 const CHAT_BACKGROUND_OPACITY_KEY = "monocode.chatBackgroundOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
@@ -92,6 +96,25 @@ describe("transcript prompt-to-top setting", () => {
     expect(loadTranscriptAnchor()).toBe(true);
     saveTranscriptAnchor(false);
     expect(loadTranscriptAnchor()).toBe(false);
+  });
+});
+
+describe("compact transcript setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(COMPACT_KEY);
+  });
+
+  it("defaults to off", () => {
+    expect(TRANSCRIPT_COMPACT_DEFAULT).toBe(false);
+    expect(loadTranscriptCompact()).toBe(false);
+  });
+
+  it("persists across loads", () => {
+    saveTranscriptCompact(true);
+    expect(loadTranscriptCompact()).toBe(true);
+    saveTranscriptCompact(false);
+    expect(loadTranscriptCompact()).toBe(false);
   });
 });
 
