@@ -11,6 +11,7 @@ import {
   clearGitlabCache,
   gitlabConnected,
   gitlabRepo,
+  listGitlabTodos,
   listGitlabWorkItems,
   type GitlabWorkItem,
 } from "./gitlab";
@@ -61,6 +62,8 @@ export type InboxItem = Omit<GithubWorkItem, "kind"> & {
   projectId?: string;
   projectName?: string;
   stateType?: string;
+  /** GitLab To-Do action that caused this item to need attention. */
+  attentionReason?: string;
 };
 
 export type GithubWorkItemDetails = {
@@ -461,6 +464,41 @@ export function githubReviewStateLabel(state: string): string {
   }
 }
 
+export function gitlabAttentionLabel(reason: string): string {
+  const action = reason.trim().toLowerCase();
+  switch (action) {
+    case "assigned":
+      return "Assigned to you";
+    case "mentioned":
+    case "directly_addressed":
+      return "Mentioned you";
+    case "review_requested":
+      return "Review requested";
+    case "review_submitted":
+      return "Review submitted";
+    case "approval_required":
+      return "Approval required";
+    case "build_failed":
+      return "Pipeline failed";
+    case "unmergeable":
+      return "Cannot be merged";
+    case "merge_train_removed":
+      return "Removed from merge train";
+    case "member_access_requested":
+      return "Access requested";
+    case "marked":
+      return "Added to your to-dos";
+    default:
+      return action
+        .split("_")
+        .filter(Boolean)
+        .map((word, index) =>
+          index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word,
+        )
+        .join(" ");
+  }
+}
+
 export function prDiffCacheKey(cwd: string, number: number): string {
   return `${normalizeProjectPath(cwd)}:pr:${number}`;
 }
@@ -599,11 +637,32 @@ async function fetchGitlabInboxItems(
   const grouped = groupProjectsByRepo(
     resolved.filter((project) => project.repo.length > 0),
   );
+
+  if (query.assignedToMe) {
+    const localPathByRepo = new Map(
+      grouped.map((project) => [project.repo.toLowerCase(), project.path]),
+    );
+    const jobs = (["issue", "pr"] as const).map(async (kind) => {
+      const items = await listGitlabTodos({
+        kind,
+        limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
+      });
+      return items.map((item) =>
+        gitlabWorkItemToInboxItem(
+          item,
+          localPathByRepo.get(item.repo.toLowerCase()) ?? "",
+          item.repo,
+        ),
+      );
+    });
+    return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
+  }
+
   const jobs = grouped.flatMap((project) =>
     (["issue", "pr"] as const).map(async (kind) => {
       const items = await listGitlabWorkItems(project.path, {
         kind,
-        assignedToMe: query.assignedToMe,
+        assignedToMe: false,
         state: query.state,
         limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
       });
@@ -843,6 +902,7 @@ export function matchesInboxQuery(item: InboxItem, query: string): boolean {
     item.identifier,
     item.teamName,
     item.projectName,
+    item.attentionReason,
     kind,
     `#${item.number}`,
     String(item.number),

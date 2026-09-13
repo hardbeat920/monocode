@@ -248,6 +248,7 @@ pub fn run() {
             gitlab::gitlab_set_config,
             gitlab::gitlab_repo,
             gitlab::gitlab_list_work_items,
+            gitlab::gitlab_list_todos,
             gitlab::gitlab_work_item_details,
             gitlab::gitlab_work_item_thread,
             gitlab::gitlab_work_item_comment,
