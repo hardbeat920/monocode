@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ComponentProps } from "react";
+import { act, createElement, useState, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SurfaceTabs } from "./SurfaceTabs";
@@ -50,6 +50,36 @@ function click(target: Element, button: number) {
   mouse(target, "mouseup", button);
   const up = mouse(target, button === 0 ? "click" : "auxclick", button);
   return { down, up };
+}
+
+function pointer(target: EventTarget, type: string, clientX: number) {
+  act(() =>
+    target.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        button: 0,
+        pointerId: 1,
+        clientX,
+        clientY: 16,
+      }),
+    ),
+  );
+}
+
+function layoutTabs(elements: HTMLElement[]) {
+  elements.forEach((element, index) => {
+    vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(index * 100, 0, 100, 32),
+    );
+    const captured = new Set<number>();
+    element.setPointerCapture = (id) => {
+      captured.add(id);
+    };
+    element.hasPointerCapture = (id) => captured.has(id);
+    element.releasePointerCapture = (id) => {
+      captured.delete(id);
+    };
+  });
 }
 
 function workspaceTab(id: string): Tab {
@@ -125,32 +155,7 @@ describe.each(["workspace", "file", "terminal"] as const)(
       const first = container.querySelector(
         '[aria-label="Close first"]',
       )!.parentElement!;
-      [first, second].forEach((element, index) => {
-        vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
-          new DOMRect(index * 100, 0, 100, 32),
-        );
-        const captured = new Set<number>();
-        element.setPointerCapture = (id) => {
-          captured.add(id);
-        };
-        element.hasPointerCapture = (id) => captured.has(id);
-        element.releasePointerCapture = (id) => {
-          captured.delete(id);
-        };
-      });
-      const pointer = (target: EventTarget, type: string, clientX: number) => {
-        act(() =>
-          target.dispatchEvent(
-            new PointerEvent(type, {
-              bubbles: true,
-              button: 0,
-              pointerId: 1,
-              clientX,
-              clientY: 16,
-            }),
-          ),
-        );
-      };
+      layoutTabs([first, second]);
       try {
         pointer(tab, "pointerdown", 150);
         pointer(window, "pointermove", 30);
@@ -171,6 +176,107 @@ describe.each(["workspace", "file", "terminal"] as const)(
         vi.useRealTimers();
       }
     });
+
+    it.each([
+      ["close button", 60],
+      ["middle click", 60],
+      ["close button", 160],
+      ["middle click", 160],
+    ] as const)(
+      "preserves the reordered tabs when closing another with %s %i ms after drop",
+      (method, delay) => {
+        vi.useFakeTimers();
+        const onReorder = vi.fn();
+        const onClose = vi.fn();
+        function Tabs() {
+          const [ids, setIds] = useState(["first", "second", "third"]);
+          const [activeId, setActiveId] = useState("first");
+          const reorder = (next: string[], movedId?: string) => {
+            onReorder(next, movedId);
+            setIds(next);
+          };
+          const close = (id: string) => {
+            onClose(id);
+            setIds((current) => current.filter((entry) => entry !== id));
+          };
+          return kind === "workspace"
+            ? createElement(TitleBar, {
+                tabs: ids.map(workspaceTab),
+                activeId,
+                cwd: "/project",
+                onToggleSidebar: vi.fn(),
+                onNew: vi.fn(),
+                onSelect: setActiveId,
+                onClose: close,
+                onCloseMany: vi.fn(),
+                onReorder: reorder,
+              })
+            : createElement(SurfaceTabs, {
+                files: ids.map((id) => ({
+                  id,
+                  path: id,
+                  cwd: "/project",
+                  ...(kind === "terminal"
+                    ? { terminal: true, foreground: "vite" }
+                    : {}),
+                })),
+                activeFileId: activeId,
+                dirtyFileIds: new Set<string>(),
+                fileErrorCounts: new Map<string, number>(),
+                onSelectFile: setActiveId,
+                onCloseFile: close,
+                onReorder: reorder,
+              });
+        }
+
+        try {
+          act(() => root.render(createElement(Tabs)));
+          const closeButtons = Array.from(
+            container.querySelectorAll<HTMLButtonElement>(
+              'button[aria-label^="Close "]',
+            ),
+          );
+          layoutTabs(closeButtons.map((button) => button.parentElement!));
+          const second = closeButtons[1].parentElement!.querySelector("button")!;
+          pointer(second, "pointerdown", 150);
+          pointer(window, "pointermove", 30);
+          act(() => vi.advanceTimersByTime(32));
+          pointer(window, "pointerup", 30);
+          expect(onReorder).not.toHaveBeenCalled();
+          act(() => vi.advanceTimersByTime(delay));
+
+          const thirdClose = container.querySelector(
+            '[aria-label="Close third"]',
+          )!;
+          click(
+            method === "close button"
+              ? thirdClose
+              : thirdClose.parentElement!.querySelector("button")!,
+            method === "close button" ? 0 : 1,
+          );
+          expect(onClose).toHaveBeenCalledExactlyOnceWith("third");
+          act(() => vi.runAllTimers());
+
+          expect(
+            Array.from(
+              container.querySelectorAll('button[aria-label^="Close "]'),
+              (button) => button.getAttribute("aria-label"),
+            ),
+          ).toEqual(["Close second", "Close first"]);
+          expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+            ["second", "first", "third"],
+            "second",
+          );
+          expect(onReorder.mock.invocationCallOrder[0]).toBeLessThan(
+            onClose.mock.invocationCallOrder[0],
+          );
+        } finally {
+          act(() => window.dispatchEvent(new Event("blur")));
+          act(() => vi.runAllTimers());
+          vi.useRealTimers();
+        }
+      },
+    );
 
     it.each(["first", "second"])(
       "closes on middle release without selecting, active tab is %s",

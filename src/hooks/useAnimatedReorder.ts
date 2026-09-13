@@ -98,6 +98,7 @@ export function useAnimatedReorder<T extends string>(
       }
 
       function reset() {
+        window.removeEventListener("pointerdown", onNextPointerDown, true);
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onCancel);
@@ -214,7 +215,15 @@ export function useAnimatedReorder<T extends string>(
         };
         finishSettling.current = finish;
         if (duration === 0) finish();
-        else finishTimer = setTimeout(finish, duration);
+        else {
+          // Commit before a new press can change the list, including close buttons.
+          window.addEventListener("pointerdown", onNextPointerDown, true);
+          finishTimer = setTimeout(finish, duration);
+        }
+      }
+
+      function onNextPointerDown() {
+        finishSettling.current?.();
       }
 
       function onUp(ev: globalThis.PointerEvent) {
