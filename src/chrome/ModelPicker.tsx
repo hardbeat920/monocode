@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Search, Star } from "./icons";
+import { Check, ChevronDown, ChevronRight, Gauge, Search, Star } from "./icons";
 import {
   useEffect,
   useId,
@@ -208,7 +208,17 @@ export function ModelPicker({
     [settings],
   );
 
-  const triggerLabel = current.name;
+  const triggerEffortSetting = hideEffort ? undefined : effortSetting(current);
+  const triggerEffortLabel = triggerEffortSetting
+    ? settingValueLabel(triggerEffortSetting, values)
+    : undefined;
+  const triggerTitle = [
+    HARNESS_TITLE[current.harness],
+    current.name,
+    triggerEffortLabel,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const pickerHarnesses = useMemo(() => {
     void availabilityVersion;
@@ -528,8 +538,10 @@ export function ModelPicker({
       <button
         ref={button}
         type="button"
-        title={`${HARNESS_TITLE[current.harness]} · ${current.name} · Recent models: right-click or ${MOD}.`}
-        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}`}
+        title={`${triggerTitle} · Recent models: right-click or ${MOD}.`}
+        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}${
+          triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
+        }`}
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open || recentMenu != null}
         aria-haspopup="menu"
@@ -547,7 +559,12 @@ export function ModelPicker({
         }`}
       >
         <HarnessIcon harness={current.harness} className="size-4 shrink-0" />
-        <span className="min-w-0 truncate text-[11px]">{triggerLabel}</span>
+        <span className="min-w-0 truncate text-[11px]">{current.name}</span>
+        {triggerEffortLabel ? (
+          <span className="shrink-0 text-[11px] text-content/50">
+            {triggerEffortLabel}
+          </span>
+        ) : null}
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
           strokeWidth={1.75}
@@ -876,6 +893,7 @@ export function EffortPicker({
             : "bg-content/10 text-content hover:bg-content/15"
         }`}
       >
+        <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
         <span className="min-w-0 truncate text-[11px]">{valueLabel}</span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
