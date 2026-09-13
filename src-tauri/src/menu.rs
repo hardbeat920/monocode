@@ -17,38 +17,41 @@ pub fn dispatch(app: &AppHandle, id: &str) {
             let _ = crate::window::open_new_window(app);
         }
         "quit" => crate::window::request_quit(app),
-        "new_tab" | "close_tab" | "close_other_tabs" | "close_all_tabs" | "next_tab"
-        | "prev_tab" | "back_tab" | "forward_tab" | "split_right" | "split_down" | "focus_left"
-        | "focus_right" | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity"
-        | "open_project" | "go_to_file" | "open_search" | "open_inbox" | "open_notes"
-        | "find_in_project" | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
+        "new_tab" | "close_tab" | "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab"
+        | "forward_tab" | "split_right" | "split_down" | "focus_left" | "focus_right"
+        | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project"
+        | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
+        | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
         | "open_model_picker" | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
-        "zoom_in" | "zoom_out" | "zoom_reset" => {
-            // Zoom targets one window: a broadcast would make every window
-            // increment the shared scale setting on a single menu click.
-            let mut windows: Vec<_> = app.webview_windows().into_values().collect();
-            windows.sort_by(|a, b| a.label().cmp(b.label()));
-            let target = windows
-                .iter()
-                .find(|window| window.is_focused().unwrap_or(false))
-                .or_else(|| {
-                    windows
-                        .iter()
-                        .find(|window| window.is_visible().unwrap_or(false))
-                })
-                .or(windows.first());
-            match target {
-                Some(window) => {
-                    let _ = app.emit_to(window.label(), id, ());
-                }
-                None => {
-                    let _ = app.emit(id, ());
-                }
-            }
-        }
+        // Zoom and Close All Tabs target one window: a broadcast would make
+        // every window act on a single menu click.
+        "zoom_in" | "zoom_out" | "zoom_reset" | "close_all_tabs" => emit_to_focused(app, id),
         _ => {}
+    }
+}
+
+/// Emit `id` to the focused window, falling back to a visible one, then any.
+fn emit_to_focused(app: &AppHandle, id: &str) {
+    let mut windows: Vec<_> = app.webview_windows().into_values().collect();
+    windows.sort_by(|a, b| a.label().cmp(b.label()));
+    let target = windows
+        .iter()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .or_else(|| {
+            windows
+                .iter()
+                .find(|window| window.is_visible().unwrap_or(false))
+        })
+        .or(windows.first());
+    match target {
+        Some(window) => {
+            let _ = app.emit_to(window.label(), id, ());
+        }
+        None => {
+            let _ = app.emit(id, ());
+        }
     }
 }
 

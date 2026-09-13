@@ -2055,7 +2055,7 @@ export default function App({
   );
 
   const onCloseTabs = useCallback(
-    (ids: string[], fallbackId: string) => {
+    (ids: string[], fallbackId: string, opts?: { confirmed?: boolean }) => {
       const current = tabsRef.current;
       const closingIds = new Set(ids);
       const closing = current.filter((tab) => closingIds.has(tab.id));
@@ -2095,6 +2095,12 @@ export default function App({
         if (closingIds.has(activeTabIdRef.current)) activateTab(fallback.id);
         void refreshHistory(sidebarCwd);
       };
+
+      // The caller already confirmed unsaved files and terminals.
+      if (opts?.confirmed) {
+        finishClose();
+        return;
+      }
 
       void (async () => {
         if (unsaved.length > 0) {
@@ -2387,6 +2393,17 @@ export default function App({
     );
     if (!tab) return;
 
+    const seedSession = (cwd: string) => {
+      const seed = sessionsRef.current[0];
+      return newSession(
+        seed?.harness ?? "claude",
+        cwd,
+        seed?.model,
+        seed?.runtimeMode,
+        seed?.modelSettings,
+      );
+    };
+
     // Stage one: files open in the active tab's editor panes close first.
     // Only when none are open does the command close every workspace tab.
     const editorFiles = tab.editorPanes.flatMap((pane) => pane.files);
@@ -2418,14 +2435,7 @@ export default function App({
           );
         } else {
           // The tab held only editor panes and must stay: seed a session.
-          const seed = sessionsRef.current[0];
-          const session = newSession(
-            seed?.harness ?? "claude",
-            editorFiles[0].cwd || projectCwd,
-            seed?.model,
-            seed?.runtimeMode,
-            seed?.modelSettings,
-          );
+          const session = seedSession(editorFiles[0].cwd || projectCwd);
           setSessions((prev) => [...prev, session]);
           nextTab = resetTabToSession(tab, session.id);
           focusesSession = true;
@@ -2454,16 +2464,61 @@ export default function App({
     }
 
     // Stage two: the workspace always keeps one tab, so close every other
-    // tab and reset the active one to a blank session.
-    onCloseOtherTabs();
-    onClearTabSession(tab.id);
-  }, [
-    onCloseTab,
-    onCloseOtherTabs,
-    onClearTabSession,
-    projectCwd,
-    tabCloseScope,
-  ]);
+    // tab and reset the active one to a blank session. Every confirmation
+    // runs before any tab changes, so a cancelled prompt leaves all tabs.
+    const otherIds = tabsRef.current
+      .filter((entry) => entry.id !== tab.id)
+      .map((entry) => entry.id);
+    const terminalFiles = (tab.terminalPanes ?? []).flatMap(
+      (pane) => pane.files,
+    );
+    const closingFiles = [
+      ...tabsRef.current
+        .filter((entry) => otherIds.includes(entry.id))
+        .flatMap((entry) => [
+          ...entry.editorPanes.flatMap((pane) => pane.files),
+          ...(entry.terminalPanes ?? []).flatMap((pane) => pane.files),
+        ]),
+      ...terminalFiles,
+    ];
+    const unsaved = closingFiles.filter(
+      (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
+    );
+    const terminals = closingFiles.filter((file) => file.terminal);
+
+    void (async () => {
+      if (unsaved.length > 0) {
+        const ok = await confirmDiscardUnsaved(
+          "Close all tabs with unsaved files?",
+        );
+        if (!ok) return;
+      }
+      if (terminals.length > 0) {
+        const ok = await confirmCloseTerminals(terminals);
+        if (!ok) return;
+      }
+      if (otherIds.length > 0) {
+        onCloseTabs(otherIds, tab.id, { confirmed: true });
+      }
+      const hasSession = leafIds(tab.layout).some((paneId) =>
+        sessionsRef.current.some((session) => session.id === paneId),
+      );
+      if (hasSession) {
+        // No editor files remain, so this commits without a prompt.
+        onClearTabSession(tab.id);
+        return;
+      }
+      // The tab held no session: seed one so the workspace stays usable.
+      const session = seedSession(terminalFiles[0]?.cwd || projectCwd);
+      setSessions((prev) => [...prev, session]);
+      setTabs((prev) =>
+        prev.map((entry) =>
+          entry.id === tab.id ? resetTabToSession(entry, session.id) : entry,
+        ),
+      );
+      setComposerFocused(true);
+    })();
+  }, [onCloseTab, onCloseTabs, onClearTabSession, projectCwd, tabCloseScope]);
 
   const onClosePane = useCallback(
     (sessionId?: string) => {
