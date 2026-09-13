@@ -105,6 +105,7 @@ import {
   markInboxItemsSeen,
   useInboxSeenTick,
 } from "../lib/inboxSeen";
+import { INBOX_LIST_PAGE, inboxListWindow } from "../lib/inboxListWindow";
 import {
   LINEAR_CHANGE_EVENT,
   linearConnected,
@@ -331,6 +332,9 @@ export function InboxView({
 }: Props) {
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const listLock = useLockOverscroll<HTMLDivElement>();
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLLIElement>(null);
+  const [listLimit, setListLimit] = useState(INBOX_LIST_PAGE);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const logos = useTabGroupLogos();
@@ -665,6 +669,41 @@ export function InboxView({
     !!targetSelectionKey && selectedKey === targetSelectionKey;
   const selected =
     selectedByKey ?? (waitingForTarget ? null : visibleItems[0]) ?? null;
+  const selectedIndex = selected
+    ? visibleItems.findIndex(
+        (item) => inboxItemKey(item) === inboxItemKey(selected),
+      )
+    : -1;
+  const shownItemCount = inboxListWindow(
+    visibleItems.length,
+    listLimit,
+    selectedIndex,
+  );
+  const shownItems = visibleItems.slice(0, shownItemCount);
+  const hasMoreItems = shownItemCount < visibleItems.length;
+  const inboxListKey = `${source}\0${searchInput}\0${JSON.stringify(activeFilters)}\0${linearHiddenTeamIds.join(",")}`;
+
+  useEffect(() => {
+    setListLimit(INBOX_LIST_PAGE);
+    const scroller = listScrollRef.current;
+    if (scroller) scroller.scrollTop = 0;
+  }, [inboxListKey]);
+
+  useEffect(() => {
+    if (!hasMoreItems) return;
+    const sentinel = loadMoreRef.current;
+    const root = listScrollRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setListLimit((current) => current + INBOX_LIST_PAGE);
+      },
+      { root, rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreItems, shownItemCount]);
 
   useEffect(() => {
     if (!selected) {
@@ -808,7 +847,10 @@ export function InboxView({
         </div>
       )}
       <div
-        ref={listLock}
+        ref={(element) => {
+          listLock(element);
+          listScrollRef.current = element;
+        }}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none"
       >
         {noSourcesConnected ? (
@@ -849,7 +891,7 @@ export function InboxView({
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5 p-1.5">
-            {visibleItems.map((item) => {
+            {shownItems.map((item) => {
               const key = inboxItemKey(item);
               const projectId = projectKey(item.projectPath);
               const relatedSessions = relatedSessionsForInboxItem(
@@ -881,6 +923,9 @@ export function InboxView({
                 </li>
               );
             })}
+            {hasMoreItems ? (
+              <li ref={loadMoreRef} aria-hidden className="h-px list-none" />
+            ) : null}
           </ul>
         )}
       </div>
