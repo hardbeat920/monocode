@@ -18,18 +18,15 @@ export type HarnessAvailability = Record<HarnessId, boolean>;
  * We only ever check whether the binary exists, never whether it is
  * authenticated, so the hint must not blame a login.
  */
-const CLI: Record<HarnessId, { name: string; install?: string }> = {
+const CLI: Record<HarnessId, { name: string }> = {
   claude: { name: "Claude Code CLI" },
   codex: { name: "Codex CLI" },
   cursor: { name: "Cursor CLI" },
-  grok: {
-    name: "Grok Build CLI",
-    install: "curl -fsSL https://x.ai/cli/install.sh | bash",
-  },
+  grok: { name: "Grok Build CLI" },
   opencode: { name: "OpenCode CLI" },
-  pi: { name: "Pi CLI", install: "npm i -g @earendil-works/pi-coding-agent" },
-  omp: { name: "omp CLI", install: "curl -fsSL https://omp.sh/install | sh" },
-  fx: { name: "fx CLI", install: "curl -fsSL https://fx.sh/setup.sh | bash" },
+  pi: { name: "Pi CLI" },
+  omp: { name: "omp CLI" },
+  fx: { name: "fx CLI" },
 };
 
 let availability: HarnessAvailability = {
@@ -60,7 +57,9 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
-export function subscribeHarnessAvailability(onStoreChange: () => void): () => void {
+export function subscribeHarnessAvailability(
+  onStoreChange: () => void,
+): () => void {
   listeners.add(onStoreChange);
   return () => {
     listeners.delete(onStoreChange);
@@ -80,14 +79,12 @@ export function isHarnessAvailable(id: HarnessId): boolean {
 }
 
 export function harnessUnavailableHint(id: HarnessId): string {
-  const { name, install } = CLI[id];
-  const how = install ? ` (\`${install}\`)` : "";
-  return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;
+  return `${CLI[id].name} not found. Install it, or restart MonoCode if it is already installed.`;
 }
 
-export function probeHarnessAvailability(
-  options?: { force?: boolean },
-): Promise<void> {
+export function probeHarnessAvailability(options?: {
+  force?: boolean;
+}): Promise<void> {
   if (inflight) return inflight;
   if (!options?.force && probedAt > 0 && Date.now() - probedAt < PROBE_TTL_MS) {
     return Promise.resolve();
