@@ -15,6 +15,9 @@ const TRANSCRIPT_LAYOUT_KEY = "monocode.transcriptLayout";
 const TRANSCRIPT_ANCHOR_KEY = "monocode.transcriptAnchor";
 const CHAT_BACKGROUND_PATH_KEY = "monocode.chatBackgroundPath";
 const CHAT_BACKGROUND_OPACITY_KEY = "monocode.chatBackgroundOpacity";
+const CHAT_BACKGROUND_EMPTY_OPACITY_KEY = "monocode.chatBackgroundEmptyOpacity";
+const CHAT_BACKGROUND_SESSION_OPACITY_KEY =
+  "monocode.chatBackgroundSessionOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
 const CHANGES_VIEW_KEY = "monocode.changesView";
 let chatBackgroundRevision = Date.now();
@@ -80,6 +83,10 @@ export const BODY_GLASS_DEFAULT = true;
 export const CHAT_BACKGROUND_OPACITY_MIN = 0.05;
 export const CHAT_BACKGROUND_OPACITY_MAX = 0.65;
 export const CHAT_BACKGROUND_OPACITY_DEFAULT = 0.24;
+export const CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT =
+  CHAT_BACKGROUND_OPACITY_DEFAULT;
+export const CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT =
+  CHAT_BACKGROUND_OPACITY_DEFAULT;
 export const CHAT_BACKGROUND_SCOPE_DEFAULT: ChatBackgroundScope = "all";
 
 function clamp(value: number, min: number, max: number) {
@@ -153,9 +160,7 @@ export function loadThemeSaturation(): number {
 export function saveThemeSaturation(value: number) {
   writeNumber(
     THEME_SATURATION_KEY,
-    Math.round(
-      clamp(value, THEME_SATURATION_MIN, THEME_SATURATION_MAX),
-    ),
+    Math.round(clamp(value, THEME_SATURATION_MIN, THEME_SATURATION_MAX)),
   );
 }
 
@@ -174,7 +179,10 @@ export function applyThemeTint(hue: number, saturation: number) {
 
 export function initAppearance() {
   document.documentElement.classList.toggle("is-mac", IS_MAC);
-  document.documentElement.classList.toggle("has-native-glass", HAS_NATIVE_GLASS);
+  document.documentElement.classList.toggle(
+    "has-native-glass",
+    HAS_NATIVE_GLASS,
+  );
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemePreference(loadThemePreference());
   watchSystemColorScheme();
@@ -182,7 +190,8 @@ export function initAppearance() {
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());
   applyChatBackground(loadChatBackgroundPath());
-  applyChatBackgroundOpacity(loadChatBackgroundOpacity());
+  applyChatBackgroundEmptyOpacity(loadChatBackgroundEmptyOpacity());
+  applyChatBackgroundSessionOpacity(loadChatBackgroundSessionOpacity());
   applyChatBackgroundScope(loadChatBackgroundScope());
   void applyUiScale(loadUiScale());
 }
@@ -294,9 +303,7 @@ export function saveSidebarBlur(value: number) {
 }
 
 export function applySidebarBlur(value: number) {
-  const next = Math.round(
-    clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX),
-  );
+  const next = Math.round(clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX));
   void invoke("set_window_background_blur", { radius: next });
   return next;
 }
@@ -364,31 +371,82 @@ export function chatBackgroundSrc(path: string | null): string | null {
 }
 
 export function loadChatBackgroundOpacity(): number {
-  return clamp(
-    readNumber(CHAT_BACKGROUND_OPACITY_KEY) ?? CHAT_BACKGROUND_OPACITY_DEFAULT,
-    CHAT_BACKGROUND_OPACITY_MIN,
-    CHAT_BACKGROUND_OPACITY_MAX,
-  );
+  return loadChatBackgroundEmptyOpacity();
 }
 
 export function saveChatBackgroundOpacity(value: number) {
-  writeNumber(
-    CHAT_BACKGROUND_OPACITY_KEY,
-    clamp(value, CHAT_BACKGROUND_OPACITY_MIN, CHAT_BACKGROUND_OPACITY_MAX),
-  );
-}
-
-export function applyChatBackgroundOpacity(value: number) {
   const next = clamp(
     value,
     CHAT_BACKGROUND_OPACITY_MIN,
     CHAT_BACKGROUND_OPACITY_MAX,
   );
-  document.documentElement.style.setProperty(
-    "--chat-background-opacity",
-    String(next),
+  saveChatBackgroundEmptyOpacity(next);
+  saveChatBackgroundSessionOpacity(next);
+  writeNumber(CHAT_BACKGROUND_OPACITY_KEY, next);
+}
+
+export function applyChatBackgroundOpacity(value: number) {
+  const next = applyChatBackgroundEmptyOpacity(value);
+  applyChatBackgroundSessionOpacity(next);
+  return next;
+}
+
+function loadChatBackgroundOpacityValue(key: string): number {
+  const next = clamp(
+    readNumber(key) ??
+      readNumber(CHAT_BACKGROUND_OPACITY_KEY) ??
+      CHAT_BACKGROUND_OPACITY_DEFAULT,
+    CHAT_BACKGROUND_OPACITY_MIN,
+    CHAT_BACKGROUND_OPACITY_MAX,
   );
   return next;
+}
+
+function saveChatBackgroundOpacityValue(key: string, value: number) {
+  writeNumber(
+    key,
+    clamp(value, CHAT_BACKGROUND_OPACITY_MIN, CHAT_BACKGROUND_OPACITY_MAX),
+  );
+}
+
+function applyChatBackgroundOpacityValue(variable: string, value: number) {
+  const next = clamp(
+    value,
+    CHAT_BACKGROUND_OPACITY_MIN,
+    CHAT_BACKGROUND_OPACITY_MAX,
+  );
+  document.documentElement.style.setProperty(variable, String(next));
+  return next;
+}
+
+export function loadChatBackgroundEmptyOpacity(): number {
+  return loadChatBackgroundOpacityValue(CHAT_BACKGROUND_EMPTY_OPACITY_KEY);
+}
+
+export function saveChatBackgroundEmptyOpacity(value: number) {
+  saveChatBackgroundOpacityValue(CHAT_BACKGROUND_EMPTY_OPACITY_KEY, value);
+}
+
+export function applyChatBackgroundEmptyOpacity(value: number) {
+  return applyChatBackgroundOpacityValue(
+    "--chat-background-empty-opacity",
+    value,
+  );
+}
+
+export function loadChatBackgroundSessionOpacity(): number {
+  return loadChatBackgroundOpacityValue(CHAT_BACKGROUND_SESSION_OPACITY_KEY);
+}
+
+export function saveChatBackgroundSessionOpacity(value: number) {
+  saveChatBackgroundOpacityValue(CHAT_BACKGROUND_SESSION_OPACITY_KEY, value);
+}
+
+export function applyChatBackgroundSessionOpacity(value: number) {
+  return applyChatBackgroundOpacityValue(
+    "--chat-background-session-opacity",
+    value,
+  );
 }
 
 function isChatBackgroundScope(value: unknown): value is ChatBackgroundScope {
@@ -476,9 +534,7 @@ export function loadProjectRailWidth(): number {
 export function saveProjectRailWidth(value: number) {
   writeNumber(
     PROJECT_RAIL_WIDTH_KEY,
-    Math.round(
-      clamp(value, PROJECT_RAIL_WIDTH_MIN, PROJECT_RAIL_WIDTH_MAX),
-    ),
+    Math.round(clamp(value, PROJECT_RAIL_WIDTH_MIN, PROJECT_RAIL_WIDTH_MAX)),
   );
 }
 

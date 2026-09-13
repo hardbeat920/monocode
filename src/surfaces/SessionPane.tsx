@@ -46,7 +46,7 @@ import { isAstraModel } from "../lib/astraWelcome";
 import { AstraWelcome } from "./AstraWelcome";
 import { projectKey } from "../lib/paths";
 import {
-  loadProjectChatBackground,
+  loadProjectChatBackgroundSettings,
   projectChatBackgroundRevision,
   subscribeProjectChatBackground,
 } from "../lib/projectChatBackground";
@@ -181,6 +181,7 @@ export const SessionPane = memo(function SessionPane({
   onPaneDragStart,
 }: Props) {
   const title = sessionDisplayTitle(session.title, session.harness);
+  const isEmpty = session.blocks.length === 0;
   const backgroundRevision = useSyncExternalStore(
     subscribeProjectChatBackground,
     projectChatBackgroundRevision,
@@ -191,13 +192,20 @@ export const SessionPane = memo(function SessionPane({
     loadChatBackgroundPath,
     loadChatBackgroundPath,
   );
-  const projectBackground = loadProjectChatBackground(projectKey(session.cwd));
+  const projectBackground = loadProjectChatBackgroundSettings(
+    projectKey(session.cwd),
+  );
   const projectBackgroundStyle = projectBackground
     ? ({
         "--chat-background-image": `url(${JSON.stringify(
           projectChatBackgroundSrc(projectBackground.path, backgroundRevision),
         )})`,
-        "--chat-background-opacity": String(projectBackground.opacity),
+        "--chat-background-empty-opacity": String(
+          projectBackground.emptyOpacity,
+        ),
+        "--chat-background-session-opacity": String(
+          projectBackground.sessionOpacity,
+        ),
       } as CSSProperties)
     : undefined;
   const approve = useCallback(
@@ -294,7 +302,6 @@ export const SessionPane = memo(function SessionPane({
     return () => window.removeEventListener(ADD_TO_CHAT_EVENT, onAdd);
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
-  const isEmpty = session.blocks.length === 0;
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer = !isEmpty || inSplit || !!session.inboxAsk;
   const draftRef = useRef<string | undefined>(undefined);

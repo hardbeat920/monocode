@@ -29,7 +29,8 @@ import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useColorScheme } from "../hooks/useColorScheme";
 import {
   applyChatBackground,
-  applyChatBackgroundOpacity,
+  applyChatBackgroundEmptyOpacity,
+  applyChatBackgroundSessionOpacity,
   applyChatBackgroundScope,
   applyBodyGlass,
   applyThemePreference,
@@ -37,15 +38,17 @@ import {
   applySidebarOpacity,
   applyThemeTint,
   BODY_GLASS_DEFAULT,
-  CHAT_BACKGROUND_OPACITY_DEFAULT,
+  CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT,
   CHAT_BACKGROUND_OPACITY_MAX,
   CHAT_BACKGROUND_OPACITY_MIN,
+  CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT,
   CHAT_BACKGROUND_SCOPE_DEFAULT,
   THEME_PREFERENCE_DEFAULT,
   chatBackgroundSrc,
   loadBodyGlass,
-  loadChatBackgroundOpacity,
+  loadChatBackgroundEmptyOpacity,
   loadChatBackgroundPath,
+  loadChatBackgroundSessionOpacity,
   loadChatBackgroundScope,
   loadThemePreference,
   loadSidebarBlur,
@@ -55,8 +58,9 @@ import {
   loadTranscriptLayout,
   loadTranscriptAnchor,
   saveBodyGlass,
-  saveChatBackgroundOpacity,
+  saveChatBackgroundEmptyOpacity,
   saveChatBackgroundPath,
+  saveChatBackgroundSessionOpacity,
   saveChatBackgroundScope,
   saveThemePreference,
   saveSidebarBlur,
@@ -1053,9 +1057,11 @@ function useAppearanceSettings() {
   const [chatBackgroundPath, setChatBackgroundPath] = useState(
     loadChatBackgroundPath,
   );
-  const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(
-    loadChatBackgroundOpacity,
+  const [chatBackgroundEmptyOpacity, setChatBackgroundEmptyOpacity] = useState(
+    loadChatBackgroundEmptyOpacity,
   );
+  const [chatBackgroundSessionOpacity, setChatBackgroundSessionOpacity] =
+    useState(loadChatBackgroundSessionOpacity);
   const [chatBackgroundScope, setChatBackgroundScope] =
     useState<ChatBackgroundScope>(loadChatBackgroundScope);
   const [chatBackgroundBusy, setChatBackgroundBusy] = useState(false);
@@ -1133,10 +1139,16 @@ function useAppearanceSettings() {
     }
   }, []);
 
-  const onChatBackgroundOpacity = useCallback((percent: number) => {
-    const next = applyChatBackgroundOpacity(percent / 100);
-    saveChatBackgroundOpacity(next);
-    setChatBackgroundOpacity(next);
+  const onChatBackgroundEmptyOpacity = useCallback((percent: number) => {
+    const next = applyChatBackgroundEmptyOpacity(percent / 100);
+    saveChatBackgroundEmptyOpacity(next);
+    setChatBackgroundEmptyOpacity(next);
+  }, []);
+
+  const onChatBackgroundSessionOpacity = useCallback((percent: number) => {
+    const next = applyChatBackgroundSessionOpacity(percent / 100);
+    saveChatBackgroundSessionOpacity(next);
+    setChatBackgroundSessionOpacity(next);
   }, []);
 
   const onChatBackgroundScope = useCallback((next: ChatBackgroundScope) => {
@@ -1157,7 +1169,12 @@ function useAppearanceSettings() {
     onBlur(SIDEBAR_BLUR_DEFAULT);
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
-    onChatBackgroundOpacity(Math.round(CHAT_BACKGROUND_OPACITY_DEFAULT * 100));
+    onChatBackgroundEmptyOpacity(
+      Math.round(CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT * 100),
+    );
+    onChatBackgroundSessionOpacity(
+      Math.round(CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT * 100),
+    );
     onChatBackgroundScope(CHAT_BACKGROUND_SCOPE_DEFAULT);
     if (chatBackgroundPath) void onClearChatBackground();
     onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
@@ -1165,7 +1182,8 @@ function useAppearanceSettings() {
     chatBackgroundPath,
     onBlur,
     onBodyGlass,
-    onChatBackgroundOpacity,
+    onChatBackgroundEmptyOpacity,
+    onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
     onClearChatBackground,
     onThemePreference,
@@ -1182,7 +1200,8 @@ function useAppearanceSettings() {
     themeSaturation,
     bodyGlass,
     chatBackgroundPath,
-    chatBackgroundOpacity,
+    chatBackgroundEmptyOpacity,
+    chatBackgroundSessionOpacity,
     chatBackgroundScope,
     chatBackgroundBusy,
     chatBackgroundError,
@@ -1194,7 +1213,8 @@ function useAppearanceSettings() {
     onBodyGlass,
     onChooseChatBackground,
     onClearChatBackground,
-    onChatBackgroundOpacity,
+    onChatBackgroundEmptyOpacity,
+    onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
     onUiScale,
     restoreDefaults,
@@ -1324,7 +1344,12 @@ function ChatBackgroundCard({
 }) {
   const src = chatBackgroundSrc(appearance.chatBackgroundPath);
   const hasImage = Boolean(appearance.chatBackgroundPath && src);
-  const visibility = Math.round(appearance.chatBackgroundOpacity * 100);
+  const emptyVisibility = Math.round(
+    appearance.chatBackgroundEmptyOpacity * 100,
+  );
+  const sessionVisibility = Math.round(
+    appearance.chatBackgroundSessionOpacity * 100,
+  );
   const busy = appearance.chatBackgroundBusy;
 
   return (
@@ -1368,10 +1393,10 @@ function ChatBackgroundCard({
               alt=""
               draggable={false}
               className="size-full object-cover"
-              style={{ opacity: appearance.chatBackgroundOpacity }}
+              style={{ opacity: appearance.chatBackgroundEmptyOpacity }}
             />
             <span className="pointer-events-none absolute bottom-2 left-2 text-[11px] text-content/40">
-              Preview at {visibility}%
+              Empty chat preview at {emptyVisibility}%
             </span>
           </div>
         ) : (
@@ -1410,18 +1435,38 @@ function ChatBackgroundCard({
             </div>
             <div className="flex items-center justify-between gap-4 border-t border-content/5 px-3 py-2.5">
               <div className="min-w-0">
-                <div className="text-[12px] text-content">Visibility</div>
+                <div className="text-[12px] text-content">
+                  Empty chat visibility
+                </div>
                 <p className="text-[11px] text-content/40">
-                  Keep it subtle so long conversations stay readable.
+                  Background strength before a chat has messages.
                 </p>
               </div>
               <Slider
-                label="Background visibility"
-                value={visibility}
-                display={`${visibility}%`}
+                label="Empty chat background visibility"
+                value={emptyVisibility}
+                display={`${emptyVisibility}%`}
                 min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
                 max={Math.round(CHAT_BACKGROUND_OPACITY_MAX * 100)}
-                onChange={appearance.onChatBackgroundOpacity}
+                onChange={appearance.onChatBackgroundEmptyOpacity}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 border-t border-content/5 px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="text-[12px] text-content">
+                  Session visibility
+                </div>
+                <p className="text-[11px] text-content/40">
+                  Background strength once the conversation has messages.
+                </p>
+              </div>
+              <Slider
+                label="Session background visibility"
+                value={sessionVisibility}
+                display={`${sessionVisibility}%`}
+                min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
+                max={Math.round(CHAT_BACKGROUND_OPACITY_MAX * 100)}
+                onChange={appearance.onChatBackgroundSessionOpacity}
               />
             </div>
           </div>
@@ -2163,14 +2208,9 @@ function Select({
                     : "text-content hover:bg-content/5"
                 }`}
               >
-                <span className="min-w-0 flex-1 truncate">
-                  {option.label}
-                </span>
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
                 {isSelected ? (
-                  <Check
-                    className="size-3.5 shrink-0"
-                    strokeWidth={2.25}
-                  />
+                  <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
                 ) : null}
               </button>
             );
