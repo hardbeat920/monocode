@@ -2692,6 +2692,7 @@ fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, Strin
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
+    crate::hide_window_console(&mut cmd);
     let output = cmd.output().map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             "GitHub CLI (`gh`) is not installed.".to_string()
