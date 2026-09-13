@@ -310,9 +310,14 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
       (model) => (model.nativeId ?? nativeIdFrom(model.id)) === slug,
     );
     if (byNative) return byNative;
+    const comparableSlug = comparableNativeId(harness, slug);
     const prefix = available.find((model) => {
       const native = model.nativeId ?? nativeIdFrom(model.id);
-      return native.startsWith(slug) || slug.startsWith(native);
+      const comparableNative = comparableNativeId(harness, native);
+      return (
+        comparableNative.startsWith(comparableSlug) ||
+        comparableSlug.startsWith(comparableNative)
+      );
     });
     if (prefix) return prefix;
   }
@@ -711,6 +716,11 @@ function nativeIdFrom(id: string): string {
   const slug = colon >= 0 ? trimmed.slice(colon + 1) : trimmed;
   const bracket = slug.indexOf("[");
   return bracket >= 0 ? slug.slice(0, bracket) : slug;
+}
+
+/** Claude's live catalog uses `opus`; its startup fallback uses `claude-opus-5`. */
+function comparableNativeId(harness: HarnessId, id: string): string {
+  return harness === "claude" ? id.replace(/^claude-/, "") : id;
 }
 
 function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
