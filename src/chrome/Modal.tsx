@@ -74,9 +74,9 @@ export function ModalPanel({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (closeDisabled) return;
       event.preventDefault();
       event.stopPropagation();
+      if (closeDisabled) return;
       onClose();
     };
     window.addEventListener("keydown", onKey, true);

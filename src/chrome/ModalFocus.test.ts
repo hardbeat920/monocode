@@ -117,4 +117,44 @@ describe("ModalPanel focus", () => {
     container.remove();
     vi.unstubAllGlobals();
   });
+
+  it("contains Escape while the modal is locked", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onClose = vi.fn();
+    const outsideKeyDown = vi.fn();
+    document.addEventListener("keydown", outsideKeyDown);
+
+    act(() => {
+      root.render(
+        createElement(ModalPanel, {
+          title: "Example",
+          closeDisabled: true,
+          onClose,
+          children: "Body",
+        }),
+      );
+    });
+
+    const close = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close"]',
+    )!;
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => close.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(outsideKeyDown).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    document.removeEventListener("keydown", outsideKeyDown);
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
 });

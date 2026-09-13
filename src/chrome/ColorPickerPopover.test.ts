@@ -17,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -75,4 +76,76 @@ describe("ColorPickerPopover keyboard controls", () => {
     expect(hue.getAttribute("aria-valuenow")).toBe("1");
     expect(onChange).toHaveBeenCalledTimes(3);
   });
+});
+
+describe("ColorPickerPopover pointer controls", () => {
+  it.each(["Saturation and brightness", "Hue"])(
+    "stops the %s drag when unmounted",
+    (label) => {
+      const onChange = vi.fn();
+      const addListener = vi.spyOn(window, "addEventListener");
+      const removeListener = vi.spyOn(window, "removeEventListener");
+      act(() => {
+        root.render(
+          createElement(ColorPickerPopover, {
+            value: "#ff0000",
+            onChange,
+          }),
+        );
+      });
+
+      const slider = container.querySelector<HTMLElement>(
+        `[role="slider"][aria-label="${label}"]`,
+      )!;
+      vi.spyOn(slider, "getBoundingClientRect").mockReturnValue({
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 100,
+        right: 100,
+        bottom: 100,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+      vi.spyOn(slider, "setPointerCapture").mockImplementation(() => {});
+
+      act(() => {
+        slider.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            pointerId: 1,
+            clientX: 50,
+            clientY: 50,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      onChange.mockClear();
+      const pointerTypes = [
+        "pointermove",
+        "pointerup",
+        "pointercancel",
+      ] as const;
+      const pointerListeners = new Map(
+        addListener.mock.calls.filter(([type]) =>
+          pointerTypes.includes(type as (typeof pointerTypes)[number]),
+        ),
+      );
+      expect(pointerListeners.size).toBe(pointerTypes.length);
+
+      act(() => root.render(null));
+      for (const type of pointerTypes) {
+        expect(removeListener).toHaveBeenCalledWith(
+          type,
+          pointerListeners.get(type),
+        );
+      }
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { clientX: 75, clientY: 25 }),
+      );
+
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
 });

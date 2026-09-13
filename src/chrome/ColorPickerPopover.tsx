@@ -110,6 +110,25 @@ export function ColorPickerPopover({
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
   const hexRef = useRef<HTMLInputElement>(null);
+  const pointerCleanupRef = useRef<(() => void) | null>(null);
+
+  const startPointerDrag = (onMove: (event: PointerEvent) => void) => {
+    pointerCleanupRef.current?.();
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+      if (pointerCleanupRef.current === cleanup) {
+        pointerCleanupRef.current = null;
+      }
+    };
+    pointerCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
+  };
+
+  useEffect(() => () => pointerCleanupRef.current?.(), []);
 
   useEffect(() => {
     if (autoFocus) hexRef.current?.focus();
@@ -157,14 +176,7 @@ export function ColorPickerPopover({
 
     update(event.clientX, event.clientY);
     const onMove = (e: PointerEvent) => update(e.clientX, e.clientY);
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    startPointerDrag(onMove);
   };
 
   const onHuePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -181,14 +193,7 @@ export function ColorPickerPopover({
 
     update(event.clientX);
     const onMove = (e: PointerEvent) => update(e.clientX);
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    startPointerDrag(onMove);
   };
 
   const onSvKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
