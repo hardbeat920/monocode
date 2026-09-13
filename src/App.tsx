@@ -308,6 +308,12 @@ import {
 } from "./lib/tabVisitHistory";
 import { preparePrompt } from "./lib/promptPreparation";
 import { warmNativeSkills, isNativeCommandPrompt } from "./lib/skills";
+import { fetchClaudeRateLimits } from "./lib/rateLimitsFetch";
+import {
+  formatUsageReport,
+  isUsageCommand,
+  USAGE_SNAPSHOT_MAX_AGE_MS,
+} from "./lib/usage";
 import { nativeSkillContextForSession } from "./lib/sessionSkills";
 import {
   loadSessionFolders,
@@ -3914,6 +3920,30 @@ export default function App({
     [],
   );
 
+  // The CLI answers /usage itself and never streams it, so the app does.
+  const showUsage = useCallback(
+    (sessionId: string) => {
+      void fetchClaudeRateLimits({ maxAgeMs: USAGE_SNAPSHOT_MAX_AGE_MS }).then(
+        (limits) => {
+          const session = sessionsRef.current.find((s) => s.id === sessionId);
+          if (!session || removingSessionIds.current.has(sessionId)) return;
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: formatUsageReport(
+              { session, limits },
+              {
+                now: Date.now(),
+                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              },
+            ),
+          });
+          flushHarnessEvents();
+        },
+      );
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
   const onSubmit = useCallback(
     (
       sessionId: string,
@@ -3933,6 +3963,10 @@ export default function App({
       if (removingSessionIds.current.has(sessionId)) return;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
       if (!storedCurrent) return;
+      if (storedCurrent.harness === "claude" && isUsageCommand(text)) {
+        showUsage(sessionId);
+        return;
+      }
       const current = options?.buildTarget
         ? withPlanBuildTarget(storedCurrent, options.buildTarget)
         : storedCurrent;
@@ -4434,7 +4468,7 @@ export default function App({
         }
       })();
     },
-    [enqueueHarnessEvent, flushHarnessEvents],
+    [enqueueHarnessEvent, flushHarnessEvents, showUsage],
   );
 
   const onUpdatePlan = useCallback(

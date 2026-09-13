@@ -1,4 +1,4 @@
-import type { BuiltinSkill } from "./skills";
+import { isStandaloneCommand, type BuiltinSkill } from "./skills";
 
 export const COMPACT_COMMAND: BuiltinSkill = {
   kind: "builtin",
@@ -9,7 +9,6 @@ export const COMPACT_COMMAND: BuiltinSkill = {
   source: "monocode",
 };
 
-/** Match the standalone composer command without consuming ordinary prompt text. */
 export function isCompactCommand(text: string): boolean {
-  return /^\s*\/compact\s*$/i.test(text);
+  return isStandaloneCommand(text, COMPACT_COMMAND.name);
 }

@@ -17,6 +17,7 @@ import {
   assistantThinkingBlocks,
   assistantToolUses,
   contextFromResult,
+  usageFromResult,
   contextUsedFromAssistant,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
@@ -758,6 +759,9 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
     const context = contextFromResult(rec);
     if (context) live.onEvent({ type: "context", ...context });
   }
+  // Compaction spends real tokens too, so its result counts.
+  const usage = usageFromResult(rec);
+  if (usage) live.onEvent({ type: "usage", ...usage });
 
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {

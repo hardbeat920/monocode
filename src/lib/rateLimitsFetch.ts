@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "./fs";
 import {
   errorRateLimits,
+  isRateLimitSnapshotStale,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
   unavailableRateLimits,
@@ -28,16 +29,28 @@ type ClaudeUsageFetch = {
   error?: string | null;
 };
 
-export async function fetchClaudeRateLimits(): Promise<ProviderRateLimits> {
+let lastClaudeSnapshot: ProviderRateLimits | null = null;
+
+/** Every caller shares one snapshot; `maxAgeMs` skips the keychain and network. */
+export async function fetchClaudeRateLimits(options?: {
+  maxAgeMs?: number;
+}): Promise<ProviderRateLimits> {
+  if (
+    options?.maxAgeMs != null &&
+    lastClaudeSnapshot &&
+    !isRateLimitSnapshotStale(lastClaudeSnapshot, Date.now(), options.maxAgeMs)
+  ) {
+    return lastClaudeSnapshot;
+  }
+  lastClaudeSnapshot = await fetchClaudeRateLimitsNow();
+  return lastClaudeSnapshot;
+}
+
+async function fetchClaudeRateLimitsNow(): Promise<ProviderRateLimits> {
   try {
     const result = await invoke<ClaudeUsageFetch>("fetch_claude_usage");
     if (result.status === "ok" && result.body) {
-      const parsed = parseClaudeOAuthUsage(result.body);
-      if (parsed.session || parsed.weekly) return parsed;
-      return {
-        ...parsed,
-        status: parsed.status === "ok" ? "ok" : parsed.status,
-      };
+      return parseClaudeOAuthUsage(result.body);
     }
     if (result.status === "unavailable") {
       return unavailableRateLimits(

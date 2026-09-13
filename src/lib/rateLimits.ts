@@ -1,3 +1,4 @@
+import { stringField } from "./harness/claudeProtocol";
 import { asRecord } from "./harness/codexProtocol";
 
 export type RateLimitProvider = "claude" | "codex";
@@ -18,10 +19,13 @@ export type ProviderRateLimits = {
   provider: RateLimitProvider;
   session: RateLimitWindow | null;
   weekly: RateLimitWindow | null;
+  weeklyByModel?: ScopedRateLimitWindow[];
   updatedAt: number;
   error: string | null;
   status: RateLimitStatus;
 };
+
+export type ScopedRateLimitWindow = { label: string; window: RateLimitWindow };
 
 export const SESSION_WINDOW_MINUTES = 300;
 export const WEEKLY_WINDOW_MINUTES = 10_080;
@@ -271,10 +275,30 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
     provider: "claude",
     session: mapUsageWindow(rec.five_hour, SESSION_WINDOW_MINUTES),
     weekly: mapUsageWindow(rec.seven_day, WEEKLY_WINDOW_MINUTES),
+    weeklyByModel: scopedWeeklyWindows(rec.limits),
     updatedAt: Date.now(),
     error: null,
     status: "ok",
   };
+}
+
+function scopedWeeklyWindows(raw: unknown): ScopedRateLimitWindow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ScopedRateLimitWindow[] = [];
+  for (const item of raw) {
+    const rec = asRecord(item);
+    if (!rec || rec.kind !== "weekly_scoped") continue;
+    const model = asRecord(asRecord(rec.scope)?.model);
+    const label =
+      stringField(model, "display_name") ?? stringField(model, "id");
+    const window = mapUsageWindow(
+      { utilization: rec.percent, resets_at: rec.resets_at },
+      WEEKLY_WINDOW_MINUTES,
+    );
+    if (!label || !window) continue;
+    out.push({ label, window });
+  }
+  return out;
 }
 
 type CodexWindowSnapshot = {

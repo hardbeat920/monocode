@@ -6,6 +6,7 @@ import type {
   ToolPreview,
   TurnIntent,
 } from "../session";
+import type { TurnUsage } from "../sessionUsage";
 import type { UserQuestion } from "../userQuestion";
 
 export type HarnessEvent =
@@ -114,7 +115,8 @@ export type HarnessEvent =
       streaming?: boolean;
     }
   /** Context-window level after the harness's latest request. */
-  | { type: "context"; used?: number; window?: number };
+  | { type: "context"; used?: number; window?: number }
+  | ({ type: "usage" } & TurnUsage);
 
 export type ApprovalDecision = "allow" | "deny";
 

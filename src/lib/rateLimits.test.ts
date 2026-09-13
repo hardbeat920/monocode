@@ -129,6 +129,59 @@ describe("parseClaudeOAuthUsage", () => {
     );
   });
 
+  it("maps weekly_scoped limits to per-model weekly windows", () => {
+    const limits = parseClaudeOAuthUsage(
+      JSON.stringify({
+        five_hour: { utilization: 6, resets_at: "2026-09-13T16:50:00Z" },
+        seven_day: { utilization: 28, resets_at: "2026-09-15T08:00:00Z" },
+        limits: [
+          { kind: "session", group: "session", percent: 6, scope: null },
+          { kind: "weekly_all", group: "weekly", percent: 28, scope: null },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 49,
+            resets_at: "2026-09-15T08:00:00Z",
+            scope: { model: { id: null, display_name: "Fable" }, surface: null },
+          },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 12,
+            resets_at: "2026-09-15T08:00:00Z",
+            scope: { model: { id: "claude-opus-5", display_name: "" } },
+          },
+          { kind: "weekly_scoped", group: "weekly", percent: 1, scope: {} },
+        ],
+      }),
+    );
+    expect(limits.weeklyByModel).toEqual([
+      {
+        label: "Fable",
+        window: {
+          usedPercent: 49,
+          windowMinutes: 10_080,
+          resetsAt: Date.parse("2026-09-15T08:00:00Z"),
+        },
+      },
+      {
+        label: "claude-opus-5",
+        window: {
+          usedPercent: 12,
+          windowMinutes: 10_080,
+          resetsAt: Date.parse("2026-09-15T08:00:00Z"),
+        },
+      },
+    ]);
+  });
+
+  it("leaves weeklyByModel empty without a limits array", () => {
+    const limits = parseClaudeOAuthUsage(
+      JSON.stringify({ five_hour: { utilization: 1 } }),
+    );
+    expect(limits.weeklyByModel).toEqual([]);
+  });
+
   it("returns an error for garbage", () => {
     const limits = parseClaudeOAuthUsage("not json");
     expect(limits.status).toBe("error");

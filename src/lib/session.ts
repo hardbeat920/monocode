@@ -1,4 +1,5 @@
 import type { ContextUsage } from "./contextUsage";
+import type { SessionUsage } from "./sessionUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
 import type { InboxComposerCard } from "./githubTasks";
@@ -275,6 +276,8 @@ export type Session = {
   providerSessionId?: string;
   /** Context-window level reported by the harness. Absent until it reports. */
   context?: ContextUsage;
+  /** Running totals from Claude turn results. In-memory only. */
+  usage?: SessionUsage;
   /**
    * Composer switched providers, but the previous child is still live.
    * Handoff runs on the next send, not on picker change.

@@ -124,6 +124,7 @@ import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "./Popover";
 import { consumePlanCommand, PLAN_COMMAND } from "../lib/plan";
 import { COMPACT_COMMAND, isCompactCommand } from "../lib/compact";
+import { USAGE_COMMAND } from "../lib/usage";
 import {
   consumeSessionFolderCommand,
   isSessionFolderCommand,
@@ -525,15 +526,17 @@ export function Composer({
       SESSION_FOLDER_COMMAND,
       PLAN_COMMAND,
       COMPACT_COMMAND,
+      ...(harness === "claude" ? [USAGE_COMMAND] : []),
       ...skills.filter(
         (skill) =>
           skill.kind === "native" ||
           (skill.name !== PLAN_COMMAND.name &&
             skill.name !== COMPACT_COMMAND.name &&
+            skill.name !== USAGE_COMMAND.name &&
             skill.name !== SESSION_FOLDER_COMMAND.name),
       ),
     ],
-    [skills],
+    [harness, skills],
   );
   const skillLimit = hasNativeCommands(harness)
     ? Number.POSITIVE_INFINITY
