@@ -111,7 +111,7 @@ describe("harness registry", () => {
       pi: true,
       omp: true,
       fx: false,
-      opencrabs: false,
+      opencrabs: true,
     });
   });
 

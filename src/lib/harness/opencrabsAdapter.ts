@@ -1,7 +1,9 @@
 import {
   bindOpenCrabsSession,
   cancelOpenCrabsTurn,
+  compactOpenCrabsContext,
   forgetOpenCrabsSession,
+  openCrabsCommands,
   respondOpenCrabsApproval,
   sendOpenCrabsTurn,
   steerOpenCrabsTurn,
@@ -25,6 +27,8 @@ export const openCrabsAdapter: HarnessAdapter = {
   stopSession: stopOpenCrabsSession,
   forgetSession: forgetOpenCrabsSession,
   bindSession: bindOpenCrabsSession,
+  compactContext: compactOpenCrabsContext,
+  commands: openCrabsCommands,
   generateTitle: generateOpenCrabsSessionTitle,
   generateCommitMessage: generateOpenCrabsCommitMessage,
   generatePrContent: generateOpenCrabsPrContent,

@@ -10,15 +10,22 @@ import {
   watchChild,
 } from "./child";
 import {
+  nativeCommandInvocation,
+  type NativeCommand,
+  type NativeCommandProvider,
+} from "./nativeCommands";
+import {
   autoPermissionOption,
   eventsFromAcpUpdate,
   permissionOptionId,
   permissionRequestFromAcp,
   modelsFromSessionNew,
+  nativeCommandsFromUpdate,
   sessionIdFromResult,
 } from "./opencrabsProtocol";
 import type {
   ApprovalDecision,
+  CompactContextInput,
   HarnessEvent,
   SendTurnInput,
   SteerTurnInput,
@@ -27,6 +34,7 @@ import type {
 type Live = {
   acp: AcpClient;
   acpSessionId: string;
+  threadId: string;
   cwd: string;
   muteUpdates: boolean;
   cancelled: boolean;
@@ -61,6 +69,46 @@ const CLIENT_CAPABILITIES = {
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
+
+/** Slash commands pushed by the server, cached per MonoCode thread. */
+const commandsByThread = new Map<string, NativeCommand[]>();
+const commandSubscribers = new Map<string, Set<(c: NativeCommand[]) => void>>();
+
+function cacheNativeCommands(
+  live: Live,
+  rows: { name: string; description: string }[],
+): void {
+  const commands: NativeCommand[] = rows.map((row) => ({
+    name: row.name,
+    description: row.description,
+    invocation: nativeCommandInvocation("opencrabs", row.name),
+    source: "opencrabs" as const,
+  }));
+  commandsByThread.set(live.threadId, commands);
+  commandSubscribers.get(live.threadId)?.forEach((cb) => cb(commands));
+}
+
+/**
+ * The server's `available_commands_update` push, surfaced as a command
+ * provider: built-ins, skills, and the user's own commands.toml entries are
+ * slash-able from the picker once a session is live.
+ */
+export const openCrabsCommands: NativeCommandProvider = {
+  discover: async (context) =>
+    commandsByThread.get(context.sessionId ?? "") ?? [],
+  subscribe: (context, onCommands) => {
+    const key = context.sessionId ?? "";
+    const set = commandSubscribers.get(key) ?? new Set();
+    set.add(onCommands);
+    commandSubscribers.set(key, set);
+    const cached = commandsByThread.get(key);
+    if (cached) onCommands(cached);
+    return () => {
+      set.delete(onCommands);
+    };
+  },
+  rawSlashCommands: true,
+};
 
 /**
  * Live OpenCrabs adapter. Spawns `opencrabs acp` and talks Agent Client
@@ -165,6 +213,31 @@ export async function stopOpenCrabsSession(sessionId: string): Promise<void> {
 export async function forgetOpenCrabsSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
   await stopOpenCrabsSession(sessionId);
+}
+
+/**
+ * Compact the session's context window via `session/compact`. The server
+ * runs its native summarization turn; the request resolves when it ends.
+ * Compaction of a long conversation is a full turn, so it rides the turn
+ * queue and the prompt timeout rather than the control timeout.
+ */
+export async function compactOpenCrabsContext(
+  input: CompactContextInput,
+): Promise<void> {
+  const live = liveByThread.get(input.sessionId) ??
+    (await ensureLive({ ...input, text: "" }));
+  live.onEvent = input.onEvent;
+  live.turns = live.turns
+    .catch(() => undefined)
+    .then(async () => {
+      if (live.cancelled) return;
+      await live.acp.request(
+        "session/compact",
+        { sessionId: live.acpSessionId },
+        PROMPT_TIMEOUT_MS,
+      );
+    });
+  await live.turns;
 }
 
 /** Seed ACP resume state for a restored MonoCode session. */
@@ -311,6 +384,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     const live: Live = {
       acp,
       acpSessionId,
+      threadId: input.sessionId,
       cwd: input.cwd,
       muteUpdates: didLoad,
       cancelled: false,
@@ -419,6 +493,11 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
 
 function handleNotification(live: Live, method: string, params: unknown) {
   if (method !== "session/update") return;
+  const commands = nativeCommandsFromUpdate(params);
+  if (commands) {
+    cacheNativeCommands(live, commands);
+    return;
+  }
   for (const event of eventsFromAcpUpdate(params)) {
     live.onEvent(event);
   }

@@ -255,6 +255,33 @@ export function modelsFromSessionNew(result: unknown): {
   };
 }
 
+/**
+ * The server's `available_commands_update` push: slash commands usable in
+ * prompts. Returns null for every other update so the caller's regular
+ * session/update routing is untouched.
+ */
+export function nativeCommandsFromUpdate(
+  params: unknown,
+): { name: string; description: string }[] | null {
+  const update = asRecord(asRecord(params)?.update);
+  if (update?.sessionUpdate !== "available_commands_update") return null;
+  const list = Array.isArray(update.availableCommands)
+    ? update.availableCommands
+    : [];
+  return list.flatMap((value) => {
+    const row = asRecord(value);
+    const name = typeof row?.name === "string" ? row.name.trim() : "";
+    if (!name || /[\s/\\]/.test(name)) return [];
+    return [
+      {
+        name,
+        description:
+          typeof row?.description === "string" ? row.description : "",
+      },
+    ];
+  });
+}
+
 function planEvent(update: Record<string, unknown>): HarnessEvent | null {
   const entries = update.entries ?? update.plan;
   if (Array.isArray(entries)) {
