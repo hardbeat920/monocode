@@ -64,6 +64,7 @@ import { HarnessIcon } from "../chrome/HarnessIcon";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
+import { useTranscriptCompact } from "../hooks/useTranscriptCompact";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../lib/appearance";
 import { AgentMarkdown } from "./AgentMarkdown";
@@ -1391,7 +1392,10 @@ function ActivityPhaseGroup({
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const waiting = phase.steps.some(needsApproval);
-  const open = waiting || (override ?? active);
+  // Compact drops the auto-open: the group stays the one line that already
+  // titles it. A click, or a step waiting on you, still opens it.
+  const compact = useTranscriptCompact();
+  const open = waiting || (override ?? (active && !compact));
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
   useLivePhaseScroll(liveScroller, active && open, phase.steps);
   const title = activityPhaseTitle(phase, active);

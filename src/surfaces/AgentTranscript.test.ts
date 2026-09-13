@@ -1,6 +1,6 @@
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Block } from "../lib/session";
 import { AgentTranscript } from "./AgentTranscript";
 
@@ -310,5 +310,35 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup.indexOf("Changed files")).toBeLessThan(
       markup.indexOf('aria-label="Worked for 1s"'),
     );
+  });
+});
+
+describe("AgentTranscript compact transcript", () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: (key: string) =>
+          key === "monocode.transcriptCompact" ? "1" : null,
+      },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, "localStorage");
+  });
+
+  it("folds live work behind the line that titles it", () => {
+    const markup = render([tool("one"), tool("two"), tool("three")], true);
+    expect(markup).toContain("Running 3 commands");
+    expect(markup.includes("hidden-detail-")).toBe(false);
+  });
+
+  it("still opens a group holding a call that waits on an approval", () => {
+    const markup = render(
+      [tool("one"), tool("two"), tool("approval", { requestId: 1 })],
+      true,
+    );
+    expect(markup).toContain("hidden-detail-approval");
+    expect(markup).toContain("hidden-detail-one");
   });
 });
