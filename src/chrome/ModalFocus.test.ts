@@ -86,4 +86,35 @@ describe("ModalPanel focus", () => {
     container.remove();
     vi.unstubAllGlobals();
   });
+
+  it("uses Close as the focus fallback while the modal is locked", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onClose = vi.fn();
+
+    act(() => {
+      root.render(
+        createElement(
+          ModalPanel,
+          { title: "Example", closeDisabled: true, onClose },
+          createElement("button", { type: "button", disabled: true }, "Busy"),
+        ),
+      );
+    });
+
+    const close = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close"]',
+    )!;
+    expect(close.disabled).toBe(false);
+    expect(close.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(close);
+    close.click();
+    expect(onClose).not.toHaveBeenCalled();
+
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
 });

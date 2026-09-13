@@ -22,6 +22,6 @@ describe("ModalPanel", () => {
     expect(markup).toContain('title="A reusable shell"');
     expect(markup).toContain("Body");
     expect(markup).toContain('aria-label="Close"');
-    expect(markup).toContain("disabled");
+    expect(markup).toContain('aria-disabled="true"');
   });
 });

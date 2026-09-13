@@ -57,11 +57,19 @@ export function ModalPanel({
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    (initialFocusRef?.current ?? closeRef.current)?.focus();
+    const initial = initialFocusRef?.current;
+    (initial && !initial.matches(":disabled")
+      ? initial
+      : closeRef.current
+    )?.focus();
     return () => {
       if (previous?.isConnected) previous.focus();
     };
   }, [initialFocusRef]);
+
+  useEffect(() => {
+    if (closeDisabled) closeRef.current?.focus();
+  }, [closeDisabled]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -80,10 +88,7 @@ export function ModalPanel({
     const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
       'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
     );
-    if (!focusable?.length) {
-      event.preventDefault();
-      return;
-    }
+    if (!focusable?.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     if (event.shiftKey && document.activeElement === first) {
@@ -131,9 +136,9 @@ export function ModalPanel({
             ref={closeRef}
             type="button"
             aria-label="Close"
-            disabled={closeDisabled}
-            onClick={onClose}
-            className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
+            aria-disabled={closeDisabled || undefined}
+            onClick={closeDisabled ? undefined : onClose}
+            className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent aria-disabled:cursor-default aria-disabled:opacity-30 aria-disabled:hover:bg-transparent aria-disabled:hover:text-content/45"
           >
             <X className="size-3.5" strokeWidth={1.75} />
           </button>
