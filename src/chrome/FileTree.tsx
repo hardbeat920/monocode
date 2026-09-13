@@ -14,6 +14,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -25,6 +26,10 @@ import {
   type NameIssue,
 } from "../lib/fileName";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
+import {
+  loadShowExcludedFiles,
+  subscribeShowExcludedFiles,
+} from "../lib/appearance";
 import {
   createParentOf,
   dirsTouchedByCreate,
@@ -95,6 +100,7 @@ type TreeCtxValue = {
   renaming: string | null;
   cutPath: string | null;
   epoch: number;
+  showExcludedFiles: boolean;
   gitStatuses?: GitStatusMap;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
@@ -239,6 +245,11 @@ export const FileTree = memo(function FileTree({
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
+  const showExcludedFiles = useSyncExternalStore(
+    subscribeShowExcludedFiles,
+    loadShowExcludedFiles,
+    loadShowExcludedFiles,
+  );
   const creatingRef = useRef(creating);
   creatingRef.current = creating;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -602,6 +613,7 @@ export const FileTree = memo(function FileTree({
         renaming,
         cutPath: clip?.mode === "cut" ? clip.path : null,
         epoch,
+        showExcludedFiles,
         gitStatuses,
         onToggle: toggle,
         onSelect,
@@ -840,8 +852,11 @@ function TreeChildren({
         onCancel={() => ctx.onCreateCancel(creating.id)}
       />
     ) : null;
-  const folders = entries?.filter((e) => e.isDir) ?? [];
-  const files = entries?.filter((e) => !e.isDir) ?? [];
+  const visible = ctx.showExcludedFiles
+    ? entries
+    : entries?.filter((e) => !e.ignored);
+  const folders = visible?.filter((e) => e.isDir) ?? [];
+  const files = visible?.filter((e) => !e.isDir) ?? [];
   const pad = { paddingLeft: 28 + depth * 12 };
 
   return (

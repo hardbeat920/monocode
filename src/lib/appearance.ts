@@ -20,6 +20,7 @@ const CHAT_BACKGROUND_SESSION_OPACITY_KEY =
   "monocode.chatBackgroundSessionOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
 const CHANGES_VIEW_KEY = "monocode.changesView";
+const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
 
@@ -48,6 +49,12 @@ export const TRANSCRIPT_ANCHOR_CHANGE_EVENT = "monocode:transcriptanchorchange";
 
 /** Fired on `window` whenever the transcript layout flips (detail: TranscriptLayout). */
 export const TRANSCRIPT_LAYOUT_CHANGE_EVENT = "monocode:transcriptlayoutchange";
+
+export const SHOW_EXCLUDED_FILES_DEFAULT = false;
+
+/** Fired on `window` whenever the explorer excluded-files setting flips (detail: boolean). */
+export const SHOW_EXCLUDED_FILES_CHANGE_EVENT =
+  "monocode:showexcludedfileschange";
 
 export type SidebarTabId = "files" | "sessions" | "changes" | "inbox";
 
@@ -599,4 +606,25 @@ export function saveTranscriptAnchor(value: boolean) {
       detail: value,
     }),
   );
+}
+
+export function loadShowExcludedFiles(): boolean {
+  return readFlag(SHOW_EXCLUDED_FILES_KEY) ?? SHOW_EXCLUDED_FILES_DEFAULT;
+}
+
+export function saveShowExcludedFiles(value: boolean) {
+  writeFlag(SHOW_EXCLUDED_FILES_KEY, value);
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(SHOW_EXCLUDED_FILES_CHANGE_EVENT, {
+      detail: value,
+    }),
+  );
+}
+
+export function subscribeShowExcludedFiles(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(SHOW_EXCLUDED_FILES_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(SHOW_EXCLUDED_FILES_CHANGE_EVENT, onStoreChange);
 }

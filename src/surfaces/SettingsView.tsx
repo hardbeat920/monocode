@@ -70,6 +70,9 @@ import {
   saveTranscriptLayout,
   saveTranscriptAnchor,
   TRANSCRIPT_ANCHOR_CHANGE_EVENT,
+  loadShowExcludedFiles,
+  saveShowExcludedFiles,
+  SHOW_EXCLUDED_FILES_DEFAULT,
   SIDEBAR_BLUR_DEFAULT,
   SIDEBAR_BLUR_MAX,
   SIDEBAR_BLUR_MIN,
@@ -1074,6 +1077,9 @@ function useAppearanceSettings() {
   const [themeHue, setThemeHue] = useState(loadThemeHue);
   const [themeSaturation, setThemeSaturation] = useState(loadThemeSaturation);
   const [bodyGlass, setBodyGlass] = useState(loadBodyGlass);
+  const [showExcludedFiles, setShowExcludedFiles] = useState(
+    loadShowExcludedFiles,
+  );
   const [chatBackgroundPath, setChatBackgroundPath] = useState(
     loadChatBackgroundPath,
   );
@@ -1122,6 +1128,11 @@ function useAppearanceSettings() {
     applyBodyGlass(next);
     saveBodyGlass(next);
     setBodyGlass(next);
+  }, []);
+
+  const onShowExcludedFiles = useCallback((next: boolean) => {
+    saveShowExcludedFiles(next);
+    setShowExcludedFiles(next);
   }, []);
 
   const onChooseChatBackground = useCallback(async () => {
@@ -1189,6 +1200,7 @@ function useAppearanceSettings() {
     onBlur(SIDEBAR_BLUR_DEFAULT);
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
+    onShowExcludedFiles(SHOW_EXCLUDED_FILES_DEFAULT);
     onChatBackgroundEmptyOpacity(
       Math.round(CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT * 100),
     );
@@ -1206,6 +1218,7 @@ function useAppearanceSettings() {
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
     onClearChatBackground,
+    onShowExcludedFiles,
     onThemePreference,
     onOpacity,
     onTint,
@@ -1219,6 +1232,7 @@ function useAppearanceSettings() {
     themeHue,
     themeSaturation,
     bodyGlass,
+    showExcludedFiles,
     chatBackgroundPath,
     chatBackgroundEmptyOpacity,
     chatBackgroundSessionOpacity,
@@ -1231,6 +1245,7 @@ function useAppearanceSettings() {
     onBlur,
     onTint,
     onBodyGlass,
+    onShowExcludedFiles,
     onChooseChatBackground,
     onClearChatBackground,
     onChatBackgroundEmptyOpacity,
@@ -1336,6 +1351,16 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           on={appearance.bodyGlass}
           onChange={appearance.onBodyGlass}
           disabled={glassDisabled}
+        />
+      </Row>
+      <Row
+        label="Show excluded files"
+        description="List files and folders matched by the project .gitignore, plus .git, in the explorer."
+      >
+        <Toggle
+          label="Show excluded files"
+          on={appearance.showExcludedFiles}
+          onChange={appearance.onShowExcludedFiles}
         />
       </Row>
       <ChatBackgroundCard appearance={appearance} />

@@ -14,6 +14,9 @@ import {
   loadTranscriptAnchor,
   saveTranscriptAnchor,
   TRANSCRIPT_ANCHOR_DEFAULT,
+  loadShowExcludedFiles,
+  saveShowExcludedFiles,
+  SHOW_EXCLUDED_FILES_DEFAULT,
   loadThemePreference,
   saveThemePreference,
   resolveColorScheme,
@@ -23,6 +26,7 @@ import {
 const KEY = "monocode.transcriptLayout";
 const SCHEME_KEY = "monocode.colorScheme";
 const ANCHOR_KEY = "monocode.transcriptAnchor";
+const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 const CHAT_BACKGROUND_PATH_KEY = "monocode.chatBackgroundPath";
 const CHAT_BACKGROUND_OPACITY_KEY = "monocode.chatBackgroundOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
@@ -92,6 +96,25 @@ describe("transcript prompt-to-top setting", () => {
     expect(loadTranscriptAnchor()).toBe(true);
     saveTranscriptAnchor(false);
     expect(loadTranscriptAnchor()).toBe(false);
+  });
+});
+
+describe("show excluded files setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(SHOW_EXCLUDED_FILES_KEY);
+  });
+
+  it("defaults to off", () => {
+    expect(SHOW_EXCLUDED_FILES_DEFAULT).toBe(false);
+    expect(loadShowExcludedFiles()).toBe(false);
+  });
+
+  it("persists across loads", () => {
+    saveShowExcludedFiles(true);
+    expect(loadShowExcludedFiles()).toBe(true);
+    saveShowExcludedFiles(false);
+    expect(loadShowExcludedFiles()).toBe(false);
   });
 });
 
