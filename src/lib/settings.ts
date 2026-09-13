@@ -24,7 +24,7 @@ export const SETTINGS_SECTIONS: {
   {
     id: "appearance",
     label: "Appearance",
-    description: "Theme, translucency, and the tint applied to the chrome.",
+    description: "Theme, translucency, tint, and fonts applied to the chrome.",
   },
   {
     id: "keybindings",

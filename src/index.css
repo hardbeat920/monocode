@@ -23,6 +23,9 @@
   --font-sans:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  --font-mono-size: 13px;
+  --font-mono-weight: 400;
+  --font-sans-weight: 400;
 }
 
 :root {
@@ -40,6 +43,15 @@
 
 html {
   color-scheme: dark;
+  font-weight: var(--font-sans-weight);
+}
+
+/* A picked interface font applies on every platform. Without it, macOS
+   keeps its native text rendering (see the `html:not(.is-mac)` rule below). */
+html.has-custom-ui-font,
+html.has-custom-ui-font body,
+html.has-custom-ui-font #root {
+  font-family: var(--font-sans);
 }
 
 html.theme-light {

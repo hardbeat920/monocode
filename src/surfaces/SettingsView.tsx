@@ -22,8 +22,11 @@ import {
 } from "react";
 import { HarnessIcon } from "../chrome/HarnessIcon";
 import { Popover } from "../chrome/Popover";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
+import { terminalTheme } from "./TerminalView";
 import { WindowControls } from "../chrome/WindowControls";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useColorScheme } from "../hooks/useColorScheme";
@@ -43,6 +46,7 @@ import {
   CHAT_BACKGROUND_SCOPE_DEFAULT,
   THEME_PREFERENCE_DEFAULT,
   chatBackgroundSrc,
+  isLightScheme,
   loadBodyGlass,
   loadChatBackgroundOpacity,
   loadChatBackgroundPath,
@@ -65,6 +69,7 @@ import {
   saveThemeSaturation,
   saveTranscriptLayout,
   saveTranscriptAnchor,
+  SCHEME_CHANGE_EVENT,
   TRANSCRIPT_ANCHOR_CHANGE_EVENT,
   SIDEBAR_BLUR_DEFAULT,
   SIDEBAR_BLUR_MAX,
@@ -95,6 +100,27 @@ import {
   UI_SCALE_MAX,
   UI_SCALE_MIN,
 } from "../lib/uiScale";
+import {
+  CODE_FONT_SIZE_MAX,
+  CODE_FONT_SIZE_MIN,
+  FONT_WEIGHT_MAX,
+  FONT_WEIGHT_MIN,
+  FONTS_CHANGE_EVENT,
+  codeFontStack,
+  listSystemFonts,
+  loadCodeFontFamily,
+  loadCodeFontSize,
+  loadCodeFontWeight,
+  loadUiFontFamily,
+  loadUiFontWeight,
+  resetFontsToDefaults,
+  saveCodeFontFamily,
+  saveCodeFontSize,
+  saveCodeFontWeight,
+  saveUiFontFamily,
+  saveUiFontWeight,
+  type SystemFont,
+} from "../lib/fonts";
 import {
   getHarnessAvailabilitySnapshot,
   harnessUnavailableHint,
@@ -1083,6 +1109,11 @@ function useAppearanceSettings() {
     null,
   );
   const [uiScale, setUiScale] = useState(loadUiScale);
+  const [uiFontFamily, setUiFontFamily] = useState(loadUiFontFamily);
+  const [uiFontWeight, setUiFontWeight] = useState(loadUiFontWeight);
+  const [codeFontFamily, setCodeFontFamily] = useState(loadCodeFontFamily);
+  const [codeFontSize, setCodeFontSize] = useState(loadCodeFontSize);
+  const [codeFontWeight, setCodeFontWeight] = useState(loadCodeFontWeight);
 
   useEffect(() => subscribeUiScale(() => setUiScale(loadUiScale())), []);
 
@@ -1171,6 +1202,26 @@ function useAppearanceSettings() {
     void applyUiScale(next);
   }, []);
 
+  const onUiFontFamily = useCallback((next: string) => {
+    setUiFontFamily(saveUiFontFamily(next));
+  }, []);
+
+  const onUiFontWeight = useCallback((next: number) => {
+    setUiFontWeight(saveUiFontWeight(next));
+  }, []);
+
+  const onCodeFontFamily = useCallback((next: string) => {
+    setCodeFontFamily(saveCodeFontFamily(next));
+  }, []);
+
+  const onCodeFontSize = useCallback((next: number) => {
+    setCodeFontSize(saveCodeFontSize(next));
+  }, []);
+
+  const onCodeFontWeight = useCallback((next: number) => {
+    setCodeFontWeight(saveCodeFontWeight(next));
+  }, []);
+
   const restoreDefaults = useCallback(() => {
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
@@ -1181,6 +1232,12 @@ function useAppearanceSettings() {
     onChatBackgroundScope(CHAT_BACKGROUND_SCOPE_DEFAULT);
     if (chatBackgroundPath) void onClearChatBackground();
     onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
+    resetFontsToDefaults();
+    setUiFontFamily(loadUiFontFamily());
+    setUiFontWeight(loadUiFontWeight());
+    setCodeFontFamily(loadCodeFontFamily());
+    setCodeFontSize(loadCodeFontSize());
+    setCodeFontWeight(loadCodeFontWeight());
   }, [
     chatBackgroundPath,
     onBlur,
@@ -1192,6 +1249,11 @@ function useAppearanceSettings() {
     onOpacity,
     onTint,
     onUiScale,
+    onUiFontFamily,
+    onUiFontWeight,
+    onCodeFontFamily,
+    onCodeFontSize,
+    onCodeFontWeight,
   ]);
 
   return {
@@ -1207,6 +1269,11 @@ function useAppearanceSettings() {
     chatBackgroundBusy,
     chatBackgroundError,
     uiScale,
+    uiFontFamily,
+    uiFontWeight,
+    codeFontFamily,
+    codeFontSize,
+    codeFontWeight,
     onThemePreference,
     onOpacity,
     onBlur,
@@ -1217,6 +1284,11 @@ function useAppearanceSettings() {
     onChatBackgroundOpacity,
     onChatBackgroundScope,
     onUiScale,
+    onUiFontFamily,
+    onUiFontWeight,
+    onCodeFontFamily,
+    onCodeFontSize,
+    onCodeFontWeight,
     restoreDefaults,
   };
 }
@@ -1333,7 +1405,454 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           onChange={appearance.onUiScale}
         />
       </Row>
+      <Heading title="Fonts" />
+      <Row
+        label="Interface font"
+        description="Typeface for the app chrome. macOS keeps its native rendering until you pick one."
+      >
+        <FontPicker
+          label="Interface font"
+          value={appearance.uiFontFamily}
+          onChange={appearance.onUiFontFamily}
+          previewText="Ag"
+        />
+      </Row>
+      <Row
+        label="Interface weight"
+        description="Base weight for interface text. Bolder headings keep their emphasis."
+      >
+        <FontWeightSegmented
+          label="Interface weight"
+          value={appearance.uiFontWeight}
+          onChange={appearance.onUiFontWeight}
+        />
+      </Row>
+      <Row
+        label="Code font"
+        description="Monospace for the editor and the terminal. Proportional fonts stay listed with the filter off but will misalign the terminal grid."
+      >
+        <FontPicker
+          label="Code font"
+          value={appearance.codeFontFamily}
+          onChange={appearance.onCodeFontFamily}
+          previewText="Aa"
+          monospaceFilter
+        />
+      </Row>
+      <Row
+        label="Code size"
+        description="Editor and terminal text size."
+      >
+        <Slider
+          label="Code size"
+          value={appearance.codeFontSize}
+          display={`${appearance.codeFontSize}px`}
+          min={CODE_FONT_SIZE_MIN}
+          max={CODE_FONT_SIZE_MAX}
+          onChange={appearance.onCodeFontSize}
+        />
+      </Row>
+      <Row
+        label="Code weight"
+        description="Editor and terminal text weight."
+      >
+        <FontWeightSegmented
+          label="Code weight"
+          value={appearance.codeFontWeight}
+          onChange={appearance.onCodeFontWeight}
+        />
+      </Row>
+      <CodeFontPreview />
     </>
+  );
+}
+
+const CODE_TERMINAL_SAMPLE = [
+  "\x1b[1;32m$\x1b[0m pnpm vitest run src/lib/fonts.test.ts",
+  " \x1b[32m✓\x1b[0m 9 passed (6ms)",
+  "\x1b[1;32m$\x1b[0m echo \"a => b != c → € £ ¥\"",
+  "a => b != c → € £ ¥",
+  "\x1b[1;32m$\x1b[0m git diff --stat",
+  " src/lib/fonts.ts \x1b[33m| 120 +++++++++++\x1b[0m",
+];
+
+/** Live in-place example of the code knob: a real (read-only) xterm.js
+ * terminal running the same family, size, and weight as the workspace
+ * terminals, so every picker and slider change shows here immediately. */
+function CodeFontPreview() {
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    let disposed = false;
+    const term = new Terminal({
+      cursorBlink: false,
+      disableStdin: true,
+      fontFamily: codeFontStack(loadCodeFontFamily()),
+      fontSize: loadCodeFontSize(),
+      fontWeight: loadCodeFontWeight(),
+      lineHeight: 1,
+      letterSpacing: 0,
+      scrollback: 100,
+      allowTransparency: true,
+      theme: terminalTheme(isLightScheme()),
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(host);
+    fit.fit();
+    // Static preview: hide the cursor, then play a tiny session.
+    term.write("\x1b[?25l");
+    for (const line of CODE_TERMINAL_SAMPLE) term.writeln(line);
+    const onFontsChange = () => {
+      if (disposed) return;
+      term.options.fontFamily = codeFontStack(loadCodeFontFamily());
+      term.options.fontSize = loadCodeFontSize();
+      term.options.fontWeight = loadCodeFontWeight();
+      // New metrics change the cell grid: re-fit to the host.
+      fit.fit();
+    };
+    const onSchemeChange = () => {
+      if (disposed) return;
+      term.options.theme = terminalTheme(isLightScheme());
+    };
+    window.addEventListener(FONTS_CHANGE_EVENT, onFontsChange);
+    window.addEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
+    const observer = new ResizeObserver(() => {
+      if (!disposed) fit.fit();
+    });
+    observer.observe(host);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      window.removeEventListener(FONTS_CHANGE_EVENT, onFontsChange);
+      window.removeEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
+      term.dispose();
+    };
+  }, []);
+
+  return (
+    <div className="border-b border-content/5 py-4 last:border-b-0">
+      <div className="text-[13px] font-medium text-content">Code preview</div>
+      <p className="mt-1 text-[12px] leading-relaxed text-content/45">
+        A real terminal running your code font: same typeface, size, and
+        weight as the workspace terminals.
+      </p>
+      <div className="monocode-terminal mt-3 h-36 rounded-lg border border-content/10 bg-content/5">
+        <div
+          ref={hostRef}
+          aria-label="Code font terminal preview"
+          className="h-full w-full min-h-0 min-w-0 overflow-hidden"
+        />
+      </div>
+    </div>
+  );
+}
+
+function FontWeightSegmented({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const asOption = (weight: number) =>
+    weight >= FONT_WEIGHT_MAX
+      ? String(FONT_WEIGHT_MAX)
+      : weight <= FONT_WEIGHT_MIN
+        ? String(FONT_WEIGHT_MIN)
+        : String(Math.round(weight / 100) * 100);
+  return (
+    <Segmented
+      label={label}
+      value={asOption(value)}
+      options={[
+        { value: "400", label: "Regular" },
+        { value: "500", label: "Medium" },
+        { value: "600", label: "Semibold" },
+        { value: "700", label: "Bold" },
+      ]}
+      onChange={(next) => onChange(Number(next))}
+    />
+  );
+}
+
+function FontPicker({
+  label,
+  value,
+  onChange,
+  previewText,
+  monospaceFilter = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  previewText: string;
+  monospaceFilter?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [fonts, setFonts] = useState<SystemFont[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [query, setQuery] = useState("");
+  const [monoOnly, setMonoOnly] = useState(monospaceFilter);
+  const [active, setActive] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const searchId = useId();
+  const listId = useId();
+
+  useEffect(() => {
+    if (!open || fonts || failed) return;
+    let cancelled = false;
+    void listSystemFonts()
+      .then((next) => {
+        if (!cancelled) setFonts(next);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, fonts, failed]);
+
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setActive(0);
+    }
+  }, [open]);
+
+  const needle = query.trim().toLowerCase();
+  const visible = useMemo(() => {
+    const all = fonts ?? [];
+    return all.filter((font) => {
+      if (monoOnly && !font.monospace) return false;
+      if (!needle) return true;
+      return font.family.toLowerCase().includes(needle);
+    });
+  }, [fonts, monoOnly, needle]);
+
+  // Index 0 is always "System default"; font rows follow it.
+  useEffect(() => {
+    setActive(0);
+  }, [query, monoOnly]);
+
+  const pick = (next: string) => {
+    onChange(next);
+    setOpen(false);
+    trigger.current?.focus();
+  };
+
+  const onListKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Typing in the search field must not pick a font: Enter there would
+    // otherwise reset to "System default" while the user is still filtering.
+    if (
+      e.key === "Enter" &&
+      (e.target as HTMLElement | null)?.tagName === "INPUT"
+    ) {
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => Math.min(visible.length, i + 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => Math.max(0, i - 1));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      pick(active === 0 ? "" : (visible[active - 1]?.family ?? value));
+    }
+  };
+
+  return (
+    <div ref={root} className="relative max-w-64">
+      <button
+        type="button"
+        ref={trigger}
+        aria-label={label}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20"
+      >
+        <span
+          className="grid size-6 shrink-0 place-items-center rounded bg-content/10 text-[11px] text-content/70"
+          style={value ? { fontFamily: `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}", sans-serif` } : undefined}
+          aria-hidden
+        >
+          {previewText}
+        </span>
+        <span className="min-w-0 flex-1 truncate">
+          {value || "System default"}
+        </span>
+        <ChevronDown
+          className={`size-3.5 shrink-0 text-content/50 transition-transform ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.75}
+        />
+      </button>
+      {open ? (
+        <Popover
+          anchor={root}
+          side="bottom"
+          align="end"
+          width={300}
+          maxHeight={340}
+          autoFocus
+          onDismiss={(reason) => {
+            setOpen(false);
+            if (reason === "escape") trigger.current?.focus();
+          }}
+          role="listbox"
+          aria-label={label}
+          aria-activedescendant={`${listId}-opt-${active}`}
+          tabIndex={-1}
+          onKeyDown={onListKey}
+          className="flex flex-col overflow-hidden p-1"
+        >
+          <div className="flex items-center gap-2 p-1">
+            <label
+              htmlFor={searchId}
+              className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20"
+            >
+              <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
+              <input
+                id={searchId}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search fonts"
+                aria-label="Search fonts"
+                spellCheck={false}
+                autoComplete="off"
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+              />
+            </label>
+          </div>
+          {monospaceFilter ? (
+            <label className="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[12px] text-content/60 hover:text-content">
+              <input
+                type="checkbox"
+                checked={monoOnly}
+                onChange={(event) => setMonoOnly(event.target.checked)}
+                className="size-3.5 accent-current"
+              />
+              Monospace only
+            </label>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            {fonts == null && !failed ? (
+              <p className="flex items-center gap-2 px-2 py-3 text-[12px] text-content/45">
+                <Loader className="size-3.5 animate-spin" aria-hidden />
+                Loading system fonts…
+              </p>
+            ) : failed || (fonts != null && fonts.length === 0) ? (
+              <p className="px-2 py-3 text-[12px] text-content/45">
+                {failed
+                  ? "Could not list system fonts. Your pick still applies if the family is installed."
+                  : "No system fonts found. Your pick still applies if the family is installed."}
+              </p>
+            ) : (
+              <>
+                <FontPickerOption
+                  id={`${listId}-opt-0`}
+                  name="System default"
+                  preview={null}
+                  selected={value === ""}
+                  highlighted={active === 0}
+                  onEnter={() => setActive(0)}
+                  onPick={() => pick("")}
+                />
+                {visible.map((font, index) => {
+                  const row = index + 1;
+                  return (
+                    <FontPickerOption
+                      key={font.family}
+                      id={`${listId}-opt-${row}`}
+                      name={font.family}
+                      preview={font.family}
+                      badge={font.monospace ? "Mono" : null}
+                      selected={value === font.family}
+                      highlighted={active === row}
+                      onEnter={() => setActive(row)}
+                      onPick={() => pick(font.family)}
+                    />
+                  );
+                })}
+                {visible.length === 0 ? (
+                  <p className="px-2 py-3 text-[12px] text-content/45">
+                    No matching fonts
+                  </p>
+                ) : null}
+              </>
+            )}
+          </div>
+        </Popover>
+      ) : null}
+    </div>
+  );
+}
+
+function FontPickerOption({
+  id,
+  name,
+  preview,
+  badge,
+  selected,
+  highlighted,
+  onEnter,
+  onPick,
+}: {
+  id: string;
+  name: string;
+  preview: string | null;
+  badge?: string | null;
+  selected: boolean;
+  highlighted: boolean;
+  onEnter: () => void;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      id={id}
+      role="option"
+      tabIndex={-1}
+      aria-selected={selected}
+      onMouseDown={(e) => e.preventDefault()}
+      onMouseEnter={onEnter}
+      onClick={onPick}
+      className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] ${
+        highlighted || selected
+          ? "bg-content/10 text-content"
+          : "text-content hover:bg-content/5"
+      }`}
+    >
+      <span
+        className="min-w-0 flex-1 truncate"
+        style={
+          preview
+            ? { fontFamily: `"${preview.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}", sans-serif` }
+            : undefined
+        }
+      >
+        {name}
+      </span>
+      {badge ? (
+        <span className="shrink-0 rounded bg-content/10 px-1 py-0.5 text-[10px] text-content/50">
+          {badge}
+        </span>
+      ) : null}
+      {selected ? (
+        <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
+      ) : null}
+    </button>
   );
 }
 
