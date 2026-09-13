@@ -259,7 +259,7 @@ export function isSkillTool(kind?: string, title?: string): boolean {
   return /^skill\b/i.test(title?.trim() ?? "");
 }
 
-/** Claude Code's Agent tool (named Task before v2.1.63), plus Codex subagents. */
+/** Delegation tool names shared by the provider adapters. */
 export function isAgentToolName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return (
@@ -284,11 +284,14 @@ export function agentToolTitle(
 ): string {
   const description = coerceString(input.description)?.trim();
   if (description) return description;
+  const task = coerceString(input.task)?.trim();
+  if (task) return task;
   const type =
     coerceString(input.subagent_type) ??
     coerceString(input.subagentType) ??
     coerceString(input.agent_type) ??
-    coerceString(input.agentType);
+    coerceString(input.agentType) ??
+    coerceString(input.agent);
   if (type) {
     const label = formatAgentType(type);
     return /subagent/i.test(label) ? label : `${label} subagent`;

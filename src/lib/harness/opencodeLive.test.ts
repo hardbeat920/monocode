@@ -5,6 +5,7 @@ import { applyHarnessEvent } from "./apply";
 let onStdout: ((line: string) => void) | undefined;
 let onSseEvent: ((event: Record<string, unknown>) => void) | undefined;
 let onSseEnd: ((error?: string) => void) | undefined;
+let sessionMessages: unknown[] = [];
 const spawnChild = vi.fn(async () => {
   onStdout?.("opencode server listening on http://127.0.0.1:4096");
 });
@@ -24,6 +25,12 @@ const harnessHttp = vi.fn(
         status: 200,
         body: JSON.stringify({ id: "session_1", directory: "/repo" }),
       };
+    }
+    if (
+      input.method === "GET" &&
+      url.pathname === "/session/session_1/message"
+    ) {
+      return { status: 200, body: JSON.stringify(sessionMessages) };
     }
     return { status: 204, body: "" };
   },
@@ -54,6 +61,7 @@ vi.mock("./child", () => ({
 
 const {
   __openCodeTestReset,
+  bindOpenCodeSession,
   cancelOpenCodeTurn,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
@@ -126,6 +134,7 @@ beforeEach(() => {
   onStdout = undefined;
   onSseEvent = undefined;
   onSseEnd = undefined;
+  sessionMessages = [];
   spawnChild.mockClear();
   killChild.mockClear();
   harnessHttp.mockClear();
@@ -137,7 +146,206 @@ afterEach(async () => {
   __openCodeTestReset();
 });
 
+describe("OpenCode subagent trails", () => {
+  const part = (sessionID: string, value: Record<string, unknown>) => onSseEvent?.({
+    type: "message.part.updated", properties: { part: { sessionID, ...value } },
+  });
+  const message = (sessionID: string, id: string, role = "assistant", agent?: string, modelID?: string) => onSseEvent?.({
+    type: "message.updated", properties: { info: { sessionID, id, role, agent, modelID } },
+  });
+  const task = (callID: string, child: string) => part("session_1", {
+    id: `part_${callID}`, type: "tool", tool: "task", callID,
+    state: { status: "running", title: `Task ${callID}`, metadata: { sessionId: child } },
+  });
+
+  it("pairs concurrent children by metadata and replays their latest parts after creating the row", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    sessionCreated("child_b", "session_1");
+    sessionCreated("child_a", "session_1");
+    message("child_a", "msg_a", "assistant", undefined, "claude-haiku-4-5");
+    message("child_b", "msg_b");
+    part("child_b", { id: "prose_b", messageID: "msg_b", type: "text", text: "Second child" });
+    for (let i = 0; i < 70; i++) {
+      part("child_a", { id: "prose_a", messageID: "msg_a", type: "text", text: `First child ${i}` });
+    }
+    task("a", "child_a");
+    task("b", "child_b");
+    idle("child_a");
+    expect(events.some((event) => event.type === "message.completed")).toBe(false);
+    idle();
+    await done;
+    const session = events.reduce(applyHarnessEvent, newSession("opencode", "/repo"));
+    expect(session.blocks.find((block) => block.tool?.callId === "a")?.agentRun?.model).toBe("claude-haiku-4-5");
+    expect(session.blocks.find((block) => block.tool?.callId === "a")?.agentRun?.steps).toEqual([
+      expect.objectContaining({ text: "First child 69" }),
+    ]);
+    expect(session.blocks.find((block) => block.tool?.callId === "b")?.agentRun?.steps).toEqual([
+      expect.objectContaining({ text: "Second child" }),
+    ]);
+    expect(events.filter((event) => event.type === "message.delta")).toEqual([]);
+  });
+
+  it("streams child reasoning and tools, including nested tasks, without user or hidden text", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    task("a", "child");
+    sessionCreated("child", "session_1");
+    message("child", "user_msg", "user");
+    message("child", "hidden_msg", "assistant", "compaction");
+    message("child", "assistant_msg");
+    part("child", { id: "input", type: "text", messageID: "user_msg", text: "Private prompt" });
+    part("child", { id: "hidden", type: "text", messageID: "hidden_msg", text: "Hidden summary" });
+    part("child", { id: "think", type: "reasoning", messageID: "assistant_msg", text: "Trace " });
+    onSseEvent?.({ type: "message.part.delta", properties: { sessionID: "child", partID: "think", field: "text", delta: "imports" } });
+    part("child", { id: "read", type: "tool", tool: "read", callID: "read", messageID: "assistant_msg",
+      state: { status: "running", input: { filePath: "auth.ts" } } });
+    part("child", { id: "read", type: "tool", tool: "read", callID: "read", messageID: "assistant_msg",
+      state: { status: "error", input: { filePath: "auth.ts" }, error: "File missing" } });
+    sessionCreated("grandchild", "child");
+    message("grandchild", "nested_msg");
+    part("grandchild", { id: "nested_text", type: "text", messageID: "nested_msg", text: "Nested answer" });
+    part("child", { id: "nested_call", type: "tool", tool: "task", callID: "nested_call", messageID: "assistant_msg",
+      state: { status: "running", metadata: { sessionId: "grandchild" } } });
+    // Another session on the same server is not part of this run.
+    sessionCreated("unrelated");
+    message("unrelated", "other_msg");
+    part("unrelated", { id: "other", type: "text", messageID: "other_msg", text: "Other session" });
+    idle();
+    await done;
+    const session = events.reduce(applyHarnessEvent, newSession("opencode", "/repo"));
+    const steps = session.blocks.find((block) => block.tool?.callId === "a")?.agentRun?.steps;
+    expect(steps?.map((step) => step.text)).toEqual(["Trace imports", "Read auth.ts", "Subagent", "Nested answer"]);
+    expect(steps?.find((step) => step.toolKind === "read")?.status).toBe("failed");
+    expect(session.blocks.filter((block) => block.role === "assistant")).toEqual([]);
+  });
+});
+
 describe("OpenCode event stream recovery", () => {
+  it("reverts a rejected file turn before continuing a resumed session", async () => {
+    sessionMessages = [
+      {
+        info: {
+          id: "message_bad_file",
+          sessionID: "session_1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            type: "file",
+            mime: "application/octet-stream",
+            filename: "Info.plist",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "message_bad_reply",
+          parentID: "message_bad_file",
+          sessionID: "session_1",
+          role: "assistant",
+          time: { created: 2 },
+          error: {
+            data: {
+              message:
+                "'file part media type application/octet-stream' functionality not supported.",
+            },
+          },
+        },
+        parts: [],
+      },
+    ];
+    bindOpenCodeSession("opencode-live", "session_1", "/repo");
+
+    const events: HarnessEvent[] = [];
+    const done = turn(events);
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/session/session_1/revert"),
+        ),
+      "attachment turn recovery",
+    );
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/prompt_async"),
+        ),
+      "resumed prompt",
+    );
+
+    const revertIndex = harnessHttp.mock.calls.findIndex(([input]) =>
+      input.url.includes("/session/session_1/revert"),
+    );
+    const promptIndex = harnessHttp.mock.calls.findIndex(([input]) =>
+      input.url.includes("/prompt_async"),
+    );
+    expect(revertIndex).toBeGreaterThanOrEqual(0);
+    expect(promptIndex).toBeGreaterThan(revertIndex);
+    expect(harnessHttp.mock.calls[revertIndex]?.[0]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ messageID: "message_bad_file" }),
+    });
+
+    idle();
+    await done;
+    expect(events).toContainEqual({ type: "message.completed" });
+  });
+
+  it("preserves history when a later assistant turn succeeded", async () => {
+    sessionMessages = [
+      {
+        info: {
+          id: "message_bad_file",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [{ type: "file", mime: "application/octet-stream" }],
+      },
+      {
+        info: {
+          id: "message_bad_reply",
+          parentID: "message_bad_file",
+          role: "assistant",
+          time: { created: 2 },
+          error: {
+            data: {
+              message:
+                "'file part media type application/octet-stream' functionality not supported.",
+            },
+          },
+        },
+        parts: [],
+      },
+      {
+        info: {
+          id: "message_recovered_reply",
+          role: "assistant",
+          time: { created: 3 },
+        },
+        parts: [{ type: "text", text: "Recovered" }],
+      },
+    ];
+    bindOpenCodeSession("opencode-live", "session_1", "/repo");
+
+    const events: HarnessEvent[] = [];
+    const done = turn(events);
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/prompt_async"),
+        ),
+      "resumed prompt",
+    );
+    expect(
+      harnessHttp.mock.calls.some(([input]) => input.url.includes("/revert")),
+    ).toBe(false);
+
+    idle();
+    await done;
+  });
+
   it("fails a cleanly-ended stream and reconnects on the next turn", async () => {
     const firstEvents: HarnessEvent[] = [];
     const first = turn(firstEvents);

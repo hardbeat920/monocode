@@ -86,7 +86,7 @@ import {
   type SessionFolder,
   type SessionListDropTarget,
 } from "../lib/sessionFolders";
-import { SESSION_LIST_PAGE, sessionListWindow } from "../lib/sessionListWindow";
+import { LIST_PAGE_SIZE, listWindowSize } from "../lib/listWindow";
 import {
   filterSessionsByHarness,
   filterSessionsByStatus,
@@ -397,7 +397,7 @@ function SidebarComponent({
     null,
   );
   const [searchQuery, setSearchQuery] = useState("");
-  const [sessionListLimit, setSessionListLimit] = useState(SESSION_LIST_PAGE);
+  const [sessionListLimit, setSessionListLimit] = useState(LIST_PAGE_SIZE);
   const loadMoreRef = useRef<HTMLLIElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const pendingFolderSessionIds = useRef(new Set<string>());
@@ -468,7 +468,7 @@ function SidebarComponent({
   const activeUngroupedIndex = ungroupedVisible.findIndex(
     (session) => session.id === activeSessionId,
   );
-  const shownUngroupedCount = sessionListWindow(
+  const shownUngroupedCount = listWindowSize(
     ungroupedVisible.length,
     sessionListLimit,
     activeUngroupedIndex,
@@ -554,7 +554,7 @@ function SidebarComponent({
   const changeStats = useProjectDiffStats(gitRoot, open);
 
   useEffect(() => {
-    setSessionListLimit(SESSION_LIST_PAGE);
+    setSessionListLimit(LIST_PAGE_SIZE);
     const scroller = sessionsScrollRef.current;
     if (scroller) scroller.scrollTop = 0;
   }, [sessionListKey]);
@@ -567,7 +567,7 @@ function SidebarComponent({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry?.isIntersecting) return;
-        setSessionListLimit((current) => current + SESSION_LIST_PAGE);
+        setSessionListLimit((current) => current + LIST_PAGE_SIZE);
       },
       { root, rootMargin: "240px" },
     );
@@ -2564,7 +2564,7 @@ function SessionCard({
         }}
         onContextMenu={onContextMenu}
         onKeyDown={onKeyDown}
-        className={`relative border flex w-full touch-none flex-col rounded-md px-2.5 text-left ${
+        className={`relative border flex w-full cursor-default select-none touch-none flex-col rounded-md px-2.5 text-left ${
           compact ? "py-1.5" : "py-2"
         } ${dragging ? "opacity-40" : ""} ${
           dropTarget
@@ -2594,7 +2594,6 @@ function SessionCard({
             </span>
             <span className="flex shrink-0 items-center gap-1.5">
               {linkedUpdateDot}
-              {workItemBadge}
               {status}
             </span>
           </span>
@@ -2616,7 +2615,6 @@ function SessionCard({
           {compact ? (
             <span className="flex shrink-0 items-center gap-1.5">
               {linkedUpdateDot}
-              {workItemBadge}
               {status}
             </span>
           ) : null}
@@ -2630,39 +2628,28 @@ function SessionCard({
           ) : (
             <span className="min-w-0 flex-1" />
           )}
-          <span
-            className={`flex shrink-0 items-center gap-1.5 ${
-              onArchive
-                ? "transition-[padding] group-focus-within:pl-5 group-hover:pl-5"
-                : ""
-            }`}
-          >
-            <HarnessIcon
-              harness={session.harness}
-              className="size-3.5 shrink-0"
-            />
+          <span className="flex shrink-0 items-center gap-1">
+            {onArchive ? (
+              <button
+                type="button"
+                data-no-drag
+                data-tauri-drag-region="false"
+                title={archiveLabel}
+                aria-label={`${archiveLabel} ${title}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onArchive();
+                }}
+                className="pointer-events-none grid size-5 place-items-center rounded-md text-content/50 opacity-0 hover:bg-content/10 hover:text-content group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+              >
+                <Archive className="size-3 shrink-0" strokeWidth={1.75} />
+              </button>
+            ) : null}
+            {workItemBadge}
           </span>
         </span>
       </div>
-      {onArchive ? (
-        <button
-          type="button"
-          data-no-drag
-          data-tauri-drag-region="false"
-          title={archiveLabel}
-          aria-label={`${archiveLabel} ${title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onArchive();
-          }}
-          className={`pointer-events-none absolute right-7 grid size-5 place-items-center rounded text-content/50 opacity-0 transition-opacity hover:bg-content/10 hover:text-content group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 ${
-            compact ? "bottom-[5px]" : "bottom-[7px]"
-          }`}
-        >
-          <Archive className="size-3.5" strokeWidth={1.75} />
-        </button>
-      ) : null}
     </div>
   );
 }

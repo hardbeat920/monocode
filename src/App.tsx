@@ -2873,12 +2873,12 @@ export default function App({
                   (item.kind === "issue" || item.kind === "pr")
                 ? (
                     peekGitlabWorkItemDetails(
-                      item.projectPath,
+                      item.repo,
                       item.kind,
                       item.number,
                     ) ??
                     (await gitlabWorkItemDetails(
-                      item.projectPath,
+                      item.repo,
                       item.kind,
                       item.number,
                     ))
@@ -6013,6 +6013,7 @@ export default function App({
           <NotesView
             besideRail={projectRailOpen}
             cwd={projectCwd}
+            recents={recents}
             onClose={onLeaveNotes}
             onToggleSidebar={onToggleSidebar}
           />

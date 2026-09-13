@@ -2,27 +2,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
+let onExit: ((code: number) => void) | undefined;
 
 vi.mock("./child", () => ({
   resolveCursorBinary: async () => ({ path: "/fake/cursor-agent" }),
   spawnChild: async () => undefined,
   killChild: async () => undefined,
   unwatchChild: () => undefined,
-  watchChild: (_id: string, line: (value: string) => void) => {
+  watchChild: (
+    _id: string,
+    line: (value: string) => void,
+    exit: (code: number) => void,
+  ) => {
     onLine = line;
+    onExit = exit;
   },
   writeChild: async (_id: string, line: string) => {
     sent.push(line);
   },
 }));
 
+const stores = vi.hoisted(() => ({ tools: vi.fn(), subagents: vi.fn() }));
 vi.mock("./cursorStore", () => ({
-  readStoredCursorToolCalls: async () => [],
+  readStoredCursorToolCalls: stores.tools,
+  readStoredCursorSubagentRuns: stores.subagents,
 }));
 
-const { sendCursorTurn, stopCursorSession, __cursorTestReset } =
-  await import("./cursor");
+const {
+  sendCursorTurn,
+  cancelCursorTurn,
+  stopCursorSession,
+  __cursorTestReset,
+} = await import("./cursor");
 import type { HarnessEvent } from "./types";
+import { newSession } from "../session";
+import { applyHarnessEvent } from "./apply";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -115,6 +129,8 @@ function agentEvents(events: HarnessEvent[]) {
 }
 
 beforeEach(() => {
+  stores.tools.mockReset().mockResolvedValue([]);
+  stores.subagents.mockReset().mockResolvedValue([]);
   sent.length = 0;
   onLine = undefined;
   __cursorTestReset();
@@ -126,6 +142,218 @@ afterEach(async () => {
 });
 
 describe("cursor background subagents", () => {
+  it("recovers native child steps without parent-attributed ACP events and enriches foreground names", async () => {
+    const run = {
+      agentId: "child_1",
+      toolCallId: "call_agent",
+      revision: "12",
+      prompt:
+        "Perform a read-only, defect-first code review of ACP routing in /repo.",
+      steps: [
+        { id: "child_1:blob:0", kind: "message", text: "Checking routing." },
+        {
+          id: "child_1:tool:read",
+          kind: "tool",
+          text: "",
+          toolName: "Read",
+          args: { path: "/repo/acp.ts" },
+          status: "completed",
+          output: "export const route = true;",
+        },
+      ],
+    };
+    stores.subagents.mockResolvedValue([run]);
+    const { events, promptId, turn } = await startTurn("cursor-live");
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_agent",
+        title: "Task: Subagent task",
+        kind: "other",
+        status: "pending",
+        rawInput: { _toolName: "task" },
+      },
+    });
+    expect(agentEvents(events).at(-1)).toMatchObject({ title: "Subagent" });
+    await waitFor(
+      () => events.some((event) => event.type === "agent.step"),
+      "stored child steps",
+    );
+    expect(stores.subagents).toHaveBeenCalledWith(
+      "cursor_1",
+      ["call_agent"],
+      expect.any(Object),
+    );
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call_agent",
+        status: "completed",
+      },
+    });
+    request(101, "cursor/task", {
+      toolCallId: "call_agent",
+      agentId: "child_1",
+      description: "Review ACP routing",
+      durationMs: 25,
+    });
+    reply(promptId, { stopReason: "end_turn" });
+    await turn;
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("cursor", "/repo"),
+    );
+    const row = session.blocks.find(
+      (block) => block.tool?.callId === "call_agent",
+    )!;
+    expect(row.text).toBe("Review ACP routing");
+    expect(row.tool?.status).toBe("completed");
+    expect(row.agentRun?.name).toBe("Review ACP routing");
+    expect(row.agentRun?.steps).toHaveLength(2);
+    expect(row.agentRun?.steps[1]).toMatchObject({
+      toolKind: "read",
+      status: "completed",
+      preview: { path: "/repo/acp.ts" },
+    });
+    expect(
+      session.blocks.filter((block) => block.role === "assistant"),
+    ).toEqual([]);
+    expect(stores.subagents.mock.calls.at(-1)?.[2]).toEqual({ child_1: "12" });
+  });
+
+  it("keeps a task description received before its placeholder tool row", async () => {
+    const { events, promptId, turn } = await startTurn("cursor-live");
+    notify("cursor/task", {
+      toolCallId: "call_agent",
+      description: "Review UI events",
+      agentId: "child_1",
+    });
+    notify("session/update", {
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_agent",
+        title: "Task: Subagent task",
+        rawInput: { _toolName: "task" },
+        status: "in_progress",
+      },
+    });
+    expect(agentEvents(events).at(-1)).toMatchObject({
+      title: "Review UI events",
+    });
+    reply(promptId, { stopReason: "end_turn" });
+    await turn;
+  });
+
+  it.each(["cancel", "stop", "exit"])(
+    "ignores an in-flight child read after %s",
+    async (action) => {
+      let resolve!: (runs: unknown[]) => void;
+      stores.subagents.mockImplementation(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          }),
+      );
+      const { events, promptId, turn } = await startTurn("cursor-live");
+      emitAgentStart();
+      await waitFor(() => !!resolve, "child read");
+      if (action === "cancel") await cancelCursorTurn("cursor-live");
+      else if (action === "stop") await stopCursorSession("cursor-live");
+      else onExit!(1);
+      const count = events.length;
+      resolve([
+        {
+          agentId: "child_1",
+          toolCallId: "call_agent",
+          revision: "1",
+          steps: [{ id: "late", kind: "message", text: "Late result" }],
+        },
+      ]);
+      // A stopped ACP client rejects its prompt; cancellation still receives a reply.
+      if (action === "cancel") reply(promptId, { stopReason: "cancelled" });
+      await turn.catch(() => undefined);
+      await new Promise((done) => setTimeout(done, 5));
+      expect(
+        events
+          .slice(count)
+          .some(
+            (event) =>
+              event.type === "agent.step" || event.type === "message.completed",
+          ),
+      ).toBe(false);
+    },
+  );
+
+  it("routes attributed child work to its row and leaves parent narration separate", async () => {
+    const { events, promptId, turn } = await startTurn("cursor-live");
+    emitAgentStart();
+    const meta = { parentToolCallId: "call_agent" };
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        _meta: meta,
+        content: { type: "text", text: "Child narration" },
+      },
+    });
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call",
+        _meta: meta,
+        toolCallId: "child_read",
+        title: "Read auth.ts",
+        kind: "read",
+        status: "in_progress",
+      },
+    });
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "child_read",
+        status: "completed",
+      },
+    });
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Parent narration" },
+      },
+    });
+    expect(events.filter((event) => event.type === "message.delta")).toEqual([
+      { type: "message.delta", text: "Parent narration" },
+    ]);
+    expect(events.filter((event) => event.type === "agent.step")).toEqual([
+      expect.objectContaining({
+        callId: "call_agent",
+        kind: "message",
+        text: "Child narration",
+      }),
+      expect.objectContaining({
+        callId: "call_agent",
+        stepId: "tool:child_read",
+        status: "in_progress",
+      }),
+      expect.objectContaining({
+        callId: "call_agent",
+        stepId: "tool:child_read",
+        status: "completed",
+      }),
+    ]);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "tool.updated" && event.callId === "child_read",
+      ),
+    ).toBe(false);
+    reply(promptId, { stopReason: "end_turn" });
+    await turn;
+  });
+
   it("emits request-shaped Cursor todo updates as structured task lists", async () => {
     const { events, promptId, turn } = await startTurn("cursor-live");
     request(71, "cursor/update_todos", {

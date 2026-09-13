@@ -53,6 +53,7 @@ pub struct GitlabWorkItem {
     pub assignees: Vec<GitlabAssignee>,
     pub draft: bool,
     pub repo: String,
+    pub attention_reason: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -190,15 +191,29 @@ pub async fn gitlab_list_work_items(
 }
 
 #[tauri::command]
+pub async fn gitlab_list_todos(
+    app: AppHandle,
+    kind: String,
+    limit: Option<u32>,
+) -> Result<Vec<GitlabWorkItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = require_config(&app)?;
+        gitlab_list_todos_for(&config, &kind, limit.unwrap_or(DEFAULT_LIMIT))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn gitlab_work_item_details(
     app: AppHandle,
-    cwd: String,
+    repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitlabWorkItemDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
-        let repo = gitlab_repo_for(&expand_home(&cwd), &config.url)?;
+        let repo = validate_repo(&repo)?;
         gitlab_work_item_details_for(&config, &repo, &kind, number)
     })
     .await
@@ -208,13 +223,13 @@ pub async fn gitlab_work_item_details(
 #[tauri::command]
 pub async fn gitlab_work_item_thread(
     app: AppHandle,
-    cwd: String,
+    repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitlabWorkItemThread, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
-        let repo = gitlab_repo_for(&expand_home(&cwd), &config.url)?;
+        let repo = validate_repo(&repo)?;
         gitlab_work_item_thread_for(&config, &repo, &kind, number)
     })
     .await
@@ -224,14 +239,14 @@ pub async fn gitlab_work_item_thread(
 #[tauri::command]
 pub async fn gitlab_work_item_comment(
     app: AppHandle,
-    cwd: String,
+    repo: String,
     kind: String,
     number: i64,
     body: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
-        let repo = gitlab_repo_for(&expand_home(&cwd), &config.url)?;
+        let repo = validate_repo(&repo)?;
         gitlab_work_item_comment_for(&config, &repo, &kind, number, &body)
     })
     .await
@@ -241,12 +256,12 @@ pub async fn gitlab_work_item_comment(
 #[tauri::command]
 pub async fn gitlab_mr_diff(
     app: AppHandle,
-    cwd: String,
+    repo: String,
     number: i64,
 ) -> Result<GitlabMrDiff, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
-        let repo = gitlab_repo_for(&expand_home(&cwd), &config.url)?;
+        let repo = validate_repo(&repo)?;
         gitlab_mr_diff_for(&config, &repo, number)
     })
     .await
@@ -280,6 +295,23 @@ fn gitlab_list_work_items_for(
     );
     let response = gitlab_get(config, &path)?;
     parse_work_items(&response.value, kind, repo)
+}
+
+fn gitlab_list_todos_for(
+    config: &GitlabConfig,
+    kind: &str,
+    limit: u32,
+) -> Result<Vec<GitlabWorkItem>, String> {
+    validate_kind(kind)?;
+    let target_type = if kind == "pr" {
+        "MergeRequest"
+    } else {
+        "Issue"
+    };
+    let limit = limit.clamp(1, 100);
+    let path = format!("/todos?state=pending&type={target_type}&per_page={limit}");
+    let response = gitlab_get(config, &path)?;
+    parse_todos(&response.value, kind)
 }
 
 fn gitlab_work_item_details_for(
@@ -394,6 +426,33 @@ fn parse_work_items(value: &Value, kind: &str, repo: &str) -> Result<Vec<GitlabW
         .collect())
 }
 
+fn parse_todos(value: &Value, kind: &str) -> Result<Vec<GitlabWorkItem>, String> {
+    let rows = value
+        .as_array()
+        .ok_or_else(|| "GitLab did not return to-do items".to_string())?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let repo = row
+                .get("project")
+                .and_then(|project| string_field(project, "path_with_namespace"))?;
+            if !valid_project_path(&repo) {
+                return None;
+            }
+            let target = row.get("target")?;
+            let mut item = parse_work_item(target, kind, &repo)?;
+            if item.url.is_empty() {
+                item.url = string_field(row, "target_url").unwrap_or_default();
+            }
+            if item.updated_at.is_empty() {
+                item.updated_at = string_field(row, "created_at").unwrap_or_default();
+            }
+            item.attention_reason = string_field(row, "action_name").unwrap_or_default();
+            Some(item)
+        })
+        .collect())
+}
+
 fn parse_work_item(row: &Value, kind: &str, repo: &str) -> Option<GitlabWorkItem> {
     let number = row.get("iid").and_then(Value::as_i64)?;
     if number <= 0 {
@@ -420,7 +479,17 @@ fn parse_work_item(row: &Value, kind: &str, repo: &str) -> Option<GitlabWorkItem
         assignees: parse_assignees(row),
         draft,
         repo: repo.into(),
+        attention_reason: String::new(),
     })
+}
+
+fn validate_repo(repo: &str) -> Result<String, String> {
+    let repo = repo.trim();
+    if valid_project_path(repo) {
+        Ok(repo.to_string())
+    } else {
+        Err("Invalid GitLab project".into())
+    }
 }
 
 fn parse_work_item_details(value: &Value, kind: &str) -> Result<GitlabWorkItemDetails, String> {
@@ -1146,6 +1215,39 @@ mod tests {
         assert!(items[0].draft);
         assert_eq!(items[0].labels[0].color, "ff0000");
         assert_eq!(items[0].assignees[0].login, "maya");
+        assert!(items[0].attention_reason.is_empty());
+    }
+
+    #[test]
+    fn parses_pending_todo_targets_across_projects() {
+        let rows = json!([{
+            "action_name": "mentioned",
+            "created_at": "2026-09-12T17:28:07Z",
+            "target_url": "https://gitlab.example.com/acme/platform/-/issues/193",
+            "project": { "path_with_namespace": "acme/platform" },
+            "target": {
+                "iid": 193,
+                "title": "Global inbox",
+                "state": "opened",
+                "updated_at": "2026-09-12T17:28:00Z",
+                "labels": ["feature"],
+                "assignees": [{ "username": "maya" }]
+            }
+        }]);
+        let items = parse_todos(&rows, "issue").unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].repo, "acme/platform");
+        assert_eq!(items[0].number, 193);
+        assert_eq!(items[0].url, rows[0]["target_url"]);
+        assert_eq!(items[0].attention_reason, "mentioned");
+        assert_eq!(items[0].labels[0].name, "feature");
+    }
+
+    #[test]
+    fn validates_explicit_project_paths() {
+        assert_eq!(validate_repo(" acme/platform ").unwrap(), "acme/platform");
+        assert!(validate_repo("acme").is_err());
+        assert!(validate_repo("../acme/platform").is_err());
     }
 
     #[test]

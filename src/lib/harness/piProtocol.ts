@@ -1,4 +1,4 @@
-import type { Attachment, ToolPreview } from "../session";
+import type { Attachment, ToolPreview, TurnMetrics } from "../session";
 import { attachmentPathText } from "../attachments";
 import type { AgentModel, ModelSetting } from "../models";
 import { isTaskListToolName } from "../taskList";
@@ -312,7 +312,7 @@ export function extensionUiTitle(request: PiExtensionUiRequest): string {
   const text =
     request.method === "confirm"
       ? [request.title, request.message].filter(Boolean).join(" — ")
-      : request.title ?? "Pi extension";
+      : (request.title ?? "Pi extension");
   // Pi's theme helpers emit ANSI even in RPC mode (e.g. Ponytail setStatus).
   // These labels use native UI styling. Strip CSI and OSC sequences only at
   // the display boundary: select replies must retain the original option.
@@ -383,6 +383,32 @@ export function contextFromUsage(
       (numberField(usage, "cacheWrite") ?? 0);
   if (!used) return window && window > 0 ? { window } : null;
   return window && window > 0 ? { used, window } : { used };
+}
+
+export function turnMetricsFromUsage(
+  rec: Record<string, unknown>,
+): TurnMetrics | null {
+  const usage =
+    asRecord(rec.usage) ??
+    assistantMessageUsage(rec) ??
+    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
+  if (!usage) return null;
+  const inputTokens = numberField(usage, "input") ?? 0;
+  const outputTokens = numberField(usage, "output") ?? 0;
+  const cacheReadTokens = numberField(usage, "cacheRead") ?? 0;
+  const cacheWriteTokens = numberField(usage, "cacheWrite") ?? 0;
+  const cacheReported = "cacheRead" in usage || "cacheWrite" in usage;
+  const cacheableInput = inputTokens + cacheReadTokens + cacheWriteTokens;
+  if (!inputTokens && !outputTokens && !cacheableInput) return null;
+  return {
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTokens ? { outputTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(cacheReported && cacheableInput
+      ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
+      : {}),
+  };
 }
 
 export function contextFromSessionStats(data: unknown): {
