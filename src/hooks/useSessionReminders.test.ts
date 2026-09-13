@@ -165,6 +165,27 @@ describe("saved session reminders", () => {
     expect(api.due).toEqual([]);
   });
 
+  it("dismisses the current due reminder when its session continues", async () => {
+    await mount();
+    await act(async () => api.dismissDue(reminder.sessionId));
+    expect(invoke).toHaveBeenCalledWith("reminder_clear", {
+      sessionIds: [reminder.sessionId],
+      expectedDueAt: reminder.dueAt,
+    });
+    expect(api.due).toEqual([]);
+  });
+
+  it("keeps a future reminder when its session continues early", async () => {
+    stored = [{ ...reminder, dueAt: Date.now() + 60_000 }];
+    await mount();
+    invoke.mockClear();
+    await act(async () => api.dismissDue(reminder.sessionId));
+    expect(
+      invoke.mock.calls.some(([command]) => command === "reminder_clear"),
+    ).toBe(false);
+    expect(api.reminders).toEqual(stored);
+  });
+
   it("handles a notification click queued before the window mounted", async () => {
     pending = reminder;
     await mount();

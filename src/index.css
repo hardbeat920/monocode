@@ -26,6 +26,9 @@
 }
 
 :root {
+  --motion-reorder-duration: 160ms;
+  --motion-feedback-duration: 120ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --theme-hue: 240;
   --theme-saturation: 0%;
   --sidebar-opacity: 0.85;
@@ -105,6 +108,60 @@ html.has-native-glass:not(.theme-light),
 html.has-native-glass:not(.theme-light) body,
 html.has-native-glass:not(.theme-light) #root {
   background: transparent;
+}
+
+.reorder-item {
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.reorder-item:is([data-dragging], [data-settling]) {
+  z-index: 10;
+}
+
+.tab-motion,
+.tab-motion > button {
+  transition:
+    background-color var(--motion-feedback-duration) var(--motion-ease-out),
+    color var(--motion-feedback-duration) var(--motion-ease-out),
+    opacity var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+.tab-motion[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-motion,
+  .tab-motion > button {
+    transition: none;
+  }
+}
+
+.workspace-tab:not([data-reordering])
+  > button:not([aria-selected="true"]):hover,
+.workspace-tab[data-dragging] > button:not([aria-selected="true"]),
+.project-reorder-item:not([data-reordering], [data-selected]):hover,
+.project-reorder-item[data-dragging]:not([data-selected]) {
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  color: var(--color-content);
+}
+
+/* Keep project controls from appearing as rows pass beneath the pointer. */
+.project-reorder-item[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+.project-reorder-item[data-reordering] > button:first-of-type {
+  padding-right: 0;
+}
+
+.project-reorder-item[data-reordering] .project-card-logo {
+  opacity: 1;
+}
+
+.project-reorder-item[data-reordering] .project-card-stats {
+  display: flex;
 }
 
 .sidebar-glass {
