@@ -1,5 +1,16 @@
 import { asRecord, stringField } from "./codexProtocol";
 
+/** App access is covered by the user's explicit Full Access selection. */
+export function isCodexComputerUseAccessConfirmation(params: unknown): boolean {
+  const rec = asRecord(params);
+  const message = stringField(rec, "message");
+  return (
+    stringField(rec, "serverName") === "cua_repl" &&
+    message != null &&
+    /^Allow Computer Use to use ".+"\?$/.test(message)
+  );
+}
+
 /** Only confirmations can be represented faithfully by the Allow/Deny UI. */
 export function codexMcpConfirmation(params: unknown): {
   title: string;

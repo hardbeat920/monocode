@@ -96,7 +96,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { InboxMiniCard } from "./InboxMiniCard";
 import { NoteMiniCard } from "./NoteMiniCard";
 import { HandoffMiniCard } from "./HandoffMiniCard";
-import { ModelPicker } from "./ModelPicker";
+import { EffortPicker, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
 import { SkillPicker } from "./SkillPicker";
 import { projectKey } from "../lib/paths";
@@ -104,8 +104,10 @@ import { consumeQuoteRequest, type QuoteRequest } from "../lib/quoteDraft";
 import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import {
   COMPOSER_RUNNER_CHANGE_EVENT,
+  loadComposerEffortVisible,
   loadComposerRunner,
   loadNotesEnabled,
+  subscribeComposerEffortVisible,
   subscribeNotesEnabled,
 } from "../lib/settings";
 import {
@@ -480,6 +482,11 @@ export function Composer({
     subscribeNotesEnabled,
     loadNotesEnabled,
     () => true,
+  );
+  const composerEffortVisible = useSyncExternalStore(
+    subscribeComposerEffortVisible,
+    loadComposerEffortVisible,
+    () => false,
   );
   const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
   const [mention, setMention] = useState<MentionToken | null>(null);
@@ -1490,7 +1497,7 @@ export function Composer({
                 if (
                   e.target instanceof Element &&
                   e.target.closest(
-                    "[data-model-picker], [data-access-picker], [data-model-settings]",
+                    "[data-model-picker], [data-effort-picker], [data-access-picker], [data-model-settings]",
                   )
                 ) {
                   return;
@@ -1505,6 +1512,7 @@ export function Composer({
                   harness={harness}
                   model={model}
                   values={modelSettings}
+                  hideEffort={composerEffortVisible}
                   hotkeys={hotkeys && enabled}
                   onChange={onModelChange}
                   onSettingsChange={(settings) =>
@@ -1512,6 +1520,17 @@ export function Composer({
                   }
                   onClose={() => ref.current?.focus()}
                 />
+                {composerEffortVisible ? (
+                  <EffortPicker
+                    harness={harness}
+                    model={model}
+                    values={modelSettings}
+                    onSettingsChange={(settings) =>
+                      onModelSettingsChange?.(settings)
+                    }
+                    onClose={() => ref.current?.focus()}
+                  />
+                ) : null}
                 {harness !== "fx" ? (
                   <AccessPicker
                     value={runtimeMode}
@@ -1614,7 +1633,7 @@ function MentionRuns({
   );
 }
 
-function ComposerAction({
+export function ComposerAction({
   busy,
   hasValue,
   onSend,
@@ -1626,29 +1645,26 @@ function ComposerAction({
   onStop: () => void;
 }) {
   if (busy) {
-    return (
-      <>
-        {hasValue ? (
-          <button
-            type="button"
-            title="Send"
-            aria-label="Send"
-            onClick={onSend}
-            className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
-          >
-            <ArrowUp className="size-3.5" strokeWidth={2.25} />
-          </button>
-        ) : null}
-        <button
-          type="button"
-          title="Stop"
-          aria-label="Stop"
-          onClick={onStop}
-          className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
-        >
-          <Square className="size-2.5 fill-current" strokeWidth={0} />
-        </button>
-      </>
+    return hasValue ? (
+      <button
+        type="button"
+        title="Send"
+        aria-label="Send"
+        onClick={onSend}
+        className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
+      >
+        <ArrowUp className="size-3.5" strokeWidth={2.25} />
+      </button>
+    ) : (
+      <button
+        type="button"
+        title="Stop"
+        aria-label="Stop"
+        onClick={onStop}
+        className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
+      >
+        <Square className="size-2.5 fill-current" strokeWidth={0} />
+      </button>
     );
   }
 

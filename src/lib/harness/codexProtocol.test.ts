@@ -349,6 +349,22 @@ describe("mapCodexNotification", () => {
     });
   });
 
+  it("retains the explicitly selected spawn model", () => {
+    const { events } = mapCodexNotification("item/completed", {
+      item: {
+        id: "spawn",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        model: "gpt-5.6-sol",
+        status: "completed",
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "agent",
+      agentModel: "gpt-5.6-sol",
+    });
+  });
+
   it("maps current collab-agent failures with their provider detail", () => {
     const started = mapCodexNotification("item/started", {
       item: {
@@ -360,11 +376,13 @@ describe("mapCodexNotification", () => {
         agentsStates: {},
       },
     });
+    // Waiting is bookkeeping against rows that already exist, not a third
+    // subagent of its own.
     expect(started.events[0]).toMatchObject({
       type: "tool.started",
       callId: "collab_1",
       title: "Wait for 2 subagents",
-      kind: "agent",
+      kind: "other",
       status: "in_progress",
     });
 
@@ -384,7 +402,7 @@ describe("mapCodexNotification", () => {
     expect(failed.events[0]).toMatchObject({
       type: "tool.updated",
       callId: "collab_1",
-      kind: "agent",
+      kind: "other",
       status: "failed",
       detail: "worker disconnected",
     });

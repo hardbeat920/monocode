@@ -48,6 +48,7 @@ import {
   githubWorkItemComment,
   githubWorkItemDetails,
   githubWorkItemThread,
+  gitlabAttentionLabel,
   inboxItemKey,
   inboxItemRef,
   inboxItemStatus,
@@ -832,7 +833,9 @@ export function InboxView({
                 : source === "linear"
                   ? "No Linear issues match these filters"
                   : source === "gitlab"
-                    ? "No GitLab items match these filters"
+                    ? activeFilters.assignedToMe
+                      ? "Nothing needs your attention"
+                      : "No GitLab items match these filters"
                     : "No issues or pull requests match these filters"
               : source === "linear"
                 ? "No Linear issues"
@@ -1085,6 +1088,10 @@ function InboxCard({
   const name = projectName(item.projectPath);
   const linear = item.provider === "linear";
   const source = linear ? item.teamName || item.repo : item.repo || name;
+  const attentionLabel =
+    item.provider === "gitlab"
+      ? gitlabAttentionLabel(item.attentionReason ?? "")
+      : "";
   const unseen = isInboxEntryUnseen({
     key: inboxItemKey(item),
     updatedAt: item.updatedAt,
@@ -1097,7 +1104,7 @@ function InboxCard({
       aria-current={active ? "true" : undefined}
       aria-label={`${status.label} ${kindLabel.toLowerCase()} ${inboxItemRef(
         item,
-      )}: ${item.title}${unseen ? ", new" : ""}${relatedSessionCount > 0 ? `, ${relatedSessionCount} related ${relatedSessionCount === 1 ? "thread" : "threads"}` : ""}`}
+      )}: ${item.title}${attentionLabel ? `, ${attentionLabel}` : ""}${unseen ? ", new" : ""}${relatedSessionCount > 0 ? `, ${relatedSessionCount} related ${relatedSessionCount === 1 ? "thread" : "threads"}` : ""}`}
       onClick={onSelect}
       className={`flex w-full flex-col rounded-md border px-2.5 py-2 text-left ${
         active
@@ -1117,6 +1124,7 @@ function InboxCard({
           />
           <span className="min-w-0 truncate text-[11px] text-content/50">
             {kindLabel} · {inboxItemRef(item)}
+            {attentionLabel ? ` · ${attentionLabel}` : ""}
           </span>
         </span>
         {relatedSessionCount > 0 || time || unseen ? (
@@ -1146,7 +1154,7 @@ function InboxCard({
       </span>
       <span className="mt-1 flex min-w-0 items-center gap-2">
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-content/45">
-          {linear ? null : logoPath ? (
+          {linear || !item.projectPath ? null : logoPath ? (
             <ProjectLogoIcon
               path={logoPath}
               className="size-3.5 shrink-0 rounded-sm"
@@ -1206,19 +1214,19 @@ export function InboxDetail({
   const cached = linear
     ? peekLinearIssueDetails(item.id ?? "")
     : gitlabKind
-      ? peekGitlabWorkItemDetails(item.projectPath, gitlabKind, item.number)
+      ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
       : githubKind
         ? peekGithubWorkItemDetails(item.projectPath, githubKind, item.number)
         : null;
   const cachedDiff = isPr
     ? gitlab
-      ? peekGitlabMrDiff(item.projectPath, item.number)
+      ? peekGitlabMrDiff(item.repo, item.number)
       : peekGithubPrDiff(item.projectPath, item.number)
     : null;
   const cachedThread = linear
     ? peekLinearIssueThread(item.id ?? "")
     : gitlabKind
-      ? peekGitlabWorkItemThread(item.projectPath, gitlabKind, item.number)
+      ? peekGitlabWorkItemThread(item.repo, gitlabKind, item.number)
       : githubKind
         ? peekGithubWorkItemThread(item.projectPath, githubKind, item.number)
         : null;
@@ -1244,6 +1252,7 @@ export function InboxDetail({
   const [startProject, setStartProject] = useState(defaultProject);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const chooseStartProject = linear || (gitlab && !item.projectPath);
   const status = linear
     ? item.state || inboxItemStatus(item)
     : inboxItemStatus(item);
@@ -1252,7 +1261,12 @@ export function InboxDetail({
   const source = linear
     ? item.teamName || item.repo
     : item.repo || projectName(item.projectPath);
-  const markdownCwd = linear ? startProject || cwd : item.projectPath || cwd;
+  const attentionLabel = gitlab
+    ? gitlabAttentionLabel(item.attentionReason ?? "")
+    : "";
+  const markdownCwd = chooseStartProject
+    ? startProject || cwd
+    : item.projectPath || cwd;
   const authorName = details?.author?.trim() ?? "";
   const extraAssignees = item.assignees.filter(
     (person) =>
@@ -1280,7 +1294,7 @@ export function InboxDetail({
     const cachedDetails = linear
       ? peekLinearIssueDetails(item.id ?? "")
       : gitlabKind
-        ? peekGitlabWorkItemDetails(item.projectPath, gitlabKind, item.number)
+        ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
         : githubKind
           ? peekGithubWorkItemDetails(item.projectPath, githubKind, item.number)
           : null;
@@ -1298,7 +1312,7 @@ export function InboxDetail({
         ? linearIssueDetails(item.id)
         : Promise.reject(new Error("Missing Linear issue"))
       : gitlabKind
-        ? gitlabWorkItemDetails(item.projectPath, gitlabKind, item.number)
+        ? gitlabWorkItemDetails(item.repo, gitlabKind, item.number)
         : githubKind
           ? githubWorkItemDetails(item.projectPath, githubKind, item.number)
           : Promise.reject(new Error("Unknown inbox item"));
@@ -1325,6 +1339,7 @@ export function InboxDetail({
     item.id,
     item.number,
     item.projectPath,
+    item.repo,
     linear,
     revision,
   ]);
@@ -1363,7 +1378,7 @@ export function InboxDetail({
     }
     if (gitlabKind) {
       const cachedThread = peekGitlabWorkItemThread(
-        item.projectPath,
+        item.repo,
         gitlabKind,
         item.number,
       );
@@ -1376,7 +1391,7 @@ export function InboxDetail({
         setThreadError(null);
         setThread(null);
       }
-      void gitlabWorkItemThread(item.projectPath, gitlabKind, item.number)
+      void gitlabWorkItemThread(item.repo, gitlabKind, item.number)
         .then((next) => {
           if (cancelled) return;
           setThread(next);
@@ -1432,6 +1447,7 @@ export function InboxDetail({
     item.id,
     item.number,
     item.projectPath,
+    item.repo,
     linear,
     revision,
   ]);
@@ -1440,7 +1456,7 @@ export function InboxDetail({
     if (!isPr || tab !== "code") return;
     let cancelled = false;
     const cachedDiff = gitlab
-      ? peekGitlabMrDiff(item.projectPath, item.number)
+      ? peekGitlabMrDiff(item.repo, item.number)
       : peekGithubPrDiff(item.projectPath, item.number);
     if (cachedDiff) {
       setPrDiff(cachedDiff);
@@ -1452,7 +1468,7 @@ export function InboxDetail({
       setPrDiff(null);
     }
     const pending = gitlab
-      ? gitlabMrDiff(item.projectPath, item.number)
+      ? gitlabMrDiff(item.repo, item.number)
       : githubPrDiff(item.projectPath, item.number);
     void pending
       .then((next) => {
@@ -1471,7 +1487,7 @@ export function InboxDetail({
     return () => {
       cancelled = true;
     };
-  }, [gitlab, isPr, item.number, item.projectPath, revision, tab]);
+  }, [gitlab, isPr, item.number, item.projectPath, item.repo, revision, tab]);
 
   const postComment = async (body: string) => {
     setPosting(true);
@@ -1489,21 +1505,13 @@ export function InboxDetail({
         return;
       }
       if (gitlabKind) {
-        await gitlabWorkItemComment(
-          item.projectPath,
-          gitlabKind,
-          item.number,
-          body,
-        );
+        await gitlabWorkItemComment(item.repo, gitlabKind, item.number, body);
         setReplyTo(null);
         try {
           setThread(
-            await gitlabWorkItemThread(
-              item.projectPath,
-              gitlabKind,
-              item.number,
-              { force: true },
-            ),
+            await gitlabWorkItemThread(item.repo, gitlabKind, item.number, {
+              force: true,
+            }),
           );
         } catch (err: unknown) {
           setPostError(err instanceof Error ? err.message : String(err));
@@ -1574,6 +1582,9 @@ export function InboxDetail({
                 <statusMark.Icon className="size-3.5" strokeWidth={1.75} />
                 {status}
               </span>
+              {attentionLabel ? (
+                <span className="shrink-0 text-accent">{attentionLabel}</span>
+              ) : null}
               {source ? (
                 <span className="min-w-0 truncate">{source}</span>
               ) : null}
@@ -1683,13 +1694,17 @@ export function InboxDetail({
                     type="button"
                     disabled={
                       starting ||
-                      (linear && (!startProject || loading || !!error))
+                      (chooseStartProject &&
+                        (projects.length === 0 ||
+                          !startProject ||
+                          loading ||
+                          !!error))
                     }
                     onClick={() => {
                       if (starting) return;
                       setStarting(true);
                       setStartError(null);
-                      const next = linear
+                      const next = chooseStartProject
                         ? { ...item, projectPath: startProject }
                         : item;
                       void Promise.resolve(
@@ -1709,7 +1724,7 @@ export function InboxDetail({
                   >
                     {starting ? "Sending..." : "Send to agent"}
                   </button>
-                  {linear ? (
+                  {chooseStartProject ? (
                     <InboxProjectPicker
                       projects={projects}
                       value={startProject}

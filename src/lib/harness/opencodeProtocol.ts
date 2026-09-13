@@ -366,6 +366,29 @@ export function contextUsedFromMessageInfo(
   return used > 0 ? used : undefined;
 }
 
+/**
+ * The session a `task` tool spawned, when OpenCode names it on the call. A
+ * subagent runs as its own session, so this is what ties the child's stream
+ * back to the row that started it.
+ */
+export function openCodeChildSessionId(
+  part: OpenCodePart,
+): string | undefined {
+  const state = part.state ?? {};
+  const metadata = asRecord(state.metadata);
+  const input = asRecord(state.input);
+  for (const source of [metadata, state, input]) {
+    const id =
+      stringField(source, "sessionID") ??
+      stringField(source, "sessionId") ??
+      stringField(source, "session_id") ??
+      stringField(source, "childSessionID") ??
+      stringField(source, "subSessionID");
+    if (id) return id;
+  }
+  return undefined;
+}
+
 export function eventSessionId(event: Record<string, unknown>): string | undefined {
   const properties = asRecord(event.properties);
   if (!properties) return undefined;

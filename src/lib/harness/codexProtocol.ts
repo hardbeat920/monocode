@@ -725,24 +725,188 @@ function mapCollabAgentToolCall(
             : tool === "closeAgent"
               ? "Close subagent"
               : "Subagent";
-  const prompt = stringField(item, "prompt");
-  const title =
-    tool === "spawnAgent" &&
-    prompt &&
-    !prompt.includes("\n") &&
-    prompt.length <= 160
-      ? prompt
-      : fallbackTitle;
+  // A spawn's brief is the only name the agent gets. Its first line is what
+  // the model wrote the run for, so "Spawn subagent" is a last resort.
+  const brief = agentBrief(item);
+  const title = tool === "spawnAgent" && brief ? brief : fallbackTitle;
   const detail = collabAgentFailureDetail(item);
   const failed = stringField(item, "status") === "failed" || !!detail;
+  // Spawning or resuming an agent is that agent's row. Waiting on one,
+  // messaging it and closing it are bookkeeping against a row that already
+  // exists — given their own agent rows they read as extra subagents that
+  // never do anything.
+  const spawns = tool === "spawnAgent" || tool === "resumeAgent";
+  // Completing a spawn means the call returned, not that the agent it started
+  // has finished — the child runs on its own thread for as long as it needs.
+  // Only its reported state settles the row, so a running agent is never
+  // captioned as done.
+  const settled = completed && (!spawns || failed);
   return {
     type: completed ? "tool.updated" : "tool.started",
     callId,
     title,
-    kind: "agent",
-    status: completed ? (failed ? "failed" : "completed") : "in_progress",
+    kind: spawns ? "agent" : "other",
+    ...(spawns && stringField(item, "model")
+      ? { agentModel: stringField(item, "model") }
+      : {}),
+    status: settled ? (failed ? "failed" : "completed") : "in_progress",
     ...(detail ? { detail } : {}),
   };
+}
+
+const TERMINAL_AGENT_STATES = new Set([
+  "completed",
+  "complete",
+  "done",
+  "finished",
+  "errored",
+  "error",
+  "failed",
+  "notfound",
+  "not_found",
+  "closed",
+  "interrupted",
+  "stopped",
+  "cancelled",
+  "canceled",
+]);
+
+const FAILED_AGENT_STATES = new Set([
+  "errored",
+  "error",
+  "failed",
+  "notfound",
+  "not_found",
+  "interrupted",
+]);
+
+/**
+ * Per-agent state a collab item reports, keyed by child thread. This is what
+ * actually settles a spawned agent's row: the spawn call returns long before
+ * the agent it started is finished.
+ */
+export function codexSubagentStates(
+  item: Record<string, unknown>,
+): Array<{ threadId: string; status: string; message?: string }> {
+  const states = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  return Object.entries(states ?? {}).flatMap(([threadId, value]) => {
+    const state = asRecord(value);
+    const status = (stringField(state, "status") ?? "").toLowerCase();
+    if (!threadId || !TERMINAL_AGENT_STATES.has(status)) return [];
+    const message = stringField(state, "message")?.trim();
+    return [
+      {
+        threadId,
+        status: FAILED_AGENT_STATES.has(status) ? "failed" : "completed",
+        ...(message ? { message } : {}),
+      },
+    ];
+  });
+}
+
+/**
+ * Thread ids a collab item ties to an agent row, so the child thread's own
+ * notifications can be mirrored back onto it. Codex runs each subagent as a
+ * separate thread on the same connection.
+ */
+export function codexSubagentThreadIds(
+  item: Record<string, unknown>,
+): string[] {
+  const ids = new Set<string>();
+  for (const key of ["agentThreadId", "agent_thread_id"]) {
+    const value = stringField(item, key);
+    if (value) ids.add(value);
+  }
+  const receivers = item.receiverThreadIds ?? item.receiver_thread_ids;
+  if (Array.isArray(receivers)) {
+    for (const value of receivers) {
+      if (typeof value === "string" && value) ids.add(value);
+    }
+  }
+  const states = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  for (const key of Object.keys(states ?? {})) {
+    if (key) ids.add(key);
+  }
+  return [...ids];
+}
+
+/**
+ * A child thread's own notification, mirrored onto the agent row that spawned
+ * it. Only settled items are mirrored: the deltas that stream inside a child
+ * thread carry no item identity, so they cannot be merged onto a step without
+ * stacking the same sentence up again on every chunk.
+ */
+export function mapCodexSubagentSteps(
+  callId: string,
+  method: string,
+  params: unknown,
+): HarnessEvent[] {
+  if (method === "thread/started") {
+    const model = stringField(asRecord(asRecord(params)?.thread), "model");
+    return model
+      ? [{ type: "tool.updated", callId, kind: "agent", agentModel: model }]
+      : [];
+  }
+  if (method !== "item/started" && method !== "item/completed") return [];
+  const rec = asRecord(params);
+  const item = asRecord(rec?.item);
+  const itemId = stringField(item, "id");
+  if (!rec || !itemId) return [];
+  return mapCodexNotification(method, params).events.flatMap(
+    (event): HarnessEvent[] => {
+      if (event.type === "tool.started" || event.type === "tool.updated") {
+        return [
+          {
+            type: "agent.step",
+            callId,
+            stepId: event.callId,
+            kind: "tool",
+            text: event.title ?? "",
+            ...(event.kind ? { toolKind: event.kind } : {}),
+            ...(event.status ? { status: event.status } : {}),
+            ...(event.preview ? { preview: event.preview } : {}),
+          },
+        ];
+      }
+      if (event.type === "message.delta") {
+        return [
+          {
+            type: "agent.step",
+            callId,
+            stepId: `${itemId}:text`,
+            kind: "message",
+            text: event.text,
+          },
+        ];
+      }
+      if (event.type === "reasoning.delta") {
+        return [
+          {
+            type: "agent.step",
+            callId,
+            stepId: `${itemId}:reasoning`,
+            kind: "reasoning",
+            text: event.text,
+          },
+        ];
+      }
+      return [];
+    },
+  );
+}
+
+/** The first line of a spawn's prompt, short enough to sit on a row. */
+function agentBrief(item: Record<string, unknown>): string | undefined {
+  const path = stringField(item, "agentPath") ?? stringField(item, "agent_path");
+  const leaf = path?.split(/[/\\]/).filter(Boolean).pop();
+  if (leaf) return `${formatAgentType(leaf)} subagent`;
+  const prompt = stringField(item, "prompt");
+  const line = prompt
+    ?.split("\n")
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!line) return undefined;
+  return line.length <= 160 ? line : `${line.slice(0, 159)}\u2026`;
 }
 
 function collabAgentFailureDetail(

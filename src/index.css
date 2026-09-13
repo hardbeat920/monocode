@@ -736,6 +736,25 @@ header[data-tauri-drag-region] button {
   animation: approval-toast-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+@keyframes linked-activity-notice-in {
+  from {
+    transform: translateY(-8px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.linked-activity-notice {
+  animation: linked-activity-notice-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .linked-activity-notice {
+    animation: none;
+  }
+}
+
 .shimmer-text {
   background-image:
     linear-gradient(

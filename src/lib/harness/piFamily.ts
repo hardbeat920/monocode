@@ -18,6 +18,7 @@ import {
 } from "./child";
 import type { PiFlavor } from "./piFlavor";
 import { PiRpc } from "./piClient";
+import { piSubagentEvents } from "./piSubagents";
 import {
   agentEndWillRetry,
   asRecord,
@@ -810,6 +811,9 @@ function handleFrame(
         detail: execUpdate.detail,
         preview: previewFromTool(tool.name, tool.input, execUpdate.detail),
       });
+      if (toolKindFromName(tool.name) === "agent") {
+        for (const event of piSubagentEvents(tool.id, tool.input, rec.partialResult, false)) live.onEvent(event);
+      }
     }
   }
 
@@ -826,6 +830,9 @@ function handleFrame(
         detail: execEnd.detail,
         preview: previewFromTool(tool.name, tool.input, execEnd.detail),
       });
+      if (toolKindFromName(tool.name) === "agent") {
+        for (const event of piSubagentEvents(tool.id, tool.input, rec.result, true, execEnd.isError)) live.onEvent(event);
+      }
     }
   }
 

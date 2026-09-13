@@ -682,8 +682,19 @@ pub struct GitHubWorkItemComment {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct GitHubWorkItemCommit {
+    pub oid: String,
+    pub message_headline: String,
+    pub author: String,
+    pub committed_date: String,
+    pub url: String,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct GitHubWorkItemThread {
     pub comments: Vec<GitHubWorkItemComment>,
+    pub commits: Vec<GitHubWorkItemCommit>,
     pub truncated: bool,
     pub review_decision: String,
     pub base_ref_name: String,
@@ -1822,6 +1833,21 @@ query InboxPullRequestThread($owner: String!, $name: String!, $number: Int!) {
       reviewDecision
       baseRefName
       headRefName
+      commits(last: 40) {
+        totalCount
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            committedDate
+            url
+            author {
+              name
+              user { login }
+            }
+          }
+        }
+      }
       comments(last: 40) {
         totalCount
         nodes {
@@ -2109,11 +2135,41 @@ struct GithubGraphqlPullRequest {
     #[serde(default)]
     head_ref_name: String,
     #[serde(default)]
+    commits: GithubGraphqlNodes<GithubGraphqlCommitNode>,
+    #[serde(default)]
     comments: GithubGraphqlNodes<GithubGraphqlComment>,
     #[serde(default)]
     reviews: GithubGraphqlNodes<GithubGraphqlReview>,
     #[serde(default)]
     review_threads: GithubGraphqlNodes<GithubGraphqlReviewThread>,
+}
+
+#[derive(Deserialize)]
+struct GithubGraphqlCommitNode {
+    commit: GithubGraphqlCommit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GithubGraphqlCommit {
+    #[serde(default)]
+    oid: String,
+    #[serde(default)]
+    message_headline: String,
+    #[serde(default)]
+    committed_date: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    author: Option<GithubGraphqlCommitAuthor>,
+}
+
+#[derive(Deserialize)]
+struct GithubGraphqlCommitAuthor {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    user: Option<GithubGraphqlActor>,
 }
 
 #[derive(Deserialize)]
@@ -2204,6 +2260,7 @@ fn parse_github_work_item_thread(json: &str, kind: &str) -> Result<GitHubWorkIte
     };
 
     let mut comments = Vec::new();
+    let mut commits = Vec::new();
     let mut truncated = false;
     let mut review_decision = String::new();
     let mut base_ref_name = String::new();
@@ -2216,6 +2273,30 @@ fn parse_github_work_item_thread(json: &str, kind: &str) -> Result<GitHubWorkIte
         review_decision = pull.review_decision.unwrap_or_default();
         base_ref_name = pull.base_ref_name;
         head_ref_name = pull.head_ref_name;
+        truncated |= github_nodes_truncated(&pull.commits);
+        commits.extend(pull.commits.nodes.into_iter().filter_map(|node| {
+            let commit = node.commit;
+            if commit.oid.trim().is_empty() || commit.committed_date.trim().is_empty() {
+                return None;
+            }
+            let author = commit
+                .author
+                .map(|author| {
+                    author
+                        .user
+                        .map(|user| user.login)
+                        .filter(|login| !login.trim().is_empty())
+                        .unwrap_or(author.name)
+                })
+                .unwrap_or_default();
+            Some(GitHubWorkItemCommit {
+                oid: commit.oid,
+                message_headline: commit.message_headline,
+                author,
+                committed_date: commit.committed_date,
+                url: commit.url,
+            })
+        }));
         truncated |= github_nodes_truncated(&pull.comments);
         comments.extend(
             pull.comments
@@ -2258,6 +2339,7 @@ fn parse_github_work_item_thread(json: &str, kind: &str) -> Result<GitHubWorkIte
     });
     Ok(GitHubWorkItemThread {
         comments,
+        commits,
         truncated,
         review_decision,
         base_ref_name,
@@ -5139,6 +5221,23 @@ mod tests {
                         "reviewDecision": "APPROVED",
                         "baseRefName": "main",
                         "headRefName": "agent-terminal",
+                        "commits": {
+                            "totalCount": 2,
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "oid": "abcdef123456",
+                                        "messageHeadline": "Show linked activity",
+                                        "committedDate": "2026-08-31T11:45:00Z",
+                                        "url": "https://github.com/acme/web/commit/abcdef123456",
+                                        "author": {
+                                            "name": "Maya Smith",
+                                            "user": {"login": "maya"}
+                                        }
+                                    }
+                                }
+                            ]
+                        },
                         "comments": {
                             "totalCount": 50,
                             "nodes": [
@@ -5222,6 +5321,10 @@ mod tests {
         assert_eq!(thread.review_decision, "APPROVED");
         assert_eq!(thread.base_ref_name, "main");
         assert_eq!(thread.head_ref_name, "agent-terminal");
+        assert_eq!(thread.commits.len(), 1);
+        assert_eq!(thread.commits[0].oid, "abcdef123456");
+        assert_eq!(thread.commits[0].message_headline, "Show linked activity");
+        assert_eq!(thread.commits[0].author, "maya");
         assert_eq!(
             thread
                 .comments

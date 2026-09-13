@@ -94,6 +94,25 @@ describe("InboxDetail layout", () => {
     expect(header).not.toContain("overflow-y-auto");
   });
 
+  it("shows why a remote GitLab item needs attention and asks for a workspace", () => {
+    const markup = renderDetail(
+      item({
+        provider: "gitlab",
+        repo: "acme/platform",
+        projectPath: "",
+        url: "https://gitlab.example.com/acme/platform/-/issues/157",
+        attentionReason: "mentioned",
+      }),
+    );
+    const headerIndex = markup.indexOf("data-inbox-detail-header");
+    const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
+    const header = markup.slice(headerIndex, scrollIndex);
+
+    expect(header).toContain("Mentioned you");
+    expect(header).toContain("Choose project");
+    expect(header).toContain("Open on GitLab");
+  });
+
   it("keeps related threads in the pinned header", () => {
     const markup = renderDetail(item(), [
       {

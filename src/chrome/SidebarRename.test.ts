@@ -7,7 +7,6 @@ import { formatReminderTime } from "../lib/sessionReminders";
 import { Sidebar } from "./Sidebar";
 
 // Keep native services out of these menu/input interaction tests.
-vi.mock("../hooks/useInboxUnseen", () => ({ useInboxUnseen: () => false }));
 vi.mock("../hooks/useProjectDiffStats", () => ({
   useProjectDiffStats: () => null,
 }));
@@ -259,6 +258,44 @@ describe("sidebar pinned sessions", () => {
         localStorage.getItem("monocode.pinnedSessionsCollapsed") ?? "{}",
       ),
     ).toEqual({ "/workspace/project": true });
+  });
+});
+
+describe("sidebar linked work item updates", () => {
+  it("renders an unread dot without changing session order", () => {
+    props.busySessionIds = new Set();
+    props.activeSessionId = undefined;
+    props.sessions = [
+      {
+        ...props.sessions[0],
+        id: "session-2",
+        title: formatSessionTitle("codex", "Newer conversation"),
+        updatedAt: 200,
+      },
+      {
+        ...props.sessions[0],
+        id: "session-1",
+        title: formatSessionTitle("codex", "Updated PR conversation"),
+        updatedAt: 100,
+        linkedWorkItem: {
+          kind: "pr",
+          repo: "acme/app",
+          number: 42,
+          url: "https://github.com/acme/app/pull/42",
+        },
+      },
+    ];
+    props.linkedSessionUpdateIds = new Set(["session-1"]);
+    act(() => render());
+
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLElement>("[data-session-card]"),
+      ).map((row) => row.dataset.sessionCard),
+    ).toEqual(["session-2", "session-1"]);
+    expect(
+      card().querySelector('[aria-label="Linked work item updated"]'),
+    ).not.toBeNull();
   });
 });
 
