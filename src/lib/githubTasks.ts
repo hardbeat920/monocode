@@ -88,8 +88,17 @@ export type GithubWorkItemComment = {
   replies: GithubWorkItemComment[];
 };
 
+export type GithubWorkItemCommit = {
+  oid: string;
+  messageHeadline: string;
+  author: string;
+  committedDate: string;
+  url: string;
+};
+
 export type GithubWorkItemThread = {
   comments: GithubWorkItemComment[];
+  commits: GithubWorkItemCommit[];
   truncated: boolean;
   reviewDecision: string;
   baseRefName: string;
@@ -250,10 +259,11 @@ export function githubWorkItem(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  options?: { force?: boolean },
 ): Promise<GithubWorkItem> {
   const key = workItemLookupKey(repo, kind, number);
   const cached = workItemByKey.get(key);
-  if (cached) return Promise.resolve(cached);
+  if (cached && !options?.force) return Promise.resolve(cached);
   const pending = workItemInflight.get(key);
   if (pending) return pending;
   const promise = invoke<GithubWorkItem>("git_github_work_item", {

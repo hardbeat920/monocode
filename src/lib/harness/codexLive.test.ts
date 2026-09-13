@@ -797,7 +797,7 @@ describe("codex live turn sequence", () => {
     { decision: "allow", boolean: true },
     { decision: "deny", boolean: true },
   ] as const)(
-    "shows MCP confirmation in Full Access and sends $decision, boolean=$boolean",
+    "shows other MCP confirmation in Full Access and sends $decision, boolean=$boolean",
     async ({ decision, boolean }) => {
       const { events, turn } = await startTurn("codex-live", {
         runtimeMode: "full-access",
@@ -838,6 +838,37 @@ describe("codex live turn sequence", () => {
       await turn;
     },
   );
+
+  it("auto-approves computer-use app access in Full Access", async () => {
+    const { events, turn } = await startTurn("codex-live", {
+      runtimeMode: "full-access",
+    });
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "mcpServer/elicitation/request",
+        params: {
+          serverName: "cua_repl",
+          mode: "form",
+          message: 'Allow Computer Use to use "QuickTime Player"?',
+          requestedSchema: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+        },
+      }),
+    );
+    await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      action: "accept",
+      content: {},
+      _meta: null,
+    });
+    expect(events.some((e) => e.type === "approval.requested")).toBe(false);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
 
   it.each([false, true, undefined])(
     "honors isBlocking=%s without relying on deprecated autoResolutionMs",
