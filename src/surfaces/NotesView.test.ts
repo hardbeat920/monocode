@@ -227,6 +227,168 @@ it("serializes title edits behind an in-flight project change", async () => {
   expect(stored.sourceCwd).toBe("/work/portognjeeen");
 });
 
+it("keeps newer edits after reopening a note during a project move", async () => {
+  const second = {
+    ...stored,
+    id: "second-note",
+    slug: "second",
+    title: "Second",
+  };
+  const save = invoke.getMockImplementation()!;
+  let finishMove!: () => void;
+  const moving = new Promise<void>((resolve) => {
+    finishMove = resolve;
+  });
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  invoke.mockImplementation(async (command, args) => {
+    if (command === "notes_list") return [{ ...stored }, { ...second }];
+    if (command !== "notes_upsert") return save(command, args);
+    inFlight += 1;
+    maximumInFlight = Math.max(maximumInFlight, inFlight);
+    if (args.note.sourceCwd === "/work/portognjeeen") await moving;
+    const result = await save(command, args);
+    inFlight -= 1;
+    return result;
+  });
+  const selectNote = async (title: string) => {
+    const button = [
+      ...container.querySelectorAll<HTMLButtonElement>("li button"),
+    ].find((item) => item.textContent?.includes(title));
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+  };
+
+  await render();
+  await chooseProject();
+  await selectNote("Second");
+  await selectNote("Plan");
+  const title = container.querySelector<HTMLInputElement>(
+    '[aria-label="Note title"]',
+  )!;
+  act(() => title.focus());
+  act(() => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(title, "Updated after reopening");
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => title.blur());
+  await act(async () => finishMove());
+
+  expect(stored.title).toBe("Updated after reopening");
+  expect(stored.sourceCwd).toBe("/work/portognjeeen");
+  expect(maximumInFlight).toBe(1);
+  await selectNote("Second");
+  await selectNote("Updated after reopening");
+  expect(
+    container.querySelector<HTMLInputElement>('[aria-label="Note title"]')
+      ?.value,
+  ).toBe("Updated after reopening");
+  expect(projectButton()?.textContent).toContain("portognjeeen");
+});
+
+it.each(["title", "body", "tags"] as const)(
+  "preserves earlier edits when changing %s after reopening during a move",
+  async (field) => {
+    vi.useFakeTimers();
+    const second = { ...stored, id: "second-note", title: "Second" };
+    const save = invoke.getMockImplementation()!;
+    let finishMove!: () => void;
+    const moving = new Promise<void>((resolve) => {
+      finishMove = resolve;
+    });
+    invoke.mockImplementation(async (command, args) => {
+      if (command === "notes_list") return [{ ...stored }, { ...second }];
+      if (
+        command === "notes_upsert" &&
+        args.note.sourceCwd === "/work/portognjeeen"
+      )
+        await moving;
+      return save(command, args);
+    });
+    const selectNote = async (title: string) => {
+      const button = [
+        ...container.querySelectorAll<HTMLButtonElement>("li button"),
+      ].find((item) => item.textContent?.includes(title));
+      expect(button).toBeDefined();
+      await act(async () => button!.click());
+    };
+    const editInput = async (label: string, value: string) => {
+      const input = container.querySelector<HTMLInputElement>(
+        `[aria-label="${label}"]`,
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    const editBody = async (value: string) => {
+      const source = [
+        ...container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+      ].find((button) => button.textContent === "Source")!;
+      await act(async () => source.click());
+      const input = container.querySelector<HTMLTextAreaElement>(
+        "textarea.markdown-source-field",
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+
+    await render();
+    await selectNote("Plan");
+    await editInput("Note title", "Title before moving");
+    await editBody("Content before moving");
+    await editInput("Add note tag", "before,");
+    await chooseProject();
+    await selectNote("Second");
+    await selectNote("Plan");
+    if (field === "title")
+      await editInput("Note title", "Title after reopening");
+    if (field === "body") await editBody("Content after reopening");
+    if (field === "tags") await editInput("Add note tag", "after,");
+    await act(async () => vi.advanceTimersByTime(400));
+    // Cover both an open editor and saves finishing after it unmounts.
+    if (field !== "title") await selectNote("Second");
+    await act(async () => finishMove());
+
+    const expected = {
+      title:
+        field === "title" ? "Title after reopening" : "Title before moving",
+      body:
+        field === "body" ? "Content after reopening" : "Content before moving",
+      tags: field === "tags" ? ["ideas", "after"] : ["ideas", "before"],
+      sourceCwd: "/work/portognjeeen",
+    };
+    expect(stored).toMatchObject(expected);
+    await selectNote(expected.title);
+    expect(
+      container.querySelector<HTMLInputElement>('[aria-label="Note title"]')
+        ?.value,
+    ).toBe(expected.title);
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        "textarea.markdown-source-field",
+      )?.value,
+    ).toBe(expected.body);
+    expect(
+      [...container.querySelectorAll('[aria-label="Tags"] span')].map(
+        (tag) => tag.textContent,
+      ),
+    ).toEqual(expect.arrayContaining(expected.tags.map((tag) => `#${tag}`)));
+    expect(projectButton()?.textContent).toContain("portognjeeen");
+  },
+);
+
 it("lets the user retry a project change after saving fails", async () => {
   await render();
   invoke.mockRejectedValueOnce(new Error("Disk full"));

@@ -59,6 +59,29 @@ const DEFAULT_WIDTH = 280;
 let rememberedWidth = DEFAULT_WIDTH;
 let rememberedNoteId: string | null = null;
 
+// Keep pending saves ordered across editor unmounts and reopened notes.
+const noteSaveQueues = new Map<
+  string,
+  { pending: Promise<void>; saved?: Note }
+>();
+
+function enqueueNoteSave(
+  id: string,
+  save: (latest?: Note) => void | Promise<Note | void>,
+) {
+  const queue = noteSaveQueues.get(id) ?? { pending: Promise.resolve() };
+  const persist = async () => {
+    const saved = await save(queue.saved);
+    if (saved) queue.saved = saved;
+  };
+  const pending = queue.pending.then(persist, persist).finally(() => {
+    if (queue.pending === pending) noteSaveQueues.delete(id);
+  });
+  queue.pending = pending;
+  noteSaveQueues.set(id, queue);
+  return pending;
+}
+
 type Props = {
   besideRail?: boolean;
   cwd?: string;
@@ -540,9 +563,11 @@ function NoteEditor({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const blank = !note.body.trim() && note.title === "Untitled";
   const [mode, setMode] = useMarkdownMode(note.id);
-  const [title, setTitle] = useState(note.title);
-  const [body, setBody] = useState(note.body);
-  const [tags, setTags] = useState(note.tags);
+  type Edits = Partial<Pick<Note, "title" | "body" | "tags">>;
+  const [edits, setEdits] = useState<Edits>({});
+  const title = edits.title ?? note.title;
+  const body = edits.body ?? note.body;
+  const tags = edits.tags ?? note.tags;
   // Keep only an unsaved choice locally so completed moves survive reopening.
   const [projectChange, setProjectChange] = useState<{ path: string } | null>(
     null,
@@ -551,9 +576,8 @@ function NoteEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [imageDrag, setImageDrag] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
-  const titleRef = useRef(title);
+  const editsRef = useRef(edits);
   const bodyRef = useRef(body);
-  const tagsRef = useRef(tags);
   const projectChangeRef = useRef(projectChange);
   const noteRef = useRef(note);
   const dropZoneRef = useRef<HTMLDivElement>(null);
@@ -561,11 +585,8 @@ function NoteEditor({
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
   const saveTimer = useRef<number | null>(null);
-  const saveQueue = useRef(Promise.resolve());
   const onSavedRef = useRef(onSaved);
-  titleRef.current = title;
   bodyRef.current = body;
-  tagsRef.current = tags;
   noteRef.current = note;
   onSavedRef.current = onSaved;
   const project = noteSourceProject(sourceCwd);
@@ -577,23 +598,46 @@ function NoteEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const persist = useCallback(async () => {
+  const editNote = useCallback((change: Edits) => {
+    const next = { ...editsRef.current, ...change };
+    editsRef.current = next;
+    if (change.body !== undefined) bodyRef.current = change.body;
+    setEdits(next);
+  }, []);
+
+  const persist = useCallback(async (latest?: Note) => {
     if (skipSave.current) return;
-    const current = noteRef.current;
-    const nextTitle = titleRef.current.trim() || noteTitle(bodyRef.current);
-    const nextBody = bodyRef.current;
-    const nextTags = tagsRef.current;
+    const current = latest ?? noteRef.current;
+    const changes = editsRef.current;
+    const nextBody = changes.body ?? current.body;
+    const nextTitle =
+      (changes.title ?? current.title).trim() || noteTitle(nextBody);
+    const nextTags = changes.tags ?? current.tags;
     const nextProject = projectChangeRef.current;
+    const acceptSaved = (saved: Note) => {
+      noteRef.current = saved;
+      // A completed save only clears the edits included in that request.
+      const remaining = { ...editsRef.current };
+      if (remaining.title === changes.title) delete remaining.title;
+      if (remaining.body === changes.body) delete remaining.body;
+      if (remaining.tags === changes.tags) delete remaining.tags;
+      editsRef.current = remaining;
+      bodyRef.current = remaining.body ?? saved.body;
+      setEdits(remaining);
+      if (projectChangeRef.current === nextProject) {
+        projectChangeRef.current = null;
+        setProjectChange(null);
+      }
+      setSaveError(null);
+    };
     if (
       nextTitle === current.title &&
       nextBody === current.body &&
       sameTags(nextTags, current.tags) &&
       (!nextProject || nextProject.path === current.sourceCwd)
     ) {
-      projectChangeRef.current = null;
-      setProjectChange(null);
-      setSaveError(null);
-      return;
+      acceptSaved(current);
+      return current;
     }
     try {
       const saved = await upsertNote({
@@ -603,30 +647,20 @@ function NoteEditor({
         tags: nextTags,
         ...(nextProject ? { sourceCwd: nextProject.path } : {}),
       });
-      noteRef.current = saved;
-      if (projectChangeRef.current === nextProject) {
-        projectChangeRef.current = null;
-        setProjectChange(null);
-      }
-      setSaveError(null);
-      if (
-        titleRef.current.trim() === "" ||
-        titleRef.current === current.title
-      ) {
-        setTitle(saved.title);
-      }
+      acceptSaved(saved);
       onSavedRef.current(saved);
+      return saved;
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : String(err));
+      return current;
     }
   }, []);
 
   const saveNow = useCallback(() => {
     if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
     saveTimer.current = null;
-    saveQueue.current = saveQueue.current.then(persist, persist);
-    return saveQueue.current;
-  }, [persist]);
+    return enqueueNoteSave(note.id, persist);
+  }, [note.id, persist]);
 
   const scheduleSave = useCallback(() => {
     if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
@@ -663,8 +697,7 @@ function NoteEditor({
           range.end,
           images,
         );
-        bodyRef.current = inserted.value;
-        setBody(inserted.value);
+        editNote({ body: inserted.value });
         setSaveError(null);
         scheduleSave();
         window.requestAnimationFrame(() => {
@@ -679,7 +712,7 @@ function NoteEditor({
         setImageBusy(false);
       }
     },
-    [scheduleSave],
+    [editNote, scheduleSave],
   );
 
   useEffect(() => {
@@ -815,14 +848,12 @@ function NoteEditor({
           <input
             value={title}
             onChange={(event) => {
-              titleRef.current = event.target.value;
-              setTitle(event.target.value);
+              editNote({ title: event.target.value });
               scheduleSave();
             }}
             onBlur={() => {
               const next = title.trim() || noteTitle(body);
-              titleRef.current = next;
-              if (next !== title) setTitle(next);
+              if (next !== title) editNote({ title: next });
               void saveNow();
             }}
             onKeyDown={onTitleKeyDown}
@@ -836,8 +867,7 @@ function NoteEditor({
           <NoteTagsEditor
             tags={tags}
             onChange={(next) => {
-              tagsRef.current = next;
-              setTags(next);
+              editNote({ tags: next });
               scheduleSave();
             }}
           />
@@ -856,7 +886,7 @@ function NoteEditor({
                 skipSave.current = true;
                 if (saveTimer.current != null)
                   window.clearTimeout(saveTimer.current);
-                void saveQueue.current.then(() => onDelete(note.id));
+                void enqueueNoteSave(note.id, () => onDelete(note.id));
               }}
               className="inline-flex items-center gap-1.5 rounded-md px-3 h-7 text-[12px] text-content/70 hover:bg-content/10 hover:text-red-400"
             >
@@ -942,8 +972,7 @@ function NoteEditor({
               autoFocus={blank}
               value={body}
               onChange={(next) => {
-                bodyRef.current = next;
-                setBody(next);
+                editNote({ body: next });
                 scheduleSave();
               }}
             />
