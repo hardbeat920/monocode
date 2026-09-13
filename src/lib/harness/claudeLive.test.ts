@@ -500,6 +500,120 @@ describe("claude subagents", () => {
     ).toBe(false);
   });
 
+  it("mirrors a subagent's tools, thinking and prose onto its own row", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_agent",
+            name: "Agent",
+            input: {
+              description: "Correctness review",
+              subagent_type: "explore",
+            },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "assistant",
+      parent_tool_use_id: "toolu_agent",
+      message: {
+        id: "msg_sub_1",
+        model: "claude-haiku-4-5",
+        content: [
+          { type: "thinking", thinking: "Start with the reducer." },
+          { type: "text", text: "I will grep for tokens" },
+          {
+            type: "tool_use",
+            id: "toolu_sub_read",
+            name: "Read",
+            input: { file_path: "/repo/src/App.tsx" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      parent_tool_use_id: "toolu_agent",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_sub_read",
+            content: "export function App() {}",
+          },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(
+      events
+        .reduce(applyHarnessEvent, newSession("claude", "/repo"))
+        .blocks.find((block) => block.tool?.callId === "toolu_agent")?.agentRun
+        ?.model,
+    ).toBe("claude-haiku-4-5");
+    const steps = events.filter((event) => event.type === "agent.step");
+    expect(steps.every((step) => step.callId === "toolu_agent")).toBe(true);
+    expect(
+      steps.map((step) => [step.stepId, step.kind, step.text, step.status]),
+    ).toEqual([
+      ["msg_sub_1:thinking", "reasoning", "Start with the reducer.", undefined],
+      ["msg_sub_1:text", "message", "I will grep for tokens", undefined],
+      ["toolu_sub_read", "tool", "Read /repo/src/App.tsx", "in_progress"],
+      ["toolu_sub_read", "tool", "", "completed"],
+    ]);
+  });
+
+  it("does not mirror a subagent result onto the parent tool row", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_agent",
+            name: "Agent",
+            input: { description: "Correctness review" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      parent_tool_use_id: "toolu_agent",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_sub_read",
+            content: "export function App() {}",
+          },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    // The parent stays in flight: only the subagent's own row settles.
+    expect(
+      events.some(
+        (event) =>
+          event.type === "tool.updated" &&
+          event.callId === "toolu_agent" &&
+          event.status === "completed",
+      ),
+    ).toBe(false);
+  });
+
   it("routes an unexpected provider exit to the turn that is actually running", async () => {
     const first = await startTurn("s1");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });

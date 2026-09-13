@@ -97,6 +97,8 @@ const COMPOSER_RUNNER_KEY = "monocode.composerRunner";
 
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 
+const COMPOSER_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
+
 export type FollowUpBehavior = "steer" | "queue";
 
 export const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = "steer";
@@ -118,6 +120,46 @@ export function saveFollowUpBehavior(value: FollowUpBehavior) {
   } catch {
     // private mode / quota
   }
+}
+
+export const COMPOSER_EFFORT_VISIBLE_DEFAULT = false;
+
+/** Fired on `window` when the standalone composer effort control setting flips. */
+export const COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT =
+  "monocode:composer-effort-visible-change";
+
+export function loadComposerEffortVisible(): boolean {
+  try {
+    const raw = localStorage.getItem(COMPOSER_EFFORT_VISIBLE_KEY);
+    if (raw == null) return COMPOSER_EFFORT_VISIBLE_DEFAULT;
+    return raw === "1" || raw === "true";
+  } catch {
+    return COMPOSER_EFFORT_VISIBLE_DEFAULT;
+  }
+}
+
+export function saveComposerEffortVisible(value: boolean) {
+  try {
+    localStorage.setItem(COMPOSER_EFFORT_VISIBLE_KEY, value ? "1" : "0");
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT, {
+      detail: value,
+    }),
+  );
+}
+
+export function subscribeComposerEffortVisible(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(
+      COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT,
+      onStoreChange,
+    );
 }
 
 export const COMPOSER_RUNNER_DEFAULT = true;

@@ -94,7 +94,18 @@ describe("session work items", () => {
       githubWorkItem("/tmp/codex", "openai/codex", "pr", 42),
     ).resolves.toEqual(result);
 
-    expect(invoke).toHaveBeenCalledTimes(1);
+    const refreshed = { ...result, updatedAt: "2026-09-09T12:01:00Z" };
+    vi.mocked(invoke).mockResolvedValueOnce(refreshed);
+    await expect(
+      githubWorkItem("/tmp/codex", "openai/codex", "pr", 42, {
+        force: true,
+      }),
+    ).resolves.toEqual(refreshed);
+    await expect(
+      githubWorkItem("/tmp/codex", "openai/codex", "pr", 42),
+    ).resolves.toEqual(refreshed);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke).toHaveBeenCalledWith("git_github_work_item", {
       cwd: "/tmp/codex",
       repo: "openai/codex",

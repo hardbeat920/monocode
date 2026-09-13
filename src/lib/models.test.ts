@@ -16,6 +16,7 @@ import {
   preferredModelId,
   preferredModelSettings,
   resetHarnessModelOverlays,
+  resolveModel,
   saveDefaultModel,
   saveLastModelChoice,
   saveLastModelSettings,
@@ -324,5 +325,29 @@ describe("live catalog overlays", () => {
     ]);
     expect(hasLiveCatalog("pi")).toBe(true);
     expect(hasLiveCatalog("omp")).toBe(false);
+  });
+
+  it("keeps a Claude alias on the same model family across relaunch", () => {
+    const live = [
+      {
+        id: "claude:sonnet",
+        harness: "claude" as const,
+        name: "Sonnet 5",
+        nativeId: "sonnet",
+      },
+      {
+        id: "claude:opus",
+        harness: "claude" as const,
+        name: "Opus 5",
+        nativeId: "opus",
+      },
+    ];
+
+    setHarnessModels("claude", live);
+    expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus");
+
+    // A relaunch starts with the built-in catalog until discovery completes.
+    resetHarnessModelOverlays();
+    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5");
   });
 });

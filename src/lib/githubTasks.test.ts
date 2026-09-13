@@ -9,6 +9,7 @@ import {
   githubAvatarUrl,
   githubReviewDecisionLabel,
   githubReviewStateLabel,
+  gitlabAttentionLabel,
   groupProjectsByRepo,
   inboxComposerCard,
   inboxItemKey,
@@ -144,6 +145,17 @@ describe("githubReviewStateLabel", () => {
     expect(githubReviewStateLabel("APPROVED")).toBe("Approved");
     expect(githubReviewStateLabel("COMMENTED")).toBe("Commented");
     expect(githubReviewStateLabel("PENDING")).toBe("");
+  });
+});
+
+describe("gitlabAttentionLabel", () => {
+  it("labels the GitLab actions that put work in the attention view", () => {
+    expect(gitlabAttentionLabel("assigned")).toBe("Assigned to you");
+    expect(gitlabAttentionLabel("mentioned")).toBe("Mentioned you");
+    expect(gitlabAttentionLabel("review_requested")).toBe("Review requested");
+    expect(gitlabAttentionLabel("marked")).toBe("Added to your to-dos");
+    expect(gitlabAttentionLabel("unknown_action")).toBe("Unknown action");
+    expect(gitlabAttentionLabel("")).toBe("");
   });
 });
 
