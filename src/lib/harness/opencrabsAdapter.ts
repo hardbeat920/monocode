@@ -7,6 +7,12 @@ import {
   steerOpenCrabsTurn,
   stopOpenCrabsSession,
 } from "./opencrabs";
+import {
+  generateOpenCrabsBranchName,
+  generateOpenCrabsCommitMessage,
+  generateOpenCrabsPrContent,
+} from "./opencrabsGit";
+import { generateOpenCrabsSessionTitle } from "./opencrabsTitle";
 import { registerHarness, type HarnessAdapter } from "./registry";
 
 export const openCrabsAdapter: HarnessAdapter = {
@@ -19,6 +25,10 @@ export const openCrabsAdapter: HarnessAdapter = {
   stopSession: stopOpenCrabsSession,
   forgetSession: forgetOpenCrabsSession,
   bindSession: bindOpenCrabsSession,
+  generateTitle: generateOpenCrabsSessionTitle,
+  generateCommitMessage: generateOpenCrabsCommitMessage,
+  generatePrContent: generateOpenCrabsPrContent,
+  generateBranchName: generateOpenCrabsBranchName,
 };
 
 let registered = false;
