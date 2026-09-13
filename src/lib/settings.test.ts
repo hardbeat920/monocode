@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ALWAYS_SHOW_USAGE_DEFAULT,
   COMPOSER_RUNNER_DEFAULT,
   COMPOSER_EFFORT_VISIBLE_DEFAULT,
   DIFF_VIEWER_DEFAULT,
@@ -7,6 +8,7 @@ import {
   GRID_ARCADE_ENABLED_DEFAULT,
   KEYBINDINGS,
   LIVE_AGENTS_ENABLED_DEFAULT,
+  loadAlwaysShowUsage,
   loadComposerRunner,
   loadComposerEffortVisible,
   loadDiffViewer,
@@ -15,6 +17,7 @@ import {
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   NOTES_ENABLED_DEFAULT,
+  saveAlwaysShowUsage,
   saveComposerRunner,
   saveComposerEffortVisible,
   saveDiffViewer,
@@ -31,6 +34,7 @@ const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+const ALWAYS_SHOW_USAGE_KEY = "monocode.alwaysShowUsage";
 
 describe("follow-up behavior setting", () => {
   beforeEach(mockLocalStorage);
@@ -219,5 +223,31 @@ describe("diff viewer setting", () => {
   it("ignores unknown stored values", () => {
     localStorage.setItem(DIFF_VIEWER_KEY, "split");
     expect(loadDiffViewer()).toBe("editor");
+  });
+});
+
+describe("always show provider usage setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(ALWAYS_SHOW_USAGE_KEY);
+  });
+
+  it("defaults to off so the footer keeps following the active session", () => {
+    expect(ALWAYS_SHOW_USAGE_DEFAULT).toBe(false);
+    expect(loadAlwaysShowUsage()).toBe(false);
+  });
+
+  it("persists an on switch", () => {
+    saveAlwaysShowUsage(true);
+    expect(localStorage.getItem(ALWAYS_SHOW_USAGE_KEY)).toBe("1");
+    expect(loadAlwaysShowUsage()).toBe(true);
+    saveAlwaysShowUsage(false);
+    expect(localStorage.getItem(ALWAYS_SHOW_USAGE_KEY)).toBe("0");
+    expect(loadAlwaysShowUsage()).toBe(false);
+  });
+
+  it("reads the legacy truthy spelling", () => {
+    localStorage.setItem(ALWAYS_SHOW_USAGE_KEY, "true");
+    expect(loadAlwaysShowUsage()).toBe(true);
   });
 });

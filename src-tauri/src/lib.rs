@@ -3,8 +3,10 @@ use tauri::Manager;
 mod chat_background;
 mod checkpoint;
 mod cursor_store;
+mod cursor_usage;
 mod fs;
 mod gitlab;
+mod grok_usage;
 mod harness;
 mod inbox_media;
 mod linear;
@@ -300,6 +302,8 @@ pub fn run() {
             harness::harness_sse_close,
             harness::harness_exec,
             rate_limits::fetch_claude_usage,
+            cursor_usage::fetch_cursor_usage,
+            grok_usage::fetch_grok_usage,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

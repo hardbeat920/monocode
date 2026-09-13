@@ -361,13 +361,17 @@ import type { LinkedSessionUpdate } from "./lib/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "./lib/linkedSessionSeen";
 import { linearIssueDetails, peekLinearIssueDetails } from "./lib/linear";
 import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "./lib/gitlab";
+import { usageFooterProviders } from "./lib/rateLimits";
 import {
+  ALWAYS_SHOW_USAGE_DEFAULT,
+  loadAlwaysShowUsage,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   loadDiffViewer,
   loadFollowUpBehavior,
   loadSettingsSection,
   saveSettingsSection,
+  subscribeAlwaysShowUsage,
   subscribeLiveAgentsEnabled,
   subscribeNotesEnabled,
   type SettingsSectionId,
@@ -668,6 +672,11 @@ export default function App({
     subscribeLiveAgentsEnabled,
     loadLiveAgentsEnabled,
     () => true,
+  );
+  const alwaysShowUsage = useSyncExternalStore(
+    subscribeAlwaysShowUsage,
+    loadAlwaysShowUsage,
+    () => ALWAYS_SHOW_USAGE_DEFAULT,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateNotice, setUpdateNotice] = useState(installedUpdate);
@@ -993,12 +1002,14 @@ export default function App({
   }
   const busySessionIds = busySessionIdsRef.current;
 
-  const usageProviders = useMemo(() => {
-    if (active?.harness === "claude" || active?.harness === "codex") {
-      return [active.harness];
-    }
-    return [];
-  }, [active?.harness]);
+  const usageProviders = useMemo(
+    () =>
+      usageFooterProviders({
+        activeHarness: active?.harness,
+        alwaysShow: alwaysShowUsage,
+      }),
+    [active?.harness, alwaysShowUsage],
+  );
   const usageSession = useMemo(() => {
     if (!active) return undefined;
     return { harness: active.harness };

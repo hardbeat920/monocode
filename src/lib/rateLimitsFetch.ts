@@ -4,8 +4,11 @@ import {
   errorRateLimits,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseCursorUsageSummary,
+  parseGrokBilling,
   unavailableRateLimits,
   type ProviderRateLimits,
+  type RateLimitProvider,
 } from "./rateLimits";
 import {
   killChild,
@@ -21,18 +24,26 @@ const USAGE_CHILD_ID = "monocode-codex-usage";
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
-type ClaudeUsageFetch = {
+type UsageFetch = {
   status: "ok" | "error" | "unavailable" | string;
   httpStatus?: number | null;
   body?: string | null;
   error?: string | null;
 };
 
-export async function fetchClaudeRateLimits(): Promise<ProviderRateLimits> {
+type InvokeUsageProvider = Exclude<RateLimitProvider, "codex">;
+
+async function fetchInvokeRateLimits(
+  command: string,
+  provider: InvokeUsageProvider,
+  parse: (body: string) => ProviderRateLimits,
+  unavailableMessage: string,
+  errorMessage: string,
+): Promise<ProviderRateLimits> {
   try {
-    const result = await invoke<ClaudeUsageFetch>("fetch_claude_usage");
+    const result = await invoke<UsageFetch>(command);
     if (result.status === "ok" && result.body) {
-      const parsed = parseClaudeOAuthUsage(result.body);
+      const parsed = parse(result.body);
       if (parsed.session || parsed.weekly) return parsed;
       return {
         ...parsed,
@@ -41,20 +52,47 @@ export async function fetchClaudeRateLimits(): Promise<ProviderRateLimits> {
     }
     if (result.status === "unavailable") {
       return unavailableRateLimits(
-        "claude",
-        result.error?.trim() || "Claude not signed in",
+        provider,
+        result.error?.trim() || unavailableMessage,
       );
     }
-    return errorRateLimits(
-      "claude",
-      result.error?.trim() || "Claude usage unavailable",
-    );
+    return errorRateLimits(provider, result.error?.trim() || errorMessage);
   } catch (error) {
     return errorRateLimits(
-      "claude",
-      error instanceof Error ? error.message : "Claude usage unavailable",
+      provider,
+      error instanceof Error ? error.message : errorMessage,
     );
   }
+}
+
+export async function fetchClaudeRateLimits(): Promise<ProviderRateLimits> {
+  return fetchInvokeRateLimits(
+    "fetch_claude_usage",
+    "claude",
+    parseClaudeOAuthUsage,
+    "Claude not signed in",
+    "Claude usage unavailable",
+  );
+}
+
+export async function fetchCursorRateLimits(): Promise<ProviderRateLimits> {
+  return fetchInvokeRateLimits(
+    "fetch_cursor_usage",
+    "cursor",
+    parseCursorUsageSummary,
+    "Cursor not signed in",
+    "Cursor usage unavailable",
+  );
+}
+
+export async function fetchGrokRateLimits(): Promise<ProviderRateLimits> {
+  return fetchInvokeRateLimits(
+    "fetch_grok_usage",
+    "grok",
+    parseGrokBilling,
+    "Grok not signed in",
+    "Grok usage unavailable",
+  );
 }
 
 export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
