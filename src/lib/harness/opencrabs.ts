@@ -1,5 +1,5 @@
 import { nativeModelId } from "../models";
-import { promptBlocks } from "../attachments";
+import { openCrabsPromptBlocks } from "./opencrabsPrompt";
 import type { RuntimeMode } from "../session";
 import { AcpClient, type AcpHandlers } from "./acp";
 import {
@@ -109,7 +109,7 @@ export async function sendOpenCrabsTurn(input: SendTurnInput): Promise<void> {
 export async function steerOpenCrabsTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
   if (!live) throw new Error("No active OpenCrabs session");
-  const blocks = promptBlocks(input.text, input.attachments);
+  const blocks = await openCrabsPromptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
   await live.acp
     .notify("session/steer", {
@@ -349,7 +349,7 @@ function spawnArgs(model: string): string[] {
 
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   try {
-    const blocks = promptBlocks(input.text, input.attachments);
+    const blocks = await openCrabsPromptBlocks(input.text, input.attachments);
     if (blocks.length === 0) return;
     await live.acp.request(
       "session/prompt",

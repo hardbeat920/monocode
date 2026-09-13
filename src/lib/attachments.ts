@@ -479,7 +479,7 @@ function fallbackName(mimeType: string): string {
   return "attachment";
 }
 
-function fileUri(path: string): string {
+export function fileUri(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const abs = normalized.startsWith("/") ? normalized : `/${normalized}`;
   return `file://${abs.split("/").map(encodeURIComponent).join("/")}`;
