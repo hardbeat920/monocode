@@ -63,7 +63,7 @@ vi.mock("./Popover", () => ({
     ),
 }));
 
-import { ModelPicker } from "./ModelPicker";
+import { EffortPicker, ModelPicker } from "./ModelPicker";
 import { saveRecentModelChoice } from "../lib/models";
 
 let container: HTMLDivElement;
@@ -111,7 +111,7 @@ function keyDown(target: EventTarget, key: string) {
 }
 
 describe("model picker", () => {
-  it("shows the model name while keeping effort in the combined picker", () => {
+  it("shows the model name and effort in the combined picker", () => {
     const onChange = vi.fn();
     const onSettingsChange = vi.fn();
     act(() =>
@@ -129,7 +129,13 @@ describe("model picker", () => {
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="menu"]',
     )!;
-    expect(trigger.textContent).toBe("Grok 4.6");
+    expect(trigger.textContent).toBe("Grok 4.6High");
+    expect(trigger.getAttribute("aria-label")).toBe(
+      "Grok Build Grok 4.6, effort High",
+    );
+    expect(trigger.querySelector(".text-content\\/50")?.textContent).toBe(
+      "High",
+    );
     expect(trigger.querySelector("svg")).not.toBeNull();
 
     act(() => trigger.click());
@@ -196,6 +202,57 @@ describe("model picker", () => {
 
     expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("can move effort into a dedicated composer control", () => {
+    const onSettingsChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(
+          "div",
+          null,
+          createElement(ModelPicker, {
+            harness: "grok",
+            model: "grok:grok-4.6",
+            values: { effort: "high" },
+            hideEffort: true,
+            onChange: vi.fn(),
+            onSettingsChange,
+          }),
+          createElement(EffortPicker, {
+            harness: "grok",
+            model: "grok:grok-4.6",
+            values: { effort: "high" },
+            onSettingsChange,
+          }),
+        ),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Grok Build Grok 4.6"]',
+    )!;
+    expect(modelTrigger.textContent).toBe("Grok 4.6");
+    act(() => modelTrigger.click());
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>("button")].some(
+        (button) => button.textContent?.startsWith("Effort"),
+      ),
+    ).toBe(false);
+
+    const effortTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Effort: High"]',
+    )!;
+    expect(effortTrigger.textContent).toBe("High");
+    expect(effortTrigger.querySelector("svg")).not.toBeNull();
+    act(() => effortTrigger.click());
+    const effortMenu = container.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Effort"]',
+    )!;
+    expect(effortMenu).not.toBeNull();
+    keyDown(effortMenu, "ArrowUp");
+    keyDown(effortMenu, "Enter");
+    expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
   });
 
   it("returns to the selected model's harness when reopened", () => {

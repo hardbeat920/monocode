@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Search, Star } from "./icons";
+import { Check, ChevronDown, ChevronRight, Gauge, Search, Star } from "./icons";
 import {
   useEffect,
   useId,
@@ -46,6 +46,7 @@ type Props = {
   harness: HarnessId;
   model: string;
   values: Record<string, string>;
+  hideEffort?: boolean;
   hotkeys?: boolean;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
@@ -77,11 +78,24 @@ const SETTING_ORDER = [
   "fast",
   "effort",
   "reasoning",
+  "reasoningEffort",
   "thinking",
   "variant",
   "agent",
   "context",
 ];
+
+const EFFORT_SETTING_IDS = new Set(["effort", "reasoning", "reasoningEffort"]);
+
+function isEffortSetting(setting: ModelSetting): boolean {
+  return EFFORT_SETTING_IDS.has(setting.id);
+}
+
+function effortSetting(model: AgentModel): ModelSetting | undefined {
+  return model.settings?.find(
+    (setting) => setting.kind === "select" && isEffortSetting(setting),
+  );
+}
 
 function pickerSettings(model: AgentModel): ModelSetting[] {
   return [...(model.settings ?? [])]
@@ -131,6 +145,7 @@ export function ModelPicker({
   harness,
   model,
   values,
+  hideEffort = false,
   hotkeys = false,
   onChange,
   onSettingsChange,
@@ -178,8 +193,10 @@ export function ModelPicker({
   currentRef.current = current;
   const settings = useMemo(() => {
     void catalogVersion;
-    return pickerSettings(current);
-  }, [catalogVersion, current]);
+    return pickerSettings(current).filter(
+      (setting) => !hideEffort || !isEffortSetting(setting),
+    );
+  }, [catalogVersion, current, hideEffort]);
   const entries = useMemo<MenuEntry[]>(
     () => [
       ...settings.map((setting) => ({
@@ -191,7 +208,17 @@ export function ModelPicker({
     [settings],
   );
 
-  const triggerLabel = current.name;
+  const triggerEffortSetting = hideEffort ? undefined : effortSetting(current);
+  const triggerEffortLabel = triggerEffortSetting
+    ? settingValueLabel(triggerEffortSetting, values)
+    : undefined;
+  const triggerTitle = [
+    HARNESS_TITLE[current.harness],
+    current.name,
+    triggerEffortLabel,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const pickerHarnesses = useMemo(() => {
     void availabilityVersion;
@@ -324,7 +351,7 @@ export function ModelPicker({
       if (target.closest(".monocode-terminal")) return true;
       return Boolean(
         target.closest(
-          "[data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-access-picker]",
+          "[data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-access-picker], [data-effort-picker]",
         ),
       );
     };
@@ -511,8 +538,10 @@ export function ModelPicker({
       <button
         ref={button}
         type="button"
-        title={`${HARNESS_TITLE[current.harness]} · ${current.name} · Recent models: right-click or ${MOD}.`}
-        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}`}
+        title={`${triggerTitle} · Recent models: right-click or ${MOD}.`}
+        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}${
+          triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
+        }`}
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open || recentMenu != null}
         aria-haspopup="menu"
@@ -530,7 +559,12 @@ export function ModelPicker({
         }`}
       >
         <HarnessIcon harness={current.harness} className="size-4 shrink-0" />
-        <span className="min-w-0 truncate text-[11px]">{triggerLabel}</span>
+        <span className="min-w-0 truncate text-[11px]">{current.name}</span>
+        {triggerEffortLabel ? (
+          <span className="shrink-0 text-[11px] text-content/50">
+            {triggerEffortLabel}
+          </span>
+        ) : null}
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
           strokeWidth={1.75}
@@ -787,6 +821,137 @@ export function ModelPicker({
                 {selected ? (
                   <Check
                     className="size-3.5 shrink-0 text-content/55"
+                    strokeWidth={2}
+                  />
+                ) : null}
+              </button>
+            );
+          })}
+        </Popover>
+      ) : null}
+    </>
+  );
+}
+
+export function EffortPicker({
+  harness,
+  model,
+  values,
+  onSettingsChange,
+  onClose,
+}: Pick<
+  Props,
+  "harness" | "model" | "values" | "onSettingsChange" | "onClose"
+>) {
+  const catalogVersion = useSyncExternalStore(
+    subscribeModels,
+    getModelSnapshot,
+    getModelSnapshot,
+  );
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const button = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+  const current = resolveModel(harness, model);
+  void catalogVersion;
+  const setting = effortSetting(current);
+
+  if (!setting) return null;
+
+  const value = settingValue(setting, values);
+  const valueLabel = settingValueLabel(setting, values);
+  const dismiss = (restoreFocus: boolean) => {
+    setOpen(false);
+    if (restoreFocus) onClose?.();
+  };
+  const openPicker = () => {
+    const selectedIndex = setting.options.findIndex(
+      (option) => option.value === value,
+    );
+    setActive(selectedIndex >= 0 ? selectedIndex : 0);
+    setOpen(true);
+  };
+  const pick = (optionValue: string) => {
+    onSettingsChange({ ...values, [setting.id]: optionValue });
+    dismiss(true);
+  };
+
+  return (
+    <>
+      <button
+        ref={button}
+        type="button"
+        title={`Effort: ${valueLabel}`}
+        aria-label={`Effort: ${valueLabel}`}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => (open ? dismiss(true) : openPicker())}
+        className={`flex h-6.5 max-w-28 items-center gap-1 rounded-md px-1.5 ${
+          open
+            ? "bg-content/10 text-content"
+            : "bg-content/10 text-content hover:bg-content/15"
+        }`}
+      >
+        <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
+        <span className="min-w-0 truncate text-[11px]">{valueLabel}</span>
+        <ChevronDown
+          className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.75}
+        />
+      </button>
+
+      {open ? (
+        <Popover
+          anchor={button}
+          side="top"
+          width={SETTING_MENU_WIDTH}
+          autoFocus
+          onDismiss={(reason) => dismiss(reason === "escape")}
+          role="menu"
+          aria-label="Effort"
+          aria-activedescendant={`${menuId}-${active}`}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              const direction = event.key === "ArrowDown" ? 1 : -1;
+              setActive(
+                (index) =>
+                  (index + direction + setting.options.length) %
+                  setting.options.length,
+              );
+              return;
+            }
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            const option = setting.options[active];
+            if (option) pick(option.value);
+          }}
+          data-effort-picker
+          className="p-1 font-sans"
+        >
+          {setting.options.map((option, index) => {
+            const selected = option.value === value;
+            const highlighted = index === active;
+            return (
+              <button
+                key={option.value}
+                id={`${menuId}-${index}`}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => pick(option.value)}
+                className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
+                  highlighted ? "bg-content/10" : "hover:bg-content/5"
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {selected ? (
+                  <Check
+                    className="size-3.5 shrink-0 text-content/50"
                     strokeWidth={2}
                   />
                 ) : null}
