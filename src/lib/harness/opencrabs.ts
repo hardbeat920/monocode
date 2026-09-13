@@ -87,6 +87,7 @@ export async function sendOpenCrabsTurn(input: SendTurnInput): Promise<void> {
       live.muteUpdates = false;
       try {
         await applyModelSelection(live, input);
+        await applyRuntimeMode(live, input);
         if (live.cancelled) return;
         await prompt(live, input);
       } catch (error) {
@@ -361,6 +362,29 @@ async function applyModelSelection(
 function spawnArgs(model: string): string[] {
   const native = nativeModelId(model).trim();
   return native ? ["acp", "--model", native] : ["acp"];
+}
+
+/**
+ * Push the runtime/plan mode server-side so the approval policy lives where
+ * the tools run. Client-side gating in handlePermission stays as backstop,
+ * and an older binary without set_mode support degrades to it.
+ */
+async function applyRuntimeMode(
+  live: Live,
+  input: SendTurnInput,
+): Promise<void> {
+  const modeId = input.intent === "plan" ? "plan" : input.runtimeMode;
+  await live.acp
+    .request(
+      "session/set_mode",
+      { sessionId: live.acpSessionId, modeId },
+      CONTROL_TIMEOUT_MS,
+    )
+    .catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.debug("[monocode] opencrabs set_mode failed", detail);
+      if (/timed out|not running|exited|closed|pipe/i.test(detail)) throw error;
+    });
 }
 
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
