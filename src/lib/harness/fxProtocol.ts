@@ -11,6 +11,7 @@ import {
   extractToolPreview,
 } from "./preview";
 import { fxToolInfo, fxToolVerb } from "./fxTool";
+import { acpAgentInfo } from "./acpSubagents";
 
 export type FxModeId = "ask" | "code";
 
@@ -251,6 +252,7 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         status,
         detail: cap(fx.detail ?? "") || toolDetail(update, tool),
         preview,
+        ...acpAgentInfo(update, tool, toolKind, title),
       },
     ];
   }

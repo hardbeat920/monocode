@@ -1,4 +1,5 @@
 import { nativeModelId } from "../models";
+import { AcpSubagents } from "./acpSubagents";
 import type { RuntimeMode } from "../session";
 import { promptBlocks } from "../attachments";
 import { isTaskListToolName, taskListFromToolInput } from "../taskList";
@@ -12,8 +13,15 @@ import {
 } from "./child";
 import {
   readStoredCursorToolCalls,
+  readStoredCursorSubagentRuns,
   type StoredCursorToolCall,
+  type StoredCursorSubagentRun,
 } from "./cursorStore";
+import {
+  cursorAgentLabel,
+  cursorSubagentEvents,
+  kindFromCursorToolName,
+} from "./cursorSubagents";
 import { stopCursorTitleGeneration } from "./cursorTitle";
 import type {
   ApprovalDecision,
@@ -58,6 +66,7 @@ type PendingToolEnrichment = {
 };
 
 type Live = {
+  subagents: AcpSubagents;
   acp: AcpClient;
   acpSessionId: string;
   cwd: string;
@@ -78,6 +87,12 @@ type Live = {
   taskListTools: Set<string>;
   agentTools: Map<string, string>;
   backgroundAgentTools: Set<string>;
+  subagentRuns: Map<string, StoredCursorSubagentRun>;
+  subagentRevisions: Record<string, string>;
+  subagentGeneration: number;
+  subagentFinalPolls: number;
+  subagentTimer?: ReturnType<typeof setTimeout>;
+  subagentRefresh?: Promise<void>;
   promptActive: boolean;
   turns: Promise<void>;
 };
@@ -172,6 +187,7 @@ export async function cancelCursorTurn(sessionId: string): Promise<void> {
   live.cancelled = true;
   live.muteUpdates = true;
   live.promptActive = false;
+  retireCursorSubagentPolling(live);
   live.taskListTools.clear();
   live.agentTools.clear();
   live.backgroundAgentTools.clear();
@@ -195,6 +211,7 @@ export async function stopCursorSession(sessionId: string): Promise<void> {
   if (live) {
     live.muteUpdates = true;
     live.promptActive = false;
+    retireCursorSubagentPolling(live);
     if (live.toolEnrichmentTimer) clearTimeout(live.toolEnrichmentTimer);
     live.pendingToolEnrichments.clear();
     live.agentTools.clear();
@@ -271,6 +288,10 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       acp.close(new Error("Cursor CLI exited"));
       liveByThread.delete(input.sessionId);
       const live = liveRef.current;
+      if (live) {
+        live.promptActive = false;
+        retireCursorSubagentPolling(live);
+      }
       if (!live?.muteUpdates) {
         (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
@@ -322,6 +343,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     if (!acpSessionId) throw new Error("Cursor did not return a session id");
 
     const live: Live = {
+      subagents: new AcpSubagents(),
       acp,
       acpSessionId,
       cwd: input.cwd,
@@ -341,6 +363,10 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       taskListTools: new Set(),
       agentTools: new Map(),
       backgroundAgentTools: new Set(),
+      subagentRuns: new Map(),
+      subagentRevisions: {},
+      subagentGeneration: 0,
+      subagentFinalPolls: 0,
       promptActive: false,
       turns: Promise.resolve(),
     };
@@ -415,6 +441,9 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     const blocks = promptBlocks(input.text, input.attachments);
     if (blocks.length === 0) return;
     live.agentTools.clear();
+    retireCursorSubagentPolling(live);
+    live.subagentRuns.clear();
+    live.subagentRevisions = {};
     live.backgroundAgentTools.clear();
     live.taskListTools.clear();
     live.promptActive = true;
@@ -428,6 +457,10 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
       return;
     }
     settleCursorBackgroundAgents(live, "completed");
+    await refreshCursorSubagents(live);
+    if (live.cancelled || live.muteUpdates) return;
+    live.subagentFinalPolls = 3;
+    scheduleCursorSubagents(live, 500);
     live.onEvent({ type: "message.completed" });
     live.onEvent({ type: "reasoning.completed" });
     wakeCursorToolEnrichment(live);
@@ -451,6 +484,7 @@ function handleNotification(live: Live, method: string, params: unknown) {
   if (isCursorTodoUpdate(method)) {
     emitCursorTodoUpdate(live, params);
   }
+  if (method === "cursor/task") handleCursorTask(live, params);
 }
 
 async function handleRequest(
@@ -511,10 +545,10 @@ function emitCursorTodoUpdate(live: Live, params: unknown): void {
 
 function handleCursorTask(live: Live, params: unknown): void {
   const task = asRecord(params);
-  if (!task || !live.promptActive) return;
+  if (!task) return;
   const callId =
     stringField(task, "toolCallId") ?? stringField(task, "tool_call_id");
-  if (!callId || !live.agentTools.has(callId)) return;
+  if (!callId || (!live.promptActive && !live.agentTools.has(callId))) return;
 
   const agentId = stringField(task, "agentId") ?? stringField(task, "agent_id");
   const durationMs =
@@ -522,23 +556,30 @@ function handleCursorTask(live: Live, params: unknown): void {
   const background =
     live.backgroundAgentTools.has(callId) ||
     (!!agentId && durationMs === undefined);
-  if (!background) return;
-
-  const title =
-    stringField(task, "description") ??
-    live.agentTools.get(callId) ??
-    "Subagent";
+  const title = cursorAgentTitle(task, undefined, live.agentTools.get(callId));
   live.agentTools.set(callId, title);
-  live.backgroundAgentTools.add(callId);
-  live.toolStatuses.set(callId, "in_progress");
+  if (background) live.backgroundAgentTools.add(callId);
+  const status = background
+    ? "in_progress"
+    : (live.toolStatuses.get(callId) ??
+      (durationMs === undefined ? "in_progress" : "completed"));
+  live.toolStatuses.set(callId, status);
   live.onEvent({
     type: "tool.updated",
     callId,
     title,
     kind: "agent",
-    status: "in_progress",
-    detail: cursorSubagentDetail(task),
+    status,
+    ...(background ? { detail: cursorSubagentDetail(task) } : {}),
   });
+  // A completion notification often carries the first useful description.
+  const cached = live.subagentRuns.get(callId);
+  if (cached)
+    for (const event of cursorSubagentEvents(cached, title))
+      live.onEvent(event);
+  scheduleCursorSubagents(live, 0);
+  if (!cursorAgentLabel(title))
+    queueCursorToolEnrichment(live, callId, "agent");
 }
 
 async function handleAskQuestion(live: Live, id: number, params: unknown) {
@@ -722,6 +763,10 @@ function handleSessionUpdate(live: Live, params: unknown) {
   const rec = asRecord(params);
   const update = asRecord(rec?.update) ?? rec;
   if (!update) return;
+  const emit = (event: HarnessEvent) => {
+    for (const routed of live.subagents.route(params, [event]))
+      live.onEvent(routed);
+  };
   const kind = String(
     update.sessionUpdate ?? update.session_update ?? update.type ?? "",
   );
@@ -732,7 +777,7 @@ function handleSessionUpdate(live: Live, params: unknown) {
       update.content ?? update.text,
       kind === "agent_message" ? "\n" : "",
     );
-    if (text) live.onEvent({ type: "message.delta", text });
+    if (text) emit({ type: "message.delta", text });
     return;
   }
   if (kind === "agent_thought_chunk" || kind === "agent_thought") {
@@ -740,7 +785,7 @@ function handleSessionUpdate(live: Live, params: unknown) {
       update.content ?? update.text,
       kind === "agent_thought" ? "\n" : "",
     );
-    if (text) live.onEvent({ type: "reasoning.delta", text });
+    if (text) emit({ type: "reasoning.delta", text });
     return;
   }
   if (
@@ -806,6 +851,17 @@ function handleSessionUpdate(live: Live, params: unknown) {
           query: preview?.query ?? extractSearchQuery(rawInput),
           previewKind: preview?.kind,
         }) || rawTitle;
+    if (live.subagents.isChild(params)) {
+      emit({
+        type: "tool.updated",
+        callId,
+        title,
+        kind: toolKind,
+        status,
+        preview,
+      });
+      return;
+    }
     if (agent && title) live.agentTools.set(callId, title);
     const background =
       agent &&
@@ -814,7 +870,7 @@ function handleSessionUpdate(live: Live, params: unknown) {
     if (background) live.backgroundAgentTools.add(callId);
     const displayedStatus = background ? "in_progress" : status;
     if (displayedStatus) live.toolStatuses.set(callId, displayedStatus);
-    live.onEvent({
+    emit({
       type: "tool.updated",
       callId,
       title,
@@ -823,6 +879,13 @@ function handleSessionUpdate(live: Live, params: unknown) {
       detail,
       preview,
     });
+    if (agent) {
+      const cached = live.subagentRuns.get(callId);
+      if (cached)
+        for (const event of cursorSubagentEvents(cached, title))
+          live.onEvent(event);
+      scheduleCursorSubagents(live, 0);
+    }
     if (needsCursorToolEnrichment(toolKind, title, preview)) {
       queueCursorToolEnrichment(live, callId, toolKind);
     } else if (live.pendingToolEnrichments.has(callId)) {
@@ -867,12 +930,72 @@ function cursorAgentTitle(
   existing: string | undefined,
 ): string {
   const input = asRecord(rawInput);
-  if (input) return agentToolTitle(input, existing ?? rawTitle ?? "Subagent");
-  if (existing) return existing;
-  const stripped = rawTitle
-    ?.replace(/^(?:agent|task|subagent)\b[\s:·-]*/i, "")
-    .trim();
-  return stripped || "Subagent";
+  const description = input
+    ? cursorAgentLabel(stringField(input, "description"))
+    : undefined;
+  if (description) return description;
+  const name = cursorAgentLabel(existing) ?? cursorAgentLabel(rawTitle);
+  if (name) return name;
+  const inferred = input ? agentToolTitle(input) : undefined;
+  return cursorAgentLabel(inferred) ?? "Subagent";
+}
+
+function retireCursorSubagentPolling(live: Live): void {
+  if (live.subagentTimer) clearTimeout(live.subagentTimer);
+  live.subagentTimer = undefined;
+  live.subagentFinalPolls = 0;
+  live.subagentGeneration += 1;
+}
+
+function scheduleCursorSubagents(live: Live, delay: number): void {
+  if (
+    live.muteUpdates ||
+    live.subagentTimer ||
+    live.subagentRefresh ||
+    !live.agentTools.size
+  )
+    return;
+  live.subagentTimer = setTimeout(() => {
+    live.subagentTimer = undefined;
+    void refreshCursorSubagents(live);
+  }, delay);
+}
+
+function refreshCursorSubagents(live: Live): Promise<void> {
+  if (live.subagentRefresh) return live.subagentRefresh;
+  if (live.muteUpdates || !live.agentTools.size) return Promise.resolve();
+  const generation = live.subagentGeneration;
+  const job = (async () => {
+    const runs = await readStoredCursorSubagentRuns(
+      live.acpSessionId,
+      [...live.agentTools.keys()].slice(-256),
+      live.subagentRevisions,
+    ).catch(() => []);
+    if (live.muteUpdates || live.subagentGeneration !== generation) return;
+    for (const run of runs) {
+      if (!live.agentTools.has(run.toolCallId)) continue;
+      live.subagentRevisions[run.agentId] = run.revision;
+      live.subagentRuns.set(run.toolCallId, run);
+      for (const event of cursorSubagentEvents(
+        run,
+        live.agentTools.get(run.toolCallId),
+      ))
+        live.onEvent(event);
+    }
+  })().finally(() => {
+    live.subagentRefresh = undefined;
+    if (live.subagentGeneration !== generation) {
+      if (live.promptActive) scheduleCursorSubagents(live, 0);
+      return;
+    }
+    if (live.promptActive) scheduleCursorSubagents(live, 1_000);
+    else if (live.subagentFinalPolls > 0) {
+      live.subagentFinalPolls -= 1;
+      scheduleCursorSubagents(live, 500);
+    }
+  });
+  live.subagentRefresh = job;
+  return job;
 }
 
 function cursorToolOutputIsBackground(
@@ -933,6 +1056,7 @@ function needsCursorToolEnrichment(
   preview: ReturnType<typeof extractToolPreview>,
 ): boolean {
   const key = (kind ?? "").toLowerCase();
+  if (key === "agent") return !cursorAgentLabel(title);
   if (
     key === "execute" ||
     key === "think" ||
@@ -1036,21 +1160,32 @@ function applyStoredCursorToolCall(
   };
   const preview = extractToolPreview(recovered, recovered);
   const title =
-    composeToolTitle({
-      kind: mappedKind,
-      title: toolLabel(recovered, recovered) ?? stored.toolName,
-      command: extractShellCommand(stored.args),
-      skill: extractSkillName(stored.args),
-      path: preview?.path,
-      query: preview?.query ?? extractSearchQuery(stored.args),
-      previewKind: preview?.kind,
-    }) || stored.toolName;
+    mappedKind === "agent"
+      ? cursorAgentTitle(
+          stored.args,
+          undefined,
+          live.agentTools.get(stored.toolCallId),
+        )
+      : composeToolTitle({
+          kind: mappedKind,
+          title: toolLabel(recovered, recovered) ?? stored.toolName,
+          command: extractShellCommand(stored.args),
+          skill: extractSkillName(stored.args),
+          path: preview?.path,
+          query: preview?.query ?? extractSearchQuery(stored.args),
+          previewKind: preview?.kind,
+        }) || stored.toolName;
 
-  if (!preview?.path && !preview?.query && isWeakToolTitle(title)) {
+  if (
+    mappedKind === "agent"
+      ? !cursorAgentLabel(title)
+      : !preview?.path && !preview?.query && isWeakToolTitle(title)
+  ) {
     return false;
   }
 
   live.enrichedTools.add(stored.toolCallId);
+  if (mappedKind === "agent") live.agentTools.set(stored.toolCallId, title);
   live.onEvent({
     type: "tool.updated",
     callId: stored.toolCallId,
@@ -1059,36 +1194,11 @@ function applyStoredCursorToolCall(
     status: live.toolStatuses.get(stored.toolCallId),
     preview,
   });
+  const cached = live.subagentRuns.get(stored.toolCallId);
+  if (mappedKind === "agent" && cached)
+    for (const event of cursorSubagentEvents(cached, title))
+      live.onEvent(event);
   return true;
-}
-
-function kindFromCursorToolName(
-  name: string | undefined,
-  fallback?: string,
-): string | undefined {
-  const key = (name ?? "").toLowerCase();
-  if (
-    key === "grep" ||
-    key === "glob" ||
-    key === "rg" ||
-    key.includes("search")
-  ) {
-    return "search";
-  }
-  if (key === "read") return "read";
-  if (
-    key === "edit" ||
-    key === "write" ||
-    key === "strreplace" ||
-    key === "applypatch"
-  ) {
-    return "edit";
-  }
-  if (key === "shell" || key === "bash") return "execute";
-  if (key === "skill" || key === "skills") return "skill";
-  if (key === "agent" || key === "task" || key === "subagent") return "agent";
-  if (isTaskListToolName(key)) return "tasks";
-  return fallback;
 }
 
 function toolEnrichmentDelay(live: Live): number {
@@ -1493,6 +1603,11 @@ function joinContentParts(parts: string[], separator: string): string {
 }
 
 export function __cursorTestReset(): void {
+  for (const live of liveByThread.values()) {
+    retireCursorSubagentPolling(live);
+    if (live.toolEnrichmentTimer) clearTimeout(live.toolEnrichmentTimer);
+    live.muteUpdates = true;
+  }
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();

@@ -282,6 +282,7 @@ pub fn run() {
             skills::list_skills,
             search::search_project,
             cursor_store::cursor_tool_calls,
+            cursor_store::cursor_subagent_runs,
             harness::harness_resolve_cursor,
             harness::harness_resolve_codex,
             harness::harness_resolve_opencode,
