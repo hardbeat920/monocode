@@ -35,8 +35,7 @@ export const SETTINGS_SECTIONS: {
   {
     id: "providers",
     label: "Providers",
-    description:
-      "Agent CLIs MonoCode can drive, and the model new sessions start with.",
+    description: "Choose the default agent CLI and model for new sessions.",
   },
   {
     id: "inbox",
@@ -52,7 +51,7 @@ export const SETTINGS_SECTIONS: {
   {
     id: "archive",
     label: "Archive",
-    description: "Projects and conversations you have archived.",
+    description: "Projects and sessions you have archived.",
   },
 ];
 

@@ -345,7 +345,7 @@ export function BranchPicker({
                 ref={search}
                 type="text"
                 value={query}
-                placeholder="Search or create a branch..."
+                placeholder="Search or create a branch…"
                 aria-label="Search or create a branch"
                 spellCheck={false}
                 autoComplete="off"

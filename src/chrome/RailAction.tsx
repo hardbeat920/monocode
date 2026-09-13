@@ -27,7 +27,8 @@ export function RailAction({
       onClick={onClick}
       disabled={!onClick}
       aria-label={ariaLabel ?? label}
-      className={`relative flex w-full items-center gap-2 rounded-md px-2 h-8  text-left ${
+      aria-current={active ? "page" : undefined}
+      className={`relative flex h-8 w-full items-center gap-2 rounded-md px-2 text-left ${
         active
           ? "bg-content/10 text-content"
           : "text-content/50 hover:bg-content/10 hover:text-content"
@@ -80,7 +81,7 @@ export function RailSearch({
       onClick={onClick}
       disabled={!onClick}
       aria-label={ariaLabel ?? label}
-      className={`relative flex w-full items-center gap-2 rounded-md border border-content/8 px-1.5 shadow-sm h-8 text-left ${
+      className={`relative flex h-8 w-full items-center gap-2 rounded-md border border-content/8 px-1.5 text-left shadow-sm ${
         active
           ? "bg-content/10 text-content"
           : "text-content/50 hover:bg-content/10 hover:text-content"

@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { hexToHsv, hsvToHex, normalizeHex, type Hsv } from "../lib/colorUtils";
@@ -11,6 +12,8 @@ import { Pipette } from "./icons";
 type Props = {
   value: string;
   onChange: (hex: string) => void;
+  className?: string;
+  autoFocus?: boolean;
 };
 
 export function ColorSwatchRow({
@@ -28,9 +31,10 @@ export function ColorSwatchRow({
   customPickerOpen: boolean;
   customHighlighted?: boolean;
   onPickIndex: (index: number) => void;
-  onToggleCustom?: () => void;
+  onToggleCustom?: (anchor: HTMLButtonElement) => void;
 }) {
-  const pipetteActive = customHighlighted ?? (customColor != null || customPickerOpen);
+  const pipetteActive =
+    customHighlighted ?? (customColor != null || customPickerOpen);
   return (
     <div className="flex items-center justify-between gap-1 px-0.5">
       {colors.map((color, index) => {
@@ -66,7 +70,7 @@ export function ColorSwatchRow({
         aria-expanded={customPickerOpen}
         aria-pressed={customColor != null}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={onToggleCustom}
+        onClick={(event) => onToggleCustom?.(event.currentTarget)}
         className="grid size-5 place-items-center rounded-full"
       >
         <span
@@ -85,7 +89,10 @@ export function ColorSwatchRow({
           }
         >
           {!customColor ? (
-            <Pipette className="size-2 text-white drop-shadow-sm" strokeWidth={2.25} />
+            <Pipette
+              className="size-2 text-white drop-shadow-sm"
+              strokeWidth={2.25}
+            />
           ) : null}
         </span>
       </button>
@@ -93,10 +100,39 @@ export function ColorSwatchRow({
   );
 }
 
-export function ColorPickerPopover({ value, onChange }: Props) {
+export function ColorPickerPopover({
+  value,
+  onChange,
+  className = "mt-2 rounded-lg border border-content/10 bg-content/5 p-2",
+  autoFocus = false,
+}: Props) {
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
+  const hexRef = useRef<HTMLInputElement>(null);
+  const pointerCleanupRef = useRef<(() => void) | null>(null);
+
+  const startPointerDrag = (onMove: (event: PointerEvent) => void) => {
+    pointerCleanupRef.current?.();
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+      if (pointerCleanupRef.current === cleanup) {
+        pointerCleanupRef.current = null;
+      }
+    };
+    pointerCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
+  };
+
+  useEffect(() => () => pointerCleanupRef.current?.(), []);
+
+  useEffect(() => {
+    if (autoFocus) hexRef.current?.focus();
+  }, [autoFocus]);
 
   useEffect(() => {
     const hex = normalizeHex(value);
@@ -140,14 +176,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
 
     update(event.clientX, event.clientY);
     const onMove = (e: PointerEvent) => update(e.clientX, e.clientY);
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    startPointerDrag(onMove);
   };
 
   const onHuePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -164,21 +193,50 @@ export function ColorPickerPopover({ value, onChange }: Props) {
 
     update(event.clientX);
     const onMove = (e: PointerEvent) => update(e.clientX);
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    startPointerDrag(onMove);
+  };
+
+  const onSvKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 1;
+    if (event.key === "ArrowLeft") {
+      applyHsv((prev) => ({ ...prev, s: Math.max(0, prev.s - step) }));
+    } else if (event.key === "ArrowRight") {
+      applyHsv((prev) => ({ ...prev, s: Math.min(100, prev.s + step) }));
+    } else if (event.key === "ArrowDown") {
+      applyHsv((prev) => ({ ...prev, v: Math.max(0, prev.v - step) }));
+    } else if (event.key === "ArrowUp") {
+      applyHsv((prev) => ({ ...prev, v: Math.min(100, prev.v + step) }));
+    } else if (event.key === "Home") {
+      applyHsv((prev) => ({ ...prev, s: 0 }));
+    } else if (event.key === "End") {
+      applyHsv((prev) => ({ ...prev, s: 100 }));
+    } else {
+      return;
+    }
+    event.preventDefault();
+  };
+
+  const onHueKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 1;
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      applyHsv((prev) => ({ ...prev, h: Math.max(0, prev.h - step) }));
+    } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      applyHsv((prev) => ({ ...prev, h: Math.min(360, prev.h + step) }));
+    } else if (event.key === "Home") {
+      applyHsv((prev) => ({ ...prev, h: 0 }));
+    } else if (event.key === "End") {
+      applyHsv((prev) => ({ ...prev, h: 360 }));
+    } else {
+      return;
+    }
+    event.preventDefault();
   };
 
   const preview = hsvToHex(hsv.h, hsv.s, hsv.v);
   const hueColor = hsvToHex(hsv.h, 100, 100);
 
   return (
-    <div className="mt-2 rounded-lg border border-content/10 bg-content/5 p-2">
+    <div className={className}>
       <div
         ref={svRef}
         role="slider"
@@ -186,11 +244,14 @@ export function ColorPickerPopover({ value, onChange }: Props) {
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(hsv.s)}
+        aria-valuetext={`${Math.round(hsv.s)}% saturation, ${Math.round(hsv.v)}% brightness`}
+        tabIndex={0}
         className="relative h-28 w-full cursor-crosshair touch-none rounded-md"
         style={{
           background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${hueColor})`,
         }}
         onPointerDown={onSvPointer}
+        onKeyDown={onSvKeyDown}
       >
         <span
           className="pointer-events-none absolute size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
@@ -209,12 +270,15 @@ export function ColorPickerPopover({ value, onChange }: Props) {
         aria-valuemin={0}
         aria-valuemax={360}
         aria-valuenow={Math.round(hsv.h)}
+        aria-valuetext={`${Math.round(hsv.h)}° hue`}
+        tabIndex={0}
         className="relative mt-2 h-3 w-full cursor-ew-resize touch-none rounded-full"
         style={{
           background:
             "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
         }}
         onPointerDown={onHuePointer}
+        onKeyDown={onHueKeyDown}
       >
         <span
           className="pointer-events-none absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
@@ -232,6 +296,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
           aria-hidden
         />
         <input
+          ref={hexRef}
           type="text"
           value={preview}
           spellCheck={false}

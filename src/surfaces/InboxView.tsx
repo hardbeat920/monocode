@@ -829,9 +829,11 @@ export function InboxView({
           </button>
           <button
             type="button"
-            aria-label="Refresh"
+            title="Refresh inbox"
+            aria-label="Refresh inbox"
+            disabled={loading || revalidating}
             onClick={() => setRefresh((value) => value + 1)}
-            className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content/45"
           >
             {loading || revalidating ? (
               <LoaderCircle
@@ -1762,7 +1764,7 @@ export function InboxDetail({
                     }}
                     className={`${ACTION_FILLED} disabled:cursor-default disabled:opacity-40`}
                   >
-                    {starting ? "Sending..." : "Send to agent"}
+                    {starting ? "Sending…" : "Send to agent"}
                   </button>
                   {chooseStartProject ? (
                     <InboxProjectPicker

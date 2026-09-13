@@ -358,7 +358,9 @@ export function SurfaceTabs({
                 onCloseFile(file.id);
               }}
               className={`absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content ${
-                active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                active
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               }`}
             >
               <X className="size-3" strokeWidth={1.75} />

@@ -44,7 +44,7 @@ import { searchSessions, type SessionSummary } from "../lib/sessionStore";
 
 const SCOPES: { id: SearchScope; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "conversations", label: "Conversations" },
+  { id: "conversations", label: "Sessions" },
   { id: "files", label: "Files" },
   { id: "projects", label: "Projects" },
 ];
@@ -339,7 +339,7 @@ export function SearchView({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onQueryKeyDown}
-            placeholder="Search everything..."
+            placeholder="Search everything…"
             aria-label="Search"
             spellCheck={false}
             autoComplete="off"
@@ -436,7 +436,7 @@ function EmptyState() {
       </div>
 
       <p className="max-w-xs text-center text-[13px] text-content/45">
-        Find files, conversations, messages, and projects.
+        Find files, sessions, messages, and projects.
       </p>
     </div>
   );

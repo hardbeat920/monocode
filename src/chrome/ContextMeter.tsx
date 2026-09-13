@@ -81,7 +81,7 @@ export function ContextMeter({
               title={
                 compactDisabled
                   ? "Wait for the current operation to finish"
-                  : "Compact this conversation's context"
+                  : "Compact this session's context"
               }
               onClick={() => {
                 setOpen(false);

@@ -1367,6 +1367,7 @@ export function Composer({
             </div>
             <textarea
               ref={ref}
+              data-focus-quiet
               data-composer-empty={navigationEmpty ? "true" : undefined}
               rows={1}
               spellCheck={false}
@@ -1378,9 +1379,7 @@ export function Composer({
                     ? "Add a message, or send…"
                     : handoffCard
                       ? "Add context, or send to continue…"
-                      : shell
-                        ? "Ask, build, / for commands, @ for references... "
-                        : "Ask, build, / for commands, @ for references... "
+                      : "Ask, build, / for commands, @ for references…"
               }
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"
@@ -1425,11 +1424,8 @@ export function Composer({
                   width={250}
                   onDismiss={() => setPlusOpen(false)}
                   data-composer-plus
-                  className="p-1.5"
+                  className="p-1"
                 >
-                  <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-content/40">
-                    Add to message
-                  </p>
                   <button
                     type="button"
                     disabled={!attachmentsSupported}
@@ -1438,14 +1434,19 @@ export function Composer({
                       setPlusOpen(false);
                       attachFromPicker();
                     }}
-                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/5 focus-visible:bg-content/10 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    <FilePlus className="mt-0.5 size-4 shrink-0" />
+                    <FilePlus
+                      className="mt-0.5 size-3.5 shrink-0 text-content/70"
+                      strokeWidth={1.75}
+                    />
                     <span className="min-w-0">
-                      <span className="block text-[13px]">Upload file</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
+                      <span className="block text-[13px] font-medium leading-5">
+                        Upload files
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-content/50">
                         {attachmentsSupported
-                          ? "Attach files or images to this message"
+                          ? "Attach files or images"
                           : `${HARNESS_TITLE[harness]} does not support attachments`}
                       </span>
                     </span>
@@ -1459,17 +1460,22 @@ export function Composer({
                       setPlusOpen(false);
                       ref.current?.focus();
                     }}
-                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
+                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/5 focus-visible:bg-content/10"
                   >
-                    <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
+                    <AiIdea
+                      className="mt-0.5 size-3.5 shrink-0 text-content"
+                      strokeWidth={1.75}
+                    />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px]">Plan mode</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
-                        Create a plan to review before building
+                      <span className="block text-[13px] font-medium leading-5">
+                        Plan mode
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-content/50">
+                        Plan changes before building
                       </span>
                     </span>
                     {planSelected ? (
-                      <Check className="mt-0.5 size-3.5 shrink-0 text-accent" />
+                      <Check className="mt-0.5 size-3.5 shrink-0 text-content" />
                     ) : null}
                   </button>
                 </Popover>
@@ -1484,11 +1490,11 @@ export function Composer({
                   setPlanSelected(false);
                   ref.current?.focus();
                 }}
-                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-yellow-300/12 px-1.5 text-[11px] text-yellow-200/90 hover:bg-yellow-300/18"
+                className="group flex h-6.5 shrink-0 items-center gap-1.5 rounded-md bg-content/8 px-2 text-[11px] font-medium text-content/70 hover:bg-content/12 hover:text-content focus-visible:bg-content/12"
               >
-                <AiIdea className="size-3.5" />
-                Plan
-                <X className="size-3" />
+                <AiIdea className="size-3.5 text-content" strokeWidth={1.75} />
+                Plan mode
+                <X className="size-3 text-content/45 group-hover:text-content/70" />
               </button>
             ) : null}
             <div
