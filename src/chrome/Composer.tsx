@@ -1463,9 +1463,7 @@ export function Composer({
                     className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/5 focus-visible:bg-content/10"
                   >
                     <AiIdea
-                      className={`mt-0.5 size-3.5 shrink-0 ${
-                        planSelected ? "text-yellow-300/80" : "text-content/70"
-                      }`}
+                      className="mt-0.5 size-3.5 shrink-0 text-content"
                       strokeWidth={1.75}
                     />
                     <span className="min-w-0 flex-1">
@@ -1477,7 +1475,7 @@ export function Composer({
                       </span>
                     </span>
                     {planSelected ? (
-                      <Check className="mt-0.5 size-3.5 shrink-0 text-yellow-300/80" />
+                      <Check className="mt-0.5 size-3.5 shrink-0 text-content" />
                     ) : null}
                   </button>
                 </Popover>
@@ -1492,11 +1490,11 @@ export function Composer({
                   setPlanSelected(false);
                   ref.current?.focus();
                 }}
-                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-yellow-300/12 px-1.5 text-[11px] text-yellow-200/90 hover:bg-yellow-300/18"
+                className="group flex h-6.5 shrink-0 items-center gap-1.5 rounded-md bg-content/8 px-2 text-[11px] font-medium text-content/70 hover:bg-content/12 hover:text-content focus-visible:bg-content/12"
               >
-                <AiIdea className="size-3.5" />
-                Plan
-                <X className="size-3" />
+                <AiIdea className="size-3.5 text-content" strokeWidth={1.75} />
+                Plan mode
+                <X className="size-3 text-content/45 group-hover:text-content/70" />
               </button>
             ) : null}
             <div

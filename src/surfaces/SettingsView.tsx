@@ -1667,7 +1667,7 @@ function ProviderRow({
         </p>
       </div>
 
-      <div className="grid shrink-0 grid-cols-[11rem_8.5rem_7rem] items-center gap-3 max-[900px]:w-full">
+      <div className="grid shrink-0 grid-cols-[11rem_8.5rem_7rem] items-center gap-3 max-[900px]:w-full max-[900px]:grid-cols-1">
         {current ? (
           <Select
             label={`${HARNESS_TITLE[harness]} model`}
