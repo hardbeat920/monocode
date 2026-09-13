@@ -21,6 +21,7 @@ import {
   type IconComponent,
 } from "../chrome/icons";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -105,7 +106,7 @@ import {
   markInboxItemsSeen,
   useInboxSeenTick,
 } from "../lib/inboxSeen";
-import { INBOX_LIST_PAGE, inboxListWindow } from "../lib/inboxListWindow";
+import { LIST_PAGE_SIZE, listWindowSize } from "../lib/listWindow";
 import {
   LINEAR_CHANGE_EVENT,
   linearConnected,
@@ -334,7 +335,14 @@ export function InboxView({
   const listLock = useLockOverscroll<HTMLDivElement>();
   const listScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLLIElement>(null);
-  const [listLimit, setListLimit] = useState(INBOX_LIST_PAGE);
+  const [listLimit, setListLimit] = useState(LIST_PAGE_SIZE);
+  const setListScrollRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      listLock(element);
+      listScrollRef.current = element;
+    },
+    [listLock],
+  );
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const logos = useTabGroupLogos();
@@ -669,25 +677,15 @@ export function InboxView({
     !!targetSelectionKey && selectedKey === targetSelectionKey;
   const selected =
     selectedByKey ?? (waitingForTarget ? null : visibleItems[0]) ?? null;
-  const selectedIndex = selected
-    ? visibleItems.findIndex(
-        (item) => inboxItemKey(item) === inboxItemKey(selected),
-      )
-    : -1;
-  const shownItemCount = inboxListWindow(
-    visibleItems.length,
-    listLimit,
-    selectedIndex,
-  );
+  const shownItemCount = listWindowSize(visibleItems.length, listLimit);
   const shownItems = visibleItems.slice(0, shownItemCount);
   const hasMoreItems = shownItemCount < visibleItems.length;
-  const inboxListKey = `${source}\0${searchInput}\0${JSON.stringify(activeFilters)}\0${linearHiddenTeamIds.join(",")}`;
 
   useEffect(() => {
-    setListLimit(INBOX_LIST_PAGE);
+    setListLimit(LIST_PAGE_SIZE);
     const scroller = listScrollRef.current;
     if (scroller) scroller.scrollTop = 0;
-  }, [inboxListKey]);
+  }, [activeFilters, linearHiddenTeamIds, searchInput, source]);
 
   useEffect(() => {
     if (!hasMoreItems) return;
@@ -697,7 +695,7 @@ export function InboxView({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry?.isIntersecting) return;
-        setListLimit((current) => current + INBOX_LIST_PAGE);
+        setListLimit((current) => current + LIST_PAGE_SIZE);
       },
       { root, rootMargin: "240px" },
     );
@@ -847,10 +845,7 @@ export function InboxView({
         </div>
       )}
       <div
-        ref={(element) => {
-          listLock(element);
-          listScrollRef.current = element;
-        }}
+        ref={setListScrollRef}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none"
       >
         {noSourcesConnected ? (

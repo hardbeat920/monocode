@@ -86,7 +86,7 @@ import {
   type SessionFolder,
   type SessionListDropTarget,
 } from "../lib/sessionFolders";
-import { SESSION_LIST_PAGE, sessionListWindow } from "../lib/sessionListWindow";
+import { LIST_PAGE_SIZE, listWindowSize } from "../lib/listWindow";
 import {
   filterSessionsByHarness,
   filterSessionsByStatus,
@@ -396,7 +396,7 @@ function SidebarComponent({
     null,
   );
   const [searchQuery, setSearchQuery] = useState("");
-  const [sessionListLimit, setSessionListLimit] = useState(SESSION_LIST_PAGE);
+  const [sessionListLimit, setSessionListLimit] = useState(LIST_PAGE_SIZE);
   const loadMoreRef = useRef<HTMLLIElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const pendingFolderSessionIds = useRef(new Set<string>());
@@ -467,7 +467,7 @@ function SidebarComponent({
   const activeUngroupedIndex = ungroupedVisible.findIndex(
     (session) => session.id === activeSessionId,
   );
-  const shownUngroupedCount = sessionListWindow(
+  const shownUngroupedCount = listWindowSize(
     ungroupedVisible.length,
     sessionListLimit,
     activeUngroupedIndex,
@@ -551,7 +551,7 @@ function SidebarComponent({
   const changeStats = useProjectDiffStats(gitRoot, open);
 
   useEffect(() => {
-    setSessionListLimit(SESSION_LIST_PAGE);
+    setSessionListLimit(LIST_PAGE_SIZE);
     const scroller = sessionsScrollRef.current;
     if (scroller) scroller.scrollTop = 0;
   }, [sessionListKey]);
@@ -564,7 +564,7 @@ function SidebarComponent({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry?.isIntersecting) return;
-        setSessionListLimit((current) => current + SESSION_LIST_PAGE);
+        setSessionListLimit((current) => current + LIST_PAGE_SIZE);
       },
       { root, rootMargin: "240px" },
     );
