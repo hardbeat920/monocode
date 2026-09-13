@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "../lib/githubTasks";
 import type { SessionSummary } from "../lib/sessionStore";
-import { InboxDetail } from "./InboxView";
+import { InboxDetail, inboxShowsFullFileDiff } from "./InboxView";
 
 function item(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -73,6 +73,21 @@ describe("InboxDetail layout", () => {
     expect(header).toContain('aria-label="Pull request sections"');
     expect(header).toContain("Summary");
     expect(header).toContain("Code");
+  });
+
+  it("offers full-file diffs only for GitHub pull requests", () => {
+    expect(inboxShowsFullFileDiff(item({ kind: "pr" }))).toBe(true);
+    expect(
+      inboxShowsFullFileDiff(
+        item({
+          kind: "pr",
+          provider: "gitlab",
+          repo: "acme/platform",
+          url: "https://gitlab.example.com/acme/platform/-/merge_requests/12",
+        }),
+      ),
+    ).toBe(false);
+    expect(inboxShowsFullFileDiff(item({ kind: "issue" }))).toBe(false);
   });
 
   it("keeps the Linear project picker beside the pinned send action", () => {
