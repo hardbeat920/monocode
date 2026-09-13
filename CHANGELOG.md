@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode falls back to readable local paths for unsupported attachment formats instead of sending provider-rejected file parts, and repairs sessions already stuck on an unsupported file turn. Fixes #211.
+
 ## [0.1.45] - 2026-09-13
 
 ### Added
@@ -30,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab Inbox repository detection no longer flashes console windows when it invokes Git on Windows. In #200.
 - Claude Sonnet 5 appears only with Claude Code 2.1.197 or newer, preventing older CLI versions from receiving an unsupported model argument. In #199 by @nulljosh.
 - Claude model choices resolve consistently between the CLI's short live aliases and MonoCode's full startup model IDs, so relaunching no longer switches a saved session to a different model family.
+
+### Fixed
+
+- **Supervised** access now reaches Claude Code as a permission flag. It was the one mode MonoCode sent nothing for, so the CLI fell back to `permissions.defaultMode` from your settings files, and a session the picker labelled Supervised could run as `auto` or `bypassPermissions` without asking.
 
 ## [0.1.44] - 2026-09-12
 

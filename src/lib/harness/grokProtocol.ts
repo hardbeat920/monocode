@@ -420,8 +420,7 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
     return [];
   }
 
-  const usage = usageFromUpdate(update);
-  return usage ? [usage] : [];
+  return usageFromUpdate(update);
 }
 
 export function sessionIdFromResult(result: unknown): string | undefined {
@@ -688,13 +687,13 @@ function previewKind(kind?: string): ToolPreview["kind"] {
   return "read";
 }
 
-function usageFromUpdate(update: Record<string, unknown>): HarnessEvent | null {
+function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
   const usage =
     asRecord(update.usage) ??
     asRecord(update.tokenUsage) ??
     asRecord(update.token_usage) ??
     (hasUsageFields(update) ? update : null);
-  if (!usage) return null;
+  if (!usage) return [];
   const used =
     numberField(usage, "totalTokens") ??
     numberField(usage, "used") ??
@@ -711,12 +710,45 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent | null {
     numberField(usage, "contextWindow") ??
     numberField(usage, "context_window") ??
     numberField(usage, "maxTokens");
-  if (used == null && window == null) return null;
-  return {
-    type: "context",
-    used: used ?? undefined,
-    window: window ?? undefined,
-  };
+  const events: HarnessEvent[] = [];
+  if (used != null || window != null) {
+    events.push({
+      type: "context",
+      ...(used != null ? { used } : {}),
+      ...(window != null ? { window } : {}),
+    });
+  }
+  const inputTokens =
+    numberField(usage, "inputTokens") ?? numberField(usage, "input_tokens");
+  const outputTokens =
+    numberField(usage, "outputTokens") ?? numberField(usage, "output_tokens");
+  const cacheReadTokens =
+    numberField(usage, "cacheReadTokens") ??
+    numberField(usage, "cache_read_input_tokens");
+  const cacheWriteTokens =
+    numberField(usage, "cacheWriteTokens") ??
+    numberField(usage, "cache_creation_input_tokens");
+  const cacheReported = cacheReadTokens != null || cacheWriteTokens != null;
+  if (
+    inputTokens != null ||
+    outputTokens != null ||
+    cacheReadTokens != null ||
+    cacheWriteTokens != null
+  ) {
+    const cacheableInput =
+      (inputTokens ?? 0) + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
+    events.push({
+      type: "turn.metrics",
+      ...(inputTokens != null ? { inputTokens } : {}),
+      ...(outputTokens != null ? { outputTokens } : {}),
+      ...(cacheReadTokens != null ? { cacheReadTokens } : {}),
+      ...(cacheWriteTokens != null ? { cacheWriteTokens } : {}),
+      ...(cacheReported && cacheableInput > 0
+        ? { cacheHitPercent: ((cacheReadTokens ?? 0) / cacheableInput) * 100 }
+        : {}),
+    });
+  }
+  return events;
 }
 
 function hasUsageFields(rec: Record<string, unknown>): boolean {

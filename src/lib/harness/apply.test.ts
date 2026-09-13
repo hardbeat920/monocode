@@ -544,6 +544,25 @@ describe("usage totals", () => {
   });
 });
 
+describe("applyHarnessEvent turn metrics", () => {
+  it("attaches provider metrics to the latest user turn", () => {
+    let session = appendUser(newSession("claude", "/repo"), "Explain this");
+    session = applyHarnessEvent(session, {
+      type: "turn.metrics",
+      inputTokens: 1_000,
+      outputTokens: 250,
+      cacheReadTokens: 800,
+      cacheHitPercent: 44.4,
+    });
+    expect(session.blocks[0]?.turnMetrics).toEqual({
+      inputTokens: 1_000,
+      outputTokens: 250,
+      cacheReadTokens: 800,
+      cacheHitPercent: 44.4,
+    });
+  });
+});
+
 describe("tool enrichment", () => {
   it("retains Edit and Write previews when a tool completes without repeating its input", () => {
     for (const [name, input] of [

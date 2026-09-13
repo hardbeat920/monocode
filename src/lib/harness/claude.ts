@@ -19,6 +19,7 @@ import {
   contextFromResult,
   usageFromResult,
   contextUsedFromAssistant,
+  turnMetricsFromResult,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
   buildControlRequest,
@@ -762,6 +763,8 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // Compaction spends real tokens too, so its result counts.
   const usage = usageFromResult(rec);
   if (usage) live.onEvent({ type: "usage", ...usage });
+  const metrics = turnMetricsFromResult(rec);
+  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {

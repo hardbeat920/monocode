@@ -112,6 +112,8 @@ export function applyHarnessEvent(
       return session.usage
         ? { ...session, usage: resetProcessCounters(session.usage) }
         : session;
+    case "turn.metrics":
+      return mergeTurnMetrics(session, event);
     case "tasks.updated":
       return upsertTaskList(session, event);
     case "plan":
@@ -142,6 +144,39 @@ export function applyHarnessEvent(
     default:
       return session;
   }
+}
+
+function mergeTurnMetrics(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "turn.metrics" }>,
+): Session {
+  let userIndex = -1;
+  for (let index = session.blocks.length - 1; index >= 0; index -= 1) {
+    if (session.blocks[index].role === "user") {
+      userIndex = index;
+      break;
+    }
+  }
+  if (userIndex < 0) return session;
+
+  const current = session.blocks[userIndex];
+  const metrics = {
+    ...(current.turnMetrics ?? {}),
+    ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
+    ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
+    ...(event.cacheReadTokens != null
+      ? { cacheReadTokens: event.cacheReadTokens }
+      : {}),
+    ...(event.cacheWriteTokens != null
+      ? { cacheWriteTokens: event.cacheWriteTokens }
+      : {}),
+    ...(event.cacheHitPercent != null
+      ? { cacheHitPercent: event.cacheHitPercent }
+      : {}),
+  };
+  const blocks = session.blocks.slice();
+  blocks[userIndex] = { ...current, turnMetrics: metrics };
+  return { ...session, blocks };
 }
 
 function upsertPlan(
