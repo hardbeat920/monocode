@@ -1,4 +1,4 @@
-import { nativeModelId } from "../models";
+import { nativeModelId, setHarnessModels } from "../models";
 import { openCrabsPromptBlocks } from "./opencrabsPrompt";
 import type { RuntimeMode } from "../session";
 import { AcpClient, type AcpHandlers } from "./acp";
@@ -14,6 +14,7 @@ import {
   eventsFromAcpUpdate,
   permissionOptionId,
   permissionRequestFromAcp,
+  modelsFromSessionNew,
   sessionIdFromResult,
 } from "./opencrabsProtocol";
 import type {
@@ -291,6 +292,21 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     }
     if (!acpSessionId) throw new Error("opencrabs did not return a session id");
 
+    // Live catalog: replace the static "default" picker entry with the
+    // server's configured provider/model pairs.
+    const catalog = modelsFromSessionNew(setup);
+    if (catalog.available.length > 0) {
+      setHarnessModels(
+        "opencrabs",
+        catalog.available.map((entry) => ({
+          id: `opencrabs:${entry.modelId}`,
+          harness: "opencrabs" as const,
+          name: entry.name,
+          nativeId: entry.modelId,
+        })),
+      );
+    }
+
     const live: Live = {
       acp,
       acpSessionId,
@@ -324,8 +340,8 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
 
 /**
  * Model selection is best-effort: the static catalog ships only `default`
- * (empty native id), and a server that understands `session/set_model`
- * can honor a real one once a live catalog exists.
+ * (empty native id, skipped here), while live catalog entries carry
+ * `provider/model` pairs the server routes through `session/set_model`.
  */
 async function applyModelSelection(
   live: Live,

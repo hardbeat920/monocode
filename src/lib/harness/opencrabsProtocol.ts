@@ -233,6 +233,28 @@ export function sessionIdFromResult(result: unknown): string | undefined {
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
+/** `session/new` carries the live catalog: models.availableModels + currentModelId. */
+export function modelsFromSessionNew(result: unknown): {
+  available: { modelId: string; name: string }[];
+  current: string | undefined;
+} {
+  const rec = asRecord(result);
+  const models = asRecord(rec?.models);
+  const available = Array.isArray(models?.availableModels)
+    ? models.availableModels.flatMap((item) => {
+        const entry = asRecord(item);
+        const modelId = String(entry?.modelId ?? "").trim();
+        if (!modelId) return [];
+        return [{ modelId, name: String(entry?.name ?? modelId).trim() || modelId }];
+      })
+    : [];
+  const currentRaw = models?.currentModelId;
+  return {
+    available,
+    current: typeof currentRaw === "string" && currentRaw.trim() ? currentRaw.trim() : undefined,
+  };
+}
+
 function planEvent(update: Record<string, unknown>): HarnessEvent | null {
   const entries = update.entries ?? update.plan;
   if (Array.isArray(entries)) {
