@@ -404,6 +404,14 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       type: "session.providerBound",
       providerSessionId: acpSessionId,
     });
+    // Reflect the server's current model in the thread badge — on load this
+    // is the restored per-session pick, so the picker survives restarts.
+    if (catalog.current) {
+      live.onEvent({
+        type: "session.configChanged",
+        model: `opencrabs:${catalog.current}`,
+      });
+    }
     live.onEvent({ type: "session.started" });
     return live;
   } catch (error) {
@@ -424,13 +432,18 @@ async function applyModelSelection(
 ): Promise<void> {
   const base = nativeModelId(input.model).trim();
   if (!base) return;
-  await live.acp
-    .request(
+  try {
+    await live.acp.request(
       "session/set_model",
       { sessionId: live.acpSessionId, modelId: base },
       CONTROL_TIMEOUT_MS,
-    )
-    .catch(() => undefined);
+    );
+    // The badge only hears about model switches through configChanged —
+    // without it the picker and the turn can quietly disagree.
+    live.onEvent({ type: "session.configChanged", model: input.model });
+  } catch {
+    // A failed set_model leaves the previous model in place; no event.
+  }
 }
 
 function spawnArgs(model: string): string[] {

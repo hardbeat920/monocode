@@ -1,9 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
-  fileUri,
-  promptBlocks,
-  type PromptContentBlock,
-} from "../attachments";
+import { fileUri, type PromptContentBlock } from "../attachments";
 import type { Attachment } from "../session";
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -12,65 +8,74 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/jpg": "jpg",
   "image/gif": "gif",
   "image/webp": "webp",
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/wav": "wav",
+  "audio/ogg": "ogg",
+  "audio/m4a": "m4a",
+  "audio/webm": "webm",
+  "application/pdf": "pdf",
+  "text/plain": "txt",
+  "text/markdown": "md",
 };
 
 /**
  * Prompt blocks shaped for `opencrabs acp`.
  *
  * The server declares `promptCapabilities.image: false` and reads
- * `resource_link` blocks as on-disk path references, so vision blocks are
- * rewritten as links instead of being sent inline. Images that already
- * carry a local `uri` (picked from disk) convert for free; pasted blobs
- * are persisted through the shared `write_attachment` command first.
- * Nothing is silently dropped — a blob that cannot be persisted fails the
- * send with a visible error, matching the `attachmentPath` contract.
+ * `resource_link` blocks as on-disk path references, so every attachment
+ * kind — image, audio, file — is rewritten as a link. The rule is uniform:
+ * a disk path links as-is; a pasted blob is persisted through the shared
+ * `write_attachment` command first; an attachment with neither fails the
+ * send with a visible error. Nothing is silently dropped.
  */
 export async function openCrabsPromptBlocks(
   text: string,
   attachments: Attachment[] = [],
 ): Promise<PromptContentBlock[]> {
-  const blocks = promptBlocks(text, attachments);
-  return Promise.all(blocks.map(asServerBlock));
+  const blocks: PromptContentBlock[] = [];
+  const trimmed = text.trim();
+  if (trimmed) blocks.push({ type: "text", text: trimmed });
+  for (const file of attachments) {
+    blocks.push(await attachmentBlock(file));
+  }
+  return blocks;
 }
 
-async function asServerBlock(
-  block: PromptContentBlock,
-): Promise<PromptContentBlock> {
-  if (block.type !== "image") return block;
-  if (block.uri) {
+async function attachmentBlock(file: Attachment): Promise<PromptContentBlock> {
+  if (file.path?.trim()) {
     return {
       type: "resource_link",
-      uri: block.uri,
-      name: nameFromUri(block.uri),
-      mimeType: block.mimeType,
+      uri: fileUri(file.path),
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size,
     };
   }
-  if (!block.data) {
+  if (!file.data) {
     throw new Error(
-      "Cannot attach image: no local file path or image data is available. Attach the file again.",
+      `Cannot attach ${JSON.stringify(file.name)}: no local file path or data is available. Attach the file again.`,
     );
   }
-  const ext = EXT_BY_MIME[block.mimeType] ?? "png";
-  const name = `pasted-image.${ext}`;
+  const name = persistName(file);
   const path = await invoke<string>("write_attachment", {
     name,
-    data: block.data,
+    data: file.data,
   });
   return {
     type: "resource_link",
     uri: fileUri(path),
     name,
-    mimeType: block.mimeType,
+    mimeType: file.mimeType,
+    size: file.size,
   };
 }
 
-function nameFromUri(uri: string): string {
-  const segments = uri.split("/").filter(Boolean);
-  const leaf = segments[segments.length - 1];
-  if (!leaf) return "image";
-  try {
-    return decodeURIComponent(leaf);
-  } catch {
-    return leaf;
-  }
+/** Pasted blobs get a generated name: kind plus the best extension guess. */
+function persistName(file: Attachment): string {
+  const ext =
+    EXT_BY_MIME[file.mimeType] ??
+    (file.name.includes(".") ? file.name.split(".").pop() : undefined) ??
+    "bin";
+  return `pasted-${file.kind}.${ext}`;
 }

@@ -39,6 +39,7 @@ describe("openCrabsPromptBlocks", () => {
       uri: "file:///tmp/shot.png",
       name: "shot.png",
       mimeType: "image/png",
+      size: 4,
     });
     expect(invokeMock).not.toHaveBeenCalled();
   });
@@ -56,6 +57,7 @@ describe("openCrabsPromptBlocks", () => {
       uri: "file:///tmp/monocode-attachments/1-2-pasted-image.png",
       name: "pasted-image.png",
       mimeType: "image/png",
+      size: 4,
     });
   });
 
@@ -84,6 +86,64 @@ describe("openCrabsPromptBlocks", () => {
       mimeType: "text/markdown",
       size: 10,
     });
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("links a disk-backed audio attachment without persisting", async () => {
+    const file: Attachment = {
+      id: "att-3",
+      name: "voice.mp3",
+      mimeType: "audio/mpeg",
+      kind: "audio",
+      size: 42,
+      path: "/tmp/voice.mp3",
+    } as Attachment;
+    const blocks = await openCrabsPromptBlocks("transcribe this", [file]);
+    expect(blocks[1]).toEqual({
+      type: "resource_link",
+      uri: "file:///tmp/voice.mp3",
+      name: "voice.mp3",
+      mimeType: "audio/mpeg",
+      size: 42,
+    });
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("persists a pasted audio blob with a kind-specific name", async () => {
+    invokeMock.mockResolvedValue("/tmp/monocode-attachments/3-pasted-audio.mp3");
+    const file: Attachment = {
+      id: "att-4",
+      name: "voice.mp3",
+      mimeType: "audio/mpeg",
+      kind: "audio",
+      size: 42,
+      data: "YXVkaW8=",
+    } as Attachment;
+    const blocks = await openCrabsPromptBlocks("", [file]);
+    expect(invokeMock).toHaveBeenCalledWith("write_attachment", {
+      name: "pasted-audio.mp3",
+      data: "YXVkaW8=",
+    });
+    expect(blocks[0]).toEqual({
+      type: "resource_link",
+      uri: "file:///tmp/monocode-attachments/3-pasted-audio.mp3",
+      name: "pasted-audio.mp3",
+      mimeType: "audio/mpeg",
+      size: 42,
+    });
+  });
+
+  it("fails loud when an attachment has neither path nor data", async () => {
+    const file: Attachment = {
+      id: "att-5",
+      name: "ghost.pdf",
+      mimeType: "application/pdf",
+      kind: "file",
+      size: 1,
+    } as Attachment;
+    await expect(openCrabsPromptBlocks("", [file])).rejects.toThrow(
+      "no local file path or data",
+    );
     expect(invokeMock).not.toHaveBeenCalled();
   });
 });
