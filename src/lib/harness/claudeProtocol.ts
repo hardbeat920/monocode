@@ -22,7 +22,7 @@ import type { ApprovalDecision, HarnessEvent } from "./types";
 
 /** Claude Code versions that first ship Opus 5 / Sonnet 5 / Fable 5 / Opus 4.8 / 4.7. */
 export const MINIMUM_CLAUDE_OPUS_5_VERSION = "2.1.219";
-export const MINIMUM_CLAUDE_SONNET_5_VERSION = "2.1.219";
+export const MINIMUM_CLAUDE_SONNET_5_VERSION = "2.1.197";
 export const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.169";
 export const MINIMUM_CLAUDE_OPUS_4_8_VERSION = "2.1.154";
 export const MINIMUM_CLAUDE_OPUS_4_7_VERSION = "2.1.111";

@@ -264,8 +264,11 @@ describe("modelsForClaudeVersion", () => {
     expect(next).toContain("claude-sonnet-5");
   });
 
-  it("hides Sonnet 5 until 2.1.219, and rejects a missing version", () => {
-    const atMinimum = modelsForClaudeVersion("2.1.219").map((model) => model.nativeId);
+  it("hides Sonnet 5 until 2.1.197, and rejects a missing version", () => {
+    const beforeMinimum = modelsForClaudeVersion("2.1.196").map((model) => model.nativeId);
+    expect(beforeMinimum).not.toContain("claude-sonnet-5");
+
+    const atMinimum = modelsForClaudeVersion("2.1.197").map((model) => model.nativeId);
     expect(atMinimum).toContain("claude-sonnet-5");
 
     const missing = modelsForClaudeVersion(null).map((model) => model.nativeId);
