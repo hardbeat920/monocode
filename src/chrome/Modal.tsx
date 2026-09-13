@@ -53,7 +53,14 @@ export function ModalPanel({
   const descriptionId = description ? `${uid}-desc` : undefined;
 
   useEffect(() => {
+    const previous =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     (initialFocusRef?.current ?? closeRef.current)?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
   }, [initialFocusRef]);
 
   useEffect(() => {

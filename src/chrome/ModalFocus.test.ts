@@ -59,4 +59,31 @@ describe("ModalPanel focus", () => {
     container.remove();
     vi.unstubAllGlobals();
   });
+
+  it("restores focus to the trigger when the dialog unmounts", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const trigger = document.createElement("button");
+    const container = document.createElement("div");
+    document.body.append(trigger, container);
+    trigger.focus();
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        createElement(ModalPanel, {
+          title: "Example",
+          onClose: vi.fn(),
+          children: "Body",
+        }),
+      );
+    });
+    expect(document.activeElement).not.toBe(trigger);
+
+    act(() => root.unmount());
+    expect(document.activeElement).toBe(trigger);
+
+    trigger.remove();
+    container.remove();
+    vi.unstubAllGlobals();
+  });
 });

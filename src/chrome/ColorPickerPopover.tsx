@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { hexToHsv, hsvToHex, normalizeHex, type Hsv } from "../lib/colorUtils";
@@ -12,6 +13,7 @@ type Props = {
   value: string;
   onChange: (hex: string) => void;
   className?: string;
+  autoFocus?: boolean;
 };
 
 export function ColorSwatchRow({
@@ -102,10 +104,16 @@ export function ColorPickerPopover({
   value,
   onChange,
   className = "mt-2 rounded-lg border border-content/10 bg-content/5 p-2",
+  autoFocus = false,
 }: Props) {
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
+  const hexRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (autoFocus) hexRef.current?.focus();
+  }, [autoFocus]);
 
   useEffect(() => {
     const hex = normalizeHex(value);
@@ -183,6 +191,42 @@ export function ColorPickerPopover({
     window.addEventListener("pointercancel", onUp);
   };
 
+  const onSvKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 1;
+    if (event.key === "ArrowLeft") {
+      applyHsv((prev) => ({ ...prev, s: Math.max(0, prev.s - step) }));
+    } else if (event.key === "ArrowRight") {
+      applyHsv((prev) => ({ ...prev, s: Math.min(100, prev.s + step) }));
+    } else if (event.key === "ArrowDown") {
+      applyHsv((prev) => ({ ...prev, v: Math.max(0, prev.v - step) }));
+    } else if (event.key === "ArrowUp") {
+      applyHsv((prev) => ({ ...prev, v: Math.min(100, prev.v + step) }));
+    } else if (event.key === "Home") {
+      applyHsv((prev) => ({ ...prev, s: 0 }));
+    } else if (event.key === "End") {
+      applyHsv((prev) => ({ ...prev, s: 100 }));
+    } else {
+      return;
+    }
+    event.preventDefault();
+  };
+
+  const onHueKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 1;
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      applyHsv((prev) => ({ ...prev, h: Math.max(0, prev.h - step) }));
+    } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      applyHsv((prev) => ({ ...prev, h: Math.min(360, prev.h + step) }));
+    } else if (event.key === "Home") {
+      applyHsv((prev) => ({ ...prev, h: 0 }));
+    } else if (event.key === "End") {
+      applyHsv((prev) => ({ ...prev, h: 360 }));
+    } else {
+      return;
+    }
+    event.preventDefault();
+  };
+
   const preview = hsvToHex(hsv.h, hsv.s, hsv.v);
   const hueColor = hsvToHex(hsv.h, 100, 100);
 
@@ -195,11 +239,14 @@ export function ColorPickerPopover({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(hsv.s)}
+        aria-valuetext={`${Math.round(hsv.s)}% saturation, ${Math.round(hsv.v)}% brightness`}
+        tabIndex={0}
         className="relative h-28 w-full cursor-crosshair touch-none rounded-md"
         style={{
           background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${hueColor})`,
         }}
         onPointerDown={onSvPointer}
+        onKeyDown={onSvKeyDown}
       >
         <span
           className="pointer-events-none absolute size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
@@ -218,12 +265,15 @@ export function ColorPickerPopover({
         aria-valuemin={0}
         aria-valuemax={360}
         aria-valuenow={Math.round(hsv.h)}
+        aria-valuetext={`${Math.round(hsv.h)}° hue`}
+        tabIndex={0}
         className="relative mt-2 h-3 w-full cursor-ew-resize touch-none rounded-full"
         style={{
           background:
             "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
         }}
         onPointerDown={onHuePointer}
+        onKeyDown={onHueKeyDown}
       >
         <span
           className="pointer-events-none absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
@@ -241,6 +291,7 @@ export function ColorPickerPopover({
           aria-hidden
         />
         <input
+          ref={hexRef}
           type="text"
           value={preview}
           spellCheck={false}

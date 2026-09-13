@@ -260,7 +260,11 @@ export function TabGroupMenu({
           gap={6}
           width={240}
           layer={LAYER.submenu}
-          onDismiss={() => setCustomPickerAnchor(null)}
+          onDismiss={(reason) => {
+            const anchor = customPickerAnchor;
+            setCustomPickerAnchor(null);
+            if (reason === "escape") anchor.focus();
+          }}
           data-custom-color-picker
           aria-label="Custom color picker"
           className="p-2"
@@ -269,6 +273,7 @@ export function TabGroupMenu({
             value={customColor ?? normalizeHex(currentColor)}
             onChange={(color) => onCustomColorChange(groupId, color)}
             className=""
+            autoFocus
           />
         </Popover>
       ) : null}
