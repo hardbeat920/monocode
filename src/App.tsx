@@ -55,6 +55,7 @@ import {
 } from "./lib/fileIndex";
 import {
   closeLeaf,
+  closeSurfacePanes,
   findSurfacePane,
   firstLeafId,
   focusedFileTab,
@@ -78,6 +79,7 @@ import {
   openSessionChangesTab,
   openTerminalTab,
   removePane,
+  resetTabToSession,
   replaceLeafId,
   setSplitRatio,
   siblingLeafId,
@@ -2378,6 +2380,90 @@ export default function App({
     },
     [tabs, persistSession, refreshHistory, sidebarCwd],
   );
+
+  const onCloseAllTabs = useCallback(() => {
+    const tab = tabsRef.current.find(
+      (entry) => entry.id === activeTabIdRef.current,
+    );
+    if (!tab) return;
+
+    // Stage one: files open in the active tab's editor panes close first.
+    // Only when none are open does the command close every workspace tab.
+    const editorFiles = tab.editorPanes.flatMap((pane) => pane.files);
+    if (editorFiles.length > 0) {
+      const remaining = closeSurfacePanes(tab, "editor");
+      if (!remaining) {
+        const closePlan = planWorkspaceTabClose({
+          tabs: tabsRef.current,
+          sessions: sessionsRef.current,
+          closingTabId: tab.id,
+          scope: tabCloseScope,
+        });
+        if (closePlan.action === "close") {
+          onCloseTab(tab.id);
+          return;
+        }
+      }
+      const unsaved = editorFiles.filter(
+        (file) => isFilesystemTab(file) && dirtyFilesRef.current.has(file.id),
+      );
+
+      const finishClose = () => {
+        let nextTab: WorkspaceTab;
+        let focusesSession: boolean;
+        if (remaining) {
+          nextTab = remaining;
+          focusesSession = sessionsRef.current.some(
+            (session) => session.id === remaining.focusedId,
+          );
+        } else {
+          // The tab held only editor panes and must stay: seed a session.
+          const seed = sessionsRef.current[0];
+          const session = newSession(
+            seed?.harness ?? "claude",
+            editorFiles[0].cwd || projectCwd,
+            seed?.model,
+            seed?.runtimeMode,
+            seed?.modelSettings,
+          );
+          setSessions((prev) => [...prev, session]);
+          nextTab = resetTabToSession(tab, session.id);
+          focusesSession = true;
+        }
+        setTabs((prev) =>
+          prev.map((entry) => (entry.id === tab.id ? nextTab : entry)),
+        );
+        setDirtyFiles((prev) => {
+          const updated = new Set(prev);
+          for (const file of editorFiles) updated.delete(file.id);
+          return updated;
+        });
+        setComposerFocused(focusesSession);
+      };
+
+      void (async () => {
+        if (unsaved.length > 0) {
+          const ok = await confirmDiscardUnsaved(
+            "Close all open files with unsaved changes?",
+          );
+          if (!ok) return;
+        }
+        finishClose();
+      })();
+      return;
+    }
+
+    // Stage two: the workspace always keeps one tab, so close every other
+    // tab and reset the active one to a blank session.
+    onCloseOtherTabs();
+    onClearTabSession(tab.id);
+  }, [
+    onCloseTab,
+    onCloseOtherTabs,
+    onClearTabSession,
+    projectCwd,
+    tabCloseScope,
+  ]);
 
   const onClosePane = useCallback(
     (sessionId?: string) => {
@@ -5304,6 +5390,7 @@ export default function App({
     onNew,
     onArchiveFocusedSession,
     onCloseOtherTabs,
+    onCloseAllTabs,
     onClosePane,
     onNext,
     onPrev,
@@ -5331,6 +5418,7 @@ export default function App({
     onNew,
     onArchiveFocusedSession,
     onCloseOtherTabs,
+    onCloseAllTabs,
     onClosePane,
     onNext,
     onPrev,
@@ -5454,6 +5542,7 @@ export default function App({
         if (cmd === "new") run("new", a.onNew);
         else if (cmd === "close-others")
           run("close-others", a.onCloseOtherTabs);
+        else if (cmd === "close-all") run("close-all", a.onCloseAllTabs);
         else if (cmd === "close") run("close", a.onClosePane);
         else if (cmd === "next") run("next", a.onNext);
         else if (cmd === "prev") run("prev", a.onPrev);
@@ -5534,6 +5623,9 @@ export default function App({
       listen("new_tab", () => run("new", actions.current.onNew)),
       listen("close_other_tabs", () =>
         run("close-others", actions.current.onCloseOtherTabs),
+      ),
+      listen("close_all_tabs", () =>
+        run("close-all", actions.current.onCloseAllTabs),
       ),
       listen("close_tab", () => run("close", actions.current.onClosePane)),
       listen("next_tab", () => run("next", actions.current.onNext)),
@@ -5808,6 +5900,7 @@ export default function App({
                 activeTabId ? () => onCloseTab(activeTabId) : undefined
               }
               onCloseOtherTabs={onCloseOtherTabs}
+              onCloseAllTabs={onCloseAllTabs}
               onPickProject={pickProject}
               onFindInProject={onFindInProject}
               onSearch={onOpenSearch}

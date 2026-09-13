@@ -104,6 +104,22 @@ export function newTab(sessionId: string): WorkspaceTab {
   };
 }
 
+/** Keep the tab's identity and group; replace its contents with one session leaf. */
+export function resetTabToSession(
+  tab: WorkspaceTab,
+  sessionId: string,
+): WorkspaceTab {
+  return {
+    ...tab,
+    layout: leaf(sessionId),
+    focusedId: sessionId,
+    editorPanes: [],
+    terminalPanes: [],
+    diffOpen: false,
+    diffFocused: false,
+  };
+}
+
 export function newFileTab(
   path: string,
   cwd: string,
@@ -734,6 +750,18 @@ export function closeLeaf(
       ? (siblingLeafId(tab.layout, leafId) ?? firstLeafId(nextLayout))
       : tab.focusedId;
   return { ...tab, layout: nextLayout, focusedId: nextFocus };
+}
+
+/** Close every pane of one surface kind. Returns null only when nothing remains. */
+export function closeSurfacePanes(
+  tab: WorkspaceTab,
+  kind: SurfaceKind,
+): WorkspaceTab | null {
+  const remaining = surfacePanes(tab, kind).reduce<WorkspaceTab | null>(
+    (acc, pane) => acc && closeLeaf(acc, pane.id),
+    tab,
+  );
+  return remaining && withSurfacePanes(remaining, kind, []);
 }
 
 /** Move the sash between `index` and `index + 1` to `boundary` (0–1 of the group). */
