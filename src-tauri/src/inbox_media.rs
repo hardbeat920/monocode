@@ -270,6 +270,7 @@ fn github_auth_token() -> Option<String> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
+    crate::hide_window_console(&mut cmd);
     let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
