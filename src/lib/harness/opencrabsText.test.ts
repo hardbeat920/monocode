@@ -64,7 +64,7 @@ describe("runOpenCrabsTextPrompt", () => {
     });
     expect(spawned[0]).toEqual({
       command: "/fake/opencrabs",
-      args: ["run", "--format", "json", "title this"],
+      args: ["run", "--quiet", "--format", "json", "title this"],
       cwd: "/repo",
     });
     onLine?.("🤔 Processing...");

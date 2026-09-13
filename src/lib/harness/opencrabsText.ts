@@ -10,13 +10,14 @@ const TEXT_CHILD_ID = "monocode-opencrabs-text";
 const REQUEST_TIMEOUT_MS = 45_000;
 
 /**
- * One-shot text generation through `opencrabs run --format json`.
+ * One-shot text generation through `opencrabs run --quiet --format json`.
  *
  * Unlike the REPL/server harnesses there is nothing to keep warm: each
  * prompt spawns a short-lived child, captures stdout until exit, and reads
- * the structured summary object. The run subcommand prints progress and
- * tool-call noise before the summary, so the JSON is located by scanning
- * backwards for the final parseable object with a string `content` field.
+ * the structured summary object. `--quiet` (parity branch and later) keeps
+ * stdout payload-only; the parser below still scans backwards for the final
+ * parseable object with a string `content` field, so progress noise from a
+ * binary without the flag degrades gracefully instead of corrupting output.
  * Calls are serialized because each one carries the full headless context.
  */
 let turns: Promise<unknown> = Promise.resolve();
@@ -67,7 +68,7 @@ async function promptOnce(input: {
     await spawnChild(
       TEXT_CHILD_ID,
       path,
-      ["run", "--format", "json", input.prompt],
+      ["run", "--quiet", "--format", "json", input.prompt],
       input.cwd,
     );
     await exitPromise;
