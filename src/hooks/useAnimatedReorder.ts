@@ -19,7 +19,9 @@ export function useAnimatedReorder<T extends string>(
   const nodes = useRef(new Map<T, HTMLElement>());
   const [draggingId, setDraggingId] = useState<T | null>(null);
   const latest = useRef({ ids, onReorder });
-  latest.current = { ids, onReorder };
+  useLayoutEffect(() => {
+    latest.current = { ids, onReorder };
+  }, [ids, onReorder]);
   const cleanup = useRef<(() => void) | null>(null);
   const finishSettling = useRef<(() => void) | null>(null);
   const suppressClickUntil = useRef(0);
