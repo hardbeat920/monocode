@@ -1367,6 +1367,7 @@ export function Composer({
             </div>
             <textarea
               ref={ref}
+              data-focus-quiet
               data-composer-empty={navigationEmpty ? "true" : undefined}
               rows={1}
               spellCheck={false}

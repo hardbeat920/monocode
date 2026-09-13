@@ -53,15 +53,21 @@ html.theme-light {
   color-scheme: light;
 }
 
-button:focus-visible,
+button:not([data-focus-quiet]):focus-visible,
 input:focus-visible,
-textarea:focus-visible,
+textarea:not([data-focus-quiet]):focus-visible,
 select:focus-visible,
 [role="button"]:focus-visible,
 [role="slider"]:focus-visible,
 [tabindex]:not([tabindex="-1"]):focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--color-accent) 75%, transparent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-content) 32%, transparent);
+}
+
+[data-project-card]:has([data-project-main]:focus-visible) {
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-content) 22%, transparent);
 }
 
 html,
@@ -380,6 +386,16 @@ header[data-tauri-drag-region] button {
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-content) 15%, transparent);
   outline: none;
+}
+
+.sidebar-opacity-slider:focus-visible {
+  box-shadow: none;
+}
+
+.sidebar-opacity-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 2px var(--color-background-base),
+    0 0 0 4px color-mix(in srgb, var(--color-content) 38%, transparent);
 }
 
 .sidebar-opacity-slider::-webkit-slider-thumb {

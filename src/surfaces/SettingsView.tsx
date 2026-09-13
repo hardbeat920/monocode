@@ -1592,28 +1592,27 @@ function ProvidersPage() {
 
   return (
     <>
-      <p className="pb-2 text-[12px] leading-relaxed text-content/45">
-        A provider is listed as installed once its CLI is found on your PATH.
-        Uninstalled CLIs stay listed here but are omitted from the model picker.
-        Turn off Show in picker to hide an installed provider from those tabs.
-        The model beside each provider is what new sessions use when that
-        provider is selected; Use by default picks the provider itself.
+      <p className="max-w-2xl pb-4 text-[12px] leading-relaxed text-content/45">
+        Installed providers can appear in the composer model picker. Missing
+        CLIs remain listed with installation instructions.
       </p>
-      {HARNESSES.map((harness) => (
-        <ProviderRow
-          key={harness}
-          harness={harness}
-          selectedModel={
-            defaultModels[harness] ??
-            (choice?.harness === harness
-              ? choice.model
-              : defaultModelId(harness))
-          }
-          isDefault={choice?.harness === harness}
-          onDefault={onDefault}
-          onModelChange={onModelChange}
-        />
-      ))}
+      <div className="overflow-hidden rounded-xl border border-content/10">
+        {HARNESSES.map((harness) => (
+          <ProviderRow
+            key={harness}
+            harness={harness}
+            selectedModel={
+              defaultModels[harness] ??
+              (choice?.harness === harness
+                ? choice.model
+                : defaultModelId(harness))
+            }
+            isDefault={choice?.harness === harness}
+            onDefault={onDefault}
+            onModelChange={onModelChange}
+          />
+        ))}
+      </div>
     </>
   );
 }
@@ -1650,53 +1649,62 @@ function ProviderRow({
   };
 
   return (
-    <Row
-      label={
-        <span className="flex items-center gap-2">
+    <div className="flex items-center gap-6 border-b border-content/8 px-4 py-3.5 last:border-b-0 max-[900px]:flex-col max-[900px]:items-stretch max-[900px]:gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-[13px] font-medium text-content">
           <HarnessIcon harness={harness} className="size-4 shrink-0" />
-          {HARNESS_TITLE[harness]}
+          <span>{HARNESS_TITLE[harness]}</span>
           {isDefault ? (
-            <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
+            <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
               Default
             </span>
           ) : null}
-        </span>
-      }
-      description={
-        available
-          ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
-          : harnessUnavailableHint(harness)
-      }
-    >
-      {current ? (
-        <Select
-          label={`${HARNESS_TITLE[harness]} model`}
-          value={current.id}
-          disabled={!available}
-          onChange={(next) => onModelChange(harness, next)}
-          options={models.map((item) => ({
-            value: item.id,
-            label: item.name,
-          }))}
-        />
-      ) : null}
-      <SecondaryButton
-        onClick={() => current && onDefault(harness, current.id)}
-        disabled={isDefault || !current}
-      >
-        {isDefault ? "Default" : "Use by default"}
-      </SecondaryButton>
-      {available ? (
-        <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">Show in picker</span>
+        </div>
+        <p className="mt-1 text-[12px] leading-relaxed text-content/45">
+          {available
+            ? `${models.length} ${models.length === 1 ? "model" : "models"} available`
+            : harnessUnavailableHint(harness)}
+        </p>
+      </div>
+
+      <div className="grid shrink-0 grid-cols-[11rem_8.5rem_7rem] items-center gap-3 max-[900px]:w-full">
+        {current ? (
+          <Select
+            label={`${HARNESS_TITLE[harness]} model`}
+            value={current.id}
+            disabled={!available}
+            onChange={(next) => onModelChange(harness, next)}
+            options={models.map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
+            className="w-44"
+          />
+        ) : (
+          <span />
+        )}
+        <div
+          className={`flex items-center justify-end gap-2 ${available ? "" : "opacity-40"}`}
+        >
+          <span className="whitespace-nowrap text-[12px] text-content/50">
+            In picker
+          </span>
           <Toggle
             label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
             on={inPicker}
             onChange={onPickerVisible}
+            disabled={!available}
           />
         </div>
-      ) : null}
-    </Row>
+        <SecondaryButton
+          onClick={() => current && onDefault(harness, current.id)}
+          disabled={isDefault || !available || !current}
+          className="w-28 justify-center"
+        >
+          {isDefault ? "Default" : "Set default"}
+        </SecondaryButton>
+      </div>
+    </div>
   );
 }
 
@@ -2094,12 +2102,14 @@ function Select({
   options,
   onChange,
   disabled = false,
+  className,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
   disabled?: boolean;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
@@ -2173,7 +2183,7 @@ function Select({
   };
 
   return (
-    <div ref={root} className="relative max-w-52">
+    <div ref={root} className={`relative max-w-52 ${className ?? ""}`}>
       <button
         type="button"
         ref={trigger}
@@ -2249,11 +2259,13 @@ function SecondaryButton({
   onClick,
   disabled = false,
   danger = false,
+  className,
   children,
 }: {
   onClick: () => void;
   disabled?: boolean;
   danger?: boolean;
+  className?: string;
   children: ReactNode;
 }) {
   return (
@@ -2265,7 +2277,7 @@ function SecondaryButton({
         danger
           ? "text-red-400 hover:border-red-400/40 hover:bg-red-400/10"
           : "text-content/70 hover:bg-content/10 hover:text-content"
-      } disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent`}
+      } disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent ${className ?? ""}`}
     >
       {children}
     </button>

@@ -933,6 +933,7 @@ function ProjectCard({
   return (
     <div
       ref={(el) => sortable.setItemRef(item.path, el)}
+      data-project-card
       className={`group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
         selected
           ? "bg-content/12 text-content"
@@ -965,9 +966,11 @@ function ProjectCard({
         title={cardTitle}
         aria-label={cardAriaLabel}
         aria-current={selected ? "true" : undefined}
-        className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left group-hover:pr-6 group-focus-within:pr-6"
+        data-focus-quiet
+        data-project-main
+        className="flex min-w-0 flex-1 cursor-default items-center gap-2 rounded-md text-left group-hover:pr-6 focus-visible:outline-none"
       >
-        <div className="grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+        <div className="grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
           {logoPath && !busy ? (
             <ProjectLogoIcon
               path={logoPath}
@@ -992,7 +995,7 @@ function ProjectCard({
           <span className={nameClassName}>{name}</span>
         )}
         {hasChanges ? (
-          <span className="shrink-0 group-hover:hidden group-focus-within:hidden">
+          <span className="shrink-0 group-hover:hidden">
             <ProjectDiffStat additions={additions} deletions={deletions} />
           </span>
         ) : null}
@@ -1008,7 +1011,7 @@ function ProjectCard({
           event.stopPropagation();
           onOpenMenu(item.path, event.clientX, event.clientY);
         }}
-        className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-focus-within:grid"
+        className="pointer-events-none absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 opacity-0 hover:bg-content/8 hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
       >
         <MoreHorizontal className="size-4" strokeWidth={1.75} />
       </button>
@@ -1022,7 +1025,7 @@ function ProjectCard({
           event.stopPropagation();
           onTogglePin(item.path);
         }}
-        className="pointer-events-none absolute left-2 top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-sm text-content/55 opacity-0 transition-opacity hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+        className="pointer-events-none absolute left-2 top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-sm text-content/55 opacity-0 transition-opacity hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
       >
         {pinned ? (
           <PinOff className="size-3.5" strokeWidth={1.75} />
