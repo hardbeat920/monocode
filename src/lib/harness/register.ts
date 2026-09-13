@@ -5,6 +5,7 @@ import { ensureFxRegistered } from "./fxAdapter";
 import { ensureGrokRegistered } from "./grokAdapter";
 import { ensureOpenCodeRegistered } from "./opencodeAdapter";
 import { ensureOmpRegistered } from "./ompAdapter";
+import { ensureOpenCrabsRegistered } from "./opencrabsAdapter";
 import { ensurePiRegistered } from "./piAdapter";
 
 /** Register all known live harness adapters. Idempotent. */
@@ -17,4 +18,5 @@ export function registerBuiltinHarnesses(): void {
   ensurePiRegistered();
   ensureOmpRegistered();
   ensureFxRegistered();
+  ensureOpenCrabsRegistered();
 }
