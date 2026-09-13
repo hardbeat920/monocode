@@ -162,7 +162,7 @@ export async function steerOpenCrabsTurn(input: SteerTurnInput): Promise<void> {
   const blocks = await openCrabsPromptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
   await live.acp
-    .notify("session/steer", {
+    .notify("_session/steer", {
       sessionId: live.acpSessionId,
       prompt: blocks,
     })
