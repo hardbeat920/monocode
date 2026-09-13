@@ -4,7 +4,7 @@ import { attachmentPathText, promptBlocks } from "../attachments";
 import { buildClaudeUserMessage } from "./claudeProtocol";
 import { buildPiPrompt, buildPiSteer } from "./piProtocol";
 import { grokPromptBlocks } from "./grokProtocol";
-import { toOpenCodeFileParts } from "./opencodeProtocol";
+import { toOpenCodePromptParts } from "./opencodeProtocol";
 
 const document: Attachment = {
   id: "document",
@@ -51,21 +51,46 @@ describe("native file attachment formats", () => {
     });
   });
 
-  it("keeps OpenCode's native file parts for documents and pasted data", () => {
+  it("keeps OpenCode's native file parts for supported text and images", () => {
+    const text = {
+      ...document,
+      name: "notes.md",
+      mimeType: "text/markdown",
+      path: "/tmp/notes.md",
+    };
     expect(
-      toOpenCodeFileParts([document, { ...image, path: undefined }]),
+      toOpenCodePromptParts("", [text, { ...image, path: undefined }]),
     ).toEqual([
       {
         type: "file",
-        mime: "application/pdf",
-        filename: "report.pdf",
-        url: "file:///tmp/report.pdf",
+        mime: "text/markdown",
+        filename: "notes.md",
+        url: "file:///tmp/notes.md",
       },
       {
         type: "file",
         mime: "image/png",
         filename: "screenshot.png",
         url: "data:image/png;base64,YWJj",
+      },
+    ]);
+  });
+
+  it("gives OpenCode unsupported and provider-dependent files as local paths", () => {
+    const plist = {
+      ...document,
+      name: "Info.plist",
+      mimeType: "application/octet-stream",
+      path: "/tmp/Info.plist",
+    };
+    expect(toOpenCodePromptParts("Inspect these", [plist, document])).toEqual([
+      {
+        type: "text",
+        text: [
+          "Inspect these",
+          'Attached file (read from disk): "/tmp/Info.plist"',
+          'Attached file (read from disk): "/tmp/report.pdf"',
+        ].join("\n\n"),
       },
     ]);
   });
@@ -155,7 +180,7 @@ describe("file paths in native harness prompts", () => {
       () => buildPiPrompt({ text: "Review", attachments: files }),
       () => buildPiSteer({ text: "Review", attachments: files }),
       () => promptBlocks("Review", files),
-      () => toOpenCodeFileParts(files),
+      () => toOpenCodePromptParts("Review", files),
     ];
     for (const build of builders)
       expect(build).toThrow(/report\.pdf.*no local file path/);

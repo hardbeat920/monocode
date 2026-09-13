@@ -6,6 +6,7 @@ import {
   FilePlusCorner,
   Minus,
   Bot,
+  ChartBreakoutSquare,
   PenLine,
   Search,
   Terminal,
@@ -36,6 +37,7 @@ import {
 import { SecondOpinionCard } from "../chrome/SecondOpinionCard";
 import { NoteMiniCard } from "../chrome/NoteMiniCard";
 import { TerminalSpinner } from "../chrome/TerminalSpinner";
+import { Popover } from "../chrome/Popover";
 import { ProjectMascot } from "../chrome/ProjectMascot";
 import type { ApprovalDecision } from "../lib/harness";
 import {
@@ -59,6 +61,7 @@ import {
   type HarnessId,
   type PlanBuildTarget,
   type ToolPreview,
+  type TurnMetrics,
 } from "../lib/session";
 import { HarnessIcon } from "../chrome/HarnessIcon";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -587,6 +590,7 @@ function AgentTranscriptComponent({
               {durationMs != null && settled ? (
                 <TurnDuration
                   elapsedMs={durationMs}
+                  metrics={userBlock?.turnMetrics}
                   labelHidden={showFoldLine}
                   modelName={turnModelName}
                   completedAt={
@@ -674,6 +678,7 @@ function LiveFoldTitle({
  */
 function TurnDuration({
   elapsedMs,
+  metrics,
   labelHidden = false,
   modelName,
   harness,
@@ -685,6 +690,7 @@ function TurnDuration({
   onHandoff,
 }: {
   elapsedMs: number | null;
+  metrics?: TurnMetrics;
   /** True when the fold line above already keeps the time for this turn. */
   labelHidden?: boolean;
   modelName?: string;
@@ -725,6 +731,7 @@ function TurnDuration({
         {fromHarness && onSecondOpinion ? (
           <SecondOpinionButton from={fromHarness} onPick={onSecondOpinion} />
         ) : null}
+        <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
 
       {labelHidden ? null : (
@@ -751,6 +758,101 @@ function TurnDuration({
       ) : null}
     </div>
   );
+}
+
+function TurnMetricsBadge({
+  metrics,
+  elapsedMs,
+}: {
+  metrics?: TurnMetrics;
+  elapsedMs: number | null;
+}) {
+  const root = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState(false);
+  if (!metrics || !hasTurnMetrics(metrics)) return null;
+
+  const outputRate =
+    metrics.outputTokens != null && elapsedMs != null && elapsedMs > 0
+      ? metrics.outputTokens / (elapsedMs / 1000)
+      : undefined;
+  const headline =
+    [
+      metrics.cacheHitPercent != null
+        ? `Cache hit ${Math.round(metrics.cacheHitPercent)}%`
+        : null,
+      outputRate != null
+        ? `Output ${formatMetricCount(outputRate)} tok/s`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || "Turn tokens";
+  const detail = [
+    metrics.inputTokens != null
+      ? `${formatMetricCount(metrics.inputTokens)} input`
+      : null,
+    metrics.outputTokens != null
+      ? `${formatMetricCount(metrics.outputTokens)} output`
+      : null,
+    metrics.cacheReadTokens != null
+      ? `${formatMetricCount(metrics.cacheReadTokens)} cached`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const label = [headline, detail].filter(Boolean).join(". ");
+
+  return (
+    <div
+      ref={root}
+      className="relative shrink-0"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+    >
+      <span
+        role="img"
+        tabIndex={0}
+        aria-label={`Turn metrics: ${label}`}
+        title="Turn metrics"
+        className="grid rounded-sm p-1 outline-none hover:text-content focus-visible:ring-1 focus-visible:ring-accent"
+      >
+        <ChartBreakoutSquare className="size-3.5" strokeWidth={1.6} />
+      </span>
+      {hovered ? (
+        <Popover
+          anchor={root}
+          side="top"
+          align="start"
+          className="pointer-events-none w-max px-2.5 py-1.5"
+        >
+          <div className="text-[12px] leading-4 text-content">{headline}</div>
+          {detail ? (
+            <div className="text-[11px] leading-4 text-content/50">
+              {detail}
+            </div>
+          ) : null}
+        </Popover>
+      ) : null}
+    </div>
+  );
+}
+
+function hasTurnMetrics(metrics: TurnMetrics): boolean {
+  return (
+    metrics.cacheHitPercent != null ||
+    (metrics.inputTokens ?? 0) > 0 ||
+    (metrics.outputTokens ?? 0) > 0 ||
+    (metrics.cacheReadTokens ?? 0) > 0 ||
+    (metrics.cacheWriteTokens ?? 0) > 0
+  );
+}
+
+function formatMetricCount(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+  }).format(Math.max(0, Math.round(value)));
 }
 
 /** Wall-clock stamp for a finished turn, in the reader's own locale. */
@@ -2180,13 +2282,7 @@ function formatWorkingDuration(
 ): string {
   const who = modelName?.trim();
   const elapsed = formatElapsed(elapsedMs);
-  const verb = done
-    ? who
-      ? "worked"
-      : "Worked"
-    : who
-      ? "working"
-      : "Working";
+  const verb = done ? (who ? "worked" : "Worked") : who ? "working" : "Working";
   if (elapsed == null) {
     if (done) return who ? `${who} ${verb}` : verb;
     return who ? `${who} ${verb}…` : `${verb}…`;

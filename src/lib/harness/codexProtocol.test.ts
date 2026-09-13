@@ -633,6 +633,13 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
     });
     expect(mapped.events).toEqual([
       { type: "context", used: 42_000, window: 272_000 },
+      {
+        type: "turn.metrics",
+        inputTokens: 40_000,
+        cacheReadTokens: 30_000,
+        outputTokens: 2_000,
+        cacheHitPercent: 75,
+      },
     ]);
   });
 

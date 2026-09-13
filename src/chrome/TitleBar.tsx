@@ -26,7 +26,7 @@ import { looksLikeProject } from "../lib/recents";
 import type { HarnessId } from "../lib/session";
 import { CwdPicker } from "./CwdPicker";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useSortable } from "../hooks/useSortable";
+import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -214,11 +214,10 @@ function TabHarnesses({
   );
 }
 
-type SortableApi = ReturnType<typeof useSortable>;
+type SortableApi = ReturnType<typeof useAnimatedReorder>;
 
 function TitleTabItem({
   tab,
-  index,
   active,
   closable,
   canDrag,
@@ -229,7 +228,6 @@ function TitleTabItem({
   itemRef,
 }: {
   tab: Tab;
-  index: number;
   active: boolean;
   closable: boolean;
   canDrag: boolean;
@@ -239,21 +237,8 @@ function TitleTabItem({
   onContextMenu: (id: string, event: ReactMouseEvent<HTMLDivElement>) => void;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
-  const dragging = canDrag && sortable.draggingId === tab.id;
   const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
-  const showStart =
-    canDrag &&
-    sortable.draggingId &&
-    sortable.toIndex === index &&
-    sortable.fromIndex !== null &&
-    sortable.toIndex < sortable.fromIndex;
-  const showEnd =
-    canDrag &&
-    sortable.draggingId &&
-    sortable.toIndex === index &&
-    sortable.fromIndex !== null &&
-    sortable.toIndex > sortable.fromIndex;
 
   return (
     <div
@@ -261,7 +246,7 @@ function TitleTabItem({
         sortable.setItemRef(tab.id, el);
         itemRef?.(el);
       }}
-      className={`group @container relative flex h-full cursor-default touch-none items-center self-stretch min-w-0 w-full ${dragging ? "opacity-40" : ""}`}
+      className="reorder-item tab-motion group @container relative flex h-full cursor-default touch-none items-center self-stretch min-w-0 w-full"
       data-tauri-drag-region="false"
       onContextMenu={(event) => {
         event.preventDefault();
@@ -286,12 +271,6 @@ function TitleTabItem({
         if (canDrag) sortable.onItemPointerDown(tab.id, event);
       }}
     >
-      {showStart ? (
-        <div className="pointer-events-none absolute inset-y-1.5 left-0 z-20 w-0.5 rounded-full bg-accent" />
-      ) : null}
-      {showEnd ? (
-        <div className="pointer-events-none absolute inset-y-1.5 right-0 z-20 w-0.5 rounded-full bg-accent" />
-      ) : null}
       <button
         type="button"
         title={tooltip}
@@ -560,7 +539,7 @@ function TitleBarComponent({
   onSelectProject,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
-  const sortable = useSortable(tabIds, onReorder);
+  const sortable = useAnimatedReorder(tabIds, onReorder);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(
@@ -817,7 +796,7 @@ function TitleBarComponent({
             ref={setTabStripRef}
             className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none px-1.5"
           >
-            {tabs.map((tab, index) => (
+            {tabs.map((tab) => (
               <div
                 key={tab.id}
                 className="relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
@@ -825,7 +804,6 @@ function TitleBarComponent({
               >
                 <TitleTabItem
                   tab={tab}
-                  index={index}
                   active={tab.id === activeId}
                   closable={titleTabClosable(tab, tabs.length)}
                   canDrag={canDrag}

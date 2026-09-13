@@ -3024,6 +3024,21 @@ export default function App({
     sessions.filter((session) => !session.inboxAsk).map((session) => session.id),
   );
 
+  const dismissNoticesForContinuedSession = useCallback(
+    (sessionId: string) => {
+      void sessionReminders.dismissDue(sessionId);
+      const updatedAt = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      )?.linkedWorkItemUpdateCard?.updatedAt;
+      if (updatedAt == null) return;
+      markLinkedSessionUpdateSeen(sessionId, updatedAt);
+      setLinkedWorkItemUpdateCard(sessionId, (card) =>
+        card?.updatedAt === updatedAt ? undefined : card,
+      );
+    },
+    [sessionReminders.dismissDue, setLinkedWorkItemUpdateCard],
+  );
+
   const onPlaceSessionOnPane = useCallback(
     async (sessionId: string, targetId: string, edge: PaneEdge) => {
       if (sessionId === targetId) return;
@@ -4010,6 +4025,7 @@ export default function App({
                 : s,
             ),
           );
+          dismissNoticesForContinuedSession(sessionId);
           return;
         }
         if (
@@ -4025,6 +4041,7 @@ export default function App({
           flushHarnessEvents();
           return;
         }
+        dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
         const cards = userTurnCards(noteCard);
         setSessions((prev) =>
@@ -4111,6 +4128,7 @@ export default function App({
         void cancelHarnessTurn(pendingSwitch.from, sessionId);
       }
 
+      dismissNoticesForContinuedSession(sessionId);
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
@@ -4434,7 +4452,11 @@ export default function App({
         }
       })();
     },
-    [enqueueHarnessEvent, flushHarnessEvents],
+    [
+      dismissNoticesForContinuedSession,
+      enqueueHarnessEvent,
+      flushHarnessEvents,
+    ],
   );
 
   const onUpdatePlan = useCallback(
@@ -6013,6 +6035,7 @@ export default function App({
           <NotesView
             besideRail={projectRailOpen}
             cwd={projectCwd}
+            recents={recents}
             onClose={onLeaveNotes}
             onToggleSidebar={onToggleSidebar}
           />

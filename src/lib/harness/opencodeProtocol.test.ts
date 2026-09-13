@@ -8,6 +8,7 @@ import {
   buildOpenCodePermissionRules,
   compareSemver,
   contextUsedFromMessageInfo,
+  turnMetricsFromMessageInfo,
   detailFromToolPart,
   eventSessionId,
   inferDefaultAgent,
@@ -161,12 +162,12 @@ describe("OpenCode CLI inventory parsers", () => {
       "anthropic/claude-sonnet-4-6",
       "opencode/glm-5",
     ]);
-    expect(models[1].settings?.some((setting) => setting.id === "variant")).toBe(
-      true,
-    );
-    expect(models[0].settings?.find((setting) => setting.id === "agent")?.value).toBe(
-      "build",
-    );
+    expect(
+      models[1].settings?.some((setting) => setting.id === "variant"),
+    ).toBe(true);
+    expect(
+      models[0].settings?.find((setting) => setting.id === "agent")?.value,
+    ).toBe("build");
   });
 
   it("parses agent list headers", () => {
@@ -217,9 +218,9 @@ describe("OpenCode helpers", () => {
     expect(inferDefaultVariant("openai", ["low", "medium", "high"])).toBe(
       "medium",
     );
-    expect(
-      inferDefaultAgent([{ name: "plan" }, { name: "build" }]),
-    ).toBe("build");
+    expect(inferDefaultAgent([{ name: "plan" }, { name: "build" }])).toBe(
+      "build",
+    );
   });
 });
 
@@ -248,9 +249,33 @@ describe("contextUsedFromMessageInfo", () => {
   it("treats an all-zero reading as nothing to report", () => {
     expect(
       contextUsedFromMessageInfo({
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
       }),
     ).toBeUndefined();
+  });
+
+  it("normalizes cache usage for a turn tooltip", () => {
+    expect(
+      turnMetricsFromMessageInfo({
+        tokens: {
+          input: 1_200,
+          output: 800,
+          reasoning: 200,
+          cache: { read: 40_000, write: 5_000 },
+        },
+      }),
+    ).toEqual({
+      inputTokens: 1_200,
+      outputTokens: 1_000,
+      cacheReadTokens: 40_000,
+      cacheWriteTokens: 5_000,
+      cacheHitPercent: (40_000 / 46_200) * 100,
+    });
   });
 });
 

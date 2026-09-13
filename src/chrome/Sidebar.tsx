@@ -86,7 +86,7 @@ import {
   type SessionFolder,
   type SessionListDropTarget,
 } from "../lib/sessionFolders";
-import { SESSION_LIST_PAGE, sessionListWindow } from "../lib/sessionListWindow";
+import { LIST_PAGE_SIZE, listWindowSize } from "../lib/listWindow";
 import {
   filterSessionsByHarness,
   filterSessionsByStatus,
@@ -118,6 +118,7 @@ import { useGitFileStatuses } from "../hooks/useGitFileStatuses";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { useSortable } from "../hooks/useSortable";
+import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
 import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import { normalizeHex } from "../lib/colorUtils";
 import {
@@ -396,7 +397,7 @@ function SidebarComponent({
     null,
   );
   const [searchQuery, setSearchQuery] = useState("");
-  const [sessionListLimit, setSessionListLimit] = useState(SESSION_LIST_PAGE);
+  const [sessionListLimit, setSessionListLimit] = useState(LIST_PAGE_SIZE);
   const loadMoreRef = useRef<HTMLLIElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const pendingFolderSessionIds = useRef(new Set<string>());
@@ -467,7 +468,7 @@ function SidebarComponent({
   const activeUngroupedIndex = ungroupedVisible.findIndex(
     (session) => session.id === activeSessionId,
   );
-  const shownUngroupedCount = sessionListWindow(
+  const shownUngroupedCount = listWindowSize(
     ungroupedVisible.length,
     sessionListLimit,
     activeUngroupedIndex,
@@ -509,11 +510,14 @@ function SidebarComponent({
   const sessionListKey = `${cwd}\0${sessionFilters.showArchived}\0${sessionFilters.time}\0${sessionFilters.hiddenHarnesses.join(",")}\0${sessionFilters.status.working}\0${sessionFilters.status.needsApproval}\0${sessionFilters.status.done}\0${searchQuery}`;
   const sessionHarnesses = harnessesInSessions(sessions);
   const narrowedByUser = searchNarrowed || filtersActive;
-  const sortable = useSortable(tabOrder, (ids) => {
-    const next = ids as SidebarTab[];
+  const visibleTabs = tabOrder.filter((itemId) => itemId !== "inbox");
+  const sortable = useAnimatedReorder(visibleTabs, (ids) => {
+    let index = 0;
+    const next = tabOrder.map((itemId) =>
+      itemId === "inbox" ? itemId : ids[index++],
+    );
     setTabOrder(next);
     saveSidebarTabOrder(next);
-    if (next[0]) onTabChange(next[0]);
   });
   const visibleFolderIds = sessionListEntries.flatMap((entry) =>
     entry.kind === "folder" ? [entry.folder.id] : [],
@@ -530,8 +534,6 @@ function SidebarComponent({
     },
     { axis: "y" },
   );
-  const visibleTabs = tabOrder.filter((itemId) => itemId !== "inbox");
-  const canDragTabs = visibleTabs.length > 1;
   const showProjectRail = Boolean(onSelectProject && onOpenProject);
   // Settings live in the rail slot, so they keep it visible even when the
   // project rail itself is collapsed.
@@ -551,7 +553,7 @@ function SidebarComponent({
   const changeStats = useProjectDiffStats(gitRoot, open);
 
   useEffect(() => {
-    setSessionListLimit(SESSION_LIST_PAGE);
+    setSessionListLimit(LIST_PAGE_SIZE);
     const scroller = sessionsScrollRef.current;
     if (scroller) scroller.scrollTop = 0;
   }, [sessionListKey]);
@@ -564,7 +566,7 @@ function SidebarComponent({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry?.isIntersecting) return;
-        setSessionListLimit((current) => current + SESSION_LIST_PAGE);
+        setSessionListLimit((current) => current + LIST_PAGE_SIZE);
       },
       { root, rootMargin: "240px" },
     );
@@ -1088,39 +1090,19 @@ function SidebarComponent({
   const changeDeletions = changeStats?.deletions ?? 0;
   const hasChangeStats = changeAdditions > 0 || changeDeletions > 0;
 
-  const workspaceTabItems = visibleTabs.map((itemId, index) => {
+  const workspaceTabItems = visibleTabs.map((itemId) => {
     const active = tab === itemId;
     const isChangesTab = itemId === "changes";
-    const draggingTab = sortable.draggingId === itemId;
-    const showStart =
-      sortable.draggingId &&
-      sortable.toIndex === index &&
-      sortable.fromIndex !== null &&
-      sortable.toIndex < sortable.fromIndex;
-    const showEnd =
-      sortable.draggingId &&
-      sortable.toIndex === index &&
-      sortable.fromIndex !== null &&
-      sortable.toIndex > sortable.fromIndex;
     return (
       <div
         key={itemId}
         ref={(el) => sortable.setItemRef(itemId, el)}
-        className={`relative flex min-w-0 flex-1 touch-none items-stretch ${
-          draggingTab ? "opacity-40" : ""
-        } ${canDragTabs ? "cursor-grab active:cursor-grabbing" : ""}`}
+        className="reorder-item workspace-tab relative flex min-w-0 flex-1 touch-none items-stretch"
         onPointerDown={(event) => {
           if (event.button !== 0) return;
-          onTabPick(itemId);
           sortable.onItemPointerDown(itemId, event);
         }}
       >
-        {showStart ? (
-          <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-0.5 bg-accent" />
-        ) : null}
-        {showEnd ? (
-          <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-0.5 bg-accent" />
-        ) : null}
         <button
           type="button"
           role="tab"
@@ -1144,10 +1126,8 @@ function SidebarComponent({
             onTabPick(itemId);
           }}
           className={`flex h-6 min-w-0 flex-1 items-center justify-center self-center rounded-md px-2 text-[12px] leading-none ${
-            active
-              ? "bg-content/10 text-content"
-              : "text-content/50 hover:bg-content/5 hover:text-content"
-          } ${canDragTabs ? "cursor-grab active:cursor-grabbing" : ""}`}
+            active ? "bg-content/10 text-content" : "text-content/50"
+          }`}
         >
           {isChangesTab && hasChangeStats ? (
             <DiffStat additions={changeAdditions} deletions={changeDeletions} />
@@ -1474,7 +1454,6 @@ function SidebarComponent({
                                   "folder",
                                   entry.folder.id,
                                 )}
-                                canReorder={visibleFolderIds.length > 1}
                                 busy={entry.sessions.some((session) =>
                                   busySessionIds.has(session.id),
                                 )}
@@ -2131,7 +2110,6 @@ function FolderRow({
   sessions,
   expanded,
   dropTarget,
-  canReorder = false,
   busy,
   done,
   needsApproval,
@@ -2145,7 +2123,6 @@ function FolderRow({
   sessions: SessionSummary[];
   expanded: boolean;
   dropTarget: boolean;
-  canReorder?: boolean;
   busy: boolean;
   done: boolean;
   needsApproval: boolean;
@@ -2174,7 +2151,7 @@ function FolderRow({
       }}
       className={`group relative flex w-full touch-none items-center gap-1.5 px-2 h-8 text-left ${
         expanded ? "rounded-md" : ""
-      } ${canReorder ? "cursor-grab active:cursor-grabbing" : ""} ${
+      } ${
         dropTarget
           ? "text-content"
           : expanded
@@ -2611,7 +2588,6 @@ function SessionCard({
             </span>
             <span className="flex shrink-0 items-center gap-1.5">
               {linkedUpdateDot}
-              {workItemBadge}
               {status}
             </span>
           </span>
@@ -2633,7 +2609,6 @@ function SessionCard({
           {compact ? (
             <span className="flex shrink-0 items-center gap-1.5">
               {linkedUpdateDot}
-              {workItemBadge}
               {status}
             </span>
           ) : null}
@@ -2647,39 +2622,28 @@ function SessionCard({
           ) : (
             <span className="min-w-0 flex-1" />
           )}
-          <span
-            className={`flex shrink-0 items-center gap-1.5 ${
-              onArchive
-                ? "transition-[padding] group-focus-within:pl-5 group-hover:pl-5"
-                : ""
-            }`}
-          >
-            <HarnessIcon
-              harness={session.harness}
-              className="size-3.5 shrink-0"
-            />
+          <span className="flex shrink-0 items-center gap-1">
+            {onArchive ? (
+              <button
+                type="button"
+                data-no-drag
+                data-tauri-drag-region="false"
+                title={archiveLabel}
+                aria-label={`${archiveLabel} ${title}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onArchive();
+                }}
+                className="pointer-events-none grid size-5 place-items-center rounded-md text-content/50 opacity-0 hover:bg-content/10 hover:text-content group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+              >
+                <Archive className="size-3 shrink-0" strokeWidth={1.75} />
+              </button>
+            ) : null}
+            {workItemBadge}
           </span>
         </span>
       </div>
-      {onArchive ? (
-        <button
-          type="button"
-          data-no-drag
-          data-tauri-drag-region="false"
-          title={archiveLabel}
-          aria-label={`${archiveLabel} ${title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onArchive();
-          }}
-          className={`pointer-events-none absolute right-7 grid size-5 place-items-center rounded text-content/50 opacity-0 transition-opacity hover:bg-content/10 hover:text-content group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 ${
-            compact ? "bottom-[5px]" : "bottom-[7px]"
-          }`}
-        >
-          <Archive className="size-3.5" strokeWidth={1.75} />
-        </button>
-      ) : null}
     </div>
   );
 }

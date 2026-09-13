@@ -1,5 +1,14 @@
-import type { Attachment, RuntimeMode, ToolPreview } from "../session";
-import { attachmentPath } from "../attachments";
+import type {
+  Attachment,
+  RuntimeMode,
+  ToolPreview,
+  TurnMetrics,
+} from "../session";
+import {
+  attachmentPath,
+  attachmentPathText,
+  isVisionImage,
+} from "../attachments";
 import { isTaskListToolName } from "../taskList";
 import { extractToolPreview } from "./preview";
 import type { HarnessEvent } from "./types";
@@ -155,9 +164,20 @@ export function toFileUrl(path: string): string {
   return `file://${abs.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-export function toOpenCodeFileParts(
+export type OpenCodePromptPart =
+  | { type: "text"; text: string }
+  | { type: "file"; mime: string; filename: string; url: string };
+
+/**
+ * OpenCode forwards native file parts to the selected model provider. Keep
+ * those parts to formats its provider adapters consistently support; local
+ * files of every other type remain available to the agent through their path.
+ */
+export function toOpenCodePromptParts(
+  text: string,
   attachments: Attachment[] | undefined,
-): Array<{ type: "file"; mime: string; filename: string; url: string }> {
+): OpenCodePromptPart[] {
+  const textParts = text.trim() ? [text.trim()] : [];
   const parts: Array<{
     type: "file";
     mime: string;
@@ -165,6 +185,11 @@ export function toOpenCodeFileParts(
     url: string;
   }> = [];
   for (const attachment of attachments ?? []) {
+    const mime = attachment.mimeType.trim().toLowerCase();
+    if (!mime.startsWith("text/") && !isVisionImage(mime)) {
+      textParts.push(attachmentPathText(attachment));
+      continue;
+    }
     const url =
       !attachment.path && attachment.data
         ? `data:${attachment.mimeType};base64,${attachment.data}`
@@ -176,7 +201,12 @@ export function toOpenCodeFileParts(
       url,
     });
   }
-  return parts;
+  return [
+    ...(textParts.length > 0
+      ? [{ type: "text" as const, text: textParts.join("\n\n") }]
+      : []),
+    ...parts,
+  ];
 }
 
 export function mergeOpenCodeAssistantText(
@@ -364,6 +394,34 @@ export function contextUsedFromMessageInfo(
     num(cache, "read") +
     num(cache, "write");
   return used > 0 ? used : undefined;
+}
+
+export function turnMetricsFromMessageInfo(
+  info: Record<string, unknown> | null,
+): TurnMetrics | undefined {
+  const tokens = asRecord(info?.tokens);
+  if (!tokens) return undefined;
+  const cache = asRecord(tokens.cache);
+  const num = (rec: Record<string, unknown> | null, key: string): number => {
+    const value = rec?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  };
+  const inputTokens = num(tokens, "input");
+  const outputTokens = num(tokens, "output") + num(tokens, "reasoning");
+  const cacheReadTokens = num(cache, "read");
+  const cacheWriteTokens = num(cache, "write");
+  const cacheReported = cache !== null;
+  const cacheableInput = inputTokens + cacheReadTokens + cacheWriteTokens;
+  if (!inputTokens && !outputTokens && !cacheableInput) return undefined;
+  return {
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTokens ? { outputTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(cacheReported && cacheableInput
+      ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
+      : {}),
+  };
 }
 
 /**

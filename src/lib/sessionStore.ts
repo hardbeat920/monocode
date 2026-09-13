@@ -17,6 +17,7 @@ import type {
   TaskListMeta,
   PlanBlockMeta,
   TurnModel,
+  TurnMetrics,
 } from "./session";
 import { HARNESSES, RUNTIME_MODES } from "./session";
 
@@ -383,6 +384,8 @@ function sanitizeBlock(block: Block): Block | null {
   if (block.durationMs != null) next.durationMs = block.durationMs;
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
+  const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);
+  if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;
   if (block.approval?.decided) {
     next.approval = {
@@ -411,6 +414,39 @@ function sanitizeBlock(block: Block): Block | null {
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
   return next;
+}
+
+function sanitizeTurnMetrics(value: unknown): TurnMetrics | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const rec = value as Record<string, unknown>;
+  const number = (key: keyof TurnMetrics): number | undefined => {
+    const candidate = rec[key];
+    return typeof candidate === "number" &&
+      Number.isFinite(candidate) &&
+      candidate >= 0
+      ? candidate
+      : undefined;
+  };
+  const metrics: TurnMetrics = {
+    ...(number("inputTokens") != null
+      ? { inputTokens: number("inputTokens") }
+      : {}),
+    ...(number("outputTokens") != null
+      ? { outputTokens: number("outputTokens") }
+      : {}),
+    ...(number("cacheReadTokens") != null
+      ? { cacheReadTokens: number("cacheReadTokens") }
+      : {}),
+    ...(number("cacheWriteTokens") != null
+      ? { cacheWriteTokens: number("cacheWriteTokens") }
+      : {}),
+    ...(number("cacheHitPercent") != null
+      ? { cacheHitPercent: number("cacheHitPercent") }
+      : {}),
+  };
+  return Object.keys(metrics).length > 0 ? metrics : undefined;
 }
 
 function sanitizeTurnModel(value: unknown): TurnModel | undefined {

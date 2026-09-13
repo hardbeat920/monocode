@@ -28,6 +28,7 @@ import {
   buildPiSteer,
   contextFromSessionStats,
   contextFromUsage,
+  turnMetricsFromUsage,
   extensionUiResponse,
   extensionUiTitle,
   isAgentSettled,
@@ -746,6 +747,8 @@ function handleFrame(
 
   const context = contextFromUsage(rec, live.contextWindow);
   if (context) live.onEvent({ type: "context", ...context });
+  const metrics = turnMetricsFromUsage(rec);
+  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 
   const delta = assistantDeltaFromEvent(rec);
   if (delta) {

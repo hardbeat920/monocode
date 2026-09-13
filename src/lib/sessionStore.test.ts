@@ -114,6 +114,30 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("persists provider metrics recorded on a user turn", () => {
+    const session = newSession("claude", "/tmp/project");
+    session.blocks = [
+      {
+        id: "u1",
+        role: "user",
+        text: "remember this",
+        turnMetrics: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 80,
+          cacheHitPercent: 40,
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]?.turnMetrics).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 80,
+      cacheHitPercent: 40,
+    });
+  });
+
   it("persists a canonical GitHub work-item identity", () => {
     const session = newSession("codex", "/tmp/project");
     session.blocks = [{ id: "u1", role: "user", text: "fix PR #42" }];

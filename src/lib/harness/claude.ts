@@ -18,6 +18,7 @@ import {
   assistantToolUses,
   contextFromResult,
   contextUsedFromAssistant,
+  turnMetricsFromResult,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
   buildControlRequest,
@@ -758,6 +759,8 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
     const context = contextFromResult(rec);
     if (context) live.onEvent({ type: "context", ...context });
   }
+  const metrics = turnMetricsFromResult(rec);
+  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {
