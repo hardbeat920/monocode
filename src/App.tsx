@@ -6013,6 +6013,7 @@ export default function App({
           <NotesView
             besideRail={projectRailOpen}
             cwd={projectCwd}
+            recents={recents}
             onClose={onLeaveNotes}
             onToggleSidebar={onToggleSidebar}
           />

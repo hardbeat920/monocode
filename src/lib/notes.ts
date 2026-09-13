@@ -26,6 +26,7 @@ export type NoteUpsert = {
   body: string;
   tags: string[];
   sourceSessionId?: string;
+  /** Omit on update to keep the saved project directory. */
   sourceCwd?: string;
 };
 

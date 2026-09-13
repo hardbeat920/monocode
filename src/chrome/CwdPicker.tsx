@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight } from "./icons";
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -10,6 +11,7 @@ import { basename } from "../lib/fs";
 import { prettyCwd, prettyParent } from "../lib/paths";
 import {
   looksLikeProject,
+  projectRailItems,
   sameProjectPath,
   type RecentProject,
 } from "../lib/recents";
@@ -22,6 +24,11 @@ import { MOD } from "../lib/platform";
 type Props = {
   cwd: string;
   recents: RecentProject[];
+  /** Moving an item offers the full project rail in a single list. */
+  mode?: "switch" | "move";
+  /** Active app project, which can differ from the item's current project. */
+  activeCwd?: string;
+  renderProjectLabel?: (path: string) => ReactNode;
   projectLogoPath?: string | null;
   enabled?: boolean;
   placement?: "above" | "below";
@@ -52,6 +59,9 @@ type Row =
 export function CwdPicker({
   cwd,
   recents,
+  mode = "switch",
+  activeCwd,
+  renderProjectLabel,
   projectLogoPath,
   enabled = true,
   placement = "above",
@@ -68,6 +78,7 @@ export function CwdPicker({
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
   const closeMoreTimer = useRef<number | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const onCloseRef = useRef(onClose);
@@ -75,14 +86,20 @@ export function CwdPicker({
 
   const inProject = looksLikeProject(cwd);
   const label = prettyCwd(cwd);
-  const otherRecents = useMemo(
-    () =>
-      recents.filter((item) => !inProject || !sameProjectPath(item.path, cwd)),
-    [cwd, inProject, recents],
+  // Read the saved rail order on opening, including changes made while Notes is open.
+  const projects =
+    mode === "move" ? projectRailItems(recents, activeCwd ?? "") : recents;
+  const otherRecents = projects.filter(
+    (item) => !inProject || !sameProjectPath(item.path, cwd),
   );
-  const previewRecents = otherRecents.slice(0, PREVIEW);
-  const overflowRecents = otherRecents.slice(PREVIEW);
+  const previewRecents =
+    mode === "move" ? otherRecents : otherRecents.slice(0, PREVIEW);
+  const overflowRecents = mode === "move" ? [] : otherRecents.slice(PREVIEW);
   const hasMore = overflowRecents.length > 0;
+
+  useEffect(() => {
+    if (mode === "move") activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [active, open, mode]);
 
   const rows = useMemo((): Row[] => {
     const out: Row[] = previewRecents.map((item) => ({
@@ -215,10 +232,7 @@ export function CwdPicker({
       >
         {children ?? (
           <>
-            <ProjectLogoIcon
-              path={projectLogoPath}
-              fallbackStrokeWidth={1.5}
-            />
+            <ProjectLogoIcon path={projectLogoPath} fallbackStrokeWidth={1.5} />
             <span className="truncate font-mono text-[12px]">{label}</span>
           </>
         )}
@@ -255,7 +269,7 @@ export function CwdPicker({
                 </p>
                 <div className="px-2.5 py-1.5 text-content/50">
                   <p className="truncate text-[13px] text-content">
-                    {basename(cwd)}
+                    {renderProjectLabel?.(cwd) ?? basename(cwd)}
                   </p>
                   <p className="truncate font-mono text-[11px]">
                     {prettyParent(cwd)}
@@ -263,14 +277,20 @@ export function CwdPicker({
                 </div>
               </>
             ) : null}
-            {previewRecents.length > 0 ? (
+            {previewRecents.length > 0 || mode === "move" ? (
               <>
                 <p className="px-2.5 pb-1 pt-2 text-[10px] uppercase tracking-widest text-content/50">
-                  Recent projects
+                  {mode === "move" ? "Move to project" : "Recent projects"}
                 </p>
+                {mode === "move" && previewRecents.length === 0 ? (
+                  <p className="px-2.5 py-2 text-[13px] text-content/50">
+                    No other projects
+                  </p>
+                ) : null}
                 {previewRecents.map((item, index) => (
                   <button
                     key={item.path}
+                    ref={active === index ? activeRef : undefined}
                     type="button"
                     role="menuitem"
                     title={item.path}
@@ -287,7 +307,7 @@ export function CwdPicker({
                     }`}
                   >
                     <span className="min-w-0 truncate text-[13px]">
-                      {basename(item.path)}
+                      {renderProjectLabel?.(item.path) ?? basename(item.path)}
                     </span>
                     <span className="max-w-28 shrink-0 truncate font-mono text-[11px] text-content/45">
                       {prettyParent(item.path)}
@@ -379,7 +399,7 @@ export function CwdPicker({
               className="flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left text-content/80 hover:bg-content/5 hover:text-content"
             >
               <span className="min-w-0 truncate text-[13px]">
-                {basename(item.path)}
+                {renderProjectLabel?.(item.path) ?? basename(item.path)}
               </span>
               <span className="max-w-28 shrink-0 truncate font-mono text-[11px] text-content/45">
                 {prettyParent(item.path)}
