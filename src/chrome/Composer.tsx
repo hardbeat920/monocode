@@ -1424,11 +1424,8 @@ export function Composer({
                   width={250}
                   onDismiss={() => setPlusOpen(false)}
                   data-composer-plus
-                  className="p-1.5"
+                  className="p-1"
                 >
-                  <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-content/40">
-                    Add to message
-                  </p>
                   <button
                     type="button"
                     disabled={!attachmentsSupported}
@@ -1437,14 +1434,19 @@ export function Composer({
                       setPlusOpen(false);
                       attachFromPicker();
                     }}
-                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/5 focus-visible:bg-content/10 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    <FilePlus className="mt-0.5 size-4 shrink-0" />
+                    <FilePlus
+                      className="mt-0.5 size-3.5 shrink-0 text-content/70"
+                      strokeWidth={1.75}
+                    />
                     <span className="min-w-0">
-                      <span className="block text-[13px]">Upload file</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
+                      <span className="block text-[13px] font-medium leading-5">
+                        Upload files
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-content/50">
                         {attachmentsSupported
-                          ? "Attach files or images to this message"
+                          ? "Attach files or images"
                           : `${HARNESS_TITLE[harness]} does not support attachments`}
                       </span>
                     </span>
@@ -1458,17 +1460,24 @@ export function Composer({
                       setPlusOpen(false);
                       ref.current?.focus();
                     }}
-                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
+                    className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/5 focus-visible:bg-content/10"
                   >
-                    <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
+                    <AiIdea
+                      className={`mt-0.5 size-3.5 shrink-0 ${
+                        planSelected ? "text-yellow-300/80" : "text-content/70"
+                      }`}
+                      strokeWidth={1.75}
+                    />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px]">Plan mode</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
-                        Create a plan to review before building
+                      <span className="block text-[13px] font-medium leading-5">
+                        Plan mode
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-content/50">
+                        Plan changes before building
                       </span>
                     </span>
                     {planSelected ? (
-                      <Check className="mt-0.5 size-3.5 shrink-0 text-accent" />
+                      <Check className="mt-0.5 size-3.5 shrink-0 text-yellow-300/80" />
                     ) : null}
                   </button>
                 </Popover>
