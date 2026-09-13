@@ -1,4 +1,5 @@
 import type {
+  AgentStepKind,
   Attachment,
   RuntimeMode,
   TaskListItem,
@@ -42,6 +43,23 @@ export type HarnessEvent =
       preview?: ToolPreview;
       /** Every path affected when one structured edit changes multiple files. */
       paths?: string[];
+    }
+  /** Something a subagent did, mirrored onto its parent Agent tool call. */
+  | {
+      type: "agent.step";
+      /** Tool call id of the parent Agent/Task call. */
+      callId: string;
+      /** Provider step identity; repeats merge onto the same row. */
+      stepId: string;
+      kind: AgentStepKind;
+      text: string;
+      /** Tool kind for a "tool" step, so it gets the right icon. */
+      toolKind?: string;
+      status?: string;
+      preview?: ToolPreview;
+      /** The subagent's own name, when the provider only reveals it here. */
+      agentName?: string;
+      agentType?: string;
     }
   | {
       type: "approval.requested";

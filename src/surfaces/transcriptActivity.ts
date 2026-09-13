@@ -14,7 +14,10 @@ import type { Block } from "../lib/session";
 export type ToolCallState = "pending" | "accepted" | "rejected";
 
 export type TurnItem =
-  { type: "block"; block: Block } | { type: "activity"; blocks: Block[] };
+  | { type: "block"; block: Block }
+  | { type: "activity"; blocks: Block[] }
+  /** Delegated runs spawned together, kept out of the folding work trail. */
+  | { type: "subagents"; blocks: Block[] };
 
 export function needsApproval(block: Block): boolean {
   return !!block.approval && !block.approval.decided;
@@ -210,6 +213,16 @@ export function groupTurnItems(blocks: Block[]): TurnItem[] {
     activity = [];
   };
   visible.forEach((block) => {
+    // Delegated runs never join the work trail. Their row is the one thing in
+    // a turn that has to stay put: it is where the user goes to watch, and the
+    // trail around it folds and re-folds while the subagent is still going.
+    if (isSubagentBlock(block)) {
+      flush();
+      const last = items[items.length - 1];
+      if (last?.type === "subagents") last.blocks.push(block);
+      else items.push({ type: "subagents", blocks: [block] });
+      return;
+    }
     if (isActivityBlock(block)) {
       activity.push(block);
       return;
@@ -315,11 +328,64 @@ export function activityStillRunning(blocks: Block[]): boolean {
 
 export function hasRunningSubagent(blocks: Block[]): boolean {
   return blocks.some(
-    (block) =>
-      isToolBlock(block) &&
-      isAgentTool(block.tool?.kind, block.text || block.tool?.title) &&
-      toolCallState(block) === "pending",
+    (block) => isSubagentBlock(block) && toolCallState(block) === "pending",
   );
+}
+
+/**
+ * A delegated run: the tool call that spawned a subagent. One still waiting on
+ * you is not one yet — it stays in the work trail, where its approval controls
+ * are.
+ */
+export function isSubagentBlock(block: Block): boolean {
+  return (
+    isToolBlock(block) &&
+    !needsApproval(block) &&
+    isAgentTool(block.tool?.kind, block.text || block.tool?.title)
+  );
+}
+
+/**
+ * The whole brief a run was spawned with. Providers put the instructions here,
+ * so this can be a paragraph; it belongs on a tooltip, not on a row.
+ */
+export function subagentBrief(block: Block): string {
+  const name =
+    block.agentRun?.name?.trim() ||
+    (block.text || block.tool?.title || "").trim();
+  const stripped = name
+    .replace(/^(?:agent|task|subagent)\b[\s:·-]*/i, "")
+    .trim();
+  return stripped || "Subagent";
+}
+
+/** Past this a name stops being a name and starts being the brief again. */
+const MAX_SUBAGENT_NAME = 56;
+
+/**
+ * What to call a run on its row. A row is one line next to a live status, so
+ * take the brief's first sentence and cap it on a word — the full text stays
+ * one hover away.
+ */
+export function subagentName(block: Block): string {
+  const brief = subagentBrief(block);
+  const sentence = (brief.match(/^[^.!?]*[.!?]?/)?.[0] ?? brief).trim();
+  const name = sentence || brief;
+  if (name.length <= MAX_SUBAGENT_NAME) return name;
+  const cut = name.slice(0, MAX_SUBAGENT_NAME);
+  const space = cut.lastIndexOf(" ");
+  const trimmed = space > MAX_SUBAGENT_NAME / 2 ? cut.slice(0, space) : cut;
+  return `${trimmed.replace(/[\s,;:]+$/, "")}\u2026`;
+}
+
+/**
+ * What a delegated run handed back: its report, or the reason it died. The
+ * provider puts both in the tool result, so a finished run always has the one
+ * thing worth reading at the end of its trail.
+ */
+export function subagentReport(block: Block): string | undefined {
+  if (toolCallState(block) === "pending") return undefined;
+  return block.tool?.detail?.trim() || undefined;
 }
 
 /** A failed delegated call must stay visible even when the work trail folds. */
@@ -618,7 +684,7 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
       }
       continue;
     }
-    if (isProseBlock(item.block)) answered = true;
+    if (item.type === "block" && isProseBlock(item.block)) answered = true;
   }
   if (end < 0) return undefined;
   // Only work and the agent's commentary on it fold. A plan, a task list or a
@@ -629,6 +695,10 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
 }
 
 function isFoldableItem(item: TurnItem): boolean {
+  // A stack of delegated runs is work, so the fold reaches across it and the
+  // turn's status line stays at the top. The rows themselves never collapse —
+  // the transcript pins them outside the fold's body.
+  if (item.type === "subagents") return true;
   return item.type === "activity"
     ? !item.blocks.some(needsApproval)
     : isProseBlock(item.block);
@@ -647,7 +717,15 @@ export function firstFoldableIndex(items: TurnItem[]): number {
 export function foldedBlocks(items: TurnItem[], fold: WorkFold): Block[] {
   return items
     .slice(fold.start, fold.end + 1)
-    .flatMap((item) => (item.type === "activity" ? item.blocks : [item.block]));
+    .flatMap((item) =>
+      item.type === "block"
+        ? [item.block]
+        : // Delegated runs keep their own rows, so they are not part of what
+          // the fold summarises.
+          item.type === "subagents"
+          ? []
+          : item.blocks,
+    );
 }
 
 /** True when a nested scroller should consume this wheel, not the parent. */

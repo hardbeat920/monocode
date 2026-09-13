@@ -1,4 +1,6 @@
 import type {
+  AgentRunMeta,
+  AgentStep,
   Attachment,
   Block,
   Session,
@@ -52,6 +54,8 @@ export function applyHarnessEvent(
         preview: event.preview,
         streaming: event.status !== "completed" && event.status !== "failed",
       });
+    case "agent.step":
+      return recordAgentStep(session, event);
     case "approval.requested":
       return attachApproval(session, event);
     case "approval.resolved": {
@@ -769,6 +773,105 @@ function fillPreview(
     return stubFilePreview(kind, title);
   }
   return undefined;
+}
+
+/**
+ * How much of a subagent's trail the parent keeps. A delegated run can be
+ * thousands of calls long; the transcript only ever shows a window of it, and
+ * an unbounded array would grow the saved session without bound.
+ */
+const MAX_AGENT_STEPS = 300;
+
+const MAX_AGENT_STEP_CHARS = 2_000;
+
+/**
+ * Mirrors one subagent action onto its parent Agent tool block. Steps merge by
+ * provider id, so a call that starts pending and later completes stays one row
+ * instead of appearing twice.
+ */
+function recordAgentStep(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "agent.step" }>,
+): Session {
+  const index = session.blocks.findIndex(
+    (block) => block.tool?.callId === event.callId,
+  );
+  if (index < 0) return session;
+  const prev = session.blocks[index];
+  const text = capAgentStepText(event.text);
+  // A tool step earns a row on its label alone; prose with nothing in it does
+  // not.
+  if (!text && event.kind !== "tool") return session;
+
+  const run = prev.agentRun;
+  const step: AgentStep = {
+    id: event.stepId,
+    kind: event.kind,
+    text,
+    ...(event.toolKind ? { toolKind: event.toolKind } : {}),
+    ...(event.status ? { status: event.status } : {}),
+    ...(event.preview ? { preview: event.preview } : {}),
+  };
+
+  const at = run?.steps.findIndex((entry) => entry.id === event.stepId) ?? -1;
+  let steps: AgentStep[];
+  if (run && at >= 0) {
+    const existing = run.steps[at];
+    steps = run.steps.slice();
+    steps[at] = {
+      ...existing,
+      ...step,
+      // A completion carries the result, not the request: keep the label the
+      // call announced itself with rather than letting the result rename it.
+      text: text || existing.text,
+      preview: mergeToolPreview(event.preview, existing.preview),
+    };
+  } else {
+    steps = [...(run?.steps ?? []), step];
+    if (steps.length > MAX_AGENT_STEPS) {
+      steps = steps.slice(steps.length - MAX_AGENT_STEPS);
+    }
+  }
+
+  const next: AgentRunMeta = {
+    name:
+      event.agentName ||
+      run?.name ||
+      prev.tool?.title ||
+      prev.text ||
+      "Subagent",
+    ...(event.agentType ?? run?.agentType
+      ? { agentType: event.agentType ?? run?.agentType }
+      : {}),
+    steps,
+  };
+  if (run && sameAgentRun(run, next)) return session;
+  const blocks = session.blocks.slice();
+  blocks[index] = { ...prev, agentRun: next };
+  return { ...session, blocks };
+}
+
+function sameAgentRun(a: AgentRunMeta, b: AgentRunMeta): boolean {
+  if (a.name !== b.name || a.agentType !== b.agentType) return false;
+  if (a.steps.length !== b.steps.length) return false;
+  return a.steps.every((step, index) => sameAgentStep(step, b.steps[index]));
+}
+
+function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
+  return (
+    a.id === b.id &&
+    a.kind === b.kind &&
+    a.text === b.text &&
+    a.toolKind === b.toolKind &&
+    a.status === b.status &&
+    samePreview(a.preview, b.preview)
+  );
+}
+
+function capAgentStepText(value: string): string {
+  const text = value.trim();
+  if (text.length <= MAX_AGENT_STEP_CHARS) return text;
+  return `${text.slice(0, MAX_AGENT_STEP_CHARS)}\u2026`;
 }
 
 function findToolIndex(

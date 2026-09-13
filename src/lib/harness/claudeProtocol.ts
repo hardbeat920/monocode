@@ -758,6 +758,26 @@ export function assistantTextBlocks(rec: Record<string, unknown>): string[] {
   });
 }
 
+/** Reasoning a message carries, used to mirror a subagent's thinking. */
+export function assistantThinkingBlocks(rec: Record<string, unknown>): string[] {
+  const message = asRecord(rec.message);
+  const content = message?.content;
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => {
+    const row = asRecord(block);
+    if (stringField(row, "type") !== "thinking") return [];
+    const text = typeof row?.thinking === "string" ? row.thinking : "";
+    return text ? [text] : [];
+  });
+}
+
+/** Provider id of an assistant message, for keying steps mirrored from it. */
+export function assistantMessageId(
+  rec: Record<string, unknown>,
+): string | undefined {
+  return stringField(asRecord(rec.message), "id");
+}
+
 export function assistantToolUses(rec: Record<string, unknown>): Array<{
   id: string;
   name: string;

@@ -360,11 +360,13 @@ describe("mapCodexNotification", () => {
         agentsStates: {},
       },
     });
+    // Waiting is bookkeeping against rows that already exist, not a third
+    // subagent of its own.
     expect(started.events[0]).toMatchObject({
       type: "tool.started",
       callId: "collab_1",
       title: "Wait for 2 subagents",
-      kind: "agent",
+      kind: "other",
       status: "in_progress",
     });
 
@@ -384,7 +386,7 @@ describe("mapCodexNotification", () => {
     expect(failed.events[0]).toMatchObject({
       type: "tool.updated",
       callId: "collab_1",
-      kind: "agent",
+      kind: "other",
       status: "failed",
       detail: "worker disconnected",
     });

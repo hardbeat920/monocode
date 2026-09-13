@@ -15,7 +15,10 @@ import {
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  isSubagentBlock,
+  subagentBrief,
   subagentFailureSummary,
+  subagentName,
   toolCallLabel,
   turnCopyText,
 } from "./transcriptActivity";
@@ -631,6 +634,103 @@ describe("running subagents", () => {
     expect(
       activityPhaseTitle(buildActivityPhases([agent("one", "failed")])[0]),
     ).toBe("Subagent failed");
+  });
+});
+
+describe("the subagent stack", () => {
+  const agent = (
+    id: string,
+    name = "Correctness review",
+    status = "in_progress",
+  ): Block => ({
+    id,
+    role: "tool",
+    text: name,
+    tool: { kind: "agent", title: name, status },
+  });
+
+  it("gives delegated runs their own item instead of folding them into work", () => {
+    const items = groupTurnItems([
+      { id: "note", role: "assistant", text: "I will run two reviews." },
+      agent("a1", "Correctness review"),
+      agent("a2", "Quality review"),
+      shell("s1"),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "subagents",
+      "activity",
+    ]);
+    const stack = items[1];
+    expect(stack.type === "subagents" && stack.blocks).toHaveLength(2);
+  });
+
+  it("starts a fresh stack when the agent narrates between spawns", () => {
+    const items = groupTurnItems([
+      agent("a1", "Correctness review"),
+      { id: "note", role: "assistant", text: "Adding one more." },
+      agent("a2", "Quality review"),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "subagents",
+      "block",
+      "subagents",
+    ]);
+  });
+
+  it("folds across a stack, so the turn's status line stays at the top", () => {
+    const items = groupTurnItems([
+      { id: "lead", role: "assistant", text: "Running two reviews." },
+      agent("a1"),
+      shell("s1"),
+      { id: "answer", role: "assistant", text: "Both agree." },
+    ]);
+    const fold = foldableWork(items);
+
+    expect(fold).toBeDefined();
+    // The stack does not cut the fold short: it starts at the turn's first
+    // work, which is where the "working for" line sits.
+    expect(fold!.start).toBe(0);
+    expect(items.slice(fold!.start, fold!.end + 1).map((i) => i.type)).toEqual([
+      "block",
+      "subagents",
+      "activity",
+    ]);
+    // The stack keeps its own rows, so it is not part of what the fold
+    // collapses or summarises.
+    expect(foldedBlocks(items, fold!).map((block) => block.id)).toEqual([
+      "lead",
+      "s1",
+    ]);
+  });
+
+  it("shortens a run named with its whole brief, keeping the brief intact", () => {
+    const briefed = agent(
+      "a1",
+      "Independently review the current repository's recent changes for correctness and regressions. Inspect the uncommitted diff.",
+    );
+
+    expect(subagentName(briefed)).toBe(
+      "Independently review the current repository's recent\u2026",
+    );
+    expect(subagentName(briefed).length).toBeLessThanOrEqual(57);
+    expect(subagentBrief(briefed)).toContain("Inspect the uncommitted diff.");
+  });
+
+  it("names a run from its description, without the tool's own prefix", () => {
+    expect(subagentName(agent("a1", "Task: Correctness review"))).toBe(
+      "Correctness review",
+    );
+    expect(
+      subagentName({
+        ...agent("a1", "Explore"),
+        agentRun: { name: "Quality review", steps: [] },
+      }),
+    ).toBe("Quality review");
+    expect(isSubagentBlock(agent("a1"))).toBe(true);
+    expect(isSubagentBlock(shell("s1"))).toBe(false);
   });
 });
 

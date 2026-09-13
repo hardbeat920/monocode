@@ -120,6 +120,33 @@ export type ToolPreview = {
   output?: string;
 };
 
+/** One thing a subagent did, mirrored into the parent transcript. */
+export type AgentStepKind = "tool" | "message" | "reasoning";
+
+export type AgentStep = {
+  /** Provider step identity, so repeats merge instead of stacking up. */
+  id: string;
+  kind: AgentStepKind;
+  /** Tool label, or the prose the subagent wrote. */
+  text: string;
+  toolKind?: string;
+  status?: string;
+  preview?: ToolPreview;
+};
+
+/**
+ * The inside of a delegated run: what the subagent is called, and the trail it
+ * left. Held on the parent Agent tool block so the transcript can open it
+ * without a second session.
+ */
+export type AgentRunMeta = {
+  /** What the subagent is called, e.g. "Correctness review". */
+  name: string;
+  /** Provider agent type, e.g. "code-reviewer". */
+  agentType?: string;
+  steps: AgentStep[];
+};
+
 export type AttachmentKind = "image" | "audio" | "file";
 
 export type Attachment = {
@@ -178,6 +205,8 @@ export type Block = {
     requestId: number;
     decided?: "allow" | "deny" | "cancelled";
   };
+  /** Inner activity of a delegated run. Present on Agent/Task tool blocks. */
+  agentRun?: AgentRunMeta;
   taskList?: TaskListMeta;
   plan?: PlanBlockMeta;
   handoff?: HandoffMeta;

@@ -11,7 +11,9 @@ import {
 } from "./child";
 import {
   askUserQuestionAllowInput,
+  assistantMessageId,
   assistantTextBlocks,
+  assistantThinkingBlocks,
   assistantToolUses,
   contextFromResult,
   contextUsedFromAssistant,
@@ -611,7 +613,7 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
   const started = toolStartFromEvent(rec);
   if (started) {
     if (subagent) {
-      noteSubagentTool(live, rec, started.name, started.input);
+      noteSubagentTool(live, rec, started.id, started.name, started.input);
       return;
     }
     const tool: InFlightTool = {
@@ -661,8 +663,9 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
 
 function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   if (isSubagentMessage(rec)) {
+    noteSubagentNarration(live, rec);
     for (const use of assistantToolUses(rec)) {
-      noteSubagentTool(live, rec, use.name, use.input);
+      noteSubagentTool(live, rec, use.id, use.name, use.input);
     }
     return;
   }
@@ -704,7 +707,10 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
 }
 
 function handleUser(live: Live, rec: Record<string, unknown>): void {
-  if (isSubagentMessage(rec)) return;
+  if (isSubagentMessage(rec)) {
+    noteSubagentResults(live, rec);
+    return;
+  }
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
@@ -720,6 +726,17 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
       detail: result.text || undefined,
       preview: previewFromTool(tool.name, tool.input, result.text),
     });
+    // What a subagent hands back is the last thing it said, so it closes out
+    // that agent's own trail rather than sitting on the parent row as detail.
+    if (isAgentToolName(tool.name) && result.text.trim() && !result.isError) {
+      live.onEvent({
+        type: "agent.step",
+        callId: tool.id,
+        stepId: `${tool.id}:report`,
+        kind: "message",
+        text: result.text,
+      });
+    }
   }
 }
 
@@ -1039,37 +1056,133 @@ function handleToolProgress(live: Live, rec: Record<string, unknown>): void {
       ? live.toolsById.get(progress.parentToolUseId)
       : undefined);
   if (!tool || !isAgentToolName(tool.name)) return;
-  const detail = progress.subagentType
-    ? `${progress.subagentType.replace(/[_-]+/g, " ")} subagent`
-    : progress.toolName;
   live.onEvent({
     type: "tool.updated",
     callId: tool.id,
     title: tool.title,
     kind: "agent",
     status: "in_progress",
-    ...(detail ? { detail } : {}),
   });
+  // Progress names the call in flight. That is a step in the run, not the
+  // result of it, so it goes to the panel rather than onto the Agent row.
+  if (progress.toolName) {
+    live.onEvent({
+      type: "agent.step",
+      callId: tool.id,
+      stepId: progress.toolUseId,
+      kind: "tool",
+      text: progress.toolName,
+      status: "in_progress",
+      ...(progress.subagentType ? { agentType: progress.subagentType } : {}),
+    });
+  }
 }
 
+/**
+ * The Agent call a subagent message belongs to, or nothing when the message
+ * came from somewhere the parent transcript has no row for.
+ */
+function subagentParent(
+  live: Live,
+  rec: Record<string, unknown>,
+): InFlightTool | undefined {
+  const parentId = stringField(rec, "parent_tool_use_id");
+  if (!parentId) return undefined;
+  const parent = live.toolsById.get(parentId);
+  if (!parent || !isAgentToolName(parent.name)) return undefined;
+  return parent;
+}
+
+/**
+ * A call a subagent made, mirrored onto the Agent row that spawned it. The
+ * parent keeps its own "still running" status; the step is what the panel
+ * under that row reads back.
+ */
 function noteSubagentTool(
   live: Live,
   rec: Record<string, unknown>,
+  id: string,
   name: string,
   input: Record<string, unknown>,
 ): void {
-  const parentId = stringField(rec, "parent_tool_use_id");
-  if (!parentId) return;
-  const parent = live.toolsById.get(parentId);
-  if (!parent || !isAgentToolName(parent.name)) return;
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  const title = toolTitle(name, input);
+  // No detail: the Agent row's detail is the report the run hands back, and
+  // writing the call of the moment there would leave whatever the subagent
+  // happened to do last standing in as its result.
   live.onEvent({
     type: "tool.updated",
     callId: parent.id,
     title: parent.title,
     kind: "agent",
     status: "in_progress",
-    detail: toolTitle(name, input),
   });
+  if (!id) return;
+  const preview = previewFromTool(name, input);
+  live.onEvent({
+    type: "agent.step",
+    callId: parent.id,
+    stepId: id,
+    kind: "tool",
+    text: title,
+    toolKind: toolKindFromName(name),
+    status: "in_progress",
+    ...(preview ? { preview } : {}),
+  });
+}
+
+/**
+ * What a subagent said and thought on its way through the work. Its prose
+ * never joins the parent transcript — that would read as the main agent
+ * talking — but it is the most legible thing in the panel for its own row.
+ */
+function noteSubagentNarration(
+  live: Live,
+  rec: Record<string, unknown>,
+): void {
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  const messageId = assistantMessageId(rec) ?? crypto.randomUUID();
+  const thinking = assistantThinkingBlocks(rec).join("").trim();
+  if (thinking) {
+    live.onEvent({
+      type: "agent.step",
+      callId: parent.id,
+      stepId: `${messageId}:thinking`,
+      kind: "reasoning",
+      text: thinking,
+    });
+  }
+  const text = assistantTextBlocks(rec).join("").trim();
+  if (text) {
+    live.onEvent({
+      type: "agent.step",
+      callId: parent.id,
+      stepId: `${messageId}:text`,
+      kind: "message",
+      text,
+    });
+  }
+}
+
+/** Settles the subagent's own tool rows once their results come back. */
+function noteSubagentResults(
+  live: Live,
+  rec: Record<string, unknown>,
+): void {
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  for (const result of toolResultsFromUserMessage(rec)) {
+    live.onEvent({
+      type: "agent.step",
+      callId: parent.id,
+      stepId: result.toolUseId,
+      kind: "tool",
+      text: "",
+      status: result.isError ? "failed" : "completed",
+    });
+  }
 }
 
 function isBackgroundedAgentTool(live: Live, toolUseId: string): boolean {

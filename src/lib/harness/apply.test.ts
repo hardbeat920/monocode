@@ -626,3 +626,107 @@ describe("clarifying questions", () => {
     expect(session.pendingQuestion).toBeUndefined();
   });
 });
+
+describe("subagent steps", () => {
+  const spawn = () =>
+    applyHarnessEvent(newSession("claude", "/tmp"), {
+      type: "tool.started",
+      callId: "agent-1",
+      title: "Correctness review",
+      kind: "agent",
+      status: "in_progress",
+    });
+
+  it("mirrors a subagent's work onto the call that spawned it", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "Read src/App.tsx",
+      toolKind: "read",
+      status: "in_progress",
+    });
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "m1",
+      kind: "message",
+      text: "Two regressions stand out.",
+    });
+
+    const run = session.blocks[0].agentRun;
+    expect(run?.name).toBe("Correctness review");
+    expect(run?.steps).toHaveLength(2);
+    expect(run?.steps[0]).toMatchObject({
+      kind: "tool",
+      text: "Read src/App.tsx",
+      status: "in_progress",
+    });
+    expect(run?.steps[1]).toMatchObject({ kind: "message" });
+  });
+
+  it("settles a step in place instead of repeating it", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "Read src/App.tsx",
+      status: "in_progress",
+    });
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "",
+      status: "completed",
+    });
+
+    const steps = session.blocks[0].agentRun?.steps ?? [];
+    expect(steps).toHaveLength(1);
+    // The result renames nothing: the row keeps the label the call announced.
+    expect(steps[0]).toMatchObject({
+      text: "Read src/App.tsx",
+      status: "completed",
+    });
+  });
+
+  it("drops a step with no parent call to hang it on", () => {
+    const session = spawn();
+    expect(
+      applyHarnessEvent(session, {
+        type: "agent.step",
+        callId: "agent-missing",
+        stepId: "t1",
+        kind: "tool",
+        text: "Read src/App.tsx",
+      }),
+    ).toBe(session);
+  });
+
+  it("keeps the parent tool block's own identity", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "Read src/App.tsx",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "agent-1",
+      title: "Correctness review",
+      kind: "agent",
+      status: "completed",
+      detail: "No regressions found.",
+    });
+
+    expect(session.blocks[0].tool?.status).toBe("completed");
+    expect(session.blocks[0].agentRun?.steps).toHaveLength(1);
+  });
+});

@@ -36,6 +36,7 @@ import {
 import { SecondOpinionCard } from "../chrome/SecondOpinionCard";
 import { NoteMiniCard } from "../chrome/NoteMiniCard";
 import { TerminalSpinner } from "../chrome/TerminalSpinner";
+import { ProjectMascot } from "../chrome/ProjectMascot";
 import type { ApprovalDecision } from "../lib/harness";
 import {
   isEditTool,
@@ -53,6 +54,7 @@ import { Shimmer } from "./Shimmer";
 import {
   hasPendingApproval,
   HARNESS_TITLE,
+  type AgentStep,
   type Block,
   type HarnessId,
   type PlanBuildTarget,
@@ -76,7 +78,6 @@ import {
   foldedBlocks,
   groupTurnItems,
   groupTurns,
-  hasRunningSubagent,
   initialThinkingIndex,
   isIncompleteTool,
   isThinkingBlock,
@@ -85,7 +86,9 @@ import {
   needsApproval,
   nestedScrollAbsorbsWheel,
   proseSummary,
-  subagentFailureSummary,
+  subagentBrief,
+  subagentName,
+  subagentReport,
   toolCallLabel,
   toolCallState,
   turnCopyText,
@@ -405,28 +408,25 @@ function AgentTranscriptComponent({
           const turnId = turn[0].id;
           const fold = foldableWork(items);
           const folded = fold ? foldedBlocks(items, fold) : [];
-          const subagentFailure = subagentFailureSummary(turn);
-          // Failures open once by default so their provider detail is not
-          // buried. An explicit click still lets the reader fold them away.
-          const workOpen = openWork[turnId] ?? !!subagentFailure;
+          const workOpen = openWork[turnId] ?? false;
           // The fold line is the turn's status line from the first token to
           // the last: the mark, and the clock beside it. It never moves, so a
           // turn settling does not shuffle the layout around the answer.
           const live = visible && !settled && !preparingHandoff;
           const turnModelName =
             turnModel?.name ?? (live ? currentModelName : undefined);
-          const foldTitle: ReactNode = subagentFailure ? (
-            subagentFailure
-          ) : live ? (
+          // The fold line speaks for the main agent only. A delegated run has
+          // its own row, which says who is working and how it went, so saying
+          // it again here would be two lines telling the same story.
+          const foldTitle: ReactNode = live ? (
             <LiveFoldTitle
               startedAt={startedAt}
               paused={waitingForApproval}
               waitingLabel={pendingQuestion ? "Waiting for answers" : undefined}
-              subagent={hasRunningSubagent(turn)}
               modelName={turnModelName}
             />
           ) : durationMs != null ? (
-            formatWorkingDuration(durationMs, true, false, turnModelName)
+            formatWorkingDuration(durationMs, turnModelName, true)
           ) : (
             workSummaryLine(folded)
           );
@@ -441,7 +441,16 @@ function AgentTranscriptComponent({
               ? firstWork
               : items.length;
           const renderItem = (item: TurnItem, itemIndex: number) =>
-            item.type === "activity" ? (
+            item.type === "subagents" ? (
+              <SubagentStack
+                key={item.blocks[0].id}
+                blocks={item.blocks}
+                cwd={cwd}
+                live={live}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+              />
+            ) : item.type === "activity" ? (
               itemIndex === initialThinkingAt ? (
                 <InitialThinking
                   key={item.blocks[0].id}
@@ -475,6 +484,7 @@ function AgentTranscriptComponent({
                   isProseBlock(item.block) &&
                   itemIndex > 0 &&
                   (items[itemIndex - 1]?.type === "activity" ||
+                    items[itemIndex - 1]?.type === "subagents" ||
                     (itemIndex === foldLineAt && showFoldLine))
                 }
                 onApproval={onApproval}
@@ -488,6 +498,23 @@ function AgentTranscriptComponent({
                 cwd={cwd}
               />
             );
+          // The fold reaches across a stack of delegated runs, but those rows
+          // do not collapse with it: they are lifted out and parked under the
+          // work, where they stay put however often it re-folds.
+          const foldEntries = fold
+            ? items
+                .slice(fold.start, fold.end + 1)
+                .map((entry, offset) => ({
+                  entry,
+                  index: fold.start + offset,
+                }))
+            : [];
+          const foldSubagents = foldEntries.filter(
+            ({ entry }) => entry.type === "subagents",
+          );
+          const foldWork = foldEntries.filter(
+            ({ entry }) => entry.type !== "subagents",
+          );
           const foldLineRow = (
             <TurnRow key="work-fold" folded={!showFoldLine}>
               <WorkFoldLine
@@ -495,7 +522,6 @@ function AgentTranscriptComponent({
                 kind={workKind(folded)}
                 harness={turnHarness}
                 live={live}
-                failed={!!subagentFailure}
                 expandable={!!fold}
                 open={workOpen && !!fold}
                 onToggle={() => toggleWork(turnId, workOpen)}
@@ -522,22 +548,29 @@ function AgentTranscriptComponent({
                     foldLineRow,
                     <TurnRow key="work-details" folded={!workOpen}>
                       {() =>
-                        items
-                          .slice(fold.start, fold.end + 1)
-                          .map((entry, offset) => (
-                            <div
-                              key={turnItemKey(entry)}
-                              className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
-                                fold.start + offset === fold.end
-                                  ? "zen-fold-tail"
-                                  : ""
-                              }`}
-                            >
-                              {renderItem(entry, fold.start + offset)}
-                            </div>
-                          ))
+                        foldWork.map(({ entry, index }, offset) => (
+                          <div
+                            key={turnItemKey(entry)}
+                            className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
+                              offset === foldWork.length - 1
+                                ? "zen-fold-tail"
+                                : ""
+                            }`}
+                          >
+                            {renderItem(entry, index)}
+                          </div>
+                        ))
                       }
                     </TurnRow>,
+                    // Delegated runs sit under the agent's own work, not
+                    // among it: they are a second thing the turn is doing,
+                    // and reading them as the first steps of the main trail
+                    // is what made them look like its work.
+                    ...foldSubagents.map(({ entry, index }) => (
+                      <div key={turnItemKey(entry)} className="flow-root pb-1">
+                        {renderItem(entry, index)}
+                      </div>
+                    )),
                   ];
                 }
                 const row = (
@@ -615,19 +648,17 @@ function LiveFoldTitle({
   startedAt,
   paused,
   waitingLabel,
-  subagent = false,
   modelName,
 }: {
   startedAt?: number;
   paused: boolean;
   waitingLabel?: string;
-  subagent?: boolean;
   modelName?: string;
 }) {
   const elapsedMs = useElapsedFrom(startedAt, paused);
   const text = paused
     ? (waitingLabel ?? "Waiting for approval")
-    : formatWorkingDuration(elapsedMs, false, subagent, modelName);
+    : formatWorkingDuration(elapsedMs, modelName);
   return (
     <Shimmer className="min-w-0 truncate font-sans text-sm" duration={1}>
       {text}
@@ -664,7 +695,7 @@ function TurnDuration({
   onSecondOpinion?: (harness: HarnessId, model: string) => void;
   onHandoff?: (harness: HarnessId, model: string) => void;
 }) {
-  const label = formatWorkingDuration(elapsedMs, true, false, modelName);
+  const label = formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
     <span
       aria-hidden
@@ -1119,7 +1150,7 @@ function TurnRow({
 
 /** A turn item's identity, stable as the group it names grows. */
 function turnItemKey(item: TurnItem): string {
-  return item.type === "activity" ? item.blocks[0].id : item.block.id;
+  return item.type === "block" ? item.block.id : item.blocks[0].id;
 }
 
 /**
@@ -1133,7 +1164,6 @@ function WorkFoldLine({
   kind,
   harness,
   live = false,
-  failed = false,
   expandable,
   open,
   onToggle,
@@ -1142,16 +1172,13 @@ function WorkFoldLine({
   kind: ActivityPhaseKind;
   harness?: HarnessId;
   live?: boolean;
-  failed?: boolean;
   expandable: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
   const icon = (
     <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-      {failed ? (
-        <X className="size-3.5 shrink-0 text-red-400" strokeWidth={2} />
-      ) : open ? (
+      {open ? (
         // Open, the chevron stays put: it is the way back, and hunting for it
         // under the cursor is no way to close what you opened.
         <ChevronRight
@@ -1183,11 +1210,7 @@ function WorkFoldLine({
   );
   // While the agent runs, the clock shimmers here rather than at the bottom,
   // which is now bare.
-  const label = failed ? (
-    <span className="min-w-0 flex-1 truncate font-sans text-sm text-red-400">
-      {title}
-    </span>
-  ) : live ? (
+  const label = live ? (
     title
   ) : (
     <span className="min-w-0 flex-1 truncate font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
@@ -1235,6 +1258,8 @@ type ActivityPhasesProps = {
   blocks: Block[];
   cwd?: string;
   done?: boolean;
+  /** False inside a nested panel, which supplies its own gutter. */
+  padded?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
@@ -1244,6 +1269,7 @@ const ActivityPhases = memo(function ActivityPhases({
   blocks,
   cwd,
   done,
+  padded = true,
   onApproval,
   onOpenFile,
   onOpenDiff,
@@ -1251,7 +1277,7 @@ const ActivityPhases = memo(function ActivityPhases({
   const phases = useMemo(() => buildActivityPhases(blocks), [blocks]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-1 px-4">
+    <div className={`flex min-w-0 flex-col gap-1 ${padded ? "px-4" : ""}`}>
       {phases.map((phase, index) => (
         <ActivityPhaseGroup
           key={phase.id}
@@ -1276,6 +1302,7 @@ function sameActivity(a: ActivityPhasesProps, b: ActivityPhasesProps): boolean {
   return (
     a.cwd === b.cwd &&
     a.done === b.done &&
+    a.padded === b.padded &&
     a.onApproval === b.onApproval &&
     a.onOpenFile === b.onOpenFile &&
     a.onOpenDiff === b.onOpenDiff &&
@@ -1364,8 +1391,7 @@ function ActivityPhaseGroup({
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const waiting = phase.steps.some(needsApproval);
-  const failed = !!subagentFailureSummary(phase.steps);
-  const open = waiting || (override ?? (active || failed));
+  const open = waiting || (override ?? active);
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
   useLivePhaseScroll(liveScroller, active && open, phase.steps);
   const title = activityPhaseTitle(phase, active);
@@ -1491,6 +1517,270 @@ function ActivityPhaseGroup({
       </div>
     </div>
   );
+}
+
+/**
+ * Every delegated run in the turn, one row each. The main transcript cycles —
+ * work folds behind a line, prose replaces prose — and a subagent you are
+ * watching must not move while that happens, so these rows are never part of a
+ * fold and hold their place from the moment the agents start.
+ *
+ * A row is a mascot, a name, and what that agent is doing right now. Click it
+ * and the agent's own trail opens underneath.
+ */
+function SubagentStack({
+  blocks,
+  cwd,
+  live = false,
+  onOpenFile,
+  onOpenDiff,
+}: {
+  blocks: Block[];
+  cwd?: string;
+  live?: boolean;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+}) {
+  // A run that died opens itself, so the provider's reason is not buried
+  // behind a face that looks like every other finished one. A click takes the
+  // row over from there and it stays where the reader puts it.
+  const [override, setOverride] = useState<Record<string, boolean>>({});
+  const isOpen = (block: Block) =>
+    override[block.id] ?? toolCallState(block) === "rejected";
+
+  return (
+    <div className="flex min-w-0 flex-col px-4">
+      {blocks.map((block) => (
+        <SubagentPanel
+          key={block.id}
+          block={block}
+          cwd={cwd}
+          live={live}
+          open={isOpen(block)}
+          onToggle={() =>
+            setOverride((current) => ({
+              ...current,
+              [block.id]: !isOpen(block),
+            }))
+          }
+          onOpenFile={onOpenFile}
+          onOpenDiff={onOpenDiff}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One delegated run: its name, what it is doing, and — once opened — the trail
+ * it left, with the same tool rows, thinking and prose the main transcript
+ * shows. While it runs the trail is a short window pinned to the newest step,
+ * so a subagent doing hundreds of things cannot push the turn off the screen.
+ */
+function SubagentPanel({
+  block,
+  cwd,
+  live = false,
+  open,
+  onToggle,
+  onOpenFile,
+  onOpenDiff,
+}: {
+  block: Block;
+  cwd?: string;
+  live?: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+}) {
+  const name = subagentName(block);
+  const brief = subagentBrief(block);
+  const state = toolCallState(block);
+  const active = live && state === "pending";
+  const steps = block.agentRun?.steps ?? [];
+  // The run's trail as transcript blocks, so the panel groups it the way the
+  // main transcript groups the agent's own work: what it said, then the calls
+  // that line introduced, folding behind it once it moves on.
+  const stepBlocks = useMemo(() => steps.map(agentStepBlock), [steps]);
+  const status = subagentStatusLine(block, steps);
+  const report = subagentReport(block);
+  const failed = state === "rejected";
+
+  // The name takes the room it needs and gives the rest back: a provider that
+  // names a run with its whole brief must not push the row off the pane.
+  const label = (
+    <span className="flex min-w-0 flex-1 items-baseline gap-2">
+      {active ? (
+        <Shimmer
+          className="min-w-0 flex-1 truncate font-sans text-sm"
+          duration={1.6}
+        >
+          {name}
+        </Shimmer>
+      ) : (
+        <span
+          className={`min-w-0 flex-1 truncate font-sans text-sm transition-colors duration-200 ${
+            state === "rejected"
+              ? "text-red-400"
+              : "text-content/75 group-hover:text-content"
+          }`}
+        >
+          {name}
+        </span>
+      )}
+      {status ? (
+        <span className="max-w-[45%] shrink-0 truncate font-sans text-[12px] text-content/40">
+          {status}
+        </span>
+      ) : null}
+    </span>
+  );
+
+  // A run that has not reported a step yet has nothing to open into. The row
+  // still holds its place, so the chevron arriving does not move anything.
+  if (steps.length === 0 && !report) {
+    return (
+      <div
+        aria-label={`Subagent: ${name}`}
+        title={brief}
+        className="-mx-1.5 flex min-w-0 items-center gap-2 px-1.5 py-1"
+      >
+        <SubagentMascot name={name} state={state} active={active} />
+        {label}
+        <span className="size-3.5 shrink-0" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={open ? `Hide ${name}'s work` : `Show ${name}'s work`}
+        title={brief}
+        onClick={onToggle}
+        // An open row keeps the wash it lit up under the cursor, so the panel
+        // below reads as hanging off it rather than off the transcript.
+        className={`group -mx-1.5 flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors duration-200 hover:bg-content/8 ${
+          open ? "bg-content/8" : ""
+        }`}
+      >
+        <SubagentMascot name={name} state={state} active={active} />
+        {label}
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-content/35 transition-transform duration-200 group-hover:text-content/60 ${
+            open ? "rotate-90" : ""
+          }`}
+          strokeWidth={1.75}
+        />
+      </button>
+      <div className="zen-phase-body" data-open={open}>
+        {open ? (
+          /*
+           * No scroll window of its own. Each phase inside already keeps the
+           * group the run is working in to a short pinned window; wrapping a
+           * second window around them nests one 17.5rem scroller inside
+           * another, and the inner one can never reach its own last row.
+           */
+          <div className="flex min-w-0 flex-col pb-1">
+            <ActivityPhases
+              blocks={stepBlocks}
+              cwd={cwd}
+              done={!active}
+              padded={false}
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+            {report ? (
+              <div className="zen-phase-step py-1">
+                {failed ? (
+                  <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-red-400/80">
+                    {report}
+                  </pre>
+                ) : (
+                  <AgentMarkdown
+                    text={report}
+                    cwd={cwd}
+                    onOpenFile={onOpenFile}
+                  />
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The pixel mascot standing in for a subagent, hopping while it works. The
+ * sprite is hashed off the agent's name, so the same reviewer keeps the same
+ * face across a session and two agents in a row are told apart at a glance.
+ */
+function SubagentMascot({
+  name,
+  state,
+  active = false,
+}: {
+  name: string;
+  state: ToolCallState;
+  active?: boolean;
+}) {
+  return (
+    <ProjectMascot
+      project={name}
+      active={active}
+      className={`size-3.5 shrink-0 ${
+        state === "rejected"
+          ? "text-red-400"
+          : state === "pending"
+            ? "text-content/70"
+            : "text-content/45"
+      }`}
+    />
+  );
+}
+
+/**
+ * A mirrored step as the transcript block it stands for, so a subagent's trail
+ * goes through the same rows — labels, file chips, diffs — as the main agent's.
+ */
+function agentStepBlock(step: AgentStep): Block {
+  if (step.kind !== "tool") {
+    return {
+      id: step.id,
+      role: step.kind === "reasoning" ? "reasoning" : "assistant",
+      text: step.text,
+    };
+  }
+  return {
+    id: step.id,
+    role: "tool",
+    text: step.text,
+    tool: {
+      callId: step.id,
+      title: step.text,
+      ...(step.toolKind ? { kind: step.toolKind } : {}),
+      ...(step.status ? { status: step.status } : {}),
+      ...(step.preview ? { preview: step.preview } : {}),
+    },
+  };
+}
+
+/** What a delegated run is up to: its newest step, or how much it got through. */
+/**
+ * A run is counted, never narrated. Echoing the call in flight put a second
+ * scrolling command line on every row — the shimmer on the name already says
+ * the agent is working, and the count says how far it has got.
+ */
+function subagentStatusLine(block: Block, steps: AgentStep[]): string {
+  if (toolCallState(block) === "rejected") return "failed";
+  const tools = steps.filter((step) => step.kind === "tool").length;
+  if (tools === 0) return "";
+  return tools === 1 ? "1 step" : `${tools} steps`;
 }
 
 /** Whether the line that titled a group has more in it than the header shows. */
@@ -1878,28 +2168,23 @@ function useElapsedFrom(
 
 function formatWorkingDuration(
   elapsedMs: number | null,
-  done = false,
-  subagent = false,
   modelName?: string,
+  done = false,
 ): string {
   const who = modelName?.trim();
   const elapsed = formatElapsed(elapsedMs);
-  const verb = workingVerb(done, subagent, !who);
+  const verb = done
+    ? who
+      ? "worked"
+      : "Worked"
+    : who
+      ? "working"
+      : "Working";
   if (elapsed == null) {
     if (done) return who ? `${who} ${verb}` : verb;
     return who ? `${who} ${verb}…` : `${verb}…`;
   }
   return who ? `${who} ${verb} for ${elapsed}` : `${verb} for ${elapsed}`;
-}
-
-function workingVerb(
-  done: boolean,
-  subagent: boolean,
-  capitalized: boolean,
-): string {
-  if (done) return capitalized ? "Worked" : "worked";
-  if (subagent) return capitalized ? "Subagent running" : "subagent running";
-  return capitalized ? "Working" : "working";
 }
 
 function formatElapsed(elapsedMs: number | null): string | null {
