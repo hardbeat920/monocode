@@ -21,6 +21,7 @@ export function useAnimatedReorder<T extends string>(
   const latest = useRef({ ids, onReorder });
   latest.current = { ids, onReorder };
   const cleanup = useRef<(() => void) | null>(null);
+  const finishSettling = useRef<(() => void) | null>(null);
   const suppressClickUntil = useRef(0);
   const orderKey = ids.join("\0");
 
@@ -33,7 +34,9 @@ export function useAnimatedReorder<T extends string>(
 
   const onItemPointerDown = useCallback(
     (id: T, event: PointerEvent) => {
-      if (event.button !== 0 || cleanup.current) return;
+      if (event.button !== 0) return;
+      finishSettling.current?.();
+      if (cleanup.current) return;
       // A new press is a click candidate, even immediately after a previous drag.
       suppressClickUntil.current = 0;
       const items = latest.current.ids;
@@ -55,6 +58,15 @@ export function useAnimatedReorder<T extends string>(
           : `translate3d(0, ${offset}px, 0)`;
       const coordinate = axis === "x" ? "clientX" : "clientY";
       const handle = tabs[from];
+      const scrollProperty = axis === "x" ? "scrollLeft" : "scrollTop";
+      const scrollParents: { element: HTMLElement; start: number }[] = [];
+      for (
+        let element = handle.parentElement;
+        element;
+        element = element.parentElement
+      ) {
+        scrollParents.push({ element, start: element[scrollProperty] });
+      }
       const pointerId = event.pointerId;
       const startPosition = event[coordinate];
       const reducedMotion = window.matchMedia(
@@ -89,6 +101,7 @@ export function useAnimatedReorder<T extends string>(
         window.removeEventListener("pointercancel", onCancel);
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("blur", onCancel);
+        window.removeEventListener("scroll", onScroll, true);
         window.clearTimeout(finishTimer);
         window.cancelAnimationFrame(frame);
         for (const element of tabs) {
@@ -99,6 +112,7 @@ export function useAnimatedReorder<T extends string>(
         releasePointer();
         if (active) suppressClickUntil.current = performance.now() + 400;
         cleanup.current = null;
+        finishSettling.current = null;
         setDraggingId(null);
       }
 
@@ -115,10 +129,16 @@ export function useAnimatedReorder<T extends string>(
 
       function paint(moveHandle = true) {
         frame = 0;
+        // Scroll moves the original slots without changing their layout order.
+        const scrollOffset = scrollParents.reduce(
+          (offset, { element, start }) =>
+            offset + element[scrollProperty] - start,
+          0,
+        );
         const offset = Math.max(
           rects[0].start - rects[from].start,
           Math.min(
-            pointerPosition - startPosition,
+            pointerPosition - startPosition + scrollOffset,
             rects[rects.length - 1].end - rects[from].end,
           ),
         );
@@ -138,6 +158,11 @@ export function useAnimatedReorder<T extends string>(
           destination = next;
           preview(next);
         }
+      }
+
+      function onScroll() {
+        if (active && !settling && !frame)
+          frame = window.requestAnimationFrame(() => paint());
       }
 
       function onMove(ev: globalThis.PointerEvent) {
@@ -185,6 +210,7 @@ export function useAnimatedReorder<T extends string>(
               latest.current.onReorder(moveItem(items, from, to), id);
           });
         };
+        finishSettling.current = finish;
         if (duration === 0) finish();
         else finishTimer = setTimeout(finish, duration);
       }
@@ -210,6 +236,7 @@ export function useAnimatedReorder<T extends string>(
       window.addEventListener("pointercancel", onCancel);
       window.addEventListener("keydown", onKey);
       window.addEventListener("blur", onCancel);
+      window.addEventListener("scroll", onScroll, true);
     },
     [axis],
   );

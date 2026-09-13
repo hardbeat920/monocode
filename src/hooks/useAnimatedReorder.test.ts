@@ -5,9 +5,10 @@ import { useAnimatedReorder } from "./useAnimatedReorder";
 
 const ids = ["sessions", "changes", "explorer"];
 
-function tabAt(left: number, top: number) {
+function tabAt(left: number, top: number, parentElement: HTMLElement) {
   const captured = new Set<number>();
   return {
+    parentElement,
     getBoundingClientRect: () => ({
       left,
       right: left + 100,
@@ -49,7 +50,12 @@ function setup(reducedMotion = false, axis: "x" | "y" = "x") {
     return null;
   }
   renderToString(createElement(Probe));
-  const tabs = [tabAt(0, 0), tabAt(100, 33), tabAt(200, 66)];
+  const scroller = { scrollLeft: 0, scrollTop: 0, parentElement: null };
+  const tabs = [
+    [0, 0],
+    [100, 33],
+    [200, 66],
+  ].map(([left, top]) => tabAt(left, top, scroller as unknown as HTMLElement));
   tabs.forEach((tab, index) =>
     reorder.setItemRef(ids[index], tab as unknown as HTMLElement),
   );
@@ -60,7 +66,7 @@ function setup(reducedMotion = false, axis: "x" | "y" = "x") {
       clientY: index * 33 + 16,
       pointerId,
     } as ReactPointerEvent);
-  return { reorder, tabs, onReorder, press };
+  return { reorder, tabs, onReorder, press, scroller };
 }
 
 beforeEach(() => {
@@ -98,6 +104,30 @@ afterEach(() => {
 });
 
 describe("workspace tab gestures", () => {
+  it.each([
+    ["x", 150, 100, "translate3d(200px, 0, 0)"],
+    ["y", 49, 33, "translate3d(0, 66px, 0)"],
+  ] as const)(
+    "keeps the dragged item under the pointer when scrolling on %s",
+    (axis, position, scroll, transform) => {
+      const { press, tabs, scroller, onReorder } = setup(false, axis);
+      press();
+      pointer("pointermove", position);
+      vi.advanceTimersByTime(16);
+      if (axis === "x") scroller.scrollLeft = scroll;
+      else scroller.scrollTop = scroll;
+      browser.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(16);
+      expect(tabs[0].style.transform).toBe(transform);
+      pointer("pointerup", position);
+      vi.runAllTimers();
+      expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+        ["changes", "explorer", "sessions"],
+        "sessions",
+      );
+    },
+  );
+
   it("releases drag feedback immediately while the drop animation finishes", () => {
     const { press, tabs, onReorder } = setup();
     press();
@@ -161,6 +191,27 @@ describe("workspace tab gestures", () => {
     pointer("pointerup", 250);
     expect(reorder.consumeClick()).toBe(false);
   });
+
+  it.each([20, 140])(
+    "accepts a fresh click started during settling and released after %i ms",
+    (held) => {
+      const { press, reorder, onReorder } = setup();
+      press();
+      pointer("pointermove", 160);
+      pointer("pointerup", 160);
+      expect(reorder.consumeClick()).toBe(true);
+      vi.advanceTimersByTime(60);
+      press(2);
+      vi.advanceTimersByTime(held);
+      pointer("pointerup", 250);
+      expect(reorder.consumeClick()).toBe(false);
+      vi.runAllTimers();
+      expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+        ["changes", "sessions", "explorer"],
+        "sessions",
+      );
+    },
+  );
 
   it("previews the latest pointer position and makes room before committing", () => {
     const { press, tabs, onReorder } = setup();
