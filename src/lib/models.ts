@@ -594,9 +594,15 @@ export function preferredModelId(harness: HarnessId): string {
 }
 
 /** Provider + model new conversations should start with. */
-export function defaultSessionChoice(): LastModelChoice {
+export function defaultSessionChoice(
+  available?: (id: HarnessId) => boolean,
+): LastModelChoice {
   const last = loadLastModelChoice();
-  const harness = last?.harness ?? "cursor";
+  const preferred = last?.harness ?? "cursor";
+  const harness =
+    available && !available(preferred)
+      ? (HARNESSES.find(available) ?? preferred)
+      : preferred;
   return { harness, model: preferredModelId(harness) };
 }
 

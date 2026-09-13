@@ -1718,7 +1718,7 @@ function ProviderRow({
       ) : null}
       <SecondaryButton
         onClick={() => current && onDefault(harness, current.id)}
-        disabled={isDefault || !current}
+        disabled={isDefault || !available || !current}
       >
         {isDefault ? "Default" : "Use by default"}
       </SecondaryButton>

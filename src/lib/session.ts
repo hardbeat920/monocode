@@ -400,8 +400,9 @@ export function newSession(
 export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
+  available?: (id: HarnessId) => boolean,
 ): Session {
-  const choice = defaultSessionChoice();
+  const choice = defaultSessionChoice(available);
   return newSession(choice.harness, cwd, choice.model, runtimeMode);
 }
 

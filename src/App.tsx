@@ -165,6 +165,7 @@ import {
   compactHarnessContext,
   forgetHarnessSession,
   generateHarnessTitle,
+  isHarnessAvailable,
   isLiveHarness,
   probeHarnessAvailability,
   refreshHarnessCatalogs,
@@ -610,6 +611,10 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
 // Register capabilities before composer hooks choose their discovery strategy.
 registerBuiltinHarnesses();
 
+function newAvailableDefaultSession(cwd?: string, runtimeMode?: RuntimeMode) {
+  return newDefaultSession(cwd, runtimeMode, isHarnessAvailable);
+}
+
 export default function App({
   windowTransfer = null,
   resumed = null,
@@ -637,7 +642,7 @@ export default function App({
   );
   const [seed] = useState(() => {
     const cwd = lastProjectPath() ?? "~";
-    const session = newDefaultSession(cwd);
+    const session = newAvailableDefaultSession(cwd);
     const tab = newTab(session.id);
     return { session, tab };
   });
@@ -960,7 +965,35 @@ export default function App({
   }, [resumed, readProjectReturnMemory]);
 
   useEffect(() => {
-    void probeHarnessAvailability();
+    void probeHarnessAvailability().then(() => {
+      if (windowTransfer || resumed) return;
+      const fallback = newAvailableDefaultSession(
+        seed.session.cwd,
+        seed.session.runtimeMode,
+      );
+      if (
+        fallback.harness === seed.session.harness &&
+        fallback.model === seed.session.model
+      ) {
+        return;
+      }
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === seed.session.id &&
+          session.blocks.length === 0 &&
+          session.harness === seed.session.harness &&
+          session.model === seed.session.model
+            ? {
+                ...session,
+                harness: fallback.harness,
+                model: fallback.model,
+                modelSettings: fallback.modelSettings,
+                title: fallback.title,
+              }
+            : session,
+        ),
+      );
+    });
     // Only the harnesses already in this window. Probing every installed CLI
     // at boot left unused agents (especially Pi) running in the background.
     const harnesses = [
@@ -1575,7 +1608,10 @@ export default function App({
     setInboxViewOpen(false);
     setNotesViewOpen(false);
     const cwd = active?.cwd ?? sessionDefaults?.cwd ?? projectCwd;
-    const session = newDefaultSession(cwd, sessionDefaults?.runtimeMode);
+    const session = newAvailableDefaultSession(
+      cwd,
+      sessionDefaults?.runtimeMode,
+    );
     const tab = newTab(session.id);
     setSessions((prev) => [...prev, session]);
     appendTab(tab, cwd);
@@ -1604,7 +1640,7 @@ export default function App({
             : `#${item.number}`;
         const linkedWorkItem = linkedWorkItemFromInboxItem(item);
         const session = {
-          ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+          ...newAvailableDefaultSession(cwd, sessionDefaults?.runtimeMode),
           title: `${ref} ${item.title}`,
           inboxCard: inboxComposerCard(item, description),
           ...(linkedWorkItem ? { linkedWorkItem } : {}),
@@ -1660,7 +1696,7 @@ export default function App({
         projectCwd;
       const title = card.title.trim();
       const session = {
-        ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+        ...newAvailableDefaultSession(cwd, sessionDefaults?.runtimeMode),
         ...(title ? { title } : {}),
         noteCard: card,
       };
@@ -1751,7 +1787,7 @@ export default function App({
   const onSplit = useCallback(
     (dir: SplitDir) => {
       if (!activeTab) return;
-      const session = newDefaultSession(
+      const session = newAvailableDefaultSession(
         sessionDefaults?.cwd ?? projectCwd,
         sessionDefaults?.runtimeMode,
       );
@@ -3186,7 +3222,7 @@ export default function App({
                   ).body
                 : undefined;
           session = {
-            ...newDefaultSession(cwd),
+            ...newAvailableDefaultSession(cwd),
             title: `Ask · ${item.title}`,
             inboxAsk: {
               key,
@@ -3390,7 +3426,7 @@ export default function App({
         replaceTarget,
         scope: tabCloseScope,
         createReplacement: (seed) =>
-          newDefaultSession(
+          newAvailableDefaultSession(
             seed?.cwd ?? projectCwdRef.current,
             seed?.runtimeMode,
           ),
@@ -4028,7 +4064,7 @@ export default function App({
 
       if (nextTabs.length === 0) {
         const fallback = nextSessions[0];
-        const session = newDefaultSession("~", fallback?.runtimeMode);
+        const session = newAvailableDefaultSession("~", fallback?.runtimeMode);
         const tab = newTab(session.id);
         nextSessions = [...nextSessions, session];
         nextTabs = [tab];
