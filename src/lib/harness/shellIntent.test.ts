@@ -183,10 +183,42 @@ describe("formatShellIntent", () => {
 });
 
 describe("unwrapShellCommand", () => {
-  it("removes the shell transport wrapper without changing ordinary commands", () => {
+  it("unwraps POSIX shells without including trailing shell arguments", () => {
     expect(unwrapShellCommand(`/bin/zsh -lc "npm test -- --run app.test.ts"`)).toBe(
       "npm test -- --run app.test.ts",
     );
+    expect(unwrapShellCommand(`/bin/zsh -lc "rg -n \\"foo\\" src" ignored`)).toBe(
+      'rg -n "foo" src',
+    );
+  });
+
+  it("unwraps PowerShell command remainders", () => {
+    expect(
+      unwrapShellCommand(
+        `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoLogo -NoProfile -Command 'rg -n foo src'`,
+      ),
+    ).toBe("rg -n foo src");
+    expect(
+      unwrapShellCommand(
+        "powershell.exe -ExecutionPolicy Bypass -Command Get-Content package.json",
+      ),
+    ).toBe("Get-Content package.json");
+  });
+
+  it("unwraps cmd command remainders", () => {
+    expect(unwrapShellCommand(`cmd.exe /d /s /c "npm test"`)).toBe("npm test");
+  });
+
+  it("leaves ordinary and incomplete commands unchanged", () => {
     expect(unwrapShellCommand("git status --short")).toBe("git status --short");
+    expect(unwrapShellCommand(`pwsh -File '-Command' script.ps1`)).toBe(
+      `pwsh -File '-Command' script.ps1`,
+    );
+    expect(unwrapShellCommand(`pwsh -Command 'npm test`)).toBe(
+      `pwsh -Command 'npm test`,
+    );
+    expect(unwrapShellCommand(`cmd.exe /c "npm test`)).toBe(
+      `cmd.exe /c "npm test`,
+    );
   });
 });
