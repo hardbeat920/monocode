@@ -4,6 +4,7 @@ type Props = {
   label: string;
   icon: IconComponent;
   onClick?: () => void;
+  onOpenContextMenu?: (x: number, y: number) => void;
   active?: boolean;
   badge?: number;
   dot?: boolean;
@@ -15,6 +16,7 @@ export function RailAction({
   label,
   icon: Icon,
   onClick,
+  onOpenContextMenu,
   active = false,
   badge,
   dot = false,
@@ -25,6 +27,30 @@ export function RailAction({
     <button
       type="button"
       onClick={onClick}
+      onContextMenu={
+        onOpenContextMenu
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpenContextMenu(event.clientX, event.clientY);
+            }
+          : undefined
+      }
+      onKeyDown={
+        onOpenContextMenu
+          ? (event) => {
+              if (
+                event.key !== "ContextMenu" &&
+                !(event.shiftKey && event.key === "F10")
+              )
+                return;
+              event.preventDefault();
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              onOpenContextMenu(rect.left, rect.bottom);
+            }
+          : undefined
+      }
       disabled={!onClick}
       aria-label={ariaLabel ?? label}
       className={`relative flex w-full items-center gap-2 rounded-md px-2 h-8  text-left ${

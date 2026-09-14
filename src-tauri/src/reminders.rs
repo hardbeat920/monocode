@@ -23,11 +23,29 @@ pub struct Reminder {
     cwd: String,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeliveryPreferences {
     notifications_enabled: bool,
     sound: bool,
+    #[serde(default)]
+    project_rules: HashMap<String, ProjectDeliveryRule>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ProjectDeliveryRule {
+    enabled: bool,
+    after: i64,
+}
+
+impl DeliveryPreferences {
+    fn allows(&self, reminder: &Reminder) -> bool {
+        self.notifications_enabled
+            && self
+                .project_rules
+                .get(&reminder.session_id)
+                .is_some_and(|rule| rule.enabled && reminder.due_at > rule.after)
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -126,16 +144,24 @@ fn clear(
 /// Claim in the database before dispatch, so restarts and multiple windows
 /// cannot repeatedly announce the same reminder. Due items remain until handled,
 /// including when OS delivery fails or the process exits during dispatch.
-fn take_due(conn: &mut Connection, now: i64) -> rusqlite::Result<Vec<Reminder>> {
+fn take_due(
+    conn: &mut Connection,
+    now: i64,
+    is_ready: impl Fn(&Reminder) -> bool,
+) -> rusqlite::Result<Vec<Reminder>> {
     let tx = conn.transaction()?;
     let due = list(&tx)?
         .into_iter()
-        .filter(|reminder| reminder.due_at <= now && reminder.fired_at.is_none())
+        .filter(|reminder| {
+            reminder.due_at <= now && reminder.fired_at.is_none() && is_ready(reminder)
+        })
         .collect::<Vec<_>>();
-    tx.execute(
-        "UPDATE session_reminders SET fired_at = ?1 WHERE due_at <= ?1 AND fired_at IS NULL",
-        [now],
-    )?;
+    for reminder in &due {
+        tx.execute(
+            "UPDATE session_reminders SET fired_at = ?1 WHERE session_id = ?2",
+            params![now, reminder.session_id],
+        )?;
+    }
     tx.commit()?;
     Ok(due)
 }
@@ -304,13 +330,18 @@ pub(crate) fn init(app: &AppHandle) {
             .preferences
             .lock()
             .ok()
-            .and_then(|value| *value);
+            .and_then(|value| value.clone());
         let Some(preferences) = preferences else {
             continue;
         };
         let store = app.state::<SessionStore>();
         let due = store.lock_conn().and_then(|mut conn| {
-            take_due(&mut conn, now_millis()).map_err(|error| error.to_string())
+            // Resolve project preferences before claiming a reminder, including
+            // during launch and immediately after a reminder is scheduled.
+            take_due(&mut conn, now_millis(), |reminder| {
+                preferences.project_rules.contains_key(&reminder.session_id)
+            })
+            .map_err(|error| error.to_string())
         });
         let due = match due {
             Ok(due) => due,
@@ -323,10 +354,21 @@ pub(crate) fn init(app: &AppHandle) {
             continue;
         }
         let _ = app.emit(CHANGED, ());
-        if !preferences.notifications_enabled {
-            continue;
-        }
         for reminder in due {
+            // A prior platform notification may have blocked while preferences
+            // changed. Take a fresh snapshot without holding the lock for delivery.
+            let preferences = app
+                .state::<ReminderService>()
+                .preferences
+                .lock()
+                .ok()
+                .and_then(|value| value.clone());
+            let Some(preferences) = preferences else {
+                continue;
+            };
+            if !preferences.allows(&reminder) {
+                continue;
+            }
             // Cancellation or rescheduling may happen while another banner is
             // being delivered. Do not announce a stale snapshot of the queue.
             let current = store.lock_conn().and_then(|conn| conn.query_row(
@@ -374,13 +416,74 @@ mod tests {
         seed(&conn, "second", "/two");
         set(&mut conn, &["first".into()], 200, 100).unwrap();
         set(&mut conn, &["second".into()], 400, 100).unwrap();
-        assert!(take_due(&mut conn, 199).unwrap().is_empty());
-        let due = take_due(&mut conn, 200).unwrap();
+        assert!(take_due(&mut conn, 199, |_| true).unwrap().is_empty());
+        let due = take_due(&mut conn, 200, |_| true).unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].session_id, "first");
-        assert!(take_due(&mut conn, 300).unwrap().is_empty());
+        assert!(take_due(&mut conn, 300, |_| true).unwrap().is_empty());
         assert_eq!(list(&conn).unwrap().len(), 2);
-        assert_eq!(take_due(&mut conn, 500).unwrap()[0].cwd, "/two");
+        assert_eq!(take_due(&mut conn, 500, |_| true).unwrap()[0].cwd, "/two");
+    }
+
+    #[test]
+    fn project_rules_wait_for_resolution_and_suppress_due_reminders_without_replay() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let mut conn = store.lock_conn().unwrap();
+        seed(&conn, "muted", "/one");
+        seed(&conn, "timed", "/two");
+        set(&mut conn, &["muted".into(), "timed".into()], 200, 100).unwrap();
+        let mut preferences: DeliveryPreferences =
+            serde_json::from_str(r#"{"notificationsEnabled":true,"sound":false}"#).unwrap();
+        assert!(take_due(&mut conn, 300, |reminder| {
+            preferences.project_rules.contains_key(&reminder.session_id)
+        })
+        .unwrap()
+        .is_empty());
+        assert!(list(&conn)
+            .unwrap()
+            .iter()
+            .all(|reminder| reminder.fired_at.is_none()));
+
+        preferences.project_rules.insert(
+            "muted".into(),
+            ProjectDeliveryRule {
+                enabled: false,
+                after: 0,
+            },
+        );
+        let due = take_due(&mut conn, 300, |reminder| {
+            preferences.project_rules.contains_key(&reminder.session_id)
+        })
+        .unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].session_id, "muted");
+        assert!(!preferences.allows(&due[0]));
+
+        preferences.project_rules.insert(
+            "timed".into(),
+            ProjectDeliveryRule {
+                enabled: true,
+                after: 200,
+            },
+        );
+        let due = take_due(&mut conn, 300, |reminder| {
+            preferences.project_rules.contains_key(&reminder.session_id)
+        })
+        .unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].session_id, "timed");
+        assert!(!preferences.allows(&due[0]));
+        assert!(list(&conn)
+            .unwrap()
+            .iter()
+            .all(|reminder| reminder.fired_at.is_some()));
+
+        preferences.project_rules.get_mut("muted").unwrap().enabled = true;
+        assert!(take_due(&mut conn, 400, |_| true).unwrap().is_empty());
+        set(&mut conn, &["timed".into()], 500, 400).unwrap();
+        let due = take_due(&mut conn, 500, |_| true).unwrap();
+        assert_eq!(due.len(), 1);
+        assert!(preferences.allows(&due[0]));
     }
 
     #[test]
@@ -390,14 +493,14 @@ mod tests {
         seed(&conn, "session", "/one");
         let ids = ["session".into()];
         set(&mut conn, &ids, 200, 100).unwrap();
-        assert_eq!(take_due(&mut conn, 200).unwrap().len(), 1);
+        assert_eq!(take_due(&mut conn, 200, |_| true).unwrap().len(), 1);
         set(&mut conn, &ids, 500, 200).unwrap();
         clear(&mut conn, &ids, Some(200)).unwrap();
         let remaining = list(&conn).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].due_at, 500);
         assert!(remaining[0].fired_at.is_none());
-        assert_eq!(take_due(&mut conn, 500).unwrap().len(), 1);
+        assert_eq!(take_due(&mut conn, 500, |_| true).unwrap().len(), 1);
         clear(&mut conn, &ids, Some(500)).unwrap();
         assert!(list(&conn).unwrap().is_empty());
     }
@@ -412,7 +515,7 @@ mod tests {
         clear(&mut conn, &["first".into()], None).unwrap();
         conn.execute("DELETE FROM sessions WHERE id = 'second'", [])
             .unwrap();
-        assert!(take_due(&mut conn, 300).unwrap().is_empty());
+        assert!(take_due(&mut conn, 300, |_| true).unwrap().is_empty());
         assert!(list(&conn).unwrap().is_empty());
     }
 
@@ -444,16 +547,16 @@ mod tests {
             seed(&conn, "fired", "/two");
             set(&mut conn, &["fired".into()], 200, 100).unwrap();
             set(&mut conn, &["missed".into()], 400, 100).unwrap();
-            assert_eq!(take_due(&mut conn, 300).unwrap().len(), 1);
+            assert_eq!(take_due(&mut conn, 300, |_| true).unwrap().len(), 1);
         }
         {
             let store = SessionStore::open(path.join("test.db")).unwrap();
             let mut conn = store.lock_conn().unwrap();
-            let due = take_due(&mut conn, 900).unwrap();
+            let due = take_due(&mut conn, 900, |_| true).unwrap();
             assert_eq!(due.len(), 1);
             assert_eq!(due[0].session_id, "missed");
             assert_eq!(list(&conn).unwrap().len(), 2);
-            assert!(take_due(&mut conn, 1000).unwrap().is_empty());
+            assert!(take_due(&mut conn, 1000, |_| true).unwrap().is_empty());
         }
         std::fs::remove_dir_all(path).unwrap();
     }

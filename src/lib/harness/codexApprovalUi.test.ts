@@ -19,9 +19,12 @@ import type { HarnessEvent } from "./types";
 const sent: Array<Record<string, unknown>> = [];
 let onLine: (line: string) => void;
 const invoke = vi.hoisted(() =>
-  vi.fn(async (command: string) =>
-    command === "notification_permission" ? "granted" : undefined,
-  ),
+  vi.fn(async (command: string, args?: Record<string, unknown>) => {
+    if (command === "notification_permission") return "granted";
+    if (command === "git_notification_context") {
+      return { root: args?.cwd, commonDir: null, remote: null };
+    }
+  }),
 );
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("./child", () => ({

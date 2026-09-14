@@ -25,9 +25,12 @@ type MenuAction = {
 export type ExplorerMenuItem =
   { kind: "sep" } | (MenuAction & { submenu?: MenuAction[] });
 
-type Props = {
-  x: number;
-  y: number;
+type Props = (
+  | { x: number; y: number; anchor?: never }
+  | { anchor: HTMLElement; x?: never; y?: never }
+) & {
+  ownerId?: string;
+  onBack?: () => void;
   items: ExplorerMenuItem[];
   ariaLabel?: string;
   header?: ReactNode;
@@ -55,6 +58,9 @@ function itemIndexAt(
 export function ExplorerMenu({
   x,
   y,
+  anchor,
+  ownerId,
+  onBack,
   items,
   ariaLabel = "File actions",
   header,
@@ -114,6 +120,12 @@ export function ExplorerMenu({
   };
 
   const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "ArrowLeft" && !submenuItems && onBack) {
+      e.preventDefault();
+      e.stopPropagation();
+      onBack();
+      return;
+    }
     if (submenuItems) {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -255,8 +267,11 @@ export function ExplorerMenu({
     <>
       <Popover
         ref={menuRef}
-        anchor={{ x, y }}
-        gap={0}
+        anchor={anchor ?? { x: x ?? 0, y: y ?? 0 }}
+        side={anchor ? "right" : undefined}
+        gap={anchor ? 4 : 0}
+        layer={anchor ? LAYER.submenu : undefined}
+        data-menu-owner={ownerId}
         width={width}
         autoFocus
         onDismiss={(reason) => {
@@ -311,6 +326,7 @@ export function ExplorerMenu({
             submenuActive >= 0 ? `${menuId}-sub-${submenuActive}` : undefined
           }
           data-explorer-menu={menuId}
+          data-menu-owner={ownerId}
           onKeyDown={onMenuKey}
           onContextMenu={(e) => e.preventDefault()}
           onMouseEnter={cancelClose}

@@ -16,7 +16,7 @@ vi.mock("../lib/githubTasks", async (importOriginal) => ({
   githubWorkItem,
   listInboxItems,
 }));
-vi.mock("../lib/sounds", () => ({ noteInboxUnseen: vi.fn() }));
+vi.mock("../lib/sounds", () => ({ playCue: vi.fn() }));
 
 const remote: InboxItem = {
   provider: "github",

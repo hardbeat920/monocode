@@ -41,7 +41,7 @@ export const SETTINGS_SECTIONS: {
   {
     id: "inbox",
     label: "Inbox",
-    description: "Connect and manage the services that appear in your Inbox.",
+    description: "Manage Inbox services and notification preferences for each project.",
   },
   {
     id: "skills",

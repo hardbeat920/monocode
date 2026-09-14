@@ -588,6 +588,99 @@ fn git_github_status_for() -> GitHubStatus {
     }
 }
 
+/// Repository identity shared by notification sources and local project folders.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationProjectContext {
+    root: String,
+    common_dir: Option<String>,
+    remote: Option<String>,
+}
+
+/// Local Git metadata only: works offline and never asks a provider for credentials.
+#[tauri::command]
+pub async fn git_notification_context(cwd: String) -> Result<NotificationProjectContext, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let directory = expand_home(&cwd);
+        std::fs::read_dir(&directory).map_err(|error| error.to_string())?;
+        let discovery = git_cmd()
+            .arg("-C")
+            .arg(&directory)
+            .args(["rev-parse", "--show-toplevel"])
+            .env("LC_ALL", "C")
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !discovery.status.success() {
+            let error = String::from_utf8_lossy(&discovery.stderr)
+                .trim()
+                .to_string();
+            if !error.starts_with("fatal: not a git repository") {
+                return Err(error);
+            }
+            // Git also reports "not a repository" for damaged metadata. Only
+            // accept a local folder when no ancestor contains a .git entry.
+            let canonical = directory
+                .canonicalize()
+                .map_err(|error| error.to_string())?;
+            for ancestor in canonical.ancestors() {
+                match std::fs::symlink_metadata(ancestor.join(".git")) {
+                    Ok(_) => return Err(error),
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            return Ok(NotificationProjectContext {
+                root: path_to_js(&directory),
+                common_dir: None,
+                remote: None,
+            });
+        }
+        let root = String::from_utf8_lossy(&discovery.stdout)
+            .trim()
+            .to_string();
+        let common_dir = notification_git_stdout(
+            &directory,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        if root.is_empty() || common_dir.is_empty() {
+            return Err("Git returned an empty notification project identity".into());
+        }
+        let config = notification_git_stdout(&directory, &["config", "--list", "--name-only"])?;
+        let resolved = config.lines().find_map(|key| {
+            key.strip_prefix("remote.")?
+                .strip_suffix(".gh-resolved")
+                .filter(|name| !name.is_empty())
+        });
+        let remotes = notification_git_stdout(&directory, &["remote"])?;
+        let name = resolved
+            .or_else(|| remotes.lines().find(|name| *name == "origin"))
+            .or_else(|| remotes.lines().find(|name| !name.is_empty()));
+        let remote = name
+            .map(|name| notification_git_stdout(&directory, &["remote", "get-url", name]))
+            .transpose()?;
+        Ok(NotificationProjectContext {
+            root: path_to_js(Path::new(&root)),
+            common_dir: Some(path_to_js(Path::new(&common_dir))),
+            remote,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn notification_git_stdout(directory: &Path, args: &[&str]) -> Result<String, String> {
+    let output = git_cmd()
+        .arg("-C")
+        .arg(directory)
+        .args(args)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// `owner/repo` for the GitHub remote of this working copy, via `gh`.
 #[tauri::command]
 pub async fn git_github_repo(cwd: String) -> Result<String, String> {
@@ -4586,6 +4679,114 @@ mod tests {
             info.repo.as_deref(),
             dir.0.file_name().and_then(|name| name.to_str())
         );
+    }
+
+    #[test]
+    fn git_notification_context_rejects_unavailable_project_directory() {
+        let dir = tmp("notification-unavailable");
+        let missing = dir.0.join("missing");
+        assert!(tauri::async_runtime::block_on(git_notification_context(
+            missing.to_string_lossy().into_owned(),
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn git_notification_context_rejects_broken_git_metadata() {
+        let mut accepted = Vec::new();
+        for damage in ["missing-head", "corrupt-config", "broken-gitfile"] {
+            let dir = tmp("notification-broken-git");
+            assert!(init_git(
+                &dir.0,
+                "main",
+                Some("https://offline.invalid/acme/widget.git")
+            ));
+            match damage {
+                "missing-head" => std::fs::remove_file(dir.0.join(".git/HEAD")).unwrap(),
+                "corrupt-config" => {
+                    std::fs::write(dir.0.join(".git/config"), "[invalid\n").unwrap()
+                }
+                "broken-gitfile" => {
+                    std::fs::rename(dir.0.join(".git"), dir.0.join("saved-git")).unwrap();
+                    std::fs::write(dir.0.join(".git"), "gitdir: missing-metadata\n").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let nested = dir.0.join("nested");
+            std::fs::create_dir(&nested).unwrap();
+            if tauri::async_runtime::block_on(git_notification_context(
+                nested.to_string_lossy().into_owned(),
+            ))
+            .is_ok()
+            {
+                accepted.push(damage);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "Accepted broken metadata: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn git_notification_context_resolves_local_project_identity() {
+        let dir = tmp("notification-context");
+        let context = tauri::async_runtime::block_on(git_notification_context(
+            dir.0.to_string_lossy().into_owned(),
+        ))
+        .unwrap();
+        assert_eq!(context.root, path_to_js(&dir.0));
+        assert!(context.common_dir.is_none());
+        assert!(context.remote.is_none());
+
+        assert!(init_git_commit(&dir.0, &[("readme.md", "hello\n")]));
+        let checkout = dir.0.join("linked checkout");
+        assert!(git(
+            &dir.0,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                checkout.to_str().unwrap()
+            ],
+        ));
+        let main = tauri::async_runtime::block_on(git_notification_context(
+            dir.0.to_string_lossy().into_owned(),
+        ))
+        .unwrap();
+        let linked = tauri::async_runtime::block_on(git_notification_context(
+            checkout.to_string_lossy().into_owned(),
+        ))
+        .unwrap();
+        assert_ne!(main.root, linked.root);
+        assert!(main.common_dir.is_some());
+        assert_eq!(main.common_dir, linked.common_dir);
+        assert!(linked.remote.is_none());
+
+        let remote = "ssh://git@offline.invalid/acme/widget.git";
+        assert!(git(&dir.0, &["remote", "add", "origin", remote]));
+        let nested = checkout.join("nested folder");
+        std::fs::create_dir(&nested).unwrap();
+        let context = tauri::async_runtime::block_on(git_notification_context(
+            nested.to_string_lossy().into_owned(),
+        ))
+        .unwrap();
+        assert_eq!(context.root, linked.root);
+        assert_eq!(context.common_dir, main.common_dir);
+        assert_eq!(context.remote.as_deref(), Some(remote));
+
+        let upstream = "https://offline.invalid/team/widget.git";
+        assert!(git(&dir.0, &["remote", "add", "upstream", upstream]));
+        assert!(git(
+            &dir.0,
+            &["config", "remote.upstream.gh-resolved", "base"],
+        ));
+        let context = tauri::async_runtime::block_on(git_notification_context(
+            nested.to_string_lossy().into_owned(),
+        ))
+        .unwrap();
+        assert_eq!(context.remote.as_deref(), Some(upstream));
     }
 
     fn git(dir: &Path, args: &[&str]) -> bool {

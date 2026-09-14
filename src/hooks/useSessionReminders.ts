@@ -1,12 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { message } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   loadNotificationsEnabled,
   NOTIFICATIONS_CHANGE_EVENT,
 } from "../lib/notifications";
 import { loadSoundsEnabled, SOUNDS_CHANGE_EVENT } from "../lib/sounds";
+import {
+  getProjectNotificationRule,
+  subscribeNotificationPreferences,
+} from "../lib/notificationPreferences";
+import {
+  knownNotificationProject,
+  resolveNotificationProject,
+  subscribeNotificationProjects,
+} from "../lib/notificationProjects";
 import {
   clearReminders,
   listReminders,
@@ -25,24 +34,71 @@ export function useSessionReminders(
   const [reminders, setItems] = useState<SessionReminder[]>([]);
   const [now, setNow] = useState(Date.now);
   const [error, setError] = useState<string | null>(null);
+  const [, refreshPolicy] = useReducer((revision: number) => revision + 1, 0);
   const revision = useRef(0);
+  const configurationRevision = useRef(0);
+  const configurationQueue = useRef<Promise<void>>(Promise.resolve());
   const remindersRef = useRef(reminders);
   remindersRef.current = reminders;
   const callbacks = useRef({ onOpenSession, ensureSaved });
   callbacks.current = { onOpenSession, ensureSaved };
+
+  const configure = useCallback(async () => {
+    const request = ++configurationRevision.current;
+    // Native preferences are global state. Keep writes ordered and skip queued
+    // snapshots superseded by another window event or a newer project policy.
+    const pending = configurationQueue.current
+      .catch(() => {})
+      .then(async () => {
+        if (request !== configurationRevision.current) return;
+        await invoke("reminder_configure", {
+          preferences: {
+            notificationsEnabled: loadNotificationsEnabled(),
+            sound: loadSoundsEnabled(),
+            projectRules: Object.fromEntries(
+              remindersRef.current.flatMap((reminder) => {
+                const project = knownNotificationProject(reminder.cwd);
+                return project
+                  ? [
+                      [
+                        reminder.sessionId,
+                        getProjectNotificationRule(project.id, "reminders"),
+                      ],
+                    ]
+                  : [];
+              }),
+            ),
+          },
+        });
+      });
+    configurationQueue.current = pending;
+    try {
+      await pending;
+    } catch (error) {
+      if (request === configurationRevision.current) throw error;
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     const request = ++revision.current;
     try {
       const items = await listReminders();
       if (request !== revision.current) return;
+      await Promise.all(
+        [...new Set(items.map((item) => item.cwd))].map(
+          resolveNotificationProject,
+        ),
+      );
+      if (request !== revision.current) return;
+      remindersRef.current = items;
       setItems(items);
       setNow(Date.now());
       setError(null);
+      await configure();
     } catch (error) {
       if (request === revision.current) setError(String(error));
     }
-  }, []);
+  }, [configure]);
 
   const report = (error: unknown) => {
     void message(String(error), { title: "Reminder", kind: "error" });
@@ -101,13 +157,9 @@ export function useSessionReminders(
   useEffect(() => {
     let disposed = false;
     const subscriptions: Array<() => void> = [];
-    const configure = () => {
-      void invoke("reminder_configure", {
-        preferences: {
-          notificationsEnabled: loadNotificationsEnabled(),
-          sound: loadSoundsEnabled(),
-        },
-      }).catch((error) => {
+    const configureCurrent = () => {
+      refreshPolicy();
+      void configure().catch((error) => {
         if (!disposed) setError(String(error));
       });
     };
@@ -138,7 +190,6 @@ export function useSessionReminders(
           }),
         ]);
         if (disposed) return;
-        configure();
         await refresh();
         await takeOpen();
       } catch (error) {
@@ -146,7 +197,6 @@ export function useSessionReminders(
       }
     })();
     const onFocus = () => {
-      configure();
       void refresh();
       void takeOpen();
     };
@@ -160,21 +210,27 @@ export function useSessionReminders(
     }, 30_000);
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener(NOTIFICATIONS_CHANGE_EVENT, configure);
-    window.addEventListener(SOUNDS_CHANGE_EVENT, configure);
-    window.addEventListener("storage", configure);
+    window.addEventListener(NOTIFICATIONS_CHANGE_EVENT, configureCurrent);
+    window.addEventListener(SOUNDS_CHANGE_EVENT, configureCurrent);
+    window.addEventListener("storage", configureCurrent);
+    const unsubscribePreferences =
+      subscribeNotificationPreferences(configureCurrent);
+    const unsubscribeProjects = subscribeNotificationProjects(configureCurrent);
     return () => {
       disposed = true;
+      unsubscribePreferences();
+      unsubscribeProjects();
       revision.current++;
+      configurationRevision.current++;
       subscriptions.forEach((unlisten) => unlisten());
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener(NOTIFICATIONS_CHANGE_EVENT, configure);
-      window.removeEventListener(SOUNDS_CHANGE_EVENT, configure);
-      window.removeEventListener("storage", configure);
+      window.removeEventListener(NOTIFICATIONS_CHANGE_EVENT, configureCurrent);
+      window.removeEventListener(SOUNDS_CHANGE_EVENT, configureCurrent);
+      window.removeEventListener("storage", configureCurrent);
     };
-  }, [openHere, refresh]);
+  }, [openHere, refresh, configure]);
 
   const sessionIdsKey = JSON.stringify(openSessionIds);
   useEffect(() => {
@@ -196,7 +252,12 @@ export function useSessionReminders(
 
   return {
     reminders,
-    due: reminders.filter((reminder) => reminder.dueAt <= now),
+    due: reminders.filter((reminder) => {
+      const project = knownNotificationProject(reminder.cwd);
+      if (!project || reminder.dueAt > now) return false;
+      const rule = getProjectNotificationRule(project.id, "reminders");
+      return rule.enabled && reminder.dueAt > rule.after;
+    }),
     error,
     refresh,
     schedule,

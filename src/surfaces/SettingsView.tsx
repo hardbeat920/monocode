@@ -127,6 +127,7 @@ import {
   looksLikeProject,
   subscribeArchivedProjects,
   type ArchivedProject,
+  type RecentProject,
 } from "../lib/recents";
 import {
   HARNESSES,
@@ -204,10 +205,12 @@ import {
 } from "../lib/updater";
 
 import { SkillsPage } from "./SkillsPage";
+import { ProjectNotificationSettings } from "./ProjectNotificationSettings";
 
-export type SettingsAnchor = "github" | "gitlab" | "linear";
+export type SettingsAnchor = "notifications" | "github" | "gitlab" | "linear";
 
 const ANCHOR_IDS: Record<SettingsAnchor, string> = {
+  notifications: "settings-project-notifications",
   github: "settings-github",
   gitlab: "settings-gitlab",
   linear: "settings-linear",
@@ -217,6 +220,9 @@ type Props = {
   section: SettingsSectionId;
   /** Card to scroll to; the General page is too long to land at the top. */
   anchor?: SettingsAnchor | null;
+  /** Project to focus when opening notification settings from a quick action. */
+  notificationProjectPath?: string | null;
+  recents?: RecentProject[];
   cwd: string;
   sessions: SessionSummary[];
   besideRail?: boolean;
@@ -232,6 +238,8 @@ type Props = {
 export function SettingsView({
   section,
   anchor = null,
+  notificationProjectPath = null,
+  recents,
   cwd,
   sessions,
   besideRail = false,
@@ -246,10 +254,12 @@ export function SettingsView({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   useEffect(() => {
     if (!anchor) return;
+    // The project card handles its own focus after its identity resolves.
+    if (anchor === "notifications" && notificationProjectPath) return;
     document.getElementById(ANCHOR_IDS[anchor])?.scrollIntoView({
       block: "start",
     });
-  }, [anchor]);
+  }, [anchor, notificationProjectPath]);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const appearance = useAppearanceSettings();
@@ -330,7 +340,9 @@ export function SettingsView({
             ) : null}
             {section === "keybindings" ? <KeybindingsPage /> : null}
             {section === "providers" ? <ProvidersPage /> : null}
-            {section === "inbox" ? <InboxPage /> : null}
+            {section === "inbox" ? (
+              <InboxPage cwd={cwd} recents={recents} notificationProjectPath={notificationProjectPath} />
+            ) : null}
             {section === "archive" ? (
               <ArchivePage
                 cwd={cwd}
@@ -566,7 +578,7 @@ function GeneralPage({
       </Row>
       <Row
         label="Sounds"
-        description="Short cues when a turn finishes, a new inbox item appears on the project rail, or an update is available. Switches and Copy on a finished turn also play."
+        description="Short cues for project activity, finished turns, and available updates. Choose project notification categories in Inbox settings. Switches and Copy on a finished turn also play."
       >
         <Toggle label="Sounds" on={soundsEnabled} onChange={onSoundsEnabled} />
       </Row>
@@ -605,10 +617,15 @@ function GeneralPage({
   );
 }
 
-function InboxPage() {
+function InboxPage({ cwd, recents, notificationProjectPath }: {
+  cwd: string;
+  recents?: RecentProject[];
+  notificationProjectPath?: string | null;
+}) {
   return (
     <>
-      <Heading title="GitHub" id={ANCHOR_IDS.github} first />
+      <ProjectNotificationSettings cwd={cwd} recents={recents} notificationProjectPath={notificationProjectPath} />
+      <Heading title="GitHub" id={ANCHOR_IDS.github} />
       <GithubSettings />
 
       <Heading title="GitLab" id={ANCHOR_IDS.gitlab} />

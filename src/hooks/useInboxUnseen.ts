@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   githubWorkItem,
+  inboxListCacheKey,
   inboxItemKey,
   inboxProjectsForRail,
   listInboxItems,
   type GithubWorkItem,
   type InboxItem,
   type InboxQuery,
+  type InboxProvider,
 } from "../lib/githubTasks";
 import {
   applyInboxFilters,
@@ -34,7 +36,12 @@ import {
 import { loadHiddenLinearTeamIds } from "../lib/linear";
 import type { RecentProject } from "../lib/recents";
 import type { SessionSummary } from "../lib/sessionStore";
-import { noteInboxUnseen } from "../lib/sounds";
+import { playCue } from "../lib/sounds";
+import { InboxNotificationTracker } from "../lib/inboxNotifications";
+import {
+  inboxNotificationProject,
+  rememberNotificationProjects,
+} from "../lib/notificationProjects";
 
 const POLL_MS = 30_000;
 const FALLBACK_REFRESH_MS = 60_000;
@@ -113,6 +120,7 @@ export function useInboxActivity(
   >(() => new Map());
   const [linkedSeenRevision, setLinkedSeenRevision] = useState(0);
   const entriesRef = useRef<InboxSeenEntry[]>([]);
+  const notifications = useRef(new InboxNotificationTracker());
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const fallbackFetchedAt = useRef(new Map<string, number>());
@@ -121,7 +129,6 @@ export function useInboxActivity(
     .join("\0");
 
   const applyUnseen = useCallback((next: boolean) => {
-    noteInboxUnseen(next);
     setUnseen(next);
   }, []);
 
@@ -165,6 +172,28 @@ export function useInboxActivity(
         const listed = await listInboxItems(projects, query, { force });
         if (cancelled) return;
         const visible = applyInboxFilters(listed.items, filters, "");
+        rememberNotificationProjects(
+          listed.items.map(inboxNotificationProject),
+        );
+        const changed = notifications.current.observe(
+          listed.items,
+          inboxListCacheKey(projects, query),
+          Object.keys(listed.errors) as InboxProvider[],
+        );
+        const visibleKeys = new Set(visible.map(inboxItemKey));
+        // The whole batch is observed even when every cue is suppressed. At most
+        // one eligible project chimes; muted projects cannot consume that slot.
+        for (const item of changed) {
+          if (!visibleKeys.has(inboxItemKey(item))) continue;
+          if (
+            playCue("inboxUnseen", {
+              projectId: inboxNotificationProject(item).id,
+              category: item.kind === "pr" ? "pullRequests" : "issues",
+              occurredAt: Date.parse(item.updatedAt),
+            })
+          )
+            break;
+        }
         const entries = seenEntries(visible);
         entriesRef.current = entries;
         seedInboxSeenIfNeeded(entries);

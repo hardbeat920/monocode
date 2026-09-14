@@ -9,6 +9,8 @@ import {
   type SessionReminder,
 } from "../lib/sessionReminders";
 import { useSessionReminders } from "./useSessionReminders";
+import { updateNotificationPreferences } from "../lib/notificationPreferences";
+import { refreshNotificationProjects } from "../lib/notificationProjects";
 
 const { invoke, listen, message } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -49,6 +51,29 @@ function Harness() {
   return null;
 }
 
+it("updates reminder delivery when a checkout is reassigned to a muted repository", async () => {
+  updateNotificationPreferences(["repository:github.com/acme/new"], {
+    mutedUntil: null,
+  });
+  await mount();
+  expect(api.due).toEqual([reminder]);
+  invoke.mockResolvedValueOnce({
+    root: reminder.cwd,
+    commonDir: null,
+    remote: "https://github.com/acme/new.git",
+  });
+  await act(async () => refreshNotificationProjects([reminder.cwd]));
+  expect(api.due).toEqual([]);
+  const configuration = invoke.mock.calls
+    .filter(([command]) => command === "reminder_configure")
+    .at(-1)![1];
+  expect(configuration.preferences.projectRules[reminder.sessionId]).toEqual({
+    enabled: false,
+    after: 0,
+  });
+  expect(api.reminders).toEqual([reminder]);
+});
+
 async function mount() {
   await act(async () =>
     root.render(createElement(StrictMode, null, createElement(Harness))),
@@ -63,6 +88,7 @@ async function emit(event: string) {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.clear();
   stored = [{ ...reminder }];
   pending = null;
   listeners = new Map();
@@ -73,6 +99,13 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(
       async (command: string, args: Record<string, any> = {}) => {
+        if (command === "git_notification_context") {
+          return {
+            root: args.cwd,
+            commonDir: null,
+            remote: "git@github.com:acme/private.git",
+          };
+        }
         if (command === "reminder_list")
           return stored.map((item) => ({ ...item }));
         if (command === "reminder_take_open") {
@@ -120,11 +153,93 @@ afterEach(() => {
 });
 
 describe("saved session reminders", () => {
+  it("serializes native configuration so a slower old update cannot overwrite a newer mute", async () => {
+    const original = invoke.getMockImplementation()!;
+    let release: () => void = () => {};
+    const configurations: Array<{
+      projectRules: Record<string, { enabled: boolean }>;
+    }> = [];
+    invoke.mockImplementation(
+      (command: string, args: Record<string, any> = {}) => {
+        if (command !== "reminder_configure") return original(command, args);
+        configurations.push(args.preferences);
+        if (configurations.length === 1)
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        return Promise.resolve();
+      },
+    );
+    await mount();
+    await act(async () =>
+      updateNotificationPreferences(["repository:github.com/acme/private"], {
+        mutedUntil: null,
+      }),
+    );
+    expect(configurations).toHaveLength(1);
+    await act(async () => release());
+    expect(configurations).toHaveLength(2);
+    expect(configurations[1].projectRules[reminder.sessionId].enabled).toBe(
+      false,
+    );
+  });
+
+  it("applies reminder category changes immediately without replaying an old due reminder on resume", async () => {
+    await mount();
+    expect(api.due).toEqual([reminder]);
+    await act(async () =>
+      updateNotificationPreferences(["repository:github.com/acme/private"], {
+        disabled: ["reminders"],
+      }),
+    );
+    expect(api.due).toEqual([]);
+    const disabled = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(disabled.preferences.projectRules[reminder.sessionId].enabled).toBe(
+      false,
+    );
+    await act(async () =>
+      updateNotificationPreferences(["repository:github.com/acme/private"], {
+        disabled: [],
+      }),
+    );
+    expect(api.due).toEqual([]);
+    const resumed = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(resumed.preferences.projectRules[reminder.sessionId].enabled).toBe(
+      true,
+    );
+    expect(
+      resumed.preferences.projectRules[reminder.sessionId].after,
+    ).toBeGreaterThan(reminder.dueAt);
+  });
+
+  it("suppresses a muted project's reminders in both native delivery and in-app notices while retaining sidebar data", async () => {
+    updateNotificationPreferences(["repository:github.com/acme/private"], {
+      mutedUntil: null,
+    });
+    await mount();
+    expect(api.reminders).toEqual([reminder]);
+    expect(api.due).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("reminder_configure", {
+      preferences: expect.objectContaining({
+        projectRules: {
+          "saved-session": { enabled: false, after: expect.any(Number) },
+        },
+      }),
+    });
+  });
+
   it("shows missed reminders on startup even with desktop notifications off", async () => {
     await mount();
     expect(api.due).toEqual([reminder]);
     expect(invoke).toHaveBeenCalledWith("reminder_configure", {
-      preferences: { notificationsEnabled: false, sound: false },
+      preferences: expect.objectContaining({
+        notificationsEnabled: false,
+        sound: false,
+      }),
     });
     expect(listeners.get(REMINDERS_CHANGED)?.size).toBe(1);
     expect(onOpen).not.toHaveBeenCalled();

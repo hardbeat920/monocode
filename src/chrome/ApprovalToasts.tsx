@@ -1,5 +1,10 @@
 import { CircleAlert } from "./icons";
+import { useState } from "react";
 import { createPortal } from "react-dom";
+import { allowsProjectNotification } from "../lib/notificationPreferences";
+import { knownNotificationProject } from "../lib/notificationProjects";
+import { useNotificationProjects } from "../hooks/useNotificationProjects";
+import { useProjectNotificationPreferences } from "../hooks/useProjectNotificationPreferences";
 import type { ApprovalDecision } from "../lib/harness";
 import type { PendingApprovalNotice } from "../lib/approvalToast";
 import { LAYER } from "../lib/layers";
@@ -29,6 +34,7 @@ export function ApprovalToasts({
   onApproval,
   topOffset = 12,
 }: Props) {
+  useProjectNotificationPreferences();
   if (notices.length === 0) return null;
 
   return createPortal(
@@ -38,8 +44,8 @@ export function ApprovalToasts({
       className="pointer-events-none fixed right-3 flex w-[min(360px,calc(100vw-24px))] flex-col gap-2"
     >
       {notices.map((notice) => (
-        <ApprovalToastCard
-          key={`${notice.sessionId}:${notice.requestId}`}
+        <ProjectApprovalToast
+          key={`${notice.sessionId}:${notice.kind}:${notice.requestId}`}
           notice={notice}
           onFocusSession={onFocusSession}
           onApproval={onApproval}
@@ -48,6 +54,30 @@ export function ApprovalToasts({
     </div>,
     document.body,
   );
+}
+
+function ProjectApprovalToast(props: {
+  notice: Notice;
+  onFocusSession: Props["onFocusSession"];
+  onApproval: Props["onApproval"];
+}) {
+  const path = props.notice.session.cwd;
+  useNotificationProjects([path]);
+  // The keyed gate stays mounted even while hidden. Resuming notifications
+  // must not turn a pending request into a new popup.
+  const [occurredAt] = useState(Date.now);
+  const project = knownNotificationProject(path);
+
+  if (
+    !project ||
+    !allowsProjectNotification({
+      projectId: project.id,
+      category: "agentInput",
+      occurredAt,
+    })
+  )
+    return null;
+  return <ApprovalToastCard {...props} />;
 }
 
 function ApprovalToastCard({
