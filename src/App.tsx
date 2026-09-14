@@ -165,7 +165,6 @@ import {
   compactHarnessContext,
   forgetHarnessSession,
   generateHarnessTitle,
-  isHarnessAvailable,
   isLiveHarness,
   probeHarnessAvailability,
   refreshHarnessCatalogs,
