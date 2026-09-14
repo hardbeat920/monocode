@@ -100,7 +100,6 @@ function projectMenuExtraItems(
   canRemove: boolean,
   canConfigureNotifications: boolean,
   notificationReady: boolean,
-  muteStatus: string | null,
   loadFailed: boolean,
 ): TabGroupMenuExtraItem[] {
   const items: TabGroupMenuExtraItem[] = [
@@ -116,7 +115,7 @@ function projectMenuExtraItems(
     {
       id: "notifications-mute",
       label: "Mute notifications",
-      icon: muteStatus ? BellOff : Clock,
+      icon: BellOff,
       sepBefore: true,
       disabled: !notificationReady,
       submenu: notificationMuteActions(),
@@ -662,7 +661,6 @@ export function ProjectRail({
             Boolean(onRemoveProject),
             Boolean(onOpenNotificationSettings),
             Boolean(readyNotificationProject),
-            menuMuteStatus,
             Boolean(notificationMenuError && !readyNotificationProject),
           )}
           footer={notificationMenuError ? (

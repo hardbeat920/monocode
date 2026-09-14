@@ -59,6 +59,12 @@ function checkbox(label: string): HTMLInputElement {
   return input as HTMLInputElement;
 }
 
+function categoriesButton(project: string): HTMLButtonElement {
+  return container.querySelector<HTMLButtonElement>(
+    `button[aria-label="Notification categories for ${project}"]`,
+  )!;
+}
+
 it("saves only the selected project's categories while preserving its mute deadline", async () => {
   updateNotificationPreferences(["repository:github.com/me/private"], {
     mutedUntil: null,
@@ -67,6 +73,7 @@ it("saves only the selected project's categories while preserving its mute deadl
     root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
   );
 
+  act(() => categoriesButton("me/private").click());
   for (const category of [
     "Issues and Linear tasks",
     "Agent finished",
@@ -105,6 +112,7 @@ it("offers only issue notifications for a Linear project", async () => {
   await act(async () =>
     root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
   );
+  act(() => categoriesButton("Roadmap").click());
   const issue = checkbox("Issues and Linear tasks for Roadmap");
   expect(
     issue
@@ -118,11 +126,17 @@ it("offers only issue notifications for a Linear project", async () => {
 });
 
 it("discovers recent projects and focuses the project requested by a quick action", async () => {
-  vi.mocked(invoke).mockImplementationOnce(async () => ({
-    root: "/newwork", commonDir: null, remote: null,
-  })).mockImplementationOnce(async () => ({
-    root: "/newprivate", commonDir: null, remote: null,
-  }));
+  vi.mocked(invoke)
+    .mockImplementationOnce(async () => ({
+      root: "/newwork",
+      commonDir: null,
+      remote: null,
+    }))
+    .mockImplementationOnce(async () => ({
+      root: "/newprivate",
+      commonDir: null,
+      remote: null,
+    }));
   await act(async () =>
     root.render(
       createElement(ProjectNotificationSettings, {
@@ -135,6 +149,43 @@ it("discovers recent projects and focuses the project requested by a quick actio
   expect(checkbox("Agent finished for newwork").checked).toBe(true);
   const target = checkbox("Agent finished for newprivate").closest("fieldset");
   expect(document.activeElement).toBe(target);
+  expect(categoriesButton("newprivate").getAttribute("aria-expanded")).toBe(
+    "true",
+  );
+  expect(categoriesButton("newwork").getAttribute("aria-expanded")).toBe(
+    "false",
+  );
+});
+
+it("keeps projects collapsed until opened and preserves choices when switching projects", async () => {
+  await act(async () =>
+    root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
+  );
+  const personal = categoriesButton("me/private");
+  const work = categoriesButton("work/app");
+  const personalPanel = document.getElementById(
+    personal.getAttribute("aria-controls")!,
+  )!;
+  const workPanel = document.getElementById(
+    work.getAttribute("aria-controls")!,
+  )!;
+  expect(personalPanel.hidden).toBe(true);
+  expect(workPanel.hidden).toBe(true);
+
+  act(() => personal.click());
+  expect(personalPanel.hidden).toBe(false);
+  act(() => checkbox("Issues and Linear tasks for me/private").click());
+  expect(personal.textContent).toContain("4 of 5 enabled");
+  act(() => work.click());
+  expect(personalPanel.hidden).toBe(true);
+  expect(workPanel.hidden).toBe(false);
+  act(() => personal.click());
+  expect(checkbox("Issues and Linear tasks for me/private").checked).toBe(
+    false,
+  );
+  act(() => personal.click());
+  expect(personalPanel.hidden).toBe(true);
+  expect(workPanel.hidden).toBe(true);
 });
 
 it("explains globally disabled channels and updates when they are enabled", async () => {
@@ -175,11 +226,18 @@ it("mutes several selected projects without changing another project's notificat
   act(() => checkbox("Select me/private").click());
   act(() => checkbox("Select me/other").click());
   const bulk = container.querySelector('[aria-label="Mute selected projects"]');
-  const eightHours = [...(bulk?.querySelectorAll("button") ?? [])].find(
-    (button) => button.textContent === "8 hours",
+  act(() =>
+    (
+      bulk?.querySelector(
+        '[aria-label="Mute notifications"]',
+      ) as HTMLButtonElement
+    ).click(),
+  );
+  const eightHours = [...document.querySelectorAll('[role="menuitem"]')].find(
+    (button) => button.textContent?.startsWith("8 hours ("),
   );
   expect(eightHours).toBeInstanceOf(HTMLButtonElement);
-  act(() => eightHours!.click());
+  act(() => (eightHours as HTMLButtonElement).click());
   expect(
     loadNotificationPreferences()["repository:github.com/me/private"]
       ?.mutedUntil,
@@ -216,4 +274,45 @@ it("shows a project's mute and lets it resume with its category choices intact",
   expect(
     loadNotificationPreferences()["repository:github.com/me/private"],
   ).toMatchObject({ disabled: ["issues"] });
+});
+
+it("dismisses the mute menu and custom date picker without changing preferences", async () => {
+  await act(async () =>
+    root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
+  );
+  const project = checkbox("Issues and Linear tasks for me/private").closest(
+    "fieldset",
+  )!;
+  const trigger = project.querySelector<HTMLButtonElement>(
+    '[aria-label="Mute notifications"]',
+  )!;
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  act(() =>
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    ),
+  );
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+
+  act(() => trigger.click());
+  const custom = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ].find((button) => button.textContent === "Choose date and time")!;
+  act(() => custom.click());
+  const dialog = document.querySelector(
+    '[role="dialog"][aria-label="Mute project notifications"]',
+  )!;
+  expect(dialog).not.toBeNull();
+  const cancel = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Cancel",
+  )!;
+  act(() => cancel.click());
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(trigger);
+  expect(
+    loadNotificationPreferences()["repository:github.com/me/private"],
+  ).toBeUndefined();
 });

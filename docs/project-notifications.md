@@ -6,6 +6,12 @@ also cover desktop banners for agent completion, approvals and questions.
 They do not hide activity in sessions or the sidebar, change read/unread state,
 stop polling, or change the user's global sound and desktop-notification settings.
 
+Muted projects do not contribute to the blue dot beside Inbox. Unread activity
+from an unmuted project still shows the dot. Muting or resuming a project updates
+the dot immediately, including automatic mute expiry. Items from muted projects
+stay unread and visible in Inbox; after resume, any remaining unread items can
+contribute to the dot again. Category switches affect delivery, not the dot.
+
 ## User controls
 
 The project context menu offers a duration submenu and project settings.

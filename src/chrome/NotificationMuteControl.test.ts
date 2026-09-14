@@ -28,8 +28,11 @@ afterEach(() => {
 });
 
 function click(label: string) {
-  const button = [...container.querySelectorAll("button")].find(
-    (item) => item.textContent === label,
+  const button = [...document.querySelectorAll("button")].find(
+    (item) =>
+      item.textContent === label ||
+      item.getAttribute("aria-label") === label ||
+      item.textContent?.startsWith(`${label} (`),
   );
   expect(button, `Button ${label}`).toBeDefined();
   act(() => button!.click());
@@ -45,6 +48,7 @@ describe("NotificationMuteControl", () => {
         }),
       ),
     );
+    click("Mute notifications");
     click("8 hours");
     expect(loadNotificationPreferences()).toEqual({
       private: { disabled: ["issues"], mutedUntil: 1_800_028_800_000 },
@@ -76,20 +80,21 @@ describe("NotificationMuteControl", () => {
         createElement(NotificationMuteControl, { projectIds: ["private"] }),
       ),
     );
+    click("Mute notifications");
     click("Choose date and time");
     expect(
-      [...container.querySelectorAll("button")].some(
+      [...document.querySelectorAll("button")].some(
         (button) => button.textContent === "1 hour",
       ),
     ).toBe(false);
-    expect(container.querySelector('input[type="datetime-local"]')).toBeNull();
-    expect(container.querySelector('[role="grid"]')).not.toBeNull();
+    expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
+    expect(document.querySelector('[role="grid"]')).not.toBeNull();
     act(() =>
-      container
+      document
         .querySelector<HTMLButtonElement>('button[aria-label="2030-01-15"]')!
         .click(),
     );
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.querySelector<HTMLInputElement>(
       'input[placeholder="HH:mm"]',
     );
     expect(input).not.toBeNull();
@@ -104,12 +109,12 @@ describe("NotificationMuteControl", () => {
       });
     type("08:00");
     click("Mute until then");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "future",
     );
     expect(loadNotificationPreferences().private).toBeUndefined();
     act(() =>
-      container
+      document
         .querySelector<HTMLButtonElement>('button[aria-label="2030-01-16"]')!
         .click(),
     );
@@ -118,7 +123,7 @@ describe("NotificationMuteControl", () => {
       throw new Error("Storage full");
     });
     click("Mute until then");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Could not save",
     );
     expect(input!.value).toBe("17:00");
@@ -127,7 +132,9 @@ describe("NotificationMuteControl", () => {
     expect(loadNotificationPreferences().private.mutedUntil).toBe(
       new Date(2030, 0, 16, 17).getTime(),
     );
-    expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(document.activeElement?.textContent).toBe("Choose date and time");
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Change mute duration",
+    );
   });
 });

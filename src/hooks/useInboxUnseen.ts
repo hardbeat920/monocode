@@ -42,15 +42,23 @@ import {
   inboxNotificationProject,
   rememberNotificationProjects,
 } from "../lib/notificationProjects";
+import {
+  isProjectMuted,
+  loadNotificationPreferences,
+  subscribeNotificationPreferences,
+} from "../lib/notificationPreferences";
 
 const POLL_MS = 30_000;
 const FALLBACK_REFRESH_MS = 60_000;
 const MAX_CONCURRENT_LOOKUPS = 3;
 
-function seenEntries(items: readonly InboxItem[]): InboxSeenEntry[] {
+type ProjectSeenEntry = InboxSeenEntry & { projectId: string };
+
+function seenEntries(items: readonly InboxItem[]): ProjectSeenEntry[] {
   return items.map((item) => ({
     key: inboxItemKey(item),
     updatedAt: item.updatedAt,
+    projectId: inboxNotificationProject(item).id,
   }));
 }
 
@@ -119,7 +127,7 @@ export function useInboxActivity(
     ReadonlyMap<string, GithubWorkItem>
   >(() => new Map());
   const [linkedSeenRevision, setLinkedSeenRevision] = useState(0);
-  const entriesRef = useRef<InboxSeenEntry[]>([]);
+  const entriesRef = useRef<ProjectSeenEntry[]>([]);
   const notifications = useRef(new InboxNotificationTracker());
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
@@ -128,14 +136,26 @@ export function useInboxActivity(
     .map((target) => target.key)
     .join("\0");
 
-  const applyUnseen = useCallback((next: boolean) => {
-    setUnseen(next);
+  const applyUnseen = useCallback(() => {
+    const preferences = loadNotificationPreferences();
+    // Mute affects the navigation badge, never the item's unread state.
+    setUnseen(
+      inboxHasUnseenItems(
+        entriesRef.current.filter((entry) => {
+          const preference = preferences[entry.projectId];
+          return !preference || !isProjectMuted(preference);
+        }),
+      ),
+    );
   }, []);
 
   useEffect(() => {
-    return subscribeInboxSeen(() => {
-      applyUnseen(inboxHasUnseenItems(entriesRef.current));
-    });
+    const stopSeen = subscribeInboxSeen(applyUnseen);
+    const stopPreferences = subscribeNotificationPreferences(applyUnseen);
+    return () => {
+      stopSeen();
+      stopPreferences();
+    };
   }, [applyUnseen]);
 
   useEffect(
@@ -150,7 +170,7 @@ export function useInboxActivity(
     const projects = inboxProjectsForRail(recents, cwd);
     if (projects.length === 0) {
       entriesRef.current = [];
-      applyUnseen(false);
+      applyUnseen();
       return;
     }
 
@@ -197,7 +217,7 @@ export function useInboxActivity(
         const entries = seenEntries(visible);
         entriesRef.current = entries;
         seedInboxSeenIfNeeded(entries);
-        applyUnseen(inboxHasUnseenItems(entries));
+        applyUnseen();
 
         const targets = linkedWorkItemTargets(sessionsRef.current);
         const targetKeys = new Set(targets.map((target) => target.key));
