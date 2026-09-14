@@ -225,6 +225,21 @@ describe("provider defaults", () => {
     });
   });
 
+  it("uses the first installed provider when the preferred one is unavailable", () => {
+    expect(defaultSessionChoice((harness) => harness === "codex")).toEqual({
+      harness: "codex",
+      model: defaultModelId("codex"),
+    });
+  });
+
+  it("keeps an installed saved default provider", () => {
+    saveLastModelChoice("opencode", "opencode:glm-5");
+    expect(defaultSessionChoice((harness) => harness === "opencode")).toEqual({
+      harness: "opencode",
+      model: "opencode:glm-5",
+    });
+  });
+
   it("keeps the six most recently used unique models", () => {
     saveRecentModelChoice("claude", "claude:opus-5");
     saveRecentModelChoice("cursor", "cursor:composer-2.5");

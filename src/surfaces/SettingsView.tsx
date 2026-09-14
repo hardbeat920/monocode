@@ -115,6 +115,7 @@ import {
 } from "../lib/uiScale";
 import {
   getHarnessAvailabilitySnapshot,
+  hasProbedHarnessAvailability,
   harnessUnavailableHint,
   isHarnessAvailable,
   probeHarnessAvailability,
@@ -122,6 +123,7 @@ import {
 } from "../lib/harness/availability";
 import { refreshHarnessCatalogs } from "../lib/harness/registry";
 import {
+  defaultSessionChoice,
   defaultModelId,
   getModelSnapshot,
   isPickerProviderVisible,
@@ -1635,6 +1637,9 @@ function ProvidersPage() {
   );
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
+  const effectiveChoice = hasProbedHarnessAvailability()
+    ? defaultSessionChoice(isHarnessAvailable)
+    : choice;
 
   useEffect(() => {
     void probeHarnessAvailability();
@@ -1674,7 +1679,7 @@ function ProvidersPage() {
               ? choice.model
               : defaultModelId(harness))
           }
-          isDefault={choice?.harness === harness}
+          isDefault={effectiveChoice?.harness === harness}
           onDefault={onDefault}
           onModelChange={onModelChange}
         />
@@ -1746,7 +1751,7 @@ function ProviderRow({
       ) : null}
       <SecondaryButton
         onClick={() => current && onDefault(harness, current.id)}
-        disabled={isDefault || !current}
+        disabled={isDefault || !available || !current}
       >
         {isDefault ? "Default" : "Use by default"}
       </SecondaryButton>

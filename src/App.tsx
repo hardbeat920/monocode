@@ -216,6 +216,7 @@ import { notifyDirsChanged } from "./lib/fileTree";
 import { nudgeWatchedFiles } from "./lib/fileWatch";
 import { type EditorNavigationTarget, type OpenFileFn } from "./lib/search";
 import {
+  defaultSessionChoice,
   mergeModelSettings,
   preferredModelSettings,
   resolveModel,
@@ -263,7 +264,6 @@ import {
   canReplaceSessionTitle,
   formatSessionTitle,
   sessionNeedsInput,
-  newDefaultSession,
   newSession,
   sessionDisplayTitle,
   sessionWorkCwd,
@@ -610,6 +610,31 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
 // Register capabilities before composer hooks choose their discovery strategy.
 registerBuiltinHarnesses();
 
+function newAvailableDefaultSession(cwd?: string, runtimeMode?: RuntimeMode) {
+  const { harness, model } = defaultSessionChoice(isHarnessAvailable);
+  return newSession(harness, cwd, model, runtimeMode);
+}
+
+type SessionSeed = Pick<
+  Session | SessionSummary,
+  "harness" | "model" | "runtimeMode"
+> & {
+  modelSettings?: Session["modelSettings"];
+};
+
+function newSessionForSeed(seed: SessionSeed | undefined, cwd: string) {
+  if (!seed || !isHarnessAvailable(seed.harness)) {
+    return newAvailableDefaultSession(cwd, seed?.runtimeMode);
+  }
+  return newSession(
+    seed.harness,
+    cwd,
+    seed.model,
+    seed.runtimeMode,
+    seed.modelSettings,
+  );
+}
+
 export default function App({
   windowTransfer = null,
   resumed = null,
@@ -637,7 +662,7 @@ export default function App({
   );
   const [seed] = useState(() => {
     const cwd = lastProjectPath() ?? "~";
-    const session = newDefaultSession(cwd);
+    const session = newAvailableDefaultSession(cwd);
     const tab = newTab(session.id);
     return { session, tab };
   });
@@ -960,7 +985,33 @@ export default function App({
   }, [resumed, readProjectReturnMemory]);
 
   useEffect(() => {
-    void probeHarnessAvailability();
+    void probeHarnessAvailability().then(() => {
+      if (windowTransfer || resumed) return;
+      setSessions((prev) =>
+        prev.map((session) => {
+          if (
+            session.blocks.length > 0 ||
+            isHarnessAvailable(session.harness)
+          ) {
+            return session;
+          }
+          const fallback = newAvailableDefaultSession(
+            session.cwd,
+            session.runtimeMode,
+          );
+          return {
+            ...session,
+            harness: fallback.harness,
+            model: fallback.model,
+            modelSettings: fallback.modelSettings,
+            title:
+              session.title === HARNESS_LABEL[session.harness]
+                ? fallback.title
+                : session.title,
+          };
+        }),
+      );
+    });
     // Only the harnesses already in this window. Probing every installed CLI
     // at boot left unused agents (especially Pi) running in the background.
     const harnesses = [
@@ -1575,7 +1626,10 @@ export default function App({
     setInboxViewOpen(false);
     setNotesViewOpen(false);
     const cwd = active?.cwd ?? sessionDefaults?.cwd ?? projectCwd;
-    const session = newDefaultSession(cwd, sessionDefaults?.runtimeMode);
+    const session = newAvailableDefaultSession(
+      cwd,
+      sessionDefaults?.runtimeMode,
+    );
     const tab = newTab(session.id);
     setSessions((prev) => [...prev, session]);
     appendTab(tab, cwd);
@@ -1604,7 +1658,7 @@ export default function App({
             : `#${item.number}`;
         const linkedWorkItem = linkedWorkItemFromInboxItem(item);
         const session = {
-          ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+          ...newAvailableDefaultSession(cwd, sessionDefaults?.runtimeMode),
           title: `${ref} ${item.title}`,
           inboxCard: inboxComposerCard(item, description),
           ...(linkedWorkItem ? { linkedWorkItem } : {}),
@@ -1660,7 +1714,7 @@ export default function App({
         projectCwd;
       const title = card.title.trim();
       const session = {
-        ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+        ...newAvailableDefaultSession(cwd, sessionDefaults?.runtimeMode),
         ...(title ? { title } : {}),
         noteCard: card,
       };
@@ -1751,7 +1805,7 @@ export default function App({
   const onSplit = useCallback(
     (dir: SplitDir) => {
       if (!activeTab) return;
-      const session = newDefaultSession(
+      const session = newAvailableDefaultSession(
         sessionDefaults?.cwd ?? projectCwd,
         sessionDefaults?.runtimeMode,
       );
@@ -2255,12 +2309,9 @@ export default function App({
               return;
             }
             const seed = sessionsRef.current[0];
-            const session = newSession(
-              seed?.harness ?? "claude",
+            const session = newSessionForSeed(
+              seed,
               file.cwd || projectCwd,
-              seed?.model,
-              seed?.runtimeMode,
-              seed?.modelSettings,
             );
             setSessions((prev) => [...prev, session]);
             setTabs((prev) =>
@@ -2417,13 +2468,7 @@ export default function App({
       const finishClear = () => {
         persistSession(oldSession);
 
-        const session = newSession(
-          oldSession.harness,
-          oldSession.cwd,
-          oldSession.model,
-          oldSession.runtimeMode,
-          oldSession.modelSettings,
-        );
+        const session = newSessionForSeed(oldSession, oldSession.cwd);
 
         setSessions((prev) => [...prev, session]);
         setDirtyFiles((prev) => {
@@ -2467,17 +2512,6 @@ export default function App({
     );
     if (!tab) return;
 
-    const seedSession = (cwd: string) => {
-      const seed = sessionsRef.current[0];
-      return newSession(
-        seed?.harness ?? "claude",
-        cwd,
-        seed?.model,
-        seed?.runtimeMode,
-        seed?.modelSettings,
-      );
-    };
-
     // Stage one: files open in the active tab's editor panes close first.
     // Only when none are open does the command close every workspace tab.
     const editorFiles = tab.editorPanes.flatMap((pane) => pane.files);
@@ -2509,7 +2543,10 @@ export default function App({
           );
         } else {
           // The tab held only editor panes and must stay: seed a session.
-          const session = seedSession(editorFiles[0].cwd || projectCwd);
+          const session = newSessionForSeed(
+            sessionsRef.current[0],
+            editorFiles[0].cwd || projectCwd,
+          );
           setSessions((prev) => [...prev, session]);
           nextTab = resetTabToSession(tab, session.id);
           focusesSession = true;
@@ -2583,7 +2620,10 @@ export default function App({
         return;
       }
       // The tab held no session: seed one so the workspace stays usable.
-      const session = seedSession(terminalFiles[0]?.cwd || projectCwd);
+      const session = newSessionForSeed(
+        sessionsRef.current[0],
+        terminalFiles[0]?.cwd || projectCwd,
+      );
       setSessions((prev) => [...prev, session]);
       setTabs((prev) =>
         prev.map((entry) =>
@@ -3186,7 +3226,7 @@ export default function App({
                   ).body
                 : undefined;
           session = {
-            ...newDefaultSession(cwd),
+            ...newAvailableDefaultSession(cwd),
             title: `Ask · ${item.title}`,
             inboxAsk: {
               key,
@@ -3224,13 +3264,7 @@ export default function App({
           ),
         );
         const fresh = {
-          ...newSession(
-            current.harness,
-            current.cwd,
-            current.model,
-            current.runtimeMode,
-            current.modelSettings,
-          ),
+          ...newSessionForSeed(current, current.cwd),
           title: current.title,
           inboxAsk: current.inboxAsk,
         };
@@ -3390,7 +3424,7 @@ export default function App({
         replaceTarget,
         scope: tabCloseScope,
         createReplacement: (seed) =>
-          newDefaultSession(
+          newAvailableDefaultSession(
             seed?.cwd ?? projectCwdRef.current,
             seed?.runtimeMode,
           ),
@@ -3792,13 +3826,7 @@ export default function App({
       ) {
         setProjectCwd(normalized);
         setRecents(rememberProject(normalized));
-        const session = newSession(
-          current.harness,
-          normalized,
-          current.model,
-          current.runtimeMode,
-          current.modelSettings,
-        );
+        const session = newSessionForSeed(current, normalized);
         const tab = newTab(session.id);
         setSessions((prev) => [...prev, session]);
         appendTab(tab, normalized);
@@ -3916,13 +3944,7 @@ export default function App({
       }
 
       const seed = current ?? sessionsRef.current[0];
-      const session = newSession(
-        seed?.harness ?? "claude",
-        normalized,
-        seed?.model,
-        seed?.runtimeMode,
-        seed?.modelSettings,
-      );
+      const session = newSessionForSeed(seed, normalized);
       const tab = newTab(session.id);
       setProjectCwd(normalized);
       setRecents(rememberProject(normalized));
@@ -4028,7 +4050,7 @@ export default function App({
 
       if (nextTabs.length === 0) {
         const fallback = nextSessions[0];
-        const session = newDefaultSession("~", fallback?.runtimeMode);
+        const session = newAvailableDefaultSession("~", fallback?.runtimeMode);
         const tab = newTab(session.id);
         nextSessions = [...nextSessions, session];
         nextTabs = [tab];
@@ -5662,11 +5684,13 @@ export default function App({
               runtimeMode: lead.runtimeMode,
             }
           : {
-              ...newSession(
-                task.harness,
+              ...newSessionForSeed(
+                {
+                  harness: task.harness,
+                  model: task.model,
+                  runtimeMode: lead.runtimeMode,
+                },
                 run.cwd,
-                task.model,
-                lead.runtimeMode,
               ),
               id: task.sessionId,
               title: task.title,
