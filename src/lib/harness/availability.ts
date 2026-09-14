@@ -6,6 +6,7 @@ import {
   resolveCursorBinary,
   resolveFxBinary,
   resolveGrokBinary,
+  resolveMcodeBinary,
   resolveOmpBinary,
   resolveOpenCodeBinary,
   resolvePiBinary,
@@ -30,6 +31,10 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
   pi: { name: "Pi CLI", install: "npm i -g @earendil-works/pi-coding-agent" },
   omp: { name: "omp CLI", install: "curl -fsSL https://omp.sh/install | sh" },
   fx: { name: "fx CLI", install: "curl -fsSL https://fx.sh/setup.sh | bash" },
+  mcode: {
+    name: "MiniMax Code CLI",
+    install: "curl -fsSL https://minimax.com/install.sh | sh",
+  },
 };
 
 let availability: HarnessAvailability = {
@@ -41,6 +46,7 @@ let availability: HarnessAvailability = {
   pi: false,
   omp: false,
   fx: false,
+  mcode: false,
 };
 let version = 0;
 let inflight: Promise<void> | null = null;
@@ -154,6 +160,14 @@ export function probeHarnessAvailability(
       if (id === "grok") {
         try {
           await resolveGrokBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "mcode") {
+        try {
+          await resolveMcodeBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

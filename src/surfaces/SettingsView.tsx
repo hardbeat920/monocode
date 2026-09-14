@@ -26,7 +26,6 @@ import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useColorScheme } from "../hooks/useColorScheme";
 import {
   applyChatBackground,
   applyChatBackgroundEmptyOpacity,
@@ -1243,7 +1242,6 @@ function useAppearanceSettings() {
 
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
-  const glassDisabled = useColorScheme() === "light";
 
   return (
     <>
@@ -1264,11 +1262,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
       </Row>
       <Row
         label="Sidebar opacity"
-        description={
-          glassDisabled
-            ? "Light mode always uses an opaque window. Your dark-mode value is preserved."
-            : "How much of the desktop shows through the sidebar and the project rail."
-        }
+        description="How much of the desktop shows through the sidebar and the project rail."
       >
         <Slider
           label="Sidebar opacity"
@@ -1277,16 +1271,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
           max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
           onChange={appearance.onOpacity}
-          disabled={glassDisabled}
         />
       </Row>
       <Row
         label="Blur radius"
-        description={
-          glassDisabled
-            ? "Background blur is unavailable while light mode uses an opaque window."
-            : "Background blur behind the window. Higher values cost more to composite."
-        }
+        description="Background blur behind the window. Higher values cost more to composite."
       >
         <Slider
           label="Blur radius"
@@ -1295,7 +1284,6 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           min={SIDEBAR_BLUR_MIN}
           max={SIDEBAR_BLUR_MAX}
           onChange={appearance.onBlur}
-          disabled={glassDisabled}
         />
       </Row>
       <Row label="Hue" description="Base hue for accents and tinted surfaces.">
@@ -1325,17 +1313,12 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
       </Row>
       <Row
         label="Main pane glass"
-        description={
-          glassDisabled
-            ? "Main pane glass is unavailable while light mode uses an opaque window."
-            : "Extend the translucent treatment to the main pane behind sessions and editors."
-        }
+        description="Extend the translucent treatment to the main pane behind sessions and editors."
       >
         <Toggle
           label="Main pane glass"
           on={appearance.bodyGlass}
           onChange={appearance.onBodyGlass}
-          disabled={glassDisabled}
         />
       </Row>
       <ChatBackgroundCard appearance={appearance} />

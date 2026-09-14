@@ -294,6 +294,18 @@ pub fn harness_resolve_fx() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve MiniMax Code (`mcode`).
+#[tauri::command(async)]
+pub fn harness_resolve_mcode() -> Result<CursorBinary, String> {
+    resolve_mcode()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "mcode CLI not found. Install MiniMax Code from https://github.com/MiniMax-Developers/code and run `mcode login`, then retry.".into()
+        })
+}
+
 /// Resolve xAI Grok Build (`grok`).
 #[tauri::command(async)]
 pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
@@ -1389,6 +1401,26 @@ fn resolve_fx() -> Option<PathBuf> {
     first_binary_matching(candidates, is_fx_agent)
 }
 
+fn resolve_mcode() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Installer default first so an unrelated `mcode` on PATH does not win.
+    if let Some(home) = &home {
+        candidates.push(home.join(".minimax-code/bin/mcode"));
+        candidates.push(home.join(".local/bin/mcode"));
+        candidates.push(home.join(".cargo/bin/mcode"));
+        candidates.push(home.join(".npm-global/bin/mcode"));
+    }
+    candidates.push(PathBuf::from("/usr/local/bin/mcode"));
+    candidates.push(PathBuf::from("/usr/bin/mcode"));
+    if let Some(from_shell) = which_via_login_shell("mcode") {
+        candidates.push(from_shell);
+    }
+
+    first_binary_matching(candidates, is_mcode_agent)
+}
+
 fn resolve_grok() -> Option<PathBuf> {
     let home = dirs_home().map(PathBuf::from);
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -1483,6 +1515,78 @@ fn is_fx_agent(path: &Path) -> bool {
         return false;
     }
     file_mentions_fx_agent(path) || fx_help_mentions_acp(path)
+}
+
+fn is_mcode_agent(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if !binary_name_eq(path, "mcode") {
+        return false;
+    }
+    file_mentions_mcode_agent(path) || mcode_help_mentions_acp(path)
+}
+
+fn file_mentions_mcode_agent(path: &Path) -> bool {
+    const MARKERS: [&str; 4] = [
+        "minimax-code",
+        "Minimax Code",
+        "mcode acp",
+        "MiniMax Code",
+    ];
+    const CHUNK: usize = 1024 * 1024;
+    const OVERLAP: usize = 64;
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut reader = BufReader::new(file);
+    let mut buf = vec![0u8; CHUNK + OVERLAP];
+    let mut carry = 0usize;
+    loop {
+        let Ok(n) = reader.read(&mut buf[carry..]) else {
+            return false;
+        };
+        if n == 0 {
+            return false;
+        }
+        let filled = carry + n;
+        let text = String::from_utf8_lossy(&buf[..filled]);
+        if MARKERS.iter().any(|marker| text.contains(marker)) {
+            return true;
+        }
+        carry = filled.min(OVERLAP);
+        buf.copy_within(filled - carry..filled, 0);
+    }
+}
+
+fn mcode_help_mentions_acp(path: &Path) -> bool {
+    let mut cmd = Command::new(path);
+    cmd.arg("acp")
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_gui_env(&mut cmd);
+    isolate_child(&mut cmd);
+    let Ok(child) = spawn_managed(&mut cmd) else {
+        return false;
+    };
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(output)) => {
+            let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+            text.contains("agent client protocol") || text.contains("stdio")
+        }
+        _ => {
+            terminate(pid);
+            false
+        }
+    }
 }
 
 fn is_grok_agent(path: &Path) -> bool {
