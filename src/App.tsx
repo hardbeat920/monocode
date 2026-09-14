@@ -615,6 +615,19 @@ function newAvailableDefaultSession(cwd?: string, runtimeMode?: RuntimeMode) {
   return newSession(harness, cwd, model, runtimeMode);
 }
 
+function newSessionForSeed(seed: Session | undefined, cwd: string) {
+  if (!seed || !isHarnessAvailable(seed.harness)) {
+    return newAvailableDefaultSession(cwd, seed?.runtimeMode);
+  }
+  return newSession(
+    seed.harness,
+    cwd,
+    seed.model,
+    seed.runtimeMode,
+    seed.modelSettings,
+  );
+}
+
 export default function App({
   windowTransfer = null,
   resumed = null,
@@ -2289,12 +2302,9 @@ export default function App({
               return;
             }
             const seed = sessionsRef.current[0];
-            const session = newSession(
-              seed?.harness ?? "claude",
+            const session = newSessionForSeed(
+              seed,
               file.cwd || projectCwd,
-              seed?.model,
-              seed?.runtimeMode,
-              seed?.modelSettings,
             );
             setSessions((prev) => [...prev, session]);
             setTabs((prev) =>
@@ -2501,20 +2511,6 @@ export default function App({
     );
     if (!tab) return;
 
-    const seedSession = (cwd: string) => {
-      const seed = sessionsRef.current[0];
-      if (!seed || !isHarnessAvailable(seed.harness)) {
-        return newAvailableDefaultSession(cwd, seed?.runtimeMode);
-      }
-      return newSession(
-        seed.harness,
-        cwd,
-        seed.model,
-        seed.runtimeMode,
-        seed.modelSettings,
-      );
-    };
-
     // Stage one: files open in the active tab's editor panes close first.
     // Only when none are open does the command close every workspace tab.
     const editorFiles = tab.editorPanes.flatMap((pane) => pane.files);
@@ -2546,7 +2542,10 @@ export default function App({
           );
         } else {
           // The tab held only editor panes and must stay: seed a session.
-          const session = seedSession(editorFiles[0].cwd || projectCwd);
+          const session = newSessionForSeed(
+            sessionsRef.current[0],
+            editorFiles[0].cwd || projectCwd,
+          );
           setSessions((prev) => [...prev, session]);
           nextTab = resetTabToSession(tab, session.id);
           focusesSession = true;
@@ -2620,7 +2619,10 @@ export default function App({
         return;
       }
       // The tab held no session: seed one so the workspace stays usable.
-      const session = seedSession(terminalFiles[0]?.cwd || projectCwd);
+      const session = newSessionForSeed(
+        sessionsRef.current[0],
+        terminalFiles[0]?.cwd || projectCwd,
+      );
       setSessions((prev) => [...prev, session]);
       setTabs((prev) =>
         prev.map((entry) =>
