@@ -2503,12 +2503,15 @@ export default function App({
 
     const seedSession = (cwd: string) => {
       const seed = sessionsRef.current[0];
+      if (!seed || !isHarnessAvailable(seed.harness)) {
+        return newAvailableDefaultSession(cwd, seed?.runtimeMode);
+      }
       return newSession(
-        seed?.harness ?? "claude",
+        seed.harness,
         cwd,
-        seed?.model,
-        seed?.runtimeMode,
-        seed?.modelSettings,
+        seed.model,
+        seed.runtimeMode,
+        seed.modelSettings,
       );
     };
 
