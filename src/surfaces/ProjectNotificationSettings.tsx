@@ -55,6 +55,7 @@ export function ProjectNotificationSettings({
   const [error, setError] = useState<string | null>(null);
   const loading = discovery.loading;
   const [selected, setSelected] = useState<string[]>([]);
+  const [selecting, setSelecting] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const selectedIds = selected.filter((id) =>
     projects.some((project) => project.id === id),
@@ -113,13 +114,29 @@ export function ProjectNotificationSettings({
     <section
       id="settings-project-notifications"
       aria-label="Project notifications"
+      className="@container/notifications"
     >
-      <h2 className="text-[15px] font-semibold text-content">
-        Project notifications
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <h2 className="text-[15px] font-semibold text-content">
+          Project notifications
+        </h2>
+        {projects.length ? (
+          <button
+            type="button"
+            aria-pressed={selecting}
+            onClick={() => {
+              setSelecting(!selecting);
+              setSelected([]);
+            }}
+            className="rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {selecting ? "Done" : "Select projects"}
+          </button>
+        ) : null}
+      </div>
       <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-        Choose which activity can send sounds and banners. Activity stays
-        available in MonoCode.
+        Choose sounds and banners for each project. Muted activity stays in
+        MonoCode.
       </p>
       {!soundsEnabled || !desktopEnabled ? (
         <div
@@ -149,36 +166,34 @@ export function ProjectNotificationSettings({
       ) : null}
       {projects.length ? (
         <>
-          <div className="mt-3 flex min-h-9 flex-wrap items-center justify-between gap-3 px-1 py-1.5">
-            <label className="flex cursor-pointer items-center gap-2.5 text-[12px] text-content/55 hover:text-content/80">
-              <ProjectSelection
-                label="Select all projects"
-                checked={selectedIds.length === projects.length}
-                mixed={
-                  selectedIds.length > 0 && selectedIds.length < projects.length
-                }
-                onChange={(checked) =>
-                  setSelected(
-                    checked ? projects.map((project) => project.id) : [],
-                  )
-                }
-              />
-              {selectedIds.length
-                ? `${selectedIds.length} selected`
-                : "Select projects to mute together"}
-            </label>
-            {selectedIds.length ? (
-              <div role="group" aria-label="Mute selected projects">
-                <NotificationMuteControl projectIds={selectedIds} />
-              </div>
-            ) : (
-              <span className="text-[11px] text-content/35">
-                {projects.length}{" "}
-                {projects.length === 1 ? "project" : "projects"}
-              </span>
-            )}
-          </div>
-          <div className="mt-1 border-y border-content/10">
+          {selecting ? (
+            <div className="mt-4 flex min-h-9 flex-wrap items-center justify-between gap-3 border-b border-content/5 pb-3">
+              <label className="flex cursor-pointer items-center gap-2.5 text-[12px] text-content/55 hover:text-content/80">
+                <ProjectSelection
+                  label="Select all projects"
+                  checked={selectedIds.length === projects.length}
+                  mixed={
+                    selectedIds.length > 0 &&
+                    selectedIds.length < projects.length
+                  }
+                  onChange={(checked) =>
+                    setSelected(
+                      checked ? projects.map((project) => project.id) : [],
+                    )
+                  }
+                />
+                {selectedIds.length
+                  ? `${selectedIds.length} selected`
+                  : "Select all projects"}
+              </label>
+              {selectedIds.length ? (
+                <div role="group" aria-label="Mute selected projects">
+                  <NotificationMuteControl projectIds={selectedIds} />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="mt-2">
             {projects.map((project) => {
               const path =
                 project.paths.find(
@@ -205,22 +220,24 @@ export function ProjectNotificationSettings({
                   key={project.id}
                   ref={project.id === targetId ? targetCard : undefined}
                   tabIndex={-1}
-                  className="min-w-0 border-t border-content/5 first:border-t-0 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent/50"
+                  className="min-w-0 border-b border-content/5 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent/50"
                 >
                   <legend className="sr-only">{project.name}</legend>
-                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 py-2">
-                    <div className="flex min-w-[min(100%,240px)] flex-1 items-center gap-3">
-                      <ProjectSelection
-                        label={`Select ${project.name}`}
-                        checked={selectedIds.includes(project.id)}
-                        onChange={(checked) =>
-                          setSelected((current) =>
-                            checked
-                              ? [...current, project.id]
-                              : current.filter((id) => id !== project.id),
-                          )
-                        }
-                      />
+                  <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4">
+                    <div className="flex min-w-[min(100%,200px)] flex-1 items-center gap-3">
+                      {selecting ? (
+                        <ProjectSelection
+                          label={`Select ${project.name}`}
+                          checked={selectedIds.includes(project.id)}
+                          onChange={(checked) =>
+                            setSelected((current) =>
+                              checked
+                                ? [...current, project.id]
+                                : current.filter((id) => id !== project.id),
+                            )
+                          }
+                        />
+                      ) : null}
                       <button
                         type="button"
                         aria-label={`Notification categories for ${project.name}`}
@@ -229,7 +246,7 @@ export function ProjectNotificationSettings({
                         onClick={() =>
                           setExpanded(isExpanded ? null : project.id)
                         }
-                        className="flex min-w-0 flex-1 items-center gap-3 rounded-md py-1.5 text-left hover:bg-content/3 focus-visible:outline-2 focus-visible:outline-accent"
+                        className="group flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                       >
                         <span className="grid size-4 shrink-0 place-items-center">
                           {logoPath ? (
@@ -259,31 +276,35 @@ export function ProjectNotificationSettings({
                         </span>
                         <div className="min-w-0 flex-1">
                           <p
-                            className="truncate text-[13px] font-medium text-content"
-                            title={`${project.name} · ${project.detail}`}
+                            className="truncate text-[13px] font-medium text-content group-hover:text-content/75"
+                            title={`${project.name} (${project.detail})`}
                           >
                             {project.name}
                           </p>
+                          <p className="mt-1 text-[12px] text-content/45">
+                            {enabledCount === categories.length
+                              ? "All activity"
+                              : `${enabledCount} of ${categories.length} enabled`}
+                          </p>
                         </div>
-                        <span className="shrink-0 text-[11px] font-normal text-content/40">
-                          {enabledCount === categories.length
-                            ? "All activity"
-                            : `${enabledCount} of ${categories.length} enabled`}
-                        </span>
                         <ChevronRight
-                          className={`mr-1 size-3 shrink-0 text-content/40 ${isExpanded ? "rotate-90" : ""}`}
+                          className={`size-3.5 shrink-0 text-content/40 ${isExpanded ? "rotate-90" : ""}`}
                           aria-hidden="true"
                         />
                       </button>
                     </div>
-                    <NotificationMuteControl projectIds={[project.id]} />
+                    <div className="ml-auto max-w-full">
+                      <NotificationMuteControl projectIds={[project.id]} />
+                    </div>
                   </div>
                   <div id={panelId} hidden={!isExpanded}>
-                    <div className="grid gap-x-8 pb-3 pl-8 pr-1 sm:grid-cols-2">
+                    <div
+                      className={`pb-2 ${selecting ? "pl-7 @[400px]/notifications:pl-14" : "pl-0 @[400px]/notifications:pl-7"}`}
+                    >
                       {categories.map((category) => (
                         <label
                           key={category.id}
-                          className="flex min-h-8 cursor-pointer items-center justify-between gap-4 rounded-md px-2 text-[12px] text-content/70 hover:bg-content/3 hover:text-content"
+                          className="flex min-h-11 cursor-pointer items-center justify-between gap-6 border-t border-content/5 py-3 text-[13px] text-content/70 hover:text-content"
                         >
                           <span>{category.label}</span>
                           <span className="relative flex shrink-0">

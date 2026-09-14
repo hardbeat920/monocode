@@ -26,9 +26,10 @@ Bulk actions include cataloged Inbox-only projects such as Linear. These actions
 apply to the catalog and rail projects shown by the menu when the action is
 chosen. Bulk actions wait for any unknown local paths to resolve so they cannot
 silently skip a project.
-Settings supports individual category choices and selecting several projects to
-mute or resume together. Preset durations and the custom-date control are shared
-between menus and Settings.
+Settings shows projects as expandable rows with notification categories in one
+column. "Select projects" reveals checkboxes to mute or resume several projects
+together; "Done" clears the selection and hides the checkboxes. Preset durations
+and the custom-date control are shared between menus and Settings.
 Choosing a custom date opens the calendar and local-time field directly, without
 repeating duration presets. `DateTimePicker.tsx` supplies the calendar, month and
 keyboard navigation, and strict local date/time parsing. The notification form

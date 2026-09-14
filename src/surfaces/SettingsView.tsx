@@ -325,9 +325,9 @@ export function SettingsView({
       ) : (
         <div
           ref={lockOverscroll}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-none"
+          className="@container/settings min-h-0 flex-1 overflow-y-auto overscroll-none"
         >
-          <div className="mx-auto w-full max-w-5xl px-8 py-8">
+          <div className="mx-auto w-full max-w-3xl px-5 py-6 @min-[560px]/settings:px-8 @min-[560px]/settings:py-8">
             <PageHeader
               title={settingsSectionLabel(section)}
               description={settingsSectionDescription(section)}
@@ -341,7 +341,11 @@ export function SettingsView({
             {section === "keybindings" ? <KeybindingsPage /> : null}
             {section === "providers" ? <ProvidersPage /> : null}
             {section === "inbox" ? (
-              <InboxPage cwd={cwd} recents={recents} notificationProjectPath={notificationProjectPath} />
+              <InboxPage
+                cwd={cwd}
+                recents={recents}
+                notificationProjectPath={notificationProjectPath}
+              />
             ) : null}
             {section === "archive" ? (
               <ArchivePage
@@ -617,14 +621,22 @@ function GeneralPage({
   );
 }
 
-function InboxPage({ cwd, recents, notificationProjectPath }: {
+function InboxPage({
+  cwd,
+  recents,
+  notificationProjectPath,
+}: {
   cwd: string;
   recents?: RecentProject[];
   notificationProjectPath?: string | null;
 }) {
   return (
     <>
-      <ProjectNotificationSettings cwd={cwd} recents={recents} notificationProjectPath={notificationProjectPath} />
+      <ProjectNotificationSettings
+        cwd={cwd}
+        recents={recents}
+        notificationProjectPath={notificationProjectPath}
+      />
       <Heading title="GitHub" id={ANCHOR_IDS.github} />
       <GithubSettings />
 
@@ -781,7 +793,7 @@ function GitlabSettings() {
         description="Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it."
       >
         {connected ? (
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             <span className="max-w-56 truncate text-[12px] text-content/50">
               {url}
             </span>
@@ -793,8 +805,8 @@ function GitlabSettings() {
             </SecondaryButton>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-2">
-            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
               <input
                 type="url"
                 value={url}
@@ -806,7 +818,7 @@ function GitlabSettings() {
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
               />
             </label>
-            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
               <input
                 type="password"
                 value={token}
@@ -935,8 +947,8 @@ function LinearSettings() {
             Disconnect
           </SecondaryButton>
         ) : (
-          <div className="flex items-center gap-2">
-            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
               <input
                 type="password"
                 value={token}
@@ -1948,7 +1960,7 @@ function Row({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-6 border-b border-content/5 py-4 last:border-b-0">
+    <div className="settings-row flex items-start gap-6 border-b border-content/5 py-4 last:border-b-0">
       <div className="min-w-0 flex-1">
         <div className="text-[13px] font-medium text-content">{label}</div>
         {description ? (
@@ -1957,7 +1969,7 @@ function Row({
           </p>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+      <div className="settings-row-control flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-center justify-end gap-2">
         {children}
       </div>
     </div>
@@ -1979,7 +1991,7 @@ function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className="inline-grid shrink-0 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
+      className="inline-grid max-w-full shrink-0 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
       style={{
         gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
       }}
@@ -1991,7 +2003,7 @@ function Segmented<T extends string>({
           role="radio"
           aria-checked={value === option.value}
           onClick={() => onChange(option.value)}
-          className={`min-w-0 whitespace-nowrap rounded-[5px] px-2.5 py-1 ${
+          className={`min-w-0 rounded-[5px] px-2.5 py-1 ${
             value === option.value
               ? "bg-content/10 text-content"
               : "text-content/50 hover:text-content"
@@ -2025,7 +2037,7 @@ function Slider({
 }) {
   return (
     <div
-      className={`flex w-56 items-center gap-3 ${disabled ? "opacity-40" : ""}`}
+      className={`flex w-56 max-w-full items-center gap-3 ${disabled ? "opacity-40" : ""}`}
     >
       <input
         type="range"

@@ -223,6 +223,14 @@ it("mutes several selected projects without changing another project's notificat
   await act(async () =>
     root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
   );
+  expect(
+    container.querySelector('input[aria-label="Select me/private"]'),
+  ).toBeNull();
+  const selectProjects = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Select projects",
+  );
+  expect(selectProjects).toBeInstanceOf(HTMLButtonElement);
+  act(() => selectProjects!.click());
   act(() => checkbox("Select me/private").click());
   act(() => checkbox("Select me/other").click());
   const bulk = container.querySelector('[aria-label="Mute selected projects"]');

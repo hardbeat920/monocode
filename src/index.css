@@ -5,6 +5,23 @@
 
 @custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
 
+@container settings (width < 560px) {
+  .settings-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .settings-row-control {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  .settings-row:has(> .settings-row-control > [role="switch"]:only-child) {
+    flex-direction: row;
+    gap: 1.5rem;
+  }
+}
+
 @theme {
   /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
   --leading-label: 1.4;
