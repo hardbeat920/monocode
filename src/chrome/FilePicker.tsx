@@ -17,6 +17,7 @@ import {
 } from "../lib/fileIndex";
 import { LAYER } from "../lib/layers";
 import { looksLikeProject } from "../lib/recents";
+import type { OpenFileFn } from "../lib/search";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { MatchText } from "./MatchText";
@@ -25,7 +26,7 @@ type Props = {
   open: boolean;
   cwd: string;
   openPaths?: string[];
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onClose: () => void;
 };
 
@@ -121,7 +122,7 @@ export function FilePicker({
   if (!open) return null;
 
   const pick = (file: RankedFile) => {
-    onOpenFile(file.path);
+    onOpenFile(file.path, undefined, { exact: true });
     onClose();
   };
 

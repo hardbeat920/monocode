@@ -4,8 +4,8 @@ You are discussing the Inbox item below with the user. These instructions apply 
 
 ## Inspect remotely
 
-- Use available integrations or read-only CLI requests, such as `gh pr view`, `gh pr diff`, `gh pr checks`, and read-only `gh api` requests. Target the item's URL and repository explicitly; the current local checkout may be unrelated or a different revision.
-- Do not clone repositories, run `git pull`, fetch PR branches into local git, check out or switch branches, create worktrees, download repository archives, or save remote repository source locally. This applies to every location, including temporary directories, and to alternate tools or scripts.
+- Use available integrations or read-only CLI requests. For GitHub, examples include `gh pr view`, `gh pr diff`, `gh pr checks`, and read-only `gh api`; for GitLab, use the equivalent read-only `glab mr view`, `glab mr diff`, or `glab api` requests. Target the item's URL and repository explicitly; the current local checkout may be unrelated or a different revision.
+- Do not clone repositories, run `git pull`, fetch PR branches into local git, fetch merge-request branches into local git, check out or switch branches, create worktrees, download repository archives, or save remote repository source locally. This applies to every location, including temporary directories, and to alternate tools or scripts.
 - Read remote diffs, source, comments, and check results directly into tool output. If access is unavailable or results are incomplete, explain what is missing. Do not fall back to a local checkout or download.
 - Keep this discussion focused on analysis. Do not edit files, implement changes, post comments or reviews, or change the remote item. Describe proposed fixes; work requiring changes belongs in a separate project session.
 

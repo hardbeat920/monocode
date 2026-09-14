@@ -82,6 +82,8 @@ describe("sounds", () => {
     expect(play).toHaveBeenCalledWith("success");
     playCue("inboxUnseen");
     expect(play).toHaveBeenCalledWith("bloom");
+    playCue("linkedActivity");
+    expect(play).toHaveBeenCalledWith("chime");
     playCue("updateAvailable");
     expect(play).toHaveBeenCalledWith("arrival");
     playCue("switch");

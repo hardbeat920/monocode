@@ -14,6 +14,7 @@ type Notice = PendingApprovalNotice & { session: Session };
 
 type Props = {
   notices: Notice[];
+  topOffset?: number;
   onFocusSession: (sessionId: string) => void;
   onApproval: (
     sessionId: string,
@@ -22,14 +23,19 @@ type Props = {
   ) => void;
 };
 
-export function ApprovalToasts({ notices, onFocusSession, onApproval }: Props) {
+export function ApprovalToasts({
+  notices,
+  onFocusSession,
+  onApproval,
+  topOffset = 12,
+}: Props) {
   if (notices.length === 0) return null;
 
   return createPortal(
     <div
       aria-live="polite"
-      style={{ zIndex: LAYER.toast }}
-      className="pointer-events-none fixed right-3 top-3 flex w-[min(360px,calc(100vw-24px))] flex-col gap-2"
+      style={{ zIndex: LAYER.toast, top: topOffset }}
+      className="pointer-events-none fixed right-3 flex w-[min(360px,calc(100vw-24px))] flex-col gap-2"
     >
       {notices.map((notice) => (
         <ApprovalToastCard

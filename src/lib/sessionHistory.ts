@@ -101,6 +101,9 @@ export function summaryFromSession(
     runtimeMode: session.runtimeMode,
     title: session.title,
     providerSessionId: session.providerSessionId,
+    ...(session.linkedWorkItem
+      ? { linkedWorkItem: session.linkedWorkItem }
+      : {}),
     ...(git?.branch ? { branch: git.branch } : {}),
     ...(git?.repo ? { repo: git.repo } : {}),
     createdAt: 0,

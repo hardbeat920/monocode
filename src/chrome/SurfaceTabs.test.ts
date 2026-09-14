@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   newChangesTab,
   newCommitTab,
+  newFileTab,
   newReleaseNotesWorkspaceTab,
   newSessionChangesTab,
+  newTerminalFile,
 } from "../lib/layout";
 import { releaseNotesTitle } from "../lib/releaseNotes";
-import { appendProblems, surfaceTabPresentation } from "./SurfaceTabs";
+import {
+  appendProblems,
+  surfaceTabMenuItems,
+  surfaceTabPresentation,
+} from "./SurfaceTabs";
 
 describe("surfaceTabPresentation", () => {
   it("labels release notes from their version", () => {
@@ -23,7 +29,9 @@ describe("surfaceTabPresentation", () => {
   });
 
   it("labels the unified working-tree tab as Changes", () => {
-    expect(surfaceTabPresentation(newChangesTab("/repo", "/repo/App.tsx"))).toEqual({
+    expect(
+      surfaceTabPresentation(newChangesTab("/repo", "/repo/App.tsx")),
+    ).toEqual({
       name: "Changes",
       label: "Changes",
       iconName: "CHANGES",
@@ -77,5 +85,62 @@ describe("appendProblems", () => {
     expect(appendProblems("/repo/src/app.ts", 4)).toBe(
       "/repo/src/app.ts — 4 problems",
     );
+  });
+});
+
+describe("surfaceTabMenuItems", () => {
+  it("offers filesystem actions for regular and review file tabs", () => {
+    for (const review of [false, true]) {
+      const items = surfaceTabMenuItems(
+        newFileTab("/repo/src/app.ts", "/repo", review),
+      );
+      expect(
+        items.flatMap((item) => (item.kind === "item" ? [item.label] : [])),
+      ).toEqual([
+        "Open in Default App",
+        expect.stringMatching(/Reveal|Containing Folder/),
+        "Copy Path",
+        "Copy Relative Path",
+        "Copy File Name",
+        "Close",
+        "Close Others",
+      ]);
+    }
+  });
+
+  it("offers close actions when a tab has no real file", () => {
+    for (const file of [
+      newChangesTab("/repo"),
+      newCommitTab("/repo", {
+        sha: "abc1234deadbeef",
+        shortSha: "abc1234",
+        subject: "Fix the graph",
+      }),
+      newSessionChangesTab("/repo", "session-a"),
+      newTerminalFile("/repo"),
+    ]) {
+      expect(surfaceTabMenuItems(file)).toEqual([
+        { kind: "item", id: "close", label: "Close" },
+        {
+          kind: "item",
+          id: "close-others",
+          label: "Close Others",
+          disabled: false,
+        },
+      ]);
+    }
+  });
+
+  it("disables Close Others when there are no sibling tabs", () => {
+    const items = surfaceTabMenuItems(
+      newFileTab("/repo/src/app.ts", "/repo"),
+      false,
+    );
+    expect(items.at(-1)).toEqual({
+      kind: "item",
+      id: "close-others",
+      label: "Close Others",
+      disabled: true,
+    });
   });
 });

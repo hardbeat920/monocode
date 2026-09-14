@@ -278,13 +278,27 @@ export function promptBlocks(
   const trimmed = text.trim();
   if (trimmed) blocks.push({ type: "text", text: trimmed });
   for (const file of attachments) {
-    const block = contentBlockFor(file);
-    if (block) blocks.push(block);
+    blocks.push(contentBlockFor(file));
   }
   return blocks;
 }
 
-function contentBlockFor(file: Attachment): PromptContentBlock | null {
+/** Require a deliverable source instead of silently dropping an attachment. */
+export function attachmentPath(file: Attachment): string {
+  if (!file.path?.trim()) {
+    throw new Error(
+      `Cannot attach ${JSON.stringify(file.name)}: no local file path is available. Attach the file again.`,
+    );
+  }
+  return file.path;
+}
+
+/** Native harnesses without file blocks can ask their tools to read this path. */
+export function attachmentPathText(file: Attachment): string {
+  return `Attached file (read from disk): ${JSON.stringify(attachmentPath(file))}`;
+}
+
+function contentBlockFor(file: Attachment): PromptContentBlock {
   if (file.data && isVisionImage(file.mimeType)) {
     return {
       type: "image",
@@ -293,10 +307,9 @@ function contentBlockFor(file: Attachment): PromptContentBlock | null {
       ...(file.path ? { uri: fileUri(file.path) } : {}),
     };
   }
-  if (!file.path) return null;
   return {
     type: "resource_link",
-    uri: fileUri(file.path),
+    uri: fileUri(attachmentPath(file)),
     name: file.name,
     mimeType: file.mimeType,
     size: file.size,
@@ -430,11 +443,11 @@ function kindFromMime(mimeType: string): AttachmentKind {
   return "file";
 }
 
-function isVisionImage(mimeType: string): boolean {
+export function isVisionImage(mimeType: string): boolean {
   return VISION_MIME.has(mimeType.toLowerCase());
 }
 
-function normalizeImageMime(mimeType: string): string {
+export function normalizeImageMime(mimeType: string): string {
   const mime = mimeType.toLowerCase();
   if (mime === "image/jpg") return "image/jpeg";
   return mime;

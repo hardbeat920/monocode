@@ -120,7 +120,11 @@ export function ProjectSearch({
   const fileCount = groups.length;
 
   const openMatch = (match: ProjectSearchMatch) => {
-    onOpenFile(match.path, { line: match.line, column: match.column });
+    onOpenFile(
+      match.path,
+      { line: match.line, column: match.column },
+      { exact: true },
+    );
   };
 
   const onQueryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {

@@ -39,7 +39,7 @@ function toModel(file: PrDiffFile, truncated: boolean): UnifiedDiffFileModel {
     emptyMessage:
       !file.binary && file.lines.length === 0
         ? truncated
-          ? "Patch unavailable because this pull request is too large"
+          ? "Patch unavailable because this change is too large"
           : "No textual diff"
         : undefined,
     additions: file.additions,

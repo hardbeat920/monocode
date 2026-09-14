@@ -129,6 +129,9 @@ describe("OMP native commands", () => {
         commands: [
           { name: "plan", source: "builtin" },
           { name: "compact", source: "builtin" },
+          { name: "new", source: "builtin" },
+          { name: "new-session", source: "builtin" },
+          { name: "add-to-folder", source: "builtin" },
           {
             name: "Review_Code",
             source: "custom",
@@ -165,6 +168,27 @@ describe("OMP native commands", () => {
       {
         name: "compact",
         invocation: "omp:compact",
+        description: "",
+        source: "omp",
+        origin: "builtin",
+      },
+      {
+        name: "new",
+        invocation: "new",
+        description: "",
+        source: "omp",
+        origin: "builtin",
+      },
+      {
+        name: "new-session",
+        invocation: "new-session",
+        description: "",
+        source: "omp",
+        origin: "builtin",
+      },
+      {
+        name: "add-to-folder",
+        invocation: "omp:add-to-folder",
         description: "",
         source: "omp",
         origin: "builtin",

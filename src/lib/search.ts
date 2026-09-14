@@ -34,7 +34,16 @@ export type EditorNavigationTarget = EditorNavigation & {
   token: number;
 };
 
-export type OpenFileFn = (path: string, navigation?: EditorNavigation) => void;
+export type FileOpenOptions = {
+  /** The caller obtained this concrete path from the filesystem or file index. */
+  exact?: boolean;
+};
+
+export type OpenFileFn = (
+  path: string,
+  navigation?: EditorNavigation,
+  options?: FileOpenOptions,
+) => void;
 
 export function normalizeEditorPath(path: string): string {
   return slash(path).replace(/\/+$/, "") || path;

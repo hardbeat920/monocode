@@ -8,6 +8,9 @@ import {
   buildOpenCodePermissionRules,
   compareSemver,
   contextUsedFromMessageInfo,
+  turnMetricsFromMessageInfo,
+  detailFromToolPart,
+  eventSessionId,
   inferDefaultAgent,
   inferDefaultVariant,
   isOpenCodeDefaultTitle,
@@ -19,6 +22,42 @@ import {
   toOpenCodePermissionReply,
   toolKindFromName,
 } from "./opencodeProtocol";
+
+describe("eventSessionId", () => {
+  it.each([
+    {
+      type: "permission.asked",
+      properties: { id: "permission_1", sessionID: "session_1" },
+    },
+    {
+      type: "session.created",
+      properties: { info: { id: "session_1", parentID: "session_parent" } },
+    },
+    {
+      type: "message.updated",
+      properties: { info: { id: "message_1", sessionID: "session_1" } },
+    },
+    {
+      type: "message.part.updated",
+      properties: { part: { id: "part_1", sessionID: "session_1" } },
+    },
+    {
+      type: "message.part.delta",
+      properties: { sessionID: "session_1", partID: "part_1" },
+    },
+  ])("extracts the owning session for $type", (event) => {
+    expect(eventSessionId(event)).toBe("session_1");
+  });
+
+  it("does not mistake message IDs for session IDs", () => {
+    expect(
+      eventSessionId({
+        type: "message.updated",
+        properties: { info: { id: "message_1" } },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("parseOpenCodeModelSlug", () => {
   it("splits provider/model", () => {
@@ -38,6 +77,22 @@ describe("parseOpenCodeModelSlug", () => {
 describe("tool kinds", () => {
   it("classifies todo writes as internal task activity", () => {
     expect(toolKindFromName("todowrite")).toBe("tasks");
+  });
+});
+
+describe("tool failure details", () => {
+  it("extracts nested provider errors instead of dropping them", () => {
+    expect(
+      detailFromToolPart({
+        id: "agent-1",
+        type: "tool",
+        tool: "task",
+        state: {
+          status: "error",
+          error: { data: { message: "worker disconnected" } },
+        },
+      }),
+    ).toBe("worker disconnected");
   });
 });
 
@@ -107,12 +162,12 @@ describe("OpenCode CLI inventory parsers", () => {
       "anthropic/claude-sonnet-4-6",
       "opencode/glm-5",
     ]);
-    expect(models[1].settings?.some((setting) => setting.id === "variant")).toBe(
-      true,
-    );
-    expect(models[0].settings?.find((setting) => setting.id === "agent")?.value).toBe(
-      "build",
-    );
+    expect(
+      models[1].settings?.some((setting) => setting.id === "variant"),
+    ).toBe(true);
+    expect(
+      models[0].settings?.find((setting) => setting.id === "agent")?.value,
+    ).toBe("build");
   });
 
   it("parses agent list headers", () => {
@@ -163,9 +218,9 @@ describe("OpenCode helpers", () => {
     expect(inferDefaultVariant("openai", ["low", "medium", "high"])).toBe(
       "medium",
     );
-    expect(
-      inferDefaultAgent([{ name: "plan" }, { name: "build" }]),
-    ).toBe("build");
+    expect(inferDefaultAgent([{ name: "plan" }, { name: "build" }])).toBe(
+      "build",
+    );
   });
 });
 
@@ -194,9 +249,33 @@ describe("contextUsedFromMessageInfo", () => {
   it("treats an all-zero reading as nothing to report", () => {
     expect(
       contextUsedFromMessageInfo({
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
       }),
     ).toBeUndefined();
+  });
+
+  it("normalizes cache usage for a turn tooltip", () => {
+    expect(
+      turnMetricsFromMessageInfo({
+        tokens: {
+          input: 1_200,
+          output: 800,
+          reasoning: 200,
+          cache: { read: 40_000, write: 5_000 },
+        },
+      }),
+    ).toEqual({
+      inputTokens: 1_200,
+      outputTokens: 1_000,
+      cacheReadTokens: 40_000,
+      cacheWriteTokens: 5_000,
+      cacheHitPercent: (40_000 / 46_200) * 100,
+    });
   });
 });
 

@@ -212,7 +212,14 @@ describe("grok protocol", () => {
           totalTokens: 19798,
         },
       }),
-    ).toEqual([{ type: "context", used: 19798 }]);
+    ).toEqual([
+      { type: "context", used: 19798 },
+      {
+        type: "turn.metrics",
+        inputTokens: 19762,
+        outputTokens: 36,
+      },
+    ]);
   });
 
   it("maps plan entries", () => {

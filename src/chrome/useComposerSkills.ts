@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   loadSkills,
+  SKILLS_CHANGE_EVENT,
   hasNativeCommands,
   subscribeSkills,
   mergeCatalog,
@@ -104,6 +105,14 @@ export function useComposerSkills(input: {
     if (cached) commit(contextToken, cached);
     void refresh().catch(() => undefined);
   }, [commit, context, contextToken, refresh]);
+
+  useEffect(() => {
+    const onChange = (): void => {
+      if (!hasNativeCommands(context.harness)) void refresh({ refresh: true });
+    };
+    window.addEventListener(SKILLS_CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(SKILLS_CHANGE_EVENT, onChange);
+  }, [context.harness, refresh]);
 
   useEffect(() => {
     if (!input.pickerOpen) return;

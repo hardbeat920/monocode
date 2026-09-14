@@ -102,7 +102,9 @@ describe("FileTree render isolation", () => {
     act(() => render(1));
     expect(row("first.ts").querySelector(".text-amber-400")).not.toBeNull();
     act(() => row("first.ts").click());
-    expect(onOpenFile).toHaveBeenCalledWith(`${cwd}/first.ts`);
+    expect(onOpenFile).toHaveBeenCalledWith(`${cwd}/first.ts`, undefined, {
+      exact: true,
+    });
   });
 
   it("still expands folders and refreshes rows after filesystem changes", async () => {

@@ -10,15 +10,18 @@ import {
   loadHiddenPickerProviders,
   loadLastModelChoice,
   loadLastModelSettings,
+  loadRecentModelChoices,
   mergeModelSettings,
   modelPickerTabs,
   preferredModelId,
   preferredModelSettings,
   resetHarnessModelOverlays,
+  resolveModel,
   saveDefaultModel,
   saveLastModelChoice,
   saveLastModelSettings,
   savePickerProviderVisible,
+  saveRecentModelChoice,
   setHarnessModels,
   showProviderInModelPicker,
   stepModelPickerTab,
@@ -221,6 +224,26 @@ describe("provider defaults", () => {
       model: defaultModelId("cursor"),
     });
   });
+
+  it("keeps the six most recently used unique models", () => {
+    saveRecentModelChoice("claude", "claude:opus-5");
+    saveRecentModelChoice("cursor", "cursor:composer-2.5");
+    saveRecentModelChoice("grok", "grok:grok-4.6");
+    saveRecentModelChoice("opencode", "opencode:glm-5");
+    saveRecentModelChoice("pi", "pi:default");
+    saveRecentModelChoice("omp", "omp:default");
+    saveRecentModelChoice("fx", "fx:zai/glm-5.2-fast");
+    saveRecentModelChoice("cursor", "cursor:composer-2.5");
+
+    expect(loadRecentModelChoices()).toEqual([
+      { harness: "cursor", model: "cursor:composer-2.5" },
+      { harness: "fx", model: "fx:zai/glm-5.2-fast" },
+      { harness: "omp", model: "omp:default" },
+      { harness: "pi", model: "pi:default" },
+      { harness: "opencode", model: "opencode:glm-5" },
+      { harness: "grok", model: "grok:grok-4.6" },
+    ]);
+  });
 });
 
 describe("model picker tabs", () => {
@@ -302,5 +325,29 @@ describe("live catalog overlays", () => {
     ]);
     expect(hasLiveCatalog("pi")).toBe(true);
     expect(hasLiveCatalog("omp")).toBe(false);
+  });
+
+  it("keeps a Claude alias on the same model family across relaunch", () => {
+    const live = [
+      {
+        id: "claude:sonnet",
+        harness: "claude" as const,
+        name: "Sonnet 5",
+        nativeId: "sonnet",
+      },
+      {
+        id: "claude:opus",
+        harness: "claude" as const,
+        name: "Opus 5",
+        nativeId: "opus",
+      },
+    ];
+
+    setHarnessModels("claude", live);
+    expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus");
+
+    // A relaunch starts with the built-in catalog until discovery completes.
+    resetHarnessModelOverlays();
+    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5");
   });
 });

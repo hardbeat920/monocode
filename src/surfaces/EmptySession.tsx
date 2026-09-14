@@ -1,6 +1,12 @@
 import { type ReactNode, useSyncExternalStore } from "react";
 import { basename } from "../lib/fs";
+import { projectKey } from "../lib/paths";
 import { looksLikeProject } from "../lib/recents";
+import {
+  loadTabGroupLabels,
+  resolveTabGroupLabel,
+  subscribeTabGroupLabels,
+} from "../lib/tabGroups";
 import {
   loadGridArcadeEnabled,
   subscribeGridArcadeEnabled,
@@ -21,7 +27,15 @@ export function EmptySession({ cwd, composer, hasChatBackground }: Props) {
     loadGridArcadeEnabled,
     () => true,
   );
-  const project = looksLikeProject(cwd) ? basename(cwd) : null;
+  const getProjectLabel = () =>
+    looksLikeProject(cwd)
+      ? resolveTabGroupLabel(projectKey(cwd), loadTabGroupLabels(), basename(cwd))
+      : null;
+  const project = useSyncExternalStore(
+    subscribeTabGroupLabels,
+    getProjectLabel,
+    getProjectLabel,
+  );
   const title = project
     ? `What should we work on in ${project}?`
     : "What should we work on?";

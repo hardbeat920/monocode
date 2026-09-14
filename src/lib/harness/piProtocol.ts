@@ -1,4 +1,5 @@
-import type { Attachment, ToolPreview } from "../session";
+import type { Attachment, ToolPreview, TurnMetrics } from "../session";
+import { attachmentPathText } from "../attachments";
 import type { AgentModel, ModelSetting } from "../models";
 import { isTaskListToolName } from "../taskList";
 import type { PiFlavor } from "./piFlavor";
@@ -180,19 +181,25 @@ export function piNativeId(provider: string, modelId: string): string {
   return `${provider}/${modelId}`;
 }
 
-export function toPiImages(attachments: Attachment[] | undefined): PiImage[] {
+function piPromptContent(text: string, attachments: Attachment[] = []) {
   const images: PiImage[] = [];
-  for (const attachment of attachments ?? []) {
-    if (attachment.kind !== "image" || !attachment.data) continue;
+  const parts = text ? [text] : [];
+  for (const attachment of attachments) {
     const mimeType = attachment.mimeType.trim().toLowerCase();
-    if (!SUPPORTED_PI_IMAGE_MIME_TYPES.has(mimeType)) continue;
-    images.push({
-      type: "image",
-      data: attachment.data,
-      mimeType,
-    });
+    if (
+      attachment.kind === "image" &&
+      attachment.data &&
+      SUPPORTED_PI_IMAGE_MIME_TYPES.has(mimeType)
+    ) {
+      images.push({ type: "image", data: attachment.data, mimeType });
+    } else {
+      parts.push(attachmentPathText(attachment));
+    }
   }
-  return images;
+  return {
+    message: parts.join("\n\n"),
+    ...(images.length > 0 ? { images } : {}),
+  };
 }
 
 export function buildPiPrompt(input: {
@@ -202,10 +209,8 @@ export function buildPiPrompt(input: {
 }): Record<string, unknown> {
   const command: Record<string, unknown> = {
     type: "prompt",
-    message: input.text,
+    ...piPromptContent(input.text, input.attachments),
   };
-  const images = toPiImages(input.attachments);
-  if (images.length > 0) command.images = images;
   if (input.streaming) command.streamingBehavior = "steer";
   return command;
 }
@@ -214,13 +219,10 @@ export function buildPiSteer(input: {
   text: string;
   attachments?: Attachment[];
 }): Record<string, unknown> {
-  const command: Record<string, unknown> = {
+  return {
     type: "steer",
-    message: input.text,
+    ...piPromptContent(input.text, input.attachments),
   };
-  const images = toPiImages(input.attachments);
-  if (images.length > 0) command.images = images;
-  return command;
 }
 
 export function parseRpcResponse(
@@ -310,7 +312,7 @@ export function extensionUiTitle(request: PiExtensionUiRequest): string {
   const text =
     request.method === "confirm"
       ? [request.title, request.message].filter(Boolean).join(" — ")
-      : request.title ?? "Pi extension";
+      : (request.title ?? "Pi extension");
   // Pi's theme helpers emit ANSI even in RPC mode (e.g. Ponytail setStatus).
   // These labels use native UI styling. Strip CSI and OSC sequences only at
   // the display boundary: select replies must retain the original option.
@@ -381,6 +383,32 @@ export function contextFromUsage(
       (numberField(usage, "cacheWrite") ?? 0);
   if (!used) return window && window > 0 ? { window } : null;
   return window && window > 0 ? { used, window } : { used };
+}
+
+export function turnMetricsFromUsage(
+  rec: Record<string, unknown>,
+): TurnMetrics | null {
+  const usage =
+    asRecord(rec.usage) ??
+    assistantMessageUsage(rec) ??
+    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
+  if (!usage) return null;
+  const inputTokens = numberField(usage, "input") ?? 0;
+  const outputTokens = numberField(usage, "output") ?? 0;
+  const cacheReadTokens = numberField(usage, "cacheRead") ?? 0;
+  const cacheWriteTokens = numberField(usage, "cacheWrite") ?? 0;
+  const cacheReported = "cacheRead" in usage || "cacheWrite" in usage;
+  const cacheableInput = inputTokens + cacheReadTokens + cacheWriteTokens;
+  if (!inputTokens && !outputTokens && !cacheableInput) return null;
+  return {
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTokens ? { outputTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(cacheReported && cacheableInput
+      ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
+      : {}),
+  };
 }
 
 export function contextFromSessionStats(data: unknown): {

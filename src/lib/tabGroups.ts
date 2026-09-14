@@ -26,6 +26,7 @@ export function tabGroupColor(project: string): string {
 const COLOR_KEY = "monocode:tab-group:colors";
 const CUSTOM_COLOR_KEY = "monocode:tab-group:custom-colors";
 const LABEL_KEY = "monocode:tab-group:labels";
+const LABELS_CHANGED = "monocode:tab-group-labels-changed";
 const LOGO_KEY = "monocode:tab-group:logos";
 const MASCOT_KEY = "monocode:tab-group:mascots";
 
@@ -217,12 +218,23 @@ export function loadTabGroupLabels(): Record<string, string> {
   return readRecord(LABEL_KEY);
 }
 
+export function subscribeTabGroupLabels(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(LABELS_CHANGED, onChange);
+  return () => window.removeEventListener(LABELS_CHANGED, onChange);
+}
+
+function notifyTabGroupLabelsChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(LABELS_CHANGED));
+}
+
 export function saveTabGroupLabel(project: string, label: string): void {
   const trimmed = label.trim();
   const next = loadTabGroupLabels();
   if (!trimmed) delete next[project];
   else next[project] = trimmed;
-  writeRecord(LABEL_KEY, next);
+  if (writeRecord(LABEL_KEY, next)) notifyTabGroupLabelsChanged();
 }
 
 export function loadTabGroupLogos(): Record<string, string> {
@@ -254,7 +266,9 @@ export function clearTabGroupSettings(project: string): void {
     const next = readRecord(key);
     if (!(project in next)) continue;
     delete next[project];
-    writeRecord(key, next);
+    if (writeRecord(key, next) && key === LABEL_KEY) {
+      notifyTabGroupLabelsChanged();
+    }
   }
 }
 

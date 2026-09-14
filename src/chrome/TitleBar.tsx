@@ -26,13 +26,13 @@ import { looksLikeProject } from "../lib/recents";
 import type { HarnessId } from "../lib/session";
 import { CwdPicker } from "./CwdPicker";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useSortable } from "../hooks/useSortable";
+import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { WindowControls } from "./WindowControls";
-import { IS_MAC, MOD } from "../lib/platform";
+import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import type { RecentProject } from "../lib/recents";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 
@@ -214,11 +214,10 @@ function TabHarnesses({
   );
 }
 
-type SortableApi = ReturnType<typeof useSortable>;
+type SortableApi = ReturnType<typeof useAnimatedReorder>;
 
 function TitleTabItem({
   tab,
-  index,
   active,
   closable,
   canDrag,
@@ -229,7 +228,6 @@ function TitleTabItem({
   itemRef,
 }: {
   tab: Tab;
-  index: number;
   active: boolean;
   closable: boolean;
   canDrag: boolean;
@@ -239,21 +237,8 @@ function TitleTabItem({
   onContextMenu: (id: string, event: ReactMouseEvent<HTMLDivElement>) => void;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
-  const dragging = canDrag && sortable.draggingId === tab.id;
   const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
-  const showStart =
-    canDrag &&
-    sortable.draggingId &&
-    sortable.toIndex === index &&
-    sortable.fromIndex !== null &&
-    sortable.toIndex < sortable.fromIndex;
-  const showEnd =
-    canDrag &&
-    sortable.draggingId &&
-    sortable.toIndex === index &&
-    sortable.fromIndex !== null &&
-    sortable.toIndex > sortable.fromIndex;
 
   return (
     <div
@@ -261,12 +246,21 @@ function TitleTabItem({
         sortable.setItemRef(tab.id, el);
         itemRef?.(el);
       }}
-      className={`group @container relative flex h-full cursor-default touch-none items-center self-stretch min-w-0 w-full ${dragging ? "opacity-40" : ""}`}
+      className="reorder-item tab-motion group @container relative flex h-full cursor-default touch-none items-center self-stretch min-w-0 w-full"
       data-tauri-drag-region="false"
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
         onContextMenu(tab.id, event);
+      }}
+      onMouseDownCapture={(event) => {
+        if (event.button === 1) event.preventDefault();
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1 || !closable) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose(tab.id);
       }}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
@@ -277,12 +271,6 @@ function TitleTabItem({
         if (canDrag) sortable.onItemPointerDown(tab.id, event);
       }}
     >
-      {showStart ? (
-        <div className="pointer-events-none absolute inset-y-1.5 left-0 z-20 w-0.5 rounded-full bg-accent" />
-      ) : null}
-      {showEnd ? (
-        <div className="pointer-events-none absolute inset-y-1.5 right-0 z-20 w-0.5 rounded-full bg-accent" />
-      ) : null}
       <button
         type="button"
         title={tooltip}
@@ -318,10 +306,11 @@ function TitleTabItem({
             <FileTypeIcon name={fileIcon} isDir={false} size={14} />
           </span>
         )}
-        <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+        {/* Keep two-line tabs compact while leaving room for descenders. */}
+        <span className="flex min-w-0 flex-1 flex-col justify-center">
           <span className="flex min-w-0 items-center gap-1">
             <span
-              className={`min-w-0 truncate leading-none ${
+              className={`min-w-0 truncate leading-tight ${
                 meta
                   ? "text-[13px] @min-[11rem]:text-[10px] @min-[11rem]:font-medium"
                   : "text-[13px]"
@@ -338,7 +327,7 @@ function TitleTabItem({
             ) : null}
           </span>
           {meta ? (
-            <span className="hidden min-w-0 truncate text-[10px] leading-none text-content/45 @min-[11rem]:block">
+            <span className="hidden min-w-0 truncate text-[10px] leading-tight text-content/45 @min-[11rem]:block">
               {meta}
             </span>
           ) : null}
@@ -550,7 +539,7 @@ function TitleBarComponent({
   onSelectProject,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
-  const sortable = useSortable(tabIds, onReorder);
+  const sortable = useAnimatedReorder(tabIds, onReorder);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(
@@ -807,7 +796,7 @@ function TitleBarComponent({
             ref={setTabStripRef}
             className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none px-1.5"
           >
-            {tabs.map((tab, index) => (
+            {tabs.map((tab) => (
               <div
                 key={tab.id}
                 className="relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
@@ -815,7 +804,6 @@ function TitleBarComponent({
               >
                 <TitleTabItem
                   tab={tab}
-                  index={index}
                   active={tab.id === activeId}
                   closable={titleTabClosable(tab, tabs.length)}
                   canDrag={canDrag}
@@ -842,13 +830,13 @@ function TitleBarComponent({
           </div>
         </div>
 
-        {IS_MAC ? null : (
+        {!IS_MAC && !IS_WIN ? (
           <div className="flex min-w-0 flex-1 items-center justify-center px-4">
             <span className="pointer-events-none truncate text-[11.5px] font-medium text-content/40 select-none">
               {systemTitle}
             </span>
           </div>
-        )}
+        ) : null}
         {trailingControls}
       </div>
       {tabMenu && contextTab ? (

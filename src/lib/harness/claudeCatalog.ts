@@ -24,6 +24,7 @@ import {
   MINIMUM_CLAUDE_OPUS_4_7_VERSION,
   MINIMUM_CLAUDE_OPUS_4_8_VERSION,
   MINIMUM_CLAUDE_OPUS_5_VERSION,
+  MINIMUM_CLAUDE_SONNET_5_VERSION,
   parseClaudeVersion,
   parseControlResponse,
   parseJsonLine,
@@ -449,6 +450,11 @@ export function modelsForClaudeVersion(
     if (slug === "claude-opus-5") {
       return version
         ? compareSemver(version, MINIMUM_CLAUDE_OPUS_5_VERSION) >= 0
+        : false;
+    }
+    if (slug === "claude-sonnet-5") {
+      return version
+        ? compareSemver(version, MINIMUM_CLAUDE_SONNET_5_VERSION) >= 0
         : false;
     }
     if (slug === "claude-fable-5") {

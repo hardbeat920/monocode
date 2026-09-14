@@ -14,7 +14,7 @@ import type { Session } from "./session";
 
 export function workspaceTabCwd(
   tab: WorkspaceTab,
-  sessions: Session[],
+  sessions: readonly Pick<Session, "id" | "cwd">[],
 ): string | null {
   for (const id of leafIds(tab.layout)) {
     const session = sessions.find((entry) => entry.id === id);
@@ -25,6 +25,16 @@ export function workspaceTabCwd(
   if (file?.cwd && file.cwd !== "~") return file.cwd;
 
   return null;
+}
+
+export function focusedWorkspaceTabCwd(
+  tab: WorkspaceTab,
+  sessions: readonly Pick<Session, "id" | "cwd">[],
+): string | null {
+  const session = sessions.find((entry) => entry.id === tab.focusedId);
+  return (
+    session?.cwd ?? focusedFileTab(tab)?.cwd ?? workspaceTabCwd(tab, sessions)
+  );
 }
 
 export function workspaceTabProject(

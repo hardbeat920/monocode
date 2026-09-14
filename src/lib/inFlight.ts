@@ -2,6 +2,7 @@ import { leafIds, newTab, type WorkspaceTab } from "./layout";
 import type { ProjectTerminalDock } from "./projectTerminal";
 import { sessionNeedsInput, type Session } from "./session";
 import { stopStreaming } from "./harness/apply";
+import type { ProjectReturnMemory } from "./projectReturn";
 
 export const INTERRUPT_MESSAGE =
   "Turn interrupted when MonoCode quit.";
@@ -19,6 +20,7 @@ export type ResumedWorkspace = {
   activeTabId: string;
   projectCwd: string;
   projectTerminals?: ProjectTerminalDock[];
+  projectReturnMemory?: ProjectReturnMemory;
 };
 
 /** A turn or approval that would be lost if this webview died. */

@@ -94,35 +94,84 @@ export function resolveWorkspacePath(
   href: string,
   cwd?: string,
 ): string | undefined {
-  let value = href.trim();
-  if (!value || /^(https?:|mailto:|tel:)/i.test(value)) return undefined;
+  return parseWorkspaceFileReference(href, cwd, false)?.path;
+}
 
-  if (value.startsWith("file://")) {
+/** Keep source positions while resolving a local Markdown file reference. */
+export function resolveWorkspaceFileReference(
+  href: string,
+  cwd?: string,
+): { path: string; navigation?: { line: number; column?: number } } | undefined {
+  return parseWorkspaceFileReference(href, cwd, true);
+}
+
+function parseWorkspaceFileReference(
+  href: string,
+  cwd: string | undefined,
+  decodeUrl: boolean,
+) {
+  let value = href.trim();
+  if (!value) return undefined;
+
+  // Strip heading anchors before decoding, keeping encoded '#' in filenames.
+  if (decodeUrl) {
+    const hash = value.indexOf("#");
+    if (hash > 0 && !/^L\d+(?:-L\d+)?$/.test(value.slice(hash + 1)))
+      value = value.slice(0, hash);
+  }
+  const location = value.match(/(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L\d+)?)$/);
+  const line = Number(location?.[1] ?? location?.[3]);
+  const column = location?.[2] ? Number(location[2]) : undefined;
+  const navigation =
+    Number.isSafeInteger(line) && line > 0
+      ? { line, ...(column && Number.isSafeInteger(column) ? { column } : {}) }
+      : undefined;
+  if (location) value = value.slice(0, location.index);
+
+  const fileUrl = value.startsWith("file://");
+  if (fileUrl) {
+    value = value.slice("file://".length);
+    if (value.startsWith("localhost/")) value = value.slice("localhost".length);
+  }
+  if (decodeUrl || fileUrl) {
     try {
-      value = decodeURIComponent(value.slice("file://".length));
+      value = decodeURIComponent(value);
     } catch {
-      value = value.slice("file://".length);
+      // A literal percent sign is valid in a local filename.
     }
   }
 
-  value = slash(value).replace(/(?::\d+(?::\d+)?|#L\d+(?:-L\d+)?)$/, "");
+  value = slash(value);
+  // File URLs can also decode to UNC paths. Windows accepts mixed separators.
+  if ((decodeUrl || fileUrl) && /^[\\/]{2}/.test(value)) return undefined;
+  // A bare filename's :line[:column] suffix must be removed before this check.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[A-Za-z]:\//.test(value))
+    return undefined;
   if (!value || value === "." || value.startsWith("#") || value.startsWith("?") || value.includes("://")) {
     return undefined;
   }
   if (!looksLikeFilePath(value)) return undefined;
 
-  if (/^[A-Za-z]:\//.test(value)) return value;
+  if (/^[A-Za-z]:\//.test(value)) return { path: value, navigation };
   if (value.startsWith("/")) {
-    return /^\/[A-Za-z]:\//.test(value) ? value.slice(1) : value;
+    return {
+      path: /^\/[A-Za-z]:\//.test(value) ? value.slice(1) : value,
+      navigation,
+    };
   }
   if (!cwd || cwd === "~") return undefined;
-  return joinPath(cwd, value);
+  return { path: joinPath(cwd, value), navigation };
+}
+
+export function isExtensionlessFileName(value: string): boolean {
+  return /^(dockerfile|makefile|gemfile|license)$/i.test(value);
 }
 
 function looksLikeFilePath(value: string): boolean {
   if (value.startsWith("/") || /^[A-Za-z]:\//.test(value)) return true;
   if (value.includes("/")) return true;
-  return /\.[A-Za-z][A-Za-z0-9+]{0,11}$/.test(value);
+  return isExtensionlessFileName(value) ||
+    /\.[A-Za-z][A-Za-z0-9+]{0,11}$/.test(value);
 }
 
 export function prettyParent(path: string): string {

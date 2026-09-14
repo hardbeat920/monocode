@@ -38,8 +38,14 @@ export type DiscoveredSkill = {
     | "monocode";
 };
 
-export function listSkills(cwd: string): Promise<DiscoveredSkill[]> {
-  return invoke<DiscoveredSkill[]>("list_skills", { cwd });
+export function listSkills(
+  cwd: string,
+  disabledPaths?: readonly string[] | null,
+): Promise<DiscoveredSkill[]> {
+  return invoke<DiscoveredSkill[]>("list_skills", {
+    cwd,
+    disabledPaths: disabledPaths ?? null,
+  });
 }
 
 export function listProjectFiles(cwd: string): Promise<ProjectFile[]> {

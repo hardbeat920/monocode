@@ -1,5 +1,5 @@
 import { modelContextWindow, nativeModelId } from "../models";
-import type { RuntimeMode } from "../session";
+import type { RuntimeMode, TurnMetrics } from "../session";
 import { taskListFromToolInput } from "../taskList";
 import {
   execChild,
@@ -10,16 +10,22 @@ import {
   unwatchChild,
   watchChild,
 } from "./child";
-import { OpenCodeClient, OpenCodeHttpError } from "./opencodeClient";
+import {
+  OpenCodeClient,
+  OpenCodeHttpError,
+  type OpenCodeMessage,
+} from "./opencodeClient";
 import {
   appendOpenCodeAssistantTextDelta,
   asRecord,
   buildOpenCodePermissionRules,
   compareSemver,
   contextUsedFromMessageInfo,
+  turnMetricsFromMessageInfo,
   detailFromToolPart,
   eventSessionId,
   isOpenCodeNotFound,
+  openCodeChildSessionId,
   mergeOpenCodeAssistantText,
   MINIMUM_OPENCODE_VERSION,
   KNOWN_HIDDEN_AGENTS,
@@ -31,7 +37,7 @@ import {
   sessionErrorMessage,
   stringField,
   textDeltaEvent,
-  toOpenCodeFileParts,
+  toOpenCodePromptParts,
   toOpenCodePermissionReply,
   toolKindFromName,
   type OpenCodePart,
@@ -78,10 +84,18 @@ type Live = {
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
+  visibleQuestionId: number | null;
   nextApprovalUiId: number;
+  sessionParentById: Map<string, string | undefined>;
+  /** Child session id -> the agent tool row that spawned it. */
+  subagentSessions: Map<string, string>;
+  subagentModels: Map<string, string>;
+  /** Child parts that arrived before their row was known. */
+  pendingSubagent: Map<string, OpenCodePart[]>;
   partById: Map<string, OpenCodePart>;
   emittedTextByPartId: Map<string, string>;
   messageRoleById: Map<string, "user" | "assistant" | "hidden">;
+  turnMetricsByMessageId: Map<string, TurnMetrics>;
   cancelled: boolean;
   muteUpdates: boolean;
   turns: Promise<void>;
@@ -184,12 +198,7 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
     );
   }
 
-  const parts = [
-    ...(input.text.trim()
-      ? [{ type: "text" as const, text: input.text.trim() }]
-      : []),
-    ...toOpenCodeFileParts(input.attachments),
-  ];
+  const parts = toOpenCodePromptParts(input.text, input.attachments);
   if (parts.length === 0) return;
 
   await live.client.promptAsync({
@@ -314,8 +323,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (code) => {
       serverExited = code;
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const live = liveRef.current;
+      if (!live?.muteUpdates) {
+        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
+      if (live) live.muteUpdates = true;
       live?.turnFailed?.(new Error("OpenCode server exited"));
       if (live) {
         live.turnDone = null;
@@ -348,6 +360,12 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       runtimeMode: input.runtimeMode,
       cwd: input.cwd,
     });
+    if (canResume) {
+      await repairUnsupportedFileTurn(client, openCodeSession.id).catch(
+        (error: unknown) =>
+          console.debug("[monocode] opencode attachment recovery", error),
+      );
+    }
 
     const live: Live = {
       client,
@@ -358,10 +376,16 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       onEvent: input.onEvent,
       approvals: new Map(),
       questions: new Map(),
+      visibleQuestionId: null,
       nextApprovalUiId: 1,
+      sessionParentById: new Map(),
+      subagentSessions: new Map(),
+      subagentModels: new Map(),
+      pendingSubagent: new Map(),
       partById: new Map(),
       emittedTextByPartId: new Map(),
       messageRoleById: new Map(),
+      turnMetricsByMessageId: new Map(),
       cancelled: false,
       muteUpdates: false,
       turns: Promise.resolve(),
@@ -381,14 +405,45 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       input.sessionId,
       (event) => {
         if (live.muteUpdates) return;
-        handleEvent(live, event);
+        const turn = live.turnDone;
+        void handleEvent(live, event).catch((error: unknown) => {
+          if (live.muteUpdates || live.turnDone !== turn) return;
+          // Failed ancestry lookups or replies must end the turn visibly;
+          // otherwise a child can remain blocked on an unanswered request.
+          live.onEvent({
+            type: "session.error",
+            message: `Could not route OpenCode event: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          finishActiveTurn(live);
+        });
       },
       (error) => {
         if (live.muteUpdates || live.cancelled) return;
-        if (error) {
-          live.onEvent({ type: "session.error", message: error });
-          live.turnFailed?.(new Error(error));
-        }
+        const message =
+          error?.trim() || "OpenCode event stream ended unexpectedly.";
+        // prompt_async has no response body to await; the SSE stream is its
+        // only completion channel. Reusing a Live after this point accepts the
+        // next prompt but can never observe it, which looks like a dead thread.
+        liveByThread.delete(input.sessionId);
+        const failed = live.turnFailed;
+        live.turnDone = null;
+        live.turnFailed = null;
+        live.muteUpdates = true;
+        for (const pending of live.approvals.values()) pending.resolve("deny");
+        live.approvals.clear();
+        for (const pending of live.questions.values())
+          pending.resolve({ kind: "skipped" });
+        live.questions.clear();
+        unwatchChild(input.sessionId);
+        void killChild(input.sessionId)
+          .catch(() => undefined)
+          .then(() => {
+            if (failed) {
+              failed(new Error(message));
+            } else {
+              live.onEvent({ type: "session.error", message });
+            }
+          });
       },
     );
 
@@ -441,12 +496,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
     );
   }
-  const parts = [
-    ...(input.text.trim()
-      ? [{ type: "text" as const, text: input.text.trim() }]
-      : []),
-    ...toOpenCodeFileParts(input.attachments),
-  ];
+  const parts = toOpenCodePromptParts(input.text, input.attachments);
   if (parts.length === 0) return;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
@@ -454,6 +504,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     live.turnFailed = reject;
   });
   live.activeTurn = true;
+  live.turnMetricsByMessageId.clear();
   settlePendingTurn(live);
 
   try {
@@ -489,12 +540,41 @@ async function runCompaction(
   await live.client.summarizeSession(live.openCodeSessionId, model);
 }
 
-function handleEvent(live: Live, event: Record<string, unknown>): void {
-  const payloadSessionId = eventSessionId(event);
-  if (payloadSessionId && payloadSessionId !== live.openCodeSessionId) return;
-
+async function handleEvent(
+  live: Live,
+  event: Record<string, unknown>,
+): Promise<void> {
   const type = typeof event.type === "string" ? event.type : "";
   const properties = asRecord(event.properties) ?? {};
+  // Session lifecycle events establish ancestry, including nested subagents.
+  // Record them before applying the parent transcript's session filter.
+  if (type === "session.created" || type === "session.updated") {
+    const info = asRecord(properties.info);
+    const id = stringField(info, "id");
+    if (id) {
+      const parentId = stringField(info, "parentID");
+      live.sessionParentById.set(id, parentId);
+    }
+    return;
+  }
+
+  const payloadSessionId = eventSessionId(event);
+  if (payloadSessionId && payloadSessionId !== live.openCodeSessionId) {
+    if (
+      type === "message.updated" ||
+      type === "message.part.updated" ||
+      type === "message.part.delta"
+    ) {
+      handleSubagentEvent(live, payloadSessionId, type, properties);
+      return;
+    }
+    // Only blocking interactions are forwarded otherwise. In particular, a
+    // child's idle/error event must never finish the parent's active turn.
+    if (type !== "permission.asked" && type !== "question.asked") return;
+    const turn = live.turnDone;
+    if (!(await isDescendantSession(live, payloadSessionId))) return;
+    if (live.muteUpdates || live.turnDone !== turn) return;
+  }
 
   switch (type) {
     case "message.updated": {
@@ -551,6 +631,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
       const id =
         stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
+      if ([...live.approvals.values()].some((pending) => pending.id === id)) break;
       const permission = stringField(properties, "permission") ?? "tool";
       const patterns = Array.isArray(properties.patterns)
         ? properties.patterns.filter(
@@ -559,6 +640,7 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
         : [];
       const metadata = asRecord(properties.metadata) ?? {};
       const callId =
+        stringField(asRecord(properties.tool), "callID") ??
         stringField(properties, "callID") ??
         stringField(properties, "toolCallId") ??
         stringField(metadata, "callID") ??
@@ -600,11 +682,13 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
       if (live.planning) {
         const decision =
           kind === "read" || kind === "search" ? "allow" : "deny";
-        void live.client
-          .replyPermission(id, toOpenCodePermissionReply(decision))
-          .catch(() => undefined);
+        await live.client.replyPermission(
+          id,
+          toOpenCodePermissionReply(decision),
+        );
         break;
       }
+      const pending = waitApproval(live, uiId, id);
       if (callId) {
         live.onEvent({
           type: "tool.updated",
@@ -622,22 +706,19 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
         callId,
         preview,
       });
-      void waitApproval(live, uiId, id);
+      await pending;
       break;
     }
     case "question.asked": {
       const id =
         stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
+      if ([...live.questions.values()].some((pending) => pending.id === id)) break;
       const questions = questionsFromUnknown(properties);
       const uiId = live.nextApprovalUiId++;
-      live.onEvent({
-        type: "question.asked",
-        requestId: uiId,
-        title: questionPromptTitle(questions) || "OpenCode question",
-        questions,
-      });
-      void waitQuestion(live, uiId, id, questions);
+      const pending = waitQuestion(live, uiId, id, questions);
+      showNextQuestion(live);
+      await pending;
       break;
     }
     case "session.status": {
@@ -667,6 +748,26 @@ function handleEvent(live: Live, event: Record<string, unknown>): void {
   }
 }
 
+async function isDescendantSession(
+  live: Live,
+  sessionId: string,
+): Promise<boolean> {
+  const visited = new Set<string>();
+  let current: string | undefined = sessionId;
+  while (current && !visited.has(current)) {
+    if (current === live.openCodeSessionId) return true;
+    visited.add(current);
+    if (!live.sessionParentById.has(current)) {
+      // Resumed children may predate the SSE subscription. Resolve their
+      // ancestry from the server instead of relying on session.created alone.
+      const session = await live.client.getSession(current);
+      live.sessionParentById.set(current, session.parentID);
+    }
+    current = live.sessionParentById.get(current);
+  }
+  return false;
+}
+
 export function openCodeAgentForTurn(input: {
   intent?: SendTurnInput["intent"];
   modelSettings?: Record<string, string>;
@@ -683,6 +784,39 @@ export function openCodeAgentForTurn(input: {
  */
 function emitContext(live: Live, info: Record<string, unknown> | null): void {
   const used = contextUsedFromMessageInfo(info);
+  const metrics = turnMetricsFromMessageInfo(info);
+  const messageId = stringField(info, "id");
+  if (metrics && messageId) live.turnMetricsByMessageId.set(messageId, metrics);
+  if (metrics && !messageId) {
+    live.onEvent({ type: "turn.metrics", ...metrics });
+  }
+  const aggregate = [
+    ...live.turnMetricsByMessageId.values(),
+  ].reduce<TurnMetrics>(
+    (total, current) => ({
+      inputTokens: (total.inputTokens ?? 0) + (current.inputTokens ?? 0),
+      outputTokens: (total.outputTokens ?? 0) + (current.outputTokens ?? 0),
+      cacheReadTokens:
+        (total.cacheReadTokens ?? 0) + (current.cacheReadTokens ?? 0),
+      cacheWriteTokens:
+        (total.cacheWriteTokens ?? 0) + (current.cacheWriteTokens ?? 0),
+    }),
+    {},
+  );
+  const aggregateInput =
+    (aggregate.inputTokens ?? 0) +
+    (aggregate.cacheReadTokens ?? 0) +
+    (aggregate.cacheWriteTokens ?? 0);
+  const hasAggregate = Object.values(aggregate).some(
+    (value) => typeof value === "number" && value > 0,
+  );
+  if (hasAggregate) {
+    aggregate.cacheHitPercent =
+      aggregateInput > 0
+        ? ((aggregate.cacheReadTokens ?? 0) / aggregateInput) * 100
+        : undefined;
+    live.onEvent({ type: "turn.metrics", ...aggregate });
+  }
   if (used === undefined) return;
   const providerID = stringField(info, "providerID");
   const modelID = stringField(info, "modelID");
@@ -737,6 +871,7 @@ function emitTool(live: Live, part: OpenCodePart): void {
       status: "pending",
       preview,
     });
+    if (kind === "agent") trackSubagentRow(live, callId, part);
     return;
   }
   live.onEvent({
@@ -750,9 +885,183 @@ function emitTool(live: Live, part: OpenCodePart): void {
         : status === "completed"
           ? "completed"
           : status,
-    detail,
+    detail:
+      detail ??
+      (status === "error"
+        ? kind === "agent"
+          ? "Subagent failed."
+          : "Tool failed."
+        : undefined),
     preview,
   });
+  // Bind after creating the parent block: replayed steps need an owner.
+  if (kind === "agent") trackSubagentRow(live, callId, part);
+}
+
+/** How many parts an unidentified child may bank before its row is known. */
+const MAX_PENDING_SUBAGENT = 64;
+
+/**
+ * Task metadata names the child session. Arrival order is not an identity:
+ * concurrent tasks can create their sessions in any order.
+ */
+function trackSubagentRow(
+  live: Live,
+  callId: string,
+  part: OpenCodePart,
+): void {
+  const named = openCodeChildSessionId(part);
+  if (named && named !== live.openCodeSessionId) {
+    bindSubagentSession(live, named, callId);
+  }
+}
+
+function bindSubagentSession(
+  live: Live,
+  sessionId: string,
+  callId: string,
+): void {
+  if (live.subagentSessions.get(sessionId) === callId) return;
+  live.subagentSessions.set(sessionId, callId);
+  const model = live.subagentModels.get(sessionId);
+  if (model) live.onEvent({ type: "tool.updated", callId, kind: "agent", agentModel: model });
+  const backlog = live.pendingSubagent.get(sessionId);
+  live.pendingSubagent.delete(sessionId);
+  for (const part of backlog ?? []) emitSubagentStep(live, callId, sessionId, part);
+}
+
+function handleSubagentEvent(
+  live: Live,
+  sessionId: string,
+  type: string,
+  properties: Record<string, unknown>,
+): void {
+  // The server broadcasts other sessions too. Only retain known descendants.
+  let ancestor: string | undefined = sessionId;
+  const visited = new Set<string>();
+  while (ancestor && !visited.has(ancestor)) {
+    if (ancestor === live.openCodeSessionId || live.subagentSessions.has(ancestor)) break;
+    visited.add(ancestor);
+    ancestor = live.sessionParentById.get(ancestor);
+  }
+  if (!ancestor || visited.has(ancestor)) return;
+  if (type === "message.updated") {
+    const info = asRecord(properties.info);
+    const id = stringField(info, "id");
+    const role = stringField(info, "role");
+    const agent = stringField(info, "agent");
+    const model = stringField(info, "modelID");
+    // Nested agents share the outer trail, but have their own model.
+    if (role === "assistant" && model && !(agent && KNOWN_HIDDEN_AGENTS.has(agent)) &&
+        live.sessionParentById.get(sessionId) === live.openCodeSessionId) {
+      live.subagentModels.set(sessionId, model);
+      const callId = live.subagentSessions.get(sessionId);
+      if (callId) live.onEvent({ type: "tool.updated", callId, kind: "agent", agentModel: model });
+    }
+    if (id && (role === "user" || role === "assistant")) {
+      live.messageRoleById.set(id, agent && KNOWN_HIDDEN_AGENTS.has(agent) ? "hidden" : role);
+      // Message metadata may follow the first part on a resumed stream.
+      for (const part of live.partById.values()) {
+        if (part.messageID === id) mirrorSubagentPart(live, sessionId, part);
+      }
+    }
+    return;
+  }
+  let part = type === "message.part.updated" ? parsePart(properties.part) : null;
+  if (type === "message.part.delta") {
+    const id = stringField(properties, "partID");
+    const existing = id ? live.partById.get(id) : undefined;
+    const delta = streamTextDelta(properties.delta);
+    if (existing && delta && (existing.type === "text" || existing.type === "reasoning")) {
+      part = { ...existing, text: (existing.text ?? "") + delta };
+    }
+  }
+  if (!part) return;
+  live.partById.set(part.id, part);
+  mirrorSubagentPart(live, sessionId, part);
+}
+
+/**
+ * One thing a subagent did, mirrored onto its row. Until the child's session
+ * is tied to a row the part is kept, because a task's opening moves arrive
+ * before OpenCode reports the session it created for them.
+ */
+function mirrorSubagentPart(
+  live: Live,
+  sessionId: string,
+  part: OpenCodePart,
+): void {
+  const callId = live.subagentSessions.get(sessionId);
+  if (callId) {
+    emitSubagentStep(live, callId, sessionId, part);
+    return;
+  }
+  if (part.type !== "tool" && part.type !== "text" && part.type !== "reasoning") return;
+  const backlog = live.pendingSubagent.get(sessionId) ?? [];
+  const index = backlog.findIndex((entry) => entry.id === part.id);
+  if (index >= 0) backlog[index] = part;
+  else backlog.push(part);
+  if (backlog.length > MAX_PENDING_SUBAGENT) backlog.shift();
+  if (!live.pendingSubagent.has(sessionId) && live.pendingSubagent.size >= 32) {
+    live.pendingSubagent.delete(live.pendingSubagent.keys().next().value!);
+  }
+  live.pendingSubagent.set(sessionId, backlog);
+}
+
+function emitSubagentStep(
+  live: Live,
+  callId: string,
+  sessionId: string,
+  part: OpenCodePart,
+): void {
+  if (part.messageID && !live.messageRoleById.has(part.messageID)) return;
+  if (roleForPart(live, part) !== "assistant") return;
+  if (part.type === "text" || part.type === "reasoning") {
+    const text = part.text?.trim();
+    if (!text) return;
+    live.onEvent({
+      type: "agent.step",
+      callId,
+      stepId: `${sessionId}:${part.id}`,
+      kind: part.type === "reasoning" ? "reasoning" : "message",
+      text,
+    });
+    return;
+  }
+  if (part.type !== "tool") return;
+  const tool = part.tool ?? "tool";
+  const state = part.state ?? {};
+  const status = typeof state.status === "string" ? state.status : "pending";
+  const kind = toolKindFromName(tool);
+  const preview = previewFromToolPart(part);
+  const title =
+    composeToolTitle({
+      kind,
+      title: (typeof state.title === "string" && state.title) || tool,
+      command: extractShellCommand(state.input),
+      skill: extractSkillName(state.input),
+      path: preview?.path,
+      query: preview?.query,
+      previewKind: preview?.kind,
+    }) ||
+    (typeof state.title === "string" && state.title) ||
+    tool;
+  live.onEvent({
+    type: "agent.step",
+    callId,
+    stepId: `${sessionId}:${part.callID ?? part.id}`,
+    kind: "tool",
+    text: title,
+    toolKind: kind,
+    status:
+      status === "error"
+        ? "failed"
+        : status === "completed"
+          ? "completed"
+          : "in_progress",
+    ...(preview ? { preview } : {}),
+  });
+  if (kind === "agent") trackSubagentRow(live, callId, part);
 }
 
 async function waitApproval(
@@ -765,9 +1074,7 @@ async function waitApproval(
   });
   live.approvals.delete(uiId);
   live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
-  await live.client
-    .replyPermission(id, toOpenCodePermissionReply(decision))
-    .catch(() => undefined);
+  await live.client.replyPermission(id, toOpenCodePermissionReply(decision));
 }
 
 async function waitQuestion(
@@ -785,14 +1092,34 @@ async function waitQuestion(
     requestId: uiId,
     decision: reply.kind,
   });
+  showNextQuestion(live);
   if (reply.kind !== "answered") {
-    await live.client.rejectQuestion(id).catch(() => undefined);
+    await live.client.rejectQuestion(id);
     return;
   }
   const answers = questions.map((question) =>
     selectedAnswerLabels(question, reply),
   );
-  await live.client.replyQuestion(id, answers).catch(() => undefined);
+  await live.client.replyQuestion(id, answers);
+}
+
+function showNextQuestion(live: Live): void {
+  if (live.muteUpdates || live.cancelled) return;
+  if (
+    live.visibleQuestionId !== null &&
+    live.questions.has(live.visibleQuestionId)
+  )
+    return;
+  const next = live.questions.entries().next().value;
+  live.visibleQuestionId = next?.[0] ?? null;
+  if (!next) return;
+  const [requestId, { questions }] = next;
+  live.onEvent({
+    type: "question.asked",
+    requestId,
+    title: questionPromptTitle(questions) || "OpenCode question",
+    questions,
+  });
 }
 
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
@@ -857,6 +1184,70 @@ function isHttpNotFound(error: unknown): boolean {
   return error instanceof OpenCodeHttpError && error.status === 404;
 }
 
+/**
+ * A rejected native file remains in OpenCode's durable history and can make
+ * every later prompt fail while converting that history for the provider.
+ * Revert the original attachment turn before resuming; OpenCode removes the
+ * reverted tail when the next prompt starts.
+ */
+async function repairUnsupportedFileTurn(
+  client: OpenCodeClient,
+  sessionID: string,
+): Promise<void> {
+  const messages = await client.getMessages(sessionID);
+  if (!Array.isArray(messages)) return;
+  const byId = new Map<string, OpenCodeMessage>();
+  for (const message of messages) {
+    const id = stringField(asRecord(message.info), "id");
+    if (id) byId.set(id, message);
+  }
+  const failures = messages
+    .map((message) => {
+      const info = asRecord(message.info);
+      if (stringField(info, "role") !== "assistant") return null;
+      const mime = unsupportedFileMediaType(info?.error);
+      const parentID = stringField(info, "parentID");
+      if (!mime || !parentID) return null;
+      const parent = byId.get(parentID);
+      const hasRejectedFile = (parent?.parts ?? []).some((part) => {
+        const record = asRecord(part);
+        return (
+          stringField(record, "type") === "file" &&
+          stringField(record, "mime")?.toLowerCase() === mime
+        );
+      });
+      if (!hasRejectedFile) return null;
+      const time = asRecord(info?.time)?.created;
+      if (typeof time !== "number") return null;
+      return { messageID: parentID, created: time };
+    })
+    .filter(
+      (failure): failure is { messageID: string; created: number } =>
+        failure !== null,
+    )
+    .filter(({ created }) =>
+      messages.every((message) => {
+        const info = asRecord(message.info);
+        if (stringField(info, "role") !== "assistant" || info?.error) {
+          return true;
+        }
+        const time = asRecord(info?.time)?.created;
+        return typeof time !== "number" || time <= created;
+      }),
+    )
+    .sort((left, right) => left.created - right.created);
+  const first = failures[0];
+  if (first) await client.revertSession(sessionID, first.messageID);
+}
+
+function unsupportedFileMediaType(error: unknown): string | undefined {
+  const message = sessionErrorMessage(error);
+  if (!/functionality not supported/i.test(message)) return undefined;
+  return message
+    .match(/file part media type\s+([^\s'"`]+)/i)?.[1]
+    ?.toLowerCase();
+}
+
 async function assertOpenCodeVersion(path: string, cwd: string): Promise<void> {
   const output = await execChild(path, ["--version"], cwd).catch(() => "");
   const version = parseOpenCodeVersion(output);
@@ -901,4 +1292,11 @@ function waitForServerUrl(
     };
     tick();
   });
+}
+
+/** Exported for tests. */
+export function __openCodeTestReset(): void {
+  liveByThread.clear();
+  resumeByThread.clear();
+  cancelledThreads.clear();
 }

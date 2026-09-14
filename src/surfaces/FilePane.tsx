@@ -42,6 +42,7 @@ type Props = {
   onFocus: (paneId: string) => void;
   onSelectFile: (paneId: string, fileId: string) => void;
   onCloseFile: (paneId: string, fileId: string) => void;
+  onCloseOtherFiles: (paneId: string, fileId: string) => void;
   onDirtyChange: (fileId: string, dirty: boolean) => void;
   onErrorCountChange: (fileId: string, count: number) => void;
   onReorderFiles: (paneId: string, ids: string[]) => void;
@@ -66,6 +67,7 @@ function FilePaneComponent({
   onFocus,
   onSelectFile,
   onCloseFile,
+  onCloseOtherFiles,
   onDirtyChange,
   onErrorCountChange,
   onReorderFiles,
@@ -103,6 +105,7 @@ function FilePaneComponent({
         fileErrorCounts={fileErrorCounts}
         onSelectFile={(fileId) => onSelectFile(pane.id, fileId)}
         onCloseFile={(fileId) => onCloseFile(pane.id, fileId)}
+        onCloseOtherFiles={(fileId) => onCloseOtherFiles(pane.id, fileId)}
         onReorder={(ids) => onReorderFiles(pane.id, ids)}
         onPaneDragStart={onPaneDragStart}
       />
@@ -205,6 +208,7 @@ export const FilePane = memo(FilePaneComponent, (previous, next) => {
     previous.onFocus !== next.onFocus ||
     previous.onSelectFile !== next.onSelectFile ||
     previous.onCloseFile !== next.onCloseFile ||
+    previous.onCloseOtherFiles !== next.onCloseOtherFiles ||
     previous.onDirtyChange !== next.onDirtyChange ||
     previous.onErrorCountChange !== next.onErrorCountChange ||
     previous.onReorderFiles !== next.onReorderFiles ||

@@ -19,7 +19,143 @@ describe("isPersistableId", () => {
   });
 });
 
+describe("persisting a subagent's trail", () => {
+  const withRun = (steps: Block["agentRun"]) => {
+    const session = newSession("claude", "/tmp/project");
+    session.blocks = [
+      {
+        id: "a1",
+        role: "tool",
+        text: "Correctness review",
+        tool: { callId: "agent-1", kind: "agent", status: "completed" },
+        agentRun: steps,
+      },
+    ];
+    return sanitizeSessionForPersist(session)?.blocks[0].agentRun;
+  };
+
+  it("keeps the run so a reopened session can still be inspected", () => {
+    expect(
+      withRun({
+        name: "Correctness review",
+        agentType: "code-reviewer",
+        steps: [
+          {
+            id: "s1",
+            kind: "tool",
+            text: "Read src/App.tsx",
+            toolKind: "read",
+            status: "completed",
+          },
+          { id: "s2", kind: "message", text: "Nothing to flag." },
+        ],
+      }),
+    ).toEqual({
+      name: "Correctness review",
+      agentType: "code-reviewer",
+      steps: [
+        {
+          id: "s1",
+          kind: "tool",
+          text: "Read src/App.tsx",
+          toolKind: "read",
+          status: "completed",
+        },
+        { id: "s2", kind: "message", text: "Nothing to flag." },
+      ],
+    });
+  });
+
+  it("drops steps a provider left malformed", () => {
+    expect(
+      withRun({
+        name: "Correctness review",
+        steps: [
+          { id: "", kind: "tool", text: "Read" },
+          { id: "s2", kind: "bogus", text: "Read" },
+          { id: "s3", kind: "tool", text: "Read src/App.tsx" },
+        ] as never,
+      })?.steps,
+    ).toEqual([{ id: "s3", kind: "tool", text: "Read src/App.tsx" }]);
+  });
+
+  it("keeps only the tail of a long run", () => {
+    const steps = Array.from({ length: 260 }, (_, index) => ({
+      id: `s${index}`,
+      kind: "tool" as const,
+      text: `Read file-${index}.ts`,
+    }));
+    const saved = withRun({ name: "Correctness review", steps });
+    expect(saved?.steps).toHaveLength(100);
+    expect(saved?.steps[99].id).toBe("s259");
+  });
+});
+
 describe("sanitizeSessionForPersist", () => {
+  it("persists model provenance recorded on a user turn", () => {
+    const session = newSession("claude", "/tmp/project", "claude:opus-5");
+    session.blocks = [
+      {
+        id: "u1",
+        role: "user",
+        text: "remember this",
+        turnModel: {
+          harness: "claude",
+          id: "claude:opus-5",
+          name: "Claude Opus 5",
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]?.turnModel).toEqual({
+      harness: "claude",
+      id: "claude:opus-5",
+      name: "Claude Opus 5",
+    });
+  });
+
+  it("persists provider metrics recorded on a user turn", () => {
+    const session = newSession("claude", "/tmp/project");
+    session.blocks = [
+      {
+        id: "u1",
+        role: "user",
+        text: "remember this",
+        turnMetrics: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 80,
+          cacheHitPercent: 40,
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]?.turnMetrics).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 80,
+      cacheHitPercent: 40,
+    });
+  });
+
+  it("persists a canonical GitHub work-item identity", () => {
+    const session = newSession("codex", "/tmp/project");
+    session.blocks = [{ id: "u1", role: "user", text: "fix PR #42" }];
+    session.linkedWorkItem = {
+      kind: "pr",
+      repo: "openai/codex",
+      number: 42,
+      url: "https://example.com/not-trusted",
+    };
+
+    expect(sanitizeSessionForPersist(session).linkedWorkItem).toEqual({
+      kind: "pr",
+      repo: "openai/codex",
+      number: 42,
+      url: "https://github.com/openai/codex/pull/42",
+    });
+  });
+
   it("omits a path-like provider session id so upsert can still snapshot git", () => {
     const session = newSession("pi", "/tmp/project");
     session.providerSessionId = "/Users/me/.pi/agent/sessions/abc.jsonl";

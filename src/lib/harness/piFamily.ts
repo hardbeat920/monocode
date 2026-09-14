@@ -18,6 +18,7 @@ import {
 } from "./child";
 import type { PiFlavor } from "./piFlavor";
 import { PiRpc } from "./piClient";
+import { piSubagentEvents } from "./piSubagents";
 import {
   agentEndWillRetry,
   asRecord,
@@ -27,6 +28,7 @@ import {
   buildPiSteer,
   contextFromSessionStats,
   contextFromUsage,
+  turnMetricsFromUsage,
   extensionUiResponse,
   extensionUiTitle,
   isAgentSettled,
@@ -293,7 +295,7 @@ export async function steerTurn(
     text: message,
     attachments: input.attachments,
   });
-  if (!message && !Array.isArray(command.images)) return;
+  if (!command.message && !Array.isArray(command.images)) return;
   await live.rpc.request(command);
 }
 
@@ -493,8 +495,10 @@ async function startLive(
     (code) => {
       rpc.close(new Error(`${flavor.label} exited`));
       liveByThread.delete(input.sessionId);
-      input.onEvent({ type: "session.ended", code });
       const current = liveRef.current;
+      if (!current?.muteUpdates) {
+        (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      }
       if (current) {
         for (const question of current.questions.values())
           question.resolve({ kind: "skipped" });
@@ -743,6 +747,8 @@ function handleFrame(
 
   const context = contextFromUsage(rec, live.contextWindow);
   if (context) live.onEvent({ type: "context", ...context });
+  const metrics = turnMetricsFromUsage(rec);
+  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 
   const delta = assistantDeltaFromEvent(rec);
   if (delta) {
@@ -808,6 +814,9 @@ function handleFrame(
         detail: execUpdate.detail,
         preview: previewFromTool(tool.name, tool.input, execUpdate.detail),
       });
+      if (toolKindFromName(tool.name) === "agent") {
+        for (const event of piSubagentEvents(tool.id, tool.input, rec.partialResult, false)) live.onEvent(event);
+      }
     }
   }
 
@@ -824,6 +833,9 @@ function handleFrame(
         detail: execEnd.detail,
         preview: previewFromTool(tool.name, tool.input, execEnd.detail),
       });
+      if (toolKindFromName(tool.name) === "agent") {
+        for (const event of piSubagentEvents(tool.id, tool.input, rec.result, true, execEnd.isError)) live.onEvent(event);
+      }
     }
   }
 

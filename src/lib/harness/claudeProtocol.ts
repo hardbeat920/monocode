@@ -3,7 +3,9 @@ import type {
   RuntimeMode,
   TaskListItem,
   ToolPreview,
+  TurnMetrics,
 } from "../session";
+import { attachmentPathText } from "../attachments";
 import { isTaskListToolName, taskListFromToolInput } from "../taskList";
 import {
   questionPromptTitle,
@@ -19,8 +21,9 @@ import {
 import { streamTextDelta } from "./streamText";
 import type { ApprovalDecision, HarnessEvent } from "./types";
 
-/** Claude Code versions that first ship Opus 5 / Fable 5 / Opus 4.8 / 4.7. */
+/** Claude Code versions that first ship Opus 5 / Sonnet 5 / Fable 5 / Opus 4.8 / 4.7. */
 export const MINIMUM_CLAUDE_OPUS_5_VERSION = "2.1.219";
+export const MINIMUM_CLAUDE_SONNET_5_VERSION = "2.1.197";
 export const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.169";
 export const MINIMUM_CLAUDE_OPUS_4_8_VERSION = "2.1.154";
 export const MINIMUM_CLAUDE_OPUS_4_7_VERSION = "2.1.111";
@@ -94,9 +97,15 @@ export function compareSemver(left: string, right: string): number {
   return 0;
 }
 
+/**
+ * Supervised maps onto a flag like every other mode. Sending nothing left the
+ * CLI free to fall back to `permissions.defaultMode` from the user's settings,
+ * so a session the picker called Supervised could silently run as `auto`.
+ * `default` is the value that asks; `manual` is its alias but needs CLI 2.1.200.
+ */
 export function runtimeModeToPermission(
   mode: RuntimeMode,
-): ClaudePermissionMode | undefined {
+): ClaudePermissionMode {
   switch (mode) {
     case "auto-accept-edits":
       return "acceptEdits";
@@ -105,7 +114,7 @@ export function runtimeModeToPermission(
     case "full-access":
       return "bypassPermissions";
     default:
-      return undefined;
+      return "default";
   }
 }
 
@@ -180,8 +189,12 @@ export function buildClaudeUserMessage(input: {
   const content: Array<Record<string, unknown>> = [];
   if (text) content.push({ type: "text", text });
   for (const attachment of input.attachments ?? []) {
-    const block = imageContentBlock(attachment);
-    if (block) content.push(block);
+    content.push(
+      imageContentBlock(attachment) ?? {
+        type: "text",
+        text: attachmentPathText(attachment),
+      },
+    );
   }
   return {
     type: "user",
@@ -752,6 +765,26 @@ export function assistantTextBlocks(rec: Record<string, unknown>): string[] {
   });
 }
 
+/** Reasoning a message carries, used to mirror a subagent's thinking. */
+export function assistantThinkingBlocks(rec: Record<string, unknown>): string[] {
+  const message = asRecord(rec.message);
+  const content = message?.content;
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => {
+    const row = asRecord(block);
+    if (stringField(row, "type") !== "thinking") return [];
+    const text = typeof row?.thinking === "string" ? row.thinking : "";
+    return text ? [text] : [];
+  });
+}
+
+/** Provider id of an assistant message, for keying steps mirrored from it. */
+export function assistantMessageId(
+  rec: Record<string, unknown>,
+): string | undefined {
+  return stringField(asRecord(rec.message), "id");
+}
+
 export function assistantToolUses(rec: Record<string, unknown>): Array<{
   id: string;
   name: string;
@@ -988,6 +1021,32 @@ function contextUsedFromUsage(usage: Record<string, unknown> | null): number {
     numberField(usage, "cache_read_input_tokens") +
     numberField(usage, "output_tokens")
   );
+}
+
+/** Aggregate token accounting for the completed Claude turn. */
+export function turnMetricsFromResult(
+  rec: Record<string, unknown>,
+): TurnMetrics | undefined {
+  const usage = asRecord(rec.usage);
+  if (!usage) return undefined;
+  const inputTokens = numberField(usage, "input_tokens");
+  const outputTokens = numberField(usage, "output_tokens");
+  const cacheReadTokens = numberField(usage, "cache_read_input_tokens");
+  const cacheWriteTokens = numberField(usage, "cache_creation_input_tokens");
+  const cacheReported =
+    "cache_read_input_tokens" in usage ||
+    "cache_creation_input_tokens" in usage;
+  const cacheableInput = inputTokens + cacheReadTokens + cacheWriteTokens;
+  if (!inputTokens && !outputTokens && !cacheableInput) return undefined;
+  return {
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTokens ? { outputTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(cacheReported && cacheableInput
+      ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
+      : {}),
+  };
 }
 
 /**

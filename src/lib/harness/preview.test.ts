@@ -6,8 +6,135 @@ import {
   extractSkillName,
   extractToolPreview,
   isWeakToolTitle,
+  MAX_PREVIEW_LINES,
+  mergeToolPreview,
   titleFromToolInput,
 } from "./preview";
+import { previewFromTool } from "./claudeProtocol";
+
+describe("tool input change previews", () => {
+  it("compares Claude Edit excerpts outside the workspace without inventing file line numbers", () => {
+    const preview = previewFromTool("Edit", {
+      file_path: "/Users/me/Documents/notes.md",
+      old_string: "  before\nkeep\n",
+      new_string: "  after\nkeep\n",
+    });
+    expect(preview).toMatchObject({
+      kind: "write",
+      path: "/Users/me/Documents/notes.md",
+      additions: 1,
+      deletions: 1,
+      lines: [
+        { kind: "del", text: "  before" },
+        { kind: "add", text: "  after" },
+        { kind: "context", text: "keep" },
+      ],
+    });
+    expect(preview?.lines?.every((line) => line.number === undefined)).toBe(
+      true,
+    );
+  });
+
+  it("preserves whitespace-only replacements, insertions and deletions", () => {
+    for (const [before, after, additions, deletions] of [
+      ["  ", "    ", 1, 1],
+      ["", "new\n", 1, 0],
+      ["old\n", "", 0, 1],
+      ["same\n", "same\n", 0, 0],
+    ] as const) {
+      expect(
+        previewFromTool("Edit", {
+          file_path: "notes.md",
+          old_string: before,
+          new_string: after,
+        }),
+      ).toMatchObject({ additions, deletions });
+    }
+  });
+
+  it("reads complete nested replacement inputs but waits for both strings", () => {
+    expect(
+      extractToolPreview(
+        {
+          kind: "edit",
+          args: { input: { path: "a.ts", oldText: "old", newText: "new" } },
+        },
+        {},
+      ),
+    ).toMatchObject({ additions: 1, deletions: 1 });
+    expect(
+      previewFromTool("Edit", {
+        file_path: "a.ts",
+        old_string: "old",
+      })?.lines,
+    ).toBeUndefined();
+  });
+
+  it("finds edits after long unchanged prefixes and counts beyond the preview", () => {
+    const prefix = Array.from({ length: 900 }, (_, i) => `line ${i}`).join(
+      "\n",
+    );
+    const preview = previewFromTool("Edit", {
+      file_path: "long.md",
+      old_string: prefix,
+      new_string: `${prefix}\n${Array(20).fill("added").join("\n")}`,
+    });
+    expect(preview).toMatchObject({ additions: 20, deletions: 0 });
+    expect(preview?.lines).toHaveLength(MAX_PREVIEW_LINES);
+    expect(preview?.lines?.some((line) => line.text === "added")).toBe(true);
+  });
+
+  it("shows Write contents without claiming to know the previous file", () => {
+    const preview = previewFromTool(
+      "Write",
+      {
+        file_path: "notes.md",
+        content: "  heading\n\nbody\n",
+      },
+      "File successfully written",
+    );
+    expect(preview).toMatchObject({
+      contentOnly: true,
+      lines: [
+        { number: 1, kind: "context", text: "  heading" },
+        { number: 2, kind: "context", text: "" },
+        { number: 3, kind: "context", text: "body" },
+      ],
+    });
+    expect(preview?.additions).toBeUndefined();
+    expect(preview?.deletions).toBeUndefined();
+    const empty = previewFromTool("Write", {
+      file_path: "notes.md",
+      content: "",
+    });
+    expect(mergeToolPreview(empty, preview)?.lines).toEqual([]);
+    expect(
+      previewFromTool("Read", { file_path: "notes.md" }, "contents")?.lines,
+    ).toBeUndefined();
+  });
+
+  it("prefers provider diffs and preserves indentation in them", () => {
+    const preview = extractToolPreview(
+      {
+        kind: "edit",
+        input: { old_string: "wrong", new_string: "fallback" },
+        content: [
+          {
+            type: "diff",
+            path: "a.ts",
+            oldText: "  old\n",
+            newText: "  new\n",
+          },
+        ],
+      },
+      {},
+    );
+    expect(preview?.lines?.map((line) => line.text)).toEqual([
+      "  old",
+      "  new",
+    ]);
+  });
+});
 
 describe("extractToolPreview", () => {
   it("reads nested args bags from ACP tool calls", () => {

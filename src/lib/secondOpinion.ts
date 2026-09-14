@@ -21,6 +21,8 @@ export function harnessForTurn(
   turn: Block[],
   sessionHarness: HarnessId,
 ): HarnessId {
+  const recorded = turn.find((block) => block.role === "user")?.turnModel;
+  if (recorded) return recorded.harness;
   const startId = turn[0]?.id;
   const start = startId
     ? blocks.findIndex((block) => block.id === startId)

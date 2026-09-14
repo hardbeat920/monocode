@@ -1,4 +1,4 @@
-import { LoaderCircle, Plus, Search, File, Trash2 } from "../chrome/icons";
+import { LoaderCircle, Plus, Search, File, Trash2, X } from "../chrome/icons";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   Fragment,
@@ -11,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useMarkdownMode } from "../chrome/MarkdownModeToggle";
+import { CwdPicker } from "../chrome/CwdPicker";
 import { ProjectLogoIcon } from "../chrome/ProjectLogoIcon";
 import { ProjectMascot } from "../chrome/ProjectMascot";
 import { OverlayNav } from "../chrome/TitleBar";
@@ -23,6 +24,8 @@ import {
   createNote,
   deleteNote,
   loadNotes,
+  MAX_NOTE_TAGS,
+  normalizeNoteTags,
   notePreview,
   noteSourceProject,
   noteTitle,
@@ -38,7 +41,7 @@ import {
 } from "../lib/noteImages";
 import { projectKey, projectName } from "../lib/paths";
 import { IS_MAC } from "../lib/platform";
-import { looksLikeProject } from "../lib/recents";
+import { looksLikeProject, type RecentProject } from "../lib/recents";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -56,9 +59,33 @@ const DEFAULT_WIDTH = 280;
 let rememberedWidth = DEFAULT_WIDTH;
 let rememberedNoteId: string | null = null;
 
+// Keep pending saves ordered across editor unmounts and reopened notes.
+const noteSaveQueues = new Map<
+  string,
+  { pending: Promise<void>; saved?: Note }
+>();
+
+function enqueueNoteSave(
+  id: string,
+  save: (latest?: Note) => void | Promise<Note | void>,
+) {
+  const queue = noteSaveQueues.get(id) ?? { pending: Promise.resolve() };
+  const persist = async () => {
+    const saved = await save(queue.saved);
+    if (saved) queue.saved = saved;
+  };
+  const pending = queue.pending.then(persist, persist).finally(() => {
+    if (queue.pending === pending) noteSaveQueues.delete(id);
+  });
+  queue.pending = pending;
+  noteSaveQueues.set(id, queue);
+  return pending;
+}
+
 type Props = {
   besideRail?: boolean;
   cwd?: string;
+  recents: RecentProject[];
   onClose: () => void;
   onToggleSidebar?: () => void;
 };
@@ -66,6 +93,7 @@ type Props = {
 export function NotesView({
   besideRail = false,
   cwd,
+  recents,
   onClose,
   onToggleSidebar,
 }: Props) {
@@ -126,8 +154,8 @@ export function NotesView({
       event.stopPropagation();
       onCloseRef.current();
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const visible = useMemo(() => {
@@ -139,6 +167,7 @@ export function NotesView({
         note.title.toLowerCase().includes(needle) ||
         note.body.toLowerCase().includes(needle) ||
         note.slug.toLowerCase().includes(needle) ||
+        note.tags.some((tag) => tag.includes(needle.replace(/^#/, ""))) ||
         project.includes(needle)
       );
     });
@@ -308,6 +337,8 @@ export function NotesView({
         {list}
         <NoteDetail
           note={selected}
+          recents={recents}
+          activeCwd={cwd}
           logos={logos}
           mascots={groupMascots}
           colors={groupColors}
@@ -445,12 +476,31 @@ function NoteCard({
           {preview}
         </span>
       ) : null}
+      {note.tags.length > 0 ? (
+        <span className="mt-1.5 flex min-w-0 items-center gap-1 overflow-hidden">
+          {note.tags.slice(0, 3).map((tag) => (
+            <span
+              key={tag}
+              className="max-w-24 truncate rounded bg-content/8 px-1.5 py-0.5 text-[10px] leading-none text-content/55"
+            >
+              #{tag}
+            </span>
+          ))}
+          {note.tags.length > 3 ? (
+            <span className="shrink-0 text-[10px] text-content/40">
+              +{note.tags.length - 3}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
     </button>
   );
 }
 
 function NoteDetail({
   note,
+  recents,
+  activeCwd,
   logos,
   mascots,
   colors,
@@ -460,6 +510,8 @@ function NoteDetail({
   onAddToChat,
 }: {
   note: Note | null;
+  recents: RecentProject[];
+  activeCwd?: string;
   onSaved: (note: Note) => void;
   onDelete: (id: string) => void | Promise<void>;
   onAddToChat: (note: Note) => void;
@@ -476,6 +528,8 @@ function NoteDetail({
     <NoteEditor
       key={note.id}
       note={note}
+      recents={recents}
+      activeCwd={activeCwd}
       logos={logos}
       mascots={mascots}
       colors={colors}
@@ -489,6 +543,8 @@ function NoteDetail({
 
 function NoteEditor({
   note,
+  recents,
+  activeCwd,
   logos,
   mascots,
   colors,
@@ -498,6 +554,8 @@ function NoteEditor({
   onAddToChat,
 }: {
   note: Note;
+  recents: RecentProject[];
+  activeCwd?: string;
   onSaved: (note: Note) => void;
   onDelete: (id: string) => void | Promise<void>;
   onAddToChat: (note: Note) => void;
@@ -505,26 +563,33 @@ function NoteEditor({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const blank = !note.body.trim() && note.title === "Untitled";
   const [mode, setMode] = useMarkdownMode(note.id);
-  const [title, setTitle] = useState(note.title);
-  const [body, setBody] = useState(note.body);
+  type Edits = Partial<Pick<Note, "title" | "body" | "tags">>;
+  const [edits, setEdits] = useState<Edits>({});
+  const title = edits.title ?? note.title;
+  const body = edits.body ?? note.body;
+  const tags = edits.tags ?? note.tags;
+  // Keep only an unsaved choice locally so completed moves survive reopening.
+  const [projectChange, setProjectChange] = useState<{ path: string } | null>(
+    null,
+  );
+  const sourceCwd = projectChange?.path ?? note.sourceCwd;
   const [saveError, setSaveError] = useState<string | null>(null);
   const [imageDrag, setImageDrag] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
-  const titleRef = useRef(title);
+  const editsRef = useRef(edits);
   const bodyRef = useRef(body);
+  const projectChangeRef = useRef(projectChange);
   const noteRef = useRef(note);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const sourceFieldRef = useRef<HTMLTextAreaElement>(null);
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
   const saveTimer = useRef<number | null>(null);
-  const saveQueue = useRef(Promise.resolve());
   const onSavedRef = useRef(onSaved);
-  titleRef.current = title;
   bodyRef.current = body;
   noteRef.current = note;
   onSavedRef.current = onSaved;
-  const project = noteSourceProject(note.sourceCwd);
+  const project = noteSourceProject(sourceCwd);
   const time = formatRelativeTime(new Date(note.updatedAt).toISOString());
 
   useEffect(() => {
@@ -533,38 +598,77 @@ function NoteEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const persist = useCallback(async () => {
+  const editNote = useCallback((change: Edits) => {
+    const next = { ...editsRef.current, ...change };
+    editsRef.current = next;
+    if (change.body !== undefined) bodyRef.current = change.body;
+    setEdits(next);
+  }, []);
+
+  const persist = useCallback(async (latest?: Note) => {
     if (skipSave.current) return;
-    const current = noteRef.current;
-    const nextTitle = titleRef.current.trim() || noteTitle(bodyRef.current);
-    const nextBody = bodyRef.current;
-    if (nextTitle === current.title && nextBody === current.body) return;
+    const current = latest ?? noteRef.current;
+    const changes = editsRef.current;
+    const nextBody = changes.body ?? current.body;
+    const nextTitle =
+      (changes.title ?? current.title).trim() || noteTitle(nextBody);
+    const nextTags = changes.tags ?? current.tags;
+    const nextProject = projectChangeRef.current;
+    const acceptSaved = (saved: Note) => {
+      noteRef.current = saved;
+      // A completed save only clears the edits included in that request.
+      const remaining = { ...editsRef.current };
+      if (remaining.title === changes.title) delete remaining.title;
+      if (remaining.body === changes.body) delete remaining.body;
+      if (remaining.tags === changes.tags) delete remaining.tags;
+      editsRef.current = remaining;
+      bodyRef.current = remaining.body ?? saved.body;
+      setEdits(remaining);
+      if (projectChangeRef.current === nextProject) {
+        projectChangeRef.current = null;
+        setProjectChange(null);
+      }
+      setSaveError(null);
+    };
+    if (
+      nextTitle === current.title &&
+      nextBody === current.body &&
+      sameTags(nextTags, current.tags) &&
+      (!nextProject || nextProject.path === current.sourceCwd)
+    ) {
+      acceptSaved(current);
+      return current;
+    }
     try {
       const saved = await upsertNote({
         id: current.id,
         title: nextTitle,
         body: nextBody,
+        tags: nextTags,
+        ...(nextProject ? { sourceCwd: nextProject.path } : {}),
       });
-      setSaveError(null);
-      if (
-        titleRef.current.trim() === "" ||
-        titleRef.current === current.title
-      ) {
-        setTitle(saved.title);
-      }
+      acceptSaved(saved);
       onSavedRef.current(saved);
+      return saved;
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : String(err));
+      return current;
     }
   }, []);
+
+  const saveNow = useCallback(() => {
+    if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    return enqueueNoteSave(note.id, persist);
+  }, [note.id, persist]);
 
   const scheduleSave = useCallback(() => {
     if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null;
-      saveQueue.current = saveQueue.current.then(persist, persist);
+      void saveNow();
     }, 400);
-  }, [persist]);
+  }, [saveNow]);
 
   const insertionRange = useCallback(() => {
     const field = sourceFieldRef.current;
@@ -593,8 +697,7 @@ function NoteEditor({
           range.end,
           images,
         );
-        bodyRef.current = inserted.value;
-        setBody(inserted.value);
+        editNote({ body: inserted.value });
         setSaveError(null);
         scheduleSave();
         window.requestAnimationFrame(() => {
@@ -609,7 +712,7 @@ function NoteEditor({
         setImageBusy(false);
       }
     },
-    [scheduleSave],
+    [editNote, scheduleSave],
   );
 
   useEffect(() => {
@@ -673,10 +776,9 @@ function NoteEditor({
 
   useEffect(() => {
     return () => {
-      if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
-      void persist();
+      void saveNow();
     };
-  }, [persist]);
+  }, [saveNow]);
 
   const onTitleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Enter") return;
@@ -689,6 +791,8 @@ function NoteEditor({
     ...note,
     title: title.trim() || noteTitle(body),
     body,
+    tags,
+    sourceCwd,
   };
 
   return (
@@ -704,26 +808,53 @@ function NoteEditor({
             {note.slug ? (
               <span className="min-w-0 truncate">{note.slug}</span>
             ) : null}
-            {project && note.sourceCwd ? (
-              <NoteProjectMark
-                cwd={note.sourceCwd}
-                logos={logos}
-                mascots={mascots}
-                colors={colors}
-                customColors={customColors}
-              />
-            ) : null}
+            <CwdPicker
+              cwd={sourceCwd ?? "~"}
+              recents={recents}
+              mode="move"
+              activeCwd={activeCwd}
+              renderProjectLabel={(path) => (
+                <NoteProjectMark
+                  cwd={path}
+                  logos={logos}
+                  mascots={mascots}
+                  colors={colors}
+                  customColors={customColors}
+                />
+              )}
+              placement="below"
+              chevron
+              buttonClassName="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-content/60 hover:text-content"
+              onCwdChange={(path) => {
+                const change = { path };
+                projectChangeRef.current = change;
+                setProjectChange(change);
+                void saveNow();
+              }}
+            >
+              {project && sourceCwd ? (
+                <NoteProjectMark
+                  cwd={sourceCwd}
+                  logos={logos}
+                  mascots={mascots}
+                  colors={colors}
+                  customColors={customColors}
+                />
+              ) : (
+                <span>Choose project</span>
+              )}
+            </CwdPicker>
           </div>
           <input
             value={title}
             onChange={(event) => {
-              setTitle(event.target.value);
+              editNote({ title: event.target.value });
               scheduleSave();
             }}
             onBlur={() => {
               const next = title.trim() || noteTitle(body);
-              if (next !== title) setTitle(next);
-              void persist();
+              if (next !== title) editNote({ title: next });
+              void saveNow();
             }}
             onKeyDown={onTitleKeyDown}
             aria-label="Note title"
@@ -733,6 +864,13 @@ function NoteEditor({
           {time ? (
             <div className="text-[12px] text-content/50">Updated {time}</div>
           ) : null}
+          <NoteTagsEditor
+            tags={tags}
+            onChange={(next) => {
+              editNote({ tags: next });
+              scheduleSave();
+            }}
+          />
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <button
               type="button"
@@ -748,7 +886,7 @@ function NoteEditor({
                 skipSave.current = true;
                 if (saveTimer.current != null)
                   window.clearTimeout(saveTimer.current);
-                void onDelete(note.id);
+                void enqueueNoteSave(note.id, () => onDelete(note.id));
               }}
               className="inline-flex items-center gap-1.5 rounded-md px-3 h-7 text-[12px] text-content/70 hover:bg-content/10 hover:text-red-400"
             >
@@ -757,7 +895,22 @@ function NoteEditor({
             </button>
           </div>
           {saveError ? (
-            <p className="text-[12px] text-red-400/90">{saveError}</p>
+            <div
+              role="alert"
+              className="flex items-center gap-2 text-[12px] text-red-400/90"
+            >
+              <span>Could not save note: {saveError}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSaveError(null);
+                  void saveNow();
+                }}
+                className="shrink-0 underline hover:no-underline"
+              >
+                Retry
+              </button>
+            </div>
           ) : null}
         </header>
         <div
@@ -819,12 +972,12 @@ function NoteEditor({
               autoFocus={blank}
               value={body}
               onChange={(next) => {
-                setBody(next);
+                editNote({ body: next });
                 scheduleSave();
               }}
             />
           ) : body.trim() ? (
-            <AgentMarkdown text={body} cwd={note.sourceCwd} />
+            <AgentMarkdown text={body} cwd={sourceCwd} />
           ) : (
             <p className="text-[13px] text-content/45">No description</p>
           )}
@@ -885,6 +1038,83 @@ function NoteSource({
         style={{ paddingLeft: textOffset }}
       />
     </div>
+  );
+}
+
+function NoteTagsEditor({
+  tags,
+  onChange,
+}: {
+  tags: string[];
+  onChange: (tags: string[]) => void;
+}) {
+  const [value, setValue] = useState("");
+
+  const addTag = (input = value) => {
+    const next = normalizeNoteTags([...tags, input]);
+    setValue("");
+    if (!sameTags(next, tags)) onChange(next);
+  };
+
+  return (
+    <div
+      className="flex min-w-0 flex-wrap items-center gap-1.5"
+      aria-label="Tags"
+    >
+      <span className="mr-0.5 text-[11px] text-content/45">Tags</span>
+      {tags.map((tag) => (
+        <span
+          key={tag}
+          className="inline-flex h-6 max-w-48 items-center gap-1 rounded-md bg-content/8 pl-2 pr-1 text-[11px] text-content/70"
+        >
+          <span className="truncate">#{tag}</span>
+          <button
+            type="button"
+            title={`Remove #${tag}`}
+            aria-label={`Remove #${tag}`}
+            onClick={() => onChange(tags.filter((item) => item !== tag))}
+            className="grid size-4 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
+          >
+            <X className="size-2.5" strokeWidth={1.75} />
+          </button>
+        </span>
+      ))}
+      {tags.length < MAX_NOTE_TAGS ? (
+        <input
+          value={value}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next.endsWith(",")) addTag(next.slice(0, -1));
+            else setValue(next);
+          }}
+          onBlur={() => {
+            if (value.trim()) addTag();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === ",") {
+              event.preventDefault();
+              addTag();
+              return;
+            }
+            if (event.key === "Backspace" && !value && tags.length > 0) {
+              onChange(tags.slice(0, -1));
+            }
+          }}
+          aria-label="Add note tag"
+          placeholder="Add tag…"
+          spellCheck={false}
+          autoComplete="off"
+          className="h-6 min-w-20 flex-1 border-0 bg-transparent px-1 text-[11px] text-content outline-none placeholder:text-content/35"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function sameTags(left: readonly string[], right: readonly string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((tag, index) => tag === right[index])
   );
 }
 

@@ -9,11 +9,14 @@ import {
   folderAccent,
   folderContaining,
   folderShellFill,
+  loadPinnedSessionsCollapsed,
   loadSessionFolders,
   mergeFolderSessionSummaries,
+  placeSessionInFolder,
   pruneSessionFolders,
   removeSessionFromFolder,
   renameFolder,
+  savePinnedSessionsCollapsed,
   saveSessionFolders,
   sessionListNavigationIds,
   setFolderCollapsed,
@@ -98,6 +101,58 @@ describe("uniqueFolderName", () => {
 });
 
 describe("buildSessionList", () => {
+  it("puts reminders ahead of folders and pins without duplicate cards or changing membership", () => {
+    const sessions = [
+      summary("pin", { pinned: true }),
+      summary("folder-member"),
+      summary("loose"),
+      summary("other-pin", { pinned: true }),
+    ];
+    const folders = [folder("work", ["folder-member", "loose"])];
+    const loose = ungroupedSessions(sessions, folders);
+    const entries = buildSessionList(sessions, folders, loose, false, {
+      sessionIds: ["folder-member", "pin"],
+      collapsed: false,
+    });
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "reminders",
+      "folder",
+      "pinned",
+    ]);
+    expect(sessionListNavigationIds(entries, false)).toEqual([
+      "folder-member",
+      "pin",
+      "loose",
+      "other-pin",
+    ]);
+    expect(folders[0].sessionIds).toEqual(["folder-member", "loose"]);
+    const restored = buildSessionList(sessions, folders, loose);
+    expect(sessionListNavigationIds(restored, false)).toEqual([
+      "folder-member",
+      "loose",
+      "pin",
+      "other-pin",
+    ]);
+  });
+
+  it("keeps reminder grouping ahead of paginated sessions and respects collapse/search", () => {
+    const sessions = [summary("loose"), summary("reminded")];
+    const entries = buildSessionList(sessions, [], [sessions[0]], false, {
+      sessionIds: ["reminded", "not-visible"],
+      collapsed: true,
+    });
+    expect(entries[0]).toEqual({
+      kind: "reminders",
+      sessions: [sessions[1]],
+      collapsed: true,
+    });
+    expect(sessionListNavigationIds(entries, false)).toEqual(["loose"]);
+    expect(sessionListNavigationIds(entries, true)).toEqual([
+      "reminded",
+      "loose",
+    ]);
+  });
+
   it("places folders above pinned ungrouped sessions", () => {
     const sessions = [
       summary("pin", { pinned: true, updatedAt: 1 }),
@@ -114,11 +169,13 @@ describe("buildSessionList", () => {
       entries.map((entry) =>
         entry.kind === "folder"
           ? entry.folder.name
-          : entry.kind === "session"
-            ? entry.session.id
-            : "divider",
+          : entry.kind === "pinned"
+            ? `Pinned:${entry.sessions.map((session) => session.id).join(",")}`
+            : entry.kind === "session"
+              ? entry.session.id
+              : entry.kind,
       ),
-    ).toEqual(["Work", "pin", "divider", "new"]);
+    ).toEqual(["Work", "Pinned:pin", "new"]);
   });
 
   it("hides folders whose members are not in the visible set", () => {
@@ -155,16 +212,20 @@ describe("buildSessionList", () => {
     ]);
   });
 
-  it("keeps the pin split among ungrouped sessions when there are no folders", () => {
-    const sessions = [
-      summary("pin", { pinned: true }),
-      summary("rest"),
-    ];
-    expect(
-      buildSessionList(sessions, [], sessions).map((entry) =>
-        entry.kind === "session" ? entry.session.id : entry.kind,
-      ),
-    ).toEqual(["pin", "divider", "rest"]);
+  it("groups pinned sessions without a divider", () => {
+    const sessions = [summary("pin", { pinned: true }), summary("rest")];
+    const entries = buildSessionList(sessions, [], sessions);
+    expect(entries).toEqual([
+      { kind: "pinned", collapsed: false, sessions: [sessions[0]] },
+      { kind: "session", session: sessions[1] },
+    ]);
+  });
+
+  it("omits collapsed pinned sessions from keyboard navigation", () => {
+    const sessions = [summary("pin", { pinned: true }), summary("rest")];
+    const entries = buildSessionList(sessions, [], sessions, true);
+    expect(sessionListNavigationIds(entries, false)).toEqual(["rest"]);
+    expect(sessionListNavigationIds(entries, true)).toEqual(["pin", "rest"]);
   });
 
   it("exposes the full visible navigation order without pagination", () => {
@@ -205,13 +266,33 @@ describe("folder mutations", () => {
   });
 
   it("adds a session to a folder and drops an emptied source folder", () => {
-    const folders = [
-      folder("src", ["a"]),
-      folder("dst", ["b"]),
-    ];
+    const folders = [folder("src", ["a"]), folder("dst", ["b"])];
     const next = addSessionToFolder(folders, "dst", "a");
     expect(next.map((entry) => entry.id)).toEqual(["dst"]);
     expect(next[0]?.sessionIds).toEqual(["b", "a"]);
+  });
+
+  it("places the current session in an existing expanded folder", () => {
+    const folders = [folder("work", ["a"], { collapsed: true })];
+    expect(
+      placeSessionInFolder(folders, "b", {
+        kind: "existing",
+        folderId: "work",
+      }),
+    ).toEqual([folder("work", ["a", "b"], { collapsed: false })]);
+  });
+
+  it("creates a named folder for the current session", () => {
+    const folders = placeSessionInFolder([], "a", {
+      kind: "new",
+      name: "  Launch work  ",
+    });
+    expect(folders).toHaveLength(1);
+    expect(folders[0]).toMatchObject({
+      name: "Launch work",
+      sessionIds: ["a"],
+      collapsed: false,
+    });
   });
 
   it("is a no-op when adding a session already in that folder", () => {
@@ -228,7 +309,9 @@ describe("folder mutations", () => {
 
   it("dissolves a folder without touching the others", () => {
     const folders = [folder("a", ["s1"]), folder("b", ["s2"])];
-    expect(dissolveFolder(folders, "a").map((entry) => entry.id)).toEqual(["b"]);
+    expect(dissolveFolder(folders, "a").map((entry) => entry.id)).toEqual([
+      "b",
+    ]);
   });
 
   it("renames and ignores a blank name", () => {
@@ -263,7 +346,9 @@ describe("folder mutations", () => {
     expect(custom[0]?.colorIndex).toBeUndefined();
     expect(setFolderCustomColor(custom, "g", "#3b82f6")).toBe(custom);
     expect(setFolderCustomColor(custom, "g", "not-a-color")).toBe(custom);
-    expect(setFolderCustomColor(custom, "g", null)[0]?.customColor).toBeUndefined();
+    expect(
+      setFolderCustomColor(custom, "g", null)[0]?.customColor,
+    ).toBeUndefined();
     expect(folderAccent(2, "#3b82f6")).toBe("#3b82f6");
     expect(folderShellFill(undefined, "#3b82f6")).toMatch(
       /color-mix\(in srgb, #3b82f6 18%/,
@@ -282,12 +367,7 @@ describe("folder mutations", () => {
       folder("c", ["s3"]),
     ];
     const next = reorderSessionFolders(folders, ["c", "a", "b"]);
-    expect(next.map((entry) => entry.id)).toEqual([
-      "c",
-      "hidden",
-      "a",
-      "b",
-    ]);
+    expect(next.map((entry) => entry.id)).toEqual(["c", "hidden", "a", "b"]);
     expect(reorderSessionFolders(folders, ["a", "b", "c"])).toBe(folders);
   });
 });
@@ -424,5 +504,15 @@ describe("session folder persistence", () => {
     saveSessionFolders("/tmp/project", [folder("g", ["a"])]);
     saveSessionFolders("/tmp/project", []);
     expect(localStorage.getItem("monocode.sessionFolders")).toBe("{}");
+  });
+
+  it("round-trips the pinned group collapsed state per project", () => {
+    savePinnedSessionsCollapsed("/tmp/project/", true);
+    expect(loadPinnedSessionsCollapsed("/tmp/project")).toBe(true);
+    expect(loadPinnedSessionsCollapsed("/tmp/other")).toBe(false);
+
+    savePinnedSessionsCollapsed("/tmp/project", false);
+    expect(loadPinnedSessionsCollapsed("/tmp/project")).toBe(false);
+    expect(localStorage.getItem("monocode.pinnedSessionsCollapsed")).toBe("{}");
   });
 });

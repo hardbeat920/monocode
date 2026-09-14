@@ -1,17 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
+import { recoverCursorSubagents } from "./harness/cursorSubagents";
 import { persistableAttachment } from "./attachments";
 import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
 import type {
+  AgentRunMeta,
+  AgentStep,
   Block,
   HarnessId,
   HandoffMeta,
   HandoffStatus,
+  LinkedWorkItem,
   RuntimeMode,
   SecondOpinionMeta,
   Session,
   TaskListMeta,
   PlanBlockMeta,
+  TurnModel,
+  TurnMetrics,
 } from "./session";
 import { HARNESSES, RUNTIME_MODES } from "./session";
 
@@ -31,6 +37,7 @@ export type SessionSummary = {
   updatedAt: number;
   archived?: boolean;
   pinned?: boolean;
+  linkedWorkItem?: LinkedWorkItem;
 };
 
 type SessionRecord = {
@@ -47,6 +54,7 @@ type SessionRecord = {
   contextWindow?: number | null;
   branch?: string | null;
   worktreeCwd?: string | null;
+  linkedWorkItem?: LinkedWorkItem | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -65,12 +73,15 @@ type SessionUpsertPayload = {
   contextWindow?: number;
   branch?: string;
   worktreeCwd?: string;
+  linkedWorkItem?: LinkedWorkItem;
 };
 
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
   return (
-    !session.inboxAsk && session.cwd !== "~" && session.blocks.some((block) => block.role === "user")
+    !session.inboxAsk &&
+    session.cwd !== "~" &&
+    session.blocks.some((block) => block.role === "user")
   );
 }
 
@@ -82,6 +93,7 @@ export function isPersistableId(value: string): boolean {
 function persistableMeta(
   session: Session,
 ): Omit<SessionUpsertPayload, "blocks"> {
+  const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
   return {
     id: session.id,
     cwd: normalizeProjectPath(session.cwd),
@@ -99,6 +111,34 @@ function persistableMeta(
       : {}),
     ...(session.branch ? { branch: session.branch } : {}),
     ...(session.worktreeCwd ? { worktreeCwd: session.worktreeCwd } : {}),
+    ...(linkedWorkItem ? { linkedWorkItem } : {}),
+  };
+}
+
+export function sanitizeLinkedWorkItem(
+  value: unknown,
+): LinkedWorkItem | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const item = value as Partial<LinkedWorkItem>;
+  const kind = item.kind;
+  const repo = typeof item.repo === "string" ? item.repo.trim() : "";
+  const number = item.number;
+  if (
+    (kind !== "issue" && kind !== "pr") ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ||
+    typeof number !== "number" ||
+    !Number.isSafeInteger(number) ||
+    number <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    kind,
+    repo,
+    number,
+    url: `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`,
   };
 }
 
@@ -189,6 +229,11 @@ export async function listSessionsByProject(
   return rows.map(normalizeSummary);
 }
 
+export async function listLinkedSessions(): Promise<SessionSummary[]> {
+  const rows = await invoke<SessionSummary[]>("session_list_linked");
+  return rows.map(normalizeSummary);
+}
+
 export type SessionSearchHit = {
   kind: "conversation" | "message";
   sessionId: string;
@@ -233,7 +278,7 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     sessionId,
   });
   if (!record) return null;
-  return recordToSession(record);
+  return recoverCursorSubagents(recordToSession(record));
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
@@ -337,6 +382,10 @@ function sanitizeBlock(block: Block): Block | null {
   }
   if (block.startedAt != null) next.startedAt = block.startedAt;
   if (block.durationMs != null) next.durationMs = block.durationMs;
+  const turnModel = sanitizeTurnModel(block.turnModel);
+  if (block.role === "user" && turnModel) next.turnModel = turnModel;
+  const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);
+  if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;
   if (block.approval?.decided) {
     next.approval = {
@@ -347,6 +396,8 @@ function sanitizeBlock(block: Block): Block | null {
     // Drop stale live approval prompts; request ids don't survive restarts.
     if (block.role === "approval") return null;
   }
+  const agentRun = sanitizeAgentRun(block.agentRun);
+  if (agentRun) next.agentRun = agentRun;
   const taskList = sanitizeTaskList(block.taskList);
   if (taskList) next.taskList = taskList;
   else if (block.role === "tasks") return null;
@@ -363,6 +414,58 @@ function sanitizeBlock(block: Block): Block | null {
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
   return next;
+}
+
+function sanitizeTurnMetrics(value: unknown): TurnMetrics | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const rec = value as Record<string, unknown>;
+  const number = (key: keyof TurnMetrics): number | undefined => {
+    const candidate = rec[key];
+    return typeof candidate === "number" &&
+      Number.isFinite(candidate) &&
+      candidate >= 0
+      ? candidate
+      : undefined;
+  };
+  const metrics: TurnMetrics = {
+    ...(number("inputTokens") != null
+      ? { inputTokens: number("inputTokens") }
+      : {}),
+    ...(number("outputTokens") != null
+      ? { outputTokens: number("outputTokens") }
+      : {}),
+    ...(number("cacheReadTokens") != null
+      ? { cacheReadTokens: number("cacheReadTokens") }
+      : {}),
+    ...(number("cacheWriteTokens") != null
+      ? { cacheWriteTokens: number("cacheWriteTokens") }
+      : {}),
+    ...(number("cacheHitPercent") != null
+      ? { cacheHitPercent: number("cacheHitPercent") }
+      : {}),
+  };
+  return Object.keys(metrics).length > 0 ? metrics : undefined;
+}
+
+function sanitizeTurnModel(value: unknown): TurnModel | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const harness = record.harness;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (
+    typeof harness !== "string" ||
+    !HARNESSES.includes(harness as HarnessId) ||
+    !id ||
+    !name
+  ) {
+    return undefined;
+  }
+  return { harness: harness as HarnessId, id, name };
 }
 
 function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {
@@ -389,6 +492,56 @@ function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {
     ...(originalText ? { originalText } : {}),
     ...(approvedText ? { approvedText } : {}),
     ...(record.edited === true ? { edited: true } : {}),
+  };
+}
+
+/**
+ * How much of a delegated run's trail a saved session keeps. Reopening a
+ * session is for reading what the subagent concluded, not for replaying every
+ * call it made, and a long run would otherwise dominate the snapshot.
+ */
+const PERSISTED_AGENT_STEPS = 100;
+
+function sanitizeAgentRun(value: unknown): AgentRunMeta | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.steps)) return null;
+  const steps = record.steps.flatMap((entry): AgentStep[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const row = entry as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id : "";
+    const kind = row.kind;
+    if (
+      !id ||
+      (kind !== "tool" && kind !== "message" && kind !== "reasoning")
+    ) {
+      return [];
+    }
+    const text = typeof row.text === "string" ? row.text : "";
+    return [
+      {
+        id,
+        kind,
+        text,
+        ...(typeof row.toolKind === "string" ? { toolKind: row.toolKind } : {}),
+        ...(typeof row.status === "string" ? { status: row.status } : {}),
+        ...(row.preview && typeof row.preview === "object"
+          ? { preview: row.preview as AgentStep["preview"] }
+          : {}),
+      },
+    ];
+  });
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (!name && steps.length === 0) return null;
+  return {
+    name: name || "Subagent",
+    ...(typeof record.model === "string" && record.model.trim()
+      ? { model: record.model.trim() }
+      : {}),
+    ...(typeof record.agentType === "string" && record.agentType.trim()
+      ? { agentType: record.agentType.trim() }
+      : {}),
+    steps: steps.slice(-PERSISTED_AGENT_STEPS),
   };
 }
 
@@ -432,6 +585,7 @@ function sanitizeTaskList(value: unknown): TaskListMeta | null {
 }
 
 function normalizeSummary(summary: SessionSummary): SessionSummary {
+  const linkedWorkItem = sanitizeLinkedWorkItem(summary.linkedWorkItem);
   return {
     ...summary,
     harness: asHarness(summary.harness),
@@ -445,6 +599,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
     deletions: summary.deletions ?? 0,
     archived: summary.archived || undefined,
     pinned: summary.pinned || undefined,
+    linkedWorkItem,
   };
 }
 
@@ -454,6 +609,7 @@ function recordToSession(record: SessionRecord): Session {
         .map(sanitizeBlock)
         .filter((block): block is Block => block != null)
     : [];
+  const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
   return {
     id: record.id,
     cwd: record.cwd,
@@ -472,6 +628,7 @@ function recordToSession(record: SessionRecord): Session {
       : {}),
     ...(record.branch ? { branch: record.branch } : {}),
     ...(record.worktreeCwd ? { worktreeCwd: record.worktreeCwd } : {}),
+    ...(linkedWorkItem ? { linkedWorkItem } : {}),
     ...(contextFromRecord(record) ?? {}),
   };
 }

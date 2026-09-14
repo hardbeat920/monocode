@@ -6,6 +6,8 @@
 @custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
 
 @theme {
+  /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
+  --leading-label: 1.4;
   --color-background-base: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness)
   );
@@ -24,10 +26,14 @@
 }
 
 :root {
+  --motion-reorder-duration: 160ms;
+  --motion-feedback-duration: 120ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --theme-hue: 240;
   --theme-saturation: 0%;
   --sidebar-opacity: 0.85;
-  --chat-background-opacity: 0.24;
+  --chat-background-empty-opacity: 0.24;
+  --chat-background-session-opacity: 0.24;
   --background-lightness: 9%;
   --content-lightness: 92%;
   --link-color: #7dd3fc;
@@ -104,6 +110,60 @@ html.has-native-glass,
 html.has-native-glass body,
 html.has-native-glass #root {
   background: transparent;
+}
+
+.reorder-item {
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.reorder-item:is([data-dragging], [data-settling]) {
+  z-index: 10;
+}
+
+.tab-motion,
+.tab-motion > button {
+  transition:
+    background-color var(--motion-feedback-duration) var(--motion-ease-out),
+    color var(--motion-feedback-duration) var(--motion-ease-out),
+    opacity var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+.tab-motion[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-motion,
+  .tab-motion > button {
+    transition: none;
+  }
+}
+
+.workspace-tab:not([data-reordering])
+  > button:not([aria-selected="true"]):hover,
+.workspace-tab[data-dragging] > button:not([aria-selected="true"]),
+.project-reorder-item:not([data-reordering], [data-selected]):hover,
+.project-reorder-item[data-dragging]:not([data-selected]) {
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  color: var(--color-content);
+}
+
+/* Keep project controls from appearing as rows pass beneath the pointer. */
+.project-reorder-item[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+.project-reorder-item[data-reordering] > button:first-of-type {
+  padding-right: 0;
+}
+
+.project-reorder-item[data-reordering] .project-card-logo {
+  opacity: 1;
+}
+
+.project-reorder-item[data-reordering] .project-card-stats {
+  display: flex;
 }
 
 .sidebar-glass {
@@ -209,7 +269,13 @@ html.has-native-glass .sidebar-glass {
 
 html.has-chat-background .chat-pane-background::before,
 .chat-pane-background[data-project-chat-background="true"]::before {
-  opacity: var(--chat-background-opacity);
+  opacity: var(--chat-background-empty-opacity);
+}
+
+html.has-chat-background
+  .chat-pane-background[data-session-empty="false"]::before,
+.chat-pane-background[data-project-chat-background="true"][data-session-empty="false"]::before {
+  opacity: var(--chat-background-session-opacity);
 }
 
 html.chat-background-empty-only
@@ -859,6 +925,25 @@ header[data-tauri-drag-region] button {
   animation: approval-toast-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+@keyframes linked-activity-notice-in {
+  from {
+    transform: translateY(-8px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.linked-activity-notice {
+  animation: linked-activity-notice-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .linked-activity-notice {
+    animation: none;
+  }
+}
+
 .shimmer-text {
   background-image:
     linear-gradient(
@@ -1437,11 +1522,6 @@ html.theme-light .popover-backdrop {
     animation: none;
     opacity: 0.7;
   }
-}
-
-[data-session-review-shell] + [data-message-queue] [data-message-queue-card] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 /* Graph node cutouts so lane strokes do not show through the circles. */

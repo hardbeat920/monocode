@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { projectKey } from "./paths";
 import {
   loadTabGroupLogos,
   notifyTabGroupLogosChanged,
@@ -7,8 +8,9 @@ import {
   tabGroupLogoDisplayRevision,
 } from "./tabGroups";
 
-export async function pickImageFile(): Promise<string | null> {
+export async function pickImageFile(directory: string): Promise<string | null> {
   const selected = await open({
+    defaultPath: directory,
     multiple: false,
     directory: false,
     title: "Choose project logo",
@@ -50,9 +52,10 @@ async function forgetLogoFile(path: string | null): Promise<void> {
   await invoke("forget_logo_file", { path }).catch(() => undefined);
 }
 
-export async function pickAndSetProjectLogo(project: string): Promise<string | null> {
-  const sourcePath = await pickImageFile();
+export async function pickAndSetProjectLogo(projectPath: string): Promise<string | null> {
+  const sourcePath = await pickImageFile(projectPath);
   if (!sourcePath) return null;
+  const project = projectKey(projectPath);
   const logos = loadTabGroupLogos();
   const path = await invoke<string>("save_project_logo", {
     project,

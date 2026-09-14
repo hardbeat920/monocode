@@ -279,9 +279,14 @@ export function SearchView({
 
   const openHit = (hit: AppSearchHit | null) => {
     if (!hit) return;
-    if (hit.kind === "file") onOpenFile(hit.path);
-    else if (hit.kind === "content") {
-      onOpenFile(hit.path, { line: hit.line, column: hit.column });
+    if (hit.kind === "file") {
+      onOpenFile(hit.path, undefined, { exact: true });
+    } else if (hit.kind === "content") {
+      onOpenFile(
+        hit.path,
+        { line: hit.line, column: hit.column },
+        { exact: true },
+      );
     } else if (hit.kind === "conversation" || hit.kind === "message") {
       onOpenSession(hit.sessionId);
     } else onOpenProject(hit.path);

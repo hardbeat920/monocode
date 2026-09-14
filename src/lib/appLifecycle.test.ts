@@ -5,6 +5,13 @@ import { forgetHarnessSession, killAllChildren } from "./harness";
 import { newSession } from "./session";
 import { newTab } from "./layout";
 import { closeBusyWindow, setQuitWorkspace } from "./appLifecycle";
+import {
+  collectWorkspaceSnapshot,
+  hydrateWorkspaceSnapshot,
+  parseWorkspaceSnapshot,
+} from "./workspaceSnapshot";
+import { loadWorkspaceSnapshot, saveWorkspaceSnapshot } from "./sessionStore";
+import { reconcileProjectReturn } from "./projectReturn";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -12,12 +19,184 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn().mockResolvedValue(true),
 }));
+vi.mock("./windowTransferBootstrap", () => ({
+  loadWindowTransfer: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("./sessionStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sessionStore")>();
+  return {
+    ...actual,
+    loadWorkspaceSnapshot: vi.fn().mockResolvedValue(null),
+    listInFlightSessions: vi.fn().mockResolvedValue([]),
+    listSessionsByProject: vi.fn().mockResolvedValue([]),
+    getSession: vi.fn().mockResolvedValue(null),
+  };
+});
 vi.mock("./harness", () => ({
   bindHarnessSession: vi.fn(),
   isLiveHarness: vi.fn(),
   forgetHarnessSession: vi.fn().mockResolvedValue(undefined),
   killAllChildren: vi.fn().mockResolvedValue(undefined),
 }));
+
+describe("project choices through lifecycle saves", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(ask).mockResolvedValue(true);
+    vi.mocked(loadWorkspaceSnapshot).mockResolvedValue(null);
+  });
+
+  function workspace() {
+    const sessions = ["a1", "a2", "b1", "b2"].map((id) => ({
+      ...newSession("cursor", id.startsWith("a") ? "/alpha" : "/beta"),
+      id,
+    }));
+    const tabs = sessions.map((session) => ({
+      ...newTab(session.id),
+      id: `tab-${session.id}`,
+    }));
+    const memory = new Map([
+      ["/alpha", "a2"],
+      ["/beta", "b2"],
+    ]);
+    return {
+      sessions,
+      tabs,
+      memory,
+      activeTabId: "tab-b2",
+      projectCwd: "/beta",
+    };
+  }
+
+  function lastSavedMemory() {
+    const call = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "workspace_set_snapshot")
+      .at(-1);
+    const args = call?.[1];
+    const snapshot =
+      args && typeof args === "object" && "snapshot" in args
+        ? parseWorkspaceSnapshot(args.snapshot)
+        : null;
+    expect(snapshot).not.toBeNull();
+    return snapshot
+      ? hydrateWorkspaceSnapshot(snapshot, new Map())?.projectReturnMemory
+      : undefined;
+  }
+
+  it("keeps both project choices in the final quit save after autosave", async () => {
+    const state = workspace();
+    const { handleQuitRequested, setQuitWorkspace } =
+      await import("./appLifecycle");
+    await saveWorkspaceSnapshot(
+      collectWorkspaceSnapshot(
+        state.tabs,
+        state.sessions,
+        state.activeTabId,
+        state.projectCwd,
+        state.memory,
+      ),
+    );
+    const release = setQuitWorkspace(
+      () => state.sessions,
+      () => state.tabs,
+      () => state.activeTabId,
+      () => state.projectCwd,
+      () => [],
+      () => state.memory,
+      vi.fn(),
+    );
+    try {
+      await handleQuitRequested();
+      expect([...(lastSavedMemory() ?? [])]).toEqual([...state.memory]);
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(
+            ([command]) => command === "workspace_set_snapshot",
+          ),
+      ).toHaveLength(2);
+    } finally {
+      release();
+    }
+  });
+
+  it("reads committed selection from live getters before autosave", async () => {
+    const state = workspace();
+    const { handleQuitRequested, setQuitWorkspace } =
+      await import("./appLifecycle");
+    state.activeTabId = "tab-a1";
+    state.projectCwd = "/alpha";
+    const readMemory = () => reconcileProjectReturn(state);
+    const release = setQuitWorkspace(
+      () => state.sessions,
+      () => state.tabs,
+      () => state.activeTabId,
+      () => state.projectCwd,
+      () => [],
+      readMemory,
+      vi.fn(),
+    );
+    try {
+      await handleQuitRequested();
+      expect(lastSavedMemory()?.get("/alpha")).toBe("a1");
+      expect(lastSavedMemory()?.get("/beta")).toBe("b2");
+    } finally {
+      release();
+    }
+  });
+
+  it("preserves choices through unload persistence used by idle close", async () => {
+    const state = workspace();
+    const { persistQuitState } = await import("./appLifecycle");
+    await persistQuitState(
+      state.sessions,
+      state.tabs,
+      state.activeTabId,
+      state.projectCwd,
+      state.memory,
+      "unload",
+    );
+    expect([...(lastSavedMemory() ?? [])]).toEqual([...state.memory]);
+  });
+
+  it("preserves choices when closing a busy window", async () => {
+    const state = workspace();
+    state.sessions[3].busy = true;
+    const release = setQuitWorkspace(
+      () => state.sessions,
+      () => state.tabs,
+      () => state.activeTabId,
+      () => state.projectCwd,
+      () => [],
+      () => state.memory,
+      vi.fn(),
+    );
+    try {
+      await closeBusyWindow();
+      expect([...(lastSavedMemory() ?? [])]).toEqual([...state.memory]);
+      expect(invoke).toHaveBeenCalledWith("destroy_window");
+    } finally {
+      release();
+    }
+  });
+
+  it("preserves resumed choices when quitting before App registers live getters", async () => {
+    const state = workspace();
+    vi.mocked(loadWorkspaceSnapshot).mockResolvedValue(
+      collectWorkspaceSnapshot(
+        state.tabs,
+        state.sessions,
+        state.activeTabId,
+        state.projectCwd,
+        state.memory,
+      ),
+    );
+    const { handleQuitRequested } = await import("./appLifecycle");
+    await handleQuitRequested();
+    expect([...(lastSavedMemory() ?? [])]).toEqual([...state.memory]);
+  });
+});
 
 describe("closing a busy window", () => {
   beforeEach(() => {
@@ -36,6 +215,7 @@ describe("closing a busy window", () => {
       () => tab.id,
       () => session.cwd,
       () => [],
+      () => new Map(),
       vi.fn(),
     );
     return { session, release };

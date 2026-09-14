@@ -1,4 +1,6 @@
 import type {
+  AgentRunMeta,
+  AgentStep,
   Attachment,
   Block,
   Session,
@@ -17,6 +19,7 @@ import {
 import { joinStreamText } from "./streamText";
 import { taskListText } from "../taskList";
 import { isReviewablePlan } from "../plan";
+import { resolveModel } from "../models";
 import type { HarnessEvent } from "./types";
 
 export function applyHarnessEvent(
@@ -40,6 +43,7 @@ export function applyHarnessEvent(
         status: event.status,
         preview: event.preview,
         streaming: true,
+        agentModel: event.agentModel,
       });
     case "tool.updated":
       return upsertTool(session, {
@@ -50,7 +54,10 @@ export function applyHarnessEvent(
         detail: event.detail,
         preview: event.preview,
         streaming: event.status !== "completed" && event.status !== "failed",
+        agentModel: event.agentModel,
       });
+    case "agent.step":
+      return recordAgentStep(session, event);
     case "approval.requested":
       return attachApproval(session, event);
     case "approval.resolved": {
@@ -71,8 +78,21 @@ export function applyHarnessEvent(
           requestId: event.requestId,
           questions: event.questions,
           ...(event.title ? { title: event.title } : {}),
+          ...(event.autoResolveAt != null
+            ? { autoResolveAt: event.autoResolveAt }
+            : {}),
         },
       };
+    case "question.updated":
+      return session.pendingQuestion?.requestId === event.requestId
+        ? {
+            ...session,
+            pendingQuestion: {
+              ...session.pendingQuestion,
+              autoResolveAt: event.autoResolveAt,
+            },
+          }
+        : session;
     case "question.resolved":
       return session.pendingQuestion?.requestId === event.requestId
         ? { ...session, pendingQuestion: undefined }
@@ -85,12 +105,14 @@ export function applyHarnessEvent(
           window: event.window,
         }),
       };
+    case "turn.metrics":
+      return mergeTurnMetrics(session, event);
     case "tasks.updated":
       return upsertTaskList(session, event);
     case "plan":
       return upsertPlan(session, event);
     case "session.error":
-      return appendBlock(stopStreaming(session), {
+      return appendBlock(failStreaming(session), {
         id: crypto.randomUUID(),
         role: "system",
         text: event.message,
@@ -102,7 +124,12 @@ export function applyHarnessEvent(
         ...session,
         ...(event.model ? { model: event.model } : {}),
         ...(event.modelSettings
-          ? { modelSettings: { ...session.modelSettings, ...event.modelSettings } }
+          ? {
+              modelSettings: {
+                ...session.modelSettings,
+                ...event.modelSettings,
+              },
+            }
           : {}),
       };
     case "status":
@@ -110,6 +137,39 @@ export function applyHarnessEvent(
     default:
       return session;
   }
+}
+
+function mergeTurnMetrics(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "turn.metrics" }>,
+): Session {
+  let userIndex = -1;
+  for (let index = session.blocks.length - 1; index >= 0; index -= 1) {
+    if (session.blocks[index].role === "user") {
+      userIndex = index;
+      break;
+    }
+  }
+  if (userIndex < 0) return session;
+
+  const current = session.blocks[userIndex];
+  const metrics = {
+    ...(current.turnMetrics ?? {}),
+    ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
+    ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
+    ...(event.cacheReadTokens != null
+      ? { cacheReadTokens: event.cacheReadTokens }
+      : {}),
+    ...(event.cacheWriteTokens != null
+      ? { cacheWriteTokens: event.cacheWriteTokens }
+      : {}),
+    ...(event.cacheHitPercent != null
+      ? { cacheHitPercent: event.cacheHitPercent }
+      : {}),
+  };
+  const blocks = session.blocks.slice();
+  blocks[userIndex] = { ...current, turnMetrics: metrics };
+  return { ...session, blocks };
 }
 
 function upsertPlan(
@@ -291,6 +351,17 @@ function userTurnFields(extra?: UserTurnExtra) {
   };
 }
 
+function turnModelFields(session: Session) {
+  const model = resolveModel(session.harness, session.model);
+  return {
+    turnModel: {
+      harness: session.harness,
+      id: session.model,
+      name: model.name,
+    },
+  };
+}
+
 export function appendUser(
   session: Session,
   text: string,
@@ -304,6 +375,7 @@ export function appendUser(
       role: "user",
       text,
       startedAt: Date.now(),
+      ...turnModelFields(session),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...userTurnFields(extra),
     },
@@ -326,6 +398,7 @@ export function appendSteerUser(
         id: crypto.randomUUID(),
         role: "user",
         text,
+        ...turnModelFields(session),
         ...(attachments.length > 0 ? { attachments } : {}),
         ...userTurnFields(extra),
       },
@@ -339,6 +412,45 @@ export function stopStreaming(session: Session): Session {
     busy: false,
     pendingQuestion: undefined,
     blocks: stampTurnDuration(session.blocks.map(stopBlockProgress)),
+  };
+}
+
+/**
+ * A terminal provider failure also settles work whose final tool event was
+ * lost with the transport. Leaving those calls `in_progress` hides the real
+ * failure behind a neutral completed-turn summary.
+ */
+function failStreaming(session: Session): Session {
+  const openTools = new Set(
+    session.blocks.flatMap((block) => {
+      if (block.role !== "tool" && block.role !== "approval") return [];
+      const status = block.tool?.status?.toLowerCase() ?? "";
+      return block.streaming ||
+        status === "in_progress" ||
+        status === "pending" ||
+        status === "running"
+        ? [block.id]
+        : [];
+    }),
+  );
+  const stopped = stopStreaming(session);
+  return {
+    ...stopped,
+    blocks: stopped.blocks.map((block) => {
+      const open = openTools.has(block.id);
+      const pendingApproval = !!block.approval && !block.approval.decided;
+      if (!open && !pendingApproval) return block;
+      return {
+        ...block,
+        streaming: false,
+        ...(block.tool && open
+          ? { tool: { ...block.tool, status: "failed" } }
+          : {}),
+        ...(block.approval && !block.approval.decided
+          ? { approval: { ...block.approval, decided: "cancelled" as const } }
+          : {}),
+      };
+    }),
   };
 }
 
@@ -589,6 +701,7 @@ function upsertTool(
     detail?: string;
     preview?: ToolPreview;
     streaming: boolean;
+    agentModel?: string;
   },
 ): Session {
   const index = findToolIndex(session, patch);
@@ -606,6 +719,9 @@ function upsertTool(
       role: "tool",
       text: label,
       streaming: patch.streaming,
+      ...(patch.agentModel
+        ? { agentRun: { name: label, model: patch.agentModel, steps: [] } }
+        : {}),
       tool: {
         callId: patch.callId,
         title: label,
@@ -632,6 +748,7 @@ function upsertTool(
   );
   const kind = patch.kind ?? prev.tool?.kind;
   const status = patch.status ?? prev.tool?.status;
+  const agentName = prev.agentRun?.steps.length ? prev.agentRun.name : label;
   if (
     prev.text === label &&
     prev.streaming === patch.streaming &&
@@ -639,6 +756,8 @@ function upsertTool(
     prev.tool?.kind === kind &&
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
+    (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
+    (!prev.agentRun || prev.agentRun.name === agentName) &&
     samePreview(prev.tool?.preview, preview)
   ) {
     return session;
@@ -648,6 +767,16 @@ function upsertTool(
     ...prev,
     text: label,
     streaming: patch.streaming,
+    ...(patch.agentModel || prev.agentRun
+      ? {
+          agentRun: {
+            steps: prev.agentRun?.steps ?? [],
+            ...prev.agentRun,
+            name: agentName,
+            ...(patch.agentModel ? { model: patch.agentModel } : {}),
+          },
+        }
+      : {}),
     tool: {
       callId: patch.callId,
       title: label,
@@ -679,6 +808,7 @@ function samePreview(a?: ToolPreview, b?: ToolPreview): boolean {
     a.fileName === b.fileName &&
     a.additions === b.additions &&
     a.deletions === b.deletions &&
+    a.contentOnly === b.contentOnly &&
     a.startLine === b.startLine &&
     a.output === b.output &&
     a.lines === b.lines
@@ -692,6 +822,7 @@ function fillPreview(
   title?: string,
 ): ToolPreview | undefined {
   if (
+    preview?.contentOnly ||
     preview?.lines?.some((line) => line.kind === "add" || line.kind === "del")
   ) {
     return preview;
@@ -701,6 +832,107 @@ function fillPreview(
     return stubFilePreview(kind, title);
   }
   return undefined;
+}
+
+/**
+ * How much of a subagent's trail the parent keeps. A delegated run can be
+ * thousands of calls long; the transcript only ever shows a window of it, and
+ * an unbounded array would grow the saved session without bound.
+ */
+const MAX_AGENT_STEPS = 300;
+
+const MAX_AGENT_STEP_CHARS = 2_000;
+
+/**
+ * Mirrors one subagent action onto its parent Agent tool block. Steps merge by
+ * provider id, so a call that starts pending and later completes stays one row
+ * instead of appearing twice.
+ */
+function recordAgentStep(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "agent.step" }>,
+): Session {
+  const index = session.blocks.findIndex(
+    (block) => block.tool?.callId === event.callId,
+  );
+  if (index < 0) return session;
+  const prev = session.blocks[index];
+  const text = capAgentStepText(event.text);
+  // A tool step earns a row on its label alone; prose with nothing in it does
+  // not.
+  if (!text && event.kind !== "tool") return session;
+
+  const run = prev.agentRun;
+  const step: AgentStep = {
+    id: event.stepId,
+    kind: event.kind,
+    text,
+    ...(event.toolKind ? { toolKind: event.toolKind } : {}),
+    ...(event.status ? { status: event.status } : {}),
+    ...(event.preview ? { preview: event.preview } : {}),
+  };
+
+  const at = run?.steps.findIndex((entry) => entry.id === event.stepId) ?? -1;
+  let steps: AgentStep[];
+  if (run && at >= 0) {
+    const existing = run.steps[at];
+    steps = run.steps.slice();
+    steps[at] = {
+      ...existing,
+      ...step,
+      // A completion carries the result, not the request: keep the label the
+      // call announced itself with rather than letting the result rename it.
+      text: text || existing.text,
+      preview: mergeToolPreview(event.preview, existing.preview),
+    };
+  } else {
+    steps = [...(run?.steps ?? []), step];
+    if (steps.length > MAX_AGENT_STEPS) {
+      steps = steps.slice(steps.length - MAX_AGENT_STEPS);
+    }
+  }
+
+  const next: AgentRunMeta = {
+    ...(run?.model ? { model: run.model } : {}),
+    name:
+      event.agentName ||
+      run?.name ||
+      prev.tool?.title ||
+      prev.text ||
+      "Subagent",
+    ...((event.agentType ?? run?.agentType)
+      ? { agentType: event.agentType ?? run?.agentType }
+      : {}),
+    steps,
+  };
+  if (run && sameAgentRun(run, next)) return session;
+  const blocks = session.blocks.slice();
+  blocks[index] = { ...prev, agentRun: next };
+  return { ...session, blocks };
+}
+
+function sameAgentRun(a: AgentRunMeta, b: AgentRunMeta): boolean {
+  if (a.name !== b.name || a.agentType !== b.agentType || a.model !== b.model)
+    return false;
+  if (a.steps.length !== b.steps.length) return false;
+  return a.steps.every((step, index) => sameAgentStep(step, b.steps[index]));
+}
+
+function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
+  return (
+    a.id === b.id &&
+    a.kind === b.kind &&
+    a.text === b.text &&
+    a.toolKind === b.toolKind &&
+    a.status === b.status &&
+    samePreview(a.preview, b.preview)
+  );
+}
+
+function capAgentStepText(value: string): string {
+  const text = value.trim();
+  if (text.length <= MAX_AGENT_STEP_CHARS) return text;
+  return `${text.slice(0, MAX_AGENT_STEP_CHARS)}\u2026`;
 }
 
 function findToolIndex(

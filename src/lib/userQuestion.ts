@@ -21,6 +21,8 @@ export type UserQuestionPrompt = {
   requestId: number;
   title?: string;
   questions: UserQuestion[];
+  /** Deadline owned by the harness; interaction can disable automatic skipping. */
+  autoResolveAt?: number;
 };
 
 export type UserQuestionReply =

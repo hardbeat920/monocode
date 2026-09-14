@@ -4,6 +4,7 @@ import type { HandoffComposerCard } from "./handoff";
 import type { InboxComposerCard } from "./githubTasks";
 import type { InboxAskContext } from "./inboxAsk";
 import type { NoteCardMeta, NoteComposerCard } from "./notes";
+import type { LinkedWorkItemUpdateCard } from "./linkedWorkItemActivity";
 import {
   defaultSessionChoice,
   preferredModelId,
@@ -121,9 +122,40 @@ export type ToolPreview = {
   startLine?: number;
   additions?: number;
   deletions?: number;
+  /** Write supplied new contents without the previous file to compare. */
+  contentOnly?: boolean;
   query?: string;
   lines?: ToolPreviewLine[];
   output?: string;
+};
+
+/** One thing a subagent did, mirrored into the parent transcript. */
+export type AgentStepKind = "tool" | "message" | "reasoning";
+
+export type AgentStep = {
+  /** Provider step identity, so repeats merge instead of stacking up. */
+  id: string;
+  kind: AgentStepKind;
+  /** Tool label, or the prose the subagent wrote. */
+  text: string;
+  toolKind?: string;
+  status?: string;
+  preview?: ToolPreview;
+};
+
+/**
+ * The inside of a delegated run: what the subagent is called, and the trail it
+ * left. Held on the parent Agent tool block so the transcript can open it
+ * without a second session.
+ */
+export type AgentRunMeta = {
+  /** What the subagent is called, e.g. "Correctness review". */
+  name: string;
+  /** Provider agent type, e.g. "code-reviewer". */
+  agentType?: string;
+  /** Model reported for the child, which may differ from its parent. */
+  model?: string;
+  steps: AgentStep[];
 };
 
 export type AttachmentKind = "image" | "audio" | "file";
@@ -153,6 +185,23 @@ export type QueuedMessage = {
 
 export type MessageQueueStatus = "active" | "paused" | "resuming";
 
+/** Provider/model provenance captured when a user turn is submitted. */
+export type TurnModel = {
+  harness: HarnessId;
+  id: string;
+  name: string;
+};
+
+/** Provider-reported token accounting for one user turn. */
+export type TurnMetrics = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Provider-normalized share of input served from cache, as a percentage. */
+  cacheHitPercent?: number;
+};
+
 export type Block = {
   id: string;
   role: BlockRole;
@@ -163,6 +212,10 @@ export type Block = {
   startedAt?: number;
   /** How long the agent worked on this user turn, in ms. */
   durationMs?: number;
+  /** Stable model label for this turn. Present on newly created user blocks. */
+  turnModel?: TurnModel;
+  /** Provider-reported token metrics for this user turn, when available. */
+  turnMetrics?: TurnMetrics;
   tool?: {
     callId?: string;
     title?: string;
@@ -175,6 +228,8 @@ export type Block = {
     requestId: number;
     decided?: "allow" | "deny" | "cancelled";
   };
+  /** Inner activity of a delegated run. Present on Agent/Task tool blocks. */
+  agentRun?: AgentRunMeta;
   taskList?: TaskListMeta;
   plan?: PlanBlockMeta;
   handoff?: HandoffMeta;
@@ -185,6 +240,14 @@ export type Block = {
 
 export type RuntimeMode =
   "supervised" | "auto-accept-edits" | "auto" | "full-access";
+
+/** One GitHub issue or pull request associated with a coding session. */
+export type LinkedWorkItem = {
+  kind: "issue" | "pr";
+  repo: string;
+  number: number;
+  url: string;
+};
 
 export const RUNTIME_MODES: RuntimeMode[] = [
   "supervised",
@@ -205,7 +268,7 @@ export const RUNTIME_MODE_LABEL: Record<RuntimeMode, string> = {
 export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
   supervised: "Ask before commands and file changes.",
   "auto-accept-edits": "Auto-approve edits, ask before other actions.",
-  auto: "An AI reviewer approves routine actions; risky ones still ask.",
+  auto: "An AI reviewer can approve or deny actions.",
   "full-access": "Allow commands and edits without prompts.",
 };
 
@@ -249,6 +312,10 @@ export type Session = {
   composerSeed?: string;
   /** Inbox issue/PR chip shown above the composer. In-memory, one-shot. */
   inboxCard?: InboxComposerCard;
+  /** GitHub issue or pull request shown on the persisted session card. */
+  linkedWorkItem?: LinkedWorkItem;
+  /** New linked-item activity shown above the composer. In-memory, one-shot. */
+  linkedWorkItemUpdateCard?: LinkedWorkItemUpdateCard;
   /** Note chip shown above the composer. In-memory, one-shot. */
   noteCard?: NoteComposerCard;
   /** Handoff chip shown above the composer. In-memory, one-shot. */

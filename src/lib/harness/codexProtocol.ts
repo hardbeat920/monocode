@@ -1,9 +1,17 @@
 import type {
+  Attachment,
   RuntimeMode,
   TaskListItem,
   ToolPreview,
   TurnIntent,
+  TurnMetrics,
 } from "../session";
+import {
+  attachmentPath,
+  attachmentPathText,
+  isVisionImage,
+  normalizeImageMime,
+} from "../attachments";
 import { normalizeTaskListStatus } from "../taskList";
 import {
   composeToolTitle,
@@ -49,7 +57,9 @@ export function runtimeModeToCodexConfig(mode: RuntimeMode): CodexThreadConfig {
       };
     case "full-access":
       return {
-        approvalPolicy: "never",
+        // Explicit escalations still need an approval round-trip. "never"
+        // rejects them before the client's full-access handler can allow them.
+        approvalPolicy: "on-request",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
         sandboxPolicy: { type: "dangerFullAccess" },
@@ -80,19 +90,12 @@ export function buildTurnSteerParams(input: {
   threadId: string;
   expectedTurnId: string;
   prompt?: string;
-  attachments?: Array<{ type: "image"; url: string }>;
+  attachments?: Attachment[];
 }): Record<string, unknown> {
-  const turnInput: Array<Record<string, unknown>> = [];
-  if (input.prompt) {
-    turnInput.push({ type: "text", text: input.prompt });
-  }
-  for (const attachment of input.attachments ?? []) {
-    turnInput.push(attachment);
-  }
   return {
     threadId: input.threadId,
     expectedTurnId: input.expectedTurnId,
-    input: turnInput,
+    input: codexInput(input.prompt, input.attachments),
   };
 }
 
@@ -100,7 +103,7 @@ export function buildTurnStartParams(input: {
   threadId: string;
   runtimeMode: RuntimeMode;
   prompt?: string;
-  attachments?: Array<{ type: "image"; url: string }>;
+  attachments?: Attachment[];
   model?: string;
   effort?: string;
   serviceTier?: string;
@@ -112,20 +115,13 @@ export function buildTurnStartParams(input: {
       ? {
           approvalPolicy: "never",
           sandbox: "read-only",
-          approvalsReviewer: "auto_review",
+          approvalsReviewer: runtimeConfig.approvalsReviewer,
           sandboxPolicy: { type: "readOnly" },
         }
       : runtimeConfig;
-  const turnInput: Array<Record<string, unknown>> = [];
-  if (input.prompt) {
-    turnInput.push({ type: "text", text: input.prompt });
-  }
-  for (const attachment of input.attachments ?? []) {
-    turnInput.push(attachment);
-  }
   return {
     threadId: input.threadId,
-    input: turnInput,
+    input: codexInput(input.prompt, input.attachments),
     approvalPolicy: config.approvalPolicy,
     approvalsReviewer: config.approvalsReviewer,
     sandboxPolicy: config.sandboxPolicy,
@@ -143,6 +139,30 @@ export function buildTurnStartParams(input: {
       ? { serviceTier: input.serviceTier }
       : {}),
   };
+}
+
+/** App-server accepts image inputs, but documents need a path in text. */
+function codexInput(
+  prompt: string | undefined,
+  attachments: Attachment[] = [],
+): Array<Record<string, unknown>> {
+  const input: Array<Record<string, unknown>> = [];
+  if (prompt) input.push({ type: "text", text: prompt });
+  for (const file of attachments) {
+    if (isVisionImage(file.mimeType)) {
+      input.push(
+        file.data
+          ? {
+              type: "image",
+              url: `data:${normalizeImageMime(file.mimeType)};base64,${file.data}`,
+            }
+          : { type: "localImage", path: attachmentPath(file) },
+      );
+    } else {
+      input.push({ type: "text", text: attachmentPathText(file) });
+    }
+  }
+  return input;
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
@@ -201,6 +221,8 @@ export function toCodexApprovalDecision(
 
 export type MappedCodexNotification = {
   events: HarnessEvent[];
+  /** Provider diagnostics for debug logs, excluded from the transcript. */
+  diagnostic?: string;
   /** When set, the active turn finished. */
   turnCompleted?: {
     status: "completed" | "failed" | "interrupted" | "cancelled";
@@ -332,7 +354,9 @@ export function mapCodexNotification(
       "Codex error";
     const willRetry = rec.willRetry === true;
     if (willRetry) {
-      return { events: [{ type: "status", text: message }] };
+      // Codex owns retrying the request; a status event would persist a row
+      // for every attempt and interrupt any streaming transcript block.
+      return { events: [], diagnostic: message };
     }
     return { events: [{ type: "session.error", message }] };
   }
@@ -343,6 +367,16 @@ export function mapCodexNotification(
       stringField(rec, "message") ??
       stringField(rec, "details");
     if (!message) return { events: [] };
+    // Runtime warnings have no structured code. Match only Codex's known
+    // transport fallback notice; configuration and other warnings stay visible.
+    if (
+      method === "warning" &&
+      /^Falling back from WebSockets to HTTPS transport(?:[.:]|$)/.test(
+        message.trimStart(),
+      )
+    ) {
+      return { events: [], diagnostic: message };
+    }
     return { events: [{ type: "status", text: message }] };
   }
 
@@ -367,14 +401,38 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
   if (!last) return { events: [] };
   const used = numberField(last, "totalTokens");
   const window = numberField(usage, "modelContextWindow");
-  if (!used && !window) return { events: [] };
+  const inputTokens = numberField(last, "inputTokens");
+  const cacheReadTokens = numberField(last, "cachedInputTokens");
+  const cacheWriteTokens = numberField(last, "cacheWriteInputTokens");
+  const outputTokens = numberField(last, "outputTokens");
+  const cacheReported =
+    "cachedInputTokens" in last || "cacheWriteInputTokens" in last;
+  const metrics: TurnMetrics = {
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTokens ? { outputTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(cacheReported && inputTokens > 0
+      ? {
+          cacheHitPercent:
+            (cacheReadTokens / (inputTokens + cacheWriteTokens)) * 100,
+        }
+      : {}),
+  };
+  const hasMetrics = Object.keys(metrics).length > 0;
+  if (!used && !window && !hasMetrics) return { events: [] };
   return {
     events: [
-      {
-        type: "context",
-        ...(used > 0 ? { used } : {}),
-        ...(window > 0 ? { window } : {}),
-      },
+      ...(used || window
+        ? [
+            {
+              type: "context" as const,
+              ...(used > 0 ? { used } : {}),
+              ...(window > 0 ? { window } : {}),
+            },
+          ]
+        : []),
+      ...(hasMetrics ? [{ type: "turn.metrics" as const, ...metrics }] : []),
     ],
   };
 }
@@ -403,6 +461,8 @@ function mapTurnTerminal(
   ];
   if (status === "failed" && error) {
     events.push({ type: "session.error", message: error });
+  } else if (status === "failed") {
+    events.push({ type: "session.error", message: "Codex turn failed." });
   }
   return {
     events,
@@ -613,6 +673,10 @@ function mapToolItem(
     return mapSubAgentActivity(item, callId, completed);
   }
 
+  if (itemType === "collabAgentToolCall") {
+    return mapCollabAgentToolCall(item, callId, completed);
+  }
+
   // Unknown item types are ignored; Codex may add new internal kinds over time.
   void item;
   void completed;
@@ -625,8 +689,7 @@ function mapSubAgentActivity(
   completed: boolean,
 ): HarnessEvent {
   const kind = (stringField(item, "kind") ?? "").toLowerCase();
-  const path =
-    stringField(item, "agentPath") ?? stringField(item, "agent_path");
+  const path = stringField(item, "agentPath") ?? stringField(item, "agent_path");
   const leaf = path?.split(/[/\\]/).filter(Boolean).pop();
   const title = leaf ? `${formatAgentType(leaf)} subagent` : "Subagent";
   if (kind === "interrupted") {
@@ -636,6 +699,7 @@ function mapSubAgentActivity(
       title,
       kind: "agent",
       status: "failed",
+      detail: "Subagent interrupted.",
     };
   }
   if (kind === "interacted") {
@@ -656,6 +720,240 @@ function mapSubAgentActivity(
     kind: "agent",
     status: "in_progress",
   };
+}
+
+/** Current app-server v2 representation for spawn/send/wait/close calls. */
+function mapCollabAgentToolCall(
+  item: Record<string, unknown>,
+  callId: string,
+  completed: boolean,
+): HarnessEvent {
+  const tool = stringField(item, "tool") ?? "";
+  const rawReceivers = item.receiverThreadIds ?? item.receiver_thread_ids;
+  const receivers = Array.isArray(rawReceivers)
+    ? rawReceivers.filter(
+        (value): value is string => typeof value === "string" && !!value,
+      )
+    : [];
+  const fallbackTitle =
+    tool === "spawnAgent"
+      ? "Spawn subagent"
+      : tool === "sendInput"
+        ? "Message subagent"
+        : tool === "resumeAgent"
+          ? "Resume subagent"
+          : tool === "wait"
+            ? receivers.length > 1
+              ? `Wait for ${receivers.length} subagents`
+              : "Wait for subagent"
+            : tool === "closeAgent"
+              ? "Close subagent"
+              : "Subagent";
+  // A spawn's brief is the only name the agent gets. Its first line is what
+  // the model wrote the run for, so "Spawn subagent" is a last resort.
+  const brief = agentBrief(item);
+  const title = tool === "spawnAgent" && brief ? brief : fallbackTitle;
+  const detail = collabAgentFailureDetail(item);
+  const failed = stringField(item, "status") === "failed" || !!detail;
+  // Spawning or resuming an agent is that agent's row. Waiting on one,
+  // messaging it and closing it are bookkeeping against a row that already
+  // exists — given their own agent rows they read as extra subagents that
+  // never do anything.
+  const spawns = tool === "spawnAgent" || tool === "resumeAgent";
+  // Completing a spawn means the call returned, not that the agent it started
+  // has finished — the child runs on its own thread for as long as it needs.
+  // Only its reported state settles the row, so a running agent is never
+  // captioned as done.
+  const settled = completed && (!spawns || failed);
+  return {
+    type: completed ? "tool.updated" : "tool.started",
+    callId,
+    title,
+    kind: spawns ? "agent" : "other",
+    ...(spawns && stringField(item, "model")
+      ? { agentModel: stringField(item, "model") }
+      : {}),
+    status: settled ? (failed ? "failed" : "completed") : "in_progress",
+    ...(detail ? { detail } : {}),
+  };
+}
+
+const TERMINAL_AGENT_STATES = new Set([
+  "completed",
+  "complete",
+  "done",
+  "finished",
+  "errored",
+  "error",
+  "failed",
+  "notfound",
+  "not_found",
+  "closed",
+  "interrupted",
+  "stopped",
+  "cancelled",
+  "canceled",
+]);
+
+const FAILED_AGENT_STATES = new Set([
+  "errored",
+  "error",
+  "failed",
+  "notfound",
+  "not_found",
+  "interrupted",
+]);
+
+/**
+ * Per-agent state a collab item reports, keyed by child thread. This is what
+ * actually settles a spawned agent's row: the spawn call returns long before
+ * the agent it started is finished.
+ */
+export function codexSubagentStates(
+  item: Record<string, unknown>,
+): Array<{ threadId: string; status: string; message?: string }> {
+  const states = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  return Object.entries(states ?? {}).flatMap(([threadId, value]) => {
+    const state = asRecord(value);
+    const status = (stringField(state, "status") ?? "").toLowerCase();
+    if (!threadId || !TERMINAL_AGENT_STATES.has(status)) return [];
+    const message = stringField(state, "message")?.trim();
+    return [
+      {
+        threadId,
+        status: FAILED_AGENT_STATES.has(status) ? "failed" : "completed",
+        ...(message ? { message } : {}),
+      },
+    ];
+  });
+}
+
+/**
+ * Thread ids a collab item ties to an agent row, so the child thread's own
+ * notifications can be mirrored back onto it. Codex runs each subagent as a
+ * separate thread on the same connection.
+ */
+export function codexSubagentThreadIds(
+  item: Record<string, unknown>,
+): string[] {
+  const ids = new Set<string>();
+  for (const key of ["agentThreadId", "agent_thread_id"]) {
+    const value = stringField(item, key);
+    if (value) ids.add(value);
+  }
+  const receivers = item.receiverThreadIds ?? item.receiver_thread_ids;
+  if (Array.isArray(receivers)) {
+    for (const value of receivers) {
+      if (typeof value === "string" && value) ids.add(value);
+    }
+  }
+  const states = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  for (const key of Object.keys(states ?? {})) {
+    if (key) ids.add(key);
+  }
+  return [...ids];
+}
+
+/**
+ * A child thread's own notification, mirrored onto the agent row that spawned
+ * it. Only settled items are mirrored: the deltas that stream inside a child
+ * thread carry no item identity, so they cannot be merged onto a step without
+ * stacking the same sentence up again on every chunk.
+ */
+export function mapCodexSubagentSteps(
+  callId: string,
+  method: string,
+  params: unknown,
+): HarnessEvent[] {
+  if (method === "thread/started") {
+    const model = stringField(asRecord(asRecord(params)?.thread), "model");
+    return model
+      ? [{ type: "tool.updated", callId, kind: "agent", agentModel: model }]
+      : [];
+  }
+  if (method !== "item/started" && method !== "item/completed") return [];
+  const rec = asRecord(params);
+  const item = asRecord(rec?.item);
+  const itemId = stringField(item, "id");
+  if (!rec || !itemId) return [];
+  return mapCodexNotification(method, params).events.flatMap(
+    (event): HarnessEvent[] => {
+      if (event.type === "tool.started" || event.type === "tool.updated") {
+        return [
+          {
+            type: "agent.step",
+            callId,
+            stepId: event.callId,
+            kind: "tool",
+            text: event.title ?? "",
+            ...(event.kind ? { toolKind: event.kind } : {}),
+            ...(event.status ? { status: event.status } : {}),
+            ...(event.preview ? { preview: event.preview } : {}),
+          },
+        ];
+      }
+      if (event.type === "message.delta") {
+        return [
+          {
+            type: "agent.step",
+            callId,
+            stepId: `${itemId}:text`,
+            kind: "message",
+            text: event.text,
+          },
+        ];
+      }
+      if (event.type === "reasoning.delta") {
+        return [
+          {
+            type: "agent.step",
+            callId,
+            stepId: `${itemId}:reasoning`,
+            kind: "reasoning",
+            text: event.text,
+          },
+        ];
+      }
+      return [];
+    },
+  );
+}
+
+/** The first line of a spawn's prompt, short enough to sit on a row. */
+function agentBrief(item: Record<string, unknown>): string | undefined {
+  const path =
+    stringField(item, "agentPath") ?? stringField(item, "agent_path");
+  const leaf = path?.split(/[/\\]/).filter(Boolean).pop();
+  if (leaf) return `${formatAgentType(leaf)} subagent`;
+  const prompt = stringField(item, "prompt");
+  const line = prompt
+    ?.split("\n")
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!line) return undefined;
+  return line.length <= 160 ? line : `${line.slice(0, 159)}\u2026`;
+}
+
+function collabAgentFailureDetail(
+  item: Record<string, unknown>,
+): string | undefined {
+  const states = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  const errors = Object.values(states ?? {}).flatMap((value) => {
+    const state = asRecord(value);
+    const status = (stringField(state, "status") ?? "").toLowerCase();
+    if (
+      status !== "errored" &&
+      status !== "notfound" &&
+      status !== "not_found"
+    ) {
+      return [];
+    }
+    return [stringField(state, "message") ?? "Subagent failed."];
+  });
+  if (errors.length > 0) return [...new Set(errors)].join("\n");
+  return stringField(item, "status") === "failed"
+    ? "Subagent operation failed."
+    : undefined;
 }
 
 function mapFileChangeItem(

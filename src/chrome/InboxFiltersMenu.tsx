@@ -135,7 +135,7 @@ export function InboxFiltersMenu({
       className="overflow-y-auto overscroll-none p-1"
     >
       <FilterItem
-        label="Assigned to me"
+        label={source === "gitlab" ? "Needs attention" : "Assigned to me"}
         checked={filters.assignedToMe}
         onClick={toggleAssigned}
       />
@@ -146,7 +146,7 @@ export function InboxFiltersMenu({
         checked={filters.status.open}
         onClick={() => toggleStatus("open")}
       />
-      {source === "github" ? (
+      {source !== "linear" ? (
         <FilterItem
           label="Draft"
           checked={filters.status.draft}
@@ -158,7 +158,7 @@ export function InboxFiltersMenu({
         checked={filters.status.closed}
         onClick={() => toggleStatus("closed")}
       />
-      {source === "github" ? (
+      {source !== "linear" ? (
         <FilterItem
           label="Merged"
           checked={filters.status.merged}
@@ -176,13 +176,17 @@ export function InboxFiltersMenu({
         />
       ))}
 
-      {source === "github" ? (
+      {source !== "linear" ? (
         <>
           <SectionLabel>Type</SectionLabel>
           {KIND_OPTIONS.map((option) => (
             <FilterItem
               key={option.id}
-              label={option.label}
+              label={
+                source === "gitlab" && option.id === "pr"
+                  ? "Merge requests"
+                  : option.label
+              }
               checked={!hiddenKinds.has(option.id)}
               icon={option.icon}
               onClick={() => toggleKind(option.id)}
@@ -219,7 +223,9 @@ export function InboxFiltersMenu({
         </>
       ) : null}
 
-      {source === "github" && projects.length > 0 ? (
+      {source !== "linear" &&
+      !(source === "gitlab" && filters.assignedToMe) &&
+      projects.length > 0 ? (
         <>
           <SectionLabel>Projects</SectionLabel>
           {projects.map((project) => (

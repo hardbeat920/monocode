@@ -46,7 +46,7 @@ import { isAstraModel } from "../lib/astraWelcome";
 import { AstraWelcome } from "./AstraWelcome";
 import { projectKey } from "../lib/paths";
 import {
-  loadProjectChatBackground,
+  loadProjectChatBackgroundSettings,
   projectChatBackgroundRevision,
   subscribeProjectChatBackground,
 } from "../lib/projectChatBackground";
@@ -55,6 +55,7 @@ import {
   loadChatBackgroundPath,
   subscribeChatBackgroundPath,
 } from "../lib/appearance";
+import type { SessionFolderTarget } from "../lib/sessionFolders";
 
 type Props = {
   session: Session;
@@ -84,6 +85,10 @@ type Props = {
   ) => void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
+  onPlaceSessionInFolder: (
+    sessionId: string,
+    target: SessionFolderTarget,
+  ) => void;
   onDeleteQueuedMessage: (sessionId: string, messageId: string) => void;
   onEditQueuedMessage: (
     sessionId: string,
@@ -106,6 +111,7 @@ type Props = {
     requestId: number,
     reply: UserQuestionReply,
   ) => void;
+  onQuestionInteraction?: (sessionId: string, requestId: number) => void;
   onOpenFile: (path: string) => void;
   onOpenDiff: (
     path?: string,
@@ -153,6 +159,7 @@ export const SessionPane = memo(function SessionPane({
   onSubmit,
   onStop,
   onCompactContext,
+  onPlaceSessionInFolder,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   onQueuedMessageEditingChange,
@@ -163,6 +170,7 @@ export const SessionPane = memo(function SessionPane({
   onHandoffCardDismiss,
   onApproval,
   onQuestionReply,
+  onQuestionInteraction,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -173,6 +181,7 @@ export const SessionPane = memo(function SessionPane({
   onPaneDragStart,
 }: Props) {
   const title = sessionDisplayTitle(session.title, session.harness);
+  const isEmpty = session.blocks.length === 0;
   const backgroundRevision = useSyncExternalStore(
     subscribeProjectChatBackground,
     projectChatBackgroundRevision,
@@ -183,13 +192,20 @@ export const SessionPane = memo(function SessionPane({
     loadChatBackgroundPath,
     loadChatBackgroundPath,
   );
-  const projectBackground = loadProjectChatBackground(projectKey(session.cwd));
+  const projectBackground = loadProjectChatBackgroundSettings(
+    projectKey(session.cwd),
+  );
   const projectBackgroundStyle = projectBackground
     ? ({
         "--chat-background-image": `url(${JSON.stringify(
           projectChatBackgroundSrc(projectBackground.path, backgroundRevision),
         )})`,
-        "--chat-background-opacity": String(projectBackground.opacity),
+        "--chat-background-empty-opacity": String(
+          projectBackground.emptyOpacity,
+        ),
+        "--chat-background-session-opacity": String(
+          projectBackground.sessionOpacity,
+        ),
       } as CSSProperties)
     : undefined;
   const approve = useCallback(
@@ -263,6 +279,17 @@ export const SessionPane = memo(function SessionPane({
     },
     [session.cwd, session.harness, session.id, session.title],
   );
+  const saveSelectionNote = useCallback(
+    (text: string) => {
+      void createNote({
+        title: noteTitle(text),
+        body: text,
+        sourceSessionId: session.id,
+        sourceCwd: session.cwd,
+      });
+    },
+    [session.cwd, session.id],
+  );
 
   useEffect(() => {
     if (!addToChatTarget) return;
@@ -275,7 +302,6 @@ export const SessionPane = memo(function SessionPane({
     return () => window.removeEventListener(ADD_TO_CHAT_EVENT, onAdd);
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
-  const isEmpty = session.blocks.length === 0;
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer = !isEmpty || inSplit || !!session.inboxAsk;
   const draftRef = useRef<string | undefined>(undefined);
@@ -320,6 +346,7 @@ export const SessionPane = memo(function SessionPane({
       onNoteCardDismiss={() => onNoteCardDismiss?.(session.id)}
       onHandoffCardDismiss={() => onHandoffCardDismiss?.(session.id)}
       onQuestionReply={replyQuestion}
+      onQuestionInteraction={(id) => onQuestionInteraction?.(session.id, id)}
       onFocus={() => onFocus(session.id)}
       onCwdChange={(cwd) => onCwdChange(session.id, cwd)}
       onBranchChange={() => onBranchChange(session.id)}
@@ -341,6 +368,7 @@ export const SessionPane = memo(function SessionPane({
       }
       onStop={() => onStop(session.id)}
       onCompactContext={() => onCompactContext(session.id)}
+      onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
       queuedMessages={session.queuedMessages}
       queueStatus={session.queueStatus}
       onDeleteQueuedMessage={(messageId) =>
@@ -358,18 +386,7 @@ export const SessionPane = memo(function SessionPane({
       onResumeQueue={() => onResumeQueue(session.id)}
       onOpenFile={onOpenFile}
       busy={!!session.busy}
-    >
-      {session.inboxAsk ? null : (
-        <SessionReview
-          sessionId={session.id}
-          cwd={workCwd}
-          enabled={visible}
-          busy={!!session.busy}
-          undoLocked={reviewUndoLocked}
-          onOpenDiff={onOpenDiff}
-        />
-      )}
-    </Composer>
+    />
   );
 
   return (
@@ -460,6 +477,7 @@ export const SessionPane = memo(function SessionPane({
               onApproval={approve}
               onAddToChat={addSelectionToChat}
               onSaveNote={notesEnabled ? saveNote : undefined}
+              onSaveSelectionNote={notesEnabled ? saveSelectionNote : undefined}
               onOpenFile={onOpenFile}
               onOpenDiff={onOpenDiff}
               onOpenPlan={openPlan}
@@ -479,6 +497,18 @@ export const SessionPane = memo(function SessionPane({
               onJumpToBottomChange={setShowJumpToBottom}
               onJumpToBottomReady={onJumpToBottomReady}
               onRevealReady={onRevealReady}
+              latestTurnAccessory={
+                session.inboxAsk ? undefined : (
+                  <SessionReview
+                    sessionId={session.id}
+                    cwd={workCwd}
+                    enabled={visible}
+                    busy={!!session.busy}
+                    undoLocked={reviewUndoLocked}
+                    onOpenDiff={onOpenDiff}
+                  />
+                )
+              }
             />
             <PromptOutline
               blocks={session.blocks}
