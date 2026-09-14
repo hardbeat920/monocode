@@ -8,6 +8,7 @@ const THEME_DARK_LIGHTNESS_KEY = "monocode.themeDarkLightness";
 const OPACITY_KEY = "monocode.sidebarOpacity";
 const BLUR_KEY = "monocode.sidebarBlur";
 const PROJECT_RAIL_OPEN_KEY = "monocode.projectRailOpen";
+const SIDEBAR_OPEN_KEY = "monocode.sidebarOpen";
 const BODY_KEY = "monocode.bodyGlass";
 const SCHEME_KEY = "monocode.colorScheme";
 const SIDEBAR_TAB_ORDER_KEY = "monocode.sidebarTabOrder";
@@ -521,6 +522,14 @@ function isSidebarTabId(value: unknown): value is SidebarTabId {
     value === "changes" ||
     value === "inbox"
   );
+}
+
+export function loadSidebarOpen(): boolean {
+  return readFlag(SIDEBAR_OPEN_KEY) ?? true
+}
+
+export function saveSidebarOpen(value: boolean) {
+  writeFlag(SIDEBAR_OPEN_KEY, value)
 }
 
 export function loadProjectRailOpen(): boolean {

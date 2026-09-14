@@ -22,8 +22,10 @@ import { useProjectBranches } from "./hooks/useProjectBranches";
 import { useInboxActivity } from "./hooks/useInboxUnseen";
 import {
   loadProjectRailOpen,
+  loadSidebarOpen,
   loadSidebarTabOrder,
   saveProjectRailOpen,
+  saveSidebarOpen,
   type SidebarTabId,
 } from "./lib/appearance";
 import { HAS_NATIVE_GLASS, IS_MAC } from "./lib/platform";
@@ -645,6 +647,7 @@ export default function App({
     [],
   );
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
+  const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
   const tabCloseScope = "project" as const;
   const currentProjectDock = findProjectTerminal(projectTerminals, projectCwd);
   const dockVisible = !!currentProjectDock?.open;
@@ -5363,11 +5366,11 @@ export default function App({
   );
 
   const onToggleSidebar = useCallback(() => {
-    setProjectRailOpen((open) => {
-      const next = !open;
-      saveProjectRailOpen(next);
-      return next;
-    });
+    setSidebarOpen((open) => {
+      const next = !open
+      saveSidebarOpen(next)
+      return next
+    })
   }, []);
 
   const onToggleProjectRail = useCallback(() => {
@@ -5991,7 +5994,7 @@ export default function App({
       <Sidebar
         cwd={sidebarCwd}
         gitCwd={gitCwd}
-        open
+        open={sidebarOpen}
         tab={sidebarTab}
         onTabChange={setSidebarTab}
         filesSearchOpen={filesSearchOpen}
