@@ -615,7 +615,14 @@ function newAvailableDefaultSession(cwd?: string, runtimeMode?: RuntimeMode) {
   return newSession(harness, cwd, model, runtimeMode);
 }
 
-function newSessionForSeed(seed: Session | undefined, cwd: string) {
+type SessionSeed = Pick<
+  Session | SessionSummary,
+  "harness" | "model" | "runtimeMode"
+> & {
+  modelSettings?: Session["modelSettings"];
+};
+
+function newSessionForSeed(seed: SessionSeed | undefined, cwd: string) {
   if (!seed || !isHarnessAvailable(seed.harness)) {
     return newAvailableDefaultSession(cwd, seed?.runtimeMode);
   }
@@ -2461,13 +2468,7 @@ export default function App({
       const finishClear = () => {
         persistSession(oldSession);
 
-        const session = newSession(
-          oldSession.harness,
-          oldSession.cwd,
-          oldSession.model,
-          oldSession.runtimeMode,
-          oldSession.modelSettings,
-        );
+        const session = newSessionForSeed(oldSession, oldSession.cwd);
 
         setSessions((prev) => [...prev, session]);
         setDirtyFiles((prev) => {
@@ -3263,13 +3264,7 @@ export default function App({
           ),
         );
         const fresh = {
-          ...newSession(
-            current.harness,
-            current.cwd,
-            current.model,
-            current.runtimeMode,
-            current.modelSettings,
-          ),
+          ...newSessionForSeed(current, current.cwd),
           title: current.title,
           inboxAsk: current.inboxAsk,
         };
@@ -3831,13 +3826,7 @@ export default function App({
       ) {
         setProjectCwd(normalized);
         setRecents(rememberProject(normalized));
-        const session = newSession(
-          current.harness,
-          normalized,
-          current.model,
-          current.runtimeMode,
-          current.modelSettings,
-        );
+        const session = newSessionForSeed(current, normalized);
         const tab = newTab(session.id);
         setSessions((prev) => [...prev, session]);
         appendTab(tab, normalized);
@@ -3955,13 +3944,7 @@ export default function App({
       }
 
       const seed = current ?? sessionsRef.current[0];
-      const session = newSession(
-        seed?.harness ?? "claude",
-        normalized,
-        seed?.model,
-        seed?.runtimeMode,
-        seed?.modelSettings,
-      );
+      const session = newSessionForSeed(seed, normalized);
       const tab = newTab(session.id);
       setProjectCwd(normalized);
       setRecents(rememberProject(normalized));
@@ -5701,11 +5684,13 @@ export default function App({
               runtimeMode: lead.runtimeMode,
             }
           : {
-              ...newSession(
-                task.harness,
+              ...newSessionForSeed(
+                {
+                  harness: task.harness,
+                  model: task.model,
+                  runtimeMode: lead.runtimeMode,
+                },
                 run.cwd,
-                task.model,
-                lead.runtimeMode,
               ),
               id: task.sessionId,
               title: task.title,
