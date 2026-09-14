@@ -2,9 +2,11 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveShowExcludedFiles } from "../lib/appearance";
 import {
   listCachedDir,
   notifyDirsChanged,
+  refreshDir,
   saveExpanded,
 } from "../lib/fileTree";
 import type { FsEntry } from "../lib/fs";
@@ -37,8 +39,12 @@ let cwd: string;
 let props: ComponentProps<typeof FileTree>;
 let project = 0;
 
-function file(name: string): FsEntry {
-  return { name, path: `${cwd}/${name}`, isDir: false, ignored: false };
+function file(name: string, ignored = false): FsEntry {
+  return { name, path: `${cwd}/${name}`, isDir: false, ignored };
+}
+
+function folder(name: string, ignored = false): FsEntry {
+  return { name, path: `${cwd}/${name}`, isDir: true, ignored };
 }
 
 function render(tick = 0, hidden = false) {
@@ -69,6 +75,7 @@ beforeEach(async () => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  localStorage.removeItem("monocode.showExcludedFiles");
   vi.clearAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -125,5 +132,32 @@ describe("FileTree render isolation", () => {
     });
     expect(row("added.ts")).not.toBeNull();
     expect(row("first.ts")).toBeNull();
+  });
+});
+
+describe("FileTree excluded files", () => {
+  it("hides ignored entries by default and follows the setting", async () => {
+    directories.set(cwd, [
+      folder("dist", true),
+      folder("src"),
+      file("first.ts"),
+      file("debug.log", true),
+    ]);
+    await refreshDir(cwd);
+    await act(async () => render());
+
+    expect(row("src")).not.toBeNull();
+    expect(row("first.ts")).not.toBeNull();
+    expect(row("dist")).toBeNull();
+    expect(row("debug.log")).toBeNull();
+
+    act(() => saveShowExcludedFiles(true));
+    expect(row("dist")).not.toBeNull();
+    expect(row("debug.log")).not.toBeNull();
+
+    act(() => saveShowExcludedFiles(false));
+    expect(row("dist")).toBeNull();
+    expect(row("debug.log")).toBeNull();
+    expect(row("first.ts")).not.toBeNull();
   });
 });
