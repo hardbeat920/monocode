@@ -107,8 +107,8 @@ const SHELL_WRAPPERS = [
   },
   {
     executables: new Set(["powershell", "powershell.exe", "pwsh", "pwsh.exe"]),
-    commandFlag: /^-command$/i,
-    optionBoundary: /^-file$/i,
+    commandFlag: /^-(?:command|c)$/i,
+    optionBoundary: /^-(?:file|f)$/i,
     consumeRemainder: true,
   },
   {

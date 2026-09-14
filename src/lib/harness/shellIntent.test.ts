@@ -203,6 +203,9 @@ describe("unwrapShellCommand", () => {
         "powershell.exe -ExecutionPolicy Bypass -Command Get-Content package.json",
       ),
     ).toBe("Get-Content package.json");
+    expect(unwrapShellCommand("pwsh -c Get-Content package.json")).toBe(
+      "Get-Content package.json",
+    );
   });
 
   it("unwraps cmd command remainders", () => {
@@ -212,6 +215,9 @@ describe("unwrapShellCommand", () => {
   it("stops scanning PowerShell launcher options at -File", () => {
     expect(unwrapShellCommand(`pwsh -File script.ps1 -Mode -Command build`)).toBe(
       `pwsh -File script.ps1 -Mode -Command build`,
+    );
+    expect(unwrapShellCommand(`pwsh -f script.ps1 -Mode -c build`)).toBe(
+      `pwsh -f script.ps1 -Mode -c build`,
     );
   });
 
