@@ -24,11 +24,28 @@ import {
   runningTerminalChipLabel,
   type RunningTerminal,
 } from "../lib/terminalTab";
+import { homeDir } from "../lib/fs";
+import { resolveClaudeProfileEnv } from "../lib/harness/claudeProfiles";
 
 const CLOCK_MS = 30_000;
 
+/** Resolves the active session's account to a CLAUDE_CONFIG_DIR, so the
+ * usage fetch reads the same account the session actually runs under
+ * (undefined for the default/no-override account). */
+async function resolveClaudeConfigDir(
+  session: UsageFooterSession | undefined,
+): Promise<string | undefined> {
+  if (!session?.cwd) return undefined;
+  const home = await homeDir();
+  const { env } = resolveClaudeProfileEnv(session.profile, session.cwd, home);
+  return env.CLAUDE_CONFIG_DIR;
+}
+
 export type UsageFooterSession = {
   harness: HarnessId;
+  /** Which account this session's Claude usage should be read for. */
+  cwd?: string;
+  profile?: string;
 };
 
 export function UsageFooter({
@@ -75,9 +92,11 @@ export function UsageFooter({
     if (fetchClaude) {
       setClaude((current) => fetchingRateLimits("claude", current));
       jobs.push(
-        fetchClaudeRateLimits().then((value) => {
-          setClaude(value);
-        }),
+        resolveClaudeConfigDir(session)
+          .then((configDir) => fetchClaudeRateLimits(configDir))
+          .then((value) => {
+            setClaude(value);
+          }),
       );
     }
     if (fetchCodex) {
@@ -96,10 +115,15 @@ export function UsageFooter({
       });
     inflight.current = run;
     return run;
-  }, [wantClaude, wantCodex]);
+  }, [wantClaude, wantCodex, session]);
 
   useEffect(() => {
-    void refresh();
+    // A different session's account is now in view — the in-flight/cached
+    // claude reading belongs to whichever account was previously active, so
+    // drop it and force a fresh fetch for the new one rather than showing a
+    // stale (possibly wrong-account) percentage while it catches up.
+    setClaude(idleRateLimits("claude"));
+    void refresh(true);
     const poll = window.setInterval(() => void refresh(), RATE_LIMIT_POLL_MS);
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh();

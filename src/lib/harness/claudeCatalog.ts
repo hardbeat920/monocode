@@ -4,6 +4,7 @@ import {
   type AgentModel,
   type ModelSetting,
 } from "../models";
+import { CLAUDE_PROFILE_DEFAULT, CLAUDE_PROFILE_OPTIONS } from "./claudeProfiles";
 import {
   execChild,
   killChild,
@@ -101,6 +102,15 @@ const THINKING: ModelSetting = {
   ],
 };
 
+/** Which account (CLAUDE_CONFIG_DIR) a session runs under. See claudeProfiles.ts. */
+const PROFILE: ModelSetting = {
+  id: "profile",
+  label: "Account",
+  kind: "select",
+  value: CLAUDE_PROFILE_DEFAULT,
+  options: CLAUDE_PROFILE_OPTIONS,
+};
+
 function contextWindow(defaultValue: "200k" | "1m"): ModelSetting {
   return {
     id: "context",
@@ -121,49 +131,49 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
     harness: "claude",
     name: "Claude Fable 5",
     nativeId: "claude-fable-5",
-    settings: [EFFORT_WITH_XHIGH, contextWindow("1m")],
+    settings: [EFFORT_WITH_XHIGH, contextWindow("1m"), PROFILE],
   },
   {
     id: "claude:opus-5",
     harness: "claude",
     name: "Claude Opus 5",
     nativeId: "claude-opus-5",
-    settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m")],
+    settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m"), PROFILE],
   },
   {
     id: "claude:sonnet-5",
     harness: "claude",
     name: "Claude Sonnet 5",
     nativeId: "claude-sonnet-5",
-    settings: [EFFORT_WITH_XHIGH, contextWindow("200k")],
+    settings: [EFFORT_WITH_XHIGH, contextWindow("200k"), PROFILE],
   },
   {
     id: "claude:opus-4.8",
     harness: "claude",
     name: "Claude Opus 4.8",
     nativeId: "claude-opus-4-8",
-    settings: [EFFORT_WITH_XHIGH, FAST_MODE],
+    settings: [EFFORT_WITH_XHIGH, FAST_MODE, PROFILE],
   },
   {
     id: "claude:opus-4.7",
     harness: "claude",
     name: "Claude Opus 4.7",
     nativeId: "claude-opus-4-7",
-    settings: [EFFORT_OPUS_47, FAST_MODE],
+    settings: [EFFORT_OPUS_47, FAST_MODE, PROFILE],
   },
   {
     id: "claude:opus-4.6",
     harness: "claude",
     name: "Claude Opus 4.6",
     nativeId: "claude-opus-4-6",
-    settings: [EFFORT_LOW_TO_ULTRATHINK, FAST_MODE, contextWindow("1m")],
+    settings: [EFFORT_LOW_TO_ULTRATHINK, FAST_MODE, contextWindow("1m"), PROFILE],
   },
   {
     id: "claude:sonnet-4.6",
     harness: "claude",
     name: "Claude Sonnet 4.6",
     nativeId: "claude-sonnet-4-6",
-    settings: [EFFORT_LOW_TO_ULTRATHINK, contextWindow("200k")],
+    settings: [EFFORT_LOW_TO_ULTRATHINK, contextWindow("200k"), PROFILE],
   },
   {
     id: "claude:opus-4.5",
@@ -184,6 +194,7 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
         ],
       },
       FAST_MODE,
+      PROFILE,
     ],
   },
   {
@@ -191,7 +202,7 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
     harness: "claude",
     name: "Claude Haiku 4.5",
     nativeId: "claude-haiku-4-5",
-    settings: [THINKING],
+    settings: [THINKING, PROFILE],
   },
 ];
 
@@ -383,6 +394,7 @@ function settingsFromListRow(
   }
   if (rec.supportsFastMode === true) settings.push(FAST_MODE);
   if (context1m) settings.push(contextWindow("1m"));
+  settings.push(PROFILE);
   return settings;
 }
 

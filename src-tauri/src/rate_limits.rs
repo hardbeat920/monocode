@@ -3,6 +3,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::{json, Value};
+#[cfg(target_os = "macos")]
+use sha2::{Digest, Sha256};
 
 use crate::dirs_home;
 
@@ -33,6 +35,7 @@ pub struct ClaudeUsageFetch {
 enum ClaudeCredStore {
     #[cfg(target_os = "macos")]
     Keychain {
+        service: String,
         account: String,
     },
     File {
@@ -64,15 +67,21 @@ fn usage_result(
 
 /// Fetch Claude Code 5-hour / weekly usage via the local OAuth token.
 /// The token never leaves the host process.
+///
+/// `config_dir` is the CLAUDE_CONFIG_DIR the caller's session is actually
+/// running under (None for the default, no-override account) — each
+/// profile's login is stored separately (a suffixed Keychain service, or a
+/// credentials file inside that config dir), so reading the wrong one
+/// silently reports a different account's usage than the one in use.
 #[tauri::command]
-pub async fn fetch_claude_usage() -> Result<ClaudeUsageFetch, String> {
-    tauri::async_runtime::spawn_blocking(fetch_claude_usage_sync)
+pub async fn fetch_claude_usage(config_dir: Option<String>) -> Result<ClaudeUsageFetch, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_claude_usage_sync(config_dir.as_deref()))
         .await
         .map_err(|e| e.to_string())?
 }
 
-fn fetch_claude_usage_sync() -> Result<ClaudeUsageFetch, String> {
-    let Some(mut creds) = read_claude_credentials() else {
+fn fetch_claude_usage_sync(config_dir: Option<&str>) -> Result<ClaudeUsageFetch, String> {
+    let Some(mut creds) = read_claude_credentials(config_dir) else {
         return Ok(usage_result(
             "unavailable",
             None,
@@ -183,7 +192,9 @@ fn persist_claude_credentials(creds: &ClaudeCredentials) -> bool {
     };
     match &creds.store {
         #[cfg(target_os = "macos")]
-        ClaudeCredStore::Keychain { account } => write_macos_keychain_blob(account, &raw),
+        ClaudeCredStore::Keychain { service, account } => {
+            write_macos_keychain_blob(service, account, &raw)
+        }
         ClaudeCredStore::File { path } => write_credentials_file(path, &raw),
     }
 }
@@ -200,23 +211,26 @@ fn write_credentials_file(path: &Path, raw: &str) -> bool {
     true
 }
 
-fn read_claude_credentials() -> Option<ClaudeCredentials> {
+fn read_claude_credentials(config_dir: Option<&str>) -> Option<ClaudeCredentials> {
     #[cfg(target_os = "macos")]
     {
-        if let Some(creds) = read_macos_keychain_credentials() {
+        if let Some(creds) = read_macos_keychain_credentials(config_dir) {
             return Some(creds);
         }
     }
-    read_credentials_file()
+    read_credentials_file(config_dir)
 }
 
-fn read_credentials_file() -> Option<ClaudeCredentials> {
-    let path = claude_credentials_path()?;
+fn read_credentials_file(config_dir: Option<&str>) -> Option<ClaudeCredentials> {
+    let path = claude_credentials_path(config_dir)?;
     let raw = std::fs::read_to_string(&path).ok()?;
     credentials_from_blob(&raw, ClaudeCredStore::File { path })
 }
 
-fn claude_credentials_path() -> Option<PathBuf> {
+fn claude_credentials_path(config_dir: Option<&str>) -> Option<PathBuf> {
+    if let Some(dir) = config_dir {
+        return Some(crate::fs::expand_home(dir).join(".credentials.json"));
+    }
     let home = dirs_home().or_else(|| {
         std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
     })?;
@@ -353,30 +367,35 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(target_os = "macos")]
-fn read_macos_keychain_credentials() -> Option<ClaudeCredentials> {
+fn read_macos_keychain_credentials(config_dir: Option<&str>) -> Option<ClaudeCredentials> {
+    let service = keychain_service_for(config_dir);
     let user = keychain_user();
     let candidates = [
         (user.clone(), {
-            let mut args = keychain_find_args();
+            let mut args = keychain_find_args(&service);
             args.push("-w".into());
             args
         }),
         (user.clone(), {
-            let mut args = keychain_find_args();
+            let mut args = keychain_find_args(&service);
             args.extend(["-a".into(), user.clone(), "-w".into()]);
             args
         }),
         (KEYCHAIN_FALLBACK_USER.into(), {
-            let mut args = keychain_find_args();
+            let mut args = keychain_find_args(&service);
             args.extend(["-a".into(), KEYCHAIN_FALLBACK_USER.into(), "-w".into()]);
             args
         }),
     ];
     for (account, args) in candidates {
         if let Some(secret) = security_output(&args) {
-            if let Some(creds) =
-                credentials_from_blob(&secret, ClaudeCredStore::Keychain { account })
-            {
+            if let Some(creds) = credentials_from_blob(
+                &secret,
+                ClaudeCredStore::Keychain {
+                    service: service.clone(),
+                    account,
+                },
+            ) {
                 return Some(creds);
             }
         }
@@ -384,13 +403,35 @@ fn read_macos_keychain_credentials() -> Option<ClaudeCredentials> {
     None
 }
 
+/// Claude CLI keeps the default account's login under the plain
+/// "Claude Code-credentials" Keychain service, and every other
+/// CLAUDE_CONFIG_DIR's login under that same name suffixed with the first
+/// 8 hex chars of SHA-256(absolute config dir path) — e.g.
+/// `~/.claude-personal` → `Claude Code-credentials-d8a6e19b`. Verified
+/// against this machine's real Keychain entries.
 #[cfg(target_os = "macos")]
-fn write_macos_keychain_blob(account: &str, raw: &str) -> bool {
+fn keychain_service_for(config_dir: Option<&str>) -> String {
+    let Some(dir) = config_dir else {
+        return LEGACY_KEYCHAIN_SERVICE.to_string();
+    };
+    let absolute = crate::fs::expand_home(dir);
+    let mut hasher = Sha256::new();
+    hasher.update(absolute.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
+    let mut suffix = String::with_capacity(8);
+    for byte in digest.iter().take(4) {
+        suffix.push_str(&format!("{byte:02x}"));
+    }
+    format!("{LEGACY_KEYCHAIN_SERVICE}-{suffix}")
+}
+
+#[cfg(target_os = "macos")]
+fn write_macos_keychain_blob(service: &str, account: &str, raw: &str) -> bool {
     let args = vec![
         "add-generic-password".into(),
         "-U".into(),
         "-s".into(),
-        LEGACY_KEYCHAIN_SERVICE.into(),
+        service.into(),
         "-a".into(),
         account.into(),
         "-w".into(),
@@ -400,12 +441,8 @@ fn write_macos_keychain_blob(account: &str, raw: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn keychain_find_args() -> Vec<String> {
-    vec![
-        "find-generic-password".into(),
-        "-s".into(),
-        LEGACY_KEYCHAIN_SERVICE.into(),
-    ]
+fn keychain_find_args(service: &str) -> Vec<String> {
+    vec!["find-generic-password".into(), "-s".into(), service.into()]
 }
 
 #[cfg(target_os = "macos")]
@@ -506,6 +543,24 @@ mod tests {
             None
         );
         assert_eq!(extract_access_token("not json"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_service_for_matches_observed_claude_cli_scheme() {
+        // Claude CLI suffixes the default Keychain service with the first 8
+        // hex chars of SHA-256(absolute config dir) for a non-default
+        // CLAUDE_CONFIG_DIR — verified against real Keychain entries. These
+        // paths are generic examples; the algorithm itself is what's tested.
+        assert_eq!(keychain_service_for(None), LEGACY_KEYCHAIN_SERVICE);
+        assert_eq!(
+            keychain_service_for(Some("/Users/alice/.claude-work")),
+            "Claude Code-credentials-be865d75"
+        );
+        assert_eq!(
+            keychain_service_for(Some("/Users/alice/.claude-client")),
+            "Claude Code-credentials-a90ccfe6"
+        );
     }
 
     #[test]

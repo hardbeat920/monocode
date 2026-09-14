@@ -441,7 +441,9 @@ describe("list_models catalog", () => {
     expect(opus?.settings?.some((setting) => setting.id === "fast")).toBe(true);
 
     const haiku = models[3];
-    expect(haiku?.settings).toBeUndefined();
+    // Even a row with none of effort/fast/context still gets the account
+    // (profile) picker — every claude session can switch CLAUDE_CONFIG_DIR.
+    expect(haiku?.settings?.map((setting) => setting.id)).toEqual(["profile"]);
   });
 
   it("parses success and error control responses", () => {

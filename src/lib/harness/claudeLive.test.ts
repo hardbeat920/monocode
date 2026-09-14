@@ -10,6 +10,10 @@ const writeChild = vi.fn(async (_id: string, line: string) => {
   sent.push(line);
 });
 
+vi.mock("../fs", () => ({
+  homeDir: async () => "/Users/fake",
+}));
+
 vi.mock("./child", () => ({
   resolveClaudeBinary: async () => ({ path: "/fake/claude" }),
   spawnChild: async (_id: string, _path: string, args: string[]) => {
@@ -143,6 +147,43 @@ describe("claude model switching", () => {
       "follow-up prompt",
     );
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+  });
+});
+
+describe("claude profile switching", () => {
+  it("starts a fresh conversation instead of resuming across a different account", async () => {
+    const first = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+
+    const userCount = parse().filter(
+      (message) => message.type === "user",
+    ).length;
+    const second = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: { profile: "nishanth" },
+      runtimeMode: "supervised",
+      text: "what did I ask before?",
+      attachments: [],
+      onEvent: () => undefined,
+    });
+
+    await waitFor(() => spawned.length === 2, "replacement Claude process");
+    // A different account's conversation history doesn't contain sess_1 —
+    // resuming it there would be "conversation not found". Must start fresh.
+    expect(spawned[1]).not.toContain("--resume");
+    expect(spawned[1]).toContain("--session-id");
+
+    emit({ type: "system", subtype: "init" });
+    await waitFor(
+      () =>
+        parse().filter((message) => message.type === "user").length > userCount,
+      "follow-up prompt",
+    );
+    emit({ type: "result", subtype: "success" });
     await second;
   });
 });

@@ -1008,8 +1008,12 @@ export default function App({
   }, [active?.harness]);
   const usageSession = useMemo(() => {
     if (!active) return undefined;
-    return { harness: active.harness };
-  }, [active?.harness]);
+    return {
+      harness: active.harness,
+      cwd: active.cwd,
+      profile: active.modelSettings?.profile,
+    };
+  }, [active?.harness, active?.cwd, active?.modelSettings?.profile]);
   const runningTerminals = useMemo(() => {
     const files: FilePaneTab[] = [];
     const dock = findProjectTerminal(projectTerminals, projectCwd);
@@ -1512,7 +1516,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
-    const cwd = active?.cwd ?? sessionDefaults?.cwd ?? projectCwd;
+    const cwd = active?.cwd ?? projectCwd;
     const session = newDefaultSession(cwd, sessionDefaults?.runtimeMode);
     const tab = newTab(session.id);
     setSessions((prev) => [...prev, session]);
@@ -1523,7 +1527,6 @@ export default function App({
   }, [
     active?.cwd,
     appendTab,
-    sessionDefaults?.cwd,
     sessionDefaults?.runtimeMode,
     projectCwd,
   ]);
@@ -1534,8 +1537,7 @@ export default function App({
         setInboxViewOpen(false);
         setNotesViewOpen(false);
         setSidebarTab("sessions");
-        const cwd =
-          item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
+        const cwd = item.projectPath || active?.cwd || projectCwd;
         const ref =
           item.provider === "linear"
             ? item.identifier?.trim() || `#${item.number}`
@@ -1573,13 +1575,7 @@ export default function App({
       const details = await linearIssueDetails(item.id);
       start(details.body);
     },
-    [
-      active?.cwd,
-      appendTab,
-      sessionDefaults?.cwd,
-      sessionDefaults?.runtimeMode,
-      projectCwd,
-    ],
+    [active?.cwd, appendTab, sessionDefaults?.runtimeMode, projectCwd],
   );
 
   const onAddNoteToChat = useCallback(
@@ -1594,7 +1590,6 @@ export default function App({
           ? card.sourceCwd
           : undefined) ||
         active?.cwd ||
-        sessionDefaults?.cwd ||
         projectCwd;
       const title = card.title.trim();
       const session = {
@@ -1608,13 +1603,7 @@ export default function App({
       setActiveTabId(tab.id);
       setComposerFocused(true);
     },
-    [
-      active?.cwd,
-      appendTab,
-      sessionDefaults?.cwd,
-      sessionDefaults?.runtimeMode,
-      projectCwd,
-    ],
+    [active?.cwd, appendTab, sessionDefaults?.runtimeMode, projectCwd],
   );
 
   useEffect(() => {
@@ -1690,7 +1679,7 @@ export default function App({
     (dir: SplitDir) => {
       if (!activeTab) return;
       const session = newDefaultSession(
-        sessionDefaults?.cwd ?? projectCwd,
+        active?.cwd ?? projectCwd,
         sessionDefaults?.runtimeMode,
       );
       setSessions((prev) => [...prev, session]);
@@ -1706,7 +1695,7 @@ export default function App({
       );
       setComposerFocused(true);
     },
-    [activeTab, projectCwd, sessionDefaults?.cwd, sessionDefaults?.runtimeMode],
+    [activeTab, active?.cwd, projectCwd, sessionDefaults?.runtimeMode],
   );
 
   const focusProjectTerminal = useCallback(() => {
@@ -2860,12 +2849,22 @@ export default function App({
       tabsRef.current[0];
     if (!tab) return false;
 
-    const paneId = isBlankSession(
+    // A blank pane only stands in for the session being opened if it's
+    // already scoped to the same project — otherwise this grafts the
+    // session into an unrelated project's tab instead of opening it there.
+    const isBlankForSameProject = (candidate: Session | undefined) =>
+      !!candidate &&
+      isBlankSession(candidate) &&
+      sameProjectPath(candidate.cwd, session.cwd);
+
+    const paneId = isBlankForSameProject(
       sessionsRef.current.find((entry) => entry.id === tab.focusedId),
     )
       ? tab.focusedId
       : leafIds(tab.layout).find((id) =>
-          isBlankSession(sessionsRef.current.find((entry) => entry.id === id)),
+          isBlankForSameProject(
+            sessionsRef.current.find((entry) => entry.id === id),
+          ),
         );
     if (!paneId || paneId === session.id) return false;
 
