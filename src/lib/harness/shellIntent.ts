@@ -71,10 +71,21 @@ export function unwrapShellCommand(command: string): string {
       executables.has(binName(executable)),
     );
     if (!wrapper) break;
-    const flagIndex = tokens.findIndex(
-      (token, index) =>
-        index > 0 && !token.quoted && wrapper.commandFlag.test(token.value),
-    );
+    let flagIndex = -1;
+    for (let index = 1; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (token.quoted) continue;
+      if (
+        "optionBoundary" in wrapper &&
+        wrapper.optionBoundary.test(token.value)
+      ) {
+        break;
+      }
+      if (wrapper.commandFlag.test(token.value)) {
+        flagIndex = index;
+        break;
+      }
+    }
     if (flagIndex < 0) break;
     const commandToken = tokens[flagIndex + 1];
     if (!commandToken) break;
@@ -97,6 +108,7 @@ const SHELL_WRAPPERS = [
   {
     executables: new Set(["powershell", "powershell.exe", "pwsh", "pwsh.exe"]),
     commandFlag: /^-command$/i,
+    optionBoundary: /^-file$/i,
     consumeRemainder: true,
   },
   {

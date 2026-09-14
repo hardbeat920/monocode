@@ -209,6 +209,12 @@ describe("unwrapShellCommand", () => {
     expect(unwrapShellCommand(`cmd.exe /d /s /c "npm test"`)).toBe("npm test");
   });
 
+  it("stops scanning PowerShell launcher options at -File", () => {
+    expect(unwrapShellCommand(`pwsh -File script.ps1 -Mode -Command build`)).toBe(
+      `pwsh -File script.ps1 -Mode -Command build`,
+    );
+  });
+
   it("leaves ordinary and incomplete commands unchanged", () => {
     expect(unwrapShellCommand("git status --short")).toBe("git status --short");
     expect(unwrapShellCommand(`pwsh -File '-Command' script.ps1`)).toBe(
