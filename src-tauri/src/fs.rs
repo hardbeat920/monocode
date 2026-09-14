@@ -5332,6 +5332,7 @@ mod tests {
             "title": "Promo codes fail to apply",
             "url": "https://github.com/acme/web/issues/5138",
             "state": "OPEN",
+            "createdAt": "2026-08-20T09:00:00Z",
             "updatedAt": "2026-08-27T08:00:00Z",
             "labels": [{"name": "bug", "color": "d73a4a"}],
             "assignees": [{"login": "maya"}]
@@ -5349,6 +5350,9 @@ mod tests {
             "https://avatars.githubusercontent.com/maya?s=64"
         );
         assert!(!items[0].draft);
+        let payload = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(payload["createdAt"], "2026-08-20T09:00:00Z");
+        assert_eq!(payload["updatedAt"], "2026-08-27T08:00:00Z");
     }
 
     #[test]
@@ -5368,8 +5372,9 @@ mod tests {
     }
 
     #[test]
-    fn github_pr_creation_time_reaches_frontend() {
-        let json = r#"{
+    fn github_work_item_creation_time_reaches_frontend() {
+        for (kind, resource) in [("pr", "pull"), ("issue", "issues")] {
+            let json = r#"{
             "number": 12,
             "title": "Checkout",
             "url": "https://github.com/acme/web/pull/12",
@@ -5377,10 +5382,13 @@ mod tests {
             "createdAt": "2026-09-01T08:00:00Z",
             "updatedAt": "2026-09-11T08:00:00Z"
         }"#;
-        let item = parse_github_work_item(json, "pr", "acme/web").unwrap();
-        let payload = serde_json::to_value(item).unwrap();
-        assert_eq!(payload["createdAt"], "2026-09-01T08:00:00Z");
-        assert_eq!(payload["updatedAt"], "2026-09-11T08:00:00Z");
+            let json = json.replace("/pull/", &format!("/{resource}/"));
+            let item = parse_github_work_item(&json, kind, "acme/web").unwrap();
+            let payload = serde_json::to_value(item).unwrap();
+            assert_eq!(payload["kind"], kind);
+            assert_eq!(payload["createdAt"], "2026-09-01T08:00:00Z");
+            assert_eq!(payload["updatedAt"], "2026-09-11T08:00:00Z");
+        }
     }
 
     #[test]
