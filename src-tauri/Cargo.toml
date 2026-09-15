@@ -23,6 +23,7 @@ serde_json.workspace = true
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 tauri-plugin-dialog = "2"
+fontdb = "0.24"
 rusqlite = { version = "0.40.2", features = ["bundled"], default-features = false }
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
 url = "2.5"

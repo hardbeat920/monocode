@@ -16,6 +16,13 @@ import {
 } from "../lib/terminalTab";
 import { isLightScheme, SCHEME_CHANGE_EVENT } from "../lib/appearance";
 import {
+  codeFontStack,
+  FONTS_CHANGE_EVENT,
+  loadCodeFontFamily,
+  loadCodeFontSize,
+  loadCodeFontWeight,
+} from "../lib/fonts";
+import {
   applyTerminalChrome,
   fitTerminal,
   resetGridStretch,
@@ -79,7 +86,7 @@ const ANSI_LIGHT = {
   brightWhite: "#ffffff",
 };
 
-function terminalTheme(light: boolean) {
+export function terminalTheme(light: boolean) {
   return {
     background: "#00000000",
     foreground: cssColor("var(--color-content)", light ? "#2e2e2e" : "#e8eef2"),
@@ -93,11 +100,8 @@ function terminalTheme(light: boolean) {
   };
 }
 
-function monoFont(): string {
-  const fromCss = getComputedStyle(document.documentElement)
-    .getPropertyValue("--font-mono")
-    .trim();
-  return fromCss || "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
+function codeFont(): string {
+  return codeFontStack(loadCodeFontFamily());
 }
 
 // OSC 10/11/12 replies so CLIs (vim, tmux, …) pick matching colors.
@@ -126,8 +130,9 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
-      fontFamily: monoFont(),
-      fontSize: 13,
+      fontFamily: codeFont(),
+      fontSize: loadCodeFontSize(),
+      fontWeight: loadCodeFontWeight(),
       lineHeight: 1,
       letterSpacing: 0,
       scrollback: 5000,
@@ -289,6 +294,16 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     };
 
     applySizeRef.current = applySize;
+    const onFontsChange = () => {
+      term.options.fontFamily = codeFont();
+      term.options.fontSize = loadCodeFontSize();
+      term.options.fontWeight = loadCodeFontWeight();
+      // New metrics change the cell grid: force a re-fit + pty resize.
+      lastCols = 0;
+      lastRows = 0;
+      schedule();
+    };
+    window.addEventListener(FONTS_CHANGE_EVENT, onFontsChange);
     const renderSub = term.onRender(() => {
       if (!spawned.current) applySize();
     });
@@ -308,6 +323,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       host.removeEventListener("copy", onCopy);
       host.removeEventListener("paste", onPaste);
       window.removeEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
+      window.removeEventListener(FONTS_CHANGE_EVENT, onFontsChange);
       dataSub.dispose();
       oscFg.dispose();
       oscBg.dispose();

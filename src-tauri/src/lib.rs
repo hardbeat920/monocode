@@ -5,6 +5,7 @@ mod checkpoint;
 mod control;
 pub mod control_cli;
 mod cursor_store;
+mod fonts;
 mod fs;
 mod gitlab;
 mod harness;
@@ -387,6 +388,7 @@ pub fn run() {
             project_logo::save_project_logo,
             project_logo::remove_project_logo,
             project_logo::forget_logo_file,
+            fonts::list_system_fonts,
         ])
         .build(tauri::generate_context!())
         .expect("error while building MonoCode");
