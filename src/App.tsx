@@ -1000,10 +1000,12 @@ export default function App({
   }
   const busySessionIds = busySessionIdsRef.current;
 
-  // Live model catalogs load lazily (probing a CLI spawns a process), but the
-  // picker was the only trigger: a fresh session showed the built-in fallback
-  // list (e.g. just "Default" for Pi) until the user happened to open the
-  // picker. Probe the active harness when it becomes active instead.
+  /** Probe the active session's harness for its live model catalog whenever
+   * the active harness changes. Catalogs load lazily (probing spawns a CLI
+   * process) and the boot refresh runs before restored sessions land, so a
+   * fresh session would otherwise show only the built-in fallback model
+   * until the picker happened to be opened. Idempotent: refreshHarnessCatalogs
+   * dedupes via hasLiveCatalog and its inflight map. */
   const activeHarness = active?.harness;
   useEffect(() => {
     if (!activeHarness || !isLiveHarness(activeHarness)) return;
