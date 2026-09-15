@@ -1000,6 +1000,16 @@ export default function App({
   }
   const busySessionIds = busySessionIdsRef.current;
 
+  // Live model catalogs load lazily (probing a CLI spawns a process), but the
+  // picker was the only trigger: a fresh session showed the built-in fallback
+  // list (e.g. just "Default" for Pi) until the user happened to open the
+  // picker. Probe the active harness when it becomes active instead.
+  const activeHarness = active?.harness;
+  useEffect(() => {
+    if (!activeHarness || !isLiveHarness(activeHarness)) return;
+    void refreshHarnessCatalogs([activeHarness]);
+  }, [activeHarness]);
+
   const usageProviders = useMemo(() => {
     if (active?.harness === "claude" || active?.harness === "codex") {
       return [active.harness];
