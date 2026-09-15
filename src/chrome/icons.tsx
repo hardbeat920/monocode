@@ -50,6 +50,7 @@ import GitMergeIcon from "@hugeicons/core-free-icons/GitMergeIcon";
 import GitPullRequestClosedIcon from "@hugeicons/core-free-icons/GitPullRequestClosedIcon";
 import GitPullRequestDraftIcon from "@hugeicons/core-free-icons/GitPullRequestDraftIcon";
 import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
+import HelpCircleIcon from "@hugeicons/core-free-icons/HelpCircleIcon";
 import ImageAdd01Icon from "@hugeicons/core-free-icons/ImageAdd01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
 import NotificationOff01Icon from "@hugeicons/core-free-icons/NotificationOff01Icon";
@@ -80,6 +81,7 @@ import ReplaceIcon from "@hugeicons/core-free-icons/ReplaceIcon";
 import RotateCcwIcon from "@hugeicons/core-free-icons/RotateCcwIcon";
 import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
 import Settings01Icon from "@hugeicons/core-free-icons/Settings01Icon";
+import Share02Icon from "@hugeicons/core-free-icons/Share02Icon";
 import SidebarRight01Icon from "@hugeicons/core-free-icons/SidebarRight01Icon";
 import SparklesIcon from "@hugeicons/core-free-icons/SparklesIcon";
 import SquareIcon from "@hugeicons/core-free-icons/SquareIcon";
@@ -164,6 +166,7 @@ export const ChevronUp = wrap(ArrowUp01Icon, "ChevronUp");
 export const CircleAlert = wrap(AlertCircleIcon, "CircleAlert");
 export const CircleDashed = wrap(CircleDashedIcon, "CircleDashed");
 export const CircleDot = wrap(CircleDotIcon, "CircleDot");
+export const CircleHelp = wrap(HelpCircleIcon, "CircleHelp");
 export const CircleX = wrap(CancelCircleIcon, "CircleX");
 export const CloudUpload = wrap(CloudUploadIcon, "CloudUpload");
 export const Clock = wrap(Clock01Icon, "Clock");
@@ -233,6 +236,7 @@ export const Replace = wrap(ReplaceIcon, "Replace");
 export const RotateCcw = wrap(RotateCcwIcon, "RotateCcw");
 export const Search = wrap(Search01Icon, "Search");
 export const Settings = wrap(Settings01Icon, "Settings");
+export const Share = wrap(Share02Icon, "Share");
 export const SlidersHorizontal = wrap(
   PreferenceHorizontalIcon,
   "SlidersHorizontal",

@@ -9,6 +9,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Share,
   Square,
   StickyNote,
   Trash2,
@@ -66,7 +67,7 @@ import type {
   MessageQueueStatus,
   QueuedMessage,
   RuntimeMode,
-  TurnIntent,
+  ComposerTurnOptions,
 } from "../lib/session";
 import { HARNESS_TITLE, harnessSupportsAttachments } from "../lib/session";
 import type {
@@ -181,7 +182,7 @@ type Props = {
   onSubmit: (
     text: string,
     attachments: Attachment[],
-    options?: { intent?: TurnIntent },
+    options?: ComposerTurnOptions,
   ) => void;
   onStop?: () => void;
   onCompactContext?: () => boolean;
@@ -467,6 +468,7 @@ export function Composer({
   const [fileDrag, setFileDrag] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
+  const [orchestrationSelected, setOrchestrationSelected] = useState(false);
   const [slash, setSlash] = useState<SlashToken | null>(null);
   const [skillActive, setSkillActive] = useState(0);
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -830,7 +832,10 @@ export function Composer({
       syncHasValue(next, attachmentsRef.current);
       setSlash(null);
       setCreatingSkill(false);
-      if (planCommand) setPlanSelected(true);
+      if (planCommand) {
+        setPlanSelected(true);
+        setOrchestrationSelected(false);
+      }
       el.focus();
     },
     [onPlaceInFolder, openSessionFolderPicker, syncHasValue],
@@ -1005,7 +1010,12 @@ export function Composer({
     const files = attachments;
     if (!text && files.length === 0 && !noteCard && !handoffCard) return;
     onSubmit(text, files, {
-      intent: planSelected || command.planning ? "plan" : "default",
+      intent:
+        planSelected || command.planning
+          ? "plan"
+          : orchestrationSelected
+            ? "orchestrate"
+            : "default",
     });
     if (!ref.current) return;
     ref.current.value = "";
@@ -1014,6 +1024,7 @@ export function Composer({
     onDraftChange?.("");
     setAttachments([]);
     setPlanSelected(false);
+    setOrchestrationSelected(false);
     setSessionFolderSelected(false);
     setSessionFolderOpen(false);
     setPlusOpen(false);
@@ -1443,9 +1454,9 @@ export function Composer({
                     <FilePlus className="mt-0.5 size-4 shrink-0" />
                     <span className="min-w-0">
                       <span className="block text-[13px]">Upload file</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
+                      <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
                         {attachmentsSupported
-                          ? "Attach files or images to this message"
+                          ? "Attach files or images"
                           : `${HARNESS_TITLE[harness]} does not support attachments`}
                       </span>
                     </span>
@@ -1456,6 +1467,7 @@ export function Composer({
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setPlanSelected((selected) => !selected);
+                      setOrchestrationSelected(false);
                       setPlusOpen(false);
                       ref.current?.focus();
                     }}
@@ -1464,17 +1476,64 @@ export function Composer({
                     <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px]">Plan mode</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
-                        Create a plan to review before building
+                      <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
+                        Review a plan before building
                       </span>
                     </span>
                     {planSelected ? (
                       <Check className="mt-0.5 size-3.5 shrink-0 text-accent" />
                     ) : null}
                   </button>
+                  {!hideTopBar && (
+                    <button
+                      type="button"
+                      aria-pressed={orchestrationSelected}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setOrchestrationSelected((selected) => !selected);
+                        setPlanSelected(false);
+                        setPlusOpen(false);
+                        ref.current?.focus();
+                      }}
+                      className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
+                    >
+                      <Share className="mt-0.5 size-4 shrink-0 text-fuchsia-300/65" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-[13px]">Orchestrator</span>
+                          <span className="rounded-full bg-fuchsia-300/10 px-1.5 py-0.5 text-[9px] font-medium leading-none tracking-wide text-fuchsia-200/55 mb-px">
+                            v1
+                          </span>
+                        </span>
+                        <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
+                          Plan and coordinate agent work
+                        </span>
+                      </span>
+                      {orchestrationSelected && (
+                        <Check className="mt-0.5 size-3.5 shrink-0 text-fuchsia-300/80" />
+                      )}
+                    </button>
+                  )}
                 </Popover>
               ) : null}
             </div>
+            {orchestrationSelected && (
+              <button
+                type="button"
+                title="Turn off Orchestrator mode"
+                aria-label="Turn off Orchestrator mode"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setOrchestrationSelected(false);
+                  ref.current?.focus();
+                }}
+                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-fuchsia-400/10 px-1.5 text-[11px] text-fuchsia-200/80 hover:bg-fuchsia-400/15"
+              >
+                <Share className="size-3.5" />
+                Orchestrator
+                <X className="size-3" />
+              </button>
+            )}
             {planSelected ? (
               <button
                 type="button"

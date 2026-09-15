@@ -1,3 +1,4 @@
+import { OrchestrationSidebarAgents } from "./OrchestrationSidebarAgents";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Archive,
@@ -15,12 +16,14 @@ import {
   Pin,
   Plus,
   Search,
+  Share,
   Settings,
   StickyNote,
 } from "./icons";
 import {
   memo,
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -44,6 +47,7 @@ import { prettyParent, projectKey, projectName } from "../lib/paths";
 import type { OpenFileFn } from "../lib/search";
 import { sessionDisplayTitle } from "../lib/session";
 import { nextUnseenFinishedSessions } from "../lib/sessionDone";
+import { orchestrationTaskLabel } from "../lib/orchestrationSummary";
 import {
   orderedSessionActionIds,
   pruneSessionSelection,
@@ -428,7 +432,7 @@ function SidebarComponent({
     sessions,
     openSessions,
     sessionFolders,
-  );
+  ).filter((session) => !session.orchestrationLeadId);
   const visibleSessions = [
     ...filterSessionsByQuery(
       filterSessionsByStatus(
@@ -1146,7 +1150,7 @@ function SidebarComponent({
   const sidebarContent = (
     <aside
       ref={resize.setPaneRef}
-      className="sidebar-glass relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
+      className="body-glass relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
     >
       {railVisible ? (
         <>
@@ -2350,13 +2354,24 @@ function SessionCard({
 }) {
   const skipClickUntil = useRef(0);
   const prefetchTimer = useRef<number | null>(null);
+  const orchestrationTooltipRootRef = useRef<HTMLDivElement>(null);
+  const orchestrationTooltipId = useId();
   const [dragging, setDragging] = useState(false);
+  const [orchestrationTooltipOpen, setOrchestrationTooltipOpen] =
+    useState(false);
+  const orchestration = session.orchestration;
+  const orchestrationExpanded =
+    !!orchestration && (isActive || isSelected || busy);
+  const orchestrationDone =
+    orchestration?.tasks.filter((task) => task.status === "completed").length ??
+    0;
   const title = sessionDisplayTitle(session.title, session.harness);
   const gitLabel = formatGitLabel(session.repo, session.branch);
   const time = formatRelative(session.updatedAt, now);
-  const model = compact
-    ? null
-    : resolveModel(session.harness, session.model).name;
+  const model =
+    compact && !orchestrationExpanded
+      ? null
+      : resolveModel(session.harness, session.model).name;
   const statusClass = needsApproval
     ? "text-amber-400"
     : busy
@@ -2371,7 +2386,7 @@ function SessionCard({
       {needsApproval ? (
         <>
           <CircleAlert className="size-3" strokeWidth={1.75} />
-          <span>Need approval</span>
+          <span>{orchestration ? "Needs input" : "Need approval"}</span>
         </>
       ) : busy ? (
         <>
@@ -2582,16 +2597,23 @@ function SessionCard({
   };
 
   const archiveLabel = session.archived ? "Unarchive" : "Archive";
+  // Expanding an orchestration card must not move its existing header. Keep
+  // the collapsed top inset and give only the new detail area extra room at
+  // the bottom.
+  const cardPaddingY = orchestrationExpanded
+    ? compact
+      ? "pb-2.5 pt-1.5"
+      : "pb-2.5 pt-2"
+    : compact
+      ? "py-1.5"
+      : "py-2";
 
   return (
     <div className="group relative">
       <div
-        role="button"
-        tabIndex={0}
         title={title}
-        aria-current={isActive ? "true" : undefined}
-        aria-pressed={isSelected}
         data-session-card={session.id}
+        data-orchestration-card={orchestration ? "true" : undefined}
         data-session-selected={isSelected ? "true" : undefined}
         data-tauri-drag-region="false"
         onPointerDown={onPointerDown}
@@ -2602,10 +2624,9 @@ function SessionCard({
           onSelect(session.id, event);
         }}
         onContextMenu={onContextMenu}
-        onKeyDown={onKeyDown}
-        className={`relative border flex w-full cursor-default select-none touch-none flex-col rounded-md px-2.5 text-left ${
-          compact ? "py-1.5" : "py-2"
-        } ${dragging ? "opacity-40" : ""} ${
+        className={`relative border flex w-full cursor-default select-none touch-none flex-col rounded-md px-2.5 text-left ${cardPaddingY} ${
+          dragging ? "opacity-40" : ""
+        } ${
           dropTarget
             ? "text-content border-transparent"
             : isSelected
@@ -2614,50 +2635,69 @@ function SessionCard({
                 ? "bg-content/20 text-content border-content/30 border-dashed"
                 : isActive
                   ? "bg-content/10 text-content border-transparent"
-                  : "text-content/80 hover:bg-content/5 hover:text-content border-transparent"
+                  : `text-content/80 hover:text-content border-transparent ${
+                      orchestrationExpanded
+                        ? "bg-content/5 hover:bg-content/10"
+                        : "hover:bg-content/5"
+                    }`
         }`}
       >
         {dropTarget ? (
           <div className="pointer-events-none absolute inset-0 rounded-md bg-accent/20" />
         ) : null}
-        {compact ? null : (
-          <span className="relative flex items-center gap-2">
-            <span className="flex min-w-0 flex-1 items-center gap-1.5">
-              <HarnessIcon
-                harness={session.harness}
-                className="size-3.5 shrink-0"
-              />
-              <span className="min-w-0 truncate text-[11px] text-content/50">
-                {model}
+        <div
+          role="button"
+          tabIndex={0}
+          aria-current={isActive ? "true" : undefined}
+          aria-pressed={isSelected}
+          data-session-select={session.id}
+          onKeyDown={onKeyDown}
+        >
+          {compact && !orchestrationExpanded ? null : (
+            <span className="relative flex items-center gap-2">
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <HarnessIcon
+                  harness={session.harness}
+                  className="size-3.5 shrink-0"
+                />
+                <span className="min-w-0 truncate text-[11px] text-content/50">
+                  {model}
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {linkedUpdateDot}
+                {status}
               </span>
             </span>
-            <span className="flex shrink-0 items-center gap-1.5">
-              {linkedUpdateDot}
-              {status}
+          )}
+          <span
+            className={`relative flex min-w-0 items-center gap-1.5 ${
+              compact && !orchestrationExpanded ? "" : "mt-1"
+            }`}
+          >
+            {session.pinned ? (
+              <Pin
+                className="size-3 shrink-0 text-content/45"
+                strokeWidth={1.75}
+              />
+            ) : null}
+            <span className="min-w-0 flex-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
+              {title}
             </span>
+            {compact && !orchestrationExpanded ? (
+              <span className="flex shrink-0 items-center gap-1.5">
+                {linkedUpdateDot}
+                {status}
+              </span>
+            ) : null}
           </span>
-        )}
-        <span
-          className={`relative flex min-w-0 items-center gap-1.5 ${
-            compact ? "" : "mt-1"
-          }`}
-        >
-          {session.pinned ? (
-            <Pin
-              className="size-3 shrink-0 text-content/45"
-              strokeWidth={1.75}
-            />
-          ) : null}
-          <span className="min-w-0 flex-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
-            {title}
-          </span>
-          {compact ? (
-            <span className="flex shrink-0 items-center gap-1.5">
-              {linkedUpdateDot}
-              {status}
-            </span>
-          ) : null}
-        </span>
+        </div>
+        {orchestrationExpanded ? (
+          <OrchestrationSidebarAgents
+            leadId={session.id}
+            summary={orchestration!}
+          />
+        ) : null}
         <span className="relative mt-1 flex items-center gap-2">
           {gitLabel ? (
             <span className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-content/45">
@@ -2667,7 +2707,7 @@ function SessionCard({
           ) : (
             <span className="min-w-0 flex-1" />
           )}
-          <span className="flex shrink-0 items-center gap-1">
+          <span className="relative flex shrink-0 items-center gap-px">
             {onArchive ? (
               <button
                 type="button"
@@ -2686,9 +2726,96 @@ function SessionCard({
               </button>
             ) : null}
             {workItemBadge}
+            {orchestration ? (
+              <div
+                ref={orchestrationTooltipRootRef}
+                className="relative shrink-0"
+                onMouseEnter={() => setOrchestrationTooltipOpen(true)}
+                onMouseLeave={() => setOrchestrationTooltipOpen(false)}
+              >
+                <button
+                  type="button"
+                  data-no-drag
+                  data-tauri-drag-region="false"
+                  data-orchestration-icon
+                  aria-label={`Orchestrator, ${orchestration.tasks.length} ${
+                    orchestration.tasks.length === 1 ? "subagent" : "subagents"
+                  }, ${orchestrationDone} done`}
+                  aria-describedby={
+                    orchestrationTooltipOpen
+                      ? orchestrationTooltipId
+                      : undefined
+                  }
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onFocus={() => setOrchestrationTooltipOpen(true)}
+                  onBlur={() => setOrchestrationTooltipOpen(false)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setOrchestrationTooltipOpen(false);
+                    onSelect(session.id, { shiftKey: event.shiftKey });
+                  }}
+                  className="grid size-5 shrink-0 place-items-center rounded-md text-fuchsia-300/65 hover:bg-content/10 hover:text-fuchsia-200/90"
+                >
+                  <Share className="size-3" />
+                </button>
+              </div>
+            ) : null}
           </span>
         </span>
       </div>
+      {orchestration && orchestrationTooltipOpen ? (
+        <Popover
+          anchor={orchestrationTooltipRootRef}
+          side="right"
+          align="end"
+          width={248}
+          maxHeight={320}
+          role="tooltip"
+          id={orchestrationTooltipId}
+          className="pointer-events-none overflow-y-auto p-2.5"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] font-semibold text-content/85">
+              Subagents
+            </span>
+            <span className="shrink-0 text-[10px] tabular-nums text-content/45">
+              {orchestrationDone}/{orchestration.tasks.length} done
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-col gap-0.5">
+            {orchestration.tasks.map((task) => {
+              const label = orchestrationTaskLabel(task, orchestration);
+              return (
+                <div
+                  key={task.sessionId}
+                  className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1"
+                >
+                  <HarnessIcon
+                    harness={task.harness}
+                    className="size-3.5 shrink-0 opacity-75"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-content/75">
+                    {task.title}
+                  </span>
+                  <span
+                    className={`shrink-0 text-[10px] ${
+                      task.needsInput || task.status === "failed"
+                        ? "text-amber-400"
+                        : label === "Working"
+                          ? "text-accent"
+                          : task.status === "completed"
+                            ? "text-emerald-400"
+                            : "text-content/45"
+                    }`}
+                  >
+                    {label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </Popover>
+      ) : null}
     </div>
   );
 }

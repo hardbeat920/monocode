@@ -26,7 +26,10 @@ import { looksLikeProject } from "../lib/recents";
 import type { HarnessId } from "../lib/session";
 import { CwdPicker } from "./CwdPicker";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
+import {
+  useAnimatedReorder,
+  type ReorderExternalDrop,
+} from "../hooks/useAnimatedReorder";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -35,6 +38,8 @@ import { WindowControls } from "./WindowControls";
 import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import type { RecentProject } from "../lib/recents";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
+import { paneDropFromPoint, setExternalPaneDrop } from "../lib/paneDrop";
+import type { PaneEdge } from "../lib/layout";
 
 export type Tab = {
   id: string;
@@ -79,6 +84,7 @@ type Props = {
   onClose: (id: string) => void;
   onCloseMany: (ids: string[], fallbackId: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
+  onPlaceOnPane?: (tabId: string, targetId: string, edge: PaneEdge) => void;
   onGoToFile?: () => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
@@ -267,7 +273,6 @@ function TitleTabItem({
         if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
           return;
         }
-        onSelect(tab.id);
         if (canDrag) sortable.onItemPointerDown(tab.id, event);
       }}
     >
@@ -534,12 +539,42 @@ function TitleBarComponent({
   onClose,
   onCloseMany,
   onReorder,
+  onPlaceOnPane,
   onGoToFile,
   recents = [],
   onSelectProject,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
-  const sortable = useAnimatedReorder(tabIds, onReorder);
+  const externalTabDrop = useMemo<ReorderExternalDrop<string> | undefined>(
+    () =>
+      onPlaceOnPane
+        ? {
+            onMove: (tabId, event) => {
+              if (tabId === activeId) {
+                setExternalPaneDrop(null);
+                return false;
+              }
+              const over = paneDropFromPoint(event.clientX, event.clientY);
+              setExternalPaneDrop({
+                fromId: tabId,
+                overId: over?.id ?? null,
+                edge: over?.edge ?? "left",
+              });
+              return over != null;
+            },
+            onDrop: (tabId, event) => {
+              if (tabId === activeId) return false;
+              const over = paneDropFromPoint(event.clientX, event.clientY);
+              if (!over) return false;
+              onPlaceOnPane(tabId, over.id, over.edge);
+              return true;
+            },
+            onEnd: () => setExternalPaneDrop(null),
+          }
+        : undefined,
+    [activeId, onPlaceOnPane],
+  );
+  const sortable = useAnimatedReorder(tabIds, onReorder, "x", externalTabDrop);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(

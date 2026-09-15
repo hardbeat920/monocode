@@ -1685,6 +1685,17 @@ export function InboxDetail({
                   )}
                 </>
               ) : null}
+              {item.createdAt && formatRelativeTime(item.createdAt) ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <time
+                    dateTime={item.createdAt}
+                    title={new Date(item.createdAt).toLocaleString()}
+                  >
+                    Created {formatRelativeTime(item.createdAt)}
+                  </time>
+                </>
+              ) : null}
               {formatRelativeTime(item.updatedAt) ? (
                 <>
                   <span aria-hidden>·</span>

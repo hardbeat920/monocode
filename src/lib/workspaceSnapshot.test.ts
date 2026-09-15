@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { INTERRUPT_MESSAGE } from "./inFlight";
 import {
   leaf,
+  leafIds,
+  newAgentTab,
   newChangesTab,
   newCommitTab,
   newFileTab,
@@ -9,6 +11,7 @@ import {
   newSessionChangesTab,
   newTab,
   newTerminalFile,
+  splitPane,
 } from "./layout";
 import { createProjectTerminal } from "./projectTerminal";
 import { newSession, type Session } from "./session";
@@ -175,6 +178,45 @@ describe("collectWorkspaceSnapshot", () => {
     ]);
     expect("blocks" in snapshot.sessions[0]!).toBe(false);
     expect(snapshot.projectTerminals).toEqual([]);
+  });
+
+  it("drops agent tabs, and the pane holding only them", () => {
+    const file = newFileTab("/tmp/a/README.md", "/tmp/a");
+    const agent = newAgentTab("Audit the UI", "/tmp/a", {
+      sessionId: "worker",
+      leadId: "s1",
+      harness: "codex",
+    });
+    const mixed = newAgentTab("Audit the engine", "/tmp/a", {
+      sessionId: "worker-2",
+      leadId: "s1",
+      harness: "codex",
+    });
+    const tab = {
+      ...newTab("s1"),
+      id: "t1",
+      layout: splitPane(newTab("s1").layout, "s1", "right", "e1"),
+      editorPanes: [
+        { id: "e1", files: [agent], activeFileId: agent.id },
+        { id: "e2", files: [file, mixed], activeFileId: mixed.id },
+      ],
+    };
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+    );
+    const panes = snapshot.tabs[0]!.editorPanes;
+    // The agent-only pane is gone along with its leaf; the mixed one keeps its
+    // file and falls back to it as the active tab.
+    expect(panes.map((pane) => pane.id)).toEqual(["e2"]);
+    expect(panes[0]!.files.map((entry) => entry.path)).toEqual([
+      "/tmp/a/README.md",
+    ]);
+    expect(panes[0]!.activeFileId).toBe(file.id);
+    expect(leafIds(snapshot.tabs[0]!.layout)).toEqual(["s1"]);
   });
 
   it("round-trips a unified Changes tab", () => {

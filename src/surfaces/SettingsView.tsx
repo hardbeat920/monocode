@@ -21,6 +21,10 @@ import {
   type ReactNode,
 } from "react";
 import { HarnessIcon } from "../chrome/HarnessIcon";
+import {
+  ColorPickerPopover,
+  ColorSwatchRow,
+} from "../chrome/ColorPickerPopover";
 import { Popover } from "../chrome/Popover";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
@@ -32,12 +36,15 @@ import {
   applyChatBackgroundEmptyOpacity,
   applyChatBackgroundSessionOpacity,
   applyChatBackgroundScope,
+  applyAccentColor,
   applyBodyGlass,
-  applyThemePreference,
   applySidebarBlur,
   applySidebarOpacity,
+  applyThemeDarkLightness,
+  applyThemePreference,
   applyThemeTint,
   BODY_GLASS_DEFAULT,
+  ACCENT_COLOR_DEFAULT,
   CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT,
   CHAT_BACKGROUND_OPACITY_MAX,
   CHAT_BACKGROUND_OPACITY_MIN,
@@ -46,10 +53,12 @@ import {
   THEME_PREFERENCE_DEFAULT,
   chatBackgroundSrc,
   loadBodyGlass,
+  loadAccentColor,
   loadChatBackgroundEmptyOpacity,
   loadChatBackgroundPath,
   loadChatBackgroundSessionOpacity,
   loadChatBackgroundScope,
+  loadThemeDarkLightness,
   loadThemePreference,
   loadSidebarBlur,
   loadSidebarOpacity,
@@ -58,10 +67,12 @@ import {
   loadTranscriptLayout,
   loadTranscriptAnchor,
   saveBodyGlass,
+  saveAccentColor,
   saveChatBackgroundEmptyOpacity,
   saveChatBackgroundPath,
   saveChatBackgroundSessionOpacity,
   saveChatBackgroundScope,
+  saveThemeDarkLightness,
   saveThemePreference,
   saveSidebarBlur,
   saveSidebarOpacity,
@@ -76,6 +87,9 @@ import {
   SIDEBAR_OPACITY_DEFAULT,
   SIDEBAR_OPACITY_MAX,
   SIDEBAR_OPACITY_MIN,
+  THEME_DARK_LIGHTNESS_DEFAULT,
+  THEME_DARK_LIGHTNESS_MAX,
+  THEME_DARK_LIGHTNESS_MIN,
   THEME_HUE_DEFAULT,
   THEME_HUE_MAX,
   THEME_HUE_MIN,
@@ -121,7 +135,7 @@ import {
   subscribeModels,
 } from "../lib/models";
 import { prettyCwd, projectKey, projectName } from "../lib/paths";
-import { IS_MAC } from "../lib/platform";
+import { IS_MAC, IS_WIN } from "../lib/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -1098,10 +1112,14 @@ type AppearanceSettings = ReturnType<typeof useAppearanceSettings>;
 function useAppearanceSettings() {
   const [themePreference, setThemePreference] =
     useState<ThemePreference>(loadThemePreference);
+  const [accentColor, setAccentColor] = useState(loadAccentColor);
   const [opacity, setOpacity] = useState(loadSidebarOpacity);
   const [blur, setBlur] = useState(loadSidebarBlur);
   const [themeHue, setThemeHue] = useState(loadThemeHue);
   const [themeSaturation, setThemeSaturation] = useState(loadThemeSaturation);
+  const [themeDarkLightness, setThemeDarkLightness] = useState(
+    loadThemeDarkLightness,
+  );
   const [bodyGlass, setBodyGlass] = useState(loadBodyGlass);
   const [chatBackgroundPath, setChatBackgroundPath] = useState(
     loadChatBackgroundPath,
@@ -1127,6 +1145,12 @@ function useAppearanceSettings() {
     setThemePreference(next);
   }, []);
 
+  const onAccentColor = useCallback((value: string | null) => {
+    const next = applyAccentColor(value);
+    saveAccentColor(next);
+    setAccentColor(next);
+  }, []);
+
   const onOpacity = useCallback((percent: number) => {
     const next = applySidebarOpacity(percent / 100);
     saveSidebarOpacity(next);
@@ -1145,6 +1169,12 @@ function useAppearanceSettings() {
     saveThemeSaturation(next.saturation);
     setThemeHue(next.hue);
     setThemeSaturation(next.saturation);
+  }, []);
+
+  const onDarkLightness = useCallback((value: number) => {
+    const next = applyThemeDarkLightness(value);
+    saveThemeDarkLightness(next);
+    setThemeDarkLightness(next);
   }, []);
 
   const onBodyGlass = useCallback((next: boolean) => {
@@ -1214,9 +1244,11 @@ function useAppearanceSettings() {
 
   const restoreDefaults = useCallback(() => {
     onThemePreference(THEME_PREFERENCE_DEFAULT);
+    onAccentColor(ACCENT_COLOR_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
     onBlur(SIDEBAR_BLUR_DEFAULT);
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
+    onDarkLightness(THEME_DARK_LIGHTNESS_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
     onChatBackgroundEmptyOpacity(
       Math.round(CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT * 100),
@@ -1235,18 +1267,22 @@ function useAppearanceSettings() {
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
     onClearChatBackground,
+    onAccentColor,
     onThemePreference,
     onOpacity,
     onTint,
+    onDarkLightness,
     onUiScale,
   ]);
 
   return {
     themePreference,
+    accentColor,
     opacity,
     blur,
     themeHue,
     themeSaturation,
+    themeDarkLightness,
     bodyGlass,
     chatBackgroundPath,
     chatBackgroundEmptyOpacity,
@@ -1256,9 +1292,11 @@ function useAppearanceSettings() {
     chatBackgroundError,
     uiScale,
     onThemePreference,
+    onAccentColor,
     onOpacity,
     onBlur,
     onTint,
+    onDarkLightness,
     onBodyGlass,
     onChooseChatBackground,
     onClearChatBackground,
@@ -1292,11 +1330,20 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         />
       </Row>
       <Row
+        label="Accent color"
+        description="Used for the composer send button and your message bubbles."
+      >
+        <AccentColorPicker
+          value={appearance.accentColor}
+          onChange={appearance.onAccentColor}
+        />
+      </Row>
+      <Row
         label="Sidebar opacity"
         description={
           glassDisabled
             ? "Light mode always uses an opaque window. Your dark-mode value is preserved."
-            : "How much of the desktop shows through the sidebar and the project rail."
+            : "How much of the desktop shows through the project rail and other glass panes."
         }
       >
         <Slider
@@ -1350,6 +1397,24 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           min={THEME_SATURATION_MIN}
           max={THEME_SATURATION_MAX}
           onChange={(value) => appearance.onTint(appearance.themeHue, value)}
+        />
+      </Row>
+      <Row
+        label="Dark-mode lightness"
+        description={
+          glassDisabled
+            ? "This only affects dark mode. Your dark-mode value is preserved."
+            : "Base brightness of the dark theme. Lower values are darker; zero is true black."
+        }
+      >
+        <Slider
+          label="Dark-mode lightness"
+          value={appearance.themeDarkLightness}
+          display={`${appearance.themeDarkLightness}%`}
+          min={THEME_DARK_LIGHTNESS_MIN}
+          max={THEME_DARK_LIGHTNESS_MAX}
+          onChange={appearance.onDarkLightness}
+          disabled={glassDisabled}
         />
       </Row>
       <Row
@@ -2060,12 +2125,74 @@ function Slider({
   );
 }
 
-/** macOS keeps the decision after the first prompt; only System Settings can flip it. */
+const ACCENT_COLOR_PRESETS = [
+  "#4da3f5",
+  "#8b5cf6",
+  "#ec4899",
+  "#ef4444",
+  "#f59e0b",
+  "#10b981",
+] as const;
+
+function AccentColorPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const colorIndex = value
+    ? ACCENT_COLOR_PRESETS.indexOf(
+        value as (typeof ACCENT_COLOR_PRESETS)[number],
+      )
+    : -1;
+  const presetIndex = value == null ? 0 : colorIndex >= 0 ? colorIndex + 1 : -1;
+
+  return (
+    <div ref={root} className="w-48">
+      <ColorSwatchRow
+        colors={["var(--color-content)", ...ACCENT_COLOR_PRESETS]}
+        labels={["Default", "Blue", "Violet", "Pink", "Red", "Orange", "Green"]}
+        colorIndex={presetIndex >= 0 ? presetIndex : undefined}
+        customColor={presetIndex < 0 ? (value ?? undefined) : undefined}
+        customPickerOpen={open}
+        onPickIndex={(index) => {
+          setOpen(false);
+          onChange(
+            index === 0
+              ? ACCENT_COLOR_DEFAULT
+              : (ACCENT_COLOR_PRESETS[index - 1] ?? ACCENT_COLOR_PRESETS[0]),
+          );
+        }}
+        onToggleCustom={() => setOpen((current) => !current)}
+      />
+      {open ? (
+        <Popover
+          anchor={root}
+          side="bottom"
+          align="end"
+          width={248}
+          onDismiss={() => setOpen(false)}
+          className="px-2 pb-2"
+        >
+          <ColorPickerPopover
+            value={value ?? ACCENT_COLOR_PRESETS[0]}
+            onChange={onChange}
+          />
+        </Popover>
+      ) : null}
+    </div>
+  );
+}
+
+/** macOS keeps the decision after the first prompt; only System Settings can flip it. Windows toasts are governed by Settings > Notifications. */
 function NotificationsBlocked() {
   return (
     <span className="flex items-center gap-2 text-[12px] text-content/45">
       Permission needed
-      {IS_MAC ? (
+      {IS_MAC || IS_WIN ? (
         <button
           type="button"
           onClick={() => {

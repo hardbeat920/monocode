@@ -255,7 +255,7 @@ pub fn reminder_take_open(
 
 /// A notification can outlive its window. Keep the request until the chosen
 /// window has mounted and attached its listeners, then let only that window act.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn open_from_notification(app: &AppHandle, identifier: &str) {
     let Some((session_id, due_at)) = identifier.rsplit_once(':') else {
         return;

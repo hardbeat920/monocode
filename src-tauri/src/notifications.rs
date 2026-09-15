@@ -4,17 +4,19 @@
 //! macOS goes through `UNUserNotificationCenter` directly: the app already
 //! links it for the Dock badge, it reports the real authorization state, and
 //! a delegate turns a click into a jump back to the session. Linux uses the
-//! freedesktop notification bus, which has no permission model.
+//! freedesktop notification bus, which has no permission model. Windows uses
+//! the WinRT toast API via `tauri-winrt-notification`, which likewise has no
+//! runtime permission prompt: toasts are controlled from Windows Settings.
 
 use serde::Serialize;
 use tauri::AppHandle;
 
 /// Emitted to every window when the user clicks a notification. Payload is
 /// the session id; the window that owns that session handles it.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub const CLICK_EVENT: &str = "monocode:notification-click";
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn handle_click(app: &AppHandle, identifier: &str) {
     use tauri::Emitter;
     if let Some(reminder) = identifier.strip_prefix(crate::reminders::NOTIFICATION_PREFIX) {
@@ -43,13 +45,13 @@ pub enum Permission {
 }
 
 #[tauri::command]
-pub async fn notification_permission() -> Permission {
-    platform::permission().await
+pub async fn notification_permission(app: AppHandle) -> Permission {
+    platform::permission(&app).await
 }
 
 #[tauri::command]
-pub async fn request_notification_permission() -> Permission {
-    platform::request_permission().await
+pub async fn request_notification_permission(app: AppHandle) -> Permission {
+    platform::request_permission(&app).await
 }
 
 /// Resolves only once the platform reports the banner as scheduled: the
@@ -197,15 +199,15 @@ mod platform {
         .flatten()
     }
 
-    pub(super) async fn permission() -> Permission {
+    pub(super) async fn permission(_app: &AppHandle) -> Permission {
         wait(query_permission(), None)
             .await
             .unwrap_or(Permission::Denied)
     }
 
-    pub(super) async fn request_permission() -> Permission {
+    pub(super) async fn request_permission(app: &AppHandle) -> Permission {
         wait(start_request(), None).await;
-        permission().await
+        permission(app).await
     }
 
     /// Hands the request to the center and reports what its completion
@@ -426,11 +428,11 @@ mod platform {
 
     use super::Permission;
 
-    pub(super) async fn permission() -> Permission {
+    pub(super) async fn permission(_app: &AppHandle) -> Permission {
         Permission::Granted
     }
 
-    pub(super) async fn request_permission() -> Permission {
+    pub(super) async fn request_permission(_app: &AppHandle) -> Permission {
         Permission::Granted
     }
 
@@ -500,17 +502,237 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+mod platform {
+    use tauri::AppHandle;
+
+    use super::{handle_click, Permission};
+
+    /// Action payload for the explicit "Show" button. The body click carries
+    /// no arguments, so the session id is also captured in the activation
+    /// closure; the payload is a fallback for routing, not the primary path.
+    /// Reminder identifiers (`reminder:<session>:<due>`) flow through the
+    /// same path and are routed by `handle_click`.
+    const SHOW_ACTION_PREFIX: &str = "show:";
+
+    /// Wraps the session id in the "Show" button's activation payload.
+    fn show_action(session_id: &str) -> String {
+        format!("{SHOW_ACTION_PREFIX}{session_id}")
+    }
+
+    /// Reads the session id back out of a "Show" button payload.
+    fn session_from_action(action: &str) -> Option<&str> {
+        action.strip_prefix(SHOW_ACTION_PREFIX)
+    }
+
+    /// Collapses the WinRT setting onto the frontend's decision. Only
+    /// `Enabled` is unblocked; `None` is "could not ask" and defers to the
+    /// dispatch.
+    fn blocked_from_setting(
+        setting: Option<windows::UI::Notifications::NotificationSetting>,
+    ) -> Option<bool> {
+        use windows::UI::Notifications::NotificationSetting;
+        match setting {
+            Some(NotificationSetting::Enabled) => Some(false),
+            // DisabledForApplication / ForUser / ByGroupPolicy / ByManifest.
+            Some(_) => Some(true),
+            None => None,
+        }
+    }
+
+    /// Whether Windows blocks toasts for this AppUserModelID. `None` means the
+    /// system could not be asked — an unknown ID (`tauri dev` before the
+    /// shortcut exists) or a WinRT failure — and the dispatch itself decides.
+    fn toasts_blocked(app_id: &str) -> Option<bool> {
+        use windows::core::HSTRING;
+        use windows::UI::Notifications::ToastNotificationManager;
+        let notifier =
+            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id)).ok()?;
+        blocked_from_setting(notifier.Setting().ok())
+    }
+
+    /// Asks the toast system, which reflects the per-app toggle, the user-wide
+    /// switch and group policy. There is no prompt to show, so a request just
+    /// re-reads the same state.
+    pub(super) async fn permission(app: &AppHandle) -> Permission {
+        let app_id = app.config().identifier.clone();
+        let blocked = tauri::async_runtime::spawn_blocking(move || toasts_blocked(&app_id))
+            .await
+            .ok()
+            .flatten();
+        if blocked == Some(true) {
+            Permission::Denied
+        } else {
+            Permission::Granted
+        }
+    }
+
+    pub(super) async fn request_permission(app: &AppHandle) -> Permission {
+        // Windows has no authorization dialog; Settings owns the decision.
+        permission(app).await
+    }
+
+    pub(super) async fn show(
+        app: &AppHandle,
+        session_id: &str,
+        title: &str,
+        subtitle: &str,
+        body: &str,
+        sound: bool,
+    ) -> Result<(), String> {
+        // `Toast` is `!Send`, so construct and dispatch it inside the blocking
+        // thread; only owned `Send` data crosses into the closure.
+        let app = app.clone();
+        let app_id = app.config().identifier.clone();
+        let session_id = session_id.to_string();
+        let title = title.to_string();
+        let subtitle = subtitle.to_string();
+        let body = body.to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            show_blocking(&app, &app_id, &session_id, &title, &subtitle, &body, sound)
+        })
+        .await
+        .map_err(|err| err.to_string())?
+    }
+
+    /// Dispatches on the blocking thread a `Toast` needs, honouring a Windows
+    /// block first so the caller's in-app cue stands in when no banner shows.
+    fn show_blocking(
+        app: &AppHandle,
+        app_id: &str,
+        session_id: &str,
+        title: &str,
+        subtitle: &str,
+        body: &str,
+        sound: bool,
+    ) -> Result<(), String> {
+        use tauri_winrt_notification::Toast;
+
+        if toasts_blocked(app_id) == Some(true) {
+            return Err("notifications are disabled in Windows settings".into());
+        }
+
+        // Installed NSIS builds resolve the bundle identifier through the
+        // Start Menu shortcut's AppUserModelID. `tauri dev` has no shortcut,
+        // so fall back to the PowerShell host ID (wrong branding, but visible)
+        // when the real ID fails.
+        match show_with_app_id(app, app_id, session_id, title, subtitle, body, sound) {
+            Ok(()) => Ok(()),
+            Err(first) if app_id != Toast::POWERSHELL_APP_ID => show_with_app_id(
+                app,
+                Toast::POWERSHELL_APP_ID,
+                session_id,
+                title,
+                subtitle,
+                body,
+                sound,
+            )
+            .map_err(|fallback| format!("{first}; dev fallback: {fallback}")),
+            Err(first) => Err(first),
+        }
+    }
+
+    /// Builds and shows one toast under `app_id`, wiring the "Show" button to
+    /// the shared click router.
+    fn show_with_app_id(
+        app: &AppHandle,
+        app_id: &str,
+        session_id: &str,
+        title: &str,
+        subtitle: &str,
+        body: &str,
+        sound: bool,
+    ) -> Result<(), String> {
+        use tauri_winrt_notification::{Sound, Toast};
+
+        let app = app.clone();
+        let owned_session = session_id.to_string();
+        let sound = if sound { Some(Sound::Default) } else { None };
+        // The default icon comes from the AppUserModelID registration; an
+        // explicit icon needs an absolute non-UNC path and is left out for v1.
+        Toast::new(app_id)
+            .title(title)
+            .text1(subtitle)
+            .text2(body)
+            .sound(sound)
+            .add_button("Show", &show_action(session_id))
+            .on_activated(move |action| {
+                let session = action
+                    .as_deref()
+                    .and_then(session_from_action)
+                    .unwrap_or(&owned_session)
+                    .to_string();
+                handle_click(&app, session.as_str());
+                Ok(())
+            })
+            .show()
+            .map_err(|err| err.to_string())
+    }
+
+    /// Opens Settings > System > Notifications, where the per-app toggle lives.
+    pub(super) fn open_settings(_app: &AppHandle) -> Result<(), String> {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "start", "", "ms-settings:notifications"]);
+        crate::hide_window_console(&mut cmd);
+        cmd.spawn().map(|_| ()).map_err(|err| err.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use windows::UI::Notifications::NotificationSetting;
+
+        use super::{blocked_from_setting, session_from_action, show_action};
+
+        #[test]
+        fn show_action_round_trips_the_session() {
+            let action = show_action("549ae7ac");
+            assert_eq!(session_from_action(&action), Some("549ae7ac"));
+            assert_eq!(session_from_action("other"), None);
+        }
+
+        #[test]
+        fn show_action_preserves_reminder_identifiers() {
+            let action = show_action("reminder:549ae7ac:1700000000");
+            assert_eq!(
+                session_from_action(&action),
+                Some("reminder:549ae7ac:1700000000")
+            );
+        }
+
+        #[test]
+        fn only_an_enabled_setting_is_unblocked() {
+            assert_eq!(
+                blocked_from_setting(Some(NotificationSetting::Enabled)),
+                Some(false)
+            );
+            assert_eq!(
+                blocked_from_setting(Some(NotificationSetting::DisabledForApplication)),
+                Some(true)
+            );
+            assert_eq!(
+                blocked_from_setting(Some(NotificationSetting::DisabledForUser)),
+                Some(true)
+            );
+            assert_eq!(
+                blocked_from_setting(Some(NotificationSetting::DisabledByGroupPolicy)),
+                Some(true)
+            );
+            assert_eq!(blocked_from_setting(None), None);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod platform {
     use tauri::AppHandle;
 
     use super::Permission;
 
-    pub(super) async fn permission() -> Permission {
+    pub(super) async fn permission(_app: &AppHandle) -> Permission {
         Permission::Unsupported
     }
 
-    pub(super) async fn request_permission() -> Permission {
+    pub(super) async fn request_permission(_app: &AppHandle) -> Permission {
         Permission::Unsupported
     }
 

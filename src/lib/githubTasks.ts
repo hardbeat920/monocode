@@ -41,6 +41,7 @@ export type GithubWorkItem = {
   title: string;
   url: string;
   state: string;
+  createdAt?: string;
   updatedAt: string;
   labels: GithubLabel[];
   assignees: GithubAssignee[];

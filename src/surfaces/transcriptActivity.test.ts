@@ -332,6 +332,26 @@ describe("turnCopyText", () => {
 });
 
 describe("groupTurns", () => {
+  it("folds an orchestration turn the app wrote into the turn above", () => {
+    const turns = groupTurns([
+      { id: "u1", role: "user", text: "Review the changes" },
+      { id: "a1", role: "assistant", text: "Delegating." },
+      {
+        id: "u2",
+        role: "user",
+        text: "Worker results are ready.",
+        internal: true,
+      },
+      { id: "a2", role: "assistant", text: "All three look right." },
+      { id: "u3", role: "user", text: "Ship it" },
+      { id: "a3", role: "assistant", text: "Done." },
+    ]);
+    // One thread: the app's turn neither splits it nor shows up in it.
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["u1", "a1", "a2"],
+      ["u3", "a3"],
+    ]);
+  });
   it("keeps a handoff divider on its own row between providers", () => {
     const turns = groupTurns([
       { id: "u1", role: "user", text: "go" },
@@ -575,6 +595,30 @@ describe("activityPhaseTitle", () => {
     ).toBe("Ran 3 commands · Searched the project · Edited 2 files");
   });
 
+  it("summarises readable historical Codex shell rows by their inferred work", () => {
+    const storedCodexTool = (id: string, text: string): Block => ({
+      id,
+      role: "tool",
+      text,
+      tool: { kind: "execute", title: text, status: "completed" },
+    });
+
+    expect(
+      title([
+        storedCodexTool(
+          "r1",
+          `/bin/zsh -lc "sed -n '1,120p' src/lib/paths.ts
+sed -n '330,430p' src/lib/harness/codexProtocol.test.ts"`,
+        ),
+        storedCodexTool(
+          "r2",
+          `/bin/zsh -lc "nl -ba src/lib/harness/apply.ts | sed -n '520,620p'"`,
+        ),
+        storedCodexTool("run", "/bin/zsh -lc 'npm test'"),
+      ]),
+    ).toBe("Read 2 files · Ran a command");
+  });
+
   it("puts only the call in flight in the present tense", () => {
     expect(
       title([edit("e1", "a.ts"), edit("e2", "b.ts"), shell("c1")], true),
@@ -791,6 +835,27 @@ describe("foldableWork", () => {
     expect(foldableWork(turn)).toEqual({ start: 3, end: 3 });
   });
 
+  it("uses an interjection as a hard boundary between answered work phases", () => {
+    const turn = items([
+      shell("before"),
+      note("answer", "The complete answer."),
+      {
+        id: "advisor",
+        role: "system",
+        text: "Check the fallback.",
+        interjection: { customType: "advisor", severity: "nit" },
+      },
+      shell("after"),
+      note("ack", "Checked."),
+    ]);
+    const fold = foldableWork(turn)!;
+
+    expect(fold).toEqual({ start: 3, end: 3 });
+    expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
+      "after",
+    ]);
+  });
+
   it("leaves an approval attached to earlier work outside the fold", () => {
     const turn = items([
       shell("pending", "pending", { requestId: 1 }),
@@ -881,6 +946,20 @@ describe("toolCallLabel", () => {
         tool: { kind: "skill", title: "Skill /code-review" },
       }),
     ).toBe("Skill /code-review");
+  });
+
+  it("hides Codex's shell launcher on commands that stay commands", () => {
+    expect(
+      toolCallLabel({
+        id: "wrapped",
+        role: "tool",
+        text: `/bin/zsh -lc "npm test -- --run src/lib/app.test.ts"`,
+        tool: {
+          kind: "execute",
+          title: `/bin/zsh -lc "npm test -- --run src/lib/app.test.ts"`,
+        },
+      }),
+    ).toBe("npm test -- --run src/lib/app.test.ts");
   });
 
   it("renders file-reading bash as a Read/Find label", () => {

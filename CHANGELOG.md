@@ -7,9 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Model flyouts for handoffs, second opinions, alternate Plan builds, and orchestration assignments open an adjacent effort picker when the hovered model supports reasoning levels, and apply the chosen model and effort together.
+
+## [0.1.46] - 2026-09-14
+
+### Added
+
+- **Agent orchestration v1** lets a lead agent coordinate up to four workers in the same checkout. Choose worker providers and models, review and edit the proposed assignments before starting, and let the lead manage dependencies, review results, request corrections, and redirect supported workers mid-turn. Overlapping write scopes are queued, and worker approvals and questions are routed through the lead. In #228.
+- Orchestration workers are grouped under their lead in the sidebar, with status, model, and expandable details. **View agents** opens their transcripts beside the lead. Run history survives restarts, interrupted work pauses for review, and stopping the lead stops its workers too.
+- Completed agent turns show provider-reported token usage, cache metrics, and output rate in a hover or keyboard-focus preview, with metrics retained in saved conversations.
+- Web links in user messages show compact page-title and favicon previews while preserving the surrounding text. Preview requests validate public destinations and keep fetching outside the webview.
+- Settings → Appearance includes a **Dark-mode lightness** slider and remembers its value independently of light mode.
+- Chat backgrounds have separate opacity controls for empty and active sessions, including project-specific overrides. In #191 by @shxntanu.
+- GitHub pull-request reviews in the Inbox can switch between changed hunks and full-file context. In #189 by @UtkarshRahim.
+- **Close All Tabs** is available from the menu and Command/Ctrl+Shift+W. It closes the active tab's editor files first, then closes the workspace tabs on a subsequent invocation, retaining a blank session and confirming unsaved files and running terminals. In #215 by @kartava.
+- Notes can be moved between projects without changing their order or losing edits during navigation. In #187 by @ognjeeen.
+
+### Changed
+
+- Closed conversations are prefetched on hover or press and retained in a bounded cache for faster reopening, with safeguards against stale loads and duplicate tabs.
+- Inbox cards mount progressively to keep large lists responsive. In #209 by @notsapinho.
+- Reordering tabs and projects uses shared motion settings, with smoother scrolling and consecutive drag gestures. In #206 by @ognjeeen.
+- Sidebar session cards place linked work-item and archive controls together in the footer, show a single provider icon, and retain the default cursor on reorderable items.
+- Linked work-item update notices now sit inside their session pane, make the agent action more prominent, and offer clearer open and dismiss controls.
+
 ### Fixed
 
 - OpenCode falls back to readable local paths for unsupported attachment formats instead of sending provider-rejected file parts, and repairs sessions already stuck on an unsupported file turn. Fixes #211.
+- **Supervised** access explicitly sets Claude Code's permission mode, preventing local default settings from silently switching the session to automatic approvals or bypassed permissions. In #203 by @prkl78.
+- OMP advisor interjections no longer fold away complete answers or break assistant streams. Saved conversations recover interjection boundaries and status-split continuations, while long interjections collapse by default. In #156 by @elijah7x.
+- Continuing a conversation dismisses its due reminder and linked-update notices while preserving future reminders. Linked-activity sounds no longer repeat when the same update remounts.
+- Opening the sidebar project picker focuses its search field reliably. In #226 by @actuallyakshat.
+- Background GitHub CLI and related helper commands no longer flash console windows on Windows. In #221 by @korefs.
+- Nested transcript scrollers keep receiving wheel gestures when the outer transcript reaches an edge, including gestures over SVG icons and containers that scroll on only one axis.
+- Orchestration cleanup releases checkout reservations when a window closes and removes stale run and worker ownership records when conversations are deleted. Worker tabs wait for their lead to open, sidebar controls remain independently keyboard accessible, and completed or stopped runs release the Undo lock.
 
 ## [0.1.45] - 2026-09-13
 
@@ -34,10 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab Inbox repository detection no longer flashes console windows when it invokes Git on Windows. In #200.
 - Claude Sonnet 5 appears only with Claude Code 2.1.197 or newer, preventing older CLI versions from receiving an unsupported model argument. In #199 by @nulljosh.
 - Claude model choices resolve consistently between the CLI's short live aliases and MonoCode's full startup model IDs, so relaunching no longer switches a saved session to a different model family.
-
-### Fixed
-
-- **Supervised** access now reaches Claude Code as a permission flag. It was the one mode MonoCode sent nothing for, so the CLI fell back to `permissions.defaultMode` from your settings files, and a session the picker labelled Supervised could run as `auto` or `bypassPermissions` without asking.
 
 ## [0.1.44] - 2026-09-12
 
@@ -747,7 +776,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.45...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.46...HEAD
+[0.1.46]: https://github.com/hardbeat920/monocode/compare/v0.1.45...v0.1.46
 [0.1.45]: https://github.com/hardbeat920/monocode/compare/v0.1.44...v0.1.45
 [0.1.44]: https://github.com/hardbeat920/monocode/compare/v0.1.43...v0.1.44
 [0.1.43]: https://github.com/hardbeat920/monocode/compare/v0.1.42...v0.1.43

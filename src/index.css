@@ -48,10 +48,11 @@
   --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --theme-hue: 240;
   --theme-saturation: 0%;
+  --theme-dark-lightness: 9%;
   --sidebar-opacity: 0.85;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
-  --background-lightness: 9%;
+  --background-lightness: var(--theme-dark-lightness);
   --content-lightness: 92%;
   --link-color: #7dd3fc;
   --color-skill: #e8c547;
@@ -247,6 +248,26 @@ html.chat-background-empty-only
   content-visibility: visible;
 }
 
+.user-message-with-link {
+  display: block;
+}
+
+html.has-user-accent .user-message-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+  border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
+}
+
+.user-link-preview {
+  display: inline;
+  white-space: normal;
+}
+
+.user-link-preview-title {
+  display: inline;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /*
  * After a send, the live turn fills the transcript viewport so the prompt sits
  * at the top. Switching tabs keeps this. Closing the tab drops it, so opening
@@ -364,11 +385,25 @@ html.theme-light .composer-send:not(:disabled):hover {
 
 html.theme-light .composer-send:disabled {
   background: color-mix(in srgb, var(--color-content) 25%, transparent);
-  color: color-mix(
+  color: color-mix(in srgb, var(--color-background-base) 75%, transparent);
+}
+
+html.has-user-accent .composer-send:not(:disabled) {
+  background: var(--user-accent-color);
+  color: var(--user-accent-foreground);
+}
+
+html.has-user-accent .composer-send:not(:disabled):hover {
+  background: color-mix(
     in srgb,
-    var(--color-background-base) 75%,
-    transparent
+    var(--user-accent-color) 88%,
+    var(--color-content)
   );
+}
+
+html.has-user-accent .composer-send:disabled {
+  background: color-mix(in srgb, var(--user-accent-color) 28%, transparent);
+  color: color-mix(in srgb, var(--color-content) 35%, transparent);
 }
 
 .composer-field {

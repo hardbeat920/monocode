@@ -10,6 +10,7 @@ type Props = {
   plan?: PlanBlockMeta;
   harness?: HarnessId;
   model?: string;
+  modelSettings?: Record<string, string>;
   onOpen?: () => void;
   onBuild?: (target?: PlanBuildTarget) => void;
 };
@@ -21,6 +22,7 @@ export function PlanPreview({
   plan,
   harness,
   model,
+  modelSettings,
   onOpen,
   onBuild,
 }: Props) {
@@ -109,13 +111,9 @@ export function PlanPreview({
                     <BuildTargetButton
                       from={harness}
                       model={model}
+                      settings={modelSettings}
                       disabled={buildDisabled}
-                      onPick={(targetHarness, targetModel) =>
-                        onBuild({
-                          harness: targetHarness,
-                          model: targetModel,
-                        })
-                      }
+                      onPick={onBuild}
                     />
                   ) : null}
                 </div>

@@ -41,6 +41,17 @@ function renderDetail(
 }
 
 describe("InboxDetail layout", () => {
+  it("shows when a PR was created alongside its last update", () => {
+    const markup = renderDetail({
+      ...item({ kind: "pr" }),
+      createdAt: "2026-09-01T08:00:00Z",
+    });
+    expect(markup).toContain("Created ");
+    expect(markup).toContain('dateTime="2026-09-01T08:00:00Z"');
+    expect(markup).toContain("Updated ");
+    expect(renderDetail(item({ kind: "pr" }))).not.toContain("Created ");
+  });
+
   it("keeps issue identity and actions outside the body scroller", () => {
     const markup = renderDetail(item({ projectPath: "/tmp/local-project" }));
     const headerIndex = markup.indexOf("data-inbox-detail-header");

@@ -1,7 +1,13 @@
+import type { OrchestrationRun } from "./orchestration";
+import { summarizeOrchestration } from "./orchestrationSummary";
 import { fuzzyMatch } from "./fuzzy";
 import { projectName } from "./paths";
 import { sameProjectPath } from "./recents";
-import { sessionDisplayTitle, sessionNeedsInput, type Session } from "./session";
+import {
+  sessionDisplayTitle,
+  sessionNeedsInput,
+  type Session,
+} from "./session";
 import { shouldPersistSession, type SessionSummary } from "./sessionStore";
 
 export type SessionGitHint = {
@@ -27,6 +33,9 @@ export function mergeHistorySummary(
     ...summary,
     archived: summary.archived ?? previous?.archived,
     pinned: summary.pinned ?? previous?.pinned,
+    orchestration: summary.orchestration ?? previous?.orchestration,
+    orchestrationLeadId:
+      summary.orchestrationLeadId ?? previous?.orchestrationLeadId,
   };
   return [next, ...current.filter((entry) => entry.id !== summary.id)].sort(
     compareSessionSummaries,
@@ -95,6 +104,7 @@ export function summaryFromSession(
 ): SessionSummary {
   return {
     id: session.id,
+    orchestrationLeadId: session.orchestrationLeadId,
     cwd: session.cwd,
     harness: session.harness,
     model: session.model,
@@ -137,12 +147,30 @@ export function historyWithLiveSessions(
   sessions: Session[],
   cwd: string,
   git?: SessionGitHint,
+  runs: readonly OrchestrationRun[] = [],
 ): SessionSummary[] {
-  const inboxIds = new Set(sessions.filter(session => session.inboxAsk).map(session => session.id));
-  let rows = history.filter((entry) => !inboxIds.has(entry.id) && sameProjectPath(entry.cwd, cwd));
+  const workerIds = new Set([
+    ...sessions
+      .filter((session) => session.orchestrationLeadId)
+      .map((session) => session.id),
+    ...history.flatMap(
+      (row) => row.orchestration?.tasks.map((task) => task.sessionId) ?? [],
+    ),
+    ...runs.flatMap((run) => run.tasks.map((task) => task.sessionId)),
+  ]);
+  const inboxIds = new Set(
+    sessions.filter((session) => session.inboxAsk).map((session) => session.id),
+  );
+  let rows = history.filter(
+    (entry) =>
+      !inboxIds.has(entry.id) &&
+      !entry.orchestrationLeadId &&
+      !workerIds.has(entry.id) &&
+      sameProjectPath(entry.cwd, cwd),
+  );
   const hint = projectGitHint(rows, gitOverlayForCwd(cwd, git));
   for (const session of sessions) {
-    if (session.inboxAsk) continue;
+    if (session.inboxAsk || workerIds.has(session.id)) continue;
     if (!sameProjectPath(session.cwd, cwd)) continue;
     const live = session.busy || sessionNeedsInput(session);
     if (!shouldPersistSession(session) && !live) continue;
@@ -153,5 +181,13 @@ export function historyWithLiveSessions(
     };
     rows = mergeHistorySummary(rows, summaryFromSession(session, sessionHint));
   }
-  return [...rows].sort(compareSessionSummaries);
+  const byLead = new Map(runs.map((run) => [run.leadId, run]));
+  return rows
+    .map((row) => {
+      const run = byLead.get(row.id);
+      return run
+        ? { ...row, orchestration: summarizeOrchestration(run, sessions) }
+        : row;
+    })
+    .sort(compareSessionSummaries);
 }
