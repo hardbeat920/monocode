@@ -244,6 +244,8 @@ type Props = {
   anchor?: SettingsAnchor | null;
   /** Project to focus when opening notification settings from a quick action. */
   notificationProjectPath?: string | null;
+  /** Changes for each quick action, including repeated requests for one project. */
+  notificationSettingsRequest?: number;
   recents?: RecentProject[];
   cwd: string;
   sessions: SessionSummary[];
@@ -263,6 +265,7 @@ export function SettingsView({
   section,
   anchor = null,
   notificationProjectPath = null,
+  notificationSettingsRequest = 0,
   recents,
   cwd,
   sessions,
@@ -282,7 +285,7 @@ export function SettingsView({
   onCloseRef.current = onClose;
   const appearance = useAppearanceSettings();
 
-  useEffect(() => setRevealed(anchor), [anchor]);
+  useEffect(() => setRevealed(anchor), [anchor, notificationSettingsRequest]);
 
   // Section is a dependency so a search result on another page scrolls once
   // that page has mounted the row.
@@ -296,7 +299,7 @@ export function SettingsView({
     }
     const timer = window.setTimeout(() => setRevealed(null), 1800);
     return () => window.clearTimeout(timer);
-  }, [revealed, section, notificationProjectPath]);
+  }, [revealed, section, notificationProjectPath, notificationSettingsRequest]);
 
   const onReveal = useCallback(
     (next: SettingsSectionId, settingId: string | null) => {
@@ -394,6 +397,7 @@ export function SettingsView({
                   cwd={cwd}
                   recents={recents}
                   notificationProjectPath={notificationProjectPath}
+                  notificationSettingsRequest={notificationSettingsRequest}
                 />
               ) : null}
               {section === "archive" ? (
@@ -839,10 +843,12 @@ function InboxPage({
   cwd,
   recents,
   notificationProjectPath,
+  notificationSettingsRequest,
 }: {
   cwd: string;
   recents?: RecentProject[];
   notificationProjectPath?: string | null;
+  notificationSettingsRequest?: number;
 }) {
   const revealed = useContext(RevealedSetting);
   return (
@@ -855,6 +861,7 @@ function InboxPage({
           cwd={cwd}
           recents={recents}
           notificationProjectPath={notificationProjectPath}
+          notificationSettingsRequest={notificationSettingsRequest}
           highlighted={revealed === "project-notifications"}
         />
       </div>

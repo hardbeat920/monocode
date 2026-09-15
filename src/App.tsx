@@ -731,6 +731,7 @@ export default function App({
     null,
   );
   const [notificationProjectPath, setNotificationProjectPath] = useState<string | null>(null);
+  const [notificationSettingsRequest, setNotificationSettingsRequest] = useState(0);
   const [editorNavigation, setEditorNavigation] =
     useState<EditorNavigationTarget | null>(null);
   const editorNavigationToken = useRef(0);
@@ -6337,6 +6338,7 @@ export default function App({
   const onOpenNotificationSettings = useCallback((path?: string) => {
     openSettings("inbox", "project-notifications");
     setNotificationProjectPath(path ?? null);
+    setNotificationSettingsRequest((request) => request + 1);
   }, [openSettings]);
 
   const onOpenInboxIntegrations = useCallback(
@@ -7210,6 +7212,7 @@ export default function App({
                 section={settingsSection}
                 anchor={settingsAnchor}
                 notificationProjectPath={notificationProjectPath}
+                notificationSettingsRequest={notificationSettingsRequest}
                 recents={recents}
                 cwd={sidebarCwd}
                 sessions={sidebarHistory}

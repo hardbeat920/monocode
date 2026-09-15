@@ -67,10 +67,66 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   localStorage.clear();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 describe("settings pages", () => {
+  it("reopens, scrolls to, focuses and highlights the same project on a repeated notification settings request", async () => {
+    vi.useFakeTimers();
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    rememberNotificationProjects([
+      {
+        id: "repository:github.com/work/app",
+        name: "work/app",
+        detail: "github.com",
+        kind: "repository",
+        paths: ["/repo"],
+      },
+    ]);
+    const shortcut = {
+      anchor: "project-notifications" as const,
+      notificationProjectPath: "/repo",
+      notificationSettingsRequest: 1,
+    };
+    await render("inbox", shortcut);
+    const project = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Notification categories for work/app"]',
+    )!;
+    const card = project.closest("fieldset")!;
+    const section = container.querySelector(
+      '[data-setting-id="project-notifications"]',
+    )!;
+    const highlight = () => section.querySelector(".border-accent\\/60");
+    expect(highlight()).not.toBeNull();
+    expect(project.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(card);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1800));
+    expect(highlight()).toBeNull();
+    await act(async () => project.click());
+    expect(project.getAttribute("aria-expanded")).toBe("false");
+    const search = container.querySelector<HTMLInputElement>(
+      '[aria-label="Search settings"]',
+    )!;
+    search.focus();
+    expect(document.activeElement).toBe(search);
+    scroll.mockClear();
+
+    await render("inbox", { ...shortcut, notificationSettingsRequest: 2 });
+
+    expect.soft(project.getAttribute("aria-expanded")).toBe("true");
+    expect.soft(scroll).toHaveBeenCalledWith({ block: "nearest" });
+    expect.soft(scroll.mock.contexts).toContain(card);
+    expect.soft(document.activeElement === card).toBe(true);
+    expect.soft(highlight()).not.toBeNull();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1800));
+    expect(highlight()).toBeNull();
+    expect(project.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(card);
+  });
+
   it("clears the project shortcut highlight after 1.8 seconds while keeping its project open and focused", async () => {
     vi.useFakeTimers();
     rememberNotificationProjects([

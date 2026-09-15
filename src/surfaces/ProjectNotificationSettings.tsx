@@ -34,6 +34,7 @@ type Props = {
   cwd: string;
   recents?: RecentProject[];
   notificationProjectPath?: string | null;
+  notificationSettingsRequest?: number;
   highlighted?: boolean;
 };
 
@@ -41,6 +42,7 @@ export function ProjectNotificationSettings({
   cwd,
   recents = [],
   notificationProjectPath = null,
+  notificationSettingsRequest = 0,
   highlighted = false,
 }: Props) {
   const discovery = useNotificationProjects([
@@ -75,7 +77,7 @@ export function ProjectNotificationSettings({
     loadNotificationsEnabled,
   );
   const targetCard = useRef<HTMLFieldSetElement>(null);
-  const focusedPath = useRef<string | null>(null);
+  const focusedRequest = useRef<{ path: string; request: number } | null>(null);
   const targetId = notificationProjectPath
     ? projects.find((project) =>
         project.paths.some(
@@ -85,16 +87,23 @@ export function ProjectNotificationSettings({
     : undefined;
   useEffect(() => {
     if (!notificationProjectPath) {
-      focusedPath.current = null;
+      focusedRequest.current = null;
       return;
     }
-    if (focusedPath.current === notificationProjectPath || !targetCard.current)
+    if (
+      (focusedRequest.current?.path === notificationProjectPath &&
+        focusedRequest.current.request === notificationSettingsRequest) ||
+      !targetCard.current
+    )
       return;
     setExpanded(targetId ?? null);
     targetCard.current.scrollIntoView?.({ block: "nearest" });
     targetCard.current.focus({ preventScroll: true });
-    focusedPath.current = notificationProjectPath;
-  }, [notificationProjectPath, targetId]);
+    focusedRequest.current = {
+      path: notificationProjectPath,
+      request: notificationSettingsRequest,
+    };
+  }, [notificationProjectPath, notificationSettingsRequest, targetId]);
 
   function setCategory(
     projectId: string,
