@@ -1,4 +1,4 @@
-import { ALT, IS_MAC, MOD, SHIFT } from "./platform";
+import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "./platform";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -262,6 +262,30 @@ export function subscribeLiveAgentsEnabled(onStoreChange: () => void) {
   window.addEventListener(LIVE_AGENTS_ENABLED_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(LIVE_AGENTS_ENABLED_CHANGE_EVENT, onStoreChange);
+}
+
+const CLOSE_TO_TRAY_KEY = "monocode.closeToTray";
+
+export const CLOSE_TO_TRAY_DEFAULT = true;
+
+export function loadCloseToTray(): boolean {
+  // Close to tray is Windows-only: nowhere else installs a tray icon.
+  if (!IS_WIN) return false;
+  try {
+    const raw = localStorage.getItem(CLOSE_TO_TRAY_KEY);
+    if (raw == null) return CLOSE_TO_TRAY_DEFAULT;
+    return raw === "1" || raw === "true";
+  } catch {
+    return CLOSE_TO_TRAY_DEFAULT;
+  }
+}
+
+export function saveCloseToTray(value: boolean) {
+  try {
+    localStorage.setItem(CLOSE_TO_TRAY_KEY, value ? "1" : "0");
+  } catch {
+    // private mode / quota
+  }
 }
 
 const GRID_ARCADE_ENABLED_KEY = "monocode.gridArcadeEnabled";
