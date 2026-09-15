@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsView } from "./SettingsView";
+import { rememberNotificationProjects } from "../lib/notificationProjects";
 import {
   SETTINGS_INDEX,
   SETTINGS_SECTIONS,
@@ -25,7 +26,10 @@ let container: HTMLDivElement;
 let root: Root;
 let onSelectSection: ReturnType<typeof vi.fn>;
 
-async function render(section: SettingsSectionId) {
+async function render(
+  section: SettingsSectionId,
+  options: Partial<ComponentProps<typeof SettingsView>> = {},
+) {
   await act(async () =>
     root.render(
       createElement(SettingsView, {
@@ -38,6 +42,7 @@ async function render(section: SettingsSectionId) {
         onArchiveSession: vi.fn(),
         onDeleteSession: vi.fn(),
         onOpenWhatsNew: vi.fn(),
+        ...options,
       }),
     ),
   );
@@ -62,9 +67,42 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   localStorage.clear();
+  vi.useRealTimers();
 });
 
 describe("settings pages", () => {
+  it("clears the project shortcut highlight after 1.8 seconds while keeping its project open and focused", async () => {
+    vi.useFakeTimers();
+    rememberNotificationProjects([
+      {
+        id: "repository:github.com/work/app",
+        name: "work/app",
+        detail: "github.com",
+        kind: "repository",
+        paths: ["/repo"],
+      },
+    ]);
+    await render("inbox", {
+      anchor: "project-notifications",
+      notificationProjectPath: "/repo",
+    });
+    const section = container.querySelector(
+      '[data-setting-id="project-notifications"]',
+    )!;
+    const project = section.querySelector(
+      'button[aria-label="Notification categories for work/app"]',
+    )!;
+    expect(section.querySelector(".border-accent\\/60")).not.toBeNull();
+    expect(project.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(project.closest("fieldset"));
+
+    await act(async () => vi.advanceTimersByTimeAsync(1800));
+
+    expect(section.querySelector(".border-accent\\/60")).toBeNull();
+    expect(project.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(project.closest("fieldset"));
+  });
+
   it("gives every section a rail group", () => {
     const groups = new Set(SETTINGS_SECTIONS.map((section) => section.group));
     expect([...groups]).toEqual(["app", "agents", "workspace"]);
@@ -153,7 +191,7 @@ describe("settings search", () => {
     expect(
       section?.querySelector('[aria-label="Project notifications"]'),
     ).not.toBeNull();
-    expect(section?.className).toContain("bg-accent/10");
+    expect(section?.querySelector(".border-accent\\/60")).not.toBeNull();
   });
 
   // A page whose name starts with the query beats a setting that merely

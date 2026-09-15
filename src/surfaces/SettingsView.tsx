@@ -289,10 +289,11 @@ export function SettingsView({
   useEffect(() => {
     if (!revealed) return;
     // A project quick action lets the project card focus itself after discovery.
-    if (revealed === "project-notifications" && notificationProjectPath) return;
-    document
-      .getElementById(settingDomId(revealed))
-      ?.scrollIntoView?.({ block: "center" });
+    if (!(revealed === "project-notifications" && notificationProjectPath)) {
+      document
+        .getElementById(settingDomId(revealed))
+        ?.scrollIntoView?.({ block: "center" });
+    }
     const timer = window.setTimeout(() => setRevealed(null), 1800);
     return () => window.clearTimeout(timer);
   }, [revealed, section, notificationProjectPath]);
@@ -849,14 +850,12 @@ function InboxPage({
       <div
         id={settingDomId("project-notifications")}
         data-setting-id="project-notifications"
-        className={`rounded-xl transition-colors ${
-          revealed === "project-notifications" ? "bg-accent/10" : ""
-        }`}
       >
         <ProjectNotificationSettings
           cwd={cwd}
           recents={recents}
           notificationProjectPath={notificationProjectPath}
+          highlighted={revealed === "project-notifications"}
         />
       </div>
       <Group
