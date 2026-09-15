@@ -1,20 +1,20 @@
 import { RefreshCw } from "./icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
 import {
-  fetchClaudeRateLimits,
-  fetchCodexRateLimits,
-} from "../lib/rateLimitsFetch";
+  getRateLimitsSnapshot,
+  refreshRateLimits,
+  setRateLimitProviders,
+  subscribeRateLimits,
+} from "../lib/rateLimitsStore";
 import {
   clampUsedPercent,
-  fetchingRateLimits,
   formatRateLimitWindowChipLabel,
   formatUsagePercent,
-  idleRateLimits,
-  RATE_LIMIT_POLL_MS,
+  sharedWindowResetLabel,
+  isRateLimitProvider,
   rateLimitWindowTooltip,
-  shouldFetchProvider,
   type ProviderRateLimits,
   type RateLimitProvider,
   type RateLimitWindow,
@@ -44,79 +44,52 @@ export function UsageFooter({
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
 }) {
-  const wantClaude = providers.includes("claude");
-  const wantCodex = providers.includes("codex");
-  const [claude, setClaude] = useState<ProviderRateLimits>(() =>
-    idleRateLimits("claude"),
+  const snapshot = useSyncExternalStore(
+    subscribeRateLimits,
+    getRateLimitsSnapshot,
+    getRateLimitsSnapshot,
   );
-  const [codex, setCodex] = useState<ProviderRateLimits>(() =>
-    idleRateLimits("codex"),
-  );
+  const claude = snapshot.claude;
+  const codex = snapshot.codex;
+  const cursor = snapshot.cursor;
+  const grok = snapshot.grok;
+  const refreshing = snapshot.refreshing;
   const [now, setNow] = useState(() => Date.now());
-  const [refreshing, setRefreshing] = useState(false);
-  const inflight = useRef<Promise<void> | null>(null);
-  const claudeRef = useRef(claude);
-  const codexRef = useRef(codex);
-  claudeRef.current = claude;
-  codexRef.current = codex;
-
-  const refresh = useCallback((force = false) => {
-    if (inflight.current) return inflight.current;
-    const visible = document.visibilityState === "visible";
-    const fetchClaude =
-      wantClaude &&
-      shouldFetchProvider(claudeRef.current, { force, visible });
-    const fetchCodex =
-      wantCodex &&
-      shouldFetchProvider(codexRef.current, { force, visible });
-    if (!fetchClaude && !fetchCodex) return;
-    if (force) setRefreshing(true);
-    const jobs: Promise<void>[] = [];
-    if (fetchClaude) {
-      setClaude((current) => fetchingRateLimits("claude", current));
-      jobs.push(
-        fetchClaudeRateLimits().then((value) => {
-          setClaude(value);
-        }),
-      );
-    }
-    if (fetchCodex) {
-      setCodex((current) => fetchingRateLimits("codex", current));
-      jobs.push(
-        fetchCodexRateLimits().then((value) => {
-          setCodex(value);
-        }),
-      );
-    }
-    const run = Promise.allSettled(jobs)
-      .then(() => undefined)
-      .finally(() => {
-        inflight.current = null;
-        setRefreshing(false);
-      });
-    inflight.current = run;
-    return run;
-  }, [wantClaude, wantCodex]);
 
   useEffect(() => {
-    void refresh();
-    const poll = window.setInterval(() => void refresh(), RATE_LIMIT_POLL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(poll);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [refresh]);
+    setRateLimitProviders(providers);
+  }, [providers]);
+
+  const refresh = (force = false) => refreshRateLimits(force);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), CLOCK_MS);
     return () => window.clearInterval(timer);
   }, []);
 
-  const showUsage = wantClaude || wantCodex;
+  const showUsage = providers.length > 0;
+  const usageChips = providers
+    .map((provider) =>
+      provider === "claude"
+        ? claude
+        : provider === "codex"
+          ? codex
+          : provider === "cursor"
+            ? cursor
+            : provider === "grok"
+              ? grok
+              : null,
+    )
+    .filter((limits): limits is ProviderRateLimits => limits != null);
+  // The session chip is the fallback when no usage chip covers the active
+  // provider. With the roster pinned it sits alongside the usage chips, so an
+  // OpenCode session still says "opencode" instead of vanishing behind them.
+  const showSession =
+    session != null &&
+    !(
+      isRateLimitProvider(session.harness) &&
+      providers.includes(session.harness)
+    );
   const showTerminals = terminals.length > 0;
   const showRight = showUsage || showTerminals;
   const ariaLabel = showUsage
@@ -132,13 +105,16 @@ export function UsageFooter({
       aria-label={ariaLabel}
       className="flex h-7 shrink-0 items-center gap-3 overflow-x-auto border-t border-content/10 px-3 text-[11px] text-content/55"
     >
-      {showUsage ? (
-        <>
-          {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
-          {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
-        </>
-      ) : session ? (
-        <SessionChip session={session} />
+      {showSession && session ? <SessionChip session={session} /> : null}
+      {usageChips.length > 0 ? (
+        <span className="inline-flex min-w-0 items-center gap-2.5">
+          {usageChips.map((limits, index) => (
+            <Fragment key={limits.provider}>
+              {index > 0 ? <ProviderDivider /> : null}
+              <ProviderChip limits={limits} now={now} />
+            </Fragment>
+          ))}
+        </span>
       ) : null}
       {showRight ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -179,6 +155,10 @@ function TerminalLiveMark() {
       <span className="terminal-live-bar" />
     </span>
   );
+}
+
+function ProviderDivider() {
+  return <span aria-hidden className="h-3.5 w-px shrink-0 bg-content/20" />;
 }
 
 function SessionChip({ session }: { session: UsageFooterSession }) {
@@ -306,6 +286,10 @@ function ProviderChip({
   const tooltip = windows
     .map((entry) => rateLimitWindowTooltip(entry.window, now))
     .join(" · ");
+  const sharedReset = sharedWindowResetLabel(
+    windows.map((entry) => entry.window),
+    now,
+  );
 
   return (
     <span
@@ -336,10 +320,22 @@ function ProviderChip({
                 {index > 0 ? <span className="text-content/25">·</span> : null}
                 <span>
                   {formatUsagePercent(entry.window.usedPercent)}{" "}
-                  {formatRateLimitWindowChipLabel(entry.window, now)}
+                  <span
+                    className={
+                      entry.window.chipLabel ? undefined : "text-content/40"
+                    }
+                  >
+                    {formatRateLimitWindowChipLabel(entry.window, now)}
+                  </span>
                 </span>
               </span>
             ))}
+            {sharedReset ? (
+              <span className="inline-flex items-center gap-1">
+                <span className="text-content/25">·</span>
+                <span className="text-content/40">{sharedReset}</span>
+              </span>
+            ) : null}
           </span>
         </>
       )}

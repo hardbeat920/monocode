@@ -1,6 +1,45 @@
 import { asRecord } from "./harness/codexProtocol";
 
-export type RateLimitProvider = "claude" | "codex";
+export type RateLimitProvider = "claude" | "codex" | "cursor" | "grok";
+
+/**
+ * Every provider that reports usage from a supported source: Claude Code over
+ * its OAuth usage endpoint, Codex over `account/rateLimits/read`, Cursor over
+ * cursor.com `usage-summary`, Grok over the CLI billing credits API. Ordered
+ * the way the footer renders them.
+ */
+export const RATE_LIMIT_PROVIDERS: RateLimitProvider[] = [
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+];
+
+export function isRateLimitProvider(
+  value: unknown,
+): value is RateLimitProvider {
+  return (
+    value === "claude" ||
+    value === "codex" ||
+    value === "cursor" ||
+    value === "grok"
+  );
+}
+
+/**
+ * Which chips the usage footer renders. By default the footer mirrors the
+ * active session, so it goes quiet the moment you switch to a provider we
+ * cannot report usage for. `alwaysShow` pins the whole roster instead, so an
+ * OpenCode (or any other) session no longer hides Claude, Codex, Cursor, and
+ * Grok.
+ */
+export function usageFooterProviders(input: {
+  activeHarness?: string | null;
+  alwaysShow: boolean;
+}): RateLimitProvider[] {
+  if (input.alwaysShow) return [...RATE_LIMIT_PROVIDERS];
+  return isRateLimitProvider(input.activeHarness) ? [input.activeHarness] : [];
+}
 
 export type RateLimitStatus =
   "idle" | "fetching" | "ok" | "error" | "unavailable";
@@ -12,6 +51,8 @@ export type RateLimitWindow = {
   windowMinutes: number;
   /** Unix ms timestamp when the window resets, if known. */
   resetsAt: number | null;
+  /** Compact chip suffix when remaining time would be ambiguous (Cursor Auto/API). */
+  chipLabel?: string;
 };
 
 export type ProviderRateLimits = {
@@ -57,11 +98,15 @@ export function shouldFetchRateLimits(input: {
   visible: boolean;
   claude: ProviderRateLimits;
   codex: ProviderRateLimits;
+  cursor?: ProviderRateLimits;
+  grok?: ProviderRateLimits;
   now?: number;
 }): boolean {
   return (
     shouldFetchProvider(input.claude, input) ||
-    shouldFetchProvider(input.codex, input)
+    shouldFetchProvider(input.codex, input) ||
+    (input.cursor != null && shouldFetchProvider(input.cursor, input)) ||
+    (input.grok != null && shouldFetchProvider(input.grok, input))
   );
 }
 
@@ -193,10 +238,29 @@ export function formatRateLimitWindowChipLabel(
   window: RateLimitWindow,
   now = Date.now(),
 ): string {
+  if (window.chipLabel) return window.chipLabel;
   if (window.resetsAt != null) {
     return formatResetDuration(window.resetsAt - now);
   }
   return formatWindowLabel(window.windowMinutes);
+}
+
+/**
+ * Cursor Auto/API share one billing-cycle reset. The per-window chip label
+ * already names the lane, so show the countdown once at the end instead of
+ * repeating it on every percent.
+ */
+export function sharedWindowResetLabel(
+  windows: RateLimitWindow[],
+  now = Date.now(),
+): string | null {
+  if (windows.length === 0 || !windows.every((window) => window.chipLabel)) {
+    return null;
+  }
+  const resetsAt = windows[0]?.resetsAt;
+  if (resetsAt == null) return null;
+  if (windows.some((window) => window.resetsAt !== resetsAt)) return null;
+  return formatResetDuration(resetsAt - now);
 }
 
 export function rateLimitWindowTooltip(
@@ -204,10 +268,11 @@ export function rateLimitWindowTooltip(
   now = Date.now(),
 ): string {
   const used = `${formatUsagePercent(window.usedPercent)} used`;
+  const labeled = window.chipLabel ? `${window.chipLabel} · ${used}` : used;
   if (window.resetsAt == null) {
-    return `${used} · ${formatWindowLabel(window.windowMinutes)} window`;
+    return `${labeled} · ${formatWindowLabel(window.windowMinutes)} window`;
   }
-  return `${used} · ${formatResetCountdown(window.resetsAt - now)}`;
+  return `${labeled} · ${formatResetCountdown(window.resetsAt - now)}`;
 }
 
 export function parseResetTimestamp(value: unknown): number | null {
@@ -282,6 +347,183 @@ type CodexWindowSnapshot = {
   windowDurationMins: number | null;
   resetsAt: unknown;
 };
+
+export function parseCursorUsageSummary(body: string): ProviderRateLimits {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return errorRateLimits("cursor", "Cursor usage response was not JSON");
+  }
+  const rec = asRecord(parsed);
+  if (!rec) {
+    return errorRateLimits("cursor", "Cursor usage response was empty");
+  }
+
+  const individual = asRecord(rec.individualUsage);
+  const team = asRecord(rec.teamUsage);
+  const plan = asRecord(individual?.plan);
+  const overall = asRecord(individual?.overall);
+  const pooled = asRecord(team?.pooled);
+  const autoPercent = optionalPercent(plan, "autoPercentUsed");
+  const apiPercent = optionalPercent(plan, "apiPercentUsed");
+  const totalPercent = optionalPercent(plan, "totalPercentUsed");
+  const planPercent =
+    totalPercent ??
+    averagePercent(autoPercent, apiPercent) ??
+    apiPercent ??
+    autoPercent ??
+    ratioPercent(plan) ??
+    ratioPercent(overall) ??
+    ratioPercent(pooled);
+  const resetsAt =
+    parseResetTimestamp(rec.billingCycleEnd) ??
+    parseResetTimestamp(rec.billing_cycle_end);
+  const startedAt =
+    parseResetTimestamp(rec.billingCycleStart) ??
+    parseResetTimestamp(rec.billing_cycle_start);
+  const windowMinutes =
+    startedAt != null && resetsAt != null && resetsAt > startedAt
+      ? Math.max(1, Math.round((resetsAt - startedAt) / 60_000))
+      : 30 * 24 * 60;
+
+  if (autoPercent == null && apiPercent == null && planPercent == null) {
+    return errorRateLimits("cursor", "No Cursor usage data");
+  }
+
+  const labeled = autoPercent != null && apiPercent != null;
+  return {
+    provider: "cursor",
+    session: labeled
+      ? cursorWindow(autoPercent, windowMinutes, resetsAt, "Auto")
+      : cursorWindow(planPercent ?? autoPercent ?? apiPercent, windowMinutes, resetsAt),
+    weekly: labeled
+      ? cursorWindow(apiPercent, windowMinutes, resetsAt, "API")
+      : null,
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+function cursorWindow(
+  usedPercent: number | null | undefined,
+  windowMinutes: number,
+  resetsAt: number | null,
+  chipLabel?: string,
+): RateLimitWindow | null {
+  if (usedPercent == null) return null;
+  return {
+    usedPercent: clampUsedPercent(usedPercent),
+    windowMinutes,
+    resetsAt,
+    ...(chipLabel ? { chipLabel } : {}),
+  };
+}
+
+function optionalPercent(
+  rec: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  if (!rec) return null;
+  const value = numberField(rec, key);
+  return value == null ? null : clampUsedPercent(value);
+}
+
+function averagePercent(left: number | null, right: number | null): number | null {
+  if (left == null || right == null) return null;
+  return clampUsedPercent((left + right) / 2);
+}
+
+function ratioPercent(rec: Record<string, unknown> | null): number | null {
+  if (!rec) return null;
+  const used = numberField(rec, "used");
+  const limit = numberField(rec, "limit");
+  if (used == null || limit == null || limit <= 0) return null;
+  return clampUsedPercent((used / limit) * 100);
+}
+
+export function parseGrokBilling(body: string): ProviderRateLimits {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return errorRateLimits("grok", "Grok usage response was not JSON");
+  }
+  const rec = asRecord(parsed);
+  const config = asRecord(rec?.config) ?? rec;
+  if (!config) {
+    return errorRateLimits("grok", "Grok usage response was empty");
+  }
+
+  const period = asRecord(config.currentPeriod);
+  const usedPercent =
+    optionalPercent(config, "creditUsagePercent") ??
+    grokProductPercent(config, "GrokBuild") ??
+    grokOnDemandPercent(config);
+  const resetsAt =
+    parseResetTimestamp(period?.end) ??
+    parseResetTimestamp(config.billingPeriodEnd);
+  const startedAt =
+    parseResetTimestamp(period?.start) ??
+    parseResetTimestamp(config.billingPeriodStart);
+  const periodType = typeof period?.type === "string" ? period.type : "";
+  const windowMinutes =
+    startedAt != null && resetsAt != null && resetsAt > startedAt
+      ? Math.max(1, Math.round((resetsAt - startedAt) / 60_000))
+      : /weekly/i.test(periodType)
+        ? WEEKLY_WINDOW_MINUTES
+        : 30 * 24 * 60;
+
+  if (usedPercent == null) {
+    return errorRateLimits("grok", "No Grok usage data");
+  }
+  return {
+    provider: "grok",
+    session: {
+      usedPercent,
+      windowMinutes,
+      resetsAt,
+    },
+    weekly: null,
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+function grokProductPercent(
+  config: Record<string, unknown>,
+  product: string,
+): number | null {
+  const products = config.productUsage;
+  if (!Array.isArray(products)) return null;
+  for (const item of products) {
+    const rec = asRecord(item);
+    if (rec?.product !== product) continue;
+    return optionalPercent(rec, "usagePercent");
+  }
+  return null;
+}
+
+function grokOnDemandPercent(
+  config: Record<string, unknown>,
+): number | null {
+  const used = nestedNumber(config, "onDemandUsed");
+  const cap = nestedNumber(config, "onDemandCap");
+  if (used == null || cap == null || cap <= 0) return null;
+  return clampUsedPercent((used / cap) * 100);
+}
+
+function nestedNumber(
+  rec: Record<string, unknown>,
+  key: string,
+): number | null {
+  const direct = numberField(rec, key);
+  if (direct != null) return direct;
+  const nested = asRecord(rec[key]);
+  return nested ? numberField(nested, "val") : null;
+}
 
 export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
   const rec = asRecord(result);
