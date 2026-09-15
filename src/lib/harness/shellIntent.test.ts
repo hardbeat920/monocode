@@ -206,6 +206,12 @@ describe("unwrapShellCommand", () => {
     expect(unwrapShellCommand("pwsh -c Get-Content package.json")).toBe(
       "Get-Content package.json",
     );
+    expect(
+      unwrapShellCommand(`pwsh "-Command" "Get-Content package.json"`),
+    ).toBe("Get-Content package.json");
+    expect(
+      unwrapShellCommand(`pwsh -Command 'Get-Date' '-Format' 'yyyy-MM-dd'`),
+    ).toBe(`'Get-Date' '-Format' 'yyyy-MM-dd'`);
   });
 
   it("unwraps cmd command remainders", () => {
@@ -219,6 +225,9 @@ describe("unwrapShellCommand", () => {
     expect(unwrapShellCommand(`pwsh -f script.ps1 -Mode -c build`)).toBe(
       `pwsh -f script.ps1 -Mode -c build`,
     );
+    expect(
+      unwrapShellCommand(`pwsh "-File" script.ps1 "-Command" build`),
+    ).toBe(`pwsh "-File" script.ps1 "-Command" build`);
   });
 
   it("leaves ordinary and incomplete commands unchanged", () => {

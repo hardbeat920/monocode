@@ -64,9 +64,16 @@ export function unwrapShellCommand(command: string): string {
   for (let depth = 0; depth < 2; depth += 1) {
     const tokens = tokenize(current);
     if (!tokens || tokens.length < 3) break;
-    const executable = trimMatchingOuterQuotes(
-      current.slice(tokens[0].start, tokens[0].end),
+    const executableToken = tokens[0];
+    const rawExecutable = current.slice(
+      executableToken.start,
+      executableToken.end,
     );
+    const executable =
+      executableToken.quoted &&
+      rawExecutable[0] === rawExecutable[rawExecutable.length - 1]
+        ? rawExecutable.slice(1, -1)
+        : rawExecutable;
     const wrapper = SHELL_WRAPPERS.find(({ executables }) =>
       executables.has(binName(executable)),
     );
@@ -74,7 +81,6 @@ export function unwrapShellCommand(command: string): string {
     let flagIndex = -1;
     for (let index = 1; index < tokens.length; index += 1) {
       const token = tokens[index];
-      if (token.quoted) continue;
       if (
         "optionBoundary" in wrapper &&
         wrapper.optionBoundary.test(token.value)
@@ -90,9 +96,12 @@ export function unwrapShellCommand(command: string): string {
     const commandToken = tokens[flagIndex + 1];
     if (!commandToken) break;
     const remainder = current.slice(commandToken.start).trim();
-    const script = wrapper.consumeRemainder
-      ? trimMatchingOuterQuotes(remainder)
-      : commandToken.value.trim();
+    const singleQuotedCommand =
+      commandToken.quoted && tokens.length === flagIndex + 2;
+    const script =
+      wrapper.consumeRemainder && !singleQuotedCommand
+        ? remainder
+        : commandToken.value.trim();
     if (!script || script === current) break;
     current = script;
   }
@@ -117,17 +126,6 @@ const SHELL_WRAPPERS = [
     consumeRemainder: true,
   },
 ] as const;
-
-function trimMatchingOuterQuotes(value: string): string {
-  if (
-    value.length >= 2 &&
-    ((value[0] === '"' && value[value.length - 1] === '"') ||
-      (value[0] === "'" && value[value.length - 1] === "'"))
-  ) {
-    return value.slice(1, -1).trim();
-  }
-  return value;
-}
 
 export function formatShellIntent(
   intent: ShellIntent,
