@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SecondaryButton } from "./SecondaryButton";
 import {
   loadNotificationPreferences,
   updateNotificationPreferences,
@@ -36,7 +37,7 @@ export function NotificationMuteDatePicker({
   return (
     <form
       noValidate
-      className="w-full max-w-xs space-y-3"
+      className="w-full"
       onSubmit={(event) => {
         event.preventDefault();
         if (!projectIds.length) return;
@@ -62,7 +63,9 @@ export function NotificationMuteDatePicker({
         }
       }}
     >
-      <p className="text-xs text-content/60">Resume notifications on</p>
+      <p className="mb-3 px-1 text-[11px] text-content/45">
+        Mute all notifications until
+      </p>
       <DateTimePicker
         value={value}
         onChange={(next) => {
@@ -73,25 +76,24 @@ export function NotificationMuteDatePicker({
         autoFocus
       />
       {error ? (
-        <p role="alert" className="text-xs text-red-400">
+        <p role="alert" className="mt-3 px-1 text-xs text-red-400">
           {error}
         </p>
       ) : null}
-      <div className="flex items-center justify-between gap-2 border-t border-content/10 pt-3">
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-content/10 pt-2.5">
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md px-3 py-1.5 text-xs text-content/60 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
+          className="rounded px-2 py-1.5 text-xs text-content/50 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
         >
           Cancel
         </button>
-        <button
+        <SecondaryButton
           type="submit"
           disabled={!projectIds.length}
-          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
         >
           Mute until then
-        </button>
+        </SecondaryButton>
       </div>
     </form>
   );

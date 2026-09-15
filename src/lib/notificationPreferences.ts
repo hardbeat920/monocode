@@ -154,6 +154,20 @@ export function isProjectMuted(
   return preference.mutedUntil === null || (preference.mutedUntil ?? 0) > now;
 }
 
+/** Indicators reflect current preferences; unread history is never consumed. */
+export function allowsProjectNotificationIndicator(
+  subject: Pick<NotificationSubject, "projectId" | "category">,
+  preferences = loadNotificationPreferences(),
+  now = Date.now(),
+): boolean {
+  const preference = preferences[subject.projectId];
+  return (
+    !preference ||
+    (!isProjectMuted(preference, now) &&
+      !preference.disabled.includes(subject.category))
+  );
+}
+
 /** Include effective mute state so mounted controls update when a deadline passes. */
 export function notificationPreferencesSnapshot(): string {
   const preferences = loadNotificationPreferences();

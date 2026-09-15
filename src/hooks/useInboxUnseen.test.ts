@@ -92,6 +92,40 @@ afterEach(() => {
 });
 
 describe("Inbox activity polling", () => {
+  it("updates Inbox and linked-session indicators on category changes without consuming unread activity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T12:00:00Z"));
+    const entry = { key: inboxItemKey(remote), updatedAt: remote.updatedAt };
+    seedInboxSeenIfNeeded([{ ...entry, updatedAt: "2026-09-12T12:00:00Z" }]);
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount();
+    expect(activity.unseen).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
+
+    act(() =>
+      updateNotificationPreferences(["repository:github.com/acme/app"], {
+        disabled: ["pullRequests"],
+      }),
+    );
+    expect(activity.unseen).toBe(false);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    expect(activity.linkedSessionUpdates.has(session.id)).toBe(true);
+    expect(isInboxEntryUnseen(entry)).toBe(true);
+
+    act(() =>
+      updateNotificationPreferences(["repository:github.com/acme/app"], {
+        disabled: [],
+        mutedUntil: Date.now() + 1000,
+      }),
+    );
+    expect(activity.unseen).toBe(false);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(activity.unseen).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
+    expect(isInboxEntryUnseen(entry)).toBe(true);
+  });
+
   it("updates the dot immediately on mute, resume, and mute expiry", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T12:00:00Z"));
@@ -152,7 +186,8 @@ describe("Inbox activity polling", () => {
     act(() => markInboxItemSeen(otherEntry));
     expect(activity.unseen).toBe(false);
     expect(isInboxEntryUnseen(mutedEntry)).toBe(true);
-    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    expect(activity.linkedSessionUpdates.has(session.id)).toBe(true);
   });
 
   it("reuses the Inbox list for linked-session updates", async () => {

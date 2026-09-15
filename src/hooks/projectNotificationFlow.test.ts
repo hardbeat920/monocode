@@ -61,7 +61,9 @@ async function pollUpdated(...indices: number[]) {
 }
 function projectRow(name: string) {
   return container
-    .querySelector(`input[aria-label="Select acme/${name}"]`)!
+    .querySelector(
+      `button[aria-label="Notification categories for acme/${name}"]`,
+    )!
     .closest("fieldset")!;
 }
 function click(scope: ParentNode, label: string) {
@@ -113,8 +115,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("suppresses muted updates but lets an unmuted project chime and badge in the same poll", async () => {
+it("honors category choices before and after a project mute while another project can still notify", async () => {
+  items.push({
+    ...items[0],
+    kind: "issue",
+    number: 2,
+    url: "https://github.com/acme/one/issues/2",
+  });
   await mount();
+  click(projectRow("one"), "Notification categories for acme/one");
+  act(() =>
+    projectRow("one")
+      .querySelector<HTMLInputElement>(
+        '[aria-label="Issues and Linear tasks for acme/one"]',
+      )!
+      .click(),
+  );
+  await pollUpdated(2);
+  expect(play).not.toHaveBeenCalled();
+  expect(activity.unseen).toBe(false);
+  expect(isInboxEntryUnseen(entry(2))).toBe(true);
+  await pollUpdated(0);
+  expect(play.mock.calls).toEqual([["bloom"]]);
+  expect(activity.unseen).toBe(true);
+  play.mockClear();
   mute(projectRow("one"));
   await pollUpdated(0);
   expect(activity.unseen).toBe(false);
@@ -130,6 +154,19 @@ it("suppresses muted updates but lets an unmuted project chime and badge in the 
   act(() => markInboxItemSeen(entry(1)));
   expect(activity.unseen).toBe(false);
   expect(isInboxEntryUnseen(entry(0))).toBe(true);
+
+  play.mockClear();
+  click(projectRow("one"), "Resume notifications");
+  expect(loadNotificationPreferences()[oneId].disabled).toEqual(["issues"]);
+  expect(play).not.toHaveBeenCalled();
+  act(() => markInboxItemSeen(entry(0)));
+  expect(activity.unseen).toBe(false);
+  await pollUpdated(2);
+  expect(play).not.toHaveBeenCalled();
+  expect(activity.unseen).toBe(false);
+  await pollUpdated(0);
+  expect(play.mock.calls).toEqual([["bloom"]]);
+  expect(activity.unseen).toBe(true);
 });
 
 it("restores a timed mute from storage on remount and expires without replaying missed sounds", async () => {
@@ -166,6 +203,7 @@ it("restores a timed mute from storage on remount and expires without replaying 
 
 it("bulk mutes through Settings and resumes just one project without losing unread items", async () => {
   await mount();
+  click(container, "Select projects");
   act(() =>
     container
       .querySelector<HTMLInputElement>('[aria-label="Select all projects"]')!

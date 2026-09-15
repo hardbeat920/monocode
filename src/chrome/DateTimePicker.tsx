@@ -81,12 +81,10 @@ export function DateTimePicker({
     !!minimum &&
     month.getFullYear() * 12 + month.getMonth() <=
       minimum.getFullYear() * 12 + minimum.getMonth();
-  const monthLabel = month.toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
+  const monthLabel = month.toLocaleDateString(undefined, { month: "long" });
   const headingId = useId();
   const timeId = useId();
+  const timeHintId = useId();
   const selectedKey = value.slice(0, 10);
   const time = value.includes("T") ? value.slice(value.indexOf("T") + 1) : "";
   const navigate = (date: Date, focus: boolean) => {
@@ -149,22 +147,25 @@ export function DateTimePicker({
     },
   );
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
+    <div>
+      <div className="mb-2 flex h-8 items-center justify-between px-1">
         <span
           id={headingId}
           aria-live="polite"
-          className="text-xs font-medium text-content"
+          className="flex items-baseline gap-1.5 text-xs font-medium text-content/90"
         >
-          {monthLabel}
+          {monthLabel}{" "}
+          <span className="font-normal tabular-nums text-content/40">
+            {month.getFullYear()}
+          </span>
         </span>
-        <div className="flex gap-1">
+        <div className="flex gap-0.5">
           <button
             type="button"
             aria-label="Previous month"
             disabled={previousDisabled}
             onClick={() => navigate(shiftMonth(focusedDate, -1), false)}
-            className="rounded-md p-1.5 text-content/60 hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-30"
+            className="grid size-7 place-items-center rounded text-content/55 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-30"
           >
             <ChevronLeft className="size-3.5" />
           </button>
@@ -172,7 +173,7 @@ export function DateTimePicker({
             type="button"
             aria-label="Next month"
             onClick={() => navigate(shiftMonth(focusedDate, 1), false)}
-            className="rounded-md p-1.5 text-content/60 hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent"
+            className="grid size-7 place-items-center rounded text-content/55 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
           >
             <ChevronRight className="size-3.5" />
           </button>
@@ -184,18 +185,19 @@ export function DateTimePicker({
             <span
               key={label}
               role="columnheader"
-              className="py-1 text-center text-[10px] text-content/40"
+              className="pb-1.5 text-center text-[10px] font-normal text-content/40"
             >
               {label}
             </span>
           ))}
         </div>
         {Array.from({ length: cells.length / 7 }, (_, week) => (
-          <div role="row" key={week} className="grid grid-cols-7 gap-0.5">
+          <div role="row" key={week} className="grid grid-cols-7 py-0.5">
             {cells.slice(week * 7, week * 7 + 7).map((date, column) => (
               <div
                 role="gridcell"
                 key={column}
+                className="flex justify-center"
                 aria-selected={date ? dateKey(date) === selectedKey : undefined}
               >
                 {date ? (
@@ -211,10 +213,16 @@ export function DateTimePicker({
                     aria-current={
                       dateKey(date) === dateKey(today) ? "date" : undefined
                     }
-                    className={`h-8 w-full rounded-md text-xs tabular-nums focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-25 disabled:hover:bg-transparent ${dateKey(date) === selectedKey ? "bg-accent text-white" : dateKey(date) === dateKey(today) ? "bg-content/10 text-content hover:bg-content/15" : "text-content/70 hover:bg-content/10 hover:text-content"}`}
+                    className={`relative size-8 rounded text-xs tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:text-content/20 ${dateKey(date) === selectedKey ? "bg-content/15 font-medium text-content ring-1 ring-inset ring-content/20" : "text-content/70 hover:bg-content/5 hover:text-content"}`}
                     onClick={() => pick(date)}
                   >
                     {date.getDate()}
+                    {dateKey(date) === dateKey(today) ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute bottom-1 left-1/2 size-0.5 -translate-x-1/2 rounded-full bg-current"
+                      />
+                    ) : null}
                   </button>
                 ) : null}
               </div>
@@ -222,27 +230,37 @@ export function DateTimePicker({
           </div>
         ))}
       </div>
-      <div className="border-t border-content/10 pt-3">
-        <label
-          htmlFor={timeId}
-          className="mb-1.5 block text-xs text-content/60"
-        >
-          Time (24-hour)
-        </label>
-        <div className="flex items-center gap-2 rounded-md border border-content/15 bg-content/5 px-2.5 focus-within:border-accent">
-          <Clock className="size-3.5 shrink-0 text-content/40" />
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-content/10 px-1 pt-3">
+        <div>
+          <label
+            htmlFor={timeId}
+            className="flex items-center gap-1.5 text-xs text-content/70"
+          >
+            <Clock
+              className="size-3 shrink-0 text-content/40"
+              aria-hidden="true"
+            />
+            Time
+          </label>
+          <p id={timeHintId} className="mt-0.5 text-[10px] text-content/40">
+            Local time, 24-hour
+          </p>
+        </div>
+        <div className="w-20 rounded border border-content/10 bg-content/5 focus-within:border-content/40 focus-within:outline-2 focus-within:outline-accent">
           <input
             id={timeId}
             type="text"
+            aria-describedby={timeHintId}
+            autoComplete="off"
+            spellCheck={false}
             placeholder="HH:mm"
             value={time}
             onChange={(event) =>
               onChange(`${dateKey(selected)}T${event.target.value}`)
             }
-            className="min-w-0 flex-1 bg-transparent py-2 text-xs tabular-nums text-content outline-none placeholder:text-content/30"
+            className="w-full bg-transparent px-2 py-1.5 text-center font-mono text-xs tabular-nums text-content outline-none placeholder:text-content/30"
           />
         </div>
-        <p className="mt-1.5 text-[10px] text-content/40">Your local time</p>
       </div>
     </div>
   );

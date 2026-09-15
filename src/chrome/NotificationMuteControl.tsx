@@ -8,6 +8,7 @@ import {
 import { NotificationMuteDatePicker } from "./NotificationMuteDatePicker";
 import { ExplorerMenu } from "./ExplorerMenu";
 import { Popover } from "./Popover";
+import { SecondaryButton } from "./SecondaryButton";
 import { BellOff, ChevronDown } from "./icons";
 import {
   isProjectMuted,
@@ -66,7 +67,7 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
           Resume notifications
         </button>
       ) : null}
-      <button
+      <SecondaryButton
         ref={trigger}
         type="button"
         aria-label={
@@ -74,14 +75,14 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
         }
         aria-haspopup={open === "custom" ? "dialog" : "menu"}
         aria-expanded={open !== null}
+        title="Mute pauses all project notifications without changing your category choices."
         disabled={!projectIds.length}
         onClick={() => setOpen(open ? null : "menu")}
-        className="flex shrink-0 items-center gap-2 rounded-md border border-content/10 px-2.5 py-1.5 text-xs text-content/65 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
       >
         <BellOff className="size-3.5" aria-hidden="true" />
         {muted.length ? "Muted" : "Mute"}
         <ChevronDown className="size-3 text-content/40" aria-hidden="true" />
-      </button>
+      </SecondaryButton>
       {error ? (
         <p role="alert" className="w-full text-xs text-red-400">
           {error}
@@ -95,7 +96,7 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
           width={244}
           header={
             <p className="px-2 py-1.5 text-[11px] text-content/45">
-              Mute notifications for
+              Mute all notifications for
             </p>
           }
           items={notificationMuteActions()}
@@ -116,7 +117,7 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
         <Popover
           anchor={trigger}
           align="end"
-          width={320}
+          width={280}
           role="dialog"
           aria-label="Mute project notifications"
           onDismiss={(reason) => close(reason === "escape")}

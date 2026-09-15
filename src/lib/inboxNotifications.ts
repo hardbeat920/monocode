@@ -1,5 +1,17 @@
 import type { InboxItem, InboxProvider } from "./githubTasks";
 import { inboxNotificationProject } from "./notificationProjects";
+import type { NotificationSubject } from "./notificationPreferences";
+
+export function inboxNotificationSubject(
+  item: Parameters<typeof inboxNotificationProject>[0] &
+    Pick<InboxItem, "kind" | "updatedAt">,
+): NotificationSubject {
+  return {
+    projectId: inboxNotificationProject(item).id,
+    category: item.kind === "pr" ? "pullRequests" : "issues",
+    occurredAt: Date.parse(item.updatedAt),
+  };
+}
 
 /** Tracks fetched revisions separately from the user's read/unread state. */
 export class InboxNotificationTracker {

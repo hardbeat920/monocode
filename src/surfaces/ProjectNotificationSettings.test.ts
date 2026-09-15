@@ -258,31 +258,60 @@ it("mutes several selected projects without changing another project's notificat
   ).toBeUndefined();
 });
 
-it("shows a project's mute and lets it resume with its category choices intact", async () => {
-  updateNotificationPreferences(["repository:github.com/me/private"], {
-    mutedUntil: null,
-    disabled: ["issues"],
-  });
-  await act(async () =>
-    root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
-  );
-  const project = checkbox("Issues and Linear tasks for me/private").closest(
-    "fieldset",
-  )!;
-  expect(project.textContent).toContain("Muted until resumed");
-  const resume = [...project.querySelectorAll("button")].find(
-    (button) => button.textContent === "Resume notifications",
-  );
-  expect(resume).toBeInstanceOf(HTMLButtonElement);
-  act(() => resume!.click());
-  expect(project.textContent).not.toContain("Muted until resumed");
-  expect(checkbox("Issues and Linear tasks for me/private").checked).toBe(
-    false,
-  );
-  expect(
-    loadNotificationPreferences()["repository:github.com/me/private"],
-  ).toMatchObject({ disabled: ["issues"] });
-});
+it.each(["manual", "expiry"])(
+  "explains the project-wide pause and preserves editable category choices after %s resume",
+  async (resumeMode) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-15T12:00:00Z"));
+    updateNotificationPreferences(["repository:github.com/me/private"], {
+      mutedUntil: resumeMode === "manual" ? null : Date.now() + 60_000,
+      disabled: ["issues"],
+    });
+    await act(async () =>
+      root.render(createElement(ProjectNotificationSettings, { cwd: "" })),
+    );
+    const project = checkbox("Issues and Linear tasks for me/private").closest(
+      "fieldset",
+    )!;
+    act(() => categoriesButton("me/private").click());
+    expect(categoriesButton("me/private").textContent).toContain(
+      "All notifications paused",
+    );
+    const pr = checkbox("Pull requests / Merge requests for me/private");
+    const description = document.getElementById(
+      pr.getAttribute("aria-describedby") ?? "",
+    );
+    expect(description?.textContent).toContain(
+      "Your category choices apply when notifications resume.",
+    );
+    expect(pr.checked).toBe(true);
+    expect(pr.disabled).toBe(false);
+    act(() => checkbox("Reminders for me/private").click());
+    expect(categoriesButton("me/private").textContent).toContain(
+      "All notifications paused",
+    );
+    const resume = [...project.querySelectorAll("button")].find(
+      (button) => button.textContent === "Resume notifications",
+    );
+    expect(resume).toBeInstanceOf(HTMLButtonElement);
+    if (resumeMode === "manual") {
+      act(() => resume!.click());
+    } else {
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    }
+    expect(categoriesButton("me/private").textContent).toContain(
+      "3 of 5 enabled",
+    );
+    expect(project.textContent).not.toContain("All notifications paused");
+    expect(pr.hasAttribute("aria-describedby")).toBe(false);
+    expect(checkbox("Issues and Linear tasks for me/private").checked).toBe(
+      false,
+    );
+    expect(
+      loadNotificationPreferences()["repository:github.com/me/private"],
+    ).toMatchObject({ disabled: ["issues", "reminders"] });
+  },
+);
 
 it("dismisses the mute menu and custom date picker without changing preferences", async () => {
   await act(async () =>

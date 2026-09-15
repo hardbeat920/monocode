@@ -6,11 +6,17 @@ also cover desktop banners for agent completion, approvals and questions.
 They do not hide activity in sessions or the sidebar, change read/unread state,
 stop polling, or change the user's global sound and desktop-notification settings.
 
-Muted projects do not contribute to the blue dot beside Inbox. Unread activity
-from an unmuted project still shows the dot. Muting or resuming a project updates
-the dot immediately, including automatic mute expiry. Items from muted projects
-stay unread and visible in Inbox; after resume, any remaining unread items can
-contribute to the dot again. Category switches affect delivery, not the dot.
+Category switches and project mute both govern blue dots beside Inbox in the
+sidebar and beside sessions linked to updated work items. A disabled category or
+muted project cannot show these indicators. Changes apply immediately, including
+automatic mute expiry. Items stay unread and visible; linked update details remain
+available. After resume or category re-enabling, unread activity in enabled
+categories can show indicators again. This does not replay old sounds or banners.
+
+Unread markers on individual items inside Inbox are independent of notification
+preferences. They stay visible while a category is off or the project is muted.
+Opening or reopening Inbox does not mark items read; selecting an item or using
+"Mark all as read" does. Mute expiry and category changes do not alter read state.
 
 ## User controls
 
@@ -47,6 +53,15 @@ date and time. A mute override leaves category preferences intact. After expiry
 or manual resume, only the selected categories are enabled. UI writes surface
 storage failures rather than displaying a successful save that was not persisted.
 
+Category switches are ongoing preferences, not exceptions to a project mute.
+For example, turning Issues off and leaving Pull requests on allows PR notifications
+while the project is unmuted. Muting the project pauses all delivery; resuming
+restores PR delivery while Issues stays off. Settings shows "All notifications
+paused" during a mute instead of an enabled-category count. The expanded row
+explains that category choices apply after resume. Switches remain editable while
+muted, and edits persist without cancelling or extending the mute. The row returns
+to its category count automatically at expiry or on manual resume.
+
 ## Module responsibilities
 
 - `notificationProjects.ts` resolves and catalogs project identities. Its native
@@ -70,9 +85,14 @@ storage failures rather than displaying a successful save that was not persisted
   shared `allowsProjectNotification` decision. Category enable times and mute
   resume times also live here. Subscribers follow writes, other-window storage
   events, focus changes and the nearest mute expiry.
+  `allowsProjectNotificationIndicator` applies current category and mute choices
+  to unread indicators without consuming unread history. Event delivery also
+  checks occurrence-time cutoffs to prevent replaying old sounds and banners.
 - `inboxNotifications.ts` tracks fetched item revisions independently of Inbox
   read/unread state. The existing background hook supplies snapshots and keeps
-  the badge calculation separate.
+  the badge calculation separate. `inboxNotificationSubject` shares project and
+  category classification between sound delivery and indicators, including
+  GitLab merge requests and Linear issues.
 - `sounds.ts` applies global sound settings and project policy. Project sound
   cues require a typed notification subject. `playCue` reports whether it
   submitted a cue, allowing an Inbox batch to stop after its first eligible cue.

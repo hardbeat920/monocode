@@ -72,14 +72,14 @@ export function InboxNotificationMenu({
       <Popover
         anchor={{ x, y }}
         gap={0}
-        width={320}
+        width={280}
         role="dialog"
         aria-label="Mute project notifications"
         onDismiss={onClose}
-        className="space-y-3 overflow-y-auto p-3"
+        className="space-y-1 overflow-y-auto p-3"
       >
         <div className="space-y-1">
-          <p className="text-sm font-medium text-content">Mute all projects</p>
+          <p className="px-1 text-xs font-medium text-content/85">Mute all projects</p>
         </div>
         <NotificationMuteDatePicker
           projectIds={allIds}

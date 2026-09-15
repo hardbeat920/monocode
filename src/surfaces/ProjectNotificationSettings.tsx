@@ -8,6 +8,7 @@ import { useProjectNotificationPreferences } from "../hooks/useProjectNotificati
 import { useNotificationProjects } from "../hooks/useNotificationProjects";
 import {
   NOTIFICATION_CATEGORIES,
+  isProjectMuted,
   loadNotificationPreferences,
   updateNotificationPreferences,
   type NotificationCategory,
@@ -135,8 +136,8 @@ export function ProjectNotificationSettings({
         ) : null}
       </div>
       <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-        Choose sounds and banners for each project. Muted activity stays in
-        MonoCode.
+        Choose sounds, banners and sidebar indicators by category. Mute pauses
+        them without changing your choices. Unread items stay marked in Inbox.
       </p>
       {!soundsEnabled || !desktopEnabled ? (
         <div
@@ -213,8 +214,12 @@ export function ProjectNotificationSettings({
                 (category) =>
                   !preferences[project.id]?.disabled.includes(category.id),
               ).length;
+              const muted = isProjectMuted(
+                preferences[project.id] ?? { disabled: [] },
+              );
               const isExpanded = expanded === project.id;
               const panelId = `notification-categories-${encodeURIComponent(project.id)}`;
+              const muteHintId = `${panelId}-mute-hint`;
               return (
                 <fieldset
                   key={project.id}
@@ -282,9 +287,11 @@ export function ProjectNotificationSettings({
                             {project.name}
                           </p>
                           <p className="mt-1 text-[12px] text-content/45">
-                            {enabledCount === categories.length
-                              ? "All activity"
-                              : `${enabledCount} of ${categories.length} enabled`}
+                            {muted
+                              ? "All notifications paused"
+                              : enabledCount === categories.length
+                                ? "All categories enabled"
+                                : `${enabledCount} of ${categories.length} enabled`}
                           </p>
                         </div>
                         <ChevronRight
@@ -301,6 +308,16 @@ export function ProjectNotificationSettings({
                     <div
                       className={`pb-2 ${selecting ? "pl-7 @[400px]/notifications:pl-14" : "pl-0 @[400px]/notifications:pl-7"}`}
                     >
+                      {muted ? (
+                        <p
+                          id={muteHintId}
+                          role="status"
+                          className="pb-3 text-[12px] leading-relaxed text-content/45"
+                        >
+                          Your category choices apply when notifications resume.
+                          You can edit them while muted.
+                        </p>
+                      ) : null}
                       {categories.map((category) => (
                         <label
                           key={category.id}
@@ -312,6 +329,7 @@ export function ProjectNotificationSettings({
                               type="checkbox"
                               role="switch"
                               aria-label={`${category.label} for ${project.name}`}
+                              aria-describedby={muted ? muteHintId : undefined}
                               checked={
                                 !preferences[project.id]?.disabled.includes(
                                   category.id,

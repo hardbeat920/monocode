@@ -37,28 +37,32 @@ import { loadHiddenLinearTeamIds } from "../lib/linear";
 import type { RecentProject } from "../lib/recents";
 import type { SessionSummary } from "../lib/sessionStore";
 import { playCue } from "../lib/sounds";
-import { InboxNotificationTracker } from "../lib/inboxNotifications";
+import {
+  InboxNotificationTracker,
+  inboxNotificationSubject,
+} from "../lib/inboxNotifications";
 import {
   inboxNotificationProject,
   rememberNotificationProjects,
 } from "../lib/notificationProjects";
 import {
-  isProjectMuted,
+  allowsProjectNotificationIndicator,
   loadNotificationPreferences,
   subscribeNotificationPreferences,
+  type NotificationSubject,
 } from "../lib/notificationPreferences";
 
 const POLL_MS = 30_000;
 const FALLBACK_REFRESH_MS = 60_000;
 const MAX_CONCURRENT_LOOKUPS = 3;
 
-type ProjectSeenEntry = InboxSeenEntry & { projectId: string };
+type ProjectSeenEntry = InboxSeenEntry & NotificationSubject;
 
 function seenEntries(items: readonly InboxItem[]): ProjectSeenEntry[] {
   return items.map((item) => ({
     key: inboxItemKey(item),
     updatedAt: item.updatedAt,
-    projectId: inboxNotificationProject(item).id,
+    ...inboxNotificationSubject(item),
   }));
 }
 
@@ -127,6 +131,7 @@ export function useInboxActivity(
     ReadonlyMap<string, GithubWorkItem>
   >(() => new Map());
   const [linkedSeenRevision, setLinkedSeenRevision] = useState(0);
+  const [notificationRevision, setNotificationRevision] = useState(0);
   const entriesRef = useRef<ProjectSeenEntry[]>([]);
   const notifications = useRef(new InboxNotificationTracker());
   const sessionsRef = useRef(sessions);
@@ -138,20 +143,22 @@ export function useInboxActivity(
 
   const applyUnseen = useCallback(() => {
     const preferences = loadNotificationPreferences();
-    // Mute affects the navigation badge, never the item's unread state.
+    // Category choices and mute affect badges, never the item's unread state.
     setUnseen(
       inboxHasUnseenItems(
-        entriesRef.current.filter((entry) => {
-          const preference = preferences[entry.projectId];
-          return !preference || !isProjectMuted(preference);
-        }),
+        entriesRef.current.filter((entry) =>
+          allowsProjectNotificationIndicator(entry, preferences),
+        ),
       ),
     );
   }, []);
 
   useEffect(() => {
     const stopSeen = subscribeInboxSeen(applyUnseen);
-    const stopPreferences = subscribeNotificationPreferences(applyUnseen);
+    const stopPreferences = subscribeNotificationPreferences(() => {
+      applyUnseen();
+      setNotificationRevision((revision) => revision + 1);
+    });
     return () => {
       stopSeen();
       stopPreferences();
@@ -205,14 +212,7 @@ export function useInboxActivity(
         // one eligible project chimes; muted projects cannot consume that slot.
         for (const item of changed) {
           if (!visibleKeys.has(inboxItemKey(item))) continue;
-          if (
-            playCue("inboxUnseen", {
-              projectId: inboxNotificationProject(item).id,
-              category: item.kind === "pr" ? "pullRequests" : "issues",
-              occurredAt: Date.parse(item.updatedAt),
-            })
-          )
-            break;
+          if (playCue("inboxUnseen", inboxNotificationSubject(item))) break;
         }
         const entries = seenEntries(visible);
         entriesRef.current = entries;
@@ -287,10 +287,23 @@ export function useInboxActivity(
     () => linkedSessionUpdates(sessions, workItems, linkedSessionSeenAt),
     [sessions, workItems, linkedSeenRevision],
   );
+  const linkedIndicators = useMemo(() => {
+    const preferences = loadNotificationPreferences();
+    return new Set(
+      [...updates]
+        .filter(([, update]) =>
+          allowsProjectNotificationIndicator(
+            inboxNotificationSubject({ ...update.item, provider: "github" }),
+            preferences,
+          ),
+        )
+        .map(([id]) => id),
+    );
+  }, [updates, notificationRevision]);
   return {
     unseen,
     linkedSessionUpdates: updates,
-    linkedSessionUpdateIds: new Set(updates.keys()),
+    linkedSessionUpdateIds: linkedIndicators,
   };
 }
 

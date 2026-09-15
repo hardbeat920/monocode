@@ -741,13 +741,18 @@ function ProjectNotificationDatePicker({
     <Popover
       anchor={{ x, y }}
       gap={0}
-      width={320}
+      width={280}
       role="dialog"
       aria-label="Mute project notifications"
       onDismiss={onClose}
-      className="space-y-3 overflow-y-auto p-3"
+      className="space-y-1 overflow-y-auto p-3"
     >
-      <p className="truncate text-sm font-medium text-content">{project.name}</p>
+      <p
+        className="truncate px-1 text-xs font-medium text-content/85"
+        title={project.name}
+      >
+        {project.name}
+      </p>
       <NotificationMuteDatePicker projectIds={[project.id]} onCancel={onClose} onChanged={onClose} />
     </Popover>
   );
