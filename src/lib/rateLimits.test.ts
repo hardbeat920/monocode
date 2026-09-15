@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampUsedPercent,
+  errorRateLimits,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
@@ -127,6 +128,82 @@ describe("parseClaudeOAuthUsage", () => {
     expect(limits.weekly?.resetsAt).toBe(
       Date.parse("2026-09-01T00:00:00.000Z"),
     );
+  });
+
+  it("maps weekly_scoped limits to per-model weekly windows", () => {
+    const limits = parseClaudeOAuthUsage(
+      JSON.stringify({
+        five_hour: { utilization: 6, resets_at: "2026-09-13T16:50:00Z" },
+        seven_day: { utilization: 28, resets_at: "2026-09-15T08:00:00Z" },
+        limits: [
+          { kind: "session", group: "session", percent: 6, scope: null },
+          { kind: "weekly_all", group: "weekly", percent: 28, scope: null },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 49,
+            resets_at: "2026-09-15T08:00:00Z",
+            scope: {
+              model: { id: null, display_name: "Fable" },
+              surface: null,
+            },
+          },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 12,
+            resets_at: "2026-09-15T08:00:00Z",
+            scope: { model: { id: "claude-opus-5", display_name: "" } },
+          },
+          { kind: "weekly_scoped", group: "weekly", percent: 1, scope: {} },
+        ],
+      }),
+    );
+    expect(limits.weeklyByModel).toEqual([
+      {
+        label: "Fable",
+        window: {
+          usedPercent: 49,
+          windowMinutes: 10_080,
+          resetsAt: Date.parse("2026-09-15T08:00:00Z"),
+        },
+      },
+      {
+        label: "claude-opus-5",
+        window: {
+          usedPercent: 12,
+          windowMinutes: 10_080,
+          resetsAt: Date.parse("2026-09-15T08:00:00Z"),
+        },
+      },
+    ]);
+  });
+
+  it("keeps a scoped-only snapshot through a later error", () => {
+    const scopedOnly = parseClaudeOAuthUsage(
+      JSON.stringify({
+        limits: [
+          {
+            kind: "weekly_scoped",
+            percent: 49,
+            resets_at: "2026-09-15T08:00:00Z",
+            scope: { model: { display_name: "Fable" } },
+          },
+        ],
+      }),
+    );
+    expect(scopedOnly.session).toBeNull();
+    expect(scopedOnly.weeklyByModel).toHaveLength(1);
+    const failed = errorRateLimits("claude", "boom", scopedOnly);
+    expect(failed.status).toBe("error");
+    expect(failed.weeklyByModel).toEqual(scopedOnly.weeklyByModel);
+  });
+
+  it("leaves weeklyByModel empty without a limits array", () => {
+    const limits = parseClaudeOAuthUsage(
+      JSON.stringify({ five_hour: { utilization: 1 } }),
+    );
+    expect(limits.weeklyByModel).toEqual([]);
   });
 
   it("returns an error for garbage", () => {
@@ -266,9 +343,9 @@ describe("shouldFetchRateLimits", () => {
       error: "Codex CLI not found",
     };
     expect(isRateLimitSnapshotStale(disconnected, now)).toBe(false);
-    expect(
-      shouldFetchProvider(disconnected, { visible: true, now }),
-    ).toBe(false);
+    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
+      false,
+    );
     expect(
       shouldFetchRateLimits({
         visible: true,
@@ -286,9 +363,9 @@ describe("shouldFetchRateLimits", () => {
       updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
       error: "Claude not signed in",
     };
-    expect(
-      shouldFetchProvider(disconnected, { visible: true, now }),
-    ).toBe(false);
+    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
+      false,
+    );
     expect(
       shouldFetchRateLimits({
         visible: true,

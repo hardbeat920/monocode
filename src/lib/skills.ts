@@ -146,6 +146,11 @@ export function hasNativeCommands(harness: HarnessId): boolean {
   return !!getHarness(harness)?.commands;
 }
 
+/** `/name` alone on the line, so ordinary prompt text is never consumed. */
+export function isStandaloneCommand(text: string, name: string): boolean {
+  return new RegExp(`^\\s*/${name}\\s*$`, "i").test(text);
+}
+
 export function isNativeCommandPrompt(
   text: string,
   harness: HarnessId,
@@ -558,7 +563,9 @@ export function warmNativeSkills(
 export async function readSkillBody(
   skill: FileSkill | BuiltinSkill,
 ): Promise<string> {
-  if (skill.kind === "builtin") return CREATE_SKILL_BODY;
+  if (skill.kind === "builtin") {
+    return skill.name === CREATE_SKILL_NAME ? CREATE_SKILL_BODY : "";
+  }
   try {
     return await readTextFile(skill.path);
   } catch {

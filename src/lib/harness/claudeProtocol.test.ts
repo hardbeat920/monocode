@@ -10,6 +10,7 @@ import {
   buildClaudeUserMessage,
   contextFromResult,
   contextUsedFromAssistant,
+  usageFromResult,
   extractExitPlanModePlan,
   isClaudeInitMessage,
   isSubagentMessage,
@@ -613,6 +614,38 @@ describe("contextUsedFromAssistant", () => {
   it("ignores a message with no usage", () => {
     expect(
       contextUsedFromAssistant({ type: "assistant", message: {} }),
+    ).toBeUndefined();
+  });
+});
+
+describe("usageFromResult", () => {
+  it("reads cost, API time, and the four token counts", () => {
+    expect(
+      usageFromResult({
+        type: "result",
+        total_cost_usd: 0.0108758,
+        duration_ms: 1810,
+        duration_api_ms: 1759,
+        usage: {
+          input_tokens: 10,
+          cache_creation_input_tokens: 4522,
+          cache_read_input_tokens: 15118,
+          output_tokens: 62,
+        },
+      }),
+    ).toEqual({
+      processCostUsd: 0.0108758,
+      processApiMs: 1759,
+      turnTokens: { input: 10, output: 62, cacheRead: 15118, cacheWrite: 4522 },
+    });
+  });
+
+  it("omits fields the result does not carry", () => {
+    expect(usageFromResult({ type: "result", total_cost_usd: 0.2 })).toEqual({
+      processCostUsd: 0.2,
+    });
+    expect(
+      usageFromResult({ type: "result", subtype: "success" }),
     ).toBeUndefined();
   });
 });

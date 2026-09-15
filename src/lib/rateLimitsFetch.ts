@@ -28,16 +28,31 @@ type ClaudeUsageFetch = {
   error?: string | null;
 };
 
-export async function fetchClaudeRateLimits(): Promise<ProviderRateLimits> {
+let lastClaudeSnapshot: ProviderRateLimits | null = null;
+
+/** Every caller shares one snapshot; `maxAgeMs` skips the keychain and network. */
+export async function fetchClaudeRateLimits(options?: {
+  maxAgeMs?: number;
+}): Promise<ProviderRateLimits> {
+  if (
+    options?.maxAgeMs != null &&
+    lastClaudeSnapshot &&
+    lastClaudeSnapshot.updatedAt > 0 &&
+    Date.now() - lastClaudeSnapshot.updatedAt < options.maxAgeMs
+  ) {
+    return lastClaudeSnapshot;
+  }
+  lastClaudeSnapshot = await fetchClaudeRateLimitsNow(lastClaudeSnapshot);
+  return lastClaudeSnapshot;
+}
+
+async function fetchClaudeRateLimitsNow(
+  previous: ProviderRateLimits | null,
+): Promise<ProviderRateLimits> {
   try {
     const result = await invoke<ClaudeUsageFetch>("fetch_claude_usage");
     if (result.status === "ok" && result.body) {
-      const parsed = parseClaudeOAuthUsage(result.body);
-      if (parsed.session || parsed.weekly) return parsed;
-      return {
-        ...parsed,
-        status: parsed.status === "ok" ? "ok" : parsed.status,
-      };
+      return parseClaudeOAuthUsage(result.body);
     }
     if (result.status === "unavailable") {
       return unavailableRateLimits(
@@ -48,11 +63,13 @@ export async function fetchClaudeRateLimits(): Promise<ProviderRateLimits> {
     return errorRateLimits(
       "claude",
       result.error?.trim() || "Claude usage unavailable",
+      previous,
     );
   } catch (error) {
     return errorRateLimits(
       "claude",
       error instanceof Error ? error.message : "Claude usage unavailable",
+      previous,
     );
   }
 }

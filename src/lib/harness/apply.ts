@@ -8,6 +8,7 @@ import type {
   ToolPreview,
 } from "../session";
 import { mergeContextUsage } from "../contextUsage";
+import { mergeSessionUsage, resetProcessCounters } from "../sessionUsage";
 import { displayPath } from "../paths";
 import {
   composeToolTitle,
@@ -105,6 +106,12 @@ export function applyHarnessEvent(
           window: event.window,
         }),
       };
+    case "usage":
+      return { ...session, usage: mergeSessionUsage(session.usage, event) };
+    case "session.started":
+      return session.usage
+        ? { ...session, usage: resetProcessCounters(session.usage) }
+        : session;
     case "turn.metrics":
       return mergeTurnMetrics(session, event);
     case "tasks.updated":
