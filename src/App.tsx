@@ -4367,7 +4367,7 @@ export default function App({
       if (controlError) {
         enqueueHarnessEvent(sessionId, { type: "status", text: controlError });
         flushHarnessEvents();
-        return;
+        return false;
       }
       if (options?.managed) {
         const target = sessionsRef.current.find((s) => s.id === sessionId);
@@ -4383,12 +4383,12 @@ export default function App({
             text: "",
             error: "Session is unavailable or already running",
           });
-          return;
+          return false;
         }
       }
-      if (removingSessionIds.current.has(sessionId)) return;
+      if (removingSessionIds.current.has(sessionId)) return false;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
-      if (!storedCurrent) return;
+      if (!storedCurrent) return false;
       const current = options?.buildTarget
         ? withPlanBuildTarget(storedCurrent, options.buildTarget)
         : storedCurrent;
@@ -4406,7 +4406,7 @@ export default function App({
             text: error instanceof Error ? error.message : String(error),
           });
           flushHarnessEvents();
-          return;
+          return false;
         }
       }
       const approvedPlan = options?.planBlockId
@@ -4415,12 +4415,12 @@ export default function App({
               block.id === options.planBlockId && block.role === "plan",
           )
         : undefined;
-      if (intent === "build" && !approvedPlan?.text.trim()) return;
+      if (intent === "build" && !approvedPlan?.text.trim()) return false;
       if (options?.queuedMessageId) {
         const mode =
           options.followUpBehavior === "steer" ? "steer" : "dispatch";
         if (!queuedMessageForSubmit(current, options.queuedMessageId, mode)) {
-          return;
+          return false;
         }
       }
       const noteCard =
@@ -4435,9 +4435,9 @@ export default function App({
         !noteCard &&
         !handoffCard
       ) {
-        return;
+        return false;
       }
-      if (isPreparingHandoff(current)) return;
+      if (isPreparingHandoff(current)) return false;
       saveRecentModelChoice(current.harness, current.model);
       const workCwd = sessionWorkCwd(current);
       const submittedText = intent === "build" ? "Build approved plan" : text;
@@ -4483,7 +4483,7 @@ export default function App({
             ),
           );
           dismissNoticesForContinuedSession(sessionId);
-          return;
+          return true;
         }
         if (
           !isLiveHarness(current.harness) ||
@@ -4496,7 +4496,7 @@ export default function App({
             text: `${current.harness} cannot take a follow-up mid-turn — wait for this turn to finish, or stop it first.`,
           });
           flushHarnessEvents();
-          return;
+          return false;
         }
         dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
@@ -4548,7 +4548,7 @@ export default function App({
             flushHarnessEvents();
           }
         })();
-        return;
+        return true;
       }
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
@@ -4735,7 +4735,7 @@ export default function App({
           text: "",
           error: "Harness is not connected",
         });
-        return;
+        return true;
       }
 
       if (proposalId && proposalDraft) {
@@ -5071,6 +5071,7 @@ export default function App({
               : controlOutcome,
           );
         });
+      return true;
     },
     [
       dismissNoticesForContinuedSession,
@@ -7129,6 +7130,7 @@ export default function App({
                 sessions={sidebarHistory}
                 besideRail
                 onClose={onCloseSettings}
+                onSelectSection={onSelectSettingsSection}
                 onOpenSession={onOpenArchivedSession}
                 onArchiveSession={onArchiveHistorySession}
                 onDeleteSession={onDeleteHistorySession}
@@ -7190,7 +7192,7 @@ export default function App({
             onSnooze={sessionReminders.schedule}
             onDismiss={sessionReminders.cancel}
             onRetry={sessionReminders.refresh}
-            onOpenSettings={() => openSettings()}
+            onOpenSettings={() => openSettings("general", "notifications")}
             onHeightChange={setReminderNoticesHeight}
           />
           {whatsNewVersion ? (

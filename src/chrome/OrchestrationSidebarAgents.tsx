@@ -7,7 +7,10 @@ import {
 } from "../lib/orchestrationSummary";
 import { HARNESS_TITLE } from "../lib/session";
 import { HarnessIcon } from "./HarnessIcon";
-import { OrchestrationWorkers } from "./OrchestrationActions";
+import {
+  OrchestrationActions,
+  OrchestrationWorkers,
+} from "./OrchestrationActions";
 import { Check, ChevronDown, ChevronRight, CircleAlert } from "./icons";
 import { TerminalSpinner } from "./TerminalSpinner";
 
@@ -18,6 +21,7 @@ export function OrchestrationSidebarAgents({
   leadId: string;
   summary: OrchestrationSummary;
 }) {
+  const actions = useContext(OrchestrationActions);
   const workers = useContext(OrchestrationWorkers);
   const runs = useSyncExternalStore(
     orchestrator.subscribe,
@@ -49,6 +53,13 @@ export function OrchestrationSidebarAgents({
   };
   // A saved run has no live entry, so the card stays read-only after a reload.
   const run = runs.find((entry) => entry.leadId === leadId);
+  const stopping = !!run?.tasks.some(
+    (task) => task.status === "running" || task.status === "cancelling",
+  );
+  const resumeBlocker =
+    run?.status === "paused" ? orchestrator.resumeBlocker(leadId) : undefined;
+  const leadBusy =
+    run?.status === "paused" && orchestrator.resumeLeadBusy(leadId);
   const perform = async (operation: () => Promise<void>) => {
     setPending(true);
     setError(undefined);
@@ -229,23 +240,57 @@ export function OrchestrationSidebarAgents({
       {/* Stopping a run belongs to the composer, which stops the lead and its
           agents together. Resume has no other home, so it stays. */}
       {run?.status === "paused" && (
-        <div className="-mr-1.5 mt-0.5 flex items-center justify-end">
-          <button
-            type="button"
-            className={action}
-            disabled={pending}
-            onClick={() =>
-              void perform(() =>
-                orchestrator.start(
-                  leadId,
-                  run.allowedHarnesses,
-                  run.maxWorkers,
-                ),
-              )
-            }
-          >
-            Resume
-          </button>
+        <div className="mt-1.5 space-y-1.5 border-t border-content/10 pt-1.5">
+          <p className="px-0.5 text-[11px] leading-relaxed text-content/45">
+            {stopping
+              ? "Stopping interrupted work before this run can resume."
+              : leadBusy
+                ? "Waiting for the lead's interrupted turn to finish before this run can resume."
+                : "Resume continues queued work. Interrupted tasks stay stopped for the lead to review."}
+          </p>
+          {resumeBlocker && (
+            <p className="px-0.5 text-[11px] leading-relaxed text-amber-400">
+              {resumeBlocker.title || "Another conversation"} is still running
+              in this project.
+            </p>
+          )}
+          <div className="-mr-1.5 flex items-center justify-end gap-1">
+            {resumeBlocker && actions && (
+              <button
+                type="button"
+                className={action}
+                disabled={pending}
+                onClick={() => actions.open(resumeBlocker.id)}
+              >
+                Open blocker
+              </button>
+            )}
+            <button
+              type="button"
+              className={action}
+              disabled={pending || stopping || leadBusy || !!resumeBlocker}
+              title={
+                stopping
+                  ? "Wait for interrupted agents to stop"
+                  : leadBusy
+                    ? "Wait for the lead's interrupted turn to finish"
+                    : resumeBlocker
+                      ? `Stop ${resumeBlocker.title || "the other conversation"} before resuming`
+                      : "Continue queued work and review interrupted tasks"
+              }
+              onClick={() =>
+                void perform(() =>
+                  orchestrator.start(
+                    leadId,
+                    run.allowedHarnesses,
+                    run.maxWorkers,
+                  ),
+                )
+              }
+            >
+              Resume
+            </button>
+          </div>
         </div>
       )}
     </div>

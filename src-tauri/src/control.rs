@@ -220,15 +220,14 @@ pub fn control_enable(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if inner
+    if let Some((id, _)) = inner
         .active
         .iter()
-        .any(|(id, turn)| id != &session_id && paths_overlap(&turn.cwd, &cwd))
+        .find(|(id, turn)| *id != &session_id && paths_overlap(&turn.cwd, &cwd))
     {
-        return Err(
-            "Another session is running in this checkout. Stop it before enabling orchestration."
-                .into(),
-        );
+        return Err(format!(
+            "Another session ({id}) is running in this checkout. Stop it before enabling orchestration."
+        ));
     }
     if inner.grants.values().any(|g| {
         paths_overlap(&g.cwd, &cwd) && (g.session != session_id || g.window != window.label())

@@ -183,7 +183,7 @@ type Props = {
     text: string,
     attachments: Attachment[],
     options?: ComposerTurnOptions,
-  ) => void;
+  ) => boolean | void;
   onStop?: () => void;
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
@@ -1009,7 +1009,7 @@ export function Composer({
       : composeInboxMessage(inboxCard, command.text);
     const files = attachments;
     if (!text && files.length === 0 && !noteCard && !handoffCard) return;
-    onSubmit(text, files, {
+    const accepted = onSubmit(text, files, {
       intent:
         planSelected || command.planning
           ? "plan"
@@ -1017,6 +1017,10 @@ export function Composer({
             ? "orchestrate"
             : "default",
     });
+    // The app can reject a turn before it is recorded (for example while an
+    // orchestration is paused). Keep the user's text, files and selected mode
+    // intact so resolving the blocker never destroys their work.
+    if (accepted === false) return;
     if (!ref.current) return;
     ref.current.value = "";
     ref.current.style.height = "auto";

@@ -135,6 +135,7 @@ import { ColorPickerPopover, ColorSwatchRow } from "./ColorPickerPopover";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTree } from "./FileTree";
 import { HarnessIcon } from "./HarnessIcon";
+import { LiveAgentsPreview } from "./LiveAgentsPreview";
 import { ProjectRail } from "./ProjectRail";
 import { RailAction } from "./RailAction";
 import { TerminalSpinner } from "./TerminalSpinner";
@@ -1568,6 +1569,11 @@ function SidebarComponent({
         ) : null}
         {showSidebarFooter ? (
           <>
+            <LiveAgentsPreview
+              agents={liveAgents}
+              activeSessionId={activeSessionId}
+              onSelect={onSelectAgent}
+            />
             <SidebarUpdateFooter
               update={updateNotice}
               onOpenWhatsNew={onOpenWhatsNew}
