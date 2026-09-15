@@ -100,6 +100,7 @@ export function unwrapShellCommand(command: string): string {
     const commandQuote = current[commandToken.start];
     const commandIsSoleQuotedToken =
       (commandQuote === '"' || commandQuote === "'") &&
+      current[commandToken.end - 1] === commandQuote &&
       tokens.length === flagIndex + 2;
     const script =
       wrapper.consumeRemainder && !commandIsSoleQuotedToken

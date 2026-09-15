@@ -209,6 +209,9 @@ describe("unwrapShellCommand", () => {
     expect(
       unwrapShellCommand(`pwsh "-Command" "Get-Content package.json"`),
     ).toBe("Get-Content package.json");
+    expect(unwrapShellCommand(`pwsh -Command "Get-Content".ps1`)).toBe(
+      `"Get-Content".ps1`,
+    );
     expect(
       unwrapShellCommand(`pwsh -Command 'Get-Date' '-Format' 'yyyy-MM-dd'`),
     ).toBe(`'Get-Date' '-Format' 'yyyy-MM-dd'`);
