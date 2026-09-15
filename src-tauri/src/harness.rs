@@ -306,6 +306,19 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve the OpenCrabs CLI (`opencrabs`).
+#[tauri::command(async)]
+pub fn harness_resolve_opencrabs() -> Result<CursorBinary, String> {
+    resolve_opencrabs()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "OpenCrabs CLI not found. Install OpenCrabs from https://github.com/opencrabs/opencrabs, then retry."
+                .into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -1413,6 +1426,35 @@ fn resolve_grok() -> Option<PathBuf> {
     }
 
     first_binary_matching(candidates, is_grok_agent)
+}
+
+fn resolve_opencrabs() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        candidates.push(home.join(".opencrabs/bin/opencrabs"));
+        candidates.push(home.join(".local/bin/opencrabs"));
+        candidates.push(home.join(".cargo/bin/opencrabs"));
+        candidates.push(home.join(".npm-global/bin/opencrabs"));
+        candidates.push(home.join("n/bin/opencrabs"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/opencrabs"));
+    candidates.push(PathBuf::from("/usr/local/bin/opencrabs"));
+    candidates.push(PathBuf::from("/usr/bin/opencrabs"));
+    candidates.push(PathBuf::from("/snap/bin/opencrabs"));
+    if let Some(from_shell) = which_via_login_shell("opencrabs") {
+        candidates.push(from_shell);
+    }
+
+    first_binary_matching(candidates, is_opencrabs_binary)
+}
+
+/// No same-named collision is known for `opencrabs`; an executable with the
+/// right name is the agent CLI.
+fn is_opencrabs_binary(path: &Path) -> bool {
+    binary_name_eq(path, "opencrabs")
 }
 
 fn is_pi_coding_agent(path: &Path) -> bool {

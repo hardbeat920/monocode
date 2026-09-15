@@ -97,6 +97,7 @@ describe("harness registry", () => {
       "pi",
       "omp",
       "fx",
+      "opencrabs",
     ];
 
     expect(
@@ -110,6 +111,7 @@ describe("harness registry", () => {
       pi: true,
       omp: true,
       fx: false,
+      opencrabs: true,
     });
   });
 
