@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, expect, it, vi } from "vitest";
 import {
+  announceSessionFinished,
   notifySession,
   saveNotificationsEnabled,
   setWindowFocused,
@@ -25,6 +26,46 @@ beforeEach(() => {
   });
   saveNotificationsEnabled(true);
   setWindowFocused(false);
+});
+
+it("returns false without a banner or sound when project identity lookup fails", async () => {
+  invoke.mockImplementation(async (command: string) => {
+    if (command === "git_notification_context") {
+      throw new Error("Project identity unavailable");
+    }
+  });
+
+  const sent = await notifySession(
+    newSession("claude", "/unavailable-notify"),
+    "finished",
+    false,
+  );
+
+  expect(sent).toBe(false);
+  expect(
+    invoke.mock.calls.filter(([command]) => command === "show_notification"),
+  ).toEqual([]);
+  expect(play).not.toHaveBeenCalled();
+});
+
+it("finishes without a banner or sound when project identity lookup fails", async () => {
+  invoke.mockImplementation(async (command: string) => {
+    if (command === "git_notification_context") {
+      throw new Error("Project identity unavailable");
+    }
+  });
+
+  await expect(
+    announceSessionFinished(
+      newSession("claude", "/unavailable-announcement"),
+      false,
+    ),
+  ).resolves.toBeUndefined();
+
+  expect(
+    invoke.mock.calls.filter(([command]) => command === "show_notification"),
+  ).toEqual([]);
+  expect(play).not.toHaveBeenCalled();
 });
 
 it("blocks every project banner, including approvals and questions, while muted", async () => {

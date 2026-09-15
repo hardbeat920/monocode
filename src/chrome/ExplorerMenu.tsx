@@ -37,6 +37,8 @@ type Props = (
   width?: number;
   onPick: (id: string) => void;
   onClose: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 };
 
 const MENU_WIDTH = 228;
@@ -67,6 +69,8 @@ export function ExplorerMenu({
   width = MENU_WIDTH,
   onPick,
   onClose,
+  onMouseEnter,
+  onMouseLeave,
 }: Props) {
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -286,8 +290,14 @@ export function ExplorerMenu({
         aria-activedescendant={`${menuId}-${active}`}
         onKeyDown={onMenuKey}
         onContextMenu={(e) => e.preventDefault()}
-        onMouseEnter={cancelClose}
-        onMouseLeave={submenu ? scheduleClose : undefined}
+        onMouseEnter={() => {
+          cancelClose();
+          onMouseEnter?.();
+        }}
+        onMouseLeave={() => {
+          if (submenu) scheduleClose();
+          onMouseLeave?.();
+        }}
         className="overflow-y-auto overscroll-none p-1"
       >
         {header ? (
@@ -329,8 +339,14 @@ export function ExplorerMenu({
           data-menu-owner={ownerId}
           onKeyDown={onMenuKey}
           onContextMenu={(e) => e.preventDefault()}
-          onMouseEnter={cancelClose}
-          onMouseLeave={scheduleClose}
+          onMouseEnter={() => {
+            cancelClose();
+            onMouseEnter?.();
+          }}
+          onMouseLeave={() => {
+            scheduleClose();
+            onMouseLeave?.();
+          }}
           className="overflow-y-auto overscroll-none p-1"
         >
           {submenuItems.map((item, index) => renderItem(item, index, true))}

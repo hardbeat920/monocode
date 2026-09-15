@@ -150,10 +150,21 @@ export function TabGroupMenu({
     item: TabGroupMenuExtraItem;
     anchor: HTMLButtonElement;
   } | null>(null);
+  const submenuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelSubmenuClose = () => {
+    if (submenuCloseTimer.current != null) clearTimeout(submenuCloseTimer.current);
+    submenuCloseTimer.current = null;
+  };
   const closeSubmenu = () => {
+    cancelSubmenuClose();
     submenu?.anchor.focus();
     setSubmenu(null);
   };
+  const scheduleSubmenuClose = () => {
+    cancelSubmenuClose();
+    if (submenu) submenuCloseTimer.current = setTimeout(closeSubmenu, 180);
+  };
+  useEffect(() => cancelSubmenuClose, [submenu]);
   const pickExtra = (id: string) => {
     if (onExtraPick?.(id) !== false) onClose();
   };
@@ -197,11 +208,17 @@ export function TabGroupMenu({
         aria-label="Tab group actions"
         onKeyDown={onMenuKey}
         onContextMenu={(e) => e.preventDefault()}
+        onMouseEnter={cancelSubmenuClose}
+        onMouseLeave={scheduleSubmenuClose}
         className="overflow-y-auto overscroll-none p-2"
       >
         {leadingAction ? (
           <>
-            <MenuRow item={leadingAction} onPick={() => pickExtra(leadingAction.id)} />
+            <MenuRow
+              item={leadingAction}
+              onHover={() => setSubmenu(null)}
+              onPick={() => pickExtra(leadingAction.id)}
+            />
             <div role="separator" className="my-1 h-px bg-content/10" />
           </>
         ) : null}
@@ -312,19 +329,34 @@ export function TabGroupMenu({
             <div className="my-1 h-px bg-content/10" />
 
             {ITEMS.slice(0, 2).map((item) => (
-              <MenuRow key={item.id} item={item} onPick={() => onPick(item.id as TabGroupMenuAction)} />
+              <MenuRow
+                key={item.id}
+                item={item}
+                onHover={() => setSubmenu(null)}
+                onPick={() => onPick(item.id as TabGroupMenuAction)}
+              />
             ))}
 
             <div className="my-1 h-px bg-content/10" />
 
             {ITEMS.slice(2, 4).map((item) => (
-              <MenuRow key={item.id} item={item} onPick={() => onPick(item.id as TabGroupMenuAction)} />
+              <MenuRow
+                key={item.id}
+                item={item}
+                onHover={() => setSubmenu(null)}
+                onPick={() => onPick(item.id as TabGroupMenuAction)}
+              />
             ))}
 
             <div className="my-1 h-px bg-content/10" />
 
             {ITEMS.slice(4).map((item) => (
-              <MenuRow key={item.id} item={item} onPick={() => onPick(item.id as TabGroupMenuAction)} />
+              <MenuRow
+                key={item.id}
+                item={item}
+                onHover={() => setSubmenu(null)}
+                onPick={() => onPick(item.id as TabGroupMenuAction)}
+              />
             ))}
           </>
         ) : null}
@@ -363,6 +395,8 @@ export function TabGroupMenu({
           onPick={pickExtra}
           onBack={closeSubmenu}
           onClose={closeSubmenu}
+          onMouseEnter={cancelSubmenuClose}
+          onMouseLeave={scheduleSubmenuClose}
         />
       ) : null}
     </>

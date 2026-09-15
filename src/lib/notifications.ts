@@ -231,7 +231,10 @@ export async function notifySession(
 ): Promise<boolean> {
   if (session.inboxAsk) return false;
   const occurredAt = Date.now();
-  const project = await resolveNotificationProject(session.cwd);
+  const project = await resolveNotificationProject(session.cwd).catch(
+    () => undefined,
+  );
+  if (!project) return false;
   return notifyProjectSession(session, event, sessionVisible, {
     projectId: project.id,
     category: event === "finished" ? "agentFinished" : "agentInput",
@@ -246,7 +249,10 @@ export async function announceSessionFinished(
 ): Promise<void> {
   if (session.inboxAsk) return;
   const occurredAt = Date.now();
-  const project = await resolveNotificationProject(session.cwd);
+  const project = await resolveNotificationProject(session.cwd).catch(
+    () => undefined,
+  );
+  if (!project) return;
   const subject: NotificationSubject = {
     projectId: project.id,
     category: "agentFinished",
