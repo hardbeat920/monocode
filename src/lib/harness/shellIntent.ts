@@ -69,8 +69,9 @@ export function unwrapShellCommand(command: string): string {
       executableToken.start,
       executableToken.end,
     );
+    const executableQuote = current[executableToken.start];
     const executable =
-      executableToken.quoted &&
+      (executableQuote === '"' || executableQuote === "'") &&
       rawExecutable[0] === rawExecutable[rawExecutable.length - 1]
         ? rawExecutable.slice(1, -1)
         : rawExecutable;
@@ -96,10 +97,12 @@ export function unwrapShellCommand(command: string): string {
     const commandToken = tokens[flagIndex + 1];
     if (!commandToken) break;
     const remainder = current.slice(commandToken.start).trim();
-    const singleQuotedCommand =
-      commandToken.quoted && tokens.length === flagIndex + 2;
+    const commandQuote = current[commandToken.start];
+    const commandIsSoleQuotedToken =
+      (commandQuote === '"' || commandQuote === "'") &&
+      tokens.length === flagIndex + 2;
     const script =
-      wrapper.consumeRemainder && !singleQuotedCommand
+      wrapper.consumeRemainder && !commandIsSoleQuotedToken
         ? remainder
         : commandToken.value.trim();
     if (!script || script === current) break;
@@ -606,7 +609,6 @@ type ShellToken = {
   value: string;
   start: number;
   end: number;
-  quoted: boolean;
 };
 
 function tokenize(stage: string): ShellToken[] | null {
@@ -656,7 +658,6 @@ function tokenize(stage: string): ShellToken[] | null {
         value: token,
         start,
         end: i,
-        quoted: stage[start] === "'" || stage[start] === '"',
       });
     }
     if (i <= start) i += 1;

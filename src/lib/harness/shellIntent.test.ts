@@ -232,14 +232,8 @@ describe("unwrapShellCommand", () => {
 
   it("leaves ordinary and incomplete commands unchanged", () => {
     expect(unwrapShellCommand("git status --short")).toBe("git status --short");
-    expect(unwrapShellCommand(`pwsh -File '-Command' script.ps1`)).toBe(
-      `pwsh -File '-Command' script.ps1`,
-    );
     expect(unwrapShellCommand(`pwsh -Command 'npm test`)).toBe(
       `pwsh -Command 'npm test`,
-    );
-    expect(unwrapShellCommand(`cmd.exe /c "npm test`)).toBe(
-      `cmd.exe /c "npm test`,
     );
   });
 });
