@@ -26,12 +26,16 @@
 }
 
 :root {
+  --motion-reorder-duration: 160ms;
+  --motion-feedback-duration: 120ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --theme-hue: 240;
   --theme-saturation: 0%;
+  --theme-dark-lightness: 9%;
   --sidebar-opacity: 0.85;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
-  --background-lightness: 9%;
+  --background-lightness: var(--theme-dark-lightness);
   --content-lightness: 92%;
   --link-color: #7dd3fc;
   --color-skill: #e8c547;
@@ -107,6 +111,60 @@ html.has-native-glass:not(.theme-light) #root {
   background: transparent;
 }
 
+.reorder-item {
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.reorder-item:is([data-dragging], [data-settling]) {
+  z-index: 10;
+}
+
+.tab-motion,
+.tab-motion > button {
+  transition:
+    background-color var(--motion-feedback-duration) var(--motion-ease-out),
+    color var(--motion-feedback-duration) var(--motion-ease-out),
+    opacity var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+.tab-motion[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-motion,
+  .tab-motion > button {
+    transition: none;
+  }
+}
+
+.workspace-tab:not([data-reordering])
+  > button:not([aria-selected="true"]):hover,
+.workspace-tab[data-dragging] > button:not([aria-selected="true"]),
+.project-reorder-item:not([data-reordering], [data-selected]):hover,
+.project-reorder-item[data-dragging]:not([data-selected]) {
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  color: var(--color-content);
+}
+
+/* Keep project controls from appearing as rows pass beneath the pointer. */
+.project-reorder-item[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+.project-reorder-item[data-reordering] > button:first-of-type {
+  padding-right: 0;
+}
+
+.project-reorder-item[data-reordering] .project-card-logo {
+  opacity: 1;
+}
+
+.project-reorder-item[data-reordering] .project-card-stats {
+  display: flex;
+}
+
 .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 90%, black);
 }
@@ -171,6 +229,26 @@ html.chat-background-empty-only
  */
 .transcript-turn-live {
   content-visibility: visible;
+}
+
+.user-message-with-link {
+  display: block;
+}
+
+html.has-user-accent .user-message-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+  border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
+}
+
+.user-link-preview {
+  display: inline;
+  white-space: normal;
+}
+
+.user-link-preview-title {
+  display: inline;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /*
@@ -290,11 +368,25 @@ html.theme-light .composer-send:not(:disabled):hover {
 
 html.theme-light .composer-send:disabled {
   background: color-mix(in srgb, var(--color-content) 25%, transparent);
-  color: color-mix(
+  color: color-mix(in srgb, var(--color-background-base) 75%, transparent);
+}
+
+html.has-user-accent .composer-send:not(:disabled) {
+  background: var(--user-accent-color);
+  color: var(--user-accent-foreground);
+}
+
+html.has-user-accent .composer-send:not(:disabled):hover {
+  background: color-mix(
     in srgb,
-    var(--color-background-base) 75%,
-    transparent
+    var(--user-accent-color) 88%,
+    var(--color-content)
   );
+}
+
+html.has-user-accent .composer-send:disabled {
+  background: color-mix(in srgb, var(--user-accent-color) 28%, transparent);
+  color: color-mix(in srgb, var(--color-content) 35%, transparent);
 }
 
 .composer-field {

@@ -1,4 +1,4 @@
-import { RefreshCw } from "./icons";
+import { RefreshCw, Terminal } from "./icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
@@ -24,6 +24,7 @@ import {
   runningTerminalChipLabel,
   type RunningTerminal,
 } from "../lib/terminalTab";
+import { MOD } from "../lib/platform";
 
 const CLOCK_MS = 30_000;
 
@@ -37,12 +38,18 @@ export function UsageFooter({
   terminals = [],
   terminalOpen = false,
   onToggleTerminal,
+  onNewTerminal,
+  onShowTerminal,
+  projectTerminalActive = false,
 }: {
   providers: RateLimitProvider[];
   session?: UsageFooterSession;
   terminals?: RunningTerminal[];
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
+  onNewTerminal?: () => void;
+  onShowTerminal?: () => void;
+  projectTerminalActive?: boolean;
 }) {
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
@@ -118,10 +125,16 @@ export function UsageFooter({
 
   const showUsage = wantClaude || wantCodex;
   const showTerminals = terminals.length > 0;
-  const showRight = showUsage || showTerminals;
+  const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
+  const terminalLabel = projectTerminalActive
+    ? "Terminal"
+    : `New Terminal (${MOD}\`)`;
+  const onTerminalClick = projectTerminalActive
+    ? (onShowTerminal ?? onNewTerminal)
+    : (onNewTerminal ?? onShowTerminal);
   const ariaLabel = showUsage
     ? "Provider usage"
-    : showTerminals
+    : showTerminals || showTerminalButton
       ? "Terminals"
       : session
         ? "Session"
@@ -136,11 +149,25 @@ export function UsageFooter({
         <>
           {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
           {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
+          <button
+            type="button"
+            className="grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
+            aria-label="Refresh usage"
+            title="Refresh usage"
+            disabled={refreshing}
+            onClick={() => void refresh(true)}
+          >
+            <RefreshCw
+              className={`size-3 ${refreshing ? "animate-spin" : ""}`}
+              strokeWidth={1.75}
+              aria-hidden
+            />
+          </button>
         </>
       ) : session ? (
         <SessionChip session={session} />
       ) : null}
-      {showRight ? (
+      {showTerminals || showTerminalButton ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {showTerminals ? (
             <RunningTerminalChip
@@ -149,20 +176,21 @@ export function UsageFooter({
               onToggle={onToggleTerminal}
             />
           ) : null}
-          {showUsage ? (
+          {showTerminalButton ? (
             <button
               type="button"
-              className="grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
-              aria-label="Refresh usage"
-              title="Refresh usage"
-              disabled={refreshing}
-              onClick={() => void refresh(true)}
+              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 hover:bg-content/10 ${
+                projectTerminalActive
+                  ? "text-accent"
+                  : "text-content/40 hover:text-content"
+              }`}
+              aria-label={terminalLabel}
+              aria-pressed={projectTerminalActive}
+              title={terminalLabel}
+              onClick={onTerminalClick}
             >
-              <RefreshCw
-                className={`size-3 ${refreshing ? "animate-spin" : ""}`}
-                strokeWidth={1.75}
-                aria-hidden
-              />
+              <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
+              <span>Terminal</span>
             </button>
           ) : null}
         </div>

@@ -1,4 +1,5 @@
 import { play, setEnabled, setVolume, type SoundName } from "cuelume";
+import type { LinkedWorkItemUpdateCard } from "./linkedWorkItemActivity";
 
 const KEY = "monocode.sounds";
 
@@ -68,6 +69,25 @@ export function playCue(cue: SoundCue) {
 let inboxDotOn = false;
 let inboxPrimed = false;
 let announcedUpdate: string | undefined;
+const announcedLinkedActivities = new Set<string>();
+
+/** Remember each session's activity across notice unmounts when switching tabs. */
+export function announceLinkedActivity(
+  sessionId: string,
+  card: LinkedWorkItemUpdateCard | undefined,
+) {
+  if (!card || card.status !== "ready") return;
+  const key = JSON.stringify([
+    sessionId,
+    card.kind,
+    card.repo.toLowerCase(),
+    card.number,
+    card.updatedAt,
+  ]);
+  if (announcedLinkedActivities.has(key)) return;
+  announcedLinkedActivities.add(key);
+  playCue("linkedActivity");
+}
 
 /**
  * Rising edge of the project-rail inbox dot, after the first snapshot.
@@ -90,9 +110,10 @@ export function announceUpdateAvailable(version: string | null) {
   playCue("updateAvailable");
 }
 
-/** Test helper: forget which inbox/update cues already fired. */
+/** Test helper: forget which notification cues already fired. */
 export function resetSoundCues() {
   inboxDotOn = false;
   inboxPrimed = false;
   announcedUpdate = undefined;
+  announcedLinkedActivities.clear();
 }

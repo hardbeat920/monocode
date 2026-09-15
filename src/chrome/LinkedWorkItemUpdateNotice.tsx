@@ -1,7 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { LAYER } from "../lib/layers";
+import { useEffect, useState } from "react";
 import {
   linkedWorkItemActivityPrompt,
   linkedWorkItemTerminalState,
@@ -10,7 +8,7 @@ import {
   type LinkedWorkItemUpdateCard,
 } from "../lib/linkedWorkItemActivity";
 import { formatRelativeTime } from "../lib/githubTasks";
-import { playCue } from "../lib/sounds";
+import { announceLinkedActivity } from "../lib/sounds";
 import {
   Archive,
   Check,
@@ -26,15 +24,14 @@ import {
 } from "./icons";
 
 type Props = {
+  sessionId: string;
   card?: LinkedWorkItemUpdateCard;
-  topOffset?: number;
   onAcknowledge: () => void;
   onDismiss: () => void;
   onOpenDiscussion: () => void;
   onAddToChat: (text: string) => void;
   onArchiveSession?: () => Promise<boolean>;
   onDeleteSession?: () => Promise<boolean>;
-  onHeightChange?: (height: number) => void;
 };
 
 function entryKindLabel(entry: LinkedWorkItemActivityEntry): string {
@@ -61,40 +58,21 @@ function ActivityIcon({ entry }: { entry: LinkedWorkItemActivityEntry }) {
 }
 
 export function LinkedWorkItemUpdateNotice({
+  sessionId,
   card,
-  topOffset = 12,
   onAcknowledge,
   onDismiss,
   onOpenDiscussion,
   onAddToChat,
   onArchiveSession,
   onDeleteSession,
-  onHeightChange,
 }: Props) {
-  const panelRef = useRef<HTMLElement>(null);
-  const soundedCards = useRef(new Set<string>());
   const [cleanupAction, setCleanupAction] = useState<
     "archive" | "delete" | undefined
   >();
-  useLayoutEffect(() => {
-    const panel = panelRef.current;
-    if (!panel || !onHeightChange) return;
-    const measure = () => onHeightChange(panel.offsetHeight);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(panel);
-    return () => {
-      observer.disconnect();
-      onHeightChange(0);
-    };
-  }, [card, onHeightChange]);
   useEffect(() => {
-    if (!card || card.status !== "ready") return;
-    const key = `${card.kind}:${card.repo}:${card.number}:${card.updatedAt}`;
-    if (soundedCards.current.has(key)) return;
-    soundedCards.current.add(key);
-    playCue("linkedActivity");
-  }, [card]);
+    announceLinkedActivity(sessionId, card);
+  }, [sessionId, card]);
   if (!card || card.status === "loading") return null;
 
   const KindIcon = card.kind === "pr" ? GitPullRequest : CircleDot;
@@ -104,11 +82,10 @@ export function LinkedWorkItemUpdateNotice({
     latest?.kind === "comment" ||
     latest?.kind === "review" ||
     latest?.kind === "review_comment";
-  const primaryLabel = discussion
-    ? "Open discussion"
-    : latest?.kind === "commit"
+  const openLabel =
+    latest?.kind === "commit"
       ? "Open commit"
-      : `Open ${card.kind === "pr" ? "pull request" : "issue"}`;
+      : `Open ${card.kind === "pr" ? "PR" : "issue"}`;
   const agentLabel = discussion
     ? "Address with agent"
     : latest?.kind === "commit"
@@ -130,7 +107,7 @@ export function LinkedWorkItemUpdateNotice({
         ? GitPullRequestClosed
         : Check;
 
-  const openPrimary = () => {
+  const openActivity = () => {
     onAcknowledge();
     if (discussion) {
       onOpenDiscussion();
@@ -155,13 +132,11 @@ export function LinkedWorkItemUpdateNotice({
     }
   };
 
-  return createPortal(
+  return (
     <section
-      ref={panelRef}
       aria-label={`New activity on ${kindLabel} ${card.number}`}
       aria-live="polite"
-      style={{ zIndex: LAYER.popover - 1, top: topOffset }}
-      className="linked-activity-notice fixed right-3 isolate w-[min(320px,calc(100vw-24px))] overflow-hidden rounded-xl border border-content/10 text-content shadow-xl"
+      className="linked-activity-notice pointer-events-auto absolute top-3 right-3 z-40 isolate w-[min(320px,calc(100%_-_24px))] overflow-hidden rounded-xl border border-content/10 text-content shadow-xl"
     >
       <div
         aria-hidden="true"
@@ -175,24 +150,15 @@ export function LinkedWorkItemUpdateNotice({
             GitHub activity
           </span>
         </div>
-        <div className="flex items-center gap-px">
-          <button
-            type="button"
-            onClick={dismiss}
-            className="shrink-0 whitespace-nowrap rounded-md px-1.5 h-6 text-[11px] text-content/50 hover:bg-content/10 hover:text-content"
-          >
-            Dismiss
-          </button>
-          <button
-            type="button"
-            title="Dismiss"
-            aria-label={`Dismiss updates for ${kindLabel} ${card.number}`}
-            onClick={dismiss}
-            className="grid size-6 place-items-center rounded-md text-content/40 hover:bg-content/10 hover:text-content"
-          >
-            <X className="size-3" strokeWidth={2} />
-          </button>
-        </div>
+        <button
+          type="button"
+          title="Dismiss"
+          aria-label={`Dismiss updates for ${kindLabel} ${card.number}`}
+          onClick={dismiss}
+          className="grid size-6 shrink-0 place-items-center rounded-md text-content/40 hover:bg-content/10 hover:text-content"
+        >
+          <X className="size-3" strokeWidth={2} />
+        </button>
       </div>
 
       <div className="relative z-[1] px-3 py-2.5">
@@ -311,16 +277,8 @@ export function LinkedWorkItemUpdateNotice({
       <div className="relative z-[1] flex min-w-0 items-center gap-1.5 border-t border-content/10 px-3 py-2.5 text-[11px]">
         <button
           type="button"
-          title={primaryLabel}
-          className="min-w-0 flex-1 truncate whitespace-nowrap rounded-md bg-content/10 px-2 py-1 font-medium hover:bg-content/15"
-          onClick={openPrimary}
-        >
-          {primaryLabel}
-        </button>
-        <button
-          type="button"
           title={agentLabel}
-          className="min-w-0 flex-1 truncate whitespace-nowrap rounded-md px-2 py-1 text-content/65 hover:bg-content/10"
+          className="min-w-0 flex-1 truncate whitespace-nowrap rounded-md bg-content px-2 py-1 font-medium text-background-base hover:bg-content/90"
           onClick={() => {
             onAcknowledge();
             onAddToChat(linkedWorkItemActivityPrompt(card));
@@ -328,8 +286,15 @@ export function LinkedWorkItemUpdateNotice({
         >
           {agentLabel}
         </button>
+        <button
+          type="button"
+          title={openLabel}
+          className="min-w-0 flex-1 truncate whitespace-nowrap rounded-md bg-content/10 px-2 py-1 font-medium hover:bg-content/15"
+          onClick={openActivity}
+        >
+          {openLabel}
+        </button>
       </div>
-    </section>,
-    document.body,
+    </section>
   );
 }

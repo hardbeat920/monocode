@@ -62,6 +62,8 @@ export function hiddenApprovalNotices(
   const notices: Array<PendingApprovalNotice & { session: Session }> = [];
   for (const session of sessions) {
     if (session.inboxAsk) continue;
+    // An orchestrated worker answers to its lead, never to the user directly.
+    if (session.orchestrationLeadId) continue;
     const pending = pendingApprovalForSession(session);
     if (!pending) continue;
     if (

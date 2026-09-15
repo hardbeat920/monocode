@@ -5,6 +5,7 @@ import {
   defaultTerminalTitle,
   type TerminalMetaPatch,
 } from "./terminalTab";
+import type { HarnessId } from "./session";
 
 /**
  * Split tree for a tab. Same-direction splits share a group so
@@ -42,6 +43,13 @@ export type CommitTabSource = {
   subject: string;
 };
 
+/** One orchestration worker, opened for inspection beside its lead. */
+export type AgentTabSource = {
+  sessionId: string;
+  leadId: string;
+  harness: HarnessId;
+};
+
 export type SessionChangesSource = {
   sessionId: string;
 };
@@ -61,6 +69,8 @@ export type FilePaneTab = {
   sessionChanges?: SessionChangesSource;
   /** Historical commit review (unified diff, read-only). */
   commit?: CommitTabSource;
+  /** Read-only transcript of an orchestration worker. Live only — not persisted. */
+  agent?: AgentTabSource;
   terminal?: boolean;
   /** Foreground command when it isn't the shell. Live only — not persisted. */
   foreground?: string;
@@ -101,6 +111,22 @@ export function newTab(sessionId: string): WorkspaceTab {
     focusedId: sessionId,
     editorPanes: [],
     terminalPanes: [],
+  };
+}
+
+/** Keep the tab's identity and group; replace its contents with one session leaf. */
+export function resetTabToSession(
+  tab: WorkspaceTab,
+  sessionId: string,
+): WorkspaceTab {
+  return {
+    ...tab,
+    layout: leaf(sessionId),
+    focusedId: sessionId,
+    editorPanes: [],
+    terminalPanes: [],
+    diffOpen: false,
+    diffFocused: false,
   };
 }
 
@@ -189,6 +215,15 @@ export function newReleaseNotesWorkspaceTab(
     editorPanes: [pane],
     terminalPanes: [],
   };
+}
+
+/** `path` carries the label: an agent tab has no file behind it. */
+export function newAgentTab(
+  title: string,
+  cwd: string,
+  agent: AgentTabSource,
+): FilePaneTab {
+  return { id: crypto.randomUUID(), path: title, cwd, agent };
 }
 
 export function newTerminalFile(cwd: string, title?: string): FilePaneTab {
@@ -303,8 +338,19 @@ export function isTerminalTab(file: FilePaneTab): boolean {
   return !!file.terminal;
 }
 
+export function isAgentTab(
+  file: FilePaneTab,
+): file is FilePaneTab & { agent: AgentTabSource } {
+  return !!file.agent;
+}
+
 export function isVirtualDocumentTab(file: FilePaneTab): boolean {
-  return isPlanTab(file) || isReleaseNotesTab(file) || isCommitTab(file);
+  return (
+    isPlanTab(file) ||
+    isReleaseNotesTab(file) ||
+    isCommitTab(file) ||
+    isAgentTab(file)
+  );
 }
 
 export function isFilesystemTab(file: FilePaneTab): boolean {
@@ -383,6 +429,7 @@ export function isSessionChangesTab(
 
 export function editorTabKey(file: FilePaneTab): string {
   if (file.terminal) return `terminal:${file.id}`;
+  if (file.agent) return `agent:${file.agent.sessionId}`;
   if (file.plan) return `plan:${file.plan.blockId}`;
   if (file.releaseNotes) return `release-notes:${file.releaseNotes.version}`;
   if (file.commit) return `commit:${file.cwd}:${file.commit.sha}`;
@@ -736,6 +783,18 @@ export function closeLeaf(
   return { ...tab, layout: nextLayout, focusedId: nextFocus };
 }
 
+/** Close every pane of one surface kind. Returns null only when nothing remains. */
+export function closeSurfacePanes(
+  tab: WorkspaceTab,
+  kind: SurfaceKind,
+): WorkspaceTab | null {
+  const remaining = surfacePanes(tab, kind).reduce<WorkspaceTab | null>(
+    (acc, pane) => acc && closeLeaf(acc, pane.id),
+    tab,
+  );
+  return remaining && withSurfacePanes(remaining, kind, []);
+}
+
 /** Move the sash between `index` and `index + 1` to `boundary` (0–1 of the group). */
 export function setSplitRatio(
   node: LayoutNode,
@@ -1041,7 +1100,7 @@ function extractLeaf(
 function insertBeside(
   node: LayoutNode,
   targetId: string,
-  leaf: LayoutNode,
+  incoming: LayoutNode,
   place: PanePlace,
 ): LayoutNode {
   if (node.type === "leaf") return node;
@@ -1055,7 +1114,7 @@ function insertBeside(
     const sizes = [...node.sizes];
     const share = (sizes[index] ?? 0) / 2;
     sizes[index] = share;
-    children.splice(insertAt, 0, leaf);
+    children.splice(insertAt, 0, incoming);
     sizes.splice(insertAt, 0, share);
     return { ...node, children, sizes };
   }
@@ -1063,7 +1122,7 @@ function insertBeside(
   return {
     ...node,
     children: node.children.map((child) =>
-      insertBeside(child, targetId, leaf, place),
+      insertBeside(child, targetId, incoming, place),
     ),
   };
 }
@@ -1146,11 +1205,37 @@ export function placePane(
   if (!ids.includes(toId)) return node;
   if (ids.includes(sessionId)) return movePane(node, sessionId, toId, edge);
 
+  return placeLayout(node, leaf(sessionId), toId, edge);
+}
+
+/** Place an intact layout tree beside one pane in another layout. */
+export function placeLayout(
+  node: LayoutNode,
+  incoming: LayoutNode,
+  toId: string,
+  edge: PaneEdge,
+): LayoutNode {
+  if (!leafIds(node).includes(toId)) return node;
+
   const { dir, place } = edgeSplit(edge);
-  const incoming = leaf(sessionId);
   const targetAt = leafParent(node, toId);
   if (targetAt?.dir === dir) {
     return insertBeside(node, toId, incoming, place);
   }
   return wrapBeside(node, toId, incoming, dir, place);
+}
+
+/** Replace one pane with an intact layout tree. */
+export function replacePaneWithLayout(
+  node: LayoutNode,
+  targetId: string,
+  incoming: LayoutNode,
+): LayoutNode {
+  if (node.type === "leaf") return node.id === targetId ? incoming : node;
+  return {
+    ...node,
+    children: node.children.map((child) =>
+      replacePaneWithLayout(child, targetId, incoming),
+    ),
+  };
 }

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "../lib/githubTasks";
 import type { SessionSummary } from "../lib/sessionStore";
-import { InboxDetail } from "./InboxView";
+import { InboxDetail, inboxShowsFullFileDiff } from "./InboxView";
 
 function item(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -41,6 +41,17 @@ function renderDetail(
 }
 
 describe("InboxDetail layout", () => {
+  it("shows when a PR was created alongside its last update", () => {
+    const markup = renderDetail({
+      ...item({ kind: "pr" }),
+      createdAt: "2026-09-01T08:00:00Z",
+    });
+    expect(markup).toContain("Created ");
+    expect(markup).toContain('dateTime="2026-09-01T08:00:00Z"');
+    expect(markup).toContain("Updated ");
+    expect(renderDetail(item({ kind: "pr" }))).not.toContain("Created ");
+  });
+
   it("keeps issue identity and actions outside the body scroller", () => {
     const markup = renderDetail(item({ projectPath: "/tmp/local-project" }));
     const headerIndex = markup.indexOf("data-inbox-detail-header");
@@ -73,6 +84,21 @@ describe("InboxDetail layout", () => {
     expect(header).toContain('aria-label="Pull request sections"');
     expect(header).toContain("Summary");
     expect(header).toContain("Code");
+  });
+
+  it("offers full-file diffs only for GitHub pull requests", () => {
+    expect(inboxShowsFullFileDiff(item({ kind: "pr" }))).toBe(true);
+    expect(
+      inboxShowsFullFileDiff(
+        item({
+          kind: "pr",
+          provider: "gitlab",
+          repo: "acme/platform",
+          url: "https://gitlab.example.com/acme/platform/-/merge_requests/12",
+        }),
+      ),
+    ).toBe(false);
+    expect(inboxShowsFullFileDiff(item({ kind: "issue" }))).toBe(false);
   });
 
   it("keeps the Linear project picker beside the pinned send action", () => {

@@ -15,6 +15,7 @@ type Props = {
 
 export function ColorSwatchRow({
   colors,
+  labels,
   colorIndex,
   customColor,
   customPickerOpen,
@@ -23,6 +24,7 @@ export function ColorSwatchRow({
   onToggleCustom,
 }: {
   colors: readonly string[];
+  labels?: readonly string[];
   colorIndex: number | null | undefined;
   customColor: string | null | undefined;
   customPickerOpen: boolean;
@@ -30,10 +32,12 @@ export function ColorSwatchRow({
   onPickIndex: (index: number) => void;
   onToggleCustom?: () => void;
 }) {
-  const pipetteActive = customHighlighted ?? (customColor != null || customPickerOpen);
+  const pipetteActive =
+    customHighlighted ?? (customColor != null || customPickerOpen);
   return (
     <div className="flex items-center justify-between gap-1 px-0.5">
       {colors.map((color, index) => {
+        const label = labels?.[index] ?? `Color ${index + 1}`;
         const selected =
           customColor == null &&
           (colorIndex === index || (colorIndex == null && index === 0));
@@ -41,8 +45,8 @@ export function ColorSwatchRow({
           <button
             key={color}
             type="button"
-            title={`Color ${index + 1}`}
-            aria-label={`Color ${index + 1}`}
+            title={label}
+            aria-label={label}
             aria-pressed={selected}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPickIndex(index)}
@@ -85,7 +89,10 @@ export function ColorSwatchRow({
           }
         >
           {!customColor ? (
-            <Pipette className="size-2 text-white drop-shadow-sm" strokeWidth={2.25} />
+            <Pipette
+              className="size-2 text-white drop-shadow-sm"
+              strokeWidth={2.25}
+            />
           ) : null}
         </span>
       </button>

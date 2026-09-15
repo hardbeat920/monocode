@@ -27,10 +27,12 @@ import {
   type Attachment,
   type Block,
   type HarnessId,
+  type LinkedWorkItem,
+  type ModelTarget,
   type PlanBuildTarget,
   type RuntimeMode,
   type Session,
-  type TurnIntent,
+  type ComposerTurnOptions,
 } from "../lib/session";
 import { FilePane } from "./FilePane";
 import { SessionPane } from "./SessionPane";
@@ -68,7 +70,7 @@ type Shared = {
     sessionId: string,
     text: string,
     attachments: Attachment[],
-    options?: { intent?: TurnIntent },
+    options?: ComposerTurnOptions,
   ) => void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
@@ -86,8 +88,12 @@ type Shared = {
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
   onInboxCardDismiss?: (sessionId: string) => void;
+  onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
+  onOpenLinkedWorkItem?: (item: LinkedWorkItem) => void;
+  onArchiveSession?: (sessionId: string, archived: boolean) => Promise<boolean>;
+  onDeleteSession?: (sessionId: string) => Promise<boolean>;
   onApproval: (
     sessionId: string,
     requestId: number,
@@ -114,16 +120,10 @@ type Shared = {
   ) => void;
   onSecondOpinion?: (
     sessionId: string,
-    harness: HarnessId,
+    target: ModelTarget,
     turn: Block[],
-    model: string,
   ) => void;
-  onHandoff?: (
-    sessionId: string,
-    harness: HarnessId,
-    turn: Block[],
-    model: string,
-  ) => void;
+  onHandoff?: (sessionId: string, target: ModelTarget, turn: Block[]) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
   onNewTerminal: (sessionId: string) => void;
   onTerminalMetaChange?: (fileId: string, patch: TerminalMetaPatch) => void;
@@ -175,8 +175,12 @@ function PaneTreeComponent({
   onSteerQueuedMessage,
   onResumeQueue,
   onInboxCardDismiss,
+  onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
   onHandoffCardDismiss,
+  onOpenLinkedWorkItem,
+  onArchiveSession,
+  onDeleteSession,
   onApproval,
   onQuestionReply,
   onQuestionInteraction,
@@ -390,8 +394,14 @@ function PaneTreeComponent({
                 onSteerQueuedMessage={onSteerQueuedMessage}
                 onResumeQueue={onResumeQueue}
                 onInboxCardDismiss={onInboxCardDismiss}
+                onLinkedWorkItemUpdateCardDismiss={
+                  onLinkedWorkItemUpdateCardDismiss
+                }
                 onNoteCardDismiss={onNoteCardDismiss}
                 onHandoffCardDismiss={onHandoffCardDismiss}
+                onOpenLinkedWorkItem={onOpenLinkedWorkItem}
+                onArchiveSession={onArchiveSession}
+                onDeleteSession={onDeleteSession}
                 onApproval={onApproval}
                 onQuestionReply={onQuestionReply}
                 onQuestionInteraction={onQuestionInteraction}

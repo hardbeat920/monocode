@@ -32,6 +32,14 @@ type ParsedProvider = {
   models: Record<string, OpenCodeModelJson>;
 };
 
+const PROVIDER_NAMES: Record<string, string> = {
+  opencode: "OpenCode",
+  "opencode-go": "OpenCode Go",
+  openai: "OpenAI",
+  xai: "xAI",
+  "github-copilot": "GitHub Copilot",
+};
+
 export type OpenCodeAgent = {
   name: string;
   mode: string;
@@ -108,7 +116,11 @@ export function parseModelsCliOutput(stdout: string): {
           const modelID = currentSlug.slice(separator + 1);
           let provider = providers.get(providerID);
           if (!provider) {
-            provider = { id: providerID, name: providerID, models: {} };
+            provider = {
+              id: providerID,
+              name: openCodeProviderName(providerID),
+              models: {},
+            };
             providers.set(providerID, provider);
           }
           provider.models[modelID] = model;
@@ -176,7 +188,8 @@ export function flattenOpenCodeModels(
 ): AgentModel[] {
   const connected = new Set(parsed.connected);
   const primaryAgents = agents.filter(
-    (agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"),
+    (agent) =>
+      !agent.hidden && (agent.mode === "primary" || agent.mode === "all"),
   );
   const models: AgentModel[] = [];
   for (const provider of parsed.providers.values()) {
@@ -190,12 +203,17 @@ export function flattenOpenCodeModels(
         harness: "opencode",
         name,
         nativeId,
+        provider: { id: provider.id, name: provider.name },
         settings: openCodeModelSettings(provider.id, model, primaryAgents),
         ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
       });
     }
   }
   return models.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function openCodeProviderName(providerID: string): string {
+  return PROVIDER_NAMES[providerID] ?? titleCaseSlug(providerID);
 }
 
 function openCodeModelSettings(

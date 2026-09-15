@@ -3,14 +3,19 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkedWorkItemUpdateCard } from "../lib/linkedWorkItemActivity";
+import { resetSoundCues } from "../lib/sounds";
 import { LinkedWorkItemUpdateNotice } from "./LinkedWorkItemUpdateNotice";
 
-const { openUrl, playCue } = vi.hoisted(() => ({
+const { openUrl, play } = vi.hoisted(() => ({
   openUrl: vi.fn(),
-  playCue: vi.fn(),
+  play: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
-vi.mock("../lib/sounds", () => ({ playCue }));
+vi.mock("cuelume", () => ({
+  play,
+  setEnabled: vi.fn(),
+  setVolume: vi.fn(),
+}));
 
 const baseCard: LinkedWorkItemUpdateCard = {
   kind: "pr",
@@ -49,7 +54,9 @@ beforeEach(() => {
     },
   );
   openUrl.mockReset();
-  playCue.mockReset();
+  play.mockReset();
+  resetSoundCues();
+  localStorage.clear();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -76,6 +83,7 @@ describe("linked work item update notice", () => {
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           card: { ...baseCard, status: "loading" },
           onAcknowledge: () => {},
           onDismiss: () => {},
@@ -91,6 +99,7 @@ describe("linked work item update notice", () => {
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           card: baseCard,
           onAcknowledge: () => {},
           onDismiss: () => {},
@@ -102,11 +111,12 @@ describe("linked work item update notice", () => {
     expect(
       document.body.querySelector('[aria-label^="New activity on"]')?.classList,
     ).toContain("linked-activity-notice");
-    expect(playCue).toHaveBeenCalledExactlyOnceWith("linkedActivity");
+    expect(play).toHaveBeenCalledExactlyOnceWith("chime");
 
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           onAcknowledge: () => {},
           onDismiss: () => {},
           onOpenDiscussion: () => {},
@@ -117,6 +127,7 @@ describe("linked work item update notice", () => {
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           card: baseCard,
           onAcknowledge: () => {},
           onDismiss: () => {},
@@ -125,7 +136,53 @@ describe("linked work item update notice", () => {
         }),
       );
     });
-    expect(playCue).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent after a tab remount but announces new activity", () => {
+    const renderNotice = (
+      card: LinkedWorkItemUpdateCard,
+      sessionId = "session-1",
+    ) => {
+      act(() => {
+        root.render(
+          createElement(LinkedWorkItemUpdateNotice, {
+            sessionId,
+            card,
+            onAcknowledge: () => {},
+            onDismiss: () => {},
+            onOpenDiscussion: () => {},
+            onAddToChat: () => {},
+          }),
+        );
+      });
+    };
+
+    renderNotice(baseCard);
+    expect(play).toHaveBeenCalledExactlyOnceWith("chime");
+
+    act(() => root.render(null));
+    renderNotice({ ...baseCard });
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector('[aria-label^="New activity on"]'),
+    ).not.toBeNull();
+
+    const updatedCard = { ...baseCard, updatedAt: baseCard.updatedAt + 60_000 };
+    renderNotice({ ...updatedCard, status: "loading" });
+    renderNotice({ ...updatedCard, status: "error" });
+    expect(play).toHaveBeenCalledTimes(1);
+    renderNotice(updatedCard);
+    expect(play).toHaveBeenCalledTimes(2);
+
+    act(() => root.render(null));
+    renderNotice({ ...updatedCard });
+    expect(play).toHaveBeenCalledTimes(2);
+
+    renderNotice(baseCard, "session-2");
+    expect(play).toHaveBeenCalledTimes(3);
+    renderNotice(updatedCard);
+    expect(play).toHaveBeenCalledTimes(3);
   });
 
   it("offers discussion and agent actions for a new comment", () => {
@@ -135,6 +192,7 @@ describe("linked work item update notice", () => {
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           card: baseCard,
           onAcknowledge,
           onDismiss: () => {},
@@ -147,19 +205,24 @@ describe("linked work item update notice", () => {
     const notice = document.body.querySelector<HTMLElement>(
       'section[aria-label="New activity on Pull request 42"]',
     );
+    expect(notice?.parentElement).toBe(container);
+    expect(notice?.classList.contains("absolute")).toBe(true);
+    expect(notice?.classList.contains("fixed")).toBe(false);
     expect(notice?.classList.contains("isolate")).toBe(true);
     expect(notice?.classList.contains("bg-content/10")).toBe(false);
     expect(notice?.classList.contains("bg-background-base/95")).toBe(false);
     expect(notice?.querySelector(".popover-backdrop")).not.toBeNull();
     expect(document.body.textContent).toContain("1 new comment");
     expect(
-      button("Dismiss").nextElementSibling?.getAttribute("aria-label"),
-    ).toBe("Dismiss updates for Pull request 42");
-    expect(button("Open discussion").classList.contains("truncate")).toBe(true);
+      notice?.querySelector(
+        'button[aria-label="Dismiss updates for Pull request 42"]',
+      ),
+    ).not.toBeNull();
+    expect(button("Open PR").classList.contains("truncate")).toBe(true);
     expect(button("Address with agent").classList).toContain(
       "whitespace-nowrap",
     );
-    act(() => button("Open discussion").click());
+    act(() => button("Open PR").click());
     expect(onAcknowledge).toHaveBeenCalledTimes(1);
     expect(onOpenDiscussion).toHaveBeenCalledTimes(1);
     act(() => button("Address with agent").click());
@@ -188,6 +251,7 @@ describe("linked work item update notice", () => {
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           card,
           onAcknowledge,
           onDismiss: () => {},
@@ -211,6 +275,7 @@ describe("linked work item update notice", () => {
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           card: { ...baseCard, state: "merged" },
           onAcknowledge,
           onDismiss: () => {},
@@ -239,6 +304,7 @@ describe("linked work item update notice", () => {
     act(() => {
       root.render(
         createElement(LinkedWorkItemUpdateNotice, {
+          sessionId: "session-1",
           card: { ...baseCard, kind: "issue", state: "closed" },
           onAcknowledge: () => {},
           onDismiss: () => {},

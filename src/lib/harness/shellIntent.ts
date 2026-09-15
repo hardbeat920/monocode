@@ -18,7 +18,7 @@ const READABLE_BIN =
  * should stay as typed (git, npm, scripts, mixed opaque work).
  */
 export function inferShellIntent(command: string): ShellIntent | undefined {
-  const text = command.trim();
+  const text = unwrapShellCommand(command);
   if (!text || text.length > MAX_COMMAND_CHARS) return undefined;
   if (/^(Read|Find|List|Edit|Write)\s+\S/.test(text)) return undefined;
   if (looksUnsafe(text)) return undefined;
@@ -50,6 +50,34 @@ export function inferShellIntent(command: string): ShellIntent | undefined {
     ranked.find((item) => item.verb === "Read" || item.verb === "Find") ??
     ranked[0]
   );
+}
+
+/**
+ * Codex may expose a command through the argv used to launch the user's shell,
+ * for example `/bin/zsh -lc "cat package.json"`. The launcher is transport
+ * noise for this visual-only classifier; inspect the script it was given.
+ */
+export function unwrapShellCommand(command: string): string {
+  let current = command.trim();
+  for (let depth = 0; depth < 2; depth += 1) {
+    const argv = tokenize(current);
+    if (!argv || argv.length < 3 || !SHELL_LAUNCHERS.has(binName(argv[0]))) {
+      break;
+    }
+    const scriptIndex = argv.findIndex(
+      (arg, index) => index > 0 && isCommandFlag(arg),
+    );
+    const script = scriptIndex >= 0 ? argv[scriptIndex + 1]?.trim() : undefined;
+    if (!script || script === current) break;
+    current = script;
+  }
+  return current;
+}
+
+const SHELL_LAUNCHERS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+
+function isCommandFlag(arg: string): boolean {
+  return arg === "--command" || /^-[A-Za-z]*c[A-Za-z]*$/.test(arg);
 }
 
 export function formatShellIntent(
@@ -89,6 +117,9 @@ function classifyArgv(argv: string[]): Classified {
   if (bin === "head" || bin === "tail") return headTailIntent(argv);
   if (bin === "sed") return sedIntent(argv);
   if (bin === "tee") return teeIntent(argv);
+  if (bin === "rg" && argv.includes("--files")) {
+    return { verb: "Find", query: "files" };
+  }
   if (SEARCH_BINS.has(bin)) return grepIntent(argv);
   if (bin === "find") return findIntent(argv);
   if (bin === "ls" || bin === "tree") return listIntent(argv);
@@ -418,7 +449,6 @@ function looksUnsafe(command: string): boolean {
       i += 1;
       continue;
     }
-    if (c === "\n" || c === "\r") return true;
     if (c === "`") return true;
     if (c === "$" && (command[i + 1] === "(" || command[i + 1] === "{")) {
       return true;
@@ -476,6 +506,8 @@ function readUnquotedToken(text: string, start: number): string {
 
 function chainSep(text: string, i: number): number {
   if (text.startsWith("&&", i) || text.startsWith("||", i)) return 2;
+  if (text.startsWith("\r\n", i)) return 2;
+  if (text[i] === "\n" || text[i] === "\r") return 1;
   if (text[i] === ";") return 1;
   return 0;
 }

@@ -1,4 +1,5 @@
 import type { HarnessId } from "../session";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { GeneratedSessionTitle } from "../sessionTitle";
 import type { PrContent } from "../gitText";
 import { hasLiveCatalog } from "../models";
@@ -131,9 +132,17 @@ export async function sendHarnessTurn(
     throw new Error(`${input.harness} is not connected yet`);
   }
   cancelIdlePark(input.sessionId);
+  const controlled = typeof isTauri === "function" && isTauri();
+  if (controlled)
+    await invoke("control_authorize_turn", {
+      sessionId: input.sessionId,
+      cwd: input.cwd,
+    });
   try {
     await adapter.sendTurn(input);
   } finally {
+    if (controlled)
+      await invoke("control_turn_finished", { sessionId: input.sessionId });
     scheduleIdlePark(input.harness, input.sessionId);
   }
 }

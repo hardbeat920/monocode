@@ -22,6 +22,7 @@ describe("ComposerAction", () => {
 
     const typed = renderAction(true, true);
     expect(typed).toContain('aria-label="Send"');
+    expect(typed).toContain("composer-send");
     expect(typed).not.toContain('aria-label="Stop"');
   });
 });

@@ -9,6 +9,8 @@
     "core:menu:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-title",
     "core:window:allow-close",

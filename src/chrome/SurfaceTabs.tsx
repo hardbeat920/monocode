@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { copyText } from "../lib/clipboard";
 import { basename, revealPath } from "../lib/fs";
 import {
+  isAgentTab,
   isChangesTab,
   isCommitTab,
   isFilesystemTab,
@@ -20,9 +21,10 @@ import { IS_MAC, IS_WIN } from "../lib/platform";
 import { releaseNotesTitle } from "../lib/releaseNotes";
 import { terminalTabLabel } from "../lib/terminalTab";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useSortable } from "../hooks/useSortable";
+import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { HarnessIcon } from "./HarnessIcon";
 
 type Props = {
   files: FilePaneTab[];
@@ -124,6 +126,16 @@ export function surfaceTabPresentation(
     };
   }
 
+  if (isAgentTab(file)) {
+    const name = file.path.trim() || "Agent";
+    return {
+      name,
+      label: name,
+      iconName: "AGENT",
+      tooltip: `${name} — orchestration agent`,
+    };
+  }
+
   if (isCommitTab(file)) {
     const name = file.commit.subject.trim() || file.commit.shortSha;
     return {
@@ -178,7 +190,7 @@ export function SurfaceTabs({
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const [menu, setMenu] = useState<SurfaceTabMenu | null>(null);
   const fileIds = files.map((file) => file.id);
-  const sortable = useSortable(fileIds, onReorder);
+  const sortable = useAnimatedReorder(fileIds, onReorder);
   const canDrag = files.length > 1;
   const menuFile = menu
     ? files.find((file) => file.id === menu.fileId)
@@ -255,7 +267,7 @@ export function SurfaceTabs({
           <GripVertical className="size-3.5" strokeWidth={1.75} />
         </div>
       ) : null}
-      {files.map((file, index) => {
+      {files.map((file) => {
         const active = file.id === activeFileId;
         const dirty = dirtyFileIds.has(file.id);
         const errors = fileErrorCounts.get(file.id) ?? 0;
@@ -263,18 +275,8 @@ export function SurfaceTabs({
         const commit = isCommitTab(file);
         const review = isReviewTab(file) && !changes;
         const terminal = isTerminalTab(file);
+        const agent = isAgentTab(file) ? file.agent : null;
         const { label, iconName, tooltip } = surfaceTabPresentation(file);
-        const dragging = sortable.draggingId === file.id;
-        const showStart =
-          sortable.draggingId &&
-          sortable.toIndex === index &&
-          sortable.fromIndex !== null &&
-          sortable.toIndex < sortable.fromIndex;
-        const showEnd =
-          sortable.draggingId &&
-          sortable.toIndex === index &&
-          sortable.fromIndex !== null &&
-          sortable.toIndex > sortable.fromIndex;
         return (
           <div
             key={file.id}
@@ -282,9 +284,9 @@ export function SurfaceTabs({
               sortable.setItemRef(file.id, el);
               if (el && file.id === activeFileId) activeTabRef.current = el;
             }}
-            className={`group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-content/10 ${
+            className={`reorder-item tab-motion group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-content/10 ${
               active ? "bg-content/8" : "hover:bg-content/5"
-            } ${dragging ? "opacity-40" : ""} ${
+            } ${
               canDrag ? "cursor-grab active:cursor-grabbing" : ""
             }`}
             onMouseDownCapture={(event) => {
@@ -317,12 +319,6 @@ export function SurfaceTabs({
               });
             }}
           >
-            {showStart ? (
-              <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-0.5 bg-accent" />
-            ) : null}
-            {showEnd ? (
-              <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-0.5 bg-accent" />
-            ) : null}
             <button
               type="button"
               role="tab"
@@ -340,6 +336,11 @@ export function SurfaceTabs({
             >
               {terminal ? (
                 <Terminal className="size-3.5 shrink-0" strokeWidth={1.75} />
+              ) : agent ? (
+                <HarnessIcon
+                  harness={agent.harness}
+                  className="size-3.5 shrink-0"
+                />
               ) : changes || commit ? (
                 <GitCompare className="size-3.5 shrink-0" strokeWidth={1.75} />
               ) : (

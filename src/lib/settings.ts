@@ -392,6 +392,7 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "View: Reset Zoom", keys: `${MOD}0`, when: "Always" },
   { command: "Tab: New", keys: `${MOD}T`, when: "Always" },
   { command: "Tab: Close Others", keys: `${MOD}${ALT}T`, when: "Always" },
+  { command: "Tab: Close All", keys: `${MOD}${SHIFT}W`, when: "Always" },
   { command: "Tab: Next", keys: `${MOD}${SHIFT}]`, when: "Always" },
   { command: "Tab: Previous", keys: `${MOD}${SHIFT}[`, when: "Always" },
   { command: "Tab: Cycle Next", keys: `${CTRL}Tab`, when: "Always" },

@@ -6,13 +6,16 @@ import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
 
 type Props = {
   diff: GithubPrDiff;
+  /** When true, show the whole file (no fold rows). */
+  fullFile?: boolean;
 };
 
-export function InboxPrDiff({ diff }: Props) {
+export function InboxPrDiff({ diff, fullFile = false }: Props) {
   const files = useMemo(() => {
     const parsed = mergePrDiff(diff.files, parsePrPatch(diff.patch));
-    return parsed.map((file) => toModel(file, diff.truncated));
-  }, [diff]);
+    const context = fullFile ? Number.POSITIVE_INFINITY : undefined;
+    return parsed.map((file) => toModel(file, diff.truncated, context));
+  }, [diff, fullFile]);
 
   return (
     <UnifiedDiffView
@@ -26,7 +29,11 @@ export function InboxPrDiff({ diff }: Props) {
   );
 }
 
-function toModel(file: PrDiffFile, truncated: boolean): UnifiedDiffFileModel {
+function toModel(
+  file: PrDiffFile,
+  truncated: boolean,
+  context?: number,
+): UnifiedDiffFileModel {
   const lines = file.lines.map(toUnifiedLine);
   return {
     id: file.path,
@@ -44,7 +51,7 @@ function toModel(file: PrDiffFile, truncated: boolean): UnifiedDiffFileModel {
         : undefined,
     additions: file.additions,
     deletions: file.deletions,
-    blocks: blocksFromLines(lines),
+    blocks: blocksFromLines(lines, context),
   };
 }
 

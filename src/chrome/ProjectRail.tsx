@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useDragResize } from "../hooks/useDragResize";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
-import { useSortable } from "../hooks/useSortable";
+import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
 import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import {
   loadProjectRailWidth,
@@ -358,14 +358,8 @@ export function ProjectRail({
 
   const pinnedIds = sections.pinned.map((item) => item.path);
   const projectIds = sections.projects.map((item) => item.path);
-  const pinnedSortable = useSortable(pinnedIds, onReorderPinned, {
-    axis: "y",
-    onActivate: onSelectProject,
-  });
-  const projectSortable = useSortable(projectIds, onReorderProjects, {
-    axis: "y",
-    onActivate: onSelectProject,
-  });
+  const pinnedSortable = useAnimatedReorder(pinnedIds, onReorderPinned, "y");
+  const projectSortable = useAnimatedReorder(projectIds, onReorderProjects, "y");
   return (
     <nav
       ref={resize.setPaneRef}
@@ -580,7 +574,7 @@ export function ProjectRail({
   );
 }
 
-type SortableHandle = ReturnType<typeof useSortable>;
+type SortableHandle = ReturnType<typeof useAnimatedReorder>;
 
 const LIVE_AGENT_MIN = 2;
 const LIVE_AGENT_CAP = 4;
@@ -843,7 +837,7 @@ function ProjectSection({
         </p>
       ) : null}
       <div className="flex flex-col gap-px px-2">
-        {items.map((item, index) => (
+        {items.map((item) => (
           <ProjectCard
             key={item.path}
             item={item}
@@ -851,7 +845,6 @@ function ProjectSection({
             busy={isBusyPath(item.path, busy)}
             pinned={pinned}
             sortable={sortable}
-            index={index}
             onSelect={onSelect}
             onTogglePin={onTogglePin}
             onContextMenu={onContextMenu}
@@ -877,7 +870,6 @@ function ProjectCard({
   busy,
   pinned,
   sortable,
-  index,
   onSelect,
   onTogglePin,
   onContextMenu,
@@ -893,7 +885,6 @@ function ProjectCard({
   busy: boolean;
   pinned: boolean;
   sortable: SortableHandle;
-  index: number;
   onSelect: (path: string) => void;
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
@@ -910,17 +901,6 @@ function ProjectCard({
   const name = resolveTabGroupLabel(key, groupLabels, fallbackName);
   const logoPath = resolveTabGroupLogo(key, groupLogos);
   const color = resolveTabGroupColor(key, groupColors, groupCustomColors, seed);
-  const dragging = sortable.draggingId === item.path;
-  const showStart =
-    sortable.draggingId &&
-    sortable.toIndex === index &&
-    sortable.fromIndex !== null &&
-    sortable.toIndex < sortable.fromIndex;
-  const showEnd =
-    sortable.draggingId &&
-    sortable.toIndex === index &&
-    sortable.fromIndex !== null &&
-    sortable.toIndex > sortable.fromIndex;
   const diffEnabled = Boolean(item.path) && item.path !== "~";
   const stats = useProjectDiffStats(item.path, diffEnabled);
   const files = stats?.files ?? 0;
@@ -933,11 +913,12 @@ function ProjectCard({
   return (
     <div
       ref={(el) => sortable.setItemRef(item.path, el)}
-      className={`group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
+      data-selected={selected || undefined}
+      className={`reorder-item project-reorder-item group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
         selected
           ? "bg-content/12 text-content"
-          : "opacity-65 hover:bg-content/5 hover:text-content"
-      } ${dragging ? "opacity-40" : ""} cursor-default`}
+          : "opacity-65"
+      } cursor-default`}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
@@ -954,12 +935,6 @@ function ProjectCard({
       }}
       onContextMenu={(event) => onContextMenu(item.path, event)}
     >
-      {showStart ? (
-        <div className="pointer-events-none absolute inset-x-2 top-0 z-20 h-0.5 rounded-full bg-accent" />
-      ) : null}
-      {showEnd ? (
-        <div className="pointer-events-none absolute inset-x-2 bottom-0 z-20 h-0.5 rounded-full bg-accent" />
-      ) : null}
       <button
         type="button"
         title={cardTitle}
@@ -967,7 +942,7 @@ function ProjectCard({
         aria-current={selected ? "true" : undefined}
         className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left group-hover:pr-6"
       >
-        <div className="grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
+        <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
           {logoPath && !busy ? (
             <ProjectLogoIcon
               path={logoPath}
@@ -992,7 +967,7 @@ function ProjectCard({
           <span className={nameClassName}>{name}</span>
         )}
         {hasChanges ? (
-          <span className="shrink-0 group-hover:hidden">
+          <span className="project-card-stats shrink-0 group-hover:hidden">
             <ProjectDiffStat additions={additions} deletions={deletions} />
           </span>
         ) : null}

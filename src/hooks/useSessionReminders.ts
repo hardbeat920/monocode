@@ -26,6 +26,8 @@ export function useSessionReminders(
   const [now, setNow] = useState(Date.now);
   const [error, setError] = useState<string | null>(null);
   const revision = useRef(0);
+  const remindersRef = useRef(reminders);
+  remindersRef.current = reminders;
   const callbacks = useRef({ onOpenSession, ensureSaved });
   callbacks.current = { onOpenSession, ensureSaved };
 
@@ -69,6 +71,17 @@ export function useSessionReminders(
       }
     },
     [refresh],
+  );
+
+  const dismissDue = useCallback(
+    async (sessionId: string) => {
+      const reminder = remindersRef.current.find(
+        (item) => item.sessionId === sessionId && item.dueAt <= Date.now(),
+      );
+      if (!reminder) return;
+      await cancel([sessionId], reminder.dueAt);
+    },
+    [cancel],
   );
 
   const openHere = useCallback(
@@ -188,6 +201,7 @@ export function useSessionReminders(
     refresh,
     schedule,
     cancel,
+    dismissDue,
     open,
   };
 }

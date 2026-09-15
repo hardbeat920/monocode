@@ -1222,6 +1222,10 @@ function InboxCard({
   );
 }
 
+export function inboxShowsFullFileDiff(item: InboxItem): boolean {
+  return item.provider === "github" && item.kind === "pr";
+}
+
 export function InboxDetail({
   item,
   cwd,
@@ -1274,6 +1278,8 @@ export function InboxDetail({
   const [loading, setLoading] = useState(cached == null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"summary" | "code">("summary");
+  const [diffMode, setDiffMode] = useState<"hunks" | "full">("hunks");
+  const fullFile = inboxShowsFullFileDiff(item) && diffMode === "full";
   const [prDiff, setPrDiff] = useState<GithubPrDiff | null>(cachedDiff);
   const [diffLoading, setDiffLoading] = useState(isPr && cachedDiff == null);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -1497,7 +1503,7 @@ export function InboxDetail({
     let cancelled = false;
     const cachedDiff = gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
-      : peekGithubPrDiff(item.projectPath, item.number);
+      : peekGithubPrDiff(item.projectPath, item.number, fullFile);
     if (cachedDiff) {
       setPrDiff(cachedDiff);
       setDiffLoading(false);
@@ -1509,7 +1515,7 @@ export function InboxDetail({
     }
     const pending = gitlab
       ? gitlabMrDiff(item.repo, item.number)
-      : githubPrDiff(item.projectPath, item.number);
+      : githubPrDiff(item.projectPath, item.number, { fullContext: fullFile });
     void pending
       .then((next) => {
         if (cancelled) return;
@@ -1527,7 +1533,16 @@ export function InboxDetail({
     return () => {
       cancelled = true;
     };
-  }, [gitlab, isPr, item.number, item.projectPath, item.repo, revision, tab]);
+  }, [
+    fullFile,
+    gitlab,
+    isPr,
+    item.number,
+    item.projectPath,
+    item.repo,
+    revision,
+    tab,
+  ]);
 
   const postComment = async (body: string) => {
     setPosting(true);
@@ -1670,6 +1685,17 @@ export function InboxDetail({
                   )}
                 </>
               ) : null}
+              {item.createdAt && formatRelativeTime(item.createdAt) ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <time
+                    dateTime={item.createdAt}
+                    title={new Date(item.createdAt).toLocaleString()}
+                  >
+                    Created {formatRelativeTime(item.createdAt)}
+                  </time>
+                </>
+              ) : null}
               {formatRelativeTime(item.updatedAt) ? (
                 <>
                   <span aria-hidden>·</span>
@@ -1802,23 +1828,57 @@ export function InboxDetail({
             ) : null}
           </header>
           {isPr ? (
-            <div
-              role="tablist"
-              aria-label={
-                gitlab ? "Merge request sections" : "Pull request sections"
-              }
-              className="flex h-9 items-stretch gap-4"
-            >
-              <InboxDetailTab
-                label="Summary"
-                selected={tab === "summary"}
-                onSelect={() => setTab("summary")}
-              />
-              <InboxDetailTab
-                label="Code"
-                selected={tab === "code"}
-                onSelect={() => setTab("code")}
-              />
+            <div className="flex h-9 items-stretch gap-4">
+              <div
+                role="tablist"
+                aria-label={
+                  gitlab ? "Merge request sections" : "Pull request sections"
+                }
+                className="flex items-stretch gap-4"
+              >
+                <InboxDetailTab
+                  label="Summary"
+                  selected={tab === "summary"}
+                  onSelect={() => setTab("summary")}
+                />
+                <InboxDetailTab
+                  label="Code"
+                  selected={tab === "code"}
+                  onSelect={() => setTab("code")}
+                />
+              </div>
+              {tab === "code" && inboxShowsFullFileDiff(item) ? (
+                <div
+                  role="group"
+                  aria-label="Diff context"
+                  className="ml-auto flex items-center self-center rounded-md border border-content/10 bg-content/[0.03] p-0.5"
+                >
+                  <button
+                    type="button"
+                    aria-pressed={diffMode === "hunks"}
+                    onClick={() => setDiffMode("hunks")}
+                    className={`rounded px-2.5 py-1 text-[11px] leading-none ${
+                      diffMode === "hunks"
+                        ? "bg-content/10 text-content"
+                        : "text-content/45 hover:text-content/70"
+                    }`}
+                  >
+                    Hunks
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={diffMode === "full"}
+                    onClick={() => setDiffMode("full")}
+                    className={`rounded px-2.5 py-1 text-[11px] leading-none ${
+                      diffMode === "full"
+                        ? "bg-content/10 text-content"
+                        : "text-content/45 hover:text-content/70"
+                    }`}
+                  >
+                    Full file
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1848,8 +1908,9 @@ export function InboxDetail({
               <p className="text-[13px] text-content/50">{diffError}</p>
             ) : prDiff ? (
               <InboxPrDiff
-                key={`${item.projectPath}:${item.number}:${revision}`}
+                key={`${item.projectPath}:${item.number}:${revision}:${diffMode}`}
                 diff={prDiff}
+                fullFile={fullFile}
               />
             ) : (
               <p className="text-[13px] text-content/45">No file changes</p>
