@@ -281,6 +281,78 @@ export function applyPlaceTabOnPane({
   };
 }
 
+/**
+ * Extract one leaf from a split workspace and turn it into a title tab.
+ * Surface pane metadata moves with editor and terminal leaves.
+ */
+export function applyDetachPaneToTab({
+  tabs,
+  paneId,
+  targetTabId,
+  position,
+  createTabId = () => crypto.randomUUID(),
+}: {
+  tabs: WorkspaceTab[];
+  paneId: string;
+  targetTabId: string;
+  position: "before" | "after";
+  createTabId?: () => string;
+}): {
+  tabs: WorkspaceTab[];
+  activeTabId: string;
+  focusedId: string;
+} | null {
+  const sourceIndex = tabs.findIndex((tab) =>
+    leafIds(tab.layout).includes(paneId),
+  );
+  if (sourceIndex < 0 || leafIds(tabs[sourceIndex]!.layout).length < 2) {
+    return null;
+  }
+
+  const source = tabs[sourceIndex]!;
+  const remaining = closeLeaf(source, paneId);
+  if (!remaining) return null;
+
+  const editorPane = source.editorPanes.find((pane) => pane.id === paneId);
+  const terminalPane = (source.terminalPanes ?? []).find(
+    (pane) => pane.id === paneId,
+  );
+  const nextSource: WorkspaceTab = {
+    ...remaining,
+    editorPanes: source.editorPanes.filter((pane) => pane.id !== paneId),
+    terminalPanes: (source.terminalPanes ?? []).filter(
+      (pane) => pane.id !== paneId,
+    ),
+  };
+  const withoutDetached = tabs.map((tab, index) =>
+    index === sourceIndex ? nextSource : tab,
+  );
+  const targetIndex = withoutDetached.findIndex(
+    (tab) => tab.id === targetTabId,
+  );
+  if (targetIndex < 0) return null;
+
+  const insertAt = targetIndex + (position === "after" ? 1 : 0);
+  const keepsSourceGroup =
+    !!source.groupId &&
+    (withoutDetached[insertAt - 1]?.groupId === source.groupId ||
+      withoutDetached[insertAt]?.groupId === source.groupId);
+  const detached: WorkspaceTab = {
+    kind: "session",
+    id: createTabId(),
+    layout: leaf(paneId),
+    focusedId: paneId,
+    editorPanes: editorPane ? [editorPane] : [],
+    terminalPanes: terminalPane ? [terminalPane] : [],
+    diffOpen: false,
+    diffFocused: false,
+    ...(keepsSourceGroup ? { groupId: source.groupId } : {}),
+  };
+  const nextTabs = withoutDetached.slice();
+  nextTabs.splice(insertAt, 0, detached);
+  return { tabs: nextTabs, activeTabId: detached.id, focusedId: paneId };
+}
+
 export function isGroupableProject(
   project: string | null,
 ): project is string {

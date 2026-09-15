@@ -248,6 +248,7 @@ import {
   sameProjectPath,
 } from "./lib/recents";
 import {
+  applyDetachPaneToTab,
   applyPlaceTabOnPane,
   applyPlaceSessionOnPane,
   filterTabsForProject,
@@ -367,7 +368,7 @@ import { ProjectTerminalDock } from "./surfaces/ProjectTerminalDock";
 import { SearchView } from "./surfaces/SearchView";
 import { SettingsView, type SettingsAnchor } from "./surfaces/SettingsView";
 import type { ConnectableInboxSource } from "./lib/inboxFilters";
-import { InboxView } from "./surfaces/InboxView";
+import { InboxView, LinkedWorkItemPanel } from "./surfaces/InboxView";
 import type { InboxSessionPortal } from "./surfaces/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "./lib/inboxAsk";
 import { NotesView } from "./surfaces/NotesView";
@@ -683,7 +684,16 @@ export default function App({
   const [searchViewOpen, setSearchViewOpen] = useState(false);
   const [searchViewFocusToken, setSearchViewFocusToken] = useState(0);
   const [inboxViewOpen, setInboxViewOpen] = useState(false);
-  const [inboxTarget, setInboxTarget] = useState<LinkedWorkItem | null>(null);
+  const [linkedWorkItemPanel, setLinkedWorkItemPanel] = useState<{
+    item: LinkedWorkItem;
+    sessionId: string;
+    cwd: string;
+  } | null>(null);
+  const linkedWorkItemPanelRequest = useRef(0);
+  const closeLinkedWorkItemPanel = useCallback(() => {
+    linkedWorkItemPanelRequest.current += 1;
+    setLinkedWorkItemPanel(null);
+  }, []);
   const [inboxAskPortal, setInboxAskPortal] =
     useState<InboxSessionPortal | null>(null);
   const openingInboxSessions = useRef(new Map<string, Promise<string>>());
@@ -995,6 +1005,29 @@ export default function App({
     sessions.find(
       (session) => activeTab && leafIds(activeTab.layout).includes(session.id),
     );
+
+  useEffect(() => {
+    if (!linkedWorkItemPanel || !activeTab) return;
+    if (leafIds(activeTab.layout).includes(linkedWorkItemPanel.sessionId)) {
+      return;
+    }
+    closeLinkedWorkItemPanel();
+  }, [activeTab, closeLinkedWorkItemPanel, linkedWorkItemPanel]);
+
+  useEffect(() => {
+    if (!linkedWorkItemPanel) return;
+    if (searchViewOpen || inboxViewOpen || notesViewOpen || settingsOpen) {
+      closeLinkedWorkItemPanel();
+    }
+  }, [
+    closeLinkedWorkItemPanel,
+    inboxViewOpen,
+    linkedWorkItemPanel,
+    notesViewOpen,
+    searchViewOpen,
+    settingsOpen,
+  ]);
+
   const sessionDefaults = active ?? sessions[0];
   const activeSkillContext = active
     ? nativeSkillContextForSession(active)
@@ -2912,6 +2945,24 @@ export default function App({
     [],
   );
 
+  const onDetachPane = useCallback(
+    (paneId: string, targetTabId: string, position: "before" | "after") => {
+      const result = applyDetachPaneToTab({
+        tabs: tabsRef.current,
+        paneId,
+        targetTabId,
+        position,
+      });
+      if (!result) return;
+
+      tabsRef.current = result.tabs;
+      setTabs(result.tabs);
+      setProjectTerminalFocused(false);
+      activateTab(result.activeTabId, result.focusedId);
+    },
+    [activateTab],
+  );
+
   const focusOpenSession = useCallback((sessionId: string) => {
     const tab = findOpenSessionTab(
       tabsRef.current,
@@ -3272,7 +3323,13 @@ export default function App({
   }, [inboxAskPortal, inboxViewOpen]);
 
   const onSelectHistorySession = useCallback(
-    async (sessionId: string) => {
+    async (
+      sessionId: string,
+      options?: { preserveLinkedWorkItemPanel?: boolean },
+    ) => {
+      if (!options?.preserveLinkedWorkItemPanel) {
+        closeLinkedWorkItemPanel();
+      }
       let session = await ensureOpenSession(sessionId);
       if (!session || session.inboxAsk) return;
       const parentId =
@@ -3300,6 +3357,7 @@ export default function App({
     },
     [
       appendTab,
+      closeLinkedWorkItemPanel,
       ensureOpenSession,
       focusOpenSession,
       replaceBlankPaneWithSession,
@@ -6201,28 +6259,43 @@ export default function App({
     setSettingsOpen(false);
     setSearchViewOpen(false);
     setNotesViewOpen(false);
-    setInboxTarget(null);
     setInboxViewOpen(true);
   }, []);
 
-  const onOpenLinkedWorkItem = useCallback((item: LinkedWorkItem) => {
-    setFilePickerOpen(false);
-    setSettingsOpen(false);
-    setSearchViewOpen(false);
-    setNotesViewOpen(false);
-    setInboxTarget(item);
-    setInboxViewOpen(true);
-  }, []);
+  const onOpenLinkedWorkItem = useCallback(
+    (item: LinkedWorkItem, sessionId: string) => {
+      const request = linkedWorkItemPanelRequest.current + 1;
+      linkedWorkItemPanelRequest.current = request;
+      setLinkedWorkItemPanel(null);
+      setFilePickerOpen(false);
+      setSettingsOpen(false);
+      setSearchViewOpen(false);
+      setNotesViewOpen(false);
+      setInboxViewOpen(false);
+      const cwd =
+        sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
+        history.find((session) => session.id === sessionId)?.cwd ??
+        sidebarCwd;
+      void onSelectHistorySession(sessionId, {
+        preserveLinkedWorkItemPanel: true,
+      }).then(() => {
+        if (linkedWorkItemPanelRequest.current !== request) return;
+        if (!sessionsRef.current.some((session) => session.id === sessionId)) {
+          return;
+        }
+        setLinkedWorkItemPanel({ item, sessionId, cwd });
+      });
+    },
+    [history, onSelectHistorySession, sidebarCwd],
+  );
 
   const onLeaveInbox = useCallback(() => {
     setInboxViewOpen(false);
-    setInboxTarget(null);
   }, []);
 
   const onOpenInboxSession = useCallback(
     (sessionId: string) => {
       setInboxViewOpen(false);
-      setInboxTarget(null);
       setSidebarTab("sessions");
       void onSelectHistorySession(sessionId);
     },
@@ -6956,10 +7029,10 @@ export default function App({
                 onSelectProject={onSelectProject}
               />
 
-              <main className="relative min-h-0 min-w-0 flex-1">
+              <main className="relative flex min-h-0 min-w-0 flex-1">
                 <div
                   ref={dockGridRef}
-                  className="absolute inset-0 grid h-full min-h-0 min-w-0"
+                  className="grid h-full min-h-0 min-w-0 flex-1"
                 >
                   {projectTerminals.map((dock) => {
                     const show =
@@ -7049,6 +7122,7 @@ export default function App({
                               editorNavigation={editorNavigation}
                               onUpdatePlan={onUpdatePlan}
                               onMovePane={onMovePane}
+                              onDetachPane={onDetachPane}
                               onTerminalMetaChange={onTerminalMetaChange}
                             />
                           </div>
@@ -7057,6 +7131,14 @@ export default function App({
                     </div>
                   </div>
                 </div>
+                {linkedWorkItemPanel ? (
+                  <LinkedWorkItemPanel
+                    target={linkedWorkItemPanel.item}
+                    cwd={linkedWorkItemPanel.cwd}
+                    recents={recents}
+                    onClose={closeLinkedWorkItemPanel}
+                  />
+                ) : null}
               </main>
             </div>
             {searchViewOpen ? (
@@ -7111,7 +7193,6 @@ export default function App({
                 onAskMount={setInboxAskPortal}
                 sessions={inboxRelatedSessions}
                 onOpenSession={onOpenInboxSession}
-                target={inboxTarget}
                 onOpenIntegrations={onOpenInboxIntegrations}
               />
             ) : null}

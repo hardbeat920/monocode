@@ -2,8 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "../lib/githubTasks";
+import type { LinkedWorkItem } from "../lib/session";
 import type { SessionSummary } from "../lib/sessionStore";
-import { InboxDetail, inboxShowsFullFileDiff } from "./InboxView";
+import {
+  InboxDetail,
+  inboxShowsFullFileDiff,
+  LinkedWorkItemPanel,
+} from "./InboxView";
 
 function item(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -41,6 +46,31 @@ function renderDetail(
 }
 
 describe("InboxDetail layout", () => {
+  it("renders a linked item as a standalone, closable side panel", () => {
+    const target: LinkedWorkItem = {
+      kind: "issue",
+      repo: "acme/web",
+      number: 157,
+      url: "https://github.com/acme/web/issues/157",
+    };
+    const markup = renderToStaticMarkup(
+      createElement(LinkedWorkItemPanel, {
+        target,
+        cwd: "/tmp/web",
+        recents: [],
+        onClose: () => {},
+      }),
+    );
+
+    expect(markup).toContain("data-linked-work-item-panel");
+    expect(markup).toContain('aria-label="Linked issue #157"');
+    expect(markup).toContain('aria-label="Resize linked issue panel"');
+    expect(markup).toContain('title="Close issue panel"');
+    expect(markup).not.toContain("data-app-inbox");
+    expect(markup).not.toContain("bg-background-base");
+    expect(markup).not.toContain("backdrop-blur");
+  });
+
   it("shows when a PR was created alongside its last update", () => {
     const markup = renderDetail({
       ...item({ kind: "pr" }),
@@ -84,6 +114,45 @@ describe("InboxDetail layout", () => {
     expect(header).toContain('aria-label="Pull request sections"');
     expect(header).toContain("Summary");
     expect(header).toContain("Code");
+  });
+
+  it("lets the linked-item panel header scroll and omits related threads", () => {
+    const markup = renderToStaticMarkup(
+      createElement(InboxDetail, {
+        item: item({ kind: "pr" }),
+        cwd: "/tmp/web",
+        projects: [],
+        revision: 0,
+        mode: "panel",
+        relatedSessions: [
+          {
+            id: "session-1",
+            cwd: "/tmp/web",
+            harness: "codex",
+            model: "gpt-5",
+            runtimeMode: "supervised",
+            title: "Review MonoCode Pull Request",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      }),
+    );
+    const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
+    const headerIndex = markup.indexOf("data-inbox-detail-header");
+    const reviewIndex = markup.indexOf("Review on GitHub");
+    const reviewButton = markup.slice(
+      markup.lastIndexOf("<button", reviewIndex),
+      reviewIndex,
+    );
+
+    expect(scrollIndex).toBeGreaterThan(-1);
+    expect(headerIndex).toBeGreaterThan(scrollIndex);
+    expect(markup.match(/data-inbox-detail-scroll/g)).toHaveLength(1);
+    expect(markup).toContain("text-[18px]");
+    expect(markup).not.toContain("Related thread");
+    expect(markup).not.toContain("Review MonoCode Pull Request");
+    expect(reviewButton).toContain("bg-content/10");
   });
 
   it("offers full-file diffs only for GitHub pull requests", () => {

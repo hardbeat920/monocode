@@ -2,7 +2,11 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getExternalPaneDrop } from "../lib/paneDrop";
+import {
+  getExternalPaneDrop,
+  setExternalTitleTabDrop,
+  titleTabDropFromPoint,
+} from "../lib/paneDrop";
 import { TitleBar, type Tab } from "./TitleBar";
 
 vi.mock("./WindowControls", () => ({ WindowControls: () => null }));
@@ -51,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => window.dispatchEvent(new Event("blur")));
+  act(() => setExternalTitleTabDrop(null));
   act(() => root.unmount());
   container.remove();
   vi.restoreAllMocks();
@@ -115,5 +120,70 @@ describe("title tab pane drops", () => {
     expect(onSelect).not.toHaveBeenCalled();
     expect(getExternalPaneDrop()).toBeNull();
     pane.remove();
+  });
+
+  it("resolves pane insertion on either side of a title tab", () => {
+    act(() =>
+      root.render(
+        createElement(TitleBar, {
+          tabs: [tab("first"), tab("second")],
+          activeId: "first",
+          cwd: "/project",
+          onToggleSidebar: vi.fn(),
+          onNew: vi.fn(),
+          onSelect: vi.fn(),
+          onClose: vi.fn(),
+          onCloseMany: vi.fn(),
+          onReorder: vi.fn(),
+        }),
+      ),
+    );
+    const second = container.querySelector<HTMLElement>(
+      '[data-title-tab-id="second"]',
+    )!;
+    second.getBoundingClientRect = () => new DOMRect(100, 0, 100, 40);
+    vi.spyOn(document, "elementFromPoint").mockReturnValue(second);
+
+    expect(titleTabDropFromPoint(120, 20)).toEqual({
+      targetTabId: "second",
+      position: "before",
+    });
+    expect(titleTabDropFromPoint(180, 20)).toEqual({
+      targetTabId: "second",
+      position: "after",
+    });
+  });
+
+  it("shows the insertion marker while a pane is over the title strip", () => {
+    act(() =>
+      root.render(
+        createElement(TitleBar, {
+          tabs: [tab("first"), tab("second")],
+          activeId: "first",
+          cwd: "/project",
+          onToggleSidebar: vi.fn(),
+          onNew: vi.fn(),
+          onSelect: vi.fn(),
+          onClose: vi.fn(),
+          onCloseMany: vi.fn(),
+          onReorder: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      setExternalTitleTabDrop({
+        fromId: "pane",
+        targetTabId: "second",
+        position: "before",
+      }),
+    );
+
+    expect(
+      container
+        .querySelector("[data-pane-tab-drop-hint]")
+        ?.closest("[data-title-tab-id]")
+        ?.getAttribute("data-title-tab-id"),
+    ).toBe("second");
   });
 });

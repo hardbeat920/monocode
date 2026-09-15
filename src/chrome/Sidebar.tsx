@@ -250,7 +250,7 @@ type Props = {
   onNewTerminal?: () => void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
-  onOpenInboxItem?: (item: LinkedWorkItem) => void;
+  onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onOpenNotes?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
@@ -2348,7 +2348,7 @@ function SessionCard({
   compact?: boolean;
   now: number;
   onSelect: (sessionId: string, event: { shiftKey: boolean }) => void;
-  onOpenWorkItem?: (item: LinkedWorkItem) => void;
+  onOpenWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onPrefetch?: (sessionId: string) => void;
   onPlaceOnPane?: (sessionId: string, targetId: string, edge: PaneEdge) => void;
   onListDrop?: (draggedId: string, target: SessionListDropTarget) => void;
@@ -2423,7 +2423,7 @@ function SessionCard({
       type="button"
       data-no-drag
       data-tauri-drag-region="false"
-      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} in Inbox (${MOD}-click for GitHub)`}
+      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
       aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
@@ -2433,7 +2433,7 @@ function SessionCard({
           void openUrl(linkedWorkItem.url).catch(() => undefined);
           return;
         }
-        if (onOpenWorkItem) onOpenWorkItem(linkedWorkItem);
+        if (onOpenWorkItem) onOpenWorkItem(linkedWorkItem, session.id);
         else void openUrl(linkedWorkItem.url).catch(() => undefined);
       }}
       onAuxClick={(event) => {

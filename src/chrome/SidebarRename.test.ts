@@ -646,6 +646,30 @@ describe("sidebar orchestration card", () => {
 });
 
 describe("sidebar linked work item updates", () => {
+  it("opens a linked item beside the session that owns it", () => {
+    props.busySessionIds = new Set();
+    props.onOpenInboxItem = vi.fn();
+    const linkedWorkItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+    };
+    props.sessions = [{ ...props.sessions[0], linkedWorkItem }];
+    act(() => render());
+
+    const pullRequest = card().querySelector<HTMLButtonElement>(
+      '[aria-label="Open PR #42"]',
+    )!;
+    expect(pullRequest.title).toContain("beside this session");
+    act(() => pullRequest.click());
+    expect(props.onOpenInboxItem).toHaveBeenCalledExactlyOnceWith(
+      linkedWorkItem,
+      "session-1",
+    );
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+  });
+
   it("uses the footer for the linked issue or PR instead of a second harness icon", () => {
     props.busySessionIds = new Set();
     props.onArchiveSession = vi.fn();

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Drag a split pane into the title-bar tab strip to detach it as a separate workspace tab. Chat, editor, and terminal panes keep their contents and focus.
+
+### Changed
+
+- Linked GitHub issues and pull requests open in a resizable panel beside their session instead of replacing it with the Inbox.
+
 ## [0.1.47] - 2026-09-15
 
 ### Added

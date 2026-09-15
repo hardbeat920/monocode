@@ -10,6 +10,7 @@ import {
 import { planProjectReturn } from "./projectReturn";
 import type { Session } from "./session";
 import {
+  applyDetachPaneToTab,
   applyPlaceTabOnPane,
   applyPlaceSessionOnPane,
   filterTabsForProject,
@@ -412,6 +413,83 @@ describe("applyPlaceTabOnPane", () => {
 
     expect(leafIds(next!.tabs[0]!.layout)).toEqual(["source"]);
     expect(next?.sessions.some((entry) => entry.id === blank.id)).toBe(false);
+  });
+});
+
+describe("applyDetachPaneToTab", () => {
+  it("turns one chat pane into a separate tab at the drop position", () => {
+    const source: WorkspaceTab = {
+      ...tab("source-tab", "first"),
+      layout: splitPane(newTab("first").layout, "first", "right", "second"),
+      focusedId: "second",
+    };
+    const target = tab("target-tab", "third");
+    const next = applyDetachPaneToTab({
+      tabs: [source, target],
+      paneId: "second",
+      targetTabId: target.id,
+      position: "before",
+      createTabId: () => "detached-tab",
+    });
+
+    expect(next?.activeTabId).toBe("detached-tab");
+    expect(next?.focusedId).toBe("second");
+    expect(next?.tabs.map((entry) => entry.id)).toEqual([
+      "source-tab",
+      "detached-tab",
+      "target-tab",
+    ]);
+    expect(leafIds(next!.tabs[0]!.layout)).toEqual(["first"]);
+    expect(leafIds(next!.tabs[1]!.layout)).toEqual(["second"]);
+  });
+
+  it.each(["editor", "terminal"] as const)(
+    "moves the complete %s pane metadata into the new tab",
+    (kind) => {
+      const file =
+        kind === "editor"
+          ? newFileTab("/projects/monocode/readme.md", "/projects/monocode")
+          : newTerminalFile("/projects/monocode");
+      const pane = { id: `${kind}-pane`, files: [file], activeFileId: file.id };
+      const source: WorkspaceTab = {
+        ...tab("source-tab", "chat"),
+        layout: splitPane(newTab("chat").layout, "chat", "down", pane.id),
+        editorPanes: kind === "editor" ? [pane] : [],
+        terminalPanes: kind === "terminal" ? [pane] : [],
+      };
+      const next = applyDetachPaneToTab({
+        tabs: [source, tab("target-tab", "other")],
+        paneId: pane.id,
+        targetTabId: "target-tab",
+        position: "after",
+        createTabId: () => "detached-tab",
+      });
+
+      expect(next?.tabs.map((entry) => entry.id)).toEqual([
+        "source-tab",
+        "target-tab",
+        "detached-tab",
+      ]);
+      expect(next?.tabs[0]?.editorPanes).toEqual([]);
+      expect(next?.tabs[0]?.terminalPanes).toEqual([]);
+      expect(next?.tabs[2]?.editorPanes).toEqual(
+        kind === "editor" ? [pane] : [],
+      );
+      expect(next?.tabs[2]?.terminalPanes).toEqual(
+        kind === "terminal" ? [pane] : [],
+      );
+    },
+  );
+
+  it("does not detach the only pane in a tab", () => {
+    expect(
+      applyDetachPaneToTab({
+        tabs: [tab("source-tab", "only")],
+        paneId: "only",
+        targetTabId: "source-tab",
+        position: "after",
+      }),
+    ).toBeNull();
   });
 });
 

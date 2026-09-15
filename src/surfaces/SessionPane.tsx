@@ -107,7 +107,7 @@ type Props = {
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
-  onOpenLinkedWorkItem?: (item: LinkedWorkItem) => void;
+  onOpenLinkedWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => Promise<boolean>;
   onDeleteSession?: (sessionId: string) => Promise<boolean>;
   onApproval: (
@@ -489,7 +489,7 @@ export const SessionPane = memo(function SessionPane({
               onDismiss={() => onLinkedWorkItemUpdateCardDismiss?.(session.id)}
               onOpenDiscussion={() => {
                 if (session.linkedWorkItem) {
-                  onOpenLinkedWorkItem?.(session.linkedWorkItem);
+                  onOpenLinkedWorkItem?.(session.linkedWorkItem, session.id);
                 }
               }}
               onAddToChat={(text) => addSelectionToChat(text, "plain")}

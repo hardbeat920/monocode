@@ -38,7 +38,11 @@ import { WindowControls } from "./WindowControls";
 import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import type { RecentProject } from "../lib/recents";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
-import { paneDropFromPoint, setExternalPaneDrop } from "../lib/paneDrop";
+import {
+  paneDropFromPoint,
+  setExternalPaneDrop,
+  useExternalTitleTabDrop,
+} from "../lib/paneDrop";
 import type { PaneEdge } from "../lib/layout";
 
 export type Tab = {
@@ -571,6 +575,7 @@ function TitleBarComponent({
     [activeId, onPlaceOnPane],
   );
   const sortable = useAnimatedReorder(tabIds, onReorder, "x", externalTabDrop);
+  const paneToTabDrop = useExternalTitleTabDrop();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(
@@ -817,14 +822,24 @@ function TitleBarComponent({
           ) : null}
           <div
             ref={setTabStripRef}
+            data-title-tab-strip
             className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none pl-1.5 pr-2.5"
           >
             {tabs.map((tab) => (
               <div
                 key={tab.id}
                 className="relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
+                data-title-tab-id={tab.id}
                 data-tauri-drag-region="false"
               >
+                {paneToTabDrop?.targetTabId === tab.id ? (
+                  <span
+                    data-pane-tab-drop-hint
+                    className={`pointer-events-none absolute inset-y-1 z-50 w-0.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] ${
+                      paneToTabDrop.position === "before" ? "left-0" : "right-0"
+                    }`}
+                  />
+                ) : null}
                 <TitleTabItem
                   tab={tab}
                   active={tab.id === activeId}
