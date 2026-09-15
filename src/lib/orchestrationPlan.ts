@@ -1,4 +1,5 @@
 import { HARNESSES, type Block, type HarnessId, type Session } from "./session";
+import { isEqualOrInside, pathKey } from "./paths";
 
 export type OrchestrationChoice = {
   harness: HarnessId;
@@ -53,6 +54,47 @@ function stringList(value: unknown, label: string, max: number): string[] {
         .map((item) => required(item, label, 512)),
     ),
   ];
+}
+
+function scopePath(value: string): string {
+  const slashed = value.replace(/\\/g, "/");
+  const prefix = slashed.startsWith("//")
+    ? "//"
+    : /^[A-Za-z]:\//.test(slashed)
+      ? slashed.slice(0, 3)
+      : slashed.startsWith("/")
+        ? "/"
+        : "";
+  const rest = slashed.slice(prefix.length);
+  const parts = rest.split("/").filter((part) => part && part !== ".");
+  return `${prefix}${parts.join("/")}` || ".";
+}
+
+function projectRelativeScope(
+  value: string,
+  cwd: string | undefined,
+  assignmentId: string,
+): string {
+  const slashed = value.replace(/\\/g, "/");
+  if (slashed.split("/").includes(".."))
+    throw new Error(
+      `Assignment "${assignmentId}" has invalid file scope "${value}". Use project-relative paths without '..', or '.' for the whole project`,
+    );
+  const normalized = scopePath(value);
+  if (/^[A-Za-z]:/.test(normalized) && !/^[A-Za-z]:\//.test(normalized))
+    throw new Error(
+      `Assignment "${assignmentId}" has invalid file scope "${value}". Use project-relative paths, or '.' for the whole project`,
+    );
+  const absolute =
+    normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
+  if (!absolute) return normalized;
+  if (!cwd || !isEqualOrInside(normalized, scopePath(cwd)))
+    throw new Error(
+      `Assignment "${assignmentId}" uses file scope "${value}" outside the selected project${cwd ? ` "${cwd}"` : ""}. Orchestration currently supports one project folder`,
+    );
+  const root = scopePath(cwd);
+  if (pathKey(normalized) === pathKey(root)) return ".";
+  return normalized.slice(root.length).replace(/^\/+/, "");
 }
 
 function stringRecord(value: unknown, label: string): Record<string, string> {
@@ -111,6 +153,7 @@ export function validateOrchestrationSettings(
 export function validateProposedTasks(
   value: unknown,
   settings: OrchestrationSettings,
+  cwd?: string,
 ): ProposedTask[] {
   if (!Array.isArray(value) || !value.length || value.length > 40)
     throw new Error("Provide 1 to 40 assignments");
@@ -131,16 +174,16 @@ export function validateProposedTasks(
       throw new Error(
         "Assignment IDs must contain letters, numbers, underscores or hyphens",
       );
-    const files = stringList(task.files, "file scopes", 64);
-    if (
-      !files.length ||
-      files.some(
-        (path) =>
-          /^(\/|\\|[a-z]:)/i.test(path) || path.split(/[\\/]/).includes(".."),
-      )
-    )
+    const files = [
+      ...new Set(
+        stringList(task.files, "file scopes", 64).map((path) =>
+          projectRelativeScope(path, cwd, id),
+        ),
+      ),
+    ];
+    if (!files.length)
       throw new Error(
-        "Use project-relative file scopes, or '.' for the whole project",
+        `Assignment "${id}" has no file scopes. Use project-relative paths, or '.' for the whole project`,
       );
     return {
       id,
@@ -180,12 +223,14 @@ export function validateProposedTasks(
 export function orchestrationPlanningPrompt(
   request: string,
   settings: OrchestrationSettings,
+  cwd: string,
 ): string {
   return [
     "Prepare an orchestration proposal for the user to review in MonoCode. Investigate and plan only: do not edit files, start workers, or invoke the MonoCode control CLI. No execution is authorized until the user confirms the assignment card.",
     "You are the orchestrator: the user selected you in the composer model picker. Decide the task breakdown and choose each worker's harness and model from the available catalog below. Do not ask the user to assemble a team. They can change your choices in the card before confirming.",
     "Keep planning efficient: inspect only what is needed to understand the request and relevant project conventions. Use the fewest useful tasks, with clear deliverables and acceptance checks. Do not create agents for trivial steps or duplicate investigation. Prefer a fast, economical model for straightforward work and a more capable model when complexity warrants it; do not invent model capabilities or prices. Reuse a suitable harness/model across tasks when that is sufficient. Explain your overall division of work briefly in the summary.",
     'Use only exact harness/model pairs from the catalog. Give each task self-contained instructions and project-relative write scopes; directories own their descendants. Parallelize independent work with disjoint files. Serialize shared-file edits with dependencies and avoid concurrent repository-wide commands. Assign shared operations and final combined validation to a task with files ["."]. All workers use one shared checkout without worktrees.',
+    `The exact project root is ${JSON.stringify(cwd)}. Every files entry must be "." or a path relative to this root. For example, a discovered absolute path beneath this root must be returned without the root prefix. Never use an absolute path or '..'.`,
     "Return your final proposal as one JSON object inside <monocode_proposal>...</monocode_proposal>. The app renders it as an editable card, so do not ask for approval in prose. No Markdown inside the JSON fields. Tasks may reference any task ID; the graph must be acyclic.",
     'Schema: {"title":"Short project title","summary":"What you will do and how the work fits together","tasks":[{"id":"task-1","title":"Short task title","prompt":"Self-contained instructions, constraints and checks","harness":"exact harness ID","model":"exact model ID","files":["src/feature"],"dependsOn":[]}]}',
     `Parallel worker limit: ${settings.maxWorkers}`,
@@ -211,7 +256,7 @@ export function completeOrchestrationProposal(
       ...draft,
       title: required(input.title, "a proposal title", 160),
       summary: required(input.summary, "a proposal summary", 2000),
-      tasks: validateProposedTasks(input.tasks, draft.settings),
+      tasks: validateProposedTasks(input.tasks, draft.settings, draft.cwd),
       status: "ready",
       error: undefined,
     };

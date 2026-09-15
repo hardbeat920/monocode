@@ -42,7 +42,11 @@ const payload = {
 
 describe("orchestration proposals", () => {
   it("prompts the current lead with the available model catalog and no execution authority", () => {
-    const prompt = orchestrationPlanningPrompt(draft.request, draft.settings);
+    const prompt = orchestrationPlanningPrompt(
+      draft.request,
+      draft.settings,
+      draft.cwd,
+    );
     expect(prompt).toContain("do not edit files, start workers");
     expect(prompt).toContain('"model":"codex:test"');
     expect(prompt).toContain("until the user confirms");
@@ -51,6 +55,8 @@ describe("orchestration proposals", () => {
     expect(prompt).toContain("Do not ask the user to assemble a team");
     expect(prompt).toContain("disjoint files");
     expect(prompt).toContain("acceptance checks");
+    expect(prompt).toContain('exact project root is "/repo"');
+    expect(prompt).toContain("returned without the root prefix");
   });
   it("turns the lead's structured response into a ready card without changing the discovered catalog", () => {
     const result = completeOrchestrationProposal(
@@ -93,7 +99,7 @@ describe("orchestration proposals", () => {
     ).toThrow("unknown assignment");
     expect(() =>
       validateProposedTasks([{ ...task, files: ["../outside"] }], settings),
-    ).toThrow("project-relative");
+    ).toThrow('Assignment "ui" has invalid file scope "../outside"');
     expect(() => validateProposedTasks([task, task], settings)).toThrow(
       "unique",
     );
@@ -106,6 +112,55 @@ describe("orchestration proposals", () => {
         settings,
       ),
     ).toHaveLength(2);
+  });
+  it("rebases absolute scopes inside the project and identifies outside scopes", () => {
+    expect(
+      validateProposedTasks(
+        [
+          {
+            ...task,
+            files: [
+              "/repo/src/settings",
+              "src/settings",
+              "/repo",
+              "./src/shared",
+            ],
+          },
+        ],
+        draft.settings,
+        draft.cwd,
+      )[0].files,
+    ).toEqual(["src/settings", ".", "src/shared"]);
+    expect(() =>
+      validateProposedTasks(
+        [{ ...task, files: ["/repo-other/src"] }],
+        draft.settings,
+        draft.cwd,
+      ),
+    ).toThrow(
+      'Assignment "ui" uses file scope "/repo-other/src" outside the selected project "/repo"',
+    );
+  });
+  it("rebases Windows scopes case-insensitively with portable separators", () => {
+    expect(
+      validateProposedTasks(
+        [
+          {
+            ...task,
+            files: ["c:\\work\\repo\\src\\settings", "C:\\Work\\Repo"],
+          },
+        ],
+        draft.settings,
+        "C:\\Work\\Repo",
+      )[0].files,
+    ).toEqual(["src/settings", "."]);
+    expect(() =>
+      validateProposedTasks(
+        [{ ...task, files: ["C:src\\settings"] }],
+        draft.settings,
+        "C:\\Work\\Repo",
+      ),
+    ).toThrow('Assignment "ui" has invalid file scope "C:src\\settings"');
   });
   it("keeps an explicitly selected worker effort and rejects malformed settings", () => {
     expect(

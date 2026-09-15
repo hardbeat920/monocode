@@ -7,9 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.47] - 2026-09-15
+
 ### Added
 
+- Settings can now be searched by name or keyword across every page. Results jump directly to the matching row, the navigation is organized into **App**, **Agents**, and **Workspace** groups, and transcript and composer preferences have their own **Chat** page.
+- Drag an inactive workspace tab onto any edge of an open pane to merge its complete layout into that workspace. Files, terminals, split arrangements, and focus move together, while dropping onto a blank session replaces it.
+- Settings → Appearance includes a persistent **Accent color** control with named presets and a custom picker. The chosen color is applied to the composer send button and user-message bubbles with an automatically legible foreground.
 - Model flyouts for handoffs, second opinions, alternate Plan builds, and orchestration assignments open an adjacent effort picker when the hovered model supports reasoning levels, and apply the chosen model and effort together.
+- Windows now delivers native toast notifications for completed turns, input requests, and reminders. Notification clicks restore a minimized window and open the related session, while blocked notifications are reported with a link to Windows Settings. In #220 by @ardevdevts.
+- Inbox issue details show when the issue was created. In #231 by @ognjeeen.
+- Orchestration lead cards show a compact subagent summary with per-task status in a hover or keyboard-focus tooltip, and expand their full controls while active, selected, or busy.
+- The **Working agents** preview remains available in the sidebar when the project rail is collapsed, including project identity, elapsed time, current activity, status, selection, and expandable overflow.
+- The GitHub issue chooser includes a structured feature-request template and again permits blank issues.
+
+### Changed
+
+- OpenCode models are grouped under readable provider names in the model picker, and provider names are included in search.
+- Activating a session now loads that harness's live model catalog immediately instead of waiting for the model picker to open.
+- Codex shell activity unwraps launcher commands and presents file inspection as readable **Read**, **Find**, and **List** steps while preserving the underlying command preview, including in saved transcripts.
+- Project terminal creation and activation controls have moved from the title bar to the usage footer, leaving more room for workspace tabs.
+
+### Fixed
+
+- Paused orchestration runs explain why resumption is unavailable, link to another running session that is blocking the checkout, wait for interrupted work to stop, and keep composer text, attachments, and the selected mode when a submission is rejected.
+- Orchestration scopes accept valid absolute paths by rebasing them to the project root, reject paths outside the project with a clear error, and compare Windows drive, UNC, separator, case, and extended-length path forms consistently.
+- Codex installations managed by Bun are detected when locating the CLI. In #82 by @jagadhis.
+- Expanding an orchestration card no longer shifts its header downward.
 
 ## [0.1.46] - 2026-09-14
 
@@ -776,7 +800,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.46...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.47...HEAD
+[0.1.47]: https://github.com/hardbeat920/monocode/compare/v0.1.46...v0.1.47
 [0.1.46]: https://github.com/hardbeat920/monocode/compare/v0.1.45...v0.1.46
 [0.1.45]: https://github.com/hardbeat920/monocode/compare/v0.1.44...v0.1.45
 [0.1.44]: https://github.com/hardbeat920/monocode/compare/v0.1.43...v0.1.44

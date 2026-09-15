@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Orchestrator,
+  orchestrationPathKey,
   scopesOverlap,
   visibleUserPrompt,
   workerTurnPrompt,
@@ -233,6 +234,39 @@ describe("local orchestration", () => {
       vi.mocked(f.host.submit).mock.calls.find(([id]) => id === "lead")?.[1],
     ).toContain('"modelSettings":{"reasoningEffort":"xhigh"}');
   });
+  it("names the conversation that blocks a paused run from resuming", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.startApproved("lead", "card", proposal());
+    f.completions.get("lead")!({
+      status: "failed",
+      text: "",
+      error: "Lead interrupted",
+    });
+    await vi.waitFor(() =>
+      expect(f.manager.run("lead")?.status).toBe("paused"),
+    );
+    await vi.waitFor(() =>
+      expect(
+        f
+          .tasks()
+          .every(
+            (task) => task.status !== "running" && task.status !== "cancelling",
+          ),
+      ).toBe(true),
+    );
+    f.sessions.push({
+      ...newSession("codex", "/repo"),
+      id: "investigation",
+      title: "Investigating the failure",
+      busy: true,
+    });
+
+    expect(f.manager.resumeBlocker("lead")?.id).toBe("investigation");
+    await expect(f.manager.start("lead", ["codex"], 2)).rejects.toThrow(
+      '"Investigating the failure" is still running in this checkout. Stop it before resuming orchestration.',
+    );
+  });
   it("never launches a partial plan when one assignment has invalid scopes", async () => {
     const f = setup();
     f.lead.busy = false;
@@ -317,6 +351,22 @@ describe("local orchestration", () => {
     expect(scopesOverlap(["/repo/src"], ["/repo/src/file.ts"])).toBe(true);
     expect(scopesOverlap(["/repo/src"], ["/repo/src2/file.ts"])).toBe(false);
     expect(scopesOverlap(["/repo"], ["/repo/anything"])).toBe(true);
+    expect(scopesOverlap(["/"], ["/repo/anything"])).toBe(true);
+  });
+  it("compares Windows canonical and provider paths as the same scope", () => {
+    expect(orchestrationPathKey("\\\\?\\D:\\Projects\\Repo\\src")).toBe(
+      "d:/projects/repo/src",
+    );
+    expect(orchestrationPathKey("\\\\?\\UNC\\Server\\Share\\Repo\\src")).toBe(
+      "//server/share/repo/src",
+    );
+    expect(
+      scopesOverlap(
+        ["//?/d:/projects/repo/src"],
+        ["D:/Projects/Repo/src/file.ts"],
+      ),
+    ).toBe(true);
+    expect(scopesOverlap(["//?/d:/"], ["D:/Projects/Repo"])).toBe(true);
   });
   it("runs disjoint workers concurrently and queues overlap", async () => {
     const f = setup();
@@ -459,6 +509,31 @@ describe("local orchestration", () => {
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("cancelled"));
     expect(f.manager.run("lead")!.status).toBe("paused");
     expect(f.manager.run("lead")!.error).toContain("outside its assignment");
+  });
+  it("accepts Windows drive paths inside an extended canonical scope", async () => {
+    const f = setup();
+    f.store.scopes.mockResolvedValueOnce(["//?/d:/projects/repo-a"]);
+    await f.start();
+    f.store.scopes.mockResolvedValueOnce(["//?/d:/projects/repo-a/src/a"]);
+    await f.delegate(["src/a"]);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    const task = f.tasks()[0];
+
+    for (const path of [
+      "src/a/relative.ts",
+      "D:/Projects/repo-a/src/a/forward.ts",
+      "D:\\Projects\\repo-a\\src\\a\\backward.ts",
+    ]) {
+      f.manager.observe(task.sessionId, {
+        type: "tool.started",
+        callId: path,
+        title: "Edit",
+        preview: { kind: "write", path },
+      });
+    }
+
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.tasks()[0].status).toBe("running");
   });
   it("holds ownership until a cancelled process has stopped", async () => {
     const f = setup();

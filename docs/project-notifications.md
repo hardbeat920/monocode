@@ -103,7 +103,10 @@ to its category count automatically at expiry or on manual resume.
   native delivery. `after` is the last suppressed millisecond, so an event
   scheduled exactly at mute expiry is eligible. `useSessionReminders` resolves reminder projects and sends
   those rules to the Rust scheduler. The scheduler waits for identity resolution
-  before claiming a due reminder, retains suppressed reminders without replaying
+  for each project before claiming its due reminders. Saved reminders remain
+  listed when a folder is unavailable, and known projects can deliver while
+  other lookups fail or remain pending. Failed lookups report an error and retry
+  on refresh. The scheduler retains suppressed reminders without replaying
   them, and checks current rules before sending each banner. Expiry works while
   the webview is in the background because `after` is an absolute event cutoff.
 - Approval and reminder popup lists use the same project policy. Underlying

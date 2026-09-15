@@ -40,6 +40,10 @@ vi.mock("../lib/orchestration", async (importOriginal) => ({
     snapshot: () => emptyRuns,
     hydrate: async () => {},
     waitingFor: () => undefined,
+    resumeBlocker: vi.fn(() => undefined),
+    resumeLeadBusy: vi.fn(() => false),
+    start: vi.fn(async () => {}),
+    cancelTask: vi.fn(async () => {}),
   },
 }));
 
@@ -51,7 +55,11 @@ import {
   OrchestrationWorkers,
 } from "./OrchestrationActions";
 import { newSession } from "../lib/session";
-import type { OrchestrationRun, OrchestrationTask } from "../lib/orchestration";
+import {
+  orchestrator,
+  type OrchestrationRun,
+  type OrchestrationTask,
+} from "../lib/orchestration";
 import type { OrchestrationSummary } from "../lib/orchestrationSummary";
 import { OrchestrationSidebarAgents } from "./OrchestrationSidebarAgents";
 import {
@@ -68,6 +76,8 @@ let root: Root;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
+  vi.mocked(orchestrator.resumeBlocker).mockReturnValue(undefined);
+  vi.mocked(orchestrator.resumeLeadBusy).mockReturnValue(false);
   setHarnessModels("codex", [
     {
       id: "codex:one",
@@ -231,6 +241,45 @@ describe("orchestration composer and card", () => {
         .mocked(invoke)
         .mock.calls.some(([command]) => command === "control_enable"),
     ).toBe(false);
+  });
+  it("preserves the draft and selected mode when the app rejects submission", async () => {
+    const model = modelsFor("codex")[0];
+    const submit = vi.fn(() => false);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: false,
+          harness: "codex",
+          model: model.id,
+          runtimeMode: "supervised",
+          cwd: "/repo",
+          executionCwd: "/repo",
+          sessionId: "lead",
+          initialDraft: "Do not lose this message",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: () => {},
+          onCwdChange: () => {},
+          onModelChange: () => {},
+          onRuntimeModeChange: () => {},
+          onSubmit: submit,
+        }),
+      ),
+    );
+    await click(
+      document.querySelector(
+        'button[aria-label="Add files or choose a mode"]',
+      )!,
+    );
+    await click(button("Orchestrator"));
+    const textarea = container.querySelector("textarea")!;
+    await press(textarea, "Enter");
+
+    expect(submit).toHaveBeenCalled();
+    expect(textarea.value).toBe("Do not lose this message");
+    expect(
+      document.querySelector('[aria-label="Turn off Orchestrator mode"]'),
+    ).not.toBeNull();
   });
   it("lets the user change an assignment's model and waits for explicit confirmation", async () => {
     const choices = [
@@ -803,5 +852,85 @@ describe("orchestration composer and card", () => {
     // Collapsing one leaves the other where it was.
     await click(row("one"));
     expect(openIds()).toEqual(["three"]);
+  });
+
+  it("explains paused recovery and opens the conversation blocking Resume", async () => {
+    const task: OrchestrationTask = {
+      id: "task",
+      sessionId: "worker",
+      title: "Interrupted worker",
+      harness: "codex",
+      model: "codex:two",
+      prompt: "Implement",
+      files: ["src"],
+      scopes: ["/repo/src"],
+      dependsOn: [],
+      status: "cancelled",
+      accepted: false,
+      delivered: false,
+      result: "",
+    };
+    emptyRuns.push({
+      version: 1,
+      leadId: "lead",
+      cwd: "/repo",
+      status: "paused",
+      allowedHarnesses: ["codex"],
+      maxWorkers: 2,
+      cli: "monocode",
+      tasks: [task],
+      continuations: 0,
+      requests: {},
+    });
+    vi.mocked(orchestrator.resumeBlocker).mockReturnValue({
+      ...newSession("codex", "/repo"),
+      id: "investigation",
+      title: "Investigating the failure",
+      busy: true,
+    });
+    const open = vi.fn();
+    const summary: OrchestrationSummary = {
+      status: "paused",
+      live: true,
+      tasks: [
+        {
+          sessionId: task.sessionId,
+          title: task.title,
+          harness: task.harness,
+          model: task.model,
+          status: task.status,
+        },
+      ],
+    };
+
+    await act(async () =>
+      root.render(
+        createElement(
+          OrchestrationActions.Provider,
+          {
+            value: {
+              update: () => {},
+              confirm: async () => {},
+              retry: () => {},
+              open,
+            },
+          },
+          createElement(OrchestrationSidebarAgents, {
+            leadId: "lead",
+            summary,
+          }),
+        ),
+      ),
+    );
+
+    expect(container.textContent).toContain(
+      "Interrupted tasks stay stopped for the lead to review.",
+    );
+    expect(container.textContent).toContain(
+      "Investigating the failure is still running in this project.",
+    );
+    expect(button("Resume").hasAttribute("disabled")).toBe(true);
+    await click(button("Open blocker"));
+    expect(open).toHaveBeenCalledWith("investigation");
   });
 });

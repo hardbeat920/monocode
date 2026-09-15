@@ -10,7 +10,10 @@ import {
 } from "../lib/sessionReminders";
 import { useSessionReminders } from "./useSessionReminders";
 import { updateNotificationPreferences } from "../lib/notificationPreferences";
-import { refreshNotificationProjects } from "../lib/notificationProjects";
+import {
+  refreshNotificationProjects,
+  resolveNotificationProject,
+} from "../lib/notificationProjects";
 
 const { invoke, listen, message } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -153,6 +156,87 @@ afterEach(() => {
 });
 
 describe("saved session reminders", () => {
+  it("keeps reminders accessible and delivers healthy projects when another folder is unavailable", async () => {
+    const unavailable = {
+      ...reminder,
+      sessionId: "unavailable-session",
+      cwd: "/deleted-worktree",
+    };
+    stored = [reminder, unavailable];
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command, args = {}) => {
+      if (command === "git_notification_context" && args.cwd === unavailable.cwd)
+        return Promise.reject(new Error("Directory missing"));
+      return original(command, args);
+    });
+
+    await mount();
+
+    expect(api.reminders).toEqual([reminder, unavailable]);
+    expect(api.due).toEqual([reminder]);
+    expect(api.error).toContain("Directory missing");
+    const configuration = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(configuration.preferences.projectRules).toEqual({
+      "saved-session": { enabled: true, after: 0 },
+    });
+
+    await act(async () => api.cancel([unavailable.sessionId]));
+    expect(api.reminders).toEqual([reminder]);
+    expect(api.error).toBeNull();
+  });
+
+  it("delivers known projects while another lookup is pending and applies its mute when it resolves", async () => {
+    await resolveNotificationProject(reminder.cwd);
+    const delayed = {
+      ...reminder,
+      sessionId: "delayed-session",
+      cwd: "/slow-project",
+    };
+    stored = [reminder, delayed];
+    updateNotificationPreferences(["repository:github.com/acme/muted"], {
+      mutedUntil: null,
+    });
+    let release!: () => void;
+    const discovery = new Promise((resolve) => {
+      release = () => resolve({
+        root: delayed.cwd,
+        commonDir: null,
+        remote: "https://github.com/acme/muted.git",
+      });
+    });
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command, args = {}) => {
+      if (command === "git_notification_context" && args.cwd === delayed.cwd)
+        return discovery;
+      return original(command, args);
+    });
+
+    await mount();
+
+    expect(api.reminders).toEqual([reminder, delayed]);
+    expect(api.due).toEqual([reminder]);
+    const configuration = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(configuration?.preferences.projectRules).toEqual({
+      "saved-session": { enabled: true, after: 0 },
+    });
+
+    await act(async () => release());
+    expect(api.reminders).toEqual([reminder, delayed]);
+    expect(api.due).toEqual([reminder]);
+    expect(api.error).toBeNull();
+    const resolved = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(resolved.preferences.projectRules).toEqual({
+      "saved-session": { enabled: true, after: 0 },
+      "delayed-session": { enabled: false, after: 0 },
+    });
+  });
+
   it("serializes native configuration so a slower old update cannot overwrite a newer mute", async () => {
     const original = invoke.getMockImplementation()!;
     let release: () => void = () => {};

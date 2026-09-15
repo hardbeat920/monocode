@@ -84,16 +84,23 @@ export function useSessionReminders(
     try {
       const items = await listReminders();
       if (request !== revision.current) return;
-      await Promise.all(
-        [...new Set(items.map((item) => item.cwd))].map(
-          resolveNotificationProject,
-        ),
-      );
-      if (request !== revision.current) return;
+      // Saved reminders stay accessible even when a checkout no longer exists.
       remindersRef.current = items;
       setItems(items);
       setNow(Date.now());
       setError(null);
+      const discovery = Promise.allSettled(
+        [...new Set(items.map((item) => item.cwd))].map(
+          resolveNotificationProject,
+        ),
+      );
+      // Deliver known projects now; catalog updates configure newly resolved
+      // projects independently, without waiting for every checkout to respond.
+      await configure();
+      const projects = await discovery;
+      if (request !== revision.current) return;
+      const failure = projects.find((project) => project.status === "rejected");
+      if (failure?.status === "rejected") setError(String(failure.reason));
       await configure();
     } catch (error) {
       if (request === revision.current) setError(String(error));

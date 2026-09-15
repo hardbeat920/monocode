@@ -76,8 +76,6 @@ type Props = {
   onSelect: (id: string) => void;
   onNew: () => void;
   onNewTerminal?: () => void;
-  onShowTerminal?: () => void;
-  projectTerminalActive?: boolean;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
@@ -285,7 +283,7 @@ function TitleTabItem({
           if (sortable.consumeClick()) return;
           onSelect(tab.id);
         }}
-        className={`relative flex h-7.5 min-w-0 flex-1 cursor-default items-center gap-1.5 self-center rounded-md px-2.5 text-left ${
+        className={`relative flex h-7.5 min-w-0 flex-1 cursor-default items-center gap-1.5 self-center rounded-md px-2 text-left ${
           closable ? "pr-7" : "pr-2.5"
         } ${
           active
@@ -531,8 +529,6 @@ function TitleBarComponent({
   onSelect,
   onNew,
   onNewTerminal,
-  onShowTerminal,
-  projectTerminalActive = false,
   onOpenSettings,
   onOpenInbox,
   onOpenNotes,
@@ -722,53 +718,45 @@ function TitleBarComponent({
   // Changes. Without a project that sidebar is gone, so the picker stays here.
   const showProjectButton =
     railClosed && Boolean(onSelectProject) && !showCurrentProject;
-  const trailingControls = (
+  const showTrailingActions =
+    (projectless &&
+      railClosed &&
+      Boolean(onOpenInbox || onOpenNotes || onOpenSettings)) ||
+    (railClosed && !projectless);
+  const trailingControls = showTrailingActions || !IS_MAC ? (
     <div className="flex h-full shrink-0 items-stretch">
-      <div className="flex items-center gap-0.5 px-2">
-        {projectless && railClosed && onOpenInbox ? (
-          <IconButton label="Inbox" onClick={onOpenInbox}>
-            <Inbox className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-        {projectless && railClosed && onOpenNotes ? (
-          <IconButton label="Notes" onClick={onOpenNotes}>
-            <StickyNote className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-        {railClosed && !projectless ? (
-          <>
-            <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
-              <Search className="size-3.5" strokeWidth={1.75} />
+      {showTrailingActions ? (
+        <div className="flex items-center gap-0.5 px-2">
+          {projectless && railClosed && onOpenInbox ? (
+            <IconButton label="Inbox" onClick={onOpenInbox}>
+              <Inbox className="size-3.5" strokeWidth={1.75} />
             </IconButton>
-            <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
-              <Plus className="size-3.5" strokeWidth={1.75} />
+          ) : null}
+          {projectless && railClosed && onOpenNotes ? (
+            <IconButton label="Notes" onClick={onOpenNotes}>
+              <StickyNote className="size-3.5" strokeWidth={1.75} />
             </IconButton>
-          </>
-        ) : null}
-        {!projectless && (onShowTerminal || onNewTerminal) ? (
-          <IconButton
-            label={
-              projectTerminalActive ? "Terminal" : `New Terminal (${MOD}\`)`
-            }
-            accent={projectTerminalActive}
-            onClick={
-              projectTerminalActive
-                ? (onShowTerminal ?? onNewTerminal)
-                : onNewTerminal
-            }
-          >
-            <Terminal className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-        {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
-          <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
-            <Settings className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-      </div>
+          ) : null}
+          {railClosed && !projectless ? (
+            <>
+              <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
+                <Search className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+              <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+                <Plus className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+            </>
+          ) : null}
+          {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
+            <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
+              <Settings className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          ) : null}
+        </div>
+      ) : null}
       {!IS_MAC ? <WindowControls /> : null}
     </div>
-  );
+  ) : null;
 
   // "deep" drags from anywhere in the subtree. The bare attribute only drags
   // on a direct hit, which left every label and spacer dead. Tauri still
@@ -829,7 +817,7 @@ function TitleBarComponent({
           ) : null}
           <div
             ref={setTabStripRef}
-            className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none px-1.5"
+            className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none pl-1.5 pr-2.5"
           >
             {tabs.map((tab) => (
               <div

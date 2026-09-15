@@ -801,3 +801,56 @@ describe("sidebar session reminders", () => {
     ).toBe(card());
   });
 });
+
+describe("sidebar working agents", () => {
+  it("shows the original working widget when the project rail is collapsed", () => {
+    props.projectRailOpen = false;
+    props.onSelectAgent = vi.fn();
+    props.liveAgents = [
+      {
+        id: "agent-a",
+        cwd: "/workspace/alpha",
+        title: "Build settings",
+        harness: "codex",
+        activity: "Editing Settings.tsx",
+        startedAt: Date.now() - 10_000,
+        needsApproval: false,
+        done: false,
+      },
+      {
+        id: "agent-b",
+        cwd: "/workspace/beta",
+        title: "Review tests",
+        harness: "claude",
+        activity: "Running tests",
+        startedAt: Date.now() - 5_000,
+        needsApproval: false,
+        done: false,
+      },
+    ];
+    act(() => render());
+
+    const preview = container.querySelector<HTMLElement>(
+      '[data-live-agents-preview="full"]',
+    )!;
+    expect(preview.querySelectorAll("[data-live-agent-card]")).toHaveLength(2);
+    expect(
+      preview.querySelector('[data-live-agent-card="agent-a"]')!.textContent,
+    ).toContain("alpha");
+    expect(
+      preview.querySelector('[data-live-agent-card="agent-b"]')!.textContent,
+    ).toContain("beta");
+    expect(preview.querySelector(".mascot-active")).not.toBeNull();
+
+    act(() =>
+      preview
+        .querySelector<HTMLButtonElement>('[data-live-agent-card="agent-b"]')!
+        .click(),
+    );
+    expect(props.onSelectAgent).toHaveBeenCalledExactlyOnceWith("agent-b");
+
+    props.projectRailOpen = true;
+    act(() => render());
+    expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
+  });
+});
