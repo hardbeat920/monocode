@@ -220,14 +220,22 @@ async function latestOpenCodeUserMessageId(live: Live): Promise<string> {
     const id = stringField(info, "id");
     if (!id) return [];
     const created = asRecord(info?.time)?.created;
-    return [{ id, created: typeof created === "number" ? created : undefined }];
+    return [
+      {
+        id,
+        created:
+          typeof created === "number" && Number.isFinite(created)
+            ? created
+            : undefined,
+      },
+    ];
   });
   const timestamped = candidates.filter(
     (candidate): candidate is { id: string; created: number } =>
       candidate.created !== undefined,
   );
   const latest =
-    timestamped.length > 0
+    candidates.length > 0 && timestamped.length === candidates.length
       ? timestamped.reduce((current, candidate) =>
           candidate.created >= current.created ? candidate : current,
         )

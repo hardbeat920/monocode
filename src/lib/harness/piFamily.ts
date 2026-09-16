@@ -303,7 +303,7 @@ export async function rewindLastTurn(
   if (!last) throw new Error("No user message to edit");
 
   const fork = await live.rpc.request({ type: "fork", entryId: last.entryId });
-  if (asRecord(fork)?.cancelled === true) {
+  if (asRecord(fork.data)?.cancelled === true) {
     throw new Error("Edit cancelled");
   }
   return { submitted: false };

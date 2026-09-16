@@ -12,6 +12,7 @@ const transport = vi.hoisted(() => ({
     ((sessionId: string, command: Record<string, unknown>) => void) | undefined,
   writeChild: vi.fn(),
   spawnChild: vi.fn(),
+  forkData: undefined as unknown,
 }));
 
 vi.mock("./child", () => ({
@@ -28,6 +29,7 @@ vi.mock("./child", () => ({
 
 import {
   cancelOmpTurn,
+  rewindOmpLastTurn,
   sendOmpTurn,
   steerOmpTurn,
   forgetOmpSession,
@@ -74,6 +76,7 @@ beforeEach(() => {
   transport.spawnChild.mockResolvedValue(undefined);
   transport.prompt = (id, command) => response(id, command);
   transport.fast = undefined;
+  transport.forkData = undefined;
   transport.writeChild.mockReset();
   transport.writeChild.mockImplementation(
     async (sessionId: string, line: string) => {
@@ -91,7 +94,11 @@ beforeEach(() => {
           ? { sessionId: "provider-session" }
           : command.type === "get_available_commands"
             ? { commands: [{ name: "workflow", source: "custom" }] }
-            : {},
+            : command.type === "get_fork_messages"
+              ? { messages: [{ entryId: "entry", text: "latest" }] }
+              : command.type === "fork"
+                ? (transport.forkData ?? {})
+                : {},
       );
     },
   );
@@ -125,6 +132,29 @@ async function started(turnInput = input()) {
     .at(-1)!.command;
   return { turn, request, settled: () => settled };
 }
+
+describe("Pi-family edit recovery", () => {
+  it("reads fork cancellation from the RPC data payload", async () => {
+    const running = await started();
+    frame("omp-test", {
+      type: "prompt_result",
+      id: running.request.id,
+      agentInvoked: false,
+    });
+    await running.turn;
+
+    transport.forkData = { cancelled: true };
+    await expect(
+      rewindOmpLastTurn({
+        sessionId: "omp-test",
+        cwd: "/repo",
+        model: "omp:default",
+        runtimeMode: "supervised",
+        onEvent: () => undefined,
+      }),
+    ).rejects.toThrow("Edit cancelled");
+  });
+});
 
 describe("OMP command lifecycle over the real RPC multiplexer", () => {
   it.each([["pi", sendPiTurn], ["omp", sendOmpTurn]] as const)(

@@ -4693,90 +4693,93 @@ export default function App({
       }
 
       dismissNoticesForContinuedSession(sessionId);
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sessionId) return s;
-          const selected = options?.buildTarget
-            ? withPlanBuildTarget(s, options.buildTarget)
-            : s;
-          const titled = isFirstTurn ? titleSeed : selected.title;
-          let next: Session = {
-            ...selected,
-            inboxCard: rawCommand ? s.inboxCard : undefined,
-            noteCard: rawCommand ? s.noteCard : undefined,
-            handoffCard: rawCommand ? s.handoffCard : undefined,
-          };
-          if (options?.resendEdited) {
-            next = {
-              ...next,
-              blocks: truncateBeforeLastUserTurn(next.blocks),
+      const commitSubmittedTurn = () => {
+        setSessions((prev) =>
+          prev.map((s) => {
+            if (s.id !== sessionId) return s;
+            const selected = options?.buildTarget
+              ? withPlanBuildTarget(s, options.buildTarget)
+              : s;
+            const titled = isFirstTurn ? titleSeed : selected.title;
+            let next: Session = {
+              ...selected,
+              inboxCard: rawCommand ? s.inboxCard : undefined,
+              noteCard: rawCommand ? s.noteCard : undefined,
+              handoffCard: rawCommand ? s.handoffCard : undefined,
             };
-          }
-          if (approvedPlan && intent === "build") {
-            next = {
-              ...next,
-              blocks: next.blocks.map((block) =>
-                block.id === approvedPlan.id
-                  ? {
-                      ...block,
-                      plan: {
-                        ...(block.plan ?? { status: "ready" as const }),
-                        status: "building" as const,
-                        approvedText: block.text,
-                      },
-                    }
-                  : block,
-              ),
-            };
-          }
-          if (options?.queuedMessageId) {
-            next = dequeueQueuedMessage(next, options.queuedMessageId);
-          }
-          if (!live) {
-            return {
-              ...next,
-              title: titled,
-              pendingSwitch: undefined,
-              busy: false,
-              blocks: [
-                ...next.blocks,
-                {
-                  id: crypto.randomUUID(),
-                  role: "user",
-                  text: visibleText,
-                  ...(visible.length > 0 ? { attachments: visible } : {}),
-                  ...cards,
-                },
-                {
-                  id: crypto.randomUUID(),
-                  role: "system",
-                  text: `${next.harness} is not connected yet — install and sign in to that provider, then retry.`,
-                  notice: "error",
-                },
-              ],
-            };
-          }
-          if (pendingSwitch) {
-            const sealed = stopStreaming({
-              ...next,
-              title: titled,
-              pendingSwitch: undefined,
-            });
+            if (options?.resendEdited) {
+              next = {
+                ...next,
+                blocks: truncateBeforeLastUserTurn(next.blocks),
+              };
+            }
+            if (approvedPlan && intent === "build") {
+              next = {
+                ...next,
+                blocks: next.blocks.map((block) =>
+                  block.id === approvedPlan.id && block.role === "plan"
+                    ? {
+                        ...block,
+                        plan: {
+                          ...(block.plan ?? { status: "ready" as const }),
+                          status: "building" as const,
+                          approvedText: block.text,
+                        },
+                      }
+                    : block,
+                ),
+              };
+            }
+            if (options?.queuedMessageId) {
+              next = dequeueQueuedMessage(next, options.queuedMessageId);
+            }
+            if (!live) {
+              return {
+                ...next,
+                title: titled,
+                pendingSwitch: undefined,
+                busy: false,
+                blocks: [
+                  ...next.blocks,
+                  {
+                    id: crypto.randomUUID(),
+                    role: "user",
+                    text: visibleText,
+                    ...(visible.length > 0 ? { attachments: visible } : {}),
+                    ...cards,
+                  },
+                  {
+                    id: crypto.randomUUID(),
+                    role: "system",
+                    text: `${next.harness} is not connected yet — install and sign in to that provider, then retry.`,
+                    notice: "error",
+                  },
+                ],
+              };
+            }
+            if (pendingSwitch) {
+              const sealed = stopStreaming({
+                ...next,
+                title: titled,
+                pendingSwitch: undefined,
+              });
+              return appendUser(
+                appendPreparingHandoff(sealed, pendingSwitch.from, next.harness),
+                visibleText,
+                visible,
+                cards,
+              );
+            }
             return appendUser(
-              appendPreparingHandoff(sealed, pendingSwitch.from, next.harness),
+              { ...next, title: titled },
               visibleText,
               visible,
               cards,
             );
-          }
-          return appendUser(
-            { ...next, title: titled },
-            visibleText,
-            visible,
-            cards,
-          );
-        }),
-      );
+          }),
+        );
+      };
+      if (!options?.resendEdited) commitSubmittedTurn();
 
       if (isFirstTurn && live && placeholderTitle) {
         const titleMessage =
@@ -4958,8 +4961,31 @@ export default function App({
               runtimeMode: current.runtimeMode,
               onEvent: () => undefined,
             });
-            if (turnGen.current.get(sessionId) !== gen) return;
+            if (turnGen.current.get(sessionId) !== gen) {
+              const latest = sessionsRef.current.find(
+                (session) => session.id === sessionId,
+              );
+              if (
+                !latest ||
+                (!latest.busy &&
+                  latest.providerSessionId === current.providerSessionId)
+              ) {
+                await forgetHarnessSession(current.harness, sessionId);
+                if (latest) {
+                  setSessions((prev) =>
+                    prev.map((session) =>
+                      session.id === sessionId &&
+                      session.providerSessionId === current.providerSessionId
+                        ? { ...session, providerSessionId: undefined }
+                        : session,
+                    ),
+                  );
+                }
+              }
+              return;
+            }
           }
+          if (options?.resendEdited) commitSubmittedTurn();
           const prepared = await prepareAttachments(attachments);
           const prompt =
             intent === "build" && approvedPlan

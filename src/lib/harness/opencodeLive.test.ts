@@ -437,6 +437,49 @@ describe("OpenCode edit recovery", () => {
     });
     expect(await rewind).toEqual({ submitted: false });
   });
+
+  it("uses response order when a user timestamp is missing", async () => {
+    sessionMessages = [
+      {
+        info: {
+          id: "message_older",
+          role: "user",
+          time: { created: 100 },
+        },
+      },
+      {
+        info: {
+          id: "message_latest",
+          role: "user",
+        },
+      },
+    ];
+    bindOpenCodeSession("opencode-live", "session_1", "/repo");
+
+    const rewind = rewindOpenCodeLastTurn({
+      sessionId: "opencode-live",
+      cwd: "/repo",
+      model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/session/session_1/revert"),
+        ),
+      "edited message revert",
+    );
+
+    const request = harnessHttp.mock.calls.find(([input]) =>
+      input.url.includes("/session/session_1/revert"),
+    )?.[0];
+    expect(request).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ messageID: "message_latest" }),
+    });
+    await expect(rewind).resolves.toEqual({ submitted: false });
+  });
 });
 
 describe("OpenCode child permission routing", () => {

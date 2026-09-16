@@ -26,6 +26,28 @@ describe("editLastTurn", () => {
     ]);
   });
 
+  it("ignores internal user turns when selecting the editable turn", () => {
+    const blocks: Block[] = [
+      { id: "visible", role: "user", text: "keep this" },
+      { id: "reply", role: "assistant", text: "answer" },
+      {
+        id: "internal",
+        role: "user",
+        text: "hidden orchestration prompt",
+        internal: true,
+      },
+    ];
+    const session = chat(blocks);
+
+    expect(lastUserTurnStartIndex(blocks)).toBe(0);
+    expect(truncateBeforeLastUserTurn(blocks)).toEqual([]);
+    expect(lastTurnRecall(session)).toEqual({
+      text: "keep this",
+      attachments: [],
+    });
+    expect(canEditLastTurn(session)).toBe(true);
+  });
+
   it("recalls the last user message", () => {
     const session = chat([
       { id: "u1", role: "user", text: "hello" },

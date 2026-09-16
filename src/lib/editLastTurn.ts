@@ -13,7 +13,7 @@ export function harnessSupportsEditLastTurn(harness: HarnessId): boolean {
 /** Index of the user block that starts the latest turn. */
 export function lastUserTurnStartIndex(blocks: Block[]): number {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    if (blocks[index].role === "user") return index;
+    if (blocks[index].role === "user" && !blocks[index].internal) return index;
   }
   return -1;
 }
