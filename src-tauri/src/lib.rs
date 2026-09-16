@@ -16,6 +16,7 @@ mod macos;
 mod menu;
 mod notes;
 mod notifications;
+mod pasteboard;
 mod project_logo;
 mod pty;
 mod rate_limits;
@@ -307,6 +308,7 @@ pub fn run() {
             fs::copy_path,
             fs::move_path,
             fs::reveal_path,
+            pasteboard::clipboard_file_paths,
             fs::clone_repo,
             fs::read_file_preview,
             fs::stat_files,

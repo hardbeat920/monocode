@@ -40,8 +40,10 @@ import {
   saveSelected,
   subscribeDirsChanged,
 } from "../lib/fileTree";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   basename,
+  clipboardFilePaths,
   copyPath,
   createPath,
   deletePath,
@@ -94,6 +96,7 @@ type TreeCtxValue = {
   creating: Creating | null;
   renaming: string | null;
   cutPath: string | null;
+  dragOverPath: string | null;
   epoch: number;
   gitStatuses?: GitStatusMap;
   onToggle: (path: string) => void;
@@ -144,12 +147,13 @@ function explorerItems(
   target: MenuTarget,
   clip: Clip | null,
   canOpenTerminal: boolean,
+  clipboardHasFiles: boolean,
 ): ExplorerMenuItem[] {
   const pasteParent = target.isDir ? target.path : parentPath(target.path);
-  const pasteBlocked =
-    !clip ||
-    (clip.isDir &&
-      (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`)));
+  const pasteIntoSelf =
+    !!clip?.isDir &&
+    (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`));
+  const pasteBlocked = clip ? pasteIntoSelf : !clipboardHasFiles;
   return [
     { kind: "item", id: "new-file", label: "New File" },
     { kind: "item", id: "new-folder", label: "New Folder" },
@@ -237,6 +241,8 @@ export const FileTree = memo(function FileTree({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [clip, setClip] = useState<Clip | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [clipboardHasFiles, setClipboardHasFiles] = useState(false);
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
   const creatingRef = useRef(creating);
@@ -381,8 +387,26 @@ export const FileTree = memo(function FileTree({
     onFileDeleted?.(path);
   };
 
+  const copyExternalFiles = async (paths: string[], targetPath: string) => {
+    const destParent = createParentOf(cwd, targetPath);
+    let created: string | null = null;
+    try {
+      for (const from of paths) created = await copyPath(from, destParent);
+    } finally {
+      if (created) {
+        await refreshTouched([destParent]);
+        expandDirs([destParent]);
+        setSelectedPath(created);
+        saveSelected(cwd, created);
+      }
+    }
+  };
+
   const pasteAt = async (targetPath: string) => {
-    if (!clip) return;
+    if (!clip) {
+      await copyExternalFiles(await clipboardFilePaths(), targetPath);
+      return;
+    }
     const destParent = createParentOf(cwd, targetPath);
     if (
       clip.isDir &&
@@ -431,11 +455,19 @@ export const FileTree = memo(function FileTree({
     }
   };
 
+  const dropFiles = (paths: string[], targetPath: string) =>
+    run(() => copyExternalFiles(paths, targetPath));
+  const dropFilesRef = useRef(dropFiles);
+  dropFilesRef.current = dropFiles;
+
   const openMenu = (target: MenuTarget, x: number, y: number) => {
     setCreating(null);
     setRenaming(null);
     onSelect(target.path);
     setMenu({ x, y, target });
+    void clipboardFilePaths()
+      .then((paths) => setClipboardHasFiles(paths.length > 0))
+      .catch(() => setClipboardHasFiles(false));
   };
 
   const runAction = async (id: string, target: MenuTarget) => {
@@ -555,6 +587,53 @@ export const FileTree = memo(function FileTree({
   }, [menu]);
 
   useEffect(() => {
+    const toClientPoint = (x: number, y: number) => {
+      const scale = window.devicePixelRatio || 1;
+      // Tauri types this as PhysicalPosition, but macOS wry reports logical
+      // points. Only scale down when the point sits outside the CSS viewport.
+      if (scale !== 1 && (x > window.innerWidth || y > window.innerHeight)) {
+        return { x: x / scale, y: y / scale };
+      }
+      return { x, y };
+    };
+    const treePathAt = (x: number, y: number): string | null => {
+      const root = rootRef.current;
+      if (!root) return null;
+      const point = toClientPoint(x, y);
+      const el = document.elementFromPoint(point.x, point.y);
+      if (!el || !root.contains(el)) return null;
+      return el.closest<HTMLElement>("[role='treeitem']")?.title ?? cwd;
+    };
+
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "leave") {
+          setDragOverPath(null);
+          return;
+        }
+        const { x, y } = event.payload.position;
+        const target = treePathAt(x, y);
+        if (event.payload.type !== "drop") {
+          setDragOverPath(target ? createParentOf(cwd, target) : null);
+          return;
+        }
+        setDragOverPath(null);
+        if (target) void dropFilesRef.current(event.payload.paths, target);
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [cwd]);
+
+  useEffect(() => {
     const unsub = subscribeDirsChanged(() => setEpoch((n) => n + 1));
     const onResume = () => {
       if (!document.hidden) notifyDirsChanged();
@@ -601,6 +680,7 @@ export const FileTree = memo(function FileTree({
         creating,
         renaming,
         cutPath: clip?.mode === "cut" ? clip.path : null,
+        dragOverPath,
         epoch,
         gitStatuses,
         onToggle: toggle,
@@ -676,7 +756,9 @@ export const FileTree = memo(function FileTree({
                 e.clientY,
               );
             }}
-            className={`flex min-w-0 flex-1 items-center gap-1 h-full pl-2 text-left`}
+            className={`flex min-w-0 flex-1 items-center gap-1 h-full pl-2 text-left ${
+              dragOverPath === cwd ? "bg-selection" : ""
+            }`}
           >
             <span className="grid size-4 shrink-0 place-items-center text-content/50">
               {rootOpen ? (
@@ -716,7 +798,12 @@ export const FileTree = memo(function FileTree({
         <ExplorerMenu
           x={menu.x}
           y={menu.y}
-          items={explorerItems(menu.target, clip, !!onOpenTerminal)}
+          items={explorerItems(
+            menu.target,
+            clip,
+            !!onOpenTerminal,
+            clipboardHasFiles,
+          )}
           onPick={(id) => {
             const target = menu.target;
             setMenu(null);
@@ -874,6 +961,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
     selectedPath,
     renaming,
     cutPath,
+    dragOverPath,
     epoch,
     gitStatuses,
     onToggle,
@@ -957,7 +1045,9 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
             selected
               ? "bg-selection text-content"
               : "text-content hover:bg-content/5"
-          } ${cutPath === entry.path ? "opacity-50" : ""}`}
+          } ${cutPath === entry.path ? "opacity-50" : ""} ${
+            dragOverPath === entry.path ? "bg-selection" : ""
+          }`}
         >
           <span className="grid size-4 shrink-0 place-items-center text-content/50">
             {entry.isDir ? (
