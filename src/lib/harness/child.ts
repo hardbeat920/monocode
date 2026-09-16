@@ -313,6 +313,14 @@ export function resolveGrokBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_grok");
 }
 
+export function resolveKimiBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_kimi");
+}
+
+export function resolveAntigravityBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_antigravity");
+}
+
 export function freeHarnessPort(): Promise<number> {
   return invoke("harness_free_port");
 }

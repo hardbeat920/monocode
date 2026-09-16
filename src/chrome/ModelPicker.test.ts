@@ -166,14 +166,20 @@ describe("model picker", () => {
     const modelFlyout = container.querySelector<HTMLElement>(
       '[role="dialog"][aria-label="Models"]',
     )!;
-    expect(modelFlyout.style.height).toBe("332px");
-    expect(modelFlyout.dataset.minHeight).toBe("334");
-    expect(modelFlyout.dataset.maxHeight).toBe("334");
+    expect(modelFlyout.style.height).toBe("404px");
+    expect(modelFlyout.dataset.minHeight).toBe("406");
+    expect(modelFlyout.dataset.maxHeight).toBe("406");
     expect(
       container.querySelector('[role="tablist"][aria-orientation="vertical"]'),
     ).not.toBeNull();
     expect(
       container.querySelector('[role="tab"][aria-label="Favorites"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[role="tab"][aria-label="Kimi Code"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[role="tab"][aria-label="Antigravity"]'),
     ).not.toBeNull();
     const grokTab = container.querySelector<HTMLButtonElement>(
       '[role="tab"][aria-label="Grok Build"]',

@@ -147,6 +147,26 @@ pub(crate) fn list_skills_from(
             add_root(home.join(dir), "user", source);
         }
     }
+    // Current Kimi Code uses .kimi-code, not the legacy .kimi directory.
+    let kimi_project = project.join(".kimi-code/skills");
+    if kimi_project.is_dir() {
+        add_root(kimi_project, "project", "kimi");
+    }
+    let kimi_home = std::env::var_os("KIMI_CODE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| home.join(".kimi-code")));
+    if let Some(root) = kimi_home.map(|root| root.join("skills")) {
+        if root.is_dir() {
+            add_root(root, "user", "kimi");
+        }
+    }
+    if let Some(home) = home {
+        let root = home.join(".gemini/antigravity/skills");
+        if root.is_dir() {
+            add_root(root, "user", "antigravity");
+        }
+    }
     if let Some(home) = home {
         add_root(home.join(".pi/agent/skills"), "user", "pi");
         add_root(home.join(".omp/agent/skills"), "user", "omp");
@@ -721,6 +741,29 @@ mod tests {
         let user_skill = skills.iter().find(|s| s.name == "grok-global").unwrap();
         assert_eq!(user_skill.source, "grok");
         assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_kimi_project_and_antigravity_user_skills() {
+        let project = tmp("proj-kimi-agy");
+        let home = tmp("home-kimi-agy");
+        write_skill(
+            &project.0.join(".kimi-code/skills"),
+            "kimi-review",
+            "---\nname: kimi-review\ndescription: Kimi project skill\n---\n",
+        );
+        write_skill(
+            &home.0.join(".gemini/antigravity/skills"),
+            "agy-review",
+            "---\nname: agy-review\ndescription: Antigravity user skill\n---\n",
+        );
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let kimi = skills.iter().find(|s| s.name == "kimi-review").unwrap();
+        assert_eq!(kimi.source, "kimi");
+        assert_eq!(kimi.scope, "project");
+        let agy = skills.iter().find(|s| s.name == "agy-review").unwrap();
+        assert_eq!(agy.source, "antigravity");
+        assert_eq!(agy.scope, "user");
     }
 
     #[test]

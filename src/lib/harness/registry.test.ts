@@ -97,6 +97,8 @@ describe("harness registry", () => {
       "pi",
       "omp",
       "fx",
+      "kimi",
+      "antigravity",
     ];
 
     expect(
@@ -110,7 +112,22 @@ describe("harness registry", () => {
       pi: true,
       omp: true,
       fx: false,
+      kimi: false,
+      antigravity: false,
     });
+  });
+
+  it("registers Kimi and Antigravity as live fx-tier harnesses", () => {
+    registerBuiltinHarnesses();
+    for (const id of ["kimi", "antigravity"] as const) {
+      expect(isLiveHarness(id)).toBe(true);
+      const adapter = listHarnesses().find((adapter) => adapter.id === id)!;
+      expect(adapter.canSteer).toBe(false);
+      expect(adapter.bindSession).toBeTypeOf("function");
+      expect(adapter.refreshCatalog).toBeTypeOf("function");
+      expect(adapter.generateTitle).toBeUndefined();
+      expect(adapter.generateCommitMessage).toBeUndefined();
+    }
   });
 
   it("refreshes only the requested catalogs", async () => {
