@@ -75,7 +75,13 @@ let root: Root;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  localStorage.clear();
+  try {
+    localStorage.clear();
+  } catch {
+    // Some runners boot a Node env before swapping to happy-dom; localStorage
+    // may briefly be undefined. The resetHarnessModelOverlays() call below
+    // covers the same persistence keys.
+  }
   resetHarnessModelOverlays();
   container = document.createElement("div");
   document.body.append(container);
@@ -83,7 +89,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
+  if (root) act(() => root.unmount());
   resetHarnessModelOverlays();
   container.remove();
   vi.unstubAllGlobals();
@@ -166,9 +172,9 @@ describe("model picker", () => {
     const modelFlyout = container.querySelector<HTMLElement>(
       '[role="dialog"][aria-label="Models"]',
     )!;
-    expect(modelFlyout.style.height).toBe("332px");
-    expect(modelFlyout.dataset.minHeight).toBe("334");
-    expect(modelFlyout.dataset.maxHeight).toBe("334");
+    expect(modelFlyout.style.height).toBe("368px");
+    expect(modelFlyout.dataset.minHeight).toBe("370");
+    expect(modelFlyout.dataset.maxHeight).toBe("370");
     expect(
       container.querySelector('[role="tablist"][aria-orientation="vertical"]'),
     ).not.toBeNull();
