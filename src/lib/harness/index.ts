@@ -76,6 +76,14 @@ export {
   forgetGrokSession,
   bindGrokSession,
 } from "./grok";
+export {
+  sendOpenCrabsTurn,
+  cancelOpenCrabsTurn,
+  respondOpenCrabsApproval,
+  stopOpenCrabsSession,
+  forgetOpenCrabsSession,
+  bindOpenCrabsSession,
+} from "./opencrabs";
 export { generateCursorSessionTitle } from "./cursorTitle";
 export { generateCodexSessionTitle } from "./codexTitle";
 export { generateOpenCodeSessionTitle } from "./opencodeTitle";

@@ -5,6 +5,7 @@ import cursor from "../assets/providers/cursor.svg";
 import fx from "../assets/providers/fx.svg";
 import grok from "../assets/providers/grok.svg";
 import omp from "../assets/providers/omp.svg";
+import opencrabs from "../assets/providers/opencrabs.svg";
 import opencode from "../assets/providers/opencode.svg";
 import pi from "../assets/providers/pi.svg";
 import type { HarnessId } from "../lib/session";
@@ -18,6 +19,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   pi,
   omp,
   fx,
+  opencrabs,
 };
 
 /** White marks that must follow `currentColor` so they stay visible in light mode. */
