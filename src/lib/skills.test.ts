@@ -18,8 +18,10 @@ import {
   injectSkillPrompt,
   isValidSkillName,
   isNativeCommandPrompt,
+  isStandaloneCommand,
   mergeCatalog,
   rankSkills,
+  readSkillBody,
   replaceSlashToken,
   skillNamesInText,
   skillTextParts,
@@ -27,6 +29,7 @@ import {
   slugSkillName,
   type Skill,
 } from "./skills";
+import { USAGE_COMMAND } from "./usage";
 
 describe("native command composer behavior", () => {
   it("filters commands by alias and inserts their invocation with arguments intact", () => {
@@ -284,6 +287,23 @@ describe("mergeCatalog", () => {
     expect(catalog.find((s) => s.name === "cursor-only")?.source).toBe(
       "cursor",
     );
+  });
+});
+
+describe("isStandaloneCommand", () => {
+  it("matches only the bare command", () => {
+    expect(isStandaloneCommand("/usage", "usage")).toBe(true);
+    expect(isStandaloneCommand("  /USAGE\n", "usage")).toBe(true);
+    expect(isStandaloneCommand("/usage now", "usage")).toBe(false);
+    expect(isStandaloneCommand("see /usage", "usage")).toBe(false);
+    expect(isStandaloneCommand("/usages", "usage")).toBe(false);
+  });
+});
+
+describe("readSkillBody", () => {
+  it("returns an empty body for app-handled builtins", async () => {
+    await expect(readSkillBody(USAGE_COMMAND)).resolves.toBe("");
+    await expect(readSkillBody(BUILTIN_CREATE_SKILL)).resolves.not.toBe("");
   });
 });
 

@@ -641,6 +641,56 @@ describe("applyHarnessEvent context", () => {
   });
 });
 
+describe("usage totals", () => {
+  it("folds result totals into the session and leaves blocks alone", () => {
+    let session = newSession("claude", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "usage",
+      processCostUsd: 0.01,
+      processApiMs: 1_000,
+      turnTokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    });
+    session = applyHarnessEvent(session, {
+      type: "usage",
+      processCostUsd: 0.03,
+      processApiMs: 2_500,
+      turnTokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    });
+    expect(session.usage).toEqual({
+      costUsd: 0.03,
+      apiMs: 2_500,
+      tokens: { input: 2, output: 4, cacheRead: 6, cacheWrite: 8 },
+      lastProcessCostUsd: 0.03,
+      lastProcessApiMs: 2_500,
+    });
+    expect(session.blocks).toEqual([]);
+  });
+
+  it("adds a new child's counters on top of the old total after a restart", () => {
+    let session = newSession("claude", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "usage",
+      processCostUsd: 0.5,
+      processApiMs: 100,
+    });
+    session = applyHarnessEvent(session, { type: "session.started" });
+    session = applyHarnessEvent(session, {
+      type: "usage",
+      processCostUsd: 0.6,
+      processApiMs: 200,
+    });
+    expect(session.usage?.costUsd).toBeCloseTo(1.1);
+    expect(session.usage?.apiMs).toBe(300);
+  });
+
+  it("ignores session.started before any usage arrived", () => {
+    const session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "session.started",
+    });
+    expect(session.usage).toBeUndefined();
+  });
+});
+
 describe("applyHarnessEvent turn metrics", () => {
   it("attaches provider metrics to the latest user turn", () => {
     let session = appendUser(newSession("claude", "/repo"), "Explain this");

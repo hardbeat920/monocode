@@ -196,6 +196,45 @@ describe("claude subagents", () => {
     },
   );
 
+  it("emits session usage from the turn result and ignores subagent results", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      parent_tool_use_id: "agent_1",
+      total_cost_usd: 9,
+      duration_api_ms: 9_000,
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      total_cost_usd: 0.013,
+      duration_api_ms: 2_751,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 31,
+        cache_read_input_tokens: 19_640,
+        cache_creation_input_tokens: 139,
+      },
+    });
+    await turn;
+    expect(events.filter((event) => event.type === "usage")).toEqual([
+      {
+        type: "usage",
+        processCostUsd: 0.013,
+        processApiMs: 2_751,
+        turnTokens: {
+          input: 10,
+          output: 31,
+          cacheRead: 19_640,
+          cacheWrite: 139,
+        },
+      },
+    ]);
+  });
+
   it("keeps simultaneous child questions reachable in the single-question UI", async () => {
     const { events, turn } = await startTurn("s1");
     for (const id of ["child_a", "child_b"]) {

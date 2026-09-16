@@ -5,6 +5,7 @@ import type {
   ToolPreview,
   TurnMetrics,
 } from "../session";
+import type { TurnUsage } from "../sessionUsage";
 import { attachmentPathText } from "../attachments";
 import { isTaskListToolName, taskListFromToolInput } from "../taskList";
 import {
@@ -1089,4 +1090,30 @@ export function contextFromResult(
 
   if (!used && !window) return undefined;
   return { used: used > 0 ? used : undefined, window };
+}
+
+export function usageFromResult(
+  rec: Record<string, unknown>,
+): TurnUsage | undefined {
+  const processCostUsd = optionalNumber(rec.total_cost_usd);
+  const processApiMs = optionalNumber(rec.duration_api_ms);
+  const usage = asRecord(rec.usage);
+  const turnTokens = usage
+    ? {
+        input: numberField(usage, "input_tokens"),
+        output: numberField(usage, "output_tokens"),
+        cacheRead: numberField(usage, "cache_read_input_tokens"),
+        cacheWrite: numberField(usage, "cache_creation_input_tokens"),
+      }
+    : undefined;
+  if (processCostUsd == null && processApiMs == null && !turnTokens) {
+    return undefined;
+  }
+  return { processCostUsd, processApiMs, turnTokens };
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
