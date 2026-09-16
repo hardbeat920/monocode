@@ -984,6 +984,12 @@ function SidebarComponent({
         sessionListEntries,
         searchNarrowed,
       );
+      if (
+        selectionAnchorRef.current &&
+        !visibleIds.includes(selectionAnchorRef.current)
+      ) {
+        selectionAnchorRef.current = null;
+      }
       const anchor = selectionAnchorRef.current ?? activeSessionId ?? sessionId;
       const start = visibleIds.indexOf(anchor);
       const end = visibleIds.indexOf(sessionId);

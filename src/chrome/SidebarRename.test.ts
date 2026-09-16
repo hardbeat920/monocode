@@ -134,6 +134,42 @@ afterEach(() => {
 });
 
 describe("sidebar session multiselection", () => {
+  it("starts a range at the active session when pagination hides the anchor", () => {
+    props.sessions = Array.from({ length: 80 }, (_, index) => ({
+      ...props.sessions[0],
+      id: `session-${index + 1}`,
+      updatedAt: 100 - index,
+    }));
+    props.activeSessionId = "session-80";
+    act(() => render());
+    act(() => container.querySelector<HTMLElement>(
+      '[data-session-card="session-40"]',
+    )!.click());
+
+    // Switching panes does not discard the last plain-click anchor.
+    props.activeSessionId = "session-1";
+    act(() => render());
+    const search = container.querySelector<HTMLInputElement>(
+      'input[placeholder="Search conversations..."]',
+    )!;
+    // All sessions still match, but the list returns to its first page.
+    typeTitle(search, "Original conversation");
+    expect(container.querySelector('[data-session-card="session-40"]')).toBeNull();
+    expect(container.querySelectorAll("[data-session-card]")).toHaveLength(32);
+
+    act(() => container.querySelector('[data-session-card="session-3"]')!
+      .dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        shiftKey: true,
+      })));
+    expect(Array.from(
+      container.querySelectorAll('[data-session-selected="true"]'),
+      (el) => el.getAttribute("data-session-card"),
+    )).toEqual(["session-1", "session-2", "session-3"]);
+    expect(props.onSelectSession).toHaveBeenCalledTimes(1);
+    expect(props.onSelectSession).toHaveBeenCalledWith("session-40");
+  });
+
   it.each(["ctrlKey", "metaKey"] as const)(
     "starts the next range at the active session after %s clears the last selection",
     (modifier) => {
