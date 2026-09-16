@@ -1001,9 +1001,9 @@ function SidebarComponent({
     }
     selectionAnchorRef.current = sessionId;
     if (event.ctrlKey || event.metaKey) {
-      setSelectedSessionIds((current) =>
-        toggleSessionSelection(current, sessionId),
-      );
+      const next = toggleSessionSelection(selectedSessionIds, sessionId);
+      if (next.size === 0) selectionAnchorRef.current = null;
+      setSelectedSessionIds(next);
       return;
     }
     setSelectedSessionIds(new Set());

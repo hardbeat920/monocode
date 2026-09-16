@@ -134,6 +134,39 @@ afterEach(() => {
 });
 
 describe("sidebar session multiselection", () => {
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "starts the next range at the active session after %s clears the last selection",
+    (modifier) => {
+      props.sessions = [1, 2, 3, 4].map((n) => ({
+        ...props.sessions[0],
+        id: `session-${n}`,
+        updatedAt: 100 - n,
+      }));
+      act(() => render());
+      const thirdCard = container.querySelector<HTMLElement>(
+        '[data-session-card="session-3"]',
+      )!;
+      for (let click = 0; click < 2; click++) {
+        act(() => thirdCard.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          [modifier]: true,
+        })));
+        expect(container.querySelectorAll('[data-session-selected="true"]'))
+          .toHaveLength(click === 0 ? 1 : 0);
+      }
+      act(() => container.querySelector('[data-session-card="session-4"]')!
+        .dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          shiftKey: true,
+        })));
+      expect(Array.from(
+        container.querySelectorAll('[data-session-selected="true"]'),
+        (el) => el.getAttribute("data-session-card"),
+      )).toEqual(["session-1", "session-2", "session-3", "session-4"]);
+      expect(props.onSelectSession).not.toHaveBeenCalled();
+    },
+  );
+
   it("clears the previous session focus when Ctrl-clicking another session", () => {
     props.sessions = [1, 2].map((n) => ({
       ...props.sessions[0],
