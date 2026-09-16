@@ -82,6 +82,7 @@ export function markTurnInterrupted(session: Session): Session {
         id: crypto.randomUUID(),
         role: "system",
         text: INTERRUPT_MESSAGE,
+        notice: "interrupt",
       },
     ],
   };

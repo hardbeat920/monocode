@@ -9,6 +9,7 @@ import {
 } from "../lib/harness/preview";
 import { leafName } from "../lib/fileName";
 import { displayPath } from "../lib/paths";
+import { INTERRUPT_MESSAGE } from "../lib/inFlight";
 import type { Block } from "../lib/session";
 import { allModels } from "../lib/models";
 
@@ -108,6 +109,23 @@ export function isHiddenTool(block: Block): boolean {
 }
 
 /**
+ * A system row the reader must not miss — an error, or the note that a quit
+ * cut the turn short. Sessions persisted before the `notice` tag still carry
+ * the interrupt's literal text, so it is recognised by content as well.
+ */
+export function isNoticeBlock(block: Block): boolean {
+  return (
+    block.role === "system" &&
+    (!!block.notice || block.text === INTERRUPT_MESSAGE)
+  );
+}
+
+/** Turn chrome the trail absorbed: a status ping, not a notice. */
+function isStatusStep(block: Block): boolean {
+  return block.role === "system" && !block.interjection;
+}
+
+/**
  * Foldable work: tool calls, thinking, and edits. An edit still awaiting
  * approval stays out — you cannot judge a diff you cannot see.
  *
@@ -115,11 +133,14 @@ export function isHiddenTool(block: Block): boolean {
  * text: it joins the work around it instead of splitting the group. An
  * interjection stays a standalone block while the turn is live — the reader
  * should see it land — and joins the trail only once the turn settles, which
- * is the caller's branch to make.
+ * is the caller's branch to make. A notice — an error, an interruption — is
+ * neither work nor chrome, so it keeps its own row live and settled alike.
  */
 export function isActivityBlock(block: Block): boolean {
   if (isThinkingBlock(block)) return true;
-  if (block.role === "system") return !block.interjection;
+  if (block.role === "system") {
+    return !block.interjection && !isNoticeBlock(block);
+  }
   if (block.role !== "tool" && block.role !== "approval") return false;
   if (
     isEditTool(
@@ -706,7 +727,9 @@ export function workSummaryLine(steps: Block[], live = false): string {
         ? `${tally.notes} notes`
         : "";
   if (tally.order.length === 0) {
-    return notes || (live ? "Thinking" : "Thought");
+    if (notes) return notes;
+    if (steps.length > 0 && steps.every(isStatusStep)) return "Status update";
+    return live ? "Thinking" : "Thought";
   }
   const running = live ? currentWorkKind(steps) : undefined;
   return [
