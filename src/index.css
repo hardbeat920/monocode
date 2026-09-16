@@ -1749,6 +1749,7 @@ html.theme-light .effort-specks-highlight .effort-speck-inner {
 
 html.theme-light .effort-speck-inner {
   --speck-scale: 1.15;
+
   opacity: min(0.48, calc(var(--speck-base) * var(--speck-scale)));
 }
 

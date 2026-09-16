@@ -862,8 +862,15 @@ export function EffortPicker({
   if (!setting) return null;
 
   const tiers = orderEffortOptions(setting.options);
-  const value = settingValue(setting, values);
-  const valueLabel = settingValueLabel(setting, values);
+  // A restored session can carry a value this model no longer supports;
+  // render and keyboard state must agree on a real tier.
+  const rawValue = settingValue(setting, values);
+  const value = tiers.some((tier) => tier.value === rawValue)
+    ? rawValue
+    : (tiers.find((tier) => tier.value === setting.value)?.value ??
+      tiers[0]?.value ??
+      setting.value);
+  const valueLabel = tiers.find((tier) => tier.value === value)?.label ?? value;
   const selectedIndex = Math.max(
     0,
     tiers.findIndex((tier) => tier.value === value),

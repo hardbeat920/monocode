@@ -417,7 +417,9 @@ export function EffortMeter({
   // React attaches wheel listeners passively, so the step-on-scroll handler
   // has to be native for preventDefault to stick.
   const stepRef = useRef((_delta: number) => {});
-  stepRef.current = (delta) => commit(selectedIndex + delta);
+  useLayoutEffect(() => {
+    stepRef.current = (delta) => commit(selectedIndex + delta);
+  });
   useEffect(() => {
     const el = sliderRef.current;
     if (!el) return;
