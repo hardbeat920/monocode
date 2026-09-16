@@ -252,6 +252,10 @@ export const SessionPane = memo(function SessionPane({
   const transcriptScope = useRef<HTMLDivElement>(null);
   const quoteRequestId = useRef(0);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [editingLastTurn, setEditingLastTurn] = useState(false);
+  useEffect(() => {
+    setEditingLastTurn(false);
+  }, [session.id, editLastTurnSupported]);
   const astraWelcomeSequence = useRef(0);
   const [astraWelcomeRun, setAstraWelcomeRun] = useState<number | null>(null);
   const dismissAstraWelcome = useCallback(() => setAstraWelcomeRun(null), []);
@@ -417,6 +421,7 @@ export const SessionPane = memo(function SessionPane({
       onRecallLastTurnReady={(recall) => {
         recallLastTurnRef.current = recall;
       }}
+      onEditingLastTurnChange={setEditingLastTurn}
     />
   );
 
@@ -561,6 +566,7 @@ export const SessionPane = memo(function SessionPane({
                 onJumpToBottomChange={setShowJumpToBottom}
                 onJumpToBottomReady={onJumpToBottomReady}
                 onRevealReady={onRevealReady}
+                editingLastTurn={editingLastTurn}
                 onEditLastTurn={
                   editLastTurnSupported
                     ? () => {

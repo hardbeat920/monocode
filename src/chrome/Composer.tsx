@@ -7,6 +7,7 @@ import {
   ListEnd,
   Pause,
   Pencil,
+  PenLine,
   Play,
   Plus,
   Share,
@@ -198,6 +199,7 @@ type Props = {
   onOpenFile?: (path: string) => void;
   onDraftChange?: (text: string) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
+  onEditingLastTurnChange?: (editing: boolean) => void;
   children?: ReactNode;
 };
 
@@ -453,6 +455,7 @@ export function Composer({
   onOpenFile,
   onDraftChange,
   onRecallLastTurnReady,
+  onEditingLastTurnChange,
   children,
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -997,8 +1000,44 @@ export function Composer({
     setAttachments(lastTurnRecall.attachments);
     syncHasValue(text, lastTurnRecall.attachments);
     setResendEdited(true);
+    onEditingLastTurnChange?.(true);
     ref.current?.focus();
-  }, [editLastTurnSupported, lastTurnRecall, onDraftChange]);
+  }, [
+    editLastTurnSupported,
+    lastTurnRecall,
+    onDraftChange,
+    onEditingLastTurnChange,
+  ]);
+
+  useEffect(() => {
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+  }, [sessionId, onEditingLastTurnChange]);
+
+  useEffect(() => {
+    if (editLastTurnSupported) return;
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+  }, [editLastTurnSupported, onEditingLastTurnChange]);
+  const exitEditMode = useCallback(() => {
+    if (ref.current) {
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+    }
+    setDraft("");
+    onDraftChange?.("");
+    setAttachments((previous) => {
+      for (const file of previous) revokeAttachment(file);
+      return [];
+    });
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+    setPlusOpen(false);
+    setSlash(null);
+    setMention(null);
+    syncHasValue("", []);
+    ref.current?.focus();
+  }, [onDraftChange, onEditingLastTurnChange, syncHasValue]);
 
   useEffect(() => {
     if (!editLastTurnSupported || !onRecallLastTurnReady) return;
@@ -1058,6 +1097,7 @@ export function Composer({
     onDraftChange?.("");
     setAttachments([]);
     setResendEdited(false);
+    onEditingLastTurnChange?.(false);
     setPlanSelected(false);
     setOrchestrationSelected(false);
     setSessionFolderSelected(false);
@@ -1336,13 +1376,43 @@ export function Composer({
             />
           </div>
         ) : null}
+        {resendEdited ? (
+          <div
+            data-composer-editing
+            role="status"
+            aria-live="polite"
+            className="edit-last-turn-banner flex min-w-0 items-center justify-between gap-3 rounded-t-lg border px-3 py-1.5 text-[11px]"
+          >
+            <span className="edit-last-turn-accent flex min-w-0 items-center gap-1.5 font-medium">
+              <PenLine className="size-3.5 shrink-0" strokeWidth={1.8} />
+              <span className="truncate">Editing last message</span>
+            </span>
+            <button
+              type="button"
+              title="Stop editing last message"
+              aria-label="Stop editing last message"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={exitEditMode}
+              className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-content/50 transition-colors hover:bg-content/10 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+            >
+              <X className="size-3.5" strokeWidth={1.8} />
+              <span className="hidden sm:inline">Cancel</span>
+            </button>
+          </div>
+        ) : null}
         <div
           ref={boxRef}
           data-composer-box
-          className={`relative z-10 rounded-lg border bg-content/3 backdrop-blur-sm ${
+          className={`relative z-10 border bg-content/3 backdrop-blur-sm ${
+            resendEdited
+              ? "edit-last-turn-composer rounded-b-lg border-t-0"
+              : "rounded-lg border-content/10 has-focus:border-content/20"
+          } ${
             fileDrag
               ? "border-accent/60"
-              : "border-content/10 has-focus:border-content/20"
+              : resendEdited
+                ? ""
+                : "border-content/10 has-focus:border-content/20"
           }`}
         >
           {fileDrag ? (
@@ -1413,7 +1483,7 @@ export function Composer({
             <div
               ref={highlightRef}
               aria-hidden
-              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap break-words px-3 text-sm leading-5.5 text-content font-sans ${
+              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap wrap-break-word px-3 text-sm leading-5.5 text-content font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
             >
@@ -1440,7 +1510,7 @@ export function Composer({
                         ? "Ask, build, / for commands, @ for references... "
                         : "Ask, build, / for commands, @ for references... "
               }
-              className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
+              className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
               onFocus={onFocus}

@@ -6,9 +6,9 @@ import {
   FilePlusCorner,
   Minus,
   Pencil,
+  PenLine,
   Bot,
   ChartBreakoutSquare,
-  PenLine,
   Search,
   Terminal,
   Wrench,
@@ -135,6 +135,7 @@ type Props = {
   onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
   onHandoff?: (target: ModelTarget, turn: Block[]) => void;
   onEditLastTurn?: () => void;
+  editingLastTurn?: boolean;
   onJumpToBottomChange?: (show: boolean) => void;
   onJumpToBottomReady?: (jump: () => void) => void;
   /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
@@ -166,6 +167,7 @@ function AgentTranscriptComponent({
   onSecondOpinion,
   onHandoff,
   onEditLastTurn,
+  editingLastTurn = false,
   onJumpToBottomChange,
   onJumpToBottomReady,
   onRevealReady,
@@ -535,6 +537,12 @@ function AgentTranscriptComponent({
                   item.block.role === "user"
                     ? onEditLastTurn
                     : undefined
+                }
+                editing={
+                  editingLastTurn &&
+                  isLastTurn &&
+                  settled &&
+                  item.block.role === "user"
                 }
               />
             );
@@ -1009,6 +1017,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModel,
   planModelSettings,
   onEditLastTurn,
+  editing = false,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -1026,6 +1035,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModel?: string;
   planModelSettings?: Record<string, string>;
   onEditLastTurn?: () => void;
+  editing?: boolean;
 }) {
   if (block.role === "user") {
     return (
@@ -1034,6 +1044,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         layout={layout}
         stickyIndex={stickyIndex}
         onEdit={onEditLastTurn}
+        editing={editing}
       />
     );
   }
@@ -1146,11 +1157,13 @@ function UserMessageBlock({
   layout,
   stickyIndex,
   onEdit,
+  editing = false,
 }: {
   block: Block;
   layout: TranscriptLayout;
   stickyIndex: number;
   onEdit?: () => void;
+  editing?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -1215,19 +1228,31 @@ function UserMessageBlock({
   return (
     <div
       data-prompt-anchor={block.id}
+      data-editing-last-turn={editing ? "true" : undefined}
       className={`group/usermsg ${
         chat ? "flex justify-end pt-1.5 pr-4 pb-4 pl-14" : "p-1.5 pb-3"
       }`}
     >
       <div
-        className={`user-message-bubble relative min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
+        className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color,outline-color] duration-200 ${
+          editing ? "edit-last-turn-bubble" : "bg-content/10"
+        } ${
           chat
-            ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
+            ? `w-fit max-w-xl ${singleLine && !editing ? "rounded-full" : "rounded-xl"}`
             : "rounded-lg border border-content/10"
         }`}
         style={{ zIndex: stickyIndex }}
         onClick={overflows ? toggle : undefined}
       >
+        {editing ? (
+          <div
+            aria-label="Editing this message"
+            className="edit-last-turn-accent mb-1.5 flex items-center justify-end gap-1 text-[10px] font-medium tracking-[0.08em]"
+          >
+            <PenLine className="size-3 shrink-0" strokeWidth={1.8} />
+            <span>Editing this message</span>
+          </div>
+        ) : null}
         {onEdit ? (
           <button
             type="button"
@@ -1237,7 +1262,11 @@ function UserMessageBlock({
               event.stopPropagation();
               onEdit();
             }}
-            className="absolute -left-8 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/35 opacity-0 transition-opacity hover:bg-content/10 hover:text-content/70 group-hover/usermsg:opacity-100"
+            className={`absolute -left-8 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md transition-[background-color,color,opacity] duration-150 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-accent ${
+              editing
+                ? "edit-last-turn-button opacity-100"
+                : "text-content/35 opacity-0 hover:bg-content/10 hover:text-content/70 group-hover/usermsg:opacity-100"
+            }`}
           >
             <Pencil className="size-3.5" strokeWidth={1.75} />
           </button>
