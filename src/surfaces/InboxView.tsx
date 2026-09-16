@@ -108,6 +108,7 @@ import {
   isInboxEntryUnseen,
   markInboxItemSeen,
   markInboxItemsSeen,
+  rememberInboxItems,
   useInboxSeenTick,
 } from "../lib/inboxSeen";
 import { LIST_PAGE_SIZE, listWindowSize } from "../lib/listWindow";
@@ -366,6 +367,7 @@ export function InboxView({
     () => peekInboxForRail(recents, cwd) == null,
   );
   const [revalidating, setRevalidating] = useState(false);
+  const [readStatusError, setReadStatusError] = useState<string | null>(null);
   const [providerErrors, setProviderErrors] = useState<InboxProviderErrors>(
     () => peekInboxForRail(recents, cwd)?.errors ?? {},
   );
@@ -657,6 +659,13 @@ export function InboxView({
   ]);
 
   const inboxSeenTick = useInboxSeenTick();
+  useEffect(() => {
+    rememberInboxItems(items.map((item) => ({
+      key: inboxItemKey(item),
+      updatedAt: item.updatedAt,
+      projectPath: item.projectPath,
+    })));
+  }, [items]);
   const sourceEntries = useMemo(
     () =>
       sourceAvailable
@@ -839,7 +848,11 @@ export function InboxView({
             title="Mark all as read"
             aria-label="Mark all as read"
             disabled={!sourceHasUnseen}
-            onClick={() => markInboxItemsSeen(sourceEntries)}
+            onClick={() => setReadStatusError(
+              markInboxItemsSeen(sourceEntries)
+                ? null
+                : "Could not save read status. Please try again.",
+            )}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
           >
             <CheckCheck className="size-3.5" strokeWidth={1.75} />
@@ -861,6 +874,11 @@ export function InboxView({
           </button>
         </div>
       )}
+      {readStatusError ? (
+        <p role="alert" className="px-3 py-2 text-xs text-red-400">
+          {readStatusError}
+        </p>
+      ) : null}
       <div
         ref={setListScrollRef}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none"

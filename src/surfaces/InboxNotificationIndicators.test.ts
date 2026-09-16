@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import { InboxView } from "./InboxView";
 import { inboxItemKey, type InboxItem } from "../lib/githubTasks";
 import { isInboxEntryUnseen, seedInboxSeenIfNeeded } from "../lib/inboxSeen";
@@ -26,6 +27,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
+  vi.mocked(invoke).mockRejectedValue(new Error("No native bridge"));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2030-01-15T12:00:00Z"));
@@ -39,7 +41,39 @@ afterEach(() => {
   container.remove();
   localStorage.clear();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("reports a failed mark-all write in Inbox and clears the error after retry", async () => {
+  const item: InboxItem = {
+    provider: "github", kind: "issue", repo: "acme/app", number: 42,
+    title: "Unread issue", url: "https://github.com/acme/app/issues/42",
+    state: "open", updatedAt: "2030-01-15T11:59:00Z",
+    labels: [], assignees: [], draft: false, projectPath: "/tmp/app",
+  };
+  const entry = { key: inboxItemKey(item), updatedAt: item.updatedAt };
+  seedInboxSeenIfNeeded([{ ...entry, updatedAt: "2030-01-14T12:00:00Z" }]);
+  saveInboxConnections({ github: true, gitlab: false, linear: false });
+  saveInboxSource("github");
+  listInboxItems.mockResolvedValue({ items: [item], errors: {} });
+  await act(async () => root.render(createElement(InboxView, {
+    cwd: "/tmp/app", recents: [], onAsk: async () => "", onAskRestart: async () => "",
+    onAskMount: () => {}, onOpenIntegrations: () => {},
+  })));
+  const markAll = container.querySelector<HTMLButtonElement>('button[aria-label="Mark all as read"]')!;
+  const write = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+    throw new Error("Storage full");
+  });
+  act(() => markAll.click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Could not save read status");
+  expect(isInboxEntryUnseen(entry)).toBe(true);
+  expect(markAll.disabled).toBe(false);
+  write.mockRestore();
+  act(() => markAll.click());
+  expect(isInboxEntryUnseen(entry)).toBe(false);
+  expect(markAll.disabled).toBe(true);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });
 
 it.each([

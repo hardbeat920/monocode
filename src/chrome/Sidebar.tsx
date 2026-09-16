@@ -110,6 +110,7 @@ import { useSortable } from "../hooks/useSortable";
 import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
 import { normalizeHex } from "../lib/colorUtils";
 import {
+  collectRailProjects,
   looksLikeProject,
   sameProjectPath,
   type RecentProject,
@@ -120,6 +121,7 @@ import { FileTree } from "./FileTree";
 import { HarnessIcon } from "./HarnessIcon";
 import { LiveAgentsPreview } from "./LiveAgentsPreview";
 import { ProjectRail } from "./ProjectRail";
+import { InboxNotificationMenu } from "./InboxNotificationMenu";
 import { RailAction } from "./RailAction";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
@@ -1181,6 +1183,7 @@ function SidebarComponent({
               onNew={onNew}
               onSearch={onSearch}
               onOpenInbox={onOpenInbox}
+              onOpenNotificationSettings={onOpenNotificationSettings}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               searchActive={searchActive}
               inboxActive={inboxActive}
@@ -1691,6 +1694,7 @@ function SidebarProjectPicker({
   onNew,
   onSearch,
   onOpenInbox,
+  onOpenNotificationSettings,
   onOpenNotes,
   searchActive = false,
   inboxActive = false,
@@ -1705,12 +1709,15 @@ function SidebarProjectPicker({
   onNew?: () => void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
+  onOpenNotificationSettings?: () => void;
   onOpenNotes?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   notesActive?: boolean;
   inboxUnseen?: boolean;
 }) {
+  const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(null);
+  const inboxTrigger = useRef<HTMLElement | null>(null);
   return (
     <div
       className="flex h-9 items-center gap-0.5 border-b border-stroke px-2"
@@ -1744,6 +1751,11 @@ function SidebarProjectPicker({
             label={inboxUnseen ? "Inbox, new items" : "Inbox"}
             active={inboxActive}
             onClick={onOpenInbox}
+            onOpenContextMenu={(x, y) => {
+              inboxTrigger.current = document.activeElement instanceof HTMLElement
+                ? document.activeElement : null;
+              setInboxMenu({ x, y });
+            }}
           >
             <span className="relative">
               <Inbox className="size-3.5" strokeWidth={1.75} />
@@ -1762,6 +1774,17 @@ function SidebarProjectPicker({
           </IconButton>
         ) : null}
       </div>
+      {inboxMenu ? (
+        <InboxNotificationMenu
+          {...inboxMenu}
+          projectPaths={[...collectRailProjects(recents, cwd).keys()]}
+          onOpenSettings={onOpenNotificationSettings}
+          onClose={() => {
+            setInboxMenu(null);
+            inboxTrigger.current?.focus();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

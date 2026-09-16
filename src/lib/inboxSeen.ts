@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { sameProjectPath } from "./recents";
 
 const KEY = "monocode.inboxSeen";
 const LEGACY_KEY = "monocode.inboxSeenAt";
@@ -18,6 +19,39 @@ type SeenStore = {
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
+const knownItems = new Map<string, InboxSeenEntry & { projectPaths: string[] }>();
+
+/** Share fetched activity across the Inbox view, background poll, and rail menu. */
+export function rememberInboxItems(entries: readonly (InboxSeenEntry & { projectPath: string })[]) {
+  let changed = false;
+  for (const entry of entries) {
+    const previous = knownItems.get(entry.key);
+    const projectPaths = previous?.projectPaths ?? [];
+    const knownPath = projectPaths.some((path) => sameProjectPath(path, entry.projectPath));
+    const newer = !previous || inboxUpdatedAt(entry) > inboxUpdatedAt(previous);
+    if (knownPath && !newer) continue;
+    knownItems.set(entry.key, {
+      key: entry.key,
+      updatedAt: newer ? entry.updatedAt : previous!.updatedAt,
+      projectPaths: knownPath ? projectPaths : [...projectPaths, entry.projectPath],
+    });
+    changed = true;
+  }
+  if (changed) notifyInboxSeen();
+}
+
+export function knownInboxEntries(projectPaths: readonly string[]): InboxSeenEntry[] {
+  return [...knownItems.values()].filter((entry) =>
+    entry.projectPaths.some((knownPath) =>
+      !knownPath || projectPaths.some((path) => sameProjectPath(path, knownPath)),
+    ),
+  );
+}
+
+export function clearKnownInboxItems() {
+  knownItems.clear();
+  notifyInboxSeen();
+}
 
 export function inboxUpdatedAt(item: { updatedAt: string }): number {
   const value = Date.parse(item.updatedAt);
@@ -56,17 +90,22 @@ function loadInboxSeenStore(): SeenStore {
   }
 }
 
-function saveInboxSeenStore(store: SeenStore) {
+function saveInboxSeenStore(store: SeenStore): boolean {
   try {
     localStorage.setItem(
       KEY,
       JSON.stringify({ seeded: store.seeded, items: store.items }),
     );
+  } catch {
+    return false;
+  }
+  try {
     localStorage.removeItem(LEGACY_KEY);
   } catch {
-    // private mode / quota
+    // Legacy cleanup must not turn a successful write into a failure.
   }
   notifyInboxSeen();
+  return true;
 }
 
 function mapFrom(items: readonly InboxSeenEntry[]): SeenMap {
@@ -111,9 +150,9 @@ export function markInboxItemSeen(entry: InboxSeenEntry) {
   });
 }
 
-export function markInboxItemsSeen(entries: readonly InboxSeenEntry[]) {
+export function markInboxItemsSeen(entries: readonly InboxSeenEntry[]): boolean {
   const store = loadInboxSeenStore();
-  saveInboxSeenStore({
+  return saveInboxSeenStore({
     ...store,
     items: entries.reduce(mergeSeen, store.items),
   });

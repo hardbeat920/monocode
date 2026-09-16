@@ -826,6 +826,37 @@ describe("sidebar session reminders", () => {
   });
 });
 
+describe("collapsed rail Inbox actions", () => {
+  it.each(["mouse", "ContextMenu", "Shift+F10"])("opens the shared Inbox menu via %s", async (input) => {
+    props.projectRailOpen = false;
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    props.onOpenInbox = vi.fn();
+    props.onOpenNotificationSettings = vi.fn();
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    await act(async () => render());
+    const inbox = container.querySelector<HTMLButtonElement>('button[aria-label="Inbox"]')!;
+    expect(inbox).not.toBeNull();
+    await act(async () => {
+      inbox.dispatchEvent(input === "mouse"
+        ? new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 150, clientY: 60 })
+        : new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: input === "Shift+F10" ? "F10" : input, shiftKey: input === "Shift+F10" }));
+    });
+    const menu = document.querySelector('[role="menu"][aria-label="Inbox actions"]');
+    expect(menu).not.toBeNull();
+    expect(menu!.textContent).toContain("Mark all as read");
+    expect(menu!.textContent).toContain("Mute all projects");
+    expect(menu!.textContent).toContain("Resume muted projects");
+    expect(menu!.textContent).toContain("2 projects");
+    const settings = [...menu!.querySelectorAll("button")].find((button) => button.textContent?.startsWith("Notification settings"))!;
+    act(() => settings.click());
+    expect(props.onOpenNotificationSettings).toHaveBeenCalledExactlyOnceWith();
+    expect(props.onOpenInbox).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(inbox);
+    expect(document.querySelector('[role="menu"][aria-label="Inbox actions"]')).toBeNull();
+  });
+});
+
 describe("sidebar working agents", () => {
   it("shows the original working widget when the project rail is collapsed", () => {
     props.projectRailOpen = false;

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { clearKnownInboxItems } from "./inboxSeen";
 import {
   linearConnected,
   linearTeamIdsForFetch,
@@ -171,6 +172,7 @@ const prDiffByKey = new Map<string, GithubPrDiff>();
 const prDiffInflight = new Map<string, Promise<GithubPrDiff>>();
 
 export function clearInboxCache() {
+  clearKnownInboxItems();
   inboxListCache = null;
   inboxListInflight.clear();
   repoByPath.clear();

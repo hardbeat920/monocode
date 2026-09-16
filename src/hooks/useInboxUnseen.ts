@@ -18,6 +18,7 @@ import {
 } from "../lib/inboxFilters";
 import {
   inboxHasUnseenItems,
+  rememberInboxItems,
   seedInboxSeenIfNeeded,
   subscribeInboxSeen,
   type InboxSeenEntry,
@@ -216,6 +217,11 @@ export function useInboxActivity(
         }
         const entries = seenEntries(visible);
         entriesRef.current = entries;
+        rememberInboxItems(listed.items.map((item) => ({
+          key: inboxItemKey(item),
+          updatedAt: item.updatedAt,
+          projectPath: item.projectPath,
+        })));
         seedInboxSeenIfNeeded(entries);
         applyUnseen();
 

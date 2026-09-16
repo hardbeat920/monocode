@@ -1,4 +1,10 @@
 import { useEffect, useState } from "react";
+import {
+  inboxHasUnseenItems,
+  knownInboxEntries,
+  markInboxItemsSeen,
+  useInboxSeenTick,
+} from "../lib/inboxSeen";
 import { useProjectNotificationPreferences } from "../hooks/useProjectNotificationPreferences";
 import {
   isProjectMuted,
@@ -30,12 +36,15 @@ export function InboxNotificationMenu({
   const notificationProjects = useNotificationProjects(projectPaths);
   const [saveError, setError] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
+  useInboxSeenTick();
   const preferences = useProjectNotificationPreferences();
   const pathsKey = JSON.stringify(projectPaths);
   useEffect(() => {
     setCustomOpen(false);
     setError(null);
   }, [pathsKey]);
+  const entries = knownInboxEntries(projectPaths);
+  const hasUnread = inboxHasUnseenItems(entries);
 
   const allIds = notificationProjects.projects.map((project) => project.id);
   const mutedIds = allIds.filter((id) =>
@@ -44,12 +53,18 @@ export function InboxNotificationMenu({
   const items: ExplorerMenuItem[] = [
     {
       kind: "item",
+      id: "read-all",
+      label: "Mark all as read",
+      disabled: !hasUnread,
+    },
+    { kind: "sep" },
+    {
+      kind: "item",
       id: "mute",
       label: "Mute all projects",
       disabled: !allIds.length,
       submenu: notificationMuteActions(),
     },
-    { kind: "sep" },
     {
       kind: "item",
       id: "resume",
@@ -59,7 +74,6 @@ export function InboxNotificationMenu({
   ];
   if (onOpenSettings)
     items.push(
-      { kind: "sep" },
       { kind: "item", id: "settings", label: "Notification settings…" },
     );
 
@@ -96,7 +110,7 @@ export function InboxNotificationMenu({
       header={
         <div className="space-y-1 px-2 py-1.5">
           <p className="text-xs font-medium text-content">
-            Project notifications
+            Inbox
           </p>
           <p role="status" className="text-xs text-content/50">
             {`${allIds.length} ${allIds.length === 1 ? "project" : "projects"} · ${mutedIds.length} muted`}
@@ -109,6 +123,15 @@ export function InboxNotificationMenu({
         </div>
       }
       onPick={(id) => {
+        if (id === "read-all") {
+          if (!hasUnread) return;
+          if (!markInboxItemsSeen(entries)) {
+            setError("Could not save read status. Please try again.");
+            return;
+          }
+          onClose();
+          return;
+        }
         if (id === "settings") {
           onClose();
           onOpenSettings?.();

@@ -417,6 +417,7 @@ export function IconButton({
   accent,
   disabled,
   onClick,
+  onOpenContextMenu,
   children,
 }: {
   label: string;
@@ -424,6 +425,7 @@ export function IconButton({
   accent?: boolean;
   disabled?: boolean;
   onClick?: () => void;
+  onOpenContextMenu?: (x: number, y: number) => void;
   children: ReactNode;
 }) {
   return (
@@ -438,6 +440,22 @@ export function IconButton({
         if (disabled) return;
         onClick?.();
       }}
+      onContextMenu={onOpenContextMenu ? (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (disabled) return;
+        event.currentTarget.focus();
+        onOpenContextMenu(event.clientX, event.clientY);
+      } : undefined}
+      onKeyDown={onOpenContextMenu ? (event) => {
+        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (disabled) return;
+        event.currentTarget.focus();
+        const rect = event.currentTarget.getBoundingClientRect();
+        onOpenContextMenu(rect.left, rect.bottom);
+      } : undefined}
       className={`grid size-6.5 place-items-center rounded-md ${
         disabled
           ? "text-content/25"
