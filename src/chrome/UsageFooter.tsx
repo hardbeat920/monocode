@@ -1,48 +1,69 @@
-import { RefreshCw } from "./icons";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { HarnessIcon } from "./HarnessIcon";
-import { Popover } from "./Popover";
+import { RefreshCw, Terminal } from "./icons";
 import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
+import { HarnessIcon } from "./HarnessIcon";
+import { Popover, type PopoverDismissReason } from "./Popover";
+import {
+  consumeCodexRateLimitResetCredit,
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
 } from "../lib/rateLimitsFetch";
 import {
-  clampUsedPercent,
+  errorRateLimits,
   fetchingRateLimits,
-  formatRateLimitWindowChipLabel,
-  formatUsagePercent,
   idleRateLimits,
   RATE_LIMIT_POLL_MS,
-  rateLimitWindowTooltip,
   shouldFetchProvider,
   type ProviderRateLimits,
   type RateLimitProvider,
-  type RateLimitWindow,
 } from "../lib/rateLimits";
 import { HARNESS_LABEL, HARNESS_TITLE, type HarnessId } from "../lib/session";
+import { loginHarness, supportsHarnessLogin } from "../lib/harness/auth";
 import {
   runningTerminalChipLabel,
   type RunningTerminal,
 } from "../lib/terminalTab";
+import { MOD } from "../lib/platform";
+import { UsageProviderChip } from "./UsageProviderChip";
+import {
+  ProviderSignInPanel,
+  type ProviderSignInState,
+} from "./ProviderSignInPanel";
 
 const CLOCK_MS = 30_000;
 
 export type UsageFooterSession = {
+  id?: string;
   harness: HarnessId;
+  authRequired?: boolean;
 };
 
 export function UsageFooter({
   providers,
   session,
+  project,
   terminals = [],
   terminalOpen = false,
   onToggleTerminal,
+  onNewTerminal,
+  onShowTerminal,
+  projectTerminalActive = false,
 }: {
   providers: RateLimitProvider[];
   session?: UsageFooterSession;
+  project?: string;
   terminals?: RunningTerminal[];
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
+  onNewTerminal?: () => void;
+  onShowTerminal?: () => void;
+  projectTerminalActive?: boolean;
 }) {
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
@@ -60,43 +81,45 @@ export function UsageFooter({
   claudeRef.current = claude;
   codexRef.current = codex;
 
-  const refresh = useCallback((force = false) => {
-    if (inflight.current) return inflight.current;
-    const visible = document.visibilityState === "visible";
-    const fetchClaude =
-      wantClaude &&
-      shouldFetchProvider(claudeRef.current, { force, visible });
-    const fetchCodex =
-      wantCodex &&
-      shouldFetchProvider(codexRef.current, { force, visible });
-    if (!fetchClaude && !fetchCodex) return;
-    if (force) setRefreshing(true);
-    const jobs: Promise<void>[] = [];
-    if (fetchClaude) {
-      setClaude((current) => fetchingRateLimits("claude", current));
-      jobs.push(
-        fetchClaudeRateLimits().then((value) => {
-          setClaude(value);
-        }),
-      );
-    }
-    if (fetchCodex) {
-      setCodex((current) => fetchingRateLimits("codex", current));
-      jobs.push(
-        fetchCodexRateLimits().then((value) => {
-          setCodex(value);
-        }),
-      );
-    }
-    const run = Promise.allSettled(jobs)
-      .then(() => undefined)
-      .finally(() => {
-        inflight.current = null;
-        setRefreshing(false);
-      });
-    inflight.current = run;
-    return run;
-  }, [wantClaude, wantCodex]);
+  const refresh = useCallback(
+    (force = false) => {
+      if (inflight.current) return inflight.current;
+      const visible = document.visibilityState === "visible";
+      const fetchClaude =
+        wantClaude &&
+        shouldFetchProvider(claudeRef.current, { force, visible });
+      const fetchCodex =
+        wantCodex && shouldFetchProvider(codexRef.current, { force, visible });
+      if (!fetchClaude && !fetchCodex) return;
+      if (force) setRefreshing(true);
+      const jobs: Promise<void>[] = [];
+      if (fetchClaude) {
+        setClaude((current) => fetchingRateLimits("claude", current));
+        jobs.push(
+          fetchClaudeRateLimits().then((value) => {
+            setClaude(value);
+          }),
+        );
+      }
+      if (fetchCodex) {
+        setCodex((current) => fetchingRateLimits("codex", current));
+        jobs.push(
+          fetchCodexRateLimits().then((value) => {
+            setCodex(value);
+          }),
+        );
+      }
+      const run = Promise.allSettled(jobs)
+        .then(() => undefined)
+        .finally(() => {
+          inflight.current = null;
+          setRefreshing(false);
+        });
+      inflight.current = run;
+      return run;
+    },
+    [wantClaude, wantCodex],
+  );
 
   useEffect(() => {
     void refresh();
@@ -116,12 +139,92 @@ export function UsageFooter({
     return () => window.clearInterval(timer);
   }, []);
 
+  const consumeCodexReset = useCallback(async (creditId?: string) => {
+    while (inflight.current) await inflight.current;
+    setRefreshing(true);
+    setCodex((current) => fetchingRateLimits("codex", current));
+    let outcome: Awaited<ReturnType<typeof consumeCodexRateLimitResetCredit>>;
+    const operation = (async () => {
+      try {
+        outcome = await consumeCodexRateLimitResetCredit(creditId);
+        setCodex(await fetchCodexRateLimits());
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not use Codex reset";
+        setCodex((current) => errorRateLimits("codex", message, current));
+        throw error;
+      }
+    })();
+    const tracked = operation.finally(() => {
+      inflight.current = null;
+      setRefreshing(false);
+    });
+    inflight.current = tracked.catch(() => undefined);
+    await tracked;
+    return outcome!;
+  }, []);
+
+  const reconnectProvider = useCallback(
+    async (
+      provider: RateLimitProvider,
+      fetchLimits: () => Promise<ProviderRateLimits>,
+      setLimits: Dispatch<SetStateAction<ProviderRateLimits>>,
+    ) => {
+      while (inflight.current) await inflight.current;
+      setRefreshing(true);
+      setLimits((current) => fetchingRateLimits(provider, current));
+      const operation = (async () => {
+        try {
+          await loginHarness(provider);
+          const value = await fetchLimits();
+          setLimits(value);
+          if (value.status !== "ok") {
+            throw new Error(
+              value.error ||
+                `${HARNESS_TITLE[provider]} sign-in could not be verified`,
+            );
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Could not complete sign-in";
+          setLimits((current) => errorRateLimits(provider, message, current));
+          throw error;
+        }
+      })();
+      const tracked = operation.finally(() => {
+        inflight.current = null;
+        setRefreshing(false);
+      });
+      inflight.current = tracked.catch(() => undefined);
+      await tracked;
+    },
+    [],
+  );
+
+  const reconnectClaude = useCallback(
+    () => reconnectProvider("claude", fetchClaudeRateLimits, setClaude),
+    [reconnectProvider],
+  );
+
+  const reconnectCodex = useCallback(
+    () => reconnectProvider("codex", fetchCodexRateLimits, setCodex),
+    [reconnectProvider],
+  );
+
   const showUsage = wantClaude || wantCodex;
   const showTerminals = terminals.length > 0;
-  const showRight = showUsage || showTerminals;
+  const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
+  const terminalLabel = projectTerminalActive
+    ? "Terminal"
+    : `New Terminal (${MOD}\`)`;
+  const onTerminalClick = projectTerminalActive
+    ? (onShowTerminal ?? onNewTerminal)
+    : (onNewTerminal ?? onShowTerminal);
   const ariaLabel = showUsage
     ? "Provider usage"
-    : showTerminals
+    : showTerminals || showTerminalButton
       ? "Terminals"
       : session
         ? "Session"
@@ -130,17 +233,45 @@ export function UsageFooter({
   return (
     <footer
       aria-label={ariaLabel}
-      className="flex h-7 shrink-0 items-center gap-3 overflow-x-auto border-t border-content/10 px-3 text-[11px] text-content/55"
+      className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
     >
       {showUsage ? (
         <>
-          {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
-          {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
+          {wantClaude ? (
+            <UsageProviderChip
+              limits={claude}
+              now={now}
+              onReconnect={reconnectClaude}
+            />
+          ) : null}
+          {wantCodex ? (
+            <UsageProviderChip
+              limits={codex}
+              now={now}
+              project={project}
+              onConsumeReset={consumeCodexReset}
+              onReconnect={reconnectCodex}
+            />
+          ) : null}
+          <button
+            type="button"
+            className="grid size-4.5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
+            aria-label="Refresh usage"
+            title="Refresh usage"
+            disabled={refreshing}
+            onClick={() => void refresh(true)}
+          >
+            <RefreshCw
+              className={`size-2.5 ${refreshing ? "animate-spin" : ""}`}
+              strokeWidth={1.75}
+              aria-hidden
+            />
+          </button>
         </>
       ) : session ? (
-        <SessionChip session={session} />
+        <SessionChip key={session.id ?? session.harness} session={session} />
       ) : null}
-      {showRight ? (
+      {showTerminals || showTerminalButton ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {showTerminals ? (
             <RunningTerminalChip
@@ -148,21 +279,21 @@ export function UsageFooter({
               open={terminalOpen}
               onToggle={onToggleTerminal}
             />
-          ) : null}
-          {showUsage ? (
+          ) : showTerminalButton ? (
             <button
               type="button"
-              className="grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
-              aria-label="Refresh usage"
-              title="Refresh usage"
-              disabled={refreshing}
-              onClick={() => void refresh(true)}
+              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 hover:bg-content/10 ${
+                projectTerminalActive
+                  ? "text-accent"
+                  : "text-content/40 hover:text-content"
+              }`}
+              aria-label={terminalLabel}
+              aria-pressed={projectTerminalActive}
+              title={terminalLabel}
+              onClick={onTerminalClick}
             >
-              <RefreshCw
-                className={`size-3 ${refreshing ? "animate-spin" : ""}`}
-                strokeWidth={1.75}
-                aria-hidden
-              />
+              <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
+              <span>Terminal</span>
             </button>
           ) : null}
         </div>
@@ -182,14 +313,98 @@ function TerminalLiveMark() {
 }
 
 function SessionChip({ session }: { session: UsageFooterSession }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [loginState, setLoginState] = useState<ProviderSignInState>("idle");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const authRequired = Boolean(
+    session.authRequired && loginState !== "complete",
+  );
+  const canLogin = authRequired && supportsHarnessLogin(session.harness);
+
+  useEffect(() => {
+    if (!session.authRequired && loginState === "complete") {
+      setLoginState("idle");
+    }
+  }, [loginState, session.authRequired]);
+
+  const dismiss = (reason: PopoverDismissReason) => {
+    setOpen(false);
+    if (reason === "escape") {
+      requestAnimationFrame(() => trigger.current?.focus());
+    }
+  };
+
+  const signIn = async () => {
+    setLoginState("running");
+    setLoginError(null);
+    try {
+      await loginHarness(session.harness);
+      setOpen(false);
+      setLoginState("complete");
+    } catch (error) {
+      setLoginError(
+        error instanceof Error ? error.message : "Could not complete sign-in",
+      );
+      setLoginState("error");
+    }
+  };
+
+  if (!canLogin) {
+    return (
+      <span
+        className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap"
+        title={HARNESS_TITLE[session.harness]}
+      >
+        <HarnessIcon harness={session.harness} className="size-3 shrink-0" />
+        <span>{HARNESS_LABEL[session.harness]}</span>
+      </span>
+    );
+  }
+
   return (
-    <span
-      className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap"
-      title={HARNESS_TITLE[session.harness]}
-    >
-      <HarnessIcon harness={session.harness} className="size-3 shrink-0" />
-      <span>{HARNESS_LABEL[session.harness]}</span>
-    </span>
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        className="-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]"
+        aria-label={`${HARNESS_TITLE[session.harness]} sign-in required`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={`${HARNESS_TITLE[session.harness]} sign-in required`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <HarnessIcon harness={session.harness} className="size-3 shrink-0" />
+        <span>{HARNESS_LABEL[session.harness]}</span>
+        {authRequired ? (
+          <span className="text-[10px] text-amber-600 dark:text-amber-300">
+            sign in
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <Popover
+          anchor={trigger}
+          side="top"
+          align="start"
+          gap={7}
+          width={300}
+          autoFocus
+          onDismiss={dismiss}
+          role="dialog"
+          aria-label={`${HARNESS_TITLE[session.harness]} sign-in`}
+          tabIndex={-1}
+          className="text-content"
+        >
+          <ProviderSignInPanel
+            harness={session.harness}
+            state={loginState}
+            error={loginError}
+            onSignIn={() => void signIn()}
+          />
+        </Popover>
+      ) : null}
+    </>
   );
 }
 
@@ -268,7 +483,9 @@ function RunningTerminalChip({
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => toggle(terminal.id)}
             >
-              <span className="min-w-0 flex-1 truncate">{terminal.process}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {terminal.process}
+              </span>
               <span className="max-w-[7rem] shrink-0 truncate text-[11px] text-content/40">
                 {terminal.label}
               </span>
@@ -278,99 +495,4 @@ function RunningTerminalChip({
       ) : null}
     </>
   );
-}
-
-function ProviderChip({
-  limits,
-  now,
-}: {
-  limits: ProviderRateLimits;
-  now: number;
-}) {
-  const loading =
-    limits.status === "idle" ||
-    (limits.status === "fetching" && !limits.session && !limits.weekly);
-  const disconnected = limits.status === "unavailable";
-  const windows = [
-    limits.session ? { key: "session", window: limits.session } : null,
-    limits.weekly ? { key: "weekly", window: limits.weekly } : null,
-  ].filter((entry): entry is { key: string; window: RateLimitWindow } => {
-    return entry != null;
-  });
-  const tightest = windows.reduce<RateLimitWindow | null>((best, entry) => {
-    if (!best || entry.window.usedPercent > best.usedPercent) {
-      return entry.window;
-    }
-    return best;
-  }, null);
-  const tooltip = windows
-    .map((entry) => rateLimitWindowTooltip(entry.window, now))
-    .join(" · ");
-
-  return (
-    <span
-      className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap"
-      title={
-        tooltip ||
-        limits.error ||
-        (disconnected
-          ? "Not connected"
-          : loading
-            ? "Loading usage…"
-            : undefined)
-      }
-    >
-      <HarnessIcon harness={limits.provider} className="size-3 shrink-0" />
-      {loading ? (
-        <span className="animate-pulse text-content/35">···</span>
-      ) : disconnected ? (
-        <span className="text-content/35">not connected</span>
-      ) : windows.length === 0 ? (
-        <span className="text-content/35">{emptyUsageLabel(limits)}</span>
-      ) : (
-        <>
-          {tightest ? <MiniBar usedPct={tightest.usedPercent} /> : null}
-          <span className="flex min-w-0 items-center gap-1 tabular-nums">
-            {windows.map((entry, index) => (
-              <span key={entry.key} className="inline-flex items-center gap-1">
-                {index > 0 ? <span className="text-content/25">·</span> : null}
-                <span>
-                  {formatUsagePercent(entry.window.usedPercent)}{" "}
-                  {formatRateLimitWindowChipLabel(entry.window, now)}
-                </span>
-              </span>
-            ))}
-          </span>
-        </>
-      )}
-    </span>
-  );
-}
-
-function emptyUsageLabel(limits: ProviderRateLimits): string {
-  if (limits.status !== "error") return "—";
-  const text = limits.error?.toLowerCase() ?? "";
-  if (text.includes("expired") || text.includes("sign-in")) return "expired";
-  return "—";
-}
-
-function MiniBar({ usedPct }: { usedPct: number }) {
-  const pct = clampUsedPercent(usedPct);
-  return (
-    <span
-      className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-content/10"
-      aria-hidden
-    >
-      <span
-        className={`block h-full rounded-full ${barClass(pct)}`}
-        style={{ width: `${pct}%` }}
-      />
-    </span>
-  );
-}
-
-function barClass(pct: number): string {
-  if (pct >= 90) return "bg-red-400";
-  if (pct >= 80) return "bg-amber-400";
-  return "bg-content/45";
 }

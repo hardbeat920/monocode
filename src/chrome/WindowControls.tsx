@@ -53,7 +53,7 @@ export function WindowControls() {
 
   return (
     <div
-      className="flex h-full shrink-0 items-stretch border-l border-content/10"
+      className="flex h-full shrink-0 items-stretch border-l border-stroke"
       data-tauri-drag-region="false"
     >
       <button

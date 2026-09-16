@@ -59,6 +59,12 @@ type Submenu = { kind: "setting"; setting: ModelSetting } | { kind: "models" };
 
 type RecentMenu = { models: AgentModel[] };
 
+type ModelGroup = {
+  id: string;
+  name?: string;
+  models: Array<{ item: AgentModel; index: number }>;
+};
+
 const MENU_WIDTH = 250;
 const MODEL_MENU_WIDTH = 310;
 const SETTING_MENU_WIDTH = 210;
@@ -141,6 +147,29 @@ function recentMenuModels(current: AgentModel): AgentModel[] {
   return models.slice(0, 6);
 }
 
+function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
+  if (tab !== "opencode") {
+    return [
+      {
+        id: "models",
+        models: models.map((item, index) => ({ item, index })),
+      },
+    ];
+  }
+
+  const groups = new Map<string, ModelGroup>();
+  models.forEach((item, index) => {
+    const provider = item.provider ?? { id: "opencode", name: "OpenCode" };
+    let group = groups.get(provider.id);
+    if (!group) {
+      group = { id: provider.id, name: provider.name, models: [] };
+      groups.set(provider.id, group);
+    }
+    group.models.push({ item, index });
+  });
+  return [...groups.values()];
+}
+
 export function ModelPicker({
   harness,
   model,
@@ -214,6 +243,7 @@ export function ModelPicker({
     : undefined;
   const triggerTitle = [
     HARNESS_TITLE[current.harness],
+    current.provider?.name,
     current.name,
     triggerEffortLabel,
   ]
@@ -250,7 +280,7 @@ export function ModelPicker({
         : modelsFor(visibleTab);
     if (!needle) return pool;
     return pool.filter((item) =>
-      `${item.name} ${HARNESS_TITLE[item.harness]}`
+      `${item.name} ${HARNESS_TITLE[item.harness]} ${item.provider?.name ?? ""} ${item.provider?.id ?? ""}`
         .toLowerCase()
         .includes(needle),
     );
@@ -539,7 +569,9 @@ export function ModelPicker({
         ref={button}
         type="button"
         title={`${triggerTitle} · Recent models: right-click or ${MOD}.`}
-        aria-label={`${HARNESS_TITLE[current.harness]} ${current.name}${
+        aria-label={`${HARNESS_TITLE[current.harness]}${
+          current.provider ? `, ${current.provider.name},` : ""
+        } ${current.name}${
           triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
         }`}
         aria-keyshortcuts={`${MOD}.`}
@@ -554,8 +586,8 @@ export function ModelPicker({
         onClick={() => togglePicker()}
         className={`flex h-6.5 max-w-40 items-center gap-1 rounded-md px-1.5 ${
           open
-            ? "bg-content/10 text-content"
-            : "bg-content/10 text-content hover:bg-content/15"
+            ? "bg-selection text-content"
+            : "bg-selection text-content hover:bg-selection-hover"
         }`}
       >
         <HarnessIcon harness={current.harness} className="size-4 shrink-0" />
@@ -608,7 +640,7 @@ export function ModelPicker({
                     onClick={() => showEntrySubmenu(entry)}
                     className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] ${
                       highlighted
-                        ? "bg-content/10 text-content"
+                        ? "bg-selection text-content"
                         : "text-content hover:bg-content/5"
                     }`}
                   >
@@ -658,7 +690,7 @@ export function ModelPicker({
                   }}
                   className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] ${
                     highlighted
-                      ? "bg-content/10 text-content"
+                      ? "bg-selection text-content"
                       : "text-content hover:bg-content/5"
                   }`}
                 >
@@ -725,7 +757,7 @@ export function ModelPicker({
                     onClick={() => pickSetting(submenu.setting, option.value)}
                     className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] ${
                       highlighted
-                        ? "bg-content/10 text-content"
+                        ? "bg-selection text-content"
                         : "text-content hover:bg-content/5"
                     }`}
                   >
@@ -802,7 +834,7 @@ export function ModelPicker({
                   disabled
                     ? "text-content/30"
                     : highlighted
-                      ? "bg-content/10 text-content"
+                      ? "bg-selection text-content"
                       : "text-content hover:bg-content/5"
                 }`}
               >
@@ -816,6 +848,7 @@ export function ModelPicker({
                   </span>
                   <span className="block truncate text-[11px] leading-4 text-content/45">
                     {HARNESS_TITLE[item.harness]}
+                    {item.provider ? ` · ${item.provider.name}` : ""}
                   </span>
                 </span>
                 {selected ? (
@@ -889,8 +922,8 @@ export function EffortPicker({
         onClick={() => (open ? dismiss(true) : openPicker())}
         className={`flex h-6.5 max-w-28 items-center gap-1 rounded-md px-1.5 ${
           open
-            ? "bg-content/10 text-content"
-            : "bg-content/10 text-content hover:bg-content/15"
+            ? "bg-selection text-content"
+            : "bg-selection text-content hover:bg-selection-hover"
         }`}
       >
         <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
@@ -945,7 +978,7 @@ export function EffortPicker({
                 onMouseEnter={() => setActive(index)}
                 onClick={() => pick(option.value)}
                 className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
-                  highlighted ? "bg-content/10" : "hover:bg-content/5"
+                  highlighted ? "bg-selection" : "hover:bg-content/5"
                 }`}
               >
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
@@ -997,6 +1030,7 @@ function ModelFlyout({
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
+  const groups = modelGroups(tab, models);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -1050,7 +1084,7 @@ function ModelFlyout({
         role="tablist"
         aria-label="Providers"
         aria-orientation="vertical"
-        className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-content/10 p-1.5"
+        className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-stroke p-1.5"
       >
         <ProviderTabButton
           title="Favorites"
@@ -1076,7 +1110,7 @@ function ModelFlyout({
       </nav>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <label className="flex shrink-0 items-center gap-2 border-b border-content/10 px-3 py-2.5 text-content/50">
+        <label className="flex shrink-0 items-center gap-2 border-b border-stroke px-3 py-2.5 text-content/50">
           <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
           <input
             ref={searchRef}
@@ -1107,79 +1141,108 @@ function ModelFlyout({
                     : "No matching models"}
             </div>
           ) : (
-            models.map((item, index) => {
-              const selected = item.id === currentId;
-              const highlighted = index === active;
-              const favorited = favorites.includes(item.id);
-              const disabled = !isHarnessAvailable(item.harness);
-              return (
-                <div
-                  key={item.id}
-                  className={`group flex h-8 items-center rounded-lg px-1 ${
-                    disabled
-                      ? "text-content/30"
-                      : highlighted
-                        ? "bg-content/10 text-content"
-                        : "text-content hover:bg-content/5"
-                  }`}
-                  onMouseEnter={() => onActive(index)}
-                >
-                  <button
-                    ref={highlighted ? activeRef : undefined}
-                    type="button"
-                    role="option"
-                    aria-selected={selected}
-                    disabled={disabled}
-                    title={
-                      disabled
-                        ? harnessUnavailableHint(item.harness)
-                        : undefined
-                    }
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => onPick(item)}
-                    className="flex min-w-0 flex-1 items-center gap-2 px-1.5 text-left text-[13px] disabled:cursor-not-allowed"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                  </button>
-                  <button
-                    type="button"
-                    title={
-                      favorited ? "Remove from favorites" : "Add to favorites"
-                    }
-                    aria-label={
-                      favorited ? "Remove from favorites" : "Add to favorites"
-                    }
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleFavorite(item.id);
-                    }}
-                    className={`grid size-6 shrink-0 place-items-center rounded-md transition-opacity ${
-                      favorited
-                        ? "text-content/60"
-                        : "text-content/35 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                    }`}
-                  >
-                    <Star
-                      className="size-3.5"
-                      strokeWidth={1.75}
-                      fill={favorited ? "currentColor" : "none"}
-                    />
-                  </button>
-                  {selected ? (
-                    <span
-                      aria-hidden="true"
-                      className="grid size-6 shrink-0 place-items-center"
+            groups.map((group) => (
+              <div
+                key={group.id}
+                role={group.name ? "group" : undefined}
+                aria-label={group.name}
+              >
+                {group.name ? (
+                  <div className="px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-content/40">
+                    {group.name}
+                  </div>
+                ) : null}
+                {group.models.map(({ item, index }) => {
+                  const selected = item.id === currentId;
+                  const highlighted = index === active;
+                  const favorited = favorites.includes(item.id);
+                  const disabled = !isHarnessAvailable(item.harness);
+                  return (
+                    <div
+                      key={item.id}
+                      className={`group flex h-8 items-center rounded-lg px-1 ${
+                        disabled
+                          ? "text-content/30"
+                          : highlighted
+                            ? "bg-selection text-content"
+                            : "text-content hover:bg-content/5"
+                      }`}
+                      onMouseEnter={() => onActive(index)}
                     >
-                      <Check
-                        className="size-3.5 text-content/55"
-                        strokeWidth={2}
-                      />
-                    </span>
-                  ) : null}
-                </div>
-              );
-            })
+                      <button
+                        ref={highlighted ? activeRef : undefined}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        aria-label={
+                          item.provider
+                            ? `${item.name}, ${item.provider.name}`
+                            : undefined
+                        }
+                        disabled={disabled}
+                        title={
+                          disabled
+                            ? harnessUnavailableHint(item.harness)
+                            : undefined
+                        }
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => onPick(item)}
+                        className="flex min-w-0 flex-1 items-center gap-2 px-1.5 text-left text-[13px] disabled:cursor-not-allowed"
+                      >
+                        <span className="min-w-0 flex-1 truncate">
+                          {item.name}
+                        </span>
+                      </button>
+                      {tab === "favorites" && item.provider ? (
+                        <span className="max-w-24 shrink-0 truncate text-[10px] text-content/40">
+                          {item.provider.name}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        title={
+                          favorited
+                            ? "Remove from favorites"
+                            : "Add to favorites"
+                        }
+                        aria-label={
+                          favorited
+                            ? "Remove from favorites"
+                            : "Add to favorites"
+                        }
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onToggleFavorite(item.id);
+                        }}
+                        className={`grid size-6 shrink-0 place-items-center rounded-md transition-opacity ${
+                          favorited
+                            ? "text-content/60"
+                            : "text-content/35 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                        }`}
+                      >
+                        <Star
+                          className="size-3.5"
+                          strokeWidth={1.75}
+                          fill={favorited ? "currentColor" : "none"}
+                        />
+                      </button>
+                      {selected ? (
+                        <span
+                          aria-hidden="true"
+                          className="grid size-6 shrink-0 place-items-center"
+                        >
+                          <Check
+                            className="size-3.5 text-content/55"
+                            strokeWidth={2}
+                          />
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ))
           )}
         </div>
       </div>
@@ -1210,7 +1273,7 @@ function ProviderTabButton({
       onClick={onSelect}
       className={`grid size-8 shrink-0 place-items-center rounded-md ${
         selected
-          ? "bg-content/12 text-content"
+          ? "bg-selection-strong text-content"
           : "text-content/45 hover:bg-content/8 hover:text-content"
       }`}
     >

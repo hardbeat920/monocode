@@ -15,6 +15,7 @@ import {
   ListFilter,
   LoaderCircle,
   MessageMultiple,
+  PanelLeft,
   Plus,
   RefreshCw,
   Search,
@@ -36,7 +37,8 @@ import { InboxConnectMenu } from "../chrome/InboxConnectMenu";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { ProjectLogoIcon } from "../chrome/ProjectLogoIcon";
 import { ProjectMascot } from "../chrome/ProjectMascot";
-import { OverlayNav } from "../chrome/TitleBar";
+import { Popover } from "../chrome/Popover";
+import { IconButton, OverlayNav } from "../chrome/TitleBar";
 import { WindowControls } from "../chrome/WindowControls";
 import { useDragResize } from "../hooks/useDragResize";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -44,6 +46,7 @@ import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import {
   githubStatus,
   githubPrDiff,
+  githubPrAction,
   githubReviewDecisionLabel,
   githubWorkItem,
   githubWorkItemComment,
@@ -57,12 +60,14 @@ import {
   inboxProjectsForRail,
   listInboxItems,
   peekGithubPrDiff,
+  peekGithubWorkItem,
   peekGithubWorkItemDetails,
   peekGithubWorkItemThread,
   peekInboxList,
   formatRelativeTime,
   inboxPersonAvatarUrl,
   type GithubLabel,
+  type GithubPrAction,
   type GithubPrDiff,
   type GithubWorkItemDetails,
   type GithubWorkItemThread,
@@ -104,6 +109,7 @@ import {
   isInboxEntryUnseen,
   markInboxItemSeen,
   markInboxItemsSeen,
+  rememberInboxItems,
   useInboxSeenTick,
 } from "../lib/inboxSeen";
 import { LIST_PAGE_SIZE, listWindowSize } from "../lib/listWindow";
@@ -162,10 +168,14 @@ const MAX_WIDTH = 420;
 const ACTION = "inline-flex items-center gap-1.5 rounded-md px-3 text-[12px]";
 const ACTION_FILLED = `${ACTION} h-6.5 bg-content text-background-base hover:bg-content/80`;
 const ACTION_OUTLINE = `${ACTION} h-7 border border-content/15 text-content/80 hover:bg-content/5`;
+const ACTION_PANEL_HEADER = `${ACTION} h-6.5 text-content/70 hover:bg-content/10 hover:text-content`;
 const ACTION_GHOST = `${ACTION} h-7 text-content/70 hover:bg-content/10 hover:text-content`;
 const DEFAULT_WIDTH = 280;
+const LINKED_PANEL_MIN_WIDTH = 360;
+const LINKED_PANEL_DEFAULT_WIDTH = 520;
 
 let rememberedWidth = DEFAULT_WIDTH;
+let rememberedLinkedPanelWidth = LINKED_PANEL_DEFAULT_WIDTH;
 
 type InboxProjectOption = {
   path: string;
@@ -256,7 +266,7 @@ function InboxSourceTab({
       onClick={() => onSelect(source)}
       className={`flex h-6 min-w-0 flex-1 items-center justify-center rounded-md px-2 text-[12px] leading-none ${
         selected
-          ? "bg-content/10 text-content"
+          ? "bg-selection text-content"
           : "text-content/50 hover:bg-content/5 hover:text-content"
       }`}
     >
@@ -358,6 +368,7 @@ export function InboxView({
     () => peekInboxForRail(recents, cwd) == null,
   );
   const [revalidating, setRevalidating] = useState(false);
+  const [readStatusError, setReadStatusError] = useState<string | null>(null);
   const [providerErrors, setProviderErrors] = useState<InboxProviderErrors>(
     () => peekInboxForRail(recents, cwd)?.errors ?? {},
   );
@@ -649,6 +660,13 @@ export function InboxView({
   ]);
 
   const inboxSeenTick = useInboxSeenTick();
+  useEffect(() => {
+    rememberInboxItems(items.map((item) => ({
+      key: inboxItemKey(item),
+      updatedAt: item.updatedAt,
+      projectPath: item.projectPath,
+    })));
+  }, [items]);
   const sourceEntries = useMemo(
     () =>
       sourceAvailable
@@ -677,6 +695,15 @@ export function InboxView({
     !!targetSelectionKey && selectedKey === targetSelectionKey;
   const selected =
     selectedByKey ?? (waitingForTarget ? null : visibleItems[0]) ?? null;
+  const updateInboxItem = useCallback((next: InboxItem) => {
+    const key = inboxItemKey(next);
+    setItems((current) =>
+      current.map((entry) => (inboxItemKey(entry) === key ? next : entry)),
+    );
+    setTargetItem((current) =>
+      current && inboxItemKey(current) === key ? next : current,
+    );
+  }, []);
   const shownItemCount = listWindowSize(visibleItems.length, listLimit);
   const shownItems = visibleItems.slice(0, shownItemCount);
   const hasMoreItems = shownItemCount < visibleItems.length;
@@ -750,9 +777,9 @@ export function InboxView({
   const list = (
     <div
       ref={resize.setPaneRef}
-      className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
+      className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
     >
-      <div className="flex h-9 shrink-0 items-center gap-px border-b border-content/10 px-2">
+      <div className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2">
         {visibleSources.length > 0 ? (
           <div
             role="tablist"
@@ -781,7 +808,7 @@ export function InboxView({
             onClick={() => setConnectMenuOpen((open) => !open)}
             className={`flex h-6 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px] leading-none ${
               connectMenuOpen
-                ? "bg-content/10 text-content"
+                ? "bg-selection text-content"
                 : "text-content/40 hover:bg-content/5 hover:text-content"
             }`}
           >
@@ -791,7 +818,7 @@ export function InboxView({
         ) : null}
       </div>
       {noSourcesConnected ? null : (
-        <div className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2">
+        <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
           <div className="relative flex h-7 min-w-0 flex-1 items-center">
             <Search className="pointer-events-none absolute left-2 size-3 shrink-0 opacity-50" />
             <input
@@ -812,7 +839,7 @@ export function InboxView({
             aria-haspopup="menu"
             onClick={onFilterButtonClick}
             className={`grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content ${
-              filterMenu || filtersActive ? "bg-content/10 text-content" : ""
+              filterMenu || filtersActive ? "bg-selection text-content" : ""
             }`}
           >
             <ListFilter className="size-3" strokeWidth={1.75} />
@@ -822,7 +849,11 @@ export function InboxView({
             title="Mark all as read"
             aria-label="Mark all as read"
             disabled={!sourceHasUnseen}
-            onClick={() => markInboxItemsSeen(sourceEntries)}
+            onClick={() => setReadStatusError(
+              markInboxItemsSeen(sourceEntries)
+                ? null
+                : "Could not save read status. Please try again.",
+            )}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
           >
             <CheckCheck className="size-3.5" strokeWidth={1.75} />
@@ -844,6 +875,11 @@ export function InboxView({
           </button>
         </div>
       )}
+      {readStatusError ? (
+        <p role="alert" className="px-3 py-2 text-xs text-red-400">
+          {readStatusError}
+        </p>
+      ) : null}
       <div
         ref={setListScrollRef}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none"
@@ -971,7 +1007,7 @@ export function InboxView({
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
       <div
-        className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
+        className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
         data-tauri-drag-region="deep"
       >
         {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
@@ -1003,6 +1039,7 @@ export function InboxView({
               onDiscuss={() => setDiscussionOpen(true)}
               onStart={onStart}
               onOpenSession={onOpenSession}
+              onItemChange={updateInboxItem}
             />
           </div>
           {discussionOpen && selected ? (
@@ -1023,6 +1060,164 @@ export function InboxView({
   );
 }
 
+export function LinkedWorkItemPanel({
+  target,
+  cwd,
+  recents,
+  visible = true,
+  onClose,
+}: {
+  target: LinkedWorkItem;
+  cwd: string;
+  recents: RecentProject[];
+  visible?: boolean;
+  onClose: () => void;
+}) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const logos = useTabGroupLogos();
+  const projects = useMemo(
+    () => inboxProjectsForRail(recents, cwd),
+    [cwd, recents],
+  );
+  const projectOptions = useMemo(
+    () => inboxProjectOptions(projects, logos),
+    [logos, projects],
+  );
+  const cachedItem = peekGithubWorkItem(
+    target.repo,
+    target.kind,
+    target.number,
+  );
+  const [item, setItem] = useState<InboxItem | null>(() =>
+    cachedItem ? { ...cachedItem, projectPath: cwd, provider: "github" } : null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(cachedItem == null);
+  const resize = useDragResize({
+    min: LINKED_PANEL_MIN_WIDTH,
+    max: () =>
+      Math.max(
+        LINKED_PANEL_MIN_WIDTH,
+        Math.round(
+          (typeof window === "undefined"
+            ? LINKED_PANEL_DEFAULT_WIDTH / 0.65
+            : window.innerWidth) * 0.65,
+        ),
+      ),
+    defaultWidth: LINKED_PANEL_DEFAULT_WIDTH,
+    initial: rememberedLinkedPanelWidth,
+    direction: "left",
+    onCommit: (width) => {
+      rememberedLinkedPanelWidth = width;
+    },
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const cached = peekGithubWorkItem(target.repo, target.kind, target.number);
+    setItem(
+      cached ? { ...cached, projectPath: cwd, provider: "github" } : null,
+    );
+    setError(null);
+    setLoading(cached == null);
+    void githubWorkItem(cwd, target.repo, target.kind, target.number)
+      .then((next) => {
+        if (cancelled) return;
+        setItem({ ...next, projectPath: cwd, provider: "github" });
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd, target.kind, target.number, target.repo]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onCloseRef.current();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [visible]);
+
+  const kindLabel = target.kind === "pr" ? "Pull request" : "Issue";
+  return (
+    <aside
+      ref={resize.setPaneRef}
+      aria-label={`Linked ${kindLabel.toLowerCase()} #${target.number}`}
+      aria-busy={loading}
+      aria-hidden={!visible}
+      inert={!visible || undefined}
+      data-linked-work-item-panel
+      className={`@container/linked relative min-h-0 max-w-full shrink-0 flex-col border-l border-stroke text-content max-[950px]:absolute max-[950px]:inset-y-0 max-[950px]:right-0 max-[950px]:z-30 max-[950px]:shadow-2xl ${
+        visible ? "flex" : "hidden"
+      }`}
+    >
+      <div
+        role="separator"
+        aria-label={`Resize linked ${kindLabel.toLowerCase()} panel`}
+        aria-orientation="vertical"
+        onPointerDown={resize.onPointerDown}
+        onDoubleClick={resize.onDoubleClick}
+        className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none ${
+          resize.dragging ? "bg-content/15" : "hover:bg-content/10"
+        }`}
+      />
+      <div className="absolute top-[5px] right-2 z-30">
+        <IconButton
+          label={`Close ${kindLabel.toLowerCase()} panel`}
+          onClick={onClose}
+        >
+          <PanelLeft className="size-3.5" strokeWidth={1.75} />
+        </IconButton>
+      </div>
+      <div className="min-h-0 min-w-0 flex-1">
+        {item ? (
+          <InboxDetail
+            key={inboxItemKey(item)}
+            item={item}
+            cwd={cwd}
+            projects={projectOptions}
+            revision={0}
+            relatedSessions={[]}
+            mode="panel"
+            onItemChange={setItem}
+          />
+        ) : error ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
+            <CircleX className="size-5 text-rose-400/90" strokeWidth={1.75} />
+            <p role="alert" className="max-w-sm text-[12px] text-content/55">
+              {error}
+            </p>
+            <button
+              type="button"
+              onClick={() => void openUrl(target.url)}
+              className={ACTION_OUTLINE}
+            >
+              <ExternalLink className="size-3.5" strokeWidth={1.75} />
+              Open on GitHub
+            </button>
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-content/40">
+            <LoaderCircle className="size-4 animate-spin" strokeWidth={1.75} />
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function InboxDetailBody({
   item,
   cwd,
@@ -1032,6 +1227,7 @@ function InboxDetailBody({
   onDiscuss,
   onStart,
   onOpenSession,
+  onItemChange,
 }: {
   item: InboxItem | null;
   cwd: string;
@@ -1041,6 +1237,7 @@ function InboxDetailBody({
   onDiscuss?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   onOpenSession?: (sessionId: string) => void | Promise<void>;
+  onItemChange?: (item: InboxItem) => void;
 }) {
   if (!item) {
     return (
@@ -1061,6 +1258,7 @@ function InboxDetailBody({
       onDiscuss={onDiscuss}
       onStart={onStart}
       onOpenSession={onOpenSession}
+      onItemChange={onItemChange}
     />
   );
 }
@@ -1148,7 +1346,7 @@ function InboxCard({
       onClick={onSelect}
       className={`flex w-full flex-col rounded-md border px-2.5 py-2 text-left ${
         active
-          ? "border-transparent bg-content/10 text-content"
+          ? "border-transparent bg-selection text-content"
           : "border-transparent text-content/80 hover:bg-content/5 hover:text-content"
       }`}
     >
@@ -1222,26 +1420,402 @@ function InboxCard({
   );
 }
 
+export function inboxShowsFullFileDiff(item: InboxItem): boolean {
+  return item.provider === "github" && item.kind === "pr";
+}
+
+type GithubPrMergeAction = Extract<
+  GithubPrAction,
+  "merge" | "squash" | "rebase"
+>;
+
+const GITHUB_PR_MERGE_OPTIONS: Array<{
+  action: GithubPrMergeAction;
+  label: string;
+  description: string;
+}> = [
+  {
+    action: "merge",
+    label: "Create a merge commit",
+    description: "Add every commit to the base branch.",
+  },
+  {
+    action: "squash",
+    label: "Squash and merge",
+    description: "Combine the commits into one.",
+  },
+  {
+    action: "rebase",
+    label: "Rebase and merge",
+    description: "Add the commits without a merge commit.",
+  },
+];
+
+const PR_ACTION_PRESS =
+  "transition-transform duration-[120ms] ease-[var(--motion-ease-out)] active:scale-[0.97] motion-reduce:transition-none";
+
+function githubPrActionCopy(
+  action: GithubPrAction,
+  baseRef: string,
+  headRef: string,
+): { title: string; detail: string; confirm: string; progress: string } {
+  const source = headRef ? `“${headRef}”` : "this branch";
+  const destination = baseRef ? `“${baseRef}”` : "the base branch";
+  switch (action) {
+    case "merge":
+      return {
+        title: "Merge this pull request?",
+        detail: `Every commit from ${source} will be added to ${destination} with a merge commit.`,
+        confirm: "Merge pull request",
+        progress: "Merging…",
+      };
+    case "squash":
+      return {
+        title: "Squash and merge?",
+        detail: `The commits from ${source} will be combined into one commit on ${destination}.`,
+        confirm: "Squash and merge",
+        progress: "Merging…",
+      };
+    case "rebase":
+      return {
+        title: "Rebase and merge?",
+        detail: `The commits from ${source} will be rebased individually onto ${destination}.`,
+        confirm: "Rebase and merge",
+        progress: "Merging…",
+      };
+    case "draft":
+      return {
+        title: "Convert to draft?",
+        detail:
+          "Reviewers will see that this pull request is not ready to merge.",
+        confirm: "Convert to draft",
+        progress: "Converting…",
+      };
+    case "ready":
+      return {
+        title: "Mark as ready for review?",
+        detail:
+          "Reviewers will see that this pull request is ready for feedback.",
+        confirm: "Ready for review",
+        progress: "Updating…",
+      };
+    case "close":
+      return {
+        title: "Close this pull request?",
+        detail:
+          "The pull request will close without merging. You can reopen it later.",
+        confirm: "Close pull request",
+        progress: "Closing…",
+      };
+    case "reopen":
+      return {
+        title: "Reopen this pull request?",
+        detail: "The pull request will return to the open state.",
+        confirm: "Reopen pull request",
+        progress: "Reopening…",
+      };
+  }
+}
+
+export function GithubPrActions({
+  item,
+  baseRef,
+  headRef,
+  onChange,
+}: {
+  item: InboxItem;
+  baseRef: string;
+  headRef: string;
+  onChange?: (item: InboxItem) => void;
+}) {
+  const mergeGroup = useRef<HTMLDivElement>(null);
+  const [mergeAction, setMergeAction] = useState<GithubPrMergeAction>("merge");
+  const [mergeMenuOpen, setMergeMenuOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState<{
+    action: GithubPrAction;
+    anchor: HTMLElement;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const state = item.state.trim().toLowerCase();
+  const selectedMerge =
+    GITHUB_PR_MERGE_OPTIONS.find((option) => option.action === mergeAction) ??
+    GITHUB_PR_MERGE_OPTIONS[0];
+
+  const askToRun = (action: GithubPrAction, anchor: HTMLElement) => {
+    setMergeMenuOpen(false);
+    setActionError(null);
+    setNotice(null);
+    setConfirmation({ action, anchor });
+  };
+
+  const dismissConfirmation = () => {
+    if (busy) return;
+    setConfirmation(null);
+    setActionError(null);
+  };
+
+  const runAction = async () => {
+    if (!confirmation || busy) return;
+    const action = confirmation.action;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const next = await githubPrAction(
+        item.projectPath,
+        item.repo,
+        item.number,
+        action,
+      );
+      setConfirmation(null);
+      setNotice(
+        (action === "merge" || action === "squash" || action === "rebase") &&
+          next.state.trim().toLowerCase() !== "merged"
+          ? "Merge queued or auto-merge enabled."
+          : null,
+      );
+      onChange?.({
+        ...item,
+        ...next,
+        projectPath: item.projectPath,
+        provider: "github",
+      });
+    } catch (error: unknown) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmCopy = confirmation
+    ? githubPrActionCopy(confirmation.action, baseRef, headRef)
+    : null;
+  const stateButton = `${ACTION_OUTLINE} ${PR_ACTION_PRESS} disabled:cursor-default disabled:opacity-40`;
+
+  return (
+    <>
+      {state === "open" && !item.draft ? (
+        <div
+          ref={mergeGroup}
+          role="group"
+          aria-label="Merge pull request"
+          className="inline-flex h-7 overflow-hidden rounded-md bg-content text-background-base"
+        >
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(event) => askToRun(mergeAction, event.currentTarget)}
+            className={`inline-flex items-center gap-1.5 px-3 text-[12px] font-medium hover:bg-background-base/10 disabled:cursor-default disabled:opacity-40 ${PR_ACTION_PRESS}`}
+          >
+            <GitMerge className="size-3.5" strokeWidth={1.75} />
+            {selectedMerge?.action === "merge"
+              ? "Merge pull request"
+              : selectedMerge?.label}
+          </button>
+          <button
+            type="button"
+            title="Merge options"
+            aria-label="Merge options"
+            aria-haspopup="menu"
+            aria-expanded={mergeMenuOpen}
+            disabled={busy}
+            onClick={() => setMergeMenuOpen((open) => !open)}
+            className={`grid w-7 place-items-center border-l border-background-base/20 hover:bg-background-base/10 disabled:cursor-default disabled:opacity-40 ${PR_ACTION_PRESS}`}
+          >
+            <ChevronDown className="size-3" strokeWidth={1.75} />
+          </button>
+        </div>
+      ) : null}
+      {state === "open" && item.draft ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(event) => askToRun("ready", event.currentTarget)}
+          className={stateButton}
+        >
+          <GitPullRequest className="size-3.5" strokeWidth={1.75} />
+          Ready for review
+        </button>
+      ) : null}
+      {state === "open" && !item.draft ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(event) => askToRun("draft", event.currentTarget)}
+          className={stateButton}
+        >
+          <GitPullRequestDraft className="size-3.5" strokeWidth={1.75} />
+          Convert to draft
+        </button>
+      ) : null}
+      {state === "open" ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(event) => askToRun("close", event.currentTarget)}
+          className={`${stateButton} hover:text-rose-400`}
+        >
+          <GitPullRequestClosed className="size-3.5" strokeWidth={1.75} />
+          Close pull request
+        </button>
+      ) : null}
+      {state === "closed" ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(event) => askToRun("reopen", event.currentTarget)}
+          className={stateButton}
+        >
+          <GitPullRequest className="size-3.5" strokeWidth={1.75} />
+          Reopen pull request
+        </button>
+      ) : null}
+      {notice ? (
+        <span role="status" className="text-[11px] text-content/55">
+          {notice}
+        </span>
+      ) : null}
+      {mergeMenuOpen && state === "open" && !item.draft ? (
+        <Popover
+          anchor={mergeGroup}
+          gap={4}
+          width={260}
+          autoFocus
+          onDismiss={() => setMergeMenuOpen(false)}
+          role="menu"
+          tabIndex={-1}
+          aria-label="Merge method"
+          className="p-1"
+        >
+          {GITHUB_PR_MERGE_OPTIONS.map((option) => (
+            <button
+              key={option.action}
+              type="button"
+              role="menuitemradio"
+              aria-checked={option.action === mergeAction}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                setMergeAction(option.action);
+                setMergeMenuOpen(false);
+              }}
+              className={`flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-content/8 ${
+                option.action === mergeAction
+                  ? "bg-selection text-content"
+                  : "text-content/75"
+              }`}
+            >
+              <span
+                aria-hidden
+                className={`mt-1 size-1.5 shrink-0 rounded-full ${
+                  option.action === mergeAction
+                    ? "bg-emerald-400"
+                    : "bg-content/20"
+                }`}
+              />
+              <span className="min-w-0">
+                <span className="block text-[12px] font-medium leading-tight">
+                  {option.label}
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-snug text-content/45">
+                  {option.description}
+                </span>
+              </span>
+            </button>
+          ))}
+        </Popover>
+      ) : null}
+      {confirmation && confirmCopy ? (
+        <Popover
+          anchor={confirmation.anchor}
+          gap={5}
+          width={320}
+          autoFocus
+          onDismiss={busy ? undefined : dismissConfirmation}
+          role="dialog"
+          tabIndex={-1}
+          aria-label={confirmCopy.title}
+          className="p-3"
+        >
+          <div className="flex flex-col gap-1">
+            <h2 className="text-[13px] font-medium text-content">
+              {confirmCopy.title}
+            </h2>
+            <p className="text-[12px] leading-snug text-content/55">
+              {confirmCopy.detail}
+            </p>
+          </div>
+          {actionError ? (
+            <p
+              role="alert"
+              className="mt-2 break-words text-[11px] leading-snug text-rose-400"
+            >
+              {actionError}
+            </p>
+          ) : null}
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={dismissConfirmation}
+              className={`h-7 rounded-md px-3 text-[12px] text-content/65 hover:bg-content/8 hover:text-content disabled:cursor-default disabled:opacity-40 ${PR_ACTION_PRESS}`}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void runAction()}
+              className={`inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium disabled:cursor-default disabled:opacity-60 ${
+                confirmation.action === "close"
+                  ? "bg-rose-500/20 text-rose-700 hover:bg-rose-500/30 dark:text-rose-300"
+                  : confirmation.action === "merge" ||
+                      confirmation.action === "squash" ||
+                      confirmation.action === "rebase"
+                    ? "bg-emerald-500/20 text-emerald-700 hover:bg-emerald-500/30 dark:text-emerald-300"
+                    : "bg-content text-background-base hover:bg-content/80"
+              } ${PR_ACTION_PRESS}`}
+            >
+              {busy ? (
+                <LoaderCircle
+                  className="size-3.5 animate-spin"
+                  strokeWidth={1.75}
+                />
+              ) : null}
+              {busy ? confirmCopy.progress : confirmCopy.confirm}
+            </button>
+          </div>
+        </Popover>
+      ) : null}
+    </>
+  );
+}
+
 export function InboxDetail({
   item,
   cwd,
   projects,
   revision,
   relatedSessions,
+  mode = "inbox",
   onDiscuss,
   onStart,
   onOpenSession,
+  onItemChange,
 }: {
   item: InboxItem;
   cwd: string;
   projects: InboxProjectOption[];
   revision: number;
   relatedSessions: readonly SessionSummary[];
+  mode?: "inbox" | "panel";
   onDiscuss?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   onOpenSession?: (sessionId: string) => void | Promise<void>;
+  onItemChange?: (item: InboxItem) => void;
 }) {
   const detailLock = useLockOverscroll<HTMLDivElement>();
+  const panel = mode === "panel";
   const linear = item.provider === "linear";
   const gitlab = item.provider === "gitlab";
   const isPr = !linear && item.kind === "pr";
@@ -1249,6 +1823,16 @@ export function InboxDetail({
     item.provider === "github" && (item.kind === "issue" || item.kind === "pr")
       ? item.kind
       : null;
+  const externalActionLabel =
+    item.kind === "pr"
+      ? gitlab
+        ? "Review on GitLab"
+        : "Review on GitHub"
+      : linear
+        ? "Open in Linear"
+        : gitlab
+          ? "Open on GitLab"
+          : "Open on GitHub";
   const gitlabKind =
     gitlab && (item.kind === "issue" || item.kind === "pr") ? item.kind : null;
   const cached = linear
@@ -1256,24 +1840,26 @@ export function InboxDetail({
     : gitlabKind
       ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
       : githubKind
-        ? peekGithubWorkItemDetails(item.projectPath, githubKind, item.number)
+        ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
         : null;
   const cachedDiff = isPr
     ? gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
-      : peekGithubPrDiff(item.projectPath, item.number)
+      : peekGithubPrDiff(item.repo, item.number)
     : null;
   const cachedThread = linear
     ? peekLinearIssueThread(item.id ?? "")
     : gitlabKind
       ? peekGitlabWorkItemThread(item.repo, gitlabKind, item.number)
       : githubKind
-        ? peekGithubWorkItemThread(item.projectPath, githubKind, item.number)
+        ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
         : null;
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(cached);
   const [loading, setLoading] = useState(cached == null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"summary" | "code">("summary");
+  const [diffMode, setDiffMode] = useState<"hunks" | "full">("hunks");
+  const fullFile = inboxShowsFullFileDiff(item) && diffMode === "full";
   const [prDiff, setPrDiff] = useState<GithubPrDiff | null>(cachedDiff);
   const [diffLoading, setDiffLoading] = useState(isPr && cachedDiff == null);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -1336,7 +1922,7 @@ export function InboxDetail({
       : gitlabKind
         ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
         : githubKind
-          ? peekGithubWorkItemDetails(item.projectPath, githubKind, item.number)
+          ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
           : null;
     if (cachedDetails) {
       setDetails(cachedDetails);
@@ -1354,7 +1940,12 @@ export function InboxDetail({
       : gitlabKind
         ? gitlabWorkItemDetails(item.repo, gitlabKind, item.number)
         : githubKind
-          ? githubWorkItemDetails(item.projectPath, githubKind, item.number)
+          ? githubWorkItemDetails(
+              item.projectPath,
+              item.repo,
+              githubKind,
+              item.number,
+            )
           : Promise.reject(new Error("Unknown inbox item"));
     void pending
       .then((next) => {
@@ -1451,7 +2042,7 @@ export function InboxDetail({
     }
     if (!githubKind) return;
     const cachedThread = peekGithubWorkItemThread(
-      item.projectPath,
+      item.repo,
       githubKind,
       item.number,
     );
@@ -1464,7 +2055,12 @@ export function InboxDetail({
       setThreadError(null);
       setThread(null);
     }
-    void githubWorkItemThread(item.projectPath, githubKind, item.number)
+    void githubWorkItemThread(
+      item.projectPath,
+      item.repo,
+      githubKind,
+      item.number,
+    )
       .then((next) => {
         if (cancelled) return;
         setThread(next);
@@ -1497,7 +2093,7 @@ export function InboxDetail({
     let cancelled = false;
     const cachedDiff = gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
-      : peekGithubPrDiff(item.projectPath, item.number);
+      : peekGithubPrDiff(item.repo, item.number, fullFile);
     if (cachedDiff) {
       setPrDiff(cachedDiff);
       setDiffLoading(false);
@@ -1509,7 +2105,9 @@ export function InboxDetail({
     }
     const pending = gitlab
       ? gitlabMrDiff(item.repo, item.number)
-      : githubPrDiff(item.projectPath, item.number);
+      : githubPrDiff(item.projectPath, item.repo, item.number, {
+          fullContext: fullFile,
+        });
     void pending
       .then((next) => {
         if (cancelled) return;
@@ -1527,7 +2125,16 @@ export function InboxDetail({
     return () => {
       cancelled = true;
     };
-  }, [gitlab, isPr, item.number, item.projectPath, item.repo, revision, tab]);
+  }, [
+    fullFile,
+    gitlab,
+    isPr,
+    item.number,
+    item.projectPath,
+    item.repo,
+    revision,
+    tab,
+  ]);
 
   const postComment = async (body: string) => {
     setPosting(true);
@@ -1561,6 +2168,7 @@ export function InboxDetail({
       if (!githubKind) throw new Error("Unknown inbox item");
       await githubWorkItemComment(
         item.projectPath,
+        item.repo,
         githubKind,
         item.number,
         body,
@@ -1571,6 +2179,7 @@ export function InboxDetail({
         setThread(
           await githubWorkItemThread(
             item.projectPath,
+            item.repo,
             githubKind,
             item.number,
             {
@@ -1589,312 +2198,407 @@ export function InboxDetail({
     }
   };
 
+  const identityRow = (
+    <div
+      data-inbox-detail-identity
+      data-inbox-detail-fixed-header={panel ? "" : undefined}
+      className={`flex min-w-0 items-center gap-2 text-[12px] text-content/50 ${
+        panel ? "h-9 shrink-0 border-b border-stroke px-4 pr-[34px]" : ""
+      }`}
+    >
+      <InboxProviderMark
+        provider={item.provider}
+        className="size-3.5 shrink-0"
+      />
+      <span className="shrink-0">
+        {item.kind === "pr"
+          ? gitlab
+            ? "Merge request"
+            : "Pull request"
+          : "Issue"}
+      </span>
+      <span className="shrink-0 tabular-nums">{inboxItemRef(item)}</span>
+      <span
+        className={`flex shrink-0 items-center gap-1 ${statusMark.className}`}
+      >
+        <statusMark.Icon className="size-3.5" strokeWidth={1.75} />
+        {status}
+      </span>
+      {attentionLabel ? (
+        <span className="shrink-0 text-accent">{attentionLabel}</span>
+      ) : null}
+      {source ? <span className="min-w-0 truncate">{source}</span> : null}
+      {panel ? (
+        <button
+          type="button"
+          title={externalActionLabel}
+          aria-label={externalActionLabel}
+          onClick={() => void openUrl(item.url)}
+          className={`${ACTION_PANEL_HEADER} ml-auto shrink-0`}
+        >
+          <ExternalLink className="size-3.5" strokeWidth={1.75} />
+          <span className="@max-[420px]/linked:hidden">
+            {externalActionLabel}
+          </span>
+        </button>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
+      {panel ? identityRow : null}
       <div
-        data-inbox-detail-header
-        className="relative z-10 shrink-0 border-b border-content/10"
+        ref={panel ? detailLock : undefined}
+        data-inbox-detail-scroll={panel ? "" : undefined}
+        className={
+          panel
+            ? "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none"
+            : "contents"
+        }
       >
         <div
-          className={`mx-auto flex w-full max-w-5xl flex-col gap-2.5 px-8 pt-5 ${
-            isPr ? "" : "pb-5"
+          data-inbox-detail-header
+          className={`relative border-b border-stroke ${
+            panel ? "" : "z-10 shrink-0"
           }`}
         >
-          <header className="flex flex-col gap-2.5">
-            <div className="flex min-w-0 items-center gap-2 text-[12px] text-content/50">
-              <InboxProviderMark
-                provider={item.provider}
-                className="size-3.5 shrink-0"
-              />
-              <span className="shrink-0">
-                {item.kind === "pr"
-                  ? gitlab
-                    ? "Merge request"
-                    : "Pull request"
-                  : "Issue"}
-              </span>
-              <span className="shrink-0 tabular-nums">
-                {inboxItemRef(item)}
-              </span>
-              <span
-                className={`flex shrink-0 items-center gap-1 ${statusMark.className}`}
+          <div
+            className={`mx-auto flex w-full max-w-5xl flex-col ${
+              panel ? "gap-2 px-4 pt-4" : "gap-2.5 px-8 pt-5"
+            } ${isPr ? "" : panel ? "pb-4" : "pb-5"}`}
+          >
+            <header className={`flex flex-col ${panel ? "gap-2" : "gap-2.5"}`}>
+              {panel ? null : identityRow}
+              <h1
+                title={item.title}
+                className={`line-clamp-2 font-semibold leading-tight text-content ${
+                  panel ? "text-[18px]" : "text-[20px]"
+                }`}
               >
-                <statusMark.Icon className="size-3.5" strokeWidth={1.75} />
-                {status}
-              </span>
-              {attentionLabel ? (
-                <span className="shrink-0 text-accent">{attentionLabel}</span>
-              ) : null}
-              {source ? (
-                <span className="min-w-0 truncate">{source}</span>
-              ) : null}
-            </div>
-            <h1
-              title={item.title}
-              className="line-clamp-2 text-[20px] font-semibold leading-tight text-content"
-            >
-              {item.title}
-            </h1>
-            <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[12px] text-content/50">
-              {authorName ? (
-                <InboxPerson
-                  name={authorName}
-                  avatarUrl={inboxPersonAvatarUrl(
-                    item.provider,
-                    authorName,
-                    details?.authorAvatarUrl,
-                  )}
-                  size={16}
-                />
-              ) : null}
-              {showAssignment ? (
-                <>
-                  {authorName ? <span aria-hidden>·</span> : null}
-                  {extraAssignees.length > 0 ? (
-                    <span className="flex min-w-0 items-center gap-2 overflow-hidden">
-                      {extraAssignees.map((person) => (
-                        <InboxPerson
-                          key={person.login}
-                          name={person.login}
-                          avatarUrl={inboxPersonAvatarUrl(
-                            item.provider,
-                            person.login,
-                            person.avatarUrl,
-                          )}
-                          size={16}
-                        />
-                      ))}
-                    </span>
-                  ) : (
-                    <span>Unassigned</span>
-                  )}
-                </>
-              ) : null}
-              {formatRelativeTime(item.updatedAt) ? (
-                <>
-                  <span aria-hidden>·</span>
-                  <span>Updated {formatRelativeTime(item.updatedAt)}</span>
-                </>
-              ) : null}
-              {baseRef && headRef ? (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className="inline-flex min-w-0 items-center gap-1">
-                    <GitCompare
-                      className="size-3 shrink-0"
-                      strokeWidth={1.75}
-                    />
-                    <span className="min-w-0 truncate">
-                      {baseRef} ← {headRef}
-                    </span>
-                  </span>
-                </>
-              ) : null}
-              {reviewLabel ? (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className={reviewClass}>{reviewLabel}</span>
-                </>
-              ) : null}
-            </div>
-            {relatedSessions.length > 0 ? (
-              <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                <span className="mr-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] text-content/45">
-                  <MessageMultiple className="size-3.5" strokeWidth={1.75} />
-                  Related {relatedSessions.length === 1 ? "thread" : "threads"}
-                </span>
-                {relatedSessions.map((session) => {
-                  const title = sessionDisplayTitle(
-                    session.title,
-                    session.harness,
-                  );
-                  return (
-                    <button
-                      key={session.id}
-                      type="button"
-                      title={`Open thread: ${title}`}
-                      onClick={() => void onOpenSession?.(session.id)}
-                      className="inline-flex min-w-0 max-w-64 items-center gap-1 rounded-md bg-content/5 px-2 py-1 text-[11px] text-content/70 hover:bg-content/10 hover:text-content"
+                {item.title}
+              </h1>
+              <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[12px] text-content/50">
+                {authorName ? (
+                  <InboxPerson
+                    name={authorName}
+                    avatarUrl={inboxPersonAvatarUrl(
+                      item.provider,
+                      authorName,
+                      details?.authorAvatarUrl,
+                    )}
+                    size={16}
+                  />
+                ) : null}
+                {showAssignment ? (
+                  <>
+                    {authorName ? <span aria-hidden>·</span> : null}
+                    {extraAssignees.length > 0 ? (
+                      <span className="flex min-w-0 items-center gap-2 overflow-hidden">
+                        {extraAssignees.map((person) => (
+                          <InboxPerson
+                            key={person.login}
+                            name={person.login}
+                            avatarUrl={inboxPersonAvatarUrl(
+                              item.provider,
+                              person.login,
+                              person.avatarUrl,
+                            )}
+                            size={16}
+                          />
+                        ))}
+                      </span>
+                    ) : (
+                      <span>Unassigned</span>
+                    )}
+                  </>
+                ) : null}
+                {item.createdAt && formatRelativeTime(item.createdAt) ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <time
+                      dateTime={item.createdAt}
+                      title={new Date(item.createdAt).toLocaleString()}
                     >
-                      <span className="truncate">{title}</span>
-                      {session.archived ? (
-                        <span className="shrink-0 text-content/40">
-                          Archived
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
+                      Created {formatRelativeTime(item.createdAt)}
+                    </time>
+                  </>
+                ) : null}
+                {formatRelativeTime(item.updatedAt) ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>Updated {formatRelativeTime(item.updatedAt)}</span>
+                  </>
+                ) : null}
+                {baseRef && headRef ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="inline-flex min-w-0 items-center gap-1">
+                      <GitCompare
+                        className="size-3 shrink-0"
+                        strokeWidth={1.75}
+                      />
+                      <span className="min-w-0 truncate">
+                        {baseRef} ← {headRef}
+                      </span>
+                    </span>
+                  </>
+                ) : null}
+                {reviewLabel ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className={reviewClass}>{reviewLabel}</span>
+                  </>
+                ) : null}
               </div>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-2 pt-0.5">
-              {onStart && item.kind !== "pr" ? (
-                <>
+              {!panel && relatedSessions.length > 0 ? (
+                <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                  <span className="mr-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] text-content/45">
+                    <MessageMultiple className="size-3.5" strokeWidth={1.75} />
+                    Related{" "}
+                    {relatedSessions.length === 1 ? "thread" : "threads"}
+                  </span>
+                  {relatedSessions.map((session) => {
+                    const title = sessionDisplayTitle(
+                      session.title,
+                      session.harness,
+                    );
+                    return (
+                      <button
+                        key={session.id}
+                        type="button"
+                        title={`Open thread: ${title}`}
+                        onClick={() => void onOpenSession?.(session.id)}
+                        className="inline-flex min-w-0 max-w-64 items-center gap-1 rounded-md bg-content/5 px-2 py-1 text-[11px] text-content/70 hover:bg-content/10 hover:text-content"
+                      >
+                        <span className="truncate">{title}</span>
+                        {session.archived ? (
+                          <span className="shrink-0 text-content/40">
+                            Archived
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                {onStart && item.kind !== "pr" ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={
+                        starting ||
+                        (chooseStartProject &&
+                          (projects.length === 0 ||
+                            !startProject ||
+                            loading ||
+                            !!error))
+                      }
+                      onClick={() => {
+                        if (starting) return;
+                        setStarting(true);
+                        setStartError(null);
+                        const next = chooseStartProject
+                          ? { ...item, projectPath: startProject }
+                          : item;
+                        void Promise.resolve(
+                          onStart(
+                            next,
+                            linear ? (details?.body ?? "") : undefined,
+                          ),
+                        )
+                          .catch((err: unknown) => {
+                            setStartError(
+                              err instanceof Error ? err.message : String(err),
+                            );
+                          })
+                          .finally(() => setStarting(false));
+                      }}
+                      className={`${ACTION_FILLED} disabled:cursor-default disabled:opacity-40`}
+                    >
+                      {starting ? "Sending..." : "Send to agent"}
+                    </button>
+                    {chooseStartProject ? (
+                      <InboxProjectPicker
+                        projects={projects}
+                        value={startProject}
+                        onChange={setStartProject}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+                {githubKind === "pr" ? (
+                  <GithubPrActions
+                    item={item}
+                    baseRef={baseRef}
+                    headRef={headRef}
+                    onChange={onItemChange}
+                  />
+                ) : null}
+                {onDiscuss ? (
                   <button
                     type="button"
-                    disabled={
-                      starting ||
-                      (chooseStartProject &&
-                        (projects.length === 0 ||
-                          !startProject ||
-                          loading ||
-                          !!error))
-                    }
-                    onClick={() => {
-                      if (starting) return;
-                      setStarting(true);
-                      setStartError(null);
-                      const next = chooseStartProject
-                        ? { ...item, projectPath: startProject }
-                        : item;
-                      void Promise.resolve(
-                        onStart(
-                          next,
-                          linear ? (details?.body ?? "") : undefined,
-                        ),
-                      )
-                        .catch((err: unknown) => {
-                          setStartError(
-                            err instanceof Error ? err.message : String(err),
-                          );
-                        })
-                        .finally(() => setStarting(false));
-                    }}
-                    className={`${ACTION_FILLED} disabled:cursor-default disabled:opacity-40`}
+                    onClick={onDiscuss}
+                    className={ACTION_OUTLINE}
                   >
-                    {starting ? "Sending..." : "Send to agent"}
+                    <MessageSquare className="size-3.5" strokeWidth={1.75} />{" "}
+                    Ask
                   </button>
-                  {chooseStartProject ? (
-                    <InboxProjectPicker
-                      projects={projects}
-                      value={startProject}
-                      onChange={setStartProject}
-                    />
-                  ) : null}
-                </>
+                ) : null}
+                {panel ? null : (
+                  <button
+                    type="button"
+                    onClick={() => void openUrl(item.url)}
+                    className={ACTION_GHOST}
+                  >
+                    <ExternalLink className="size-3.5" strokeWidth={1.75} />
+                    {externalActionLabel}
+                  </button>
+                )}
+              </div>
+              {startError ? (
+                <p className="text-[12px] text-red-400/90">{startError}</p>
               ) : null}
-              <button
-                type="button"
-                onClick={onDiscuss}
-                className={item.kind === "pr" ? ACTION_FILLED : ACTION_OUTLINE}
-              >
-                <MessageSquare className="size-3.5" strokeWidth={1.75} /> Ask
-              </button>
-              <button
-                type="button"
-                onClick={() => void openUrl(item.url)}
-                className={ACTION_GHOST}
-              >
-                <ExternalLink className="size-3.5" strokeWidth={1.75} />
-                {item.kind === "pr"
-                  ? gitlab
-                    ? "Review on GitLab"
-                    : "Review on GitHub"
-                  : linear
-                    ? "Open in Linear"
-                    : gitlab
-                      ? "Open on GitLab"
-                      : "Open on GitHub"}
-              </button>
-            </div>
-            {startError ? (
-              <p className="text-[12px] text-red-400/90">{startError}</p>
+            </header>
+            {isPr ? (
+              <div className="flex h-9 items-stretch gap-4">
+                <div
+                  role="tablist"
+                  aria-label={
+                    gitlab ? "Merge request sections" : "Pull request sections"
+                  }
+                  className="flex items-stretch gap-4"
+                >
+                  <InboxDetailTab
+                    label="Summary"
+                    selected={tab === "summary"}
+                    onSelect={() => setTab("summary")}
+                  />
+                  <InboxDetailTab
+                    label="Code"
+                    selected={tab === "code"}
+                    onSelect={() => setTab("code")}
+                  />
+                </div>
+                {tab === "code" && inboxShowsFullFileDiff(item) ? (
+                  <div
+                    role="group"
+                    aria-label="Diff context"
+                    className="ml-auto flex items-center self-center rounded-md border border-content/10 bg-content/[0.03] p-0.5"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={diffMode === "hunks"}
+                      onClick={() => setDiffMode("hunks")}
+                      className={`rounded px-2.5 py-1 text-[11px] leading-none ${
+                        diffMode === "hunks"
+                          ? "bg-selection text-content"
+                          : "text-content/45 hover:text-content/70"
+                      }`}
+                    >
+                      Hunks
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={diffMode === "full"}
+                      onClick={() => setDiffMode("full")}
+                      className={`rounded px-2.5 py-1 text-[11px] leading-none ${
+                        diffMode === "full"
+                          ? "bg-selection text-content"
+                          : "text-content/45 hover:text-content/70"
+                      }`}
+                    >
+                      Full file
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
-          </header>
-          {isPr ? (
-            <div
-              role="tablist"
-              aria-label={
-                gitlab ? "Merge request sections" : "Pull request sections"
-              }
-              className="flex h-9 items-stretch gap-4"
-            >
-              <InboxDetailTab
-                label="Summary"
-                selected={tab === "summary"}
-                onSelect={() => setTab("summary")}
-              />
-              <InboxDetailTab
-                label="Code"
-                selected={tab === "code"}
-                onSelect={() => setTab("code")}
-              />
-            </div>
-          ) : null}
+          </div>
         </div>
-      </div>
-      <div
-        ref={detailLock}
-        data-inbox-detail-scroll
-        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none"
-      >
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-8 py-5">
-          {item.labels.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {item.labels.map((label) => (
-                <InboxLabel key={label.name} label={label} />
-              ))}
-            </div>
-          ) : null}
-          {isPr && tab === "code" ? (
-            diffLoading ? (
+        <div
+          ref={panel ? undefined : detailLock}
+          data-inbox-detail-scroll={panel ? undefined : ""}
+          className={
+            panel
+              ? "min-w-0"
+              : "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-none"
+          }
+        >
+          <div
+            className={`mx-auto flex w-full max-w-5xl flex-col ${
+              panel ? "gap-4 px-4 py-4" : "gap-5 px-8 py-5"
+            }`}
+          >
+            {item.labels.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {item.labels.map((label) => (
+                  <InboxLabel key={label.name} label={label} />
+                ))}
+              </div>
+            ) : null}
+            {isPr && tab === "code" ? (
+              diffLoading ? (
+                <div className="flex justify-center py-10 text-content/40">
+                  <LoaderCircle
+                    className="size-4 animate-spin"
+                    strokeWidth={1.75}
+                  />
+                </div>
+              ) : diffError ? (
+                <p className="text-[13px] text-content/50">{diffError}</p>
+              ) : prDiff ? (
+                <InboxPrDiff
+                  key={`${item.projectPath}:${item.number}:${revision}:${diffMode}`}
+                  diff={prDiff}
+                  fullFile={fullFile}
+                />
+              ) : (
+                <p className="text-[13px] text-content/45">No file changes</p>
+              )
+            ) : loading ? (
               <div className="flex justify-center py-10 text-content/40">
                 <LoaderCircle
                   className="size-4 animate-spin"
                   strokeWidth={1.75}
                 />
               </div>
-            ) : diffError ? (
-              <p className="text-[13px] text-content/50">{diffError}</p>
-            ) : prDiff ? (
-              <InboxPrDiff
-                key={`${item.projectPath}:${item.number}:${revision}`}
-                diff={prDiff}
-              />
+            ) : error ? (
+              <p className="text-[13px] text-content/50">{error}</p>
             ) : (
-              <p className="text-[13px] text-content/45">No file changes</p>
-            )
-          ) : loading ? (
-            <div className="flex justify-center py-10 text-content/40">
-              <LoaderCircle
-                className="size-4 animate-spin"
-                strokeWidth={1.75}
-              />
-            </div>
-          ) : error ? (
-            <p className="text-[13px] text-content/50">{error}</p>
-          ) : (
-            <>
-              {details?.body.trim() ? (
-                <AgentMarkdown
-                  text={details.body}
+              <>
+                {details?.body.trim() ? (
+                  <AgentMarkdown
+                    text={details.body}
+                    cwd={markdownCwd}
+                    allowRemoteMedia
+                  />
+                ) : (
+                  <p className="text-[13px] text-content/45">No description</p>
+                )}
+                <InboxComments
+                  thread={thread}
+                  loading={threadLoading}
+                  error={threadError}
                   cwd={markdownCwd}
-                  allowRemoteMedia
+                  provider={item.provider}
+                  replyMode={linear ? "parent" : gitlab ? undefined : "thread"}
+                  onReply={setReplyTo}
                 />
-              ) : (
-                <p className="text-[13px] text-content/45">No description</p>
-              )}
-              <InboxComments
-                thread={thread}
-                loading={threadLoading}
-                error={threadError}
-                cwd={markdownCwd}
-                provider={item.provider}
-                replyMode={linear ? "parent" : gitlab ? undefined : "thread"}
-                onReply={setReplyTo}
-              />
-              <InboxCommentForm
-                replyTo={replyTo}
-                posting={posting}
-                error={postError}
-                onCancelReply={() => {
-                  setReplyTo(null);
-                  setPostError(null);
-                }}
-                onSubmit={postComment}
-              />
-            </>
-          )}
+                <InboxCommentForm
+                  replyTo={replyTo}
+                  posting={posting}
+                  error={postError}
+                  onCancelReply={() => {
+                    setReplyTo(null);
+                    setPostError(null);
+                  }}
+                  onSubmit={postComment}
+                />
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -2030,7 +2734,7 @@ function InboxProjectPicker({
                 }}
                 className={`flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-[12px] ${
                   active
-                    ? "bg-content/10 text-content"
+                    ? "bg-selection text-content"
                     : "text-content/80 hover:bg-content/5 hover:text-content"
                 }`}
               >

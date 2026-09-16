@@ -74,6 +74,16 @@ describe("tabCommand", () => {
     ).toBe("new-terminal-tab");
   });
 
+  it("closes all tabs with Cmd+Shift+W or Ctrl+Shift+W", () => {
+    expect(
+      tabCommand(key({ key: "W", metaKey: true, shiftKey: true })),
+    ).toBe("close-all");
+    expect(
+      tabCommand(key({ key: "w", ctrlKey: true, shiftKey: true })),
+    ).toBe("close-all");
+    expect(tabCommand(key({ key: "w", metaKey: true }))).toBe("close");
+  });
+
   it("keeps existing tab chrome bindings", () => {
     expect(tabCommand(key({ key: "t", metaKey: true }))).toBe("new");
     expect(

@@ -20,6 +20,11 @@ export type AgentModel = {
   harness: HarnessId;
   name: string;
   nativeId?: string;
+  /** Upstream provider inside a multi-provider harness such as OpenCode. */
+  provider?: {
+    id: string;
+    name: string;
+  };
   settings?: ModelSetting[];
   /** Context window, when the harness catalog reports one. */
   contextWindow?: number;
@@ -364,6 +369,30 @@ export function mergeModelSettings(
     if (value != null) next[setting.id] = value;
   }
   return next;
+}
+
+const EFFORT_SETTING_IDS = new Set(["effort", "reasoning", "reasoningEffort"]);
+
+/** The select setting that controls reasoning effort for this model, if any. */
+export function modelEffortSetting(
+  model: AgentModel,
+): ModelSetting | undefined {
+  return model.settings?.find(
+    (setting) =>
+      setting.kind === "select" && EFFORT_SETTING_IDS.has(setting.id),
+  );
+}
+
+export function modelEffortLabel(
+  model: AgentModel,
+  values?: Record<string, string>,
+): string | undefined {
+  const setting = modelEffortSetting(model);
+  if (!setting) return undefined;
+  const value = values?.[setting.id] ?? setting.value;
+  return (
+    setting.options.find((option) => option.value === value)?.label ?? value
+  );
 }
 
 /** Last chosen effort/fast/etc., applied to any model that supports those values. */

@@ -1,4 +1,4 @@
-import { stringField } from "./harness/claudeProtocol";
+import { stringField as optionalStringField } from "./harness/claudeProtocol";
 import { asRecord } from "./harness/codexProtocol";
 
 export type RateLimitProvider = "claude" | "codex";
@@ -15,11 +15,29 @@ export type RateLimitWindow = {
   resetsAt: number | null;
 };
 
+export type RateLimitResetCredit = {
+  id: string;
+  resetType: "codexRateLimits" | "unknown";
+  status: "available" | "redeeming" | "redeemed" | "unknown";
+  grantedAt: number | null;
+  expiresAt: number | null;
+  title: string | null;
+  description: string | null;
+};
+
+export type RateLimitResetCredits = {
+  availableCount: number;
+  /** Optional detail rows; the backend can report only the aggregate count. */
+  credits: RateLimitResetCredit[] | null;
+};
+
 export type ProviderRateLimits = {
   provider: RateLimitProvider;
   session: RateLimitWindow | null;
   weekly: RateLimitWindow | null;
   weeklyByModel?: ScopedRateLimitWindow[];
+  /** Codex-only banked rate-limit reset rewards, when supplied by app-server. */
+  resetCredits: RateLimitResetCredits | null;
   updatedAt: number;
   error: string | null;
   status: RateLimitStatus;
@@ -78,6 +96,7 @@ export function idleRateLimits(
     provider,
     session: null,
     weekly: null,
+    resetCredits: null,
     updatedAt: 0,
     error: null,
     status: "idle",
@@ -95,6 +114,7 @@ export function fetchingRateLimits(
     provider,
     session: previous?.session ?? null,
     weekly: previous?.weekly ?? null,
+    resetCredits: previous?.resetCredits ?? null,
     updatedAt: previous?.updatedAt ?? 0,
     error: null,
     status: "fetching",
@@ -109,6 +129,7 @@ export function unavailableRateLimits(
     provider,
     session: null,
     weekly: null,
+    resetCredits: null,
     updatedAt: Date.now(),
     error,
     status: "unavailable",
@@ -132,6 +153,7 @@ export function errorRateLimits(
     provider,
     session: null,
     weekly: null,
+    resetCredits: null,
     updatedAt: Date.now(),
     error,
     status: "error",
@@ -139,7 +161,12 @@ export function errorRateLimits(
 }
 
 function hasRateLimitData(limits: ProviderRateLimits): boolean {
-  return !!(limits.session || limits.weekly || limits.weeklyByModel?.length);
+  return !!(
+    limits.session ||
+    limits.weekly ||
+    limits.weeklyByModel?.length ||
+    limits.resetCredits
+  );
 }
 
 export function clampUsedPercent(value: number): number {
@@ -280,6 +307,7 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
     session: mapUsageWindow(rec.five_hour, SESSION_WINDOW_MINUTES),
     weekly: mapUsageWindow(rec.seven_day, WEEKLY_WINDOW_MINUTES),
     weeklyByModel: scopedWeeklyWindows(rec.limits),
+    resetCredits: null,
     updatedAt: Date.now(),
     error: null,
     status: "ok",
@@ -294,7 +322,8 @@ function scopedWeeklyWindows(raw: unknown): ScopedRateLimitWindow[] {
     if (!rec || rec.kind !== "weekly_scoped") continue;
     const model = asRecord(asRecord(rec.scope)?.model);
     const label =
-      stringField(model, "display_name") ?? stringField(model, "id");
+      optionalStringField(model, "display_name") ??
+      optionalStringField(model, "id");
     const window = mapUsageWindow(
       { utilization: rec.percent, resets_at: rec.resets_at },
       WEEKLY_WINDOW_MINUTES,
@@ -322,9 +351,54 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     provider: "codex",
     session: mapCodexSnapshot(classified.session, SESSION_WINDOW_MINUTES),
     weekly: mapCodexSnapshot(classified.weekly, WEEKLY_WINDOW_MINUTES),
+    resetCredits: parseResetCredits(
+      rec?.rateLimitResetCredits ?? rec?.rate_limit_reset_credits,
+    ),
     updatedAt: Date.now(),
     error: null,
     status: "ok",
+  };
+}
+
+function parseResetCredits(raw: unknown): RateLimitResetCredits | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+  const count =
+    numberField(rec, "availableCount") ?? numberField(rec, "available_count");
+  if (count == null) return null;
+  const rawCredits = rec.credits;
+  const credits = Array.isArray(rawCredits)
+    ? rawCredits
+        .map(parseResetCredit)
+        .filter((credit): credit is RateLimitResetCredit => credit != null)
+    : null;
+  return {
+    availableCount: Math.max(0, Math.floor(count)),
+    credits,
+  };
+}
+
+function parseResetCredit(raw: unknown): RateLimitResetCredit | null {
+  const rec = asRecord(raw);
+  if (!rec || typeof rec.id !== "string" || rec.id.trim() === "") {
+    return null;
+  }
+  const resetType =
+    rec.resetType === "codexRateLimits" ? "codexRateLimits" : "unknown";
+  const status =
+    rec.status === "available" ||
+    rec.status === "redeeming" ||
+    rec.status === "redeemed"
+      ? rec.status
+      : "unknown";
+  return {
+    id: rec.id,
+    resetType,
+    status,
+    grantedAt: parseResetTimestamp(rec.grantedAt ?? rec.granted_at),
+    expiresAt: parseResetTimestamp(rec.expiresAt ?? rec.expires_at),
+    title: stringField(rec, "title"),
+    description: stringField(rec, "description"),
   };
 }
 
@@ -418,4 +492,9 @@ function numberField(rec: Record<string, unknown>, key: string): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+}
+
+function stringField(rec: Record<string, unknown>, key: string): string | null {
+  const value = rec[key];
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }

@@ -64,7 +64,11 @@ vi.mock("./Popover", () => ({
 }));
 
 import { EffortPicker, ModelPicker } from "./ModelPicker";
-import { saveRecentModelChoice } from "../lib/models";
+import {
+  resetHarnessModelOverlays,
+  saveRecentModelChoice,
+  setHarnessModels,
+} from "../lib/models";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -72,6 +76,7 @@ let root: Root;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
+  resetHarnessModelOverlays();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -79,6 +84,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  resetHarnessModelOverlays();
   container.remove();
   vi.unstubAllGlobals();
 });
@@ -107,6 +113,17 @@ function keyDown(target: EventTarget, key: string) {
     target.dispatchEvent(
       new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
     );
+  });
+}
+
+function inputText(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+  act(() => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
 
@@ -202,6 +219,88 @@ describe("model picker", () => {
 
     expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("groups OpenCode models by provider and searches provider names", () => {
+    setHarnessModels("opencode", [
+      {
+        id: "opencode:opencode-go/gpt-5.6-luna",
+        harness: "opencode",
+        name: "GPT-5.6 Luna",
+        nativeId: "opencode-go/gpt-5.6-luna",
+        provider: { id: "opencode-go", name: "OpenCode Go" },
+      },
+      {
+        id: "opencode:openai/gpt-5.6-luna",
+        harness: "opencode",
+        name: "GPT-5.6 Luna",
+        nativeId: "openai/gpt-5.6-luna",
+        provider: { id: "openai", name: "OpenAI" },
+      },
+      {
+        id: "opencode:openai/gpt-5.6-luna-fast",
+        harness: "opencode",
+        name: "GPT-5.6 Luna Fast",
+        nativeId: "openai/gpt-5.6-luna-fast",
+        provider: { id: "openai", name: "OpenAI" },
+      },
+    ]);
+
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "opencode",
+          model: "opencode:opencode-go/gpt-5.6-luna",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    expect(trigger.getAttribute("aria-label")).toBe(
+      "OpenCode, OpenCode Go, GPT-5.6 Luna",
+    );
+    act(() => trigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"))!;
+    hover(modelRow);
+
+    expect(
+      [...container.querySelectorAll('[role="group"]')].map((group) =>
+        group.getAttribute("aria-label"),
+      ),
+    ).toEqual(["OpenCode Go", "OpenAI"]);
+    expect(
+      container.querySelector('[role="group"][aria-label="OpenCode Go"]')
+        ?.textContent,
+    ).toContain("GPT-5.6 Luna");
+    expect(
+      container.querySelector(
+        '[role="option"][aria-label="GPT-5.6 Luna, OpenCode Go"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[role="group"][aria-label="OpenAI"]')
+        ?.textContent,
+    ).toContain("GPT-5.6 Luna Fast");
+
+    inputText(
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="Search models"]',
+      )!,
+      "OpenAI",
+    );
+    expect(
+      [...container.querySelectorAll('[role="group"]')].map((group) =>
+        group.getAttribute("aria-label"),
+      ),
+    ).toEqual(["OpenAI"]);
+    expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
   });
 
   it("can move effort into a dedicated composer control", () => {
@@ -345,13 +444,13 @@ describe("model picker", () => {
     // The composer can retain focus after opening its toolbar menu. Recent
     // model navigation still needs to own these keys in that state.
     trigger.focus();
-    expect(grokModel.className).toContain("bg-content/10");
+    expect(grokModel.className).toContain("bg-selection");
     keyDown(trigger, "ArrowUp");
-    expect(claudeModel.className).toContain("bg-content/10");
+    expect(claudeModel.className).toContain("bg-selection");
     keyDown(trigger, "ArrowDown");
-    expect(grokModel.className).toContain("bg-content/10");
+    expect(grokModel.className).toContain("bg-selection");
     keyDown(trigger, "ArrowDown");
-    expect(cursorModel.className).toContain("bg-content/10");
+    expect(cursorModel.className).toContain("bg-selection");
 
     keyDown(trigger, "Enter");
     expect(onChange).toHaveBeenCalledWith("cursor", "cursor:composer-2.5");

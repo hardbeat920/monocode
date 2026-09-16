@@ -10,8 +10,11 @@ import {
 import { planProjectReturn } from "./projectReturn";
 import type { Session } from "./session";
 import {
+  applyDetachPaneToTab,
+  applyPlaceTabOnPane,
   applyPlaceSessionOnPane,
   filterTabsForProject,
+  findOpenSessionTab,
   findTabForProject,
   planWorkspaceTabClose,
   replaceGroupInTabOrder,
@@ -94,6 +97,20 @@ describe("focusedWorkspaceTabCwd", () => {
       "/alpha",
     );
     expect(focusedWorkspaceTabCwd(mixed, [])).toBeNull();
+  });
+});
+
+describe("findOpenSessionTab", () => {
+  it("does not focus a ghost tab whose session has been parked", () => {
+    const ghost = tab("ghost-tab", "parked-session");
+    expect(findOpenSessionTab([ghost], [], "parked-session")).toBeUndefined();
+    expect(
+      findOpenSessionTab(
+        [ghost],
+        [session("parked-session", "/workspace")],
+        "parked-session",
+      ),
+    ).toBe(ghost);
   });
 });
 
@@ -319,6 +336,160 @@ describe("applyPlaceSessionOnPane", () => {
     expect(next?.tabs.map((entry) => entry.id)).toEqual(["tr1", "tm1"]);
     expect(leafIds(next!.tabs[0]!.layout)).toEqual(["r1", "m1"]);
     expect(next?.tabs[1]?.focusedId).toBe("replacement");
+  });
+});
+
+describe("applyPlaceTabOnPane", () => {
+  const sessions = [
+    session("target", "/projects/monocode"),
+    session("source", "/projects/monocode"),
+    session("other", "/projects/monocode"),
+  ];
+
+  it("turns a separate tab into a split beside the target pane", () => {
+    const next = applyPlaceTabOnPane({
+      tabs: [tab("target-tab", "target"), tab("source-tab", "source")],
+      sessions,
+      sourceTabId: "source-tab",
+      targetId: "target",
+      edge: "left",
+      replaceTarget: false,
+    });
+
+    expect(next?.activeTabId).toBe("target-tab");
+    expect(next?.tabs.map((entry) => entry.id)).toEqual(["target-tab"]);
+    expect(leafIds(next!.tabs[0]!.layout)).toEqual(["source", "target"]);
+    expect(next?.tabs[0]?.focusedId).toBe("source");
+  });
+
+  it("keeps every pane and the nested layout of the dragged tab", () => {
+    const file = newFileTab(
+      "/projects/monocode/readme.md",
+      "/projects/monocode",
+    );
+    const pane = { id: "editor", files: [file], activeFileId: file.id };
+    const source: WorkspaceTab = {
+      ...tab("source-tab", "source"),
+      layout: splitPane(newTab("source").layout, "source", "down", pane.id),
+      focusedId: pane.id,
+      editorPanes: [pane],
+    };
+    const next = applyPlaceTabOnPane({
+      tabs: [tab("target-tab", "target"), source],
+      sessions,
+      sourceTabId: source.id,
+      targetId: "target",
+      edge: "right",
+      replaceTarget: false,
+    });
+
+    expect(leafIds(next!.tabs[0]!.layout)).toEqual([
+      "target",
+      "source",
+      "editor",
+    ]);
+    expect(next?.tabs[0]?.layout).toMatchObject({
+      type: "split",
+      dir: "right",
+      children: [
+        { type: "leaf", id: "target" },
+        { type: "split", dir: "down" },
+      ],
+    });
+    expect(next?.tabs[0]?.editorPanes).toEqual([pane]);
+    expect(next?.focusedId).toBe("editor");
+  });
+
+  it("replaces a blank target without leaving its session mounted", () => {
+    const blank = session("blank", "/projects/monocode");
+    const next = applyPlaceTabOnPane({
+      tabs: [tab("target-tab", "blank"), tab("source-tab", "source")],
+      sessions: [...sessions, blank],
+      sourceTabId: "source-tab",
+      targetId: blank.id,
+      edge: "bottom",
+      replaceTarget: true,
+    });
+
+    expect(leafIds(next!.tabs[0]!.layout)).toEqual(["source"]);
+    expect(next?.sessions.some((entry) => entry.id === blank.id)).toBe(false);
+  });
+});
+
+describe("applyDetachPaneToTab", () => {
+  it("turns one chat pane into a separate tab at the drop position", () => {
+    const source: WorkspaceTab = {
+      ...tab("source-tab", "first"),
+      layout: splitPane(newTab("first").layout, "first", "right", "second"),
+      focusedId: "second",
+    };
+    const target = tab("target-tab", "third");
+    const next = applyDetachPaneToTab({
+      tabs: [source, target],
+      paneId: "second",
+      targetTabId: target.id,
+      position: "before",
+      createTabId: () => "detached-tab",
+    });
+
+    expect(next?.activeTabId).toBe("detached-tab");
+    expect(next?.focusedId).toBe("second");
+    expect(next?.tabs.map((entry) => entry.id)).toEqual([
+      "source-tab",
+      "detached-tab",
+      "target-tab",
+    ]);
+    expect(leafIds(next!.tabs[0]!.layout)).toEqual(["first"]);
+    expect(leafIds(next!.tabs[1]!.layout)).toEqual(["second"]);
+  });
+
+  it.each(["editor", "terminal"] as const)(
+    "moves the complete %s pane metadata into the new tab",
+    (kind) => {
+      const file =
+        kind === "editor"
+          ? newFileTab("/projects/monocode/readme.md", "/projects/monocode")
+          : newTerminalFile("/projects/monocode");
+      const pane = { id: `${kind}-pane`, files: [file], activeFileId: file.id };
+      const source: WorkspaceTab = {
+        ...tab("source-tab", "chat"),
+        layout: splitPane(newTab("chat").layout, "chat", "down", pane.id),
+        editorPanes: kind === "editor" ? [pane] : [],
+        terminalPanes: kind === "terminal" ? [pane] : [],
+      };
+      const next = applyDetachPaneToTab({
+        tabs: [source, tab("target-tab", "other")],
+        paneId: pane.id,
+        targetTabId: "target-tab",
+        position: "after",
+        createTabId: () => "detached-tab",
+      });
+
+      expect(next?.tabs.map((entry) => entry.id)).toEqual([
+        "source-tab",
+        "target-tab",
+        "detached-tab",
+      ]);
+      expect(next?.tabs[0]?.editorPanes).toEqual([]);
+      expect(next?.tabs[0]?.terminalPanes).toEqual([]);
+      expect(next?.tabs[2]?.editorPanes).toEqual(
+        kind === "editor" ? [pane] : [],
+      );
+      expect(next?.tabs[2]?.terminalPanes).toEqual(
+        kind === "terminal" ? [pane] : [],
+      );
+    },
+  );
+
+  it("does not detach the only pane in a tab", () => {
+    expect(
+      applyDetachPaneToTab({
+        tabs: [tab("source-tab", "only")],
+        paneId: "only",
+        targetTabId: "source-tab",
+        position: "after",
+      }),
+    ).toBeNull();
   });
 });
 

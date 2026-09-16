@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSER_RUNNER_DEFAULT,
+  searchSettings,
+  SETTINGS_INDEX,
+  settingsSectionsByGroup,
   COMPOSER_EFFORT_VISIBLE_DEFAULT,
   DIFF_VIEWER_DEFAULT,
   FOLLOW_UP_BEHAVIOR_DEFAULT,
@@ -219,5 +222,76 @@ describe("diff viewer setting", () => {
   it("ignores unknown stored values", () => {
     localStorage.setItem(DIFF_VIEWER_KEY, "split");
     expect(loadDiffViewer()).toBe("editor");
+  });
+});
+
+describe("settings navigation", () => {
+  it("lists every section under exactly one rail group", () => {
+    const groups = settingsSectionsByGroup();
+    expect(groups.map((group) => group.label)).toEqual([
+      "App",
+      "Agents",
+      "Workspace",
+    ]);
+    expect(groups.flatMap((group) => group.sections.map((s) => s.id))).toEqual([
+      "general",
+      "appearance",
+      "keybindings",
+      "chat",
+      "providers",
+      "skills",
+      "inbox",
+      "archive",
+    ]);
+  });
+
+  it("points every indexed setting at a real section", () => {
+    const sections = new Set(
+      settingsSectionsByGroup().flatMap((group) =>
+        group.sections.map((section) => section.id),
+      ),
+    );
+    for (const entry of SETTINGS_INDEX) {
+      expect(sections.has(entry.section), entry.id).toBe(true);
+    }
+  });
+});
+
+describe("settings search", () => {
+  it("returns nothing for an empty query", () => {
+    expect(searchSettings("   ")).toEqual([]);
+  });
+
+  it("ranks label matches over keyword matches, and pages last", () => {
+    expect(searchSettings("glass").map((result) => result.label)).toEqual([
+      "Main pane glass",
+      "Blur radius",
+      "Sidebar opacity",
+      "Appearance",
+    ]);
+  });
+
+  it("finds a setting by a word that is not in its label", () => {
+    expect(searchSettings("steer")[0]).toMatchObject({
+      section: "chat",
+      sectionLabel: "Chat",
+      settingId: "follow-up",
+      label: "Follow-up behavior",
+    });
+  });
+
+  it("returns a whole page with no setting id", () => {
+    expect(searchSettings("skills")).toEqual([
+      {
+        section: "skills",
+        sectionLabel: "Skills",
+        settingId: null,
+        label: "Skills",
+      },
+    ]);
+  });
+
+  it("caps the result list", () => {
+    expect(searchSettings("e", 4)).toHaveLength(4);
   });
 });

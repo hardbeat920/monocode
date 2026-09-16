@@ -13,6 +13,8 @@
 //! Sidebar glass uses a transparent NSWindow plus
 //! `CGSSetWindowBackgroundBlurRadius` (private WindowServer API). That
 //! blurs the desktop behind the window; CSS only tints the sidebar on top.
+//! A nearly transparent AppKit visual-effect view behind the WKWebView keeps
+//! CSS backdrop filters stable during hover repaints and window capture.
 //!
 //! Fully clear `NSColor.clearColor` (alpha 0) plus a native shadow makes
 //! macOS draw a chamfered gap at the corners. Tiny alpha (0.01) keeps the
@@ -30,8 +32,10 @@ use objc2::{
     define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSApplication, NSColor, NSMenu, NSMenuItem, NSRequestUserAttentionType,
-    NSTitlebarSeparatorStyle, NSWindow,
+    NSApplication, NSAutoresizingMaskOptions, NSColor, NSMenu, NSMenuItem,
+    NSRequestUserAttentionType, NSTitlebarSeparatorStyle, NSUserInterfaceItemIdentification,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::NSString;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -48,6 +52,8 @@ const TOP_INSET: f64 = (TAB_BAR_HEIGHT - BUTTON_SIZE) / 2.0;
 pub const BLUR_MIN: u8 = 1;
 pub const BLUR_MAX: u8 = 64;
 pub const BLUR_DEFAULT: u8 = 24;
+
+const GLASS_BACKING_ID: &str = "monocode.webview-glass-backing";
 
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 
@@ -194,6 +200,7 @@ fn set_launch_background(window: &WebviewWindow, r: u8, g: u8, b: u8) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
+    set_glass_backing(&ns_window, false);
     ns_window.setOpaque(true);
     ns_window.setBackgroundColor(Some(&NSColor::colorWithRed_green_blue_alpha(
         r as f64 / 255.0,
@@ -221,12 +228,53 @@ fn prepare_glass(window: &WebviewWindow) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
+    set_glass_backing(&ns_window, true);
     ns_window.setOpaque(false);
     // Fully clear + shadow leaves a jagged gap at the corners.
     ns_window.setBackgroundColor(Some(&NSColor::clearColor().colorWithAlphaComponent(0.01)));
     ns_window.setHasShadow(true);
     ns_window.invalidateShadow();
     ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+}
+
+/// Keep an AppKit backdrop surface below the transparent WKWebView. With only
+/// WindowServer blur, native hover/capture tests expose unfiltered web content
+/// for individual frames. A visual-effect backing prevents that without
+/// removing CSS blur or making the page opaque; an ordinary layer-backed
+/// NSView did not. Keep a nonzero alpha so AppKit retains the effect, but only
+/// tint at 1% so the existing glass appearance and blur-radius control remain.
+fn set_glass_backing(window: &NSWindow, enabled: bool) {
+    let Some(content) = window.contentView() else {
+        return;
+    };
+    let identifier = NSString::from_str(GLASS_BACKING_ID);
+    if let Some(backing) = content
+        .subviews()
+        .iter()
+        .find(|view| view.identifier().as_deref() == Some(&identifier))
+    {
+        backing.setHidden(!enabled);
+        return;
+    }
+    if !enabled {
+        return;
+    }
+
+    let backing = NSVisualEffectView::initWithFrame(
+        NSVisualEffectView::alloc(window.mtm()),
+        content.bounds(),
+    );
+    backing.setIdentifier(Some(&identifier));
+    backing.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+    backing.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    backing.setState(NSVisualEffectState::Active);
+    backing.setAlphaValue(0.01);
+    backing.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    // Wry owns the parent and WKWebView. Insert a sibling below the webview;
+    // do not replace its parent, first responder, or event-handling view.
+    content.addSubview_positioned_relativeTo(&backing, NSWindowOrderingMode::Below, None);
 }
 
 fn apply_blur(window: &WebviewWindow, radius: u8) {

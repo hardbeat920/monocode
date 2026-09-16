@@ -2,8 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "../lib/githubTasks";
+import type { LinkedWorkItem } from "../lib/session";
 import type { SessionSummary } from "../lib/sessionStore";
-import { InboxDetail } from "./InboxView";
+import {
+  InboxDetail,
+  inboxShowsFullFileDiff,
+  LinkedWorkItemPanel,
+} from "./InboxView";
 
 function item(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -41,12 +46,53 @@ function renderDetail(
 }
 
 describe("InboxDetail layout", () => {
+  it("renders a linked item as a standalone, closable side panel", () => {
+    const target: LinkedWorkItem = {
+      kind: "issue",
+      repo: "acme/web",
+      number: 157,
+      url: "https://github.com/acme/web/issues/157",
+    };
+    const markup = renderToStaticMarkup(
+      createElement(LinkedWorkItemPanel, {
+        target,
+        cwd: "/tmp/web",
+        recents: [],
+        onClose: () => {},
+      }),
+    );
+
+    expect(markup).toContain("data-linked-work-item-panel");
+    expect(markup).toContain('aria-label="Linked issue #157"');
+    expect(markup).toContain('aria-label="Resize linked issue panel"');
+    expect(markup).toContain('title="Close issue panel"');
+    expect(markup).not.toContain("data-app-inbox");
+    expect(markup).not.toContain("bg-background-base");
+    expect(markup).not.toContain("backdrop-blur");
+  });
+
+  it("shows when a PR was created alongside its last update", () => {
+    const markup = renderDetail({
+      ...item({ kind: "pr" }),
+      createdAt: "2026-09-01T08:00:00Z",
+    });
+    expect(markup).toContain("Created ");
+    expect(markup).toContain('dateTime="2026-09-01T08:00:00Z"');
+    expect(markup).toContain("Updated ");
+    expect(renderDetail(item({ kind: "pr" }))).not.toContain("Created ");
+  });
+
   it("keeps issue identity and actions outside the body scroller", () => {
     const markup = renderDetail(item({ projectPath: "/tmp/local-project" }));
     const headerIndex = markup.indexOf("data-inbox-detail-header");
     const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
     const header = markup.slice(headerIndex, scrollIndex);
     const body = markup.slice(scrollIndex);
+    const identityIndex = header.indexOf("data-inbox-detail-identity");
+    const identityTag = header.slice(
+      identityIndex,
+      header.indexOf(">", identityIndex),
+    );
 
     expect(headerIndex).toBeGreaterThan(-1);
     expect(scrollIndex).toBeGreaterThan(headerIndex);
@@ -57,6 +103,8 @@ describe("InboxDetail layout", () => {
     expect(header).toContain("Open on GitHub");
     expect(header).toContain("Unassigned");
     expect(header).toContain("whitespace-nowrap");
+    expect(header).not.toContain("data-inbox-detail-fixed-header");
+    expect(identityTag).not.toContain("border-b");
     expect(header).not.toContain("local-project");
     expect(header).not.toContain("overflow-y-auto");
     expect(header).not.toContain("bg-background-base");
@@ -73,6 +121,120 @@ describe("InboxDetail layout", () => {
     expect(header).toContain('aria-label="Pull request sections"');
     expect(header).toContain("Summary");
     expect(header).toContain("Code");
+  });
+
+  it("offers GitHub-style actions for an open pull request", () => {
+    const markup = renderDetail(item({ kind: "pr", state: "open" }));
+
+    expect(markup).toContain("Merge pull request");
+    expect(markup).toContain('aria-label="Merge options"');
+    expect(markup).toContain("Convert to draft");
+    expect(markup).toContain("Close pull request");
+  });
+
+  it("adapts pull request actions to draft and closed states", () => {
+    const draft = renderDetail(
+      item({ kind: "pr", state: "open", draft: true }),
+    );
+    expect(draft).toContain("Ready for review");
+    expect(draft).toContain("Close pull request");
+    expect(draft).not.toContain('aria-label="Merge options"');
+
+    const closed = renderDetail(item({ kind: "pr", state: "closed" }));
+    expect(closed).toContain("Reopen pull request");
+    expect(closed).not.toContain("Convert to draft");
+
+    const merged = renderDetail(item({ kind: "pr", state: "merged" }));
+    expect(merged).not.toContain("Reopen pull request");
+    expect(merged).not.toContain('aria-label="Merge options"');
+  });
+
+  it("does not show GitHub lifecycle actions for GitLab merge requests", () => {
+    const markup = renderDetail(
+      item({
+        kind: "pr",
+        provider: "gitlab",
+        repo: "acme/platform",
+        url: "https://gitlab.example.com/acme/platform/-/merge_requests/12",
+      }),
+    );
+
+    expect(markup).not.toContain('aria-label="Merge options"');
+    expect(markup).not.toContain("Convert to draft");
+    expect(markup).not.toContain("Close pull request");
+  });
+
+  it("pins the linked-item identity above the panel scroller", () => {
+    const markup = renderToStaticMarkup(
+      createElement(InboxDetail, {
+        item: item({ kind: "pr" }),
+        cwd: "/tmp/web",
+        projects: [],
+        revision: 0,
+        mode: "panel",
+        relatedSessions: [
+          {
+            id: "session-1",
+            cwd: "/tmp/web",
+            harness: "codex",
+            model: "gpt-5",
+            runtimeMode: "supervised",
+            title: "Review MonoCode Pull Request",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      }),
+    );
+    const fixedIndex = markup.indexOf("data-inbox-detail-fixed-header");
+    const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
+    const headerIndex = markup.indexOf("data-inbox-detail-header");
+    const fixedHeader = markup.slice(fixedIndex, scrollIndex);
+    const reviewIndex = markup.lastIndexOf("Review on GitHub");
+    const reviewButton = markup.slice(
+      markup.lastIndexOf("<button", reviewIndex),
+      reviewIndex,
+    );
+
+    expect(fixedIndex).toBeGreaterThan(-1);
+    expect(scrollIndex).toBeGreaterThan(fixedIndex);
+    expect(scrollIndex).toBeGreaterThan(-1);
+    expect(headerIndex).toBeGreaterThan(scrollIndex);
+    expect(markup.match(/data-inbox-detail-scroll/g)).toHaveLength(1);
+    expect(fixedHeader).toContain("Pull request");
+    expect(fixedHeader).toContain("#157");
+    expect(fixedHeader).toContain("Review on GitHub");
+    expect(reviewIndex).toBeLessThan(scrollIndex);
+    expect(markup.match(/aria-label="Review on GitHub"/g)).toHaveLength(1);
+    expect(markup.slice(scrollIndex)).not.toContain("Review on GitHub");
+    expect(fixedHeader).toContain("h-9");
+    expect(fixedHeader).toContain("px-4");
+    expect(fixedHeader).not.toContain("h-10");
+    expect(fixedHeader).not.toContain("px-5");
+    expect(fixedHeader).toContain("border-b");
+    expect(fixedHeader).not.toContain("A long inbox issue");
+    expect(markup).toContain("text-[18px]");
+    expect(markup).not.toContain("Related thread");
+    expect(markup).not.toContain("Review MonoCode Pull Request");
+    expect(reviewButton).toContain("h-6.5");
+    expect(reviewButton).toContain("hover:bg-content/10");
+    expect(reviewButton).not.toContain("h-6.5 bg-content/10");
+    expect(fixedHeader).toContain("pr-[34px]");
+  });
+
+  it("offers full-file diffs only for GitHub pull requests", () => {
+    expect(inboxShowsFullFileDiff(item({ kind: "pr" }))).toBe(true);
+    expect(
+      inboxShowsFullFileDiff(
+        item({
+          kind: "pr",
+          provider: "gitlab",
+          repo: "acme/platform",
+          url: "https://gitlab.example.com/acme/platform/-/merge_requests/12",
+        }),
+      ),
+    ).toBe(false);
+    expect(inboxShowsFullFileDiff(item({ kind: "issue" }))).toBe(false);
   });
 
   it("keeps the Linear project picker beside the pinned send action", () => {

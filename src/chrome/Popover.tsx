@@ -9,6 +9,7 @@ import {
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
+import { GlassBackdrop } from "./GlassBackdrop";
 import { LAYER } from "../lib/layers";
 import {
   placePopover,
@@ -56,8 +57,6 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
 
 const FRAME =
   "isolate overflow-hidden rounded-xl border border-content/10 shadow-xl";
-const BACKDROP =
-  "popover-backdrop pointer-events-none absolute inset-0 z-0 backdrop-blur-xl [backface-visibility:hidden] [transform:translateZ(0)]";
 
 /** Which corner the open animation grows from, so it reads as anchored. */
 function origin(side: PopoverSide, align: PopoverAlign): string {
@@ -254,7 +253,7 @@ export function Popover({
       style={{ ...placed, zIndex: layer }}
       className={bare ? undefined : FRAME}
     >
-      {bare ? null : <div aria-hidden="true" className={BACKDROP} />}
+      {bare ? null : <GlassBackdrop />}
       <div
         {...rest}
         ref={(el) => {

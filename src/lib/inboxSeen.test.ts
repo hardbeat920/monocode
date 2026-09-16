@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  clearKnownInboxItems,
+  knownInboxEntries,
+  rememberInboxItems,
   inboxHasUnseenItems,
   inboxSeenIsSeeded,
   isInboxEntryUnseen,
@@ -42,7 +45,10 @@ function entry(
 }
 
 describe("inbox seen items", () => {
-  beforeEach(mockLocalStorage);
+  beforeEach(() => {
+    mockLocalStorage();
+    clearKnownInboxItems();
+  });
   afterEach(() => {
     localStorage.removeItem(KEY);
   });
@@ -119,6 +125,23 @@ describe("inbox seen items", () => {
     expect(inboxHasUnseenItems(next)).toBe(true);
     markInboxItemsSeen(next);
     expect(inboxHasUnseenItems(next)).toBe(false);
+  });
+
+  it("marks an unchanged item read from either local checkout after an older snapshot arrives", () => {
+    const older = entry("github:acme/web:issue:4", "2026-08-27T10:00:00Z");
+    const current = { ...older, updatedAt: "2026-08-27T11:00:00Z" };
+    seedInboxSeenIfNeeded([older]);
+    rememberInboxItems([{ ...current, projectPath: "/repos/old" }]);
+    rememberInboxItems([{ ...current, projectPath: "/repos/new" }]);
+    rememberInboxItems([{ ...older, projectPath: "/repos/old" }]);
+
+    for (const path of ["/repos/old", "/repos/new"]) {
+      expect(knownInboxEntries([path])).toEqual([expect.objectContaining(current)]);
+    }
+    expect(knownInboxEntries(["/repos/unrelated"])).toEqual([]);
+    markInboxItemsSeen(knownInboxEntries(["/repos/new"]));
+    expect(isInboxEntryUnseen(current)).toBe(false);
+    expect(isInboxEntryUnseen({ ...current, updatedAt: "2026-08-27T12:00:00Z" })).toBe(true);
   });
 
   it("treats a new item with an unreadable timestamp as unseen", () => {

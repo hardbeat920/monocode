@@ -229,7 +229,7 @@ function QuestionFields({
                   onClick={() => onSelect(option.id)}
                   className={`flex w-full items-start gap-2 rounded-md border px-2 py-1.5 text-left ${
                     active
-                      ? "border-content/35 bg-content/10"
+                      ? "border-content/35 bg-selection"
                       : "border-content/10 hover:bg-content/5"
                   }`}
                 >

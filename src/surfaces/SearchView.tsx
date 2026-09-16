@@ -325,7 +325,7 @@ export function SearchView({
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
       <div
-        className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
+        className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
         data-tauri-drag-region="deep"
       >
         {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
@@ -358,7 +358,7 @@ export function SearchView({
         {!IS_MAC ? <WindowControls /> : null}
       </div>
 
-      <div className="flex h-9 shrink-0 items-center gap-px border-b border-content/10 px-3">
+      <div className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-3">
         {SCOPES.map((item) => {
           const selected = scope === item.id;
           return (
@@ -369,7 +369,7 @@ export function SearchView({
               onClick={() => setScope(item.id)}
               className={`rounded-md px-2 py-1 text-[12px] ${
                 selected
-                  ? "bg-content/10 text-content"
+                  ? "bg-selection text-content"
                   : "text-content/50 hover:bg-content/5 hover:text-content"
               }`}
             >
@@ -508,7 +508,7 @@ function ResultList({
             onMouseEnter={() => onRowEnter(index)}
             onClick={() => onOpen(hit)}
             className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-none ${
-              highlighted ? "bg-content/10 text-content" : "text-content"
+              highlighted ? "bg-selection text-content" : "text-content"
             }`}
           >
             <span className="grid size-4 shrink-0 place-items-center">

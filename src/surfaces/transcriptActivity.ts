@@ -9,6 +9,7 @@ import {
 } from "../lib/harness/preview";
 import { leafName } from "../lib/fileName";
 import { displayPath } from "../lib/paths";
+import { INTERRUPT_MESSAGE } from "../lib/inFlight";
 import type { Block } from "../lib/session";
 import { allModels } from "../lib/models";
 
@@ -108,11 +109,38 @@ export function isHiddenTool(block: Block): boolean {
 }
 
 /**
+ * A system row the reader must not miss — an error, or the note that a quit
+ * cut the turn short. Sessions persisted before the `notice` tag still carry
+ * the interrupt's literal text, so it is recognised by content as well.
+ */
+export function isNoticeBlock(block: Block): boolean {
+  return (
+    block.role === "system" &&
+    (!!block.notice || block.text === INTERRUPT_MESSAGE)
+  );
+}
+
+/** Turn chrome the trail absorbed: a status ping, not a notice. */
+function isStatusStep(block: Block): boolean {
+  return block.role === "system" && !block.interjection;
+}
+
+/**
  * Foldable work: tool calls, thinking, and edits. An edit still awaiting
  * approval stays out — you cannot judge a diff you cannot see.
+ *
+ * A status row ("Advisor reviewed this turn") is turn chrome, not transcript
+ * text: it joins the work around it instead of splitting the group. An
+ * interjection stays a standalone block while the turn is live — the reader
+ * should see it land — and joins the trail only once the turn settles, which
+ * is the caller's branch to make. A notice — an error, an interruption — is
+ * neither work nor chrome, so it keeps its own row live and settled alike.
  */
 export function isActivityBlock(block: Block): boolean {
   if (isThinkingBlock(block)) return true;
+  if (block.role === "system") {
+    return !block.interjection && !isNoticeBlock(block);
+  }
   if (block.role !== "tool" && block.role !== "approval") return false;
   if (
     isEditTool(
@@ -173,11 +201,20 @@ export function editVerb(label: string): string {
   return "Edit";
 }
 
-/** User turns, with handoff dividers sitting on their own row. */
-export function groupTurns(blocks: Block[]): Block[][] {
+/**
+ * User turns, with handoff dividers sitting on their own row. `managed` is for
+ * a worker's own transcript, where the app-written turns are the orchestrator
+ * talking to it — the whole prompt side of that conversation, and the only
+ * thing its replies are answering.
+ */
+export function groupTurns(blocks: Block[], managed = false): Block[][] {
   const turns: Block[][] = [];
   let current: Block[] = [];
   for (const block of blocks) {
+    // A turn the app wrote to keep an orchestration moving is not a user
+    // message. Dropping it here folds the reply into the turn above, so a
+    // supervised run reads as one conversation.
+    if (block.internal && !managed) continue;
     if (block.role === "handoff") {
       if (current.length > 0) turns.push(current);
       turns.push([block]);
@@ -198,8 +235,17 @@ export function groupTurns(blocks: Block[]): Block[][] {
  * Fold contiguous runs of tool calls and reasoning into activity groups.
  * Assistant prose always stands on its own, including progress updates between
  * groups, so the readable transcript never disappears into activity chrome.
+ *
+ * A settled turn puts every kind of process into the trail: interjections and
+ * delegated runs, which keep their own rows while the turn is live so the
+ * reader sees them land and knows where to watch, fold in once there is
+ * nothing left to watch — what remains is the prompt, the work, and the answer.
  */
-export function groupTurnItems(blocks: Block[]): TurnItem[] {
+export function groupTurnItems(
+  blocks: Block[],
+  options?: { settled?: boolean },
+): TurnItem[] {
+  const settled = options?.settled ?? false;
   const visible = withoutSupersededInitialThinking(
     blocks.filter(
       (block) => !isIgnoredTurnBlock(block) && !isHiddenTool(block),
@@ -214,17 +260,23 @@ export function groupTurnItems(blocks: Block[]): TurnItem[] {
     activity = [];
   };
   visible.forEach((block) => {
-    // Delegated runs never join the work trail. Their row is the one thing in
-    // a turn that has to stay put: it is where the user goes to watch, and the
-    // trail around it folds and re-folds while the subagent is still going.
-    if (isSubagentBlock(block)) {
+    // Delegated runs keep their own rows while the turn is live. Their row is
+    // the one thing in a turn that has to stay put: it is where the user goes
+    // to watch, and the trail around it folds and re-folds while the subagent
+    // is still going. Once the turn settles they are work like any other call
+    // — except one that died: a failed run keeps its own row under the fold,
+    // where it opens itself onto the reason rather than folding out of sight.
+    if (
+      isSubagentBlock(block) &&
+      (!settled || toolCallState(block) === "rejected")
+    ) {
       flush();
       const last = items[items.length - 1];
       if (last?.type === "subagents") last.blocks.push(block);
       else items.push({ type: "subagents", blocks: [block] });
       return;
     }
-    if (isActivityBlock(block)) {
+    if (isActivityBlock(block) || (settled && !!block.interjection)) {
       activity.push(block);
       return;
     }
@@ -445,10 +497,13 @@ export function toolCategory(block: Block): ActivityWorkKind {
   const kind = block.tool?.kind;
   const title = block.text || block.tool?.title;
   const preview = block.tool?.preview;
+  const label = toolCallLabel(block);
   if (isAgentTool(kind, title)) return "agent";
   if (isEditTool(kind, title, preview)) return "edit";
   if (isSearchTool(kind, title, preview)) return "research";
   if (isReadTool(kind, title, preview)) return "research";
+  if (/^(?:Edit|Write)\s+\S/i.test(label)) return "edit";
+  if (/^(?:Read|List|Find)\b/i.test(label)) return "research";
   if (isExecuteTool(kind, title)) return "run";
   return "other";
 }
@@ -497,6 +552,14 @@ export function buildActivityPhases(blocks: Block[]): ActivityPhase[] {
       }
       continue;
     }
+    // Status rows and interjections are steps, never headlines: a note the
+    // turn absorbed joins the group it landed in rather than titling one.
+    if (block.role === "system") {
+      if (!current) current = open("note");
+      current.steps.push(block);
+      if (!current.id) current.id = block.id;
+      continue;
+    }
     if (!current) current = open(toolCategory(block));
     current.steps.push(block);
     // Count each call once. Rescanning the growing group here makes long
@@ -542,6 +605,8 @@ type PhaseTally = {
   runs: number;
   agents: number;
   others: number;
+  /** Interjections the turn absorbed. Status rows count nowhere. */
+  notes: number;
 };
 
 function tallySteps(steps: Block[]): PhaseTally {
@@ -553,13 +618,23 @@ function tallySteps(steps: Block[]): PhaseTally {
     runs: 0,
     agents: 0,
     others: 0,
+    notes: 0,
   };
   for (const block of steps) {
+    if (block.interjection) {
+      tally.notes += 1;
+      continue;
+    }
     if (!isToolBlock(block)) continue;
     const kind = block.tool?.kind;
     const title = block.text || block.tool?.title;
     const preview = block.tool?.preview;
-    const target = preview?.path ?? preview?.fileName ?? block.id;
+    const label = toolCallLabel(block);
+    const labelledTarget = label.match(
+      /^(?:Read|List|Edit|Write)\s+(.+)$/i,
+    )?.[1];
+    const target =
+      preview?.path ?? preview?.fileName ?? labelledTarget ?? block.id;
     const category = toolCategory(block);
     if (!tally.order.includes(category)) tally.order.push(category);
     switch (category) {
@@ -573,8 +648,9 @@ function tallySteps(steps: Block[]): PhaseTally {
         tally.runs += 1;
         break;
       case "research":
-        if (isSearchTool(kind, title, preview)) tally.searches += 1;
-        else tally.reads.add(target);
+        if (/^Find\b/i.test(label) || isSearchTool(kind, title, preview)) {
+          tally.searches += 1;
+        } else tally.reads.add(target);
         break;
       default:
         tally.others += 1;
@@ -639,20 +715,38 @@ function currentWorkKind(steps: Block[]): ActivityWorkKind | undefined {
  * What a run of work adds up to, one clause per kind: "Read 3 files · Edited 2
  * files · Ran a command". While the run is live, the clause for the call in
  * flight is present tense, so "Running 2 commands" settles to "Ran 2 commands"
- * when it folds.
+ * when it folds. Interjections the turn absorbed ride along as a trailing
+ * "N notes" clause; a group holding nothing but notes is just that clause.
  */
 export function workSummaryLine(steps: Block[], live = false): string {
   const tally = tallySteps(steps);
-  if (tally.order.length === 0) return live ? "Thinking" : "Thought";
+  const notes =
+    tally.notes === 1
+      ? "1 note"
+      : tally.notes > 1
+        ? `${tally.notes} notes`
+        : "";
+  if (tally.order.length === 0) {
+    if (notes) return notes;
+    if (steps.length > 0 && steps.every(isStatusStep)) return "Status update";
+    return live ? "Thinking" : "Thought";
+  }
   const running = live ? currentWorkKind(steps) : undefined;
-  return tally.order
-    .map((kind) => workSummary(kind, tally, kind === running))
-    .join(" · ");
+  return [
+    ...tally.order.map((kind) => workSummary(kind, tally, kind === running)),
+    ...(notes ? [notes] : []),
+  ].join(" · ");
 }
 
 /** The icon a run of work answers to: whatever it did most of. */
 export function workKind(steps: Block[]): ActivityPhaseKind {
-  return dominantWorkKind(steps) ?? "think";
+  return (
+    dominantWorkKind(steps) ??
+    (steps.some((block) => block.interjection) ||
+    (steps.length > 0 && steps.every(isStatusStep))
+      ? "note"
+      : "think")
+  );
 }
 
 /**
@@ -682,6 +776,12 @@ export type WorkFold = { start: number; end: number };
  * approval. As the turn streams, each new paragraph folds the work and running
  * commentary before it, leaving the final answer visible. A late approval can
  * reopen that boundary so its controls remain available.
+ *
+ * Persisted interjections (system blocks with interjection chrome) are neither
+ * prose nor work, so while the turn is live they stand on their own and stop
+ * the fold: an answer the harness already showed never folds behind an
+ * interjection that arrived after it. A settled turn groups them into the
+ * trail itself, where the fold simply spans them.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;

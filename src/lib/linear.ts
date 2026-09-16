@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { recordInboxSelfActivity } from "./inboxSelfActivity";
 
 export type LinearTeam = {
   id: string;
@@ -165,6 +166,7 @@ export async function linearIssueComment(
   });
   threadById.delete(id);
   threadInflight.delete(id);
+  recordInboxSelfActivity({ provider: "linear", kind: "linear", id });
   return url;
 }
 
