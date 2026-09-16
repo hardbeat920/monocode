@@ -178,7 +178,7 @@ export const MODELS: AgentModel[] = [
   {
     id: "kimi:kimi-code/kimi-for-coding",
     harness: "kimi",
-    name: "Kimi for Coding",
+    name: "K2.8 Preview",
     nativeId: "kimi-code/kimi-for-coding",
   },
   {
