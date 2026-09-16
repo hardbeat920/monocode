@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../lib/session";
 import { formatReminderTime } from "../lib/sessionReminders";
 import { Sidebar } from "./Sidebar";
+import { loadSessionFolders } from "../lib/sessionFolders";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../hooks/useProjectDiffStats", () => ({
@@ -130,6 +131,131 @@ afterEach(() => {
   localStorage.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("sidebar session multiselection", () => {
+  it("clears the previous session focus when Ctrl-clicking another session", () => {
+    props.sessions = [1, 2].map((n) => ({
+      ...props.sessions[0],
+      id: `session-${n}`,
+      updatedAt: 100 - n,
+    }));
+    props.onDeleteSession = vi.fn();
+    act(() => render());
+    const firstTitle = card().querySelector<HTMLElement>("[data-session-select]")!;
+    const secondTitle = container.querySelector<HTMLElement>(
+      '[data-session-select="session-2"]',
+    )!;
+    act(() => firstTitle.focus());
+    act(() => {
+      secondTitle.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        ctrlKey: true,
+      }));
+      secondTitle.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        ctrlKey: true,
+      }));
+    });
+    expect(card().getAttribute("data-session-selected")).toBeNull();
+    expect(secondTitle.closest("[data-session-card]")!.getAttribute(
+      "data-session-selected",
+    )).toBe("true");
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+    pressKey(document.activeElement as HTMLElement, "Delete");
+    expect(props.onDeleteSession).not.toHaveBeenCalled();
+    pressKey(document.activeElement as HTMLElement, "F2");
+    expect(renameInput()).toBeNull();
+    expect(document.activeElement).not.toBe(firstTitle);
+    expect(document.activeElement).not.toBe(secondTitle);
+  });
+
+  it("keeps Shift-click selection free of title focus while preserving keyboard focus", () => {
+    act(() => render());
+    const title = card().querySelector<HTMLElement>("[data-session-select]")!;
+    act(() => title.focus());
+    expect(document.activeElement).toBe(title);
+    const mouseDown = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      shiftKey: true,
+      button: 0,
+    });
+    act(() => title.dispatchEvent(mouseDown));
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(document.activeElement).not.toBe(title);
+    act(() => title.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      shiftKey: true,
+    })));
+    expect(card().getAttribute("data-session-selected")).toBe("true");
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+    act(() => title.focus());
+    expect(document.activeElement).toBe(title);
+    pressKey(title, "Enter");
+    expect(props.onSelectSession).toHaveBeenCalledWith("session-1");
+  });
+
+  it("selects the visible range from a plain click with Shift-click", () => {
+    props.sessions = [1, 2, 3, 4].map((n) => ({
+      ...props.sessions[0],
+      id: `session-${n}`,
+      updatedAt: 100 - n,
+    }));
+    act(() => render());
+    act(() => card().click());
+    act(() =>
+      container
+        .querySelector('[data-session-card="session-3"]')!
+        .dispatchEvent(
+          new MouseEvent("click", { bubbles: true, shiftKey: true }),
+        ),
+    );
+    expect(
+      Array.from(
+        container.querySelectorAll('[data-session-selected="true"]'),
+        (el) => el.getAttribute("data-session-card"),
+      ),
+    ).toEqual(["session-1", "session-2", "session-3"]);
+    expect(props.onSelectSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a folder containing the Ctrl-clicked sessions without opening them", () => {
+    props.sessions = [1, 2, 3].map((n) => ({
+      ...props.sessions[0],
+      id: `session-${n}`,
+      updatedAt: 100 - n,
+    }));
+    act(() => render());
+    for (const id of ["session-1", "session-3"]) {
+      act(() =>
+        container
+          .querySelector(`[data-session-card="${id}"]`)!
+          .dispatchEvent(
+            new MouseEvent("click", { bubbles: true, ctrlKey: true }),
+          ),
+      );
+    }
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+    expect(
+      container.querySelectorAll('[data-session-selected="true"]'),
+    ).toHaveLength(2);
+    act(() =>
+      card().dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    const newFolder = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "New folder")!;
+    act(() => newFolder.click());
+    expect(loadSessionFolders(props.cwd)[0].sessionIds).toEqual([
+      "session-1",
+      "session-3",
+    ]);
+  });
 });
 
 describe("sidebar session rename", () => {

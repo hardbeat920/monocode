@@ -358,6 +358,7 @@ function SidebarComponent({
     () => new Set(),
   );
   const contextSelectionRef = useRef(false);
+  const selectionAnchorRef = useRef<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<{
     x: number;
     y: number;
@@ -487,10 +488,14 @@ function SidebarComponent({
   }, [onSessionNavigationOrder, sessionNavigationKey]);
   useEffect(() => {
     if (tab !== "sessions") {
+      selectionAnchorRef.current = null;
       setSelectedSessionIds(new Set());
       return;
     }
     const available = new Set(sessionNavigationIds);
+    if (selectionAnchorRef.current && !available.has(selectionAnchorRef.current)) {
+      selectionAnchorRef.current = null;
+    }
     setSelectedSessionIds((current) =>
       pruneSessionSelection(current, available),
     );
@@ -631,6 +636,7 @@ function SidebarComponent({
   useEffect(() => {
     if (selectedSessionIds.size === 0) return;
     const clear = () => {
+      selectionAnchorRef.current = null;
       contextSelectionRef.current = false;
       setSelectedSessionIds(new Set());
       setSessionMenu(null);
@@ -969,11 +975,32 @@ function SidebarComponent({
 
   const onSessionCardSelect = (
     sessionId: string,
-    event: { shiftKey: boolean },
+    event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
   ) => {
+    contextSelectionRef.current = false;
+    setSessionMenu(null);
     if (event.shiftKey) {
-      contextSelectionRef.current = false;
-      setSessionMenu(null);
+      const visibleIds = sessionListNavigationIds(
+        sessionListEntries,
+        searchNarrowed,
+      );
+      const anchor = selectionAnchorRef.current ?? activeSessionId ?? sessionId;
+      const start = visibleIds.indexOf(anchor);
+      const end = visibleIds.indexOf(sessionId);
+      const range =
+        start < 0 || end < 0
+          ? [sessionId]
+          : visibleIds.slice(Math.min(start, end), Math.max(start, end) + 1);
+      selectionAnchorRef.current = start < 0 ? sessionId : anchor;
+      setSelectedSessionIds(
+        (current) => new Set(
+          event.ctrlKey || event.metaKey ? [...current, ...range] : range,
+        ),
+      );
+      return;
+    }
+    selectionAnchorRef.current = sessionId;
+    if (event.ctrlKey || event.metaKey) {
       setSelectedSessionIds((current) =>
         toggleSessionSelection(current, sessionId),
       );
@@ -2096,7 +2123,10 @@ function SessionCard({
   dropTarget?: boolean;
   compact?: boolean;
   now: number;
-  onSelect: (sessionId: string, event: { shiftKey: boolean }) => void;
+  onSelect: (
+    sessionId: string,
+    event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
+  ) => void;
   onOpenWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onPrefetch?: (sessionId: string) => void;
   onPlaceOnPane?: (sessionId: string, targetId: string, edge: PaneEdge) => void;
@@ -2206,7 +2236,7 @@ function SessionCard({
     if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onSelect(session.id, { shiftKey: e.shiftKey });
+      onSelect(session.id, e);
       return;
     }
     if (e.key === "F2" && onRename) {
@@ -2407,6 +2437,16 @@ function SessionCard({
           aria-pressed={isSelected}
           data-session-select={session.id}
           onKeyDown={onKeyDown}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return;
+            // Shift-click can trigger :focus-visible. Mouse selection should
+            // only highlight the card; Tab can still focus this button.
+            event.preventDefault();
+            // Clear prior focus too, so shortcuts cannot target another card.
+            const focused = event.currentTarget.ownerDocument.activeElement;
+            if (focused instanceof HTMLElement) focused.blur();
+          }}
+          className="rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
         >
           {compact && !orchestrationExpanded ? null : (
             <span className="relative flex items-center gap-2">
@@ -2507,7 +2547,7 @@ function SessionCard({
                   onClick={(event) => {
                     event.stopPropagation();
                     setOrchestrationTooltipOpen(false);
-                    onSelect(session.id, { shiftKey: event.shiftKey });
+                    onSelect(session.id, event);
                   }}
                   className="grid size-5 shrink-0 place-items-center rounded-md text-fuchsia-300/65 hover:bg-content/10 hover:text-fuchsia-200/90"
                 >
