@@ -1309,7 +1309,7 @@ describe("codex live turn sequence", () => {
     expect(settled).toBe(true);
   });
 
-  it("rolls back the last turn before resending an edited prompt", async () => {
+  it("reverts the last turn through the paginated thread API", async () => {
     const { turn } = await startTurn("codex-live");
     notify("turn/completed", {
       turn: { id: "turn_1", status: "completed" },
@@ -1325,13 +1325,16 @@ describe("codex live turn sequence", () => {
       onEvent: () => undefined,
     });
     await waitFor(
-      () => parse().some((message) => message.method === "thread/rollback"),
-      "thread/rollback",
+      () => parse().some((message) => message.method === "thread/revert"),
+      "thread/revert",
     );
     const request = parse().find(
-      (message) => message.method === "thread/rollback",
+      (message) => message.method === "thread/revert",
     )!;
-    expect(request.params).toEqual({ threadId: "thr_1", numTurns: 1 });
+    expect(request.params).toEqual({
+      threadId: "thr_1",
+      beforeTurnId: "turn_1",
+    });
     reply(request.id as number, {});
     expect(await rollback).toEqual({ submitted: false });
   });

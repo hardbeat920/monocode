@@ -77,6 +77,7 @@ type Live = {
   cancelled: boolean;
   muteUpdates: boolean;
   activeTurnId: string | null;
+  lastCompletedTurnId: string | null;
   turns: Promise<void>;
   /** Resolves when the current turn completes (or is cancelled). */
   turnDone: (() => void) | null;
@@ -186,11 +187,30 @@ export async function rewindCodexLastTurn(
     throw new Error("Stop the current turn before editing the last message");
   }
 
-  await live.rpc.request("thread/rollback", {
+  const beforeTurnId = await lastCompletedTurnId(live);
+  await live.rpc.request("thread/revert", {
     threadId: live.threadId,
-    numTurns: 1,
+    beforeTurnId,
   });
   return { submitted: false };
+}
+
+async function lastCompletedTurnId(live: Live): Promise<string> {
+  if (live.lastCompletedTurnId) return live.lastCompletedTurnId;
+
+  const page = await live.rpc.request<{ data?: unknown[] }>(
+    "thread/turns/list",
+    {
+      threadId: live.threadId,
+      limit: 1,
+      sortDirection: "desc",
+    },
+  );
+  const latest = asRecord(page.data?.[0]);
+  const turnId = stringField(latest, "id");
+  if (!turnId) throw new Error("Codex did not expose the last turn id");
+  live.lastCompletedTurnId = turnId;
+  return turnId;
 }
 
 export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
@@ -489,6 +509,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       cancelled: false,
       muteUpdates: didResume,
       activeTurnId: null,
+      lastCompletedTurnId: null,
       turns: Promise.resolve(),
       turnDone: null,
       turnFailed: null,
@@ -669,6 +690,9 @@ function handleNotification(live: Live, method: string, params: unknown): void {
     live.activeTurnId = mapped.activeTurnId;
   }
   if (mapped.turnCompleted) {
+    const completedTurnId =
+      stringField(asRecord(rec?.turn), "id") ?? live.activeTurnId;
+    if (completedTurnId) live.lastCompletedTurnId = completedTurnId;
     finishActiveTurn(live);
   }
 }
