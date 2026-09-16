@@ -47,7 +47,7 @@ export function AgentTabView({
           managed
         />
       </div>
-      <footer className="flex shrink-0 items-center gap-1.5 border-t border-content/10 px-3 py-1.5 font-sans text-[11px] text-content/45">
+      <footer className="flex shrink-0 items-center gap-1.5 border-t border-stroke px-3 py-1.5 font-sans text-[11px] text-content/45">
         <HarnessIcon harness={session.harness} className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate" title={title}>
           {model} · {HARNESS_TITLE[session.harness]}

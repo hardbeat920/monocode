@@ -220,15 +220,14 @@ pub fn control_enable(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if inner
+    if let Some((id, _)) = inner
         .active
         .iter()
-        .any(|(id, turn)| id != &session_id && paths_overlap(&turn.cwd, &cwd))
+        .find(|(id, turn)| *id != &session_id && paths_overlap(&turn.cwd, &cwd))
     {
-        return Err(
-            "Another session is running in this checkout. Stop it before enabling orchestration."
-                .into(),
-        );
+        return Err(format!(
+            "Another session ({id}) is running in this checkout. Stop it before enabling orchestration."
+        ));
     }
     if inner.grants.values().any(|g| {
         paths_overlap(&g.cwd, &cwd) && (g.session != session_id || g.window != window.label())
@@ -458,7 +457,10 @@ pub fn control_scopes(cwd: String, files: Vec<String>) -> Result<Vec<String>, St
     }
     files
         .iter()
-        .map(|file| resolve_scope(&crate::fs::expand_home(&cwd), file))
+        .map(|file| {
+            resolve_scope(&crate::fs::expand_home(&cwd), file)
+                .map_err(|error| format!("Invalid write scope \"{file}\": {error}"))
+        })
         .collect()
 }
 
@@ -533,6 +535,12 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         assert!(resolve_scope(&root, "../escape").is_err());
         assert!(resolve_scope(&root, "/absolute").is_err());
+        assert!(control_scopes(
+            root.to_string_lossy().into_owned(),
+            vec!["../escape".into()]
+        )
+        .unwrap_err()
+        .contains("Invalid write scope \"../escape\""));
         assert!(resolve_scope(&root, "src/new.ts")
             .unwrap()
             .ends_with("/src/new.ts"));

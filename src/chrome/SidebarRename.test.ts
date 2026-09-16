@@ -163,7 +163,7 @@ describe("sidebar session rename", () => {
 
   it("allows F2 to rename a working conversation", () => {
     act(() => render());
-    pressKey(card().querySelector('[data-session-select]')!, "F2");
+    pressKey(card().querySelector("[data-session-select]")!, "F2");
     const input = renameInput();
     expect(input.disabled).toBe(false);
     expect(document.activeElement === input).toBe(true);
@@ -431,10 +431,23 @@ describe("sidebar orchestration card", () => {
       expect(container.querySelectorAll("[data-session-card]")).toHaveLength(2);
       expect(card().dataset.orchestrationCard).toBe("true");
       // The lead card carries the sidebar's ordinary active treatment.
-      expect(card().className).toContain("bg-content/10");
+      expect(card().className).toContain("bg-selection");
       // The lead names its own model, like every agent row beneath it.
       expect(card().textContent).toContain("Claude Sonnet 5");
       expect(card().textContent).not.toContain("Orchestrator");
+      const orchestrationIcon = card().querySelector<HTMLButtonElement>(
+        "[data-orchestration-icon]",
+      );
+      expect(orchestrationIcon).not.toBeNull();
+      expect(orchestrationIcon?.tagName).toBe("BUTTON");
+      expect(orchestrationIcon?.classList.contains("opacity-0")).toBe(false);
+      expect(
+        orchestrationIcon?.querySelector("svg")?.classList.contains("size-3"),
+      ).toBe(true);
+      expect(orchestrationIcon?.hasAttribute("title")).toBe(false);
+      expect(
+        card().querySelector("[data-session-select] [data-orchestration-icon]"),
+      ).toBeNull();
       expect(card().textContent).toContain("3 agents");
       expect(card().textContent).toContain("1/3 done");
       expect(card().textContent).toContain("Build settings");
@@ -449,8 +462,12 @@ describe("sidebar orchestration card", () => {
       expect(card().querySelectorAll('[aria-label^="Archive "]')).toHaveLength(
         1,
       );
+      expect(card().lastElementChild?.contains(orchestrationIcon)).toBe(true);
       expect(card().lastElementChild?.contains(pullRequest)).toBe(true);
       expect(archive.nextElementSibling).toBe(pullRequest);
+      expect(orchestrationIcon?.parentElement?.lastElementChild).toBe(
+        orchestrationIcon,
+      );
       act(() => archive.click());
       expect(props.onArchiveSession).toHaveBeenCalledExactlyOnceWith(
         lead.id,
@@ -483,7 +500,7 @@ describe("sidebar orchestration card", () => {
         ).toBeNull();
       }
       const selection = card().querySelector<HTMLElement>(
-        '[data-session-select]',
+        "[data-session-select]",
       )!;
       act(() => selection.focus());
       expect(document.activeElement).toBe(selection);
@@ -513,6 +530,99 @@ describe("sidebar orchestration card", () => {
     },
   );
 
+  it("matches an ordinary card at rest and expands when opened or working", () => {
+    props.sessions = [
+      {
+        ...props.sessions[0],
+        orchestration: {
+          status: "active",
+          tasks: [
+            {
+              sessionId: "worker",
+              title: "Review changes",
+              harness: "codex",
+              model: "codex:test",
+              status: "completed",
+            },
+          ],
+        },
+      },
+    ];
+    props.activeSessionId = "another-session";
+    props.busySessionIds = new Set();
+    act(() => render());
+
+    expect(card().classList.contains("py-2")).toBe(true);
+    expect(card().classList.contains("py-2.5")).toBe(false);
+    expect(card().classList.contains("bg-content/5")).toBe(false);
+    expect(card().querySelector("[data-orchestration-icon]")).not.toBeNull();
+    expect(card().querySelector("[data-orchestration-agent]")).toBeNull();
+
+    props.activeSessionId = "session-1";
+    act(() => render());
+    expect(card().classList.contains("pt-2")).toBe(true);
+    expect(card().classList.contains("pb-2.5")).toBe(true);
+    expect(card().classList.contains("py-2.5")).toBe(false);
+    expect(
+      card().querySelector('[data-orchestration-agent="worker"]'),
+    ).not.toBeNull();
+
+    props.activeSessionId = "another-session";
+    props.busySessionIds = new Set(["session-1"]);
+    act(() => render());
+    expect(card().classList.contains("pt-2")).toBe(true);
+    expect(card().classList.contains("pb-2.5")).toBe(true);
+    expect(
+      card().querySelector('[data-orchestration-agent="worker"]'),
+    ).not.toBeNull();
+  });
+
+  it("opens the custom subagent tooltip immediately on hover", () => {
+    props.busySessionIds = new Set();
+    props.sessions[0].orchestration = {
+      status: "active",
+      live: true,
+      tasks: [
+        {
+          sessionId: "worker-a",
+          title: "Review changes",
+          harness: "codex",
+          model: "codex:test",
+          status: "running",
+        },
+        {
+          sessionId: "worker-b",
+          title: "Check types",
+          harness: "claude",
+          model: "claude:test",
+          status: "completed",
+        },
+      ],
+    };
+    act(() => render());
+    const trigger = card().querySelector<HTMLButtonElement>(
+      "[data-orchestration-icon]",
+    )!;
+
+    act(() =>
+      trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+    );
+
+    const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]')!;
+    expect(tooltip).not.toBeNull();
+    expect(tooltip.classList.contains("popover-open")).toBe(true);
+    expect(tooltip.textContent).toContain("1/2 done");
+    expect(tooltip.textContent).toContain("Review changes");
+    expect(tooltip.textContent).toContain("Working");
+    expect(tooltip.textContent).toContain("Check types");
+    expect(tooltip.textContent).toContain("Done");
+
+    act(() =>
+      trigger.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })),
+    );
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  });
+
   it("renders saved worker details without claiming the workers are running", () => {
     props.busySessionIds = new Set();
     props.sessions[0].orchestration = {
@@ -536,6 +646,30 @@ describe("sidebar orchestration card", () => {
 });
 
 describe("sidebar linked work item updates", () => {
+  it("opens a linked item beside the session that owns it", () => {
+    props.busySessionIds = new Set();
+    props.onOpenInboxItem = vi.fn();
+    const linkedWorkItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+    };
+    props.sessions = [{ ...props.sessions[0], linkedWorkItem }];
+    act(() => render());
+
+    const pullRequest = card().querySelector<HTMLButtonElement>(
+      '[aria-label="Open PR #42"]',
+    )!;
+    expect(pullRequest.title).toContain("beside this session");
+    act(() => pullRequest.click());
+    expect(props.onOpenInboxItem).toHaveBeenCalledExactlyOnceWith(
+      linkedWorkItem,
+      "session-1",
+    );
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+  });
+
   it("uses the footer for the linked issue or PR instead of a second harness icon", () => {
     props.busySessionIds = new Set();
     props.onArchiveSession = vi.fn();
@@ -689,5 +823,58 @@ describe("sidebar session reminders", () => {
         '[data-pinned-sessions] [data-session-card="session-1"]',
       ),
     ).toBe(card());
+  });
+});
+
+describe("sidebar working agents", () => {
+  it("shows the original working widget when the project rail is collapsed", () => {
+    props.projectRailOpen = false;
+    props.onSelectAgent = vi.fn();
+    props.liveAgents = [
+      {
+        id: "agent-a",
+        cwd: "/workspace/alpha",
+        title: "Build settings",
+        harness: "codex",
+        activity: "Editing Settings.tsx",
+        startedAt: Date.now() - 10_000,
+        needsApproval: false,
+        done: false,
+      },
+      {
+        id: "agent-b",
+        cwd: "/workspace/beta",
+        title: "Review tests",
+        harness: "claude",
+        activity: "Running tests",
+        startedAt: Date.now() - 5_000,
+        needsApproval: false,
+        done: false,
+      },
+    ];
+    act(() => render());
+
+    const preview = container.querySelector<HTMLElement>(
+      '[data-live-agents-preview="full"]',
+    )!;
+    expect(preview.querySelectorAll("[data-live-agent-card]")).toHaveLength(2);
+    expect(
+      preview.querySelector('[data-live-agent-card="agent-a"]')!.textContent,
+    ).toContain("alpha");
+    expect(
+      preview.querySelector('[data-live-agent-card="agent-b"]')!.textContent,
+    ).toContain("beta");
+    expect(preview.querySelector(".mascot-active")).not.toBeNull();
+
+    act(() =>
+      preview
+        .querySelector<HTMLButtonElement>('[data-live-agent-card="agent-b"]')!
+        .click(),
+    );
+    expect(props.onSelectAgent).toHaveBeenCalledExactlyOnceWith("agent-b");
+
+    props.projectRailOpen = true;
+    act(() => render());
+    expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
   });
 });

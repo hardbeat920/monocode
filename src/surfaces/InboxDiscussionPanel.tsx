@@ -62,7 +62,7 @@ export function InboxDiscussionPanel({
     <aside
       ref={resize.setPaneRef}
       aria-label={`Ask about ${inboxItemRef(item)}`}
-      className="relative flex min-h-0 shrink-0 flex-col border-l border-content/10 max-[1100px]:absolute max-[1100px]:inset-0 max-[1100px]:z-10 max-[1100px]:!w-auto"
+      className="relative flex min-h-0 shrink-0 flex-col border-l border-stroke max-[1100px]:absolute max-[1100px]:inset-0 max-[1100px]:z-10 max-[1100px]:!w-auto"
     >
       <div
         role="separator"
@@ -72,7 +72,7 @@ export function InboxDiscussionPanel({
         onDoubleClick={resize.onDoubleClick}
         className="absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize max-[1100px]:hidden"
       />
-      <header className="flex h-11 shrink-0 items-center border-b border-content/10 px-3">
+      <header className="flex h-11 shrink-0 items-center border-b border-stroke px-3">
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
           Ask · {inboxItemRef(item)}
         </span>

@@ -183,7 +183,7 @@ type Props = {
     text: string,
     attachments: Attachment[],
     options?: ComposerTurnOptions,
-  ) => void;
+  ) => boolean | void;
   onStop?: () => void;
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
@@ -219,8 +219,8 @@ function ToolButton({
       onClick={onClick}
       className={`grid size-6.5 shrink-0 place-items-center rounded-md ${
         active
-          ? "bg-content/20 text-content"
-          : "bg-content/10 text-content/50 hover:bg-content/15 hover:text-content"
+          ? "bg-selection-emphasis text-content"
+          : "bg-selection text-content/50 hover:bg-selection-hover hover:text-content"
       } disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content/50`}
     >
       {children}
@@ -283,7 +283,7 @@ function MessageQueue({
         data-message-queue-card
       >
         {paused ? (
-          <div className="flex h-7 items-center gap-2 border-b border-content/10 text-[12px]">
+          <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
             <Pause className="size-3.5" />
             <span className="min-w-0 flex-1 truncate">
               Queue paused because you interrupted
@@ -307,7 +307,7 @@ function MessageQueue({
             <div
               key={message.id}
               className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-content/10" : ""
+                index > 0 ? "border-t border-stroke" : ""
               }`}
             >
               <ListEnd className="size-3.5 shrink-0" />
@@ -1009,7 +1009,7 @@ export function Composer({
       : composeInboxMessage(inboxCard, command.text);
     const files = attachments;
     if (!text && files.length === 0 && !noteCard && !handoffCard) return;
-    onSubmit(text, files, {
+    const accepted = onSubmit(text, files, {
       intent:
         planSelected || command.planning
           ? "plan"
@@ -1017,6 +1017,10 @@ export function Composer({
             ? "orchestrate"
             : "default",
     });
+    // The app can reject a turn before it is recorded (for example while an
+    // orchestration is paused). Keep the user's text, files and selected mode
+    // intact so resolving the blocker never destroys their work.
+    if (accepted === false) return;
     if (!ref.current) return;
     ref.current.value = "";
     ref.current.style.height = "auto";
@@ -1710,7 +1714,7 @@ export function ComposerAction({
         title="Send"
         aria-label="Send"
         onClick={onSend}
-        className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
+        className="composer-send primary-action grid size-6.5 place-items-center rounded-md"
       >
         <ArrowUp className="size-3.5" strokeWidth={2.25} />
       </button>
@@ -1734,7 +1738,7 @@ export function ComposerAction({
       aria-label="Send"
       disabled={!hasValue}
       onClick={onSend}
-      className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90 disabled:cursor-default disabled:bg-white/30 disabled:text-black/40 disabled:hover:bg-white/30"
+      className="composer-send primary-action grid size-6.5 place-items-center rounded-md disabled:cursor-default"
     >
       <ArrowUp className="size-3.5" strokeWidth={2.25} />
     </button>

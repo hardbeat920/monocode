@@ -139,7 +139,7 @@ export function GitChangesPanel({
       ref={paneRef}
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
     >
-      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-content/10 px-3">
+      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-stroke px-3">
         <span className="text-[12px] font-medium text-content">Changes</span>
         {index?.branch ? (
           <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-content/50">
@@ -197,7 +197,7 @@ export function GitChangesPanel({
       />
       ) : null}
       <div
-        className={`shrink-0 overflow-hidden border-t border-content/10 ${
+        className={`shrink-0 overflow-hidden border-t border-stroke ${
           graphExpanded ? "min-h-0" : "h-7"
         }`}
         style={graphExpanded ? { height: graphHeight } : undefined}
@@ -471,7 +471,7 @@ function ChangedFiles({
     <aside
       className={`flex min-h-0 min-w-0 flex-col ${fill ? "flex-1" : "shrink-0"}`}
     >
-      <div className="shrink-0 border-b border-content/10 p-2">
+      <div className="shrink-0 border-b border-stroke p-2">
         <div className="relative">
           <textarea
             ref={messageRef}
@@ -1178,7 +1178,7 @@ function ChangeRow({
           tree ? "" : "pl-2"
         } ${
           active
-            ? "bg-content/10 text-content"
+            ? "bg-selection text-content"
             : "text-content hover:bg-content/5"
         }`}
       >

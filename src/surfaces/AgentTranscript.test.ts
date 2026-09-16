@@ -86,6 +86,7 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("Open example.com");
     expect(markup).toContain("user-link-preview-title");
     expect(markup).toContain("user-message-with-link");
+    expect(markup).toContain("user-message-bubble");
     expect(markup).not.toContain("text-ellipsis");
   });
 

@@ -16,12 +16,14 @@ import {
   Pin,
   Plus,
   Search,
+  Share,
   Settings,
   StickyNote,
 } from "./icons";
 import {
   memo,
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -34,17 +36,13 @@ import {
   saveSidebarTabOrder,
   type SidebarTabId,
 } from "../lib/appearance";
-import {
-  basename,
-  type GitFileDiffKind,
-  type GitHistoryCommit,
-} from "../lib/fs";
+import { type GitFileDiffKind, type GitHistoryCommit } from "../lib/fs";
 import { IS_MAC, MOD } from "../lib/platform";
 import { resolveModel } from "../lib/models";
-import { prettyParent, projectKey, projectName } from "../lib/paths";
 import type { OpenFileFn } from "../lib/search";
 import { sessionDisplayTitle } from "../lib/session";
 import { nextUnseenFinishedSessions } from "../lib/sessionDone";
+import { orchestrationTaskLabel } from "../lib/orchestrationSummary";
 import {
   orderedSessionActionIds,
   pruneSessionSelection,
@@ -103,28 +101,16 @@ import type { LiveAgent } from "../lib/liveAgents";
 import type { SessionSummary } from "../lib/sessionStore";
 import type { SettingsSectionId } from "../lib/settings";
 import type { InstalledUpdate } from "../lib/updateNotice";
-import {
-  loadTabGroupColors,
-  loadTabGroupCustomColors,
-  loadTabGroupLabels,
-  loadTabGroupMascots,
-  resolveTabGroupColor,
-  resolveTabGroupLabel,
-  resolveTabGroupLogo,
-  resolveTabGroupMascot,
-  TAB_GROUP_COLORS,
-} from "../lib/tabGroups";
+import { TAB_GROUP_COLORS } from "../lib/tabGroups";
 import { useDragResize } from "../hooks/useDragResize";
 import { useGitFileStatuses } from "../hooks/useGitFileStatuses";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { useSortable } from "../hooks/useSortable";
 import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
-import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import { normalizeHex } from "../lib/colorUtils";
 import {
   looksLikeProject,
-  projectRailItems,
   sameProjectPath,
   type RecentProject,
 } from "../lib/recents";
@@ -132,14 +118,14 @@ import { ColorPickerPopover, ColorSwatchRow } from "./ColorPickerPopover";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTree } from "./FileTree";
 import { HarnessIcon } from "./HarnessIcon";
+import { LiveAgentsPreview } from "./LiveAgentsPreview";
 import { ProjectRail } from "./ProjectRail";
 import { RailAction } from "./RailAction";
 import { TerminalSpinner } from "./TerminalSpinner";
 import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
 import { ProjectSearch } from "./ProjectSearch";
-import { ProjectLogoIcon } from "./ProjectLogoIcon";
-import { ProjectMascot } from "./ProjectMascot";
 import { Popover } from "./Popover";
+import { SearchableProjectPicker } from "./SearchableProjectPicker";
 import { SessionFiltersMenu } from "./SessionFiltersMenu";
 import { sessionReminderPresets } from "./sessionReminderPresets";
 import {
@@ -246,7 +232,7 @@ type Props = {
   onNewTerminal?: () => void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
-  onOpenInboxItem?: (item: LinkedWorkItem) => void;
+  onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onOpenNotes?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
@@ -262,6 +248,7 @@ type Props = {
   settingsOpen?: boolean;
   settingsSection?: SettingsSectionId;
   onOpenSettings?: () => void;
+  onOpenNotificationSettings?: (projectPath?: string) => void;
   onSelectSettingsSection?: (section: SettingsSectionId) => void;
   onCloseSettings?: () => void;
   updateNotice?: InstalledUpdate | null;
@@ -341,6 +328,7 @@ function SidebarComponent({
   settingsOpen = false,
   settingsSection = "general",
   onOpenSettings,
+  onOpenNotificationSettings,
   onSelectSettingsSection,
   onCloseSettings,
   updateNotice = null,
@@ -1127,7 +1115,7 @@ function SidebarComponent({
             onTabPick(itemId);
           }}
           className={`flex h-6 min-w-0 flex-1 items-center justify-center self-center rounded-md px-2 text-[12px] leading-none ${
-            active ? "bg-content/10 text-content" : "text-content/50"
+            active ? "bg-selection text-content" : "text-content/50"
           }`}
         >
           {isChangesTab && hasChangeStats ? (
@@ -1145,12 +1133,12 @@ function SidebarComponent({
   const sidebarContent = (
     <aside
       ref={resize.setPaneRef}
-      className="body-glass relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
+      className="body-glass relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
     >
       {railVisible ? (
         <>
           <div
-            className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-content/10 pl-3 pr-1.5"
+            className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
             data-tauri-drag-region="deep"
           >
             <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
@@ -1161,7 +1149,7 @@ function SidebarComponent({
           <div
             role="tablist"
             aria-label="Workspace"
-            className="flex h-9 shrink-0 items-center gap-px border-b border-content/10 px-2"
+            className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2"
           >
             {workspaceTabItems}
           </div>
@@ -1169,7 +1157,7 @@ function SidebarComponent({
       ) : (
         <>
           <div
-            className="flex h-10 shrink-0 select-none items-center border-b border-content/10 pr-1.5"
+            className="flex h-10 shrink-0 select-none items-center border-b border-stroke pr-1.5"
             data-tauri-drag-region="deep"
           >
             {IS_MAC ? <div className="w-[78px] shrink-0" /> : null}
@@ -1203,7 +1191,7 @@ function SidebarComponent({
           <div
             role="tablist"
             aria-label="Workspace"
-            className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-content/10 px-2"
+            className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
           >
             {workspaceTabItems}
           </div>
@@ -1244,7 +1232,7 @@ function SidebarComponent({
           )}
         </div>
         {tab === "sessions" && cwd && cwd !== "~" ? (
-          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2">
+          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
             <div className="relative flex h-7 min-w-0 flex-1 items-center">
               <Search className="pointer-events-none absolute left-2 size-3 shrink-0 opacity-50" />
               {sessionSearchInput}
@@ -1499,7 +1487,7 @@ function SidebarComponent({
                                   ))}
                                 </ul>
                                 {onNew ? (
-                                  <div className="border-t border-content/10 p-1">
+                                  <div className="border-t border-stroke p-1">
                                     <button
                                       type="button"
                                       data-no-drag
@@ -1565,6 +1553,11 @@ function SidebarComponent({
         ) : null}
         {showSidebarFooter ? (
           <>
+            <LiveAgentsPreview
+              agents={liveAgents}
+              activeSessionId={activeSessionId}
+              onSelect={onSelectAgent}
+            />
             <SidebarUpdateFooter
               update={updateNotice}
               onOpenWhatsNew={onOpenWhatsNew}
@@ -1674,6 +1667,7 @@ function SidebarComponent({
           settingsOpen={settingsOpen}
           settingsSection={settingsSection}
           onOpenSettings={onOpenSettings}
+          onOpenNotificationSettings={onOpenNotificationSettings}
           onSelectSettingsSection={onSelectSettingsSection}
           onCloseSettings={onCloseSettings}
           updateNotice={updateNotice}
@@ -1717,252 +1711,19 @@ function SidebarProjectPicker({
   notesActive?: boolean;
   inboxUnseen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
-  const pickerRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const [groupLabels] = useState(loadTabGroupLabels);
-  const [groupColors] = useState(loadTabGroupColors);
-  const [groupCustomColors] = useState(loadTabGroupCustomColors);
-  const [groupMascots] = useState(loadTabGroupMascots);
-  const groupLogos = useTabGroupLogos();
-  const seed = projectName(cwd);
-  const key = projectKey(cwd);
-  const label = resolveTabGroupLabel(key, groupLabels, basename(cwd) || seed);
-  const logoPath = resolveTabGroupLogo(key, groupLogos);
-  const color = resolveTabGroupColor(key, groupColors, groupCustomColors, seed);
-  const projects = projectRailItems(recents, cwd);
-  const orderedProjects = [
-    ...projects.filter((item) => sameProjectPath(item.path, cwd)),
-    ...projects.filter((item) => !sameProjectPath(item.path, cwd)),
-  ];
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const filteredProjects = normalizedQuery
-    ? orderedProjects.filter((item) => {
-        const itemKey = projectKey(item.path);
-        const itemLabel = resolveTabGroupLabel(
-          itemKey,
-          groupLabels,
-          basename(item.path) || projectName(item.path),
-        );
-        return `${itemLabel}\n${item.path}`
-          .toLocaleLowerCase()
-          .includes(normalizedQuery);
-      })
-    : orderedProjects;
-
-  const closePicker = () => {
-    setOpen(false);
-    setQuery("");
-    setActive(0);
-  };
-
-  const openPicker = () => {
-    setOpen(true);
-    setQuery("");
-    setActive(0);
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    searchRef.current?.focus();
-    const frame = window.requestAnimationFrame(() => {
-      searchRef.current?.focus();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [open]);
-
-  const pickProject = (path: string) => {
-    closePicker();
-    if (!sameProjectPath(path, cwd)) onSelectProject(path);
-  };
-
-  const onPickerKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (!(event.target instanceof HTMLInputElement)) return;
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      if (filteredProjects.length === 0) return;
-      setActive((index) => Math.min(filteredProjects.length - 1, index + 1));
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActive((index) => Math.max(0, index - 1));
-      return;
-    }
-    if (event.key === "Enter") {
-      const project = filteredProjects[active];
-      if (!project) return;
-      event.preventDefault();
-      pickProject(project.path);
-    }
-  };
-
   return (
     <div
-      className="flex h-9 items-center gap-0.5 border-b border-content/10 px-2"
+      className="flex h-9 items-center gap-0.5 border-b border-stroke px-2"
       data-tauri-drag-region="deep"
     >
-      <div
-        ref={pickerRef}
-        className="relative flex h-full min-w-0 flex-1 items-center"
-      >
-        <button
-          type="button"
-          title={cwd}
-          aria-label={`Switch project, current project ${label}`}
-          aria-expanded={open}
-          aria-haspopup="dialog"
-          data-tauri-drag-region="false"
-          onClick={() => (open ? closePicker() : openPicker())}
-          onKeyDown={(event) => {
-            if (open) return;
-            if (event.key !== "ArrowDown") return;
-            event.preventDefault();
-            openPicker();
-          }}
-          className={`flex h-6.5 min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] leading-none hover:text-content ${
-            open
-              ? "bg-content/10 text-content"
-              : "text-content/50 hover:bg-content/5"
-          }`}
-        >
-          {logoPath ? (
-            <ProjectLogoIcon
-              path={logoPath}
-              className="size-3.5 shrink-0 rounded-sm"
-              imageClassName="size-3.5"
-            />
-          ) : (
-            <ProjectMascot
-              project={seed}
-              color={color}
-              name={resolveTabGroupMascot(key, groupMascots)}
-              className="size-3 shrink-0"
-              active={busy}
-            />
-          )}
-          <span className="min-w-0 truncate font-medium text-content/90">
-            {label}
-          </span>
-          <ChevronDown
-            className={`size-3 shrink-0 text-content/45 transition-transform ${
-              open ? "rotate-180" : ""
-            }`}
-            strokeWidth={1.75}
-          />
-        </button>
-        {open ? (
-          <Popover
-            anchor={pickerRef}
-            side="bottom"
-            align="start"
-            gap={4}
-            width={286}
-            maxHeight={380}
-            role="dialog"
-            aria-label="Project picker"
-            onDismiss={() => closePicker()}
-            onKeyDown={onPickerKeyDown}
-            className="flex flex-col overflow-hidden"
-          >
-            <label className="flex h-11 shrink-0 items-center gap-2.5 border-b border-content/10 px-3 text-content/45 focus-within:text-content/70">
-              <Search className="size-4 shrink-0" strokeWidth={1.75} />
-              <span className="sr-only">Search projects</span>
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setActive(0);
-                }}
-                placeholder="Search projects..."
-                className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
-              />
-            </label>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1.5">
-              {filteredProjects.length > 0 ? (
-                filteredProjects.map((item, index) => {
-                  const current = sameProjectPath(item.path, cwd);
-                  const itemKey = projectKey(item.path);
-                  const itemSeed = projectName(item.path);
-                  const itemLabel = resolveTabGroupLabel(
-                    itemKey,
-                    groupLabels,
-                    basename(item.path) || itemSeed,
-                  );
-                  const itemLogo = resolveTabGroupLogo(itemKey, groupLogos);
-                  const itemColor = resolveTabGroupColor(
-                    itemKey,
-                    groupColors,
-                    groupCustomColors,
-                    itemSeed,
-                  );
-                  return (
-                    <button
-                      key={item.path}
-                      type="button"
-                      title={item.path}
-                      onMouseEnter={() => setActive(index)}
-                      onClick={() => pickProject(item.path)}
-                      className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left ${
-                        active === index
-                          ? "bg-content/10 text-content"
-                          : "text-content/75 hover:bg-content/5 hover:text-content"
-                      }`}
-                    >
-                      <span className="grid size-4 shrink-0 place-items-center">
-                        {current ? (
-                          <Check className="size-3.5" strokeWidth={2} />
-                        ) : itemLogo ? (
-                          <ProjectLogoIcon
-                            path={itemLogo}
-                            className="size-4 rounded-sm"
-                            imageClassName="size-4"
-                          />
-                        ) : (
-                          <ProjectMascot
-                            project={itemSeed}
-                            color={itemColor}
-                            name={resolveTabGroupMascot(itemKey, groupMascots)}
-                            className="size-3.5"
-                          />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-                        {itemLabel}
-                      </span>
-                      <span className="max-w-44 shrink truncate font-mono text-[11px] text-content/40">
-                        {prettyParent(item.path)}
-                      </span>
-                    </button>
-                  );
-                })
-              ) : (
-                <p className="px-2.5 py-5 text-center text-[12px] text-content/45">
-                  No projects found
-                </p>
-              )}
-            </div>
-            {onOpenProject ? (
-              <div className="shrink-0 border-t border-content/10 p-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    closePicker();
-                    onOpenProject();
-                  }}
-                  className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-content/75 hover:bg-content/8 hover:text-content"
-                >
-                  <Plus className="size-4 shrink-0" strokeWidth={1.75} />
-                  <span>New project</span>
-                </button>
-              </div>
-            ) : null}
-          </Popover>
-        ) : null}
-      </div>
+      <SearchableProjectPicker
+        cwd={cwd}
+        recents={recents}
+        busy={busy}
+        className="flex-1"
+        onSelectProject={onSelectProject}
+        onOpenProject={onOpenProject}
+      />
       <div className="flex items-center ml-auto">
         {onNew ? (
           <IconButton label={`New tab (${MOD}T)`} onClick={onNew}>
@@ -2057,7 +1818,7 @@ function SessionsHeaderButton({
       onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}
       className={`relative z-50 grid size-6 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content ${
-        open || active ? "bg-content/10 text-content" : ""
+        open || active ? "bg-selection text-content" : ""
       }`}
     >
       {children}
@@ -2336,7 +2097,7 @@ function SessionCard({
   compact?: boolean;
   now: number;
   onSelect: (sessionId: string, event: { shiftKey: boolean }) => void;
-  onOpenWorkItem?: (item: LinkedWorkItem) => void;
+  onOpenWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onPrefetch?: (sessionId: string) => void;
   onPlaceOnPane?: (sessionId: string, targetId: string, edge: PaneEdge) => void;
   onListDrop?: (draggedId: string, target: SessionListDropTarget) => void;
@@ -2348,15 +2109,22 @@ function SessionCard({
 }) {
   const skipClickUntil = useRef(0);
   const prefetchTimer = useRef<number | null>(null);
+  const orchestrationTooltipRootRef = useRef<HTMLDivElement>(null);
+  const orchestrationTooltipId = useId();
   const [dragging, setDragging] = useState(false);
+  const [orchestrationTooltipOpen, setOrchestrationTooltipOpen] =
+    useState(false);
   const orchestration = session.orchestration;
+  const orchestrationExpanded =
+    !!orchestration && (isActive || isSelected || busy);
+  const orchestrationDone =
+    orchestration?.tasks.filter((task) => task.status === "completed").length ??
+    0;
   const title = sessionDisplayTitle(session.title, session.harness);
   const gitLabel = formatGitLabel(session.repo, session.branch);
   const time = formatRelative(session.updatedAt, now);
-  // A lead card always shows its model, even compact: it heads a group of
-  // agents that each name theirs, so the row naming none reads as a gap.
   const model =
-    compact && !orchestration
+    compact && !orchestrationExpanded
       ? null
       : resolveModel(session.harness, session.model).name;
   const statusClass = needsApproval
@@ -2404,7 +2172,7 @@ function SessionCard({
       type="button"
       data-no-drag
       data-tauri-drag-region="false"
-      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} in Inbox (${MOD}-click for GitHub)`}
+      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
       aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
@@ -2414,7 +2182,7 @@ function SessionCard({
           void openUrl(linkedWorkItem.url).catch(() => undefined);
           return;
         }
-        if (onOpenWorkItem) onOpenWorkItem(linkedWorkItem);
+        if (onOpenWorkItem) onOpenWorkItem(linkedWorkItem, session.id);
         else void openUrl(linkedWorkItem.url).catch(() => undefined);
       }}
       onAuxClick={(event) => {
@@ -2584,8 +2352,13 @@ function SessionCard({
   };
 
   const archiveLabel = session.archived ? "Unarchive" : "Archive";
-  const cardPaddingY = orchestration
-    ? "py-2.5"
+  // Expanding an orchestration card must not move its existing header. Keep
+  // the collapsed top inset and give only the new detail area extra room at
+  // the bottom.
+  const cardPaddingY = orchestrationExpanded
+    ? compact
+      ? "pb-2.5 pt-1.5"
+      : "pb-2.5 pt-2"
     : compact
       ? "py-1.5"
       : "py-2";
@@ -2616,11 +2389,9 @@ function SessionCard({
               : needsApproval
                 ? "bg-content/20 text-content border-content/30 border-dashed"
                 : isActive
-                  ? "bg-content/10 text-content border-transparent"
-                  : // A lead rests at the tone others only reach on hover, so
-                    // its card reads as a group even when nothing is selected.
-                    `text-content/80 hover:text-content border-transparent ${
-                      orchestration
+                  ? "bg-selection text-content border-transparent"
+                  : `text-content/80 hover:text-content border-transparent ${
+                      orchestrationExpanded
                         ? "bg-content/5 hover:bg-content/10"
                         : "hover:bg-content/5"
                     }`
@@ -2637,7 +2408,7 @@ function SessionCard({
           data-session-select={session.id}
           onKeyDown={onKeyDown}
         >
-          {compact && !orchestration ? null : (
+          {compact && !orchestrationExpanded ? null : (
             <span className="relative flex items-center gap-2">
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <HarnessIcon
@@ -2656,7 +2427,7 @@ function SessionCard({
           )}
           <span
             className={`relative flex min-w-0 items-center gap-1.5 ${
-              compact && !orchestration ? "" : "mt-1"
+              compact && !orchestrationExpanded ? "" : "mt-1"
             }`}
           >
             {session.pinned ? (
@@ -2668,7 +2439,7 @@ function SessionCard({
             <span className="min-w-0 flex-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
               {title}
             </span>
-            {compact && !orchestration ? (
+            {compact && !orchestrationExpanded ? (
               <span className="flex shrink-0 items-center gap-1.5">
                 {linkedUpdateDot}
                 {status}
@@ -2676,10 +2447,10 @@ function SessionCard({
             ) : null}
           </span>
         </div>
-        {orchestration ? (
+        {orchestrationExpanded ? (
           <OrchestrationSidebarAgents
             leadId={session.id}
-            summary={orchestration}
+            summary={orchestration!}
           />
         ) : null}
         <span className="relative mt-1 flex items-center gap-2">
@@ -2691,7 +2462,7 @@ function SessionCard({
           ) : (
             <span className="min-w-0 flex-1" />
           )}
-          <span className="flex shrink-0 items-center gap-1">
+          <span className="relative flex shrink-0 items-center gap-px">
             {onArchive ? (
               <button
                 type="button"
@@ -2710,9 +2481,96 @@ function SessionCard({
               </button>
             ) : null}
             {workItemBadge}
+            {orchestration ? (
+              <div
+                ref={orchestrationTooltipRootRef}
+                className="relative shrink-0"
+                onMouseEnter={() => setOrchestrationTooltipOpen(true)}
+                onMouseLeave={() => setOrchestrationTooltipOpen(false)}
+              >
+                <button
+                  type="button"
+                  data-no-drag
+                  data-tauri-drag-region="false"
+                  data-orchestration-icon
+                  aria-label={`Orchestrator, ${orchestration.tasks.length} ${
+                    orchestration.tasks.length === 1 ? "subagent" : "subagents"
+                  }, ${orchestrationDone} done`}
+                  aria-describedby={
+                    orchestrationTooltipOpen
+                      ? orchestrationTooltipId
+                      : undefined
+                  }
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onFocus={() => setOrchestrationTooltipOpen(true)}
+                  onBlur={() => setOrchestrationTooltipOpen(false)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setOrchestrationTooltipOpen(false);
+                    onSelect(session.id, { shiftKey: event.shiftKey });
+                  }}
+                  className="grid size-5 shrink-0 place-items-center rounded-md text-fuchsia-300/65 hover:bg-content/10 hover:text-fuchsia-200/90"
+                >
+                  <Share className="size-3" />
+                </button>
+              </div>
+            ) : null}
           </span>
         </span>
       </div>
+      {orchestration && orchestrationTooltipOpen ? (
+        <Popover
+          anchor={orchestrationTooltipRootRef}
+          side="right"
+          align="end"
+          width={248}
+          maxHeight={320}
+          role="tooltip"
+          id={orchestrationTooltipId}
+          className="pointer-events-none overflow-y-auto p-2.5"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] font-semibold text-content/85">
+              Subagents
+            </span>
+            <span className="shrink-0 text-[10px] tabular-nums text-content/45">
+              {orchestrationDone}/{orchestration.tasks.length} done
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-col gap-0.5">
+            {orchestration.tasks.map((task) => {
+              const label = orchestrationTaskLabel(task, orchestration);
+              return (
+                <div
+                  key={task.sessionId}
+                  className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1"
+                >
+                  <HarnessIcon
+                    harness={task.harness}
+                    className="size-3.5 shrink-0 opacity-75"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-content/75">
+                    {task.title}
+                  </span>
+                  <span
+                    className={`shrink-0 text-[10px] ${
+                      task.needsInput || task.status === "failed"
+                        ? "text-amber-400"
+                        : label === "Working"
+                          ? "text-accent"
+                          : task.status === "completed"
+                            ? "text-emerald-400"
+                            : "text-content/45"
+                    }`}
+                  >
+                    {label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </Popover>
+      ) : null}
     </div>
   );
 }
@@ -2777,7 +2635,7 @@ function SessionRenameRow({
         needsApproval
           ? "bg-amber-400/10 text-content"
           : isActive
-            ? "bg-content/10 text-content"
+            ? "bg-selection text-content"
             : "text-content/80"
       }`}
     >

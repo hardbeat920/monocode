@@ -95,8 +95,8 @@ export function AccessPicker({
         }}
         className={`flex h-6.5 max-w-52 items-center gap-1 rounded-md px-1.5 ${
           open
-            ? "bg-content/10 text-content"
-            : "bg-content/10 text-content hover:bg-content/15"
+            ? "bg-selection text-content"
+            : "bg-selection text-content hover:bg-selection-hover"
         }`}
       >
         <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
@@ -137,7 +137,7 @@ export function AccessPicker({
                 onClick={() => pick(mode)}
                 className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left ${
                   highlighted || selected
-                    ? "bg-content/10 text-content"
+                    ? "bg-selection text-content"
                     : "text-content hover:bg-content/5"
                 }`}
               >

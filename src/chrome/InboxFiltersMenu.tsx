@@ -31,7 +31,7 @@ type Props = {
   source: InboxSource;
   filters: InboxFilters;
   onChange: (filters: InboxFilters) => void;
-  /** Shared with Settings → Linear Teams; narrows the fetch, not just the list. */
+  /** Shared with Settings → Inbox → Linear; narrows the fetch, not just the list. */
   onLinearTeamsChange: (ids: string[]) => void;
   onClose: () => void;
 };

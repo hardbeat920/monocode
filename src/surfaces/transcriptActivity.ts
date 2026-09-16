@@ -742,7 +742,10 @@ export function workSummaryLine(steps: Block[], live = false): string {
 export function workKind(steps: Block[]): ActivityPhaseKind {
   return (
     dominantWorkKind(steps) ??
-    (steps.some((block) => block.interjection) ? "note" : "think")
+    (steps.some((block) => block.interjection) ||
+    (steps.length > 0 && steps.every(isStatusStep))
+      ? "note"
+      : "think")
   );
 }
 

@@ -844,6 +844,7 @@ pub struct GitHubWorkItem {
     pub title: String,
     pub url: String,
     pub state: String,
+    pub created_at: String,
     pub updated_at: String,
     pub labels: Vec<GitHubLabel>,
     pub assignees: Vec<GitHubAssignee>,
@@ -1031,6 +1032,21 @@ pub async fn git_github_work_item_comment(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         git_github_work_item_comment_for(&expand_home(&cwd), &kind, number, &body, &in_reply_to)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Merge or change the lifecycle state of a GitHub pull request via `gh`.
+#[tauri::command]
+pub async fn git_github_pr_action(
+    cwd: String,
+    repo: String,
+    number: i64,
+    action: String,
+) -> Result<GitHubWorkItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_pr_action_for(&expand_home(&cwd), &repo, number, &action)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2010,9 +2026,9 @@ fn git_github_work_items_for(
     };
     let limit = limit.clamp(1, 100).to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
     } else {
-        "number,title,url,state,updatedAt,labels,assignees"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees"
     };
     let mut args = vec![
         kind.to_string(),
@@ -2056,15 +2072,49 @@ fn git_github_work_item_for(
     let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
     } else {
-        "number,title,url,state,updatedAt,labels,assignees"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees"
     };
     let json = gh_checked(
         root,
         &[kind, "view", &number, "--repo", &repo, "--json", fields],
     )?;
     parse_github_work_item(&json, kind, &repo)
+}
+
+fn github_pr_action_args(repo: &str, number: i64, action: &str) -> Result<Vec<String>, String> {
+    if number <= 0 {
+        return Err("GitHub pull request number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
+    let number = number.to_string();
+    let args = match action.trim() {
+        "merge" => vec!["pr", "merge", &number, "--repo", &repo, "--merge"],
+        "squash" => vec!["pr", "merge", &number, "--repo", &repo, "--squash"],
+        "rebase" => vec!["pr", "merge", &number, "--repo", &repo, "--rebase"],
+        "draft" => vec!["pr", "ready", &number, "--repo", &repo, "--undo"],
+        "ready" => vec!["pr", "ready", &number, "--repo", &repo],
+        "close" => vec!["pr", "close", &number, "--repo", &repo],
+        "reopen" => vec!["pr", "reopen", &number, "--repo", &repo],
+        _ => return Err("Unknown GitHub pull request action".into()),
+    };
+    Ok(args.into_iter().map(str::to_string).collect())
+}
+
+fn git_github_pr_action_for(
+    root: &Path,
+    repo: &str,
+    number: i64,
+    action: &str,
+) -> Result<GitHubWorkItem, String> {
+    let args = github_pr_action_args(repo, number, action)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    // Successful mutation commands do not always write to stdout. Their exit
+    // status confirms the action ran; the follow-up view fetches the new state.
+    gh_run(root, &refs, true)?;
+    git_github_work_item_for(root, repo, "pr", number)
 }
 
 fn git_github_work_item_details_for(
@@ -3027,6 +3077,8 @@ fn parse_github_work_items(
         url: String,
         state: String,
         #[serde(default)]
+        created_at: String,
+        #[serde(default)]
         updated_at: String,
         #[serde(default)]
         labels: Vec<RowLabel>,
@@ -3044,6 +3096,7 @@ fn parse_github_work_items(
             title: row.title,
             url: row.url,
             state: row.state.to_lowercase(),
+            created_at: row.created_at,
             updated_at: row.updated_at,
             labels: row
                 .labels
@@ -3160,6 +3213,7 @@ fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, Strin
     cmd.current_dir(root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
@@ -5796,6 +5850,7 @@ mod tests {
             "title": "Promo codes fail to apply",
             "url": "https://github.com/acme/web/issues/5138",
             "state": "OPEN",
+            "createdAt": "2026-08-20T09:00:00Z",
             "updatedAt": "2026-08-27T08:00:00Z",
             "labels": [{"name": "bug", "color": "d73a4a"}],
             "assignees": [{"login": "maya"}]
@@ -5813,6 +5868,9 @@ mod tests {
             "https://avatars.githubusercontent.com/maya?s=64"
         );
         assert!(!items[0].draft);
+        let payload = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(payload["createdAt"], "2026-08-20T09:00:00Z");
+        assert_eq!(payload["updatedAt"], "2026-08-27T08:00:00Z");
     }
 
     #[test]
@@ -5829,6 +5887,26 @@ mod tests {
         assert!(items[0].draft);
         assert!(items[0].labels.is_empty());
         assert_eq!(items[0].repo, "acme/web");
+    }
+
+    #[test]
+    fn github_work_item_creation_time_reaches_frontend() {
+        for (kind, resource) in [("pr", "pull"), ("issue", "issues")] {
+            let json = r#"{
+            "number": 12,
+            "title": "Checkout",
+            "url": "https://github.com/acme/web/pull/12",
+            "state": "OPEN",
+            "createdAt": "2026-09-01T08:00:00Z",
+            "updatedAt": "2026-09-11T08:00:00Z"
+        }"#;
+            let json = json.replace("/pull/", &format!("/{resource}/"));
+            let item = parse_github_work_item(&json, kind, "acme/web").unwrap();
+            let payload = serde_json::to_value(item).unwrap();
+            assert_eq!(payload["kind"], kind);
+            assert_eq!(payload["createdAt"], "2026-09-01T08:00:00Z");
+            assert_eq!(payload["updatedAt"], "2026-09-11T08:00:00Z");
+        }
     }
 
     #[test]
@@ -5887,6 +5965,25 @@ mod tests {
         );
         assert!(split_github_repo("monocode").is_err());
         assert!(split_github_repo("acme/web extra").is_err());
+    }
+
+    #[test]
+    fn github_pr_actions_map_to_non_interactive_gh_commands() {
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "squash").unwrap(),
+            ["pr", "merge", "42", "--repo", "acme/web", "--squash"]
+        );
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "draft").unwrap(),
+            ["pr", "ready", "42", "--repo", "acme/web", "--undo"]
+        );
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "reopen").unwrap(),
+            ["pr", "reopen", "42", "--repo", "acme/web"]
+        );
+        assert!(github_pr_action_args("acme/web", 42, "delete").is_err());
+        assert!(github_pr_action_args("acme/web", 0, "merge").is_err());
+        assert!(github_pr_action_args("invalid", 42, "merge").is_err());
     }
 
     #[test]

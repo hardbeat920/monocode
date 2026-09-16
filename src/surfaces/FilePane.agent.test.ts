@@ -92,4 +92,32 @@ describe("file pane agent tabs", () => {
     );
     expect(container.textContent).toContain("Done");
   });
+
+  it("shows managed approvals as waiting on the orchestrator", async () => {
+    const session = {
+      ...newSession("codex", "/repo"),
+      id: "worker",
+      busy: true,
+      blocks: [
+        { id: "u1", role: "user" as const, text: "Audit the engine" },
+        {
+          id: "approval",
+          role: "approval" as const,
+          text: "Run the check",
+          approval: { requestId: 7 },
+        },
+      ],
+    };
+
+    await act(async () =>
+      root.render(createElement(FilePane, { ...props, sessions: [session] })),
+    );
+
+    expect(container.textContent).toContain("Waiting for orchestrator");
+    const buttons = [...container.querySelectorAll("button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(buttons).not.toContain("Allow");
+    expect(buttons).not.toContain("Deny");
+  });
 });

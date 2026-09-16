@@ -1,7 +1,9 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { isHexColor } from "./colorUtils";
 import { HAS_NATIVE_GLASS, IS_MAC } from "./platform";
 import { applyUiScale, loadUiScale } from "./uiScale";
 
+const ACCENT_COLOR_KEY = "monocode.accentColor";
 const THEME_HUE_KEY = "monocode.themeHue";
 const THEME_SATURATION_KEY = "monocode.themeSaturation";
 const THEME_DARK_LIGHTNESS_KEY = "monocode.themeDarkLightness";
@@ -34,6 +36,8 @@ export type ChatBackgroundScope = "empty" | "all";
 export type ChangesView = "list" | "tree";
 
 export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";
+
+export const ACCENT_COLOR_DEFAULT = null;
 
 /** Fired on `window` whenever the color scheme flips (detail: ColorScheme). */
 export const SCHEME_CHANGE_EVENT = "monocode:schemechange";
@@ -135,6 +139,58 @@ function writeFlag(key: string, value: boolean) {
   }
 }
 
+function normalizeAccentColor(value: unknown): string | null {
+  return typeof value === "string" && isHexColor(value)
+    ? value.toLowerCase()
+    : ACCENT_COLOR_DEFAULT;
+}
+
+function accentForeground(color: string): "#000000" | "#ffffff" {
+  const channels = [1, 3, 5].map((offset) => {
+    const value = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045
+      ? value / 12.92
+      : Math.pow((value + 0.055) / 1.055, 2.4);
+  });
+  const luminance =
+    0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return luminance > 0.179 ? "#000000" : "#ffffff";
+}
+
+export function loadAccentColor(): string | null {
+  try {
+    return normalizeAccentColor(localStorage.getItem(ACCENT_COLOR_KEY));
+  } catch {
+    return ACCENT_COLOR_DEFAULT;
+  }
+}
+
+export function saveAccentColor(value: string | null) {
+  try {
+    const next = normalizeAccentColor(value);
+    if (next == null) localStorage.removeItem(ACCENT_COLOR_KEY);
+    else localStorage.setItem(ACCENT_COLOR_KEY, next);
+  } catch {
+    // private mode / quota
+  }
+}
+
+export function applyAccentColor(value: string | null) {
+  const next = normalizeAccentColor(value);
+  document.documentElement.classList.toggle("has-user-accent", next != null);
+  if (next == null) {
+    document.documentElement.style.removeProperty("--user-accent-color");
+    document.documentElement.style.removeProperty("--user-accent-foreground");
+    return next;
+  }
+  document.documentElement.style.setProperty("--user-accent-color", next);
+  document.documentElement.style.setProperty(
+    "--user-accent-foreground",
+    accentForeground(next),
+  );
+  return next;
+}
+
 export function loadThemeHue(): number {
   return Math.round(
     clamp(
@@ -218,6 +274,7 @@ export function initAppearance() {
     "has-native-glass",
     HAS_NATIVE_GLASS,
   );
+  applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
   applyThemePreference(loadThemePreference());

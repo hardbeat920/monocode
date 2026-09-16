@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ACCENT_COLOR_DEFAULT,
   CHAT_BACKGROUND_OPACITY_DEFAULT,
   CHAT_BACKGROUND_SCOPE_DEFAULT,
   loadChatBackgroundOpacity,
+  loadAccentColor,
   loadChatBackgroundPath,
   loadChatBackgroundScope,
   loadTranscriptLayout,
   saveChatBackgroundOpacity,
+  saveAccentColor,
   saveChatBackgroundPath,
   saveChatBackgroundScope,
   saveTranscriptLayout,
@@ -24,6 +27,7 @@ import {
 } from "./appearance";
 
 const KEY = "monocode.transcriptLayout";
+const ACCENT_COLOR_KEY = "monocode.accentColor";
 const SCHEME_KEY = "monocode.colorScheme";
 const ANCHOR_KEY = "monocode.transcriptAnchor";
 const CHAT_BACKGROUND_PATH_KEY = "monocode.chatBackgroundPath";
@@ -54,6 +58,31 @@ function mockLocalStorage() {
     configurable: true,
   });
 }
+
+describe("accent color setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(ACCENT_COLOR_KEY);
+  });
+
+  it("defaults to the original neutral appearance", () => {
+    expect(ACCENT_COLOR_DEFAULT).toBeNull();
+    expect(loadAccentColor()).toBeNull();
+  });
+
+  it("persists normalized hex colors and clears default or invalid values", () => {
+    saveAccentColor("#AABBCC");
+    expect(localStorage.getItem(ACCENT_COLOR_KEY)).toBe("#aabbcc");
+    expect(loadAccentColor()).toBe("#aabbcc");
+
+    saveAccentColor(ACCENT_COLOR_DEFAULT);
+    expect(localStorage.getItem(ACCENT_COLOR_KEY)).toBeNull();
+
+    saveAccentColor("tomato");
+    expect(localStorage.getItem(ACCENT_COLOR_KEY)).toBeNull();
+    expect(loadAccentColor()).toBeNull();
+  });
+});
 
 describe("transcript layout setting", () => {
   beforeEach(mockLocalStorage);

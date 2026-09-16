@@ -841,7 +841,7 @@ describe("the settled work trail", () => {
     ]);
     const items = groupTurnItems(turn, { settled: true });
     expect(items).toHaveLength(1);
-    if (items[0]?.type !== "activity") return;
+    if (items[0]?.type !== "activity") throw new Error("expected activity");
     expect(items[0].blocks.map((block) => block.id)).toEqual([
       "a",
       "ag",
@@ -1034,6 +1034,7 @@ describe("the settled work trail", () => {
     expect(workSummaryLine(statuses)).toBe("Status update");
     const phases = buildActivityPhases(statuses);
     expect(activityPhaseTitle(phases[0])).toBe("Status update");
+    expect(workKind(statuses)).toBe("note");
     // A thought among the statuses still reads as thinking, not a status line.
     expect(workSummaryLine([status("s1"), thought("r1")])).toBe("Thought");
   });

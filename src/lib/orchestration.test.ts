@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Orchestrator,
+  orchestrationPathKey,
   scopesOverlap,
   visibleUserPrompt,
   workerTurnPrompt,
@@ -197,14 +198,25 @@ describe("local orchestration", () => {
   it("starts exactly the approved assignments and preserves forward dependencies", async () => {
     const f = setup();
     f.lead.busy = false;
+    const card = proposal();
+    card.tasks[1].modelSettings = { reasoningEffort: "xhigh" };
     expect(f.host.submit).not.toHaveBeenCalled();
-    await f.manager.startApproved("lead", "card", proposal());
+    await f.manager.startApproved("lead", "card", card);
     await vi.waitFor(() =>
       expect(f.host.createWorker).toHaveBeenCalledTimes(1),
     );
     expect(f.tasks().map((task) => task.status)).toEqual(["queued", "running"]);
     expect(f.tasks()[0].prompt).toBe("User edited instructions");
     expect(f.tasks()[0].dependsOn).toEqual([f.tasks()[1].id]);
+    expect(f.tasks()[1].modelSettings).toEqual({
+      reasoningEffort: "xhigh",
+    });
+    expect(f.host.createWorker).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        modelSettings: { reasoningEffort: "xhigh" },
+      }),
+    );
     expect(f.manager.run("lead")?.proposalId).toBe("card");
     expect(f.saved.get("lead")?.tasks).toHaveLength(2);
     const workerPrompt = vi
@@ -218,6 +230,42 @@ describe("local orchestration", () => {
     expect(
       vi.mocked(f.host.submit).mock.calls.find(([id]) => id === "lead")?.[1],
     ).toContain("do not delegate duplicates");
+    expect(
+      vi.mocked(f.host.submit).mock.calls.find(([id]) => id === "lead")?.[1],
+    ).toContain('"modelSettings":{"reasoningEffort":"xhigh"}');
+  });
+  it("names the conversation that blocks a paused run from resuming", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.startApproved("lead", "card", proposal());
+    f.completions.get("lead")!({
+      status: "failed",
+      text: "",
+      error: "Lead interrupted",
+    });
+    await vi.waitFor(() =>
+      expect(f.manager.run("lead")?.status).toBe("paused"),
+    );
+    await vi.waitFor(() =>
+      expect(
+        f
+          .tasks()
+          .every(
+            (task) => task.status !== "running" && task.status !== "cancelling",
+          ),
+      ).toBe(true),
+    );
+    f.sessions.push({
+      ...newSession("codex", "/repo"),
+      id: "investigation",
+      title: "Investigating the failure",
+      busy: true,
+    });
+
+    expect(f.manager.resumeBlocker("lead")?.id).toBe("investigation");
+    await expect(f.manager.start("lead", ["codex"], 2)).rejects.toThrow(
+      '"Investigating the failure" is still running in this checkout. Stop it before resuming orchestration.',
+    );
   });
   it("never launches a partial plan when one assignment has invalid scopes", async () => {
     const f = setup();
@@ -303,6 +351,22 @@ describe("local orchestration", () => {
     expect(scopesOverlap(["/repo/src"], ["/repo/src/file.ts"])).toBe(true);
     expect(scopesOverlap(["/repo/src"], ["/repo/src2/file.ts"])).toBe(false);
     expect(scopesOverlap(["/repo"], ["/repo/anything"])).toBe(true);
+    expect(scopesOverlap(["/"], ["/repo/anything"])).toBe(true);
+  });
+  it("compares Windows canonical and provider paths as the same scope", () => {
+    expect(orchestrationPathKey("\\\\?\\D:\\Projects\\Repo\\src")).toBe(
+      "d:/projects/repo/src",
+    );
+    expect(orchestrationPathKey("\\\\?\\UNC\\Server\\Share\\Repo\\src")).toBe(
+      "//server/share/repo/src",
+    );
+    expect(
+      scopesOverlap(
+        ["//?/d:/projects/repo/src"],
+        ["D:/Projects/Repo/src/file.ts"],
+      ),
+    ).toBe(true);
+    expect(scopesOverlap(["//?/d:/"], ["D:/Projects/Repo"])).toBe(true);
   });
   it("runs disjoint workers concurrently and queues overlap", async () => {
     const f = setup();
@@ -445,6 +509,31 @@ describe("local orchestration", () => {
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("cancelled"));
     expect(f.manager.run("lead")!.status).toBe("paused");
     expect(f.manager.run("lead")!.error).toContain("outside its assignment");
+  });
+  it("accepts Windows drive paths inside an extended canonical scope", async () => {
+    const f = setup();
+    f.store.scopes.mockResolvedValueOnce(["//?/d:/projects/repo-a"]);
+    await f.start();
+    f.store.scopes.mockResolvedValueOnce(["//?/d:/projects/repo-a/src/a"]);
+    await f.delegate(["src/a"]);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    const task = f.tasks()[0];
+
+    for (const path of [
+      "src/a/relative.ts",
+      "D:/Projects/repo-a/src/a/forward.ts",
+      "D:\\Projects\\repo-a\\src\\a\\backward.ts",
+    ]) {
+      f.manager.observe(task.sessionId, {
+        type: "tool.started",
+        callId: path,
+        title: "Edit",
+        preview: { kind: "write", path },
+      });
+    }
+
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.tasks()[0].status).toBe("running");
   });
   it("holds ownership until a cancelled process has stopped", async () => {
     const f = setup();
@@ -691,6 +780,63 @@ describe("local orchestration", () => {
       7,
       "deny",
     );
+  });
+  it("returns from wait immediately when a worker already needs input", async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const worker = f.sessions.find(
+      (session) => session.id === f.tasks()[0].sessionId,
+    )!;
+    worker.blocks = [
+      {
+        id: "ask",
+        role: "approval",
+        text: "Run the check",
+        approval: { requestId: 7 },
+      },
+    ];
+
+    const waiting = f.call("wait", { timeoutSeconds: 20 }) as Promise<{
+      tasks: Array<{ needsInput?: { kind: string; requestId: number } }>;
+    }>;
+    expect(vi.getTimerCount()).toBe(0);
+    expect((await waiting).tasks[0].needsInput).toMatchObject({
+      kind: "approval",
+      requestId: 7,
+    });
+  });
+  it("wakes an active wait as soon as a worker needs input", async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const worker = f.sessions.find(
+      (session) => session.id === f.tasks()[0].sessionId,
+    )!;
+
+    const waiting = f.call("wait", { timeoutSeconds: 20 }) as Promise<{
+      tasks: Array<{ needsInput?: { kind: string; requestId: number } }>;
+    }>;
+    expect(vi.getTimerCount()).toBe(1);
+    worker.blocks = [
+      {
+        id: "ask",
+        role: "approval",
+        text: "Run the check",
+        approval: { requestId: 8 },
+      },
+    ];
+    f.manager.sync();
+
+    expect((await waiting).tasks[0].needsInput).toMatchObject({
+      kind: "approval",
+      requestId: 8,
+    });
+    expect(vi.getTimerCount()).toBe(0);
   });
   it("validates the lead's answer against the agent's own question", async () => {
     const f = setup();

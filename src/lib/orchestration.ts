@@ -19,6 +19,7 @@ export type OrchestrationTask = {
   title: string;
   harness: HarnessId;
   model: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   files: string[];
   scopes: string[];
@@ -94,15 +95,45 @@ const storage: Storage = {
   scopes: (cwd, files) => invoke("control_scopes", { cwd, files }),
 };
 
+/**
+ * One comparison form for scopes returned by Rust and paths reported by a
+ * harness. Windows canonicalize uses the extended `\\?\D:\...` form while
+ * providers usually report `D:\...`; both must describe the same location.
+ */
+export function orchestrationPathKey(value: string): string {
+  let slashed = value.replace(/\\/g, "/");
+  if (/^\/\/\?\/unc\//i.test(slashed)) slashed = `//${slashed.slice(8)}`;
+  else if (/^\/\/\?\/[a-z]:\//i.test(slashed)) slashed = slashed.slice(4);
+
+  const prefix = slashed.startsWith("//")
+    ? "//"
+    : /^[A-Za-z]:\//.test(slashed)
+      ? slashed.slice(0, 3)
+      : slashed.startsWith("/")
+        ? "/"
+        : "";
+  const parts: string[] = [];
+  for (const part of slashed.slice(prefix.length).split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return (`${prefix}${parts.join("/")}` || ".").toLowerCase();
+}
+
+const scopeContains = (scope: string, path: string) =>
+  path === scope || path.startsWith(scope.endsWith("/") ? scope : `${scope}/`);
+
 export function scopesOverlap(a: string[], b: string[]): boolean {
-  return a.some((left) =>
-    b.some(
-      (right) =>
-        left === right ||
-        left.startsWith(`${right}/`) ||
-        right.startsWith(`${left}/`),
-    ),
-  );
+  return a.some((left) => {
+    const leftKey = orchestrationPathKey(left);
+    return b.some((right) => {
+      const rightKey = orchestrationPathKey(right);
+      return (
+        scopeContains(leftKey, rightKey) || scopeContains(rightKey, leftKey)
+      );
+    });
+  });
 }
 const activeTask = (task: OrchestrationTask) =>
   task.status === "running" || task.status === "cancelling";
@@ -254,6 +285,22 @@ export class Orchestrator {
         run.leadId === id || run.tasks.some((task) => task.sessionId === id),
     );
   }
+  resumeBlocker(leadId: string): Session | undefined {
+    const lead = this.host?.session(leadId);
+    if (!lead) return undefined;
+    const cwd = this.run(leadId)?.cwd ?? lead.cwd;
+    return this.host
+      ?.sessions()
+      .find(
+        (session) =>
+          session.id !== leadId &&
+          session.busy &&
+          sameCheckout(session.worktreeCwd ?? session.cwd, cwd),
+      );
+  }
+  resumeLeadBusy(leadId: string): boolean {
+    return !!this.host?.session(leadId)?.busy;
+  }
   private emit() {
     for (const listener of this.listeners) listener();
   }
@@ -401,7 +448,11 @@ export class Orchestrator {
     if (proposal.status !== "ready")
       throw new Error("Review a completed proposal before starting");
     const settings = validateOrchestrationSettings(proposal.settings);
-    const planned = validateProposedTasks(proposal.tasks, settings);
+    const planned = validateProposedTasks(
+      proposal.tasks,
+      settings,
+      proposal.cwd,
+    );
     const lead = this.host?.session(leadId);
     if (!lead || !sameCheckout(lead.cwd, proposal.cwd))
       throw new Error("Return to the proposal's project before starting");
@@ -448,7 +499,7 @@ export class Orchestrator {
     );
     this.host!.submit(
       leadId,
-      `The user confirmed the orchestration card, including any edits. The app has already queued the exact assignments below; do not delegate duplicates. Supervise them through the control CLI, review their changes, request corrections when needed, and finish the original request.\n\nOriginal request:\n${proposal.request}\n\nApproved assignments:\n${JSON.stringify(tasks.map(({ id, title, prompt, harness, model, files, dependsOn }) => ({ taskId: id, title, prompt, harness, model, files, dependsOn })))}`,
+      `The user confirmed the orchestration card, including any edits. The app has already queued the exact assignments below; do not delegate duplicates. Supervise them through the control CLI, review their changes, request corrections when needed, and finish the original request.\n\nOriginal request:\n${proposal.request}\n\nApproved assignments:\n${JSON.stringify(tasks.map(({ id, title, prompt, harness, model, modelSettings, files, dependsOn }) => ({ taskId: id, title, prompt, harness, model, modelSettings, files, dependsOn })))}`,
       (outcome) => {
         if (outcome.status !== "completed")
           void this.pause(
@@ -470,8 +521,13 @@ export class Orchestrator {
     },
   ) {
     const lead = this.host?.session(leadId);
-    if (!lead || lead.busy)
-      throw new Error("Wait for the lead's current turn to finish");
+    if (!lead) throw new Error("The orchestration lead is unavailable");
+    if (lead.busy)
+      throw new Error(
+        this.run(leadId)?.status === "paused"
+          ? "Wait for the lead's interrupted turn to finish before resuming orchestration"
+          : "Wait for the lead's current turn to finish",
+      );
     if (lead.worktreeCwd)
       throw new Error(
         "Start orchestration in a regular project session; this session uses a worktree",
@@ -484,15 +540,6 @@ export class Orchestrator {
       allowedHarnesses.some((id) => !available.includes(id))
     )
       throw new Error("Choose installed worker harnesses");
-    if (
-      this.host!.sessions().some(
-        (session) =>
-          session.id !== leadId &&
-          session.busy &&
-          sameCheckout(session.worktreeCwd ?? session.cwd, lead.cwd),
-      )
-    )
-      throw new Error("Stop other running sessions in this checkout first");
     const previous = this.run(leadId);
     if (
       previous?.status === "active" ||
@@ -500,7 +547,26 @@ export class Orchestrator {
     )
       throw new Error("Stop the current run before starting another proposal");
     if (previous?.tasks.some(activeTask))
-      throw new Error("Stop active workers before changing the run");
+      throw new Error(
+        previous.status === "paused"
+          ? "Wait for interrupted agents to stop before resuming orchestration"
+          : "Stop active workers before changing the run",
+      );
+    if (previous?.status === "paused" && !sameCheckout(previous.cwd, lead.cwd))
+      throw new Error(
+        "Return the lead to its original project before resuming orchestration",
+      );
+    const blocker = this.resumeBlocker(leadId);
+    if (blocker) {
+      const label = blocker.title.trim() || blocker.id;
+      throw new Error(
+        `"${label}" is still running in this checkout. Stop it before ${
+          previous?.status === "paused"
+            ? "resuming orchestration"
+            : "starting orchestration"
+        }.`,
+      );
+    }
     const [canonicalRoot] = await this.store.scopes(lead.cwd, ["."]);
     const cli = await this.store.enable(leadId, lead.cwd);
     try {
@@ -961,9 +1027,12 @@ export class Orchestrator {
     // A worker blocking on the lead changes no run state, so watch for that
     // separately; otherwise the lead sleeps while an agent waits on it.
     const blocked = this.blocked.get(leadId);
+    // Input that arrived before `wait` is already actionable. Only long-poll
+    // while every running worker can still make progress without the lead.
     if (
-      run.tasks.some(activeTask) ||
-      run.tasks.some((task) => task.status === "queued")
+      this.blockedKeys(run).length === 0 &&
+      (run.tasks.some(activeTask) ||
+        run.tasks.some((task) => task.status === "queued"))
     ) {
       await new Promise<void>((resolve) => {
         const finish = () => {
@@ -1353,21 +1422,13 @@ export class Orchestrator {
     const paths =
       event.paths ?? (event.preview.path ? [event.preview.path] : []);
     for (const path of paths) {
-      const absolute = /^(\/|[a-z]:[\\/])/i.test(path)
+      const absolute = /^(?:[\\/]|[a-z]:[\\/])/i.test(path)
         ? path
         : `${run.canonicalRoot ?? run.cwd}/${path}`;
-      const parts: string[] = [];
-      for (const part of absolute
-        .replace(/\\/g, "/")
-        .toLowerCase()
-        .split("/")) {
-        if (part === "..") parts.pop();
-        else if (part !== ".") parts.push(part);
-      }
-      const normalized = parts.join("/");
+      const normalized = orchestrationPathKey(absolute);
       if (
-        task.scopes.some(
-          (scope) => normalized === scope || normalized.startsWith(`${scope}/`),
+        task.scopes.some((scope) =>
+          scopeContains(orchestrationPathKey(scope), normalized),
         )
       )
         continue;

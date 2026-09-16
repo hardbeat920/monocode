@@ -62,6 +62,7 @@ import {
   type Block,
   type HarnessId,
   type InterjectionMeta,
+  type ModelTarget,
   type PlanBuildTarget,
   type ToolPreview,
   type TurnMetrics,
@@ -120,6 +121,7 @@ type Props = {
   cwd?: string;
   harness?: HarnessId;
   model?: string;
+  modelSettings?: Record<string, string>;
   pendingQuestion?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
@@ -129,8 +131,8 @@ type Props = {
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
-  onSecondOpinion?: (harness: HarnessId, turn: Block[], model: string) => void;
-  onHandoff?: (harness: HarnessId, turn: Block[], model: string) => void;
+  onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
+  onHandoff?: (target: ModelTarget, turn: Block[]) => void;
   onJumpToBottomChange?: (show: boolean) => void;
   onJumpToBottomReady?: (jump: () => void) => void;
   /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
@@ -149,6 +151,7 @@ function AgentTranscriptComponent({
   cwd,
   harness,
   model,
+  modelSettings,
   pendingQuestion = false,
   onApproval,
   onAddToChat,
@@ -441,7 +444,13 @@ function AgentTranscriptComponent({
             <LiveFoldTitle
               startedAt={startedAt}
               paused={waitingForApproval}
-              waitingLabel={pendingQuestion ? "Waiting for answers" : undefined}
+              waitingLabel={
+                managed && waitingForApproval
+                  ? "Waiting for orchestrator"
+                  : pendingQuestion
+                    ? "Waiting for answers"
+                    : undefined
+              }
               modelName={turnModelName}
             />
           ) : durationMs != null ? (
@@ -514,6 +523,7 @@ function AgentTranscriptComponent({
                 planBusy={!!busy}
                 planHarness={harness}
                 planModel={model}
+                planModelSettings={modelSettings}
                 cwd={cwd}
               />
             );
@@ -635,13 +645,11 @@ function AgentTranscriptComponent({
                   fromHarness={turnHarness}
                   onSecondOpinion={
                     onSecondOpinion
-                      ? (target, model) => onSecondOpinion(target, turn, model)
+                      ? (target) => onSecondOpinion(target, turn)
                       : undefined
                   }
                   onHandoff={
-                    onHandoff
-                      ? (target, model) => onHandoff(target, turn, model)
-                      : undefined
+                    onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
                 />
               ) : null}
@@ -732,8 +740,8 @@ function TurnDuration({
   copyText?: string;
   onSaveNote?: (text: string) => void;
   fromHarness?: HarnessId;
-  onSecondOpinion?: (harness: HarnessId, model: string) => void;
-  onHandoff?: (harness: HarnessId, model: string) => void;
+  onSecondOpinion?: (target: ModelTarget) => void;
+  onHandoff?: (target: ModelTarget) => void;
 }) {
   const label = formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
@@ -988,6 +996,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planBusy,
   planHarness,
   planModel,
+  planModelSettings,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -1003,6 +1012,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planBusy?: boolean;
   planHarness?: HarnessId;
   planModel?: string;
+  planModelSettings?: Record<string, string>;
 }) {
   if (block.role === "user") {
     return (
@@ -1061,6 +1071,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
           plan={block.plan}
           harness={planHarness}
           model={planModel}
+          modelSettings={planModelSettings}
           onOpen={onOpenPlan ? () => onOpenPlan(block.id) : undefined}
           onBuild={
             onBuildPlan ? (target) => onBuildPlan(block.id, target) : undefined
@@ -1193,7 +1204,7 @@ function UserMessageBlock({
       }
     >
       <div
-        className={`min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
+        className={`user-message-bubble min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
           chat
             ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
             : "rounded-lg border border-content/10"
@@ -2771,20 +2782,20 @@ function ApprovalControls({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const approval = block.approval;
-  if (!approval || approval.decided) return null;
+  if (!approval || approval.decided || !onApproval) return null;
   return (
     <div className="mt-1.5 flex gap-2">
       <button
         type="button"
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
-        onClick={() => onApproval?.(approval.requestId, "allow")}
+        onClick={() => onApproval(approval.requestId, "allow")}
       >
         Allow
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
-        onClick={() => onApproval?.(approval.requestId, "deny")}
+        onClick={() => onApproval(approval.requestId, "deny")}
       >
         Deny
       </button>

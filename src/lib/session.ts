@@ -72,10 +72,13 @@ export type PlanBlockMeta = {
   edited?: boolean;
 };
 
-export type PlanBuildTarget = {
+export type ModelTarget = {
   harness: HarnessId;
   model: string;
+  modelSettings: Record<string, string>;
 };
+
+export type PlanBuildTarget = ModelTarget;
 
 export type HandoffStatus = "preparing" | "ready";
 

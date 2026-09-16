@@ -1,4 +1,4 @@
-import { RefreshCw } from "./icons";
+import { RefreshCw, Terminal } from "./icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
@@ -24,6 +24,7 @@ import {
   runningTerminalChipLabel,
   type RunningTerminal,
 } from "../lib/terminalTab";
+import { MOD } from "../lib/platform";
 
 const CLOCK_MS = 30_000;
 
@@ -37,12 +38,18 @@ export function UsageFooter({
   terminals = [],
   terminalOpen = false,
   onToggleTerminal,
+  onNewTerminal,
+  onShowTerminal,
+  projectTerminalActive = false,
 }: {
   providers: RateLimitProvider[];
   session?: UsageFooterSession;
   terminals?: RunningTerminal[];
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
+  onNewTerminal?: () => void;
+  onShowTerminal?: () => void;
+  projectTerminalActive?: boolean;
 }) {
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
@@ -60,43 +67,45 @@ export function UsageFooter({
   claudeRef.current = claude;
   codexRef.current = codex;
 
-  const refresh = useCallback((force = false) => {
-    if (inflight.current) return inflight.current;
-    const visible = document.visibilityState === "visible";
-    const fetchClaude =
-      wantClaude &&
-      shouldFetchProvider(claudeRef.current, { force, visible });
-    const fetchCodex =
-      wantCodex &&
-      shouldFetchProvider(codexRef.current, { force, visible });
-    if (!fetchClaude && !fetchCodex) return;
-    if (force) setRefreshing(true);
-    const jobs: Promise<void>[] = [];
-    if (fetchClaude) {
-      setClaude((current) => fetchingRateLimits("claude", current));
-      jobs.push(
-        fetchClaudeRateLimits().then((value) => {
-          setClaude(value);
-        }),
-      );
-    }
-    if (fetchCodex) {
-      setCodex((current) => fetchingRateLimits("codex", current));
-      jobs.push(
-        fetchCodexRateLimits().then((value) => {
-          setCodex(value);
-        }),
-      );
-    }
-    const run = Promise.allSettled(jobs)
-      .then(() => undefined)
-      .finally(() => {
-        inflight.current = null;
-        setRefreshing(false);
-      });
-    inflight.current = run;
-    return run;
-  }, [wantClaude, wantCodex]);
+  const refresh = useCallback(
+    (force = false) => {
+      if (inflight.current) return inflight.current;
+      const visible = document.visibilityState === "visible";
+      const fetchClaude =
+        wantClaude &&
+        shouldFetchProvider(claudeRef.current, { force, visible });
+      const fetchCodex =
+        wantCodex && shouldFetchProvider(codexRef.current, { force, visible });
+      if (!fetchClaude && !fetchCodex) return;
+      if (force) setRefreshing(true);
+      const jobs: Promise<void>[] = [];
+      if (fetchClaude) {
+        setClaude((current) => fetchingRateLimits("claude", current));
+        jobs.push(
+          fetchClaudeRateLimits().then((value) => {
+            setClaude(value);
+          }),
+        );
+      }
+      if (fetchCodex) {
+        setCodex((current) => fetchingRateLimits("codex", current));
+        jobs.push(
+          fetchCodexRateLimits().then((value) => {
+            setCodex(value);
+          }),
+        );
+      }
+      const run = Promise.allSettled(jobs)
+        .then(() => undefined)
+        .finally(() => {
+          inflight.current = null;
+          setRefreshing(false);
+        });
+      inflight.current = run;
+      return run;
+    },
+    [wantClaude, wantCodex],
+  );
 
   useEffect(() => {
     void refresh();
@@ -118,10 +127,16 @@ export function UsageFooter({
 
   const showUsage = wantClaude || wantCodex;
   const showTerminals = terminals.length > 0;
-  const showRight = showUsage || showTerminals;
+  const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
+  const terminalLabel = projectTerminalActive
+    ? "Terminal"
+    : `New Terminal (${MOD}\`)`;
+  const onTerminalClick = projectTerminalActive
+    ? (onShowTerminal ?? onNewTerminal)
+    : (onNewTerminal ?? onShowTerminal);
   const ariaLabel = showUsage
     ? "Provider usage"
-    : showTerminals
+    : showTerminals || showTerminalButton
       ? "Terminals"
       : session
         ? "Session"
@@ -130,17 +145,31 @@ export function UsageFooter({
   return (
     <footer
       aria-label={ariaLabel}
-      className="flex h-7 shrink-0 items-center gap-3 overflow-x-auto border-t border-content/10 px-3 text-[11px] text-content/55"
+      className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
     >
       {showUsage ? (
         <>
           {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
           {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
+          <button
+            type="button"
+            className="grid size-4.5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
+            aria-label="Refresh usage"
+            title="Refresh usage"
+            disabled={refreshing}
+            onClick={() => void refresh(true)}
+          >
+            <RefreshCw
+              className={`size-2.5 ${refreshing ? "animate-spin" : ""}`}
+              strokeWidth={1.75}
+              aria-hidden
+            />
+          </button>
         </>
       ) : session ? (
         <SessionChip session={session} />
       ) : null}
-      {showRight ? (
+      {showTerminals || showTerminalButton ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {showTerminals ? (
             <RunningTerminalChip
@@ -148,21 +177,21 @@ export function UsageFooter({
               open={terminalOpen}
               onToggle={onToggleTerminal}
             />
-          ) : null}
-          {showUsage ? (
+          ) : showTerminalButton ? (
             <button
               type="button"
-              className="grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
-              aria-label="Refresh usage"
-              title="Refresh usage"
-              disabled={refreshing}
-              onClick={() => void refresh(true)}
+              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 hover:bg-content/10 ${
+                projectTerminalActive
+                  ? "text-accent"
+                  : "text-content/40 hover:text-content"
+              }`}
+              aria-label={terminalLabel}
+              aria-pressed={projectTerminalActive}
+              title={terminalLabel}
+              onClick={onTerminalClick}
             >
-              <RefreshCw
-                className={`size-3 ${refreshing ? "animate-spin" : ""}`}
-                strokeWidth={1.75}
-                aria-hidden
-              />
+              <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
+              <span>Terminal</span>
             </button>
           ) : null}
         </div>
@@ -268,7 +297,9 @@ function RunningTerminalChip({
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => toggle(terminal.id)}
             >
-              <span className="min-w-0 flex-1 truncate">{terminal.process}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {terminal.process}
+              </span>
               <span className="max-w-[7rem] shrink-0 truncate text-[11px] text-content/40">
                 {terminal.label}
               </span>
