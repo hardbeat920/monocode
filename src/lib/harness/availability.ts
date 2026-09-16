@@ -1,5 +1,6 @@
 import type { HarnessId } from "../session";
 import { HARNESSES } from "../session";
+import { t } from "../i18n";
 import {
   resolveClaudeBinary,
   resolveCodexBinary,
@@ -82,7 +83,10 @@ export function isHarnessAvailable(id: HarnessId): boolean {
 export function harnessUnavailableHint(id: HarnessId): string {
   const { name, install } = CLI[id];
   const how = install ? ` (\`${install}\`)` : "";
-  return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;
+  return t("{name} not found{how}. Install it, or restart MonoCode if it is already installed.", {
+    name,
+    how,
+  });
 }
 
 export function probeHarnessAvailability(

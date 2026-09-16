@@ -1,13 +1,47 @@
-#[cfg(target_os = "macos")]
-use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
-#[cfg(target_os = "macos")]
-use tauri::Wry;
 use tauri::{AppHandle, Emitter, Manager};
 
+pub use crate::menu_language::{Lang, MenuLanguage};
+// Only macOS builds a native menu, so only macOS needs the label tables.
+#[cfg(target_os = "macos")]
+pub use crate::menu_language::labels;
+
+/// The language the menu is currently built in.
+pub fn language(app: &AppHandle) -> Lang {
+    app.state::<MenuLanguage>().get()
+}
+
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
+    let lang = language(app);
     #[cfg(target_os = "macos")]
-    app.set_menu(build(app)?)?;
-    let _ = app;
+    app.set_menu(build(app, lang)?)?;
+    let _ = (app, lang);
+    Ok(())
+}
+
+/// Rebuilds the native menu in `language`. The webview calls this on boot and
+/// whenever the language setting flips. A no-op on platforms whose menu bar is
+/// drawn by the webview (Windows/Linux), so the frontend can call it blindly.
+#[tauri::command]
+pub fn set_menu_language(app: AppHandle, language: String) -> Result<(), String> {
+    let next = Lang::from_tag(&language);
+    if !app.state::<MenuLanguage>().set(next)? {
+        return Ok(());
+    }
+    apply(&app, next)
+}
+
+#[cfg(target_os = "macos")]
+fn apply(app: &AppHandle, lang: Lang) -> Result<(), String> {
+    app.set_menu(build(app, lang).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    // The dock menu is a separate NSMenu that Tauri does not own, so it has to
+    // be rebuilt alongside the app menu.
+    crate::macos::install_dock_menu(app, lang);
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply(_app: &AppHandle, _lang: Lang) -> Result<(), String> {
     Ok(())
 }
 
@@ -56,102 +90,103 @@ fn emit_to_focused(app: &AppHandle, id: &str) {
 }
 
 #[cfg(target_os = "macos")]
-fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let open_settings = MenuItemBuilder::with_id("open_settings", "Settings…")
+fn build(app: &AppHandle, lang: Lang) -> tauri::Result<Menu<Wry>> {
+    let l = labels(lang);
+    let open_settings = MenuItemBuilder::with_id("open_settings", l.settings)
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
     let check_for_updates =
-        MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
-    let new_window = MenuItemBuilder::with_id("new_window", "New Window")
+        MenuItemBuilder::with_id("check_for_updates", l.check_for_updates).build(app)?;
+    let new_window = MenuItemBuilder::with_id("new_window", l.new_window)
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
-    let open_project = MenuItemBuilder::with_id("open_project", "Open Project…")
+    let open_project = MenuItemBuilder::with_id("open_project", l.open_project)
         .accelerator("CmdOrCtrl+O")
         .build(app)?;
-    let go_to_file = MenuItemBuilder::with_id("go_to_file", "Go to File…")
+    let go_to_file = MenuItemBuilder::with_id("go_to_file", l.go_to_file)
         .accelerator("CmdOrCtrl+P")
         .build(app)?;
-    let open_search = MenuItemBuilder::with_id("open_search", "Search…")
+    let open_search = MenuItemBuilder::with_id("open_search", l.open_search)
         .accelerator("CmdOrCtrl+K")
         .build(app)?;
-    let open_inbox = MenuItemBuilder::with_id("open_inbox", "Inbox").build(app)?;
-    let open_notes = MenuItemBuilder::with_id("open_notes", "Notes").build(app)?;
-    let new_tab = MenuItemBuilder::with_id("new_tab", "New Tab")
+    let open_inbox = MenuItemBuilder::with_id("open_inbox", l.open_inbox).build(app)?;
+    let open_notes = MenuItemBuilder::with_id("open_notes", l.open_notes).build(app)?;
+    let new_tab = MenuItemBuilder::with_id("new_tab", l.new_tab)
         .accelerator("CmdOrCtrl+T")
         .build(app)?;
-    let new_terminal = MenuItemBuilder::with_id("new_terminal", "New Terminal")
+    let new_terminal = MenuItemBuilder::with_id("new_terminal", l.new_terminal)
         .accelerator("CmdOrCtrl+`")
         .build(app)?;
-    let new_terminal_tab = MenuItemBuilder::with_id("new_terminal_tab", "New Terminal Tab")
+    let new_terminal_tab = MenuItemBuilder::with_id("new_terminal_tab", l.new_terminal_tab)
         .accelerator("CmdOrCtrl+Shift+`")
         .build(app)?;
-    let toggle_terminal = MenuItemBuilder::with_id("toggle_terminal", "Toggle Terminal")
+    let toggle_terminal = MenuItemBuilder::with_id("toggle_terminal", l.toggle_terminal)
         .accelerator("CmdOrCtrl+J")
         .build(app)?;
-    let split_right = MenuItemBuilder::with_id("split_right", "Split Pane Right")
+    let split_right = MenuItemBuilder::with_id("split_right", l.split_right)
         .accelerator("CmdOrCtrl+D")
         .build(app)?;
-    let split_down = MenuItemBuilder::with_id("split_down", "Split Pane Down")
+    let split_down = MenuItemBuilder::with_id("split_down", l.split_down)
         .accelerator("CmdOrCtrl+Shift+D")
         .build(app)?;
-    let close_tab = MenuItemBuilder::with_id("close_tab", "Close Pane")
+    let close_tab = MenuItemBuilder::with_id("close_tab", l.close_tab)
         .accelerator("CmdOrCtrl+W")
         .build(app)?;
-    let close_other_tabs = MenuItemBuilder::with_id("close_other_tabs", "Close Other Tabs")
+    let close_other_tabs = MenuItemBuilder::with_id("close_other_tabs", l.close_other_tabs)
         .accelerator("CmdOrCtrl+Alt+T")
         .build(app)?;
-    let close_all_tabs = MenuItemBuilder::with_id("close_all_tabs", "Close All Tabs")
+    let close_all_tabs = MenuItemBuilder::with_id("close_all_tabs", l.close_all_tabs)
         .accelerator("CmdOrCtrl+Shift+W")
         .build(app)?;
-    let next_tab = MenuItemBuilder::with_id("next_tab", "Next Tab")
+    let next_tab = MenuItemBuilder::with_id("next_tab", l.next_tab)
         .accelerator("CmdOrCtrl+Shift+]")
         .build(app)?;
-    let prev_tab = MenuItemBuilder::with_id("prev_tab", "Previous Tab")
+    let prev_tab = MenuItemBuilder::with_id("prev_tab", l.prev_tab)
         .accelerator("CmdOrCtrl+Shift+[")
         .build(app)?;
-    let back_tab = MenuItemBuilder::with_id("back_tab", "Go Back")
+    let back_tab = MenuItemBuilder::with_id("back_tab", l.back_tab)
         .accelerator("CmdOrCtrl+[")
         .build(app)?;
-    let forward_tab = MenuItemBuilder::with_id("forward_tab", "Go Forward")
+    let forward_tab = MenuItemBuilder::with_id("forward_tab", l.forward_tab)
         .accelerator("CmdOrCtrl+]")
         .build(app)?;
 
-    let focus_left = MenuItemBuilder::with_id("focus_left", "Focus Pane Left")
+    let focus_left = MenuItemBuilder::with_id("focus_left", l.focus_left)
         .accelerator("CmdOrCtrl+Alt+Left")
         .build(app)?;
-    let focus_right = MenuItemBuilder::with_id("focus_right", "Focus Pane Right")
+    let focus_right = MenuItemBuilder::with_id("focus_right", l.focus_right)
         .accelerator("CmdOrCtrl+Alt+Right")
         .build(app)?;
-    let focus_up = MenuItemBuilder::with_id("focus_up", "Focus Pane Up")
+    let focus_up = MenuItemBuilder::with_id("focus_up", l.focus_up)
         .accelerator("CmdOrCtrl+Alt+Up")
         .build(app)?;
-    let focus_down = MenuItemBuilder::with_id("focus_down", "Focus Pane Down")
+    let focus_down = MenuItemBuilder::with_id("focus_down", l.focus_down)
         .accelerator("CmdOrCtrl+Alt+Down")
         .build(app)?;
 
-    let toggle_sidebar = MenuItemBuilder::with_id("toggle_sidebar", "Toggle Sidebar")
+    let toggle_sidebar = MenuItemBuilder::with_id("toggle_sidebar", l.toggle_sidebar)
         .accelerator("CmdOrCtrl+B")
         .build(app)?;
-    let open_model_picker = MenuItemBuilder::with_id("open_model_picker", "Switch Model…")
+    let open_model_picker = MenuItemBuilder::with_id("open_model_picker", l.switch_model)
         .accelerator("CmdOrCtrl+.")
         .build(app)?;
     let sidebar_opacity =
-        MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
+        MenuItemBuilder::with_id("sidebar_opacity", l.sidebar_appearance).build(app)?;
     // No accelerators here on purpose: the webview key handler owns
     // CmdOrCtrl + - 0, and a menu accelerator would fire the same command
     // a second time on top of it.
-    let zoom_in = MenuItemBuilder::with_id("zoom_in", "Zoom In").build(app)?;
-    let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
-    let find = MenuItemBuilder::with_id("find", "Find")
+    let zoom_in = MenuItemBuilder::with_id("zoom_in", l.zoom_in).build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("zoom_out", l.zoom_out).build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", l.zoom_reset).build(app)?;
+    let find = MenuItemBuilder::with_id("find", l.find)
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
 
-    let find_in_project = MenuItemBuilder::with_id("find_in_project", "Find in Files…")
+    let find_in_project = MenuItemBuilder::with_id("find_in_project", l.find_in_project)
         .accelerator("CmdOrCtrl+Shift+F")
         .build(app)?;
 
-    let file = SubmenuBuilder::new(app, "File")
+    let file = SubmenuBuilder::new(app, l.file)
         .item(&new_window)
         .item(&open_project)
         .item(&open_search)
@@ -173,7 +208,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&forward_tab)
         .build()?;
 
-    let view = SubmenuBuilder::new(app, "View")
+    let view = SubmenuBuilder::new(app, l.view)
         .item(&toggle_sidebar)
         .item(&open_inbox)
         .item(&open_notes)
@@ -192,40 +227,48 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&sidebar_opacity)
         .build()?;
 
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
+    // The standard items take explicit text: Tauri's defaults are English, so
+    // leaving them alone would put Undo/Cut/Copy in an English menu bar.
+    let undo = PredefinedMenuItem::undo(app, Some(l.undo))?;
+    let redo = PredefinedMenuItem::redo(app, Some(l.redo))?;
+    let cut = PredefinedMenuItem::cut(app, Some(l.cut))?;
+    let copy = PredefinedMenuItem::copy(app, Some(l.copy))?;
+    let paste = PredefinedMenuItem::paste(app, Some(l.paste))?;
+    let select_all = PredefinedMenuItem::select_all(app, Some(l.select_all))?;
+
+    let edit = SubmenuBuilder::new(app, l.edit)
+        .item(&undo)
+        .item(&redo)
         .separator()
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
+        .item(&cut)
+        .item(&copy)
+        .item(&paste)
+        .item(&select_all)
         .separator()
         .item(&find)
         .build()?;
 
-    #[cfg(target_os = "macos")]
-    {
-        let quit = MenuItemBuilder::with_id("quit", "Quit MonoCode")
-            .accelerator("CmdOrCtrl+Q")
-            .build(app)?;
-        let app_menu = SubmenuBuilder::new(app, "MonoCode")
-            .about(Some(AboutMetadata::default()))
-            .separator()
-            .item(&open_settings)
-            .item(&check_for_updates)
-            .separator()
-            .hide()
-            .hide_others()
-            .show_all()
-            .separator()
-            .item(&quit)
-            .build()?;
-        let window_menu = SubmenuBuilder::new(app, "Window").build()?;
-        window_menu.set_as_windows_menu_for_nsapp()?;
-        return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
-    }
+    let about = PredefinedMenuItem::about(app, Some(l.about), Some(AboutMetadata::default()))?;
+    let hide = PredefinedMenuItem::hide(app, Some(l.hide))?;
+    let hide_others = PredefinedMenuItem::hide_others(app, Some(l.hide_others))?;
+    let show_all = PredefinedMenuItem::show_all(app, Some(l.show_all))?;
+    let quit = MenuItemBuilder::with_id("quit", l.quit)
+        .accelerator("CmdOrCtrl+Q")
+        .build(app)?;
+    let app_menu = SubmenuBuilder::new(app, "MonoCode")
+        .item(&about)
+        .separator()
+        .item(&open_settings)
+        .item(&check_for_updates)
+        .separator()
+        .item(&hide)
+        .item(&hide_others)
+        .item(&show_all)
+        .separator()
+        .item(&quit)
+        .build()?;
 
-    #[allow(unreachable_code)]
-    Menu::with_items(app, &[&file, &edit, &view])
+    let window_menu = SubmenuBuilder::new(app, l.window).build()?;
+    window_menu.set_as_windows_menu_for_nsapp()?;
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu])
 }

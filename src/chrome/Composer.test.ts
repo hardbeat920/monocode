@@ -1,7 +1,36 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposerAction } from "./Composer";
+
+/**
+ * The action renders localized labels, so pin the language: otherwise the
+ * expectations below depend on the machine's locale.
+ */
+beforeEach(() => {
+  const data = new Map<string, string>([["monocode.language", "en"]]);
+  Object.defineProperty(globalThis, "localStorage", {
+    value: {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+      removeItem: (key: string) => {
+        data.delete(key);
+      },
+      clear: () => data.clear(),
+      key: (index: number) => [...data.keys()][index] ?? null,
+      get length() {
+        return data.size;
+      },
+    },
+    configurable: true,
+  });
+});
+
+afterEach(() => {
+  Reflect.deleteProperty(globalThis, "localStorage");
+});
 
 function renderAction(busy: boolean, hasValue: boolean) {
   return renderToStaticMarkup(

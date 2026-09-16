@@ -14,6 +14,7 @@ mod link_preview;
 #[cfg(target_os = "macos")]
 mod macos;
 mod menu;
+mod menu_language;
 mod notes;
 mod notifications;
 mod project_logo;
@@ -196,6 +197,7 @@ pub fn run() {
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
         .manage(window_transfer::WindowTransferState::new())
+        .manage(menu::MenuLanguage::default())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
@@ -205,7 +207,7 @@ pub fn run() {
             menu::install(app.handle())?;
             #[cfg(target_os = "macos")]
             {
-                macos::install_dock_menu(app.handle());
+                macos::install_dock_menu(app.handle(), menu::language(app.handle()));
                 if let Some(window) = app.get_webview_window("main") {
                     macos::install(&window);
                 }
@@ -234,6 +236,7 @@ pub fn run() {
             control::control_turn_finished,
             default_cwd,
             home_dir,
+            menu::set_menu_language,
             notifications::notification_permission,
             notifications::request_notification_permission,
             notifications::show_notification,

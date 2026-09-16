@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   tabCopy,
   tabStripOverflow,
@@ -6,6 +6,35 @@ import {
   titleTabClosable,
   type Tab,
 } from "./TitleBar";
+
+/**
+ * `tabCopy` renders localized copy, so pin the language: otherwise the
+ * expectations below depend on the machine's locale.
+ */
+beforeEach(() => {
+  const data = new Map<string, string>([["monocode.language", "en"]]);
+  Object.defineProperty(globalThis, "localStorage", {
+    value: {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+      removeItem: (key: string) => {
+        data.delete(key);
+      },
+      clear: () => data.clear(),
+      key: (index: number) => [...data.keys()][index] ?? null,
+      get length() {
+        return data.size;
+      },
+    },
+    configurable: true,
+  });
+});
+
+afterEach(() => {
+  Reflect.deleteProperty(globalThis, "localStorage");
+});
 
 function tab(overrides: Partial<Tab> = {}): Tab {
   return {

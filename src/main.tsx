@@ -3,12 +3,14 @@ import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import App from "./App";
 import { activateWindowAppearance, initAppearance } from "./lib/appearance";
+import { initNativeMenuLanguage } from "./lib/nativeMenu";
 import { initSounds } from "./lib/sounds";
 import { handleQuitRequested, loadBootWorkspace } from "./lib/appLifecycle";
 import { consumeInstalledUpdate } from "./lib/updateNotice";
 import "./index.css";
 
 initAppearance();
+initNativeMenuLanguage();
 initSounds();
 
 function dismissBootSplash() {
