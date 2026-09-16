@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "../lib/session";
+import { INTERRUPT_MESSAGE } from "../lib/inFlight";
 import {
   activityPhaseTitle,
   activityStillRunning,
@@ -22,6 +23,8 @@ import {
   toolCallLabel,
   turnCopyText,
   subagentModelName,
+  workKind,
+  workSummaryLine,
 } from "./transcriptActivity";
 
 function shell(
@@ -88,6 +91,19 @@ function note(id: string, text: string): Block {
 
 function thought(id: string, text = "Weighing the options."): Block {
   return { id, role: "reasoning", text };
+}
+
+function status(id: string, text = "Advisor reviewed this turn"): Block {
+  return { id, role: "system", text };
+}
+
+function irc(id: string, text = "new message in #general"): Block {
+  return {
+    id,
+    role: "system",
+    text,
+    interjection: { customType: "irc:incoming" },
+  };
 }
 
 describe("groupTurnItems", () => {
@@ -776,6 +792,251 @@ describe("the subagent stack", () => {
     ).toBe("Quality review");
     expect(isSubagentBlock(agent("a1"))).toBe(true);
     expect(isSubagentBlock(shell("s1"))).toBe(false);
+  });
+});
+
+describe("the settled work trail", () => {
+  const agent = (id: string, name = "Correctness review"): Block => ({
+    id,
+    role: "tool",
+    text: name,
+    tool: { kind: "agent", title: name, status: "completed" },
+  });
+
+  it("keeps a status row inside the surrounding work, live or settled", () => {
+    for (const options of [undefined, { settled: false }, { settled: true }]) {
+      const items = groupTurnItems(
+        [shell("a"), status("st"), shell("b")],
+        options,
+      );
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        type: "activity",
+        blocks: [{ id: "a" }, { id: "st" }, { id: "b" }],
+      });
+    }
+  });
+
+  it("keeps an interjection on its own row while live, folds it in once settled", () => {
+    const turn = [shell("a"), irc("i1"), shell("b")];
+    expect(groupTurnItems(turn).map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "activity",
+    ]);
+    const items = groupTurnItems(turn, { settled: true });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "activity",
+      blocks: [{ id: "a" }, { id: "i1" }, { id: "b" }],
+    });
+  });
+
+  it("pins a delegated run while live, folds it into the trail once settled", () => {
+    const turn = [shell("a"), agent("ag"), shell("b")];
+    expect(groupTurnItems(turn).map((item) => item.type)).toEqual([
+      "activity",
+      "subagents",
+      "activity",
+    ]);
+    const items = groupTurnItems(turn, { settled: true });
+    expect(items).toHaveLength(1);
+    if (items[0]?.type !== "activity") throw new Error("expected activity");
+    expect(items[0].blocks.map((block) => block.id)).toEqual([
+      "a",
+      "ag",
+      "b",
+    ]);
+    expect(workSummaryLine(items[0].blocks)).toBe(
+      "Ran 2 commands · Ran a subagent",
+    );
+  });
+
+  it("keeps a failed run on its own row once settled, outside the fold", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        agent("ag", "Correctness review"),
+        {
+          id: "dead",
+          role: "tool",
+          text: "Quality review",
+          tool: { kind: "agent", title: "Quality review", status: "failed" },
+        },
+        shell("t2"),
+        { id: "done", role: "assistant", text: "It could not finish." },
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "subagents",
+      "activity",
+      "block",
+    ]);
+    // The fold spans the failed run's row, which the transcript parks under
+    // the fold line rather than collapsing into it — so the reason it died
+    // stays one click away, exactly as it was while live.
+    const fold = foldableWork(items)!;
+    expect(fold).toEqual({ start: 1, end: 3 });
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "ag",
+      "t2",
+    ]);
+  });
+
+  it("spans the whole trail once settled, status rows and notes included", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        status("st"),
+        shell("t2"),
+        irc("i1"),
+        irc("i2"),
+        shell("t3"),
+        { id: "done", role: "assistant", text: "All set." },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items);
+    expect(fold).toEqual({ start: 1, end: 1 });
+    const folded = foldedBlocks(items, fold!);
+    expect(folded.map((block) => block.id)).toEqual([
+      "t1",
+      "st",
+      "t2",
+      "i1",
+      "i2",
+      "t3",
+    ]);
+    const summary = workSummaryLine(folded);
+    expect(summary).toBe("Ran 3 commands · 2 notes");
+    expect(summary).not.toContain("Advisor reviewed");
+  });
+
+  it("leaves notes that arrive after the answer as their own trail under it", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        { id: "done", role: "assistant", text: "All set." },
+        irc("i1"),
+        irc("i2"),
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+      "activity",
+    ]);
+    // The fold covers the work the answer answered for; the answer itself and
+    // the notes after it stay out.
+    expect(foldableWork(items)).toEqual({ start: 1, end: 1 });
+    const trailing = items[3];
+    if (trailing?.type !== "activity") throw new Error("expected activity");
+    const phases = buildActivityPhases(trailing.blocks);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].kind).toBe("note");
+    expect(activityPhaseTitle(phases[0])).toBe("2 notes");
+    expect(workKind(trailing.blocks)).toBe("note");
+  });
+
+  it("lets the settled fold reach across an interjection that stops it live", () => {
+    const turn = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      note("mid", "Halfway there."),
+      irc("i1"),
+      shell("t2"),
+      note("done", "All set."),
+    ];
+    // Live: the interjection stands alone and bounds the fold.
+    expect(foldableWork(groupTurnItems(turn))).toEqual({ start: 4, end: 4 });
+    // Settled: it joins the trail and the fold spans the turn's work.
+    const items = groupTurnItems(turn, { settled: true });
+    const fold = foldableWork(items)!;
+    expect(fold).toEqual({ start: 1, end: 3 });
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "mid",
+      "i1",
+      "t2",
+    ]);
+  });
+
+  it("never counts a status row as running work", () => {
+    expect(activityStillRunning([status("st")])).toBe(false);
+    expect(
+      activityStillRunning([
+        shell("done"),
+        status("st"),
+        status("st2", "Working on it"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("keeps an error outside the trail after a completed call, live or settled", () => {
+    const turn: Block[] = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      {
+        id: "e1",
+        role: "system",
+        text: "Provider connection lost",
+        notice: "error",
+      },
+      { id: "done", role: "assistant", text: "It failed." },
+    ];
+    for (const options of [undefined, { settled: false }, { settled: true }]) {
+      const items = groupTurnItems(turn, options);
+      expect(items.map((item) => item.type)).toEqual([
+        "block",
+        "activity",
+        "block",
+        "block",
+      ]);
+      expect(items[2]).toMatchObject({ type: "block", block: { id: "e1" } });
+      // And on the bare sequence — user, done call, error — all the same.
+      expect(
+        groupTurnItems(turn.slice(0, 3), options).map((item) => item.type),
+      ).toEqual(["block", "activity", "block"]);
+    }
+    // And the fold the answer puts away stops short of the error's row.
+    const items = groupTurnItems(turn, { settled: true });
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual(["t1"]);
+  });
+
+  it("keeps a persisted interrupt outside the trail even without the tag", () => {
+    const items = groupTurnItems(
+      [
+        shell("a"),
+        { id: "int", role: "system", text: INTERRUPT_MESSAGE },
+        shell("b"),
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "activity",
+    ]);
+  });
+
+  it("labels a group that only reported status", () => {
+    const statuses = [status("s1"), status("s2", "Working on it")];
+    expect(workSummaryLine(statuses)).toBe("Status update");
+    const phases = buildActivityPhases(statuses);
+    expect(activityPhaseTitle(phases[0])).toBe("Status update");
+    expect(workKind(statuses)).toBe("note");
+    // A thought among the statuses still reads as thinking, not a status line.
+    expect(workSummaryLine([status("s1"), thought("r1")])).toBe("Thought");
   });
 });
 

@@ -431,7 +431,7 @@ describe("sidebar orchestration card", () => {
       expect(container.querySelectorAll("[data-session-card]")).toHaveLength(2);
       expect(card().dataset.orchestrationCard).toBe("true");
       // The lead card carries the sidebar's ordinary active treatment.
-      expect(card().className).toContain("bg-content/10");
+      expect(card().className).toContain("bg-selection");
       // The lead names its own model, like every agent row beneath it.
       expect(card().textContent).toContain("Claude Sonnet 5");
       expect(card().textContent).not.toContain("Orchestrator");
@@ -646,6 +646,30 @@ describe("sidebar orchestration card", () => {
 });
 
 describe("sidebar linked work item updates", () => {
+  it("opens a linked item beside the session that owns it", () => {
+    props.busySessionIds = new Set();
+    props.onOpenInboxItem = vi.fn();
+    const linkedWorkItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+    };
+    props.sessions = [{ ...props.sessions[0], linkedWorkItem }];
+    act(() => render());
+
+    const pullRequest = card().querySelector<HTMLButtonElement>(
+      '[aria-label="Open PR #42"]',
+    )!;
+    expect(pullRequest.title).toContain("beside this session");
+    act(() => pullRequest.click());
+    expect(props.onOpenInboxItem).toHaveBeenCalledExactlyOnceWith(
+      linkedWorkItem,
+      "session-1",
+    );
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+  });
+
   it("uses the footer for the linked issue or PR instead of a second harness icon", () => {
     props.busySessionIds = new Set();
     props.onArchiveSession = vi.fn();
@@ -799,5 +823,58 @@ describe("sidebar session reminders", () => {
         '[data-pinned-sessions] [data-session-card="session-1"]',
       ),
     ).toBe(card());
+  });
+});
+
+describe("sidebar working agents", () => {
+  it("shows the original working widget when the project rail is collapsed", () => {
+    props.projectRailOpen = false;
+    props.onSelectAgent = vi.fn();
+    props.liveAgents = [
+      {
+        id: "agent-a",
+        cwd: "/workspace/alpha",
+        title: "Build settings",
+        harness: "codex",
+        activity: "Editing Settings.tsx",
+        startedAt: Date.now() - 10_000,
+        needsApproval: false,
+        done: false,
+      },
+      {
+        id: "agent-b",
+        cwd: "/workspace/beta",
+        title: "Review tests",
+        harness: "claude",
+        activity: "Running tests",
+        startedAt: Date.now() - 5_000,
+        needsApproval: false,
+        done: false,
+      },
+    ];
+    act(() => render());
+
+    const preview = container.querySelector<HTMLElement>(
+      '[data-live-agents-preview="full"]',
+    )!;
+    expect(preview.querySelectorAll("[data-live-agent-card]")).toHaveLength(2);
+    expect(
+      preview.querySelector('[data-live-agent-card="agent-a"]')!.textContent,
+    ).toContain("alpha");
+    expect(
+      preview.querySelector('[data-live-agent-card="agent-b"]')!.textContent,
+    ).toContain("beta");
+    expect(preview.querySelector(".mascot-active")).not.toBeNull();
+
+    act(() =>
+      preview
+        .querySelector<HTMLButtonElement>('[data-live-agent-card="agent-b"]')!
+        .click(),
+    );
+    expect(props.onSelectAgent).toHaveBeenCalledExactlyOnceWith("agent-b");
+
+    props.projectRailOpen = true;
+    act(() => render());
+    expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
   });
 });

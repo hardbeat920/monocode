@@ -142,7 +142,7 @@ export function LinkedWorkItemUpdateNotice({
         aria-hidden="true"
         className="popover-backdrop pointer-events-none absolute inset-0 z-0 backdrop-blur-xl [backface-visibility:hidden] [transform:translateZ(0)]"
       />
-      <div className="relative z-[1] flex items-center justify-between gap-0.5 border-b border-content/10 px-3 py-2">
+      <div className="relative z-[1] flex items-center justify-between gap-0.5 border-b border-stroke px-3 py-2">
         <div className="flex items-center gap-1.5">
           <span className="size-2 shrink-0 rounded-full bg-accent" />
           <KindIcon className="size-3.5 text-content/55" strokeWidth={1.75} />
@@ -183,7 +183,7 @@ export function LinkedWorkItemUpdateNotice({
       </div>
 
       {card.entries.length > 0 ? (
-        <div className="relative z-[1] max-h-52 overflow-y-auto border-t border-content/10 divide-y divide-content/10">
+        <div className="relative z-[1] max-h-52 overflow-y-auto border-t border-stroke divide-y divide-stroke">
           {card.entries.slice(0, 3).map((entry) => (
             <button
               key={`${entry.kind}:${entry.id}`}
@@ -224,7 +224,7 @@ export function LinkedWorkItemUpdateNotice({
       ) : null}
 
       {terminalState ? (
-        <div className="relative z-[1] border-t border-content/10 px-3 py-2.5">
+        <div className="relative z-[1] border-t border-stroke px-3 py-2.5">
           <div className="flex items-center gap-2 text-[11px]">
             <TerminalIcon
               className={
@@ -274,7 +274,7 @@ export function LinkedWorkItemUpdateNotice({
         </div>
       ) : null}
 
-      <div className="relative z-[1] flex min-w-0 items-center gap-1.5 border-t border-content/10 px-3 py-2.5 text-[11px]">
+      <div className="relative z-[1] flex min-w-0 items-center gap-1.5 border-t border-stroke px-3 py-2.5 text-[11px]">
         <button
           type="button"
           title={agentLabel}

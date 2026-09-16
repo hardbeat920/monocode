@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   flattenOpenCodeModels,
+  openCodeProviderName,
   parseAgentListCliOutput,
   parseModelsCliOutput,
 } from "./opencodeCatalog";
@@ -162,6 +163,10 @@ describe("OpenCode CLI inventory parsers", () => {
       "anthropic/claude-sonnet-4-6",
       "opencode/glm-5",
     ]);
+    expect(models.map((model) => model.provider)).toEqual([
+      { id: "anthropic", name: "Anthropic" },
+      { id: "opencode", name: "OpenCode" },
+    ]);
     expect(
       models[1].settings?.some((setting) => setting.id === "variant"),
     ).toBe(true);
@@ -178,6 +183,12 @@ describe("OpenCode CLI inventory parsers", () => {
       { name: "build", mode: "primary", hidden: false },
       { name: "compaction", mode: "primary", hidden: true },
     ]);
+  });
+
+  it("uses familiar provider names and readable custom-provider fallbacks", () => {
+    expect(openCodeProviderName("opencode-go")).toBe("OpenCode Go");
+    expect(openCodeProviderName("openai")).toBe("OpenAI");
+    expect(openCodeProviderName("acme-cloud")).toBe("Acme Cloud");
   });
 });
 

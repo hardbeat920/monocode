@@ -276,6 +276,7 @@ pub fn run() {
             fs::git_github_work_item_details,
             fs::git_github_work_item_thread,
             fs::git_github_work_item_comment,
+            fs::git_github_pr_action,
             fs::git_github_pr_diff,
             inbox_media::fetch_inbox_media,
             gitlab::gitlab_status,

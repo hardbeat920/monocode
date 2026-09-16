@@ -1,7 +1,10 @@
 import { createElement, type PointerEvent as ReactPointerEvent } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAnimatedReorder } from "./useAnimatedReorder";
+import {
+  useAnimatedReorder,
+  type ReorderExternalDrop,
+} from "./useAnimatedReorder";
 
 const ids = ["sessions", "changes", "explorer"];
 
@@ -39,14 +42,18 @@ function pointer(type: string, clientX: number, pointerId = 1) {
   );
 }
 
-function setup(reducedMotion = false, axis: "x" | "y" = "x") {
+function setup(
+  reducedMotion = false,
+  axis: "x" | "y" = "x",
+  externalDrop?: ReorderExternalDrop<string>,
+) {
   Object.assign(browser, { matchMedia: () => ({ matches: reducedMotion }) });
   const onReorder = vi.fn();
   let reorder!: ReturnType<typeof useAnimatedReorder<string>>;
   // Render the real hook to obtain its gesture interface without mocking React.
   // Mount/unmount effects and native click targeting need a browser check.
   function Probe() {
-    reorder = useAnimatedReorder(ids, onReorder, axis);
+    reorder = useAnimatedReorder(ids, onReorder, axis, externalDrop);
     return null;
   }
   renderToString(createElement(Probe));
@@ -270,5 +277,28 @@ describe("workspace tab gestures", () => {
     );
     expect(tabs.every((tab) => tab.style.transform === "")).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("hands a drag to an external target without reordering", () => {
+    const externalDrop: ReorderExternalDrop<string> = {
+      onMove: vi.fn((_id, event) => event.clientY > 100),
+      onDrop: vi.fn((_id, event) => event.clientY > 100),
+      onEnd: vi.fn(),
+    };
+    const { press, tabs, reorder, onReorder } = setup(false, "x", externalDrop);
+    press();
+    pointer("pointermove", 180);
+    pointer("pointerup", 180);
+    vi.runAllTimers();
+
+    expect(externalDrop.onMove).toHaveBeenCalled();
+    expect(externalDrop.onDrop).toHaveBeenCalledExactlyOnceWith(
+      "sessions",
+      expect.objectContaining({ clientX: 180, clientY: 180 }),
+    );
+    expect(externalDrop.onEnd).toHaveBeenCalledWith("sessions");
+    expect(onReorder).not.toHaveBeenCalled();
+    expect(tabs.every((tab) => tab.style.transform === "")).toBe(true);
+    expect(reorder.consumeClick()).toBe(true);
   });
 });

@@ -424,7 +424,7 @@ export function SkillsPage({
           <aside
             id={previewId}
             aria-label="Skill preview"
-            className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-content/10 @3xl/skills:max-w-[720px] @3xl/skills:border-t-0 @3xl/skills:border-l"
+            className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-stroke @3xl/skills:max-w-[720px] @3xl/skills:border-t-0 @3xl/skills:border-l"
           >
             <header className="flex shrink-0 items-start gap-2 px-4 pt-4 pb-2">
               <h2 className="min-w-0 flex-1 break-words text-[16px] font-semibold text-content">
@@ -441,7 +441,7 @@ export function SkillsPage({
                 <X className="size-3.5" strokeWidth={1.75} />
               </button>
             </header>
-            <div className="shrink-0 space-y-3 border-b border-content/10 px-4 pt-1 pb-3">
+            <div className="shrink-0 space-y-3 border-b border-stroke px-4 pt-1 pb-3">
               <p className="select-text break-all text-[11px] text-content/50">
                 {previewSkill.path}
               </p>

@@ -23,6 +23,8 @@ import {
 } from "./recents";
 
 export type GithubTaskKind = "issue" | "pr";
+export type GithubPrAction =
+  "merge" | "squash" | "rebase" | "draft" | "ready" | "close" | "reopen";
 export type InboxKind = GithubTaskKind | "linear";
 
 export type GithubLabel = {
@@ -257,6 +259,14 @@ function workItemLookupKey(
   return `${repo.trim().toLowerCase()}:${kind}:${number}`;
 }
 
+export function peekGithubWorkItem(
+  repo: string,
+  kind: GithubTaskKind,
+  number: number,
+): GithubWorkItem | null {
+  return workItemByKey.get(workItemLookupKey(repo, kind, number)) ?? null;
+}
+
 /** Fetch one exact item after targeted Inbox navigation misses its list cache. */
 export function githubWorkItem(
   cwd: string,
@@ -435,6 +445,37 @@ export async function githubWorkItemComment(
   threadByKey.delete(key);
   threadInflight.delete(key);
   return url;
+}
+
+/** Run a state-changing pull request action and return GitHub's fresh PR state. */
+export async function githubPrAction(
+  cwd: string,
+  repo: string,
+  number: number,
+  action: GithubPrAction,
+): Promise<GithubWorkItem> {
+  const item = await invoke<GithubWorkItem>("git_github_pr_action", {
+    cwd,
+    repo,
+    number,
+    action,
+  });
+  const key = workItemLookupKey(repo, "pr", number);
+  workItemByKey.set(key, item);
+  if (inboxListCache) {
+    inboxListCache = {
+      ...inboxListCache,
+      items: inboxListCache.items.map((cached) =>
+        cached.provider === "github" &&
+        cached.kind === "pr" &&
+        cached.repo.toLowerCase() === repo.trim().toLowerCase() &&
+        cached.number === number
+          ? { ...cached, ...item }
+          : cached,
+      ),
+    };
+  }
+  return item;
 }
 
 export function githubReviewDecisionLabel(decision: string): string {

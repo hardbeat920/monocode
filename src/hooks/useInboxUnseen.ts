@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   githubWorkItem,
+  inboxListCacheKey,
   inboxItemKey,
   inboxProjectsForRail,
   listInboxItems,
   type GithubWorkItem,
   type InboxItem,
   type InboxQuery,
+  type InboxProvider,
 } from "../lib/githubTasks";
 import {
   applyInboxFilters,
@@ -34,16 +36,33 @@ import {
 import { loadHiddenLinearTeamIds } from "../lib/linear";
 import type { RecentProject } from "../lib/recents";
 import type { SessionSummary } from "../lib/sessionStore";
-import { noteInboxUnseen } from "../lib/sounds";
+import { playCue } from "../lib/sounds";
+import {
+  InboxNotificationTracker,
+  inboxNotificationSubject,
+} from "../lib/inboxNotifications";
+import {
+  inboxNotificationProject,
+  rememberNotificationProjects,
+} from "../lib/notificationProjects";
+import {
+  allowsProjectNotificationIndicator,
+  loadNotificationPreferences,
+  subscribeNotificationPreferences,
+  type NotificationSubject,
+} from "../lib/notificationPreferences";
 
 const POLL_MS = 30_000;
 const FALLBACK_REFRESH_MS = 60_000;
 const MAX_CONCURRENT_LOOKUPS = 3;
 
-function seenEntries(items: readonly InboxItem[]): InboxSeenEntry[] {
+type ProjectSeenEntry = InboxSeenEntry & NotificationSubject;
+
+function seenEntries(items: readonly InboxItem[]): ProjectSeenEntry[] {
   return items.map((item) => ({
     key: inboxItemKey(item),
     updatedAt: item.updatedAt,
+    ...inboxNotificationSubject(item),
   }));
 }
 
@@ -112,7 +131,9 @@ export function useInboxActivity(
     ReadonlyMap<string, GithubWorkItem>
   >(() => new Map());
   const [linkedSeenRevision, setLinkedSeenRevision] = useState(0);
-  const entriesRef = useRef<InboxSeenEntry[]>([]);
+  const [notificationRevision, setNotificationRevision] = useState(0);
+  const entriesRef = useRef<ProjectSeenEntry[]>([]);
+  const notifications = useRef(new InboxNotificationTracker());
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const fallbackFetchedAt = useRef(new Map<string, number>());
@@ -120,15 +141,28 @@ export function useInboxActivity(
     .map((target) => target.key)
     .join("\0");
 
-  const applyUnseen = useCallback((next: boolean) => {
-    noteInboxUnseen(next);
-    setUnseen(next);
+  const applyUnseen = useCallback(() => {
+    const preferences = loadNotificationPreferences();
+    // Category choices and mute affect badges, never the item's unread state.
+    setUnseen(
+      inboxHasUnseenItems(
+        entriesRef.current.filter((entry) =>
+          allowsProjectNotificationIndicator(entry, preferences),
+        ),
+      ),
+    );
   }, []);
 
   useEffect(() => {
-    return subscribeInboxSeen(() => {
-      applyUnseen(inboxHasUnseenItems(entriesRef.current));
+    const stopSeen = subscribeInboxSeen(applyUnseen);
+    const stopPreferences = subscribeNotificationPreferences(() => {
+      applyUnseen();
+      setNotificationRevision((revision) => revision + 1);
     });
+    return () => {
+      stopSeen();
+      stopPreferences();
+    };
   }, [applyUnseen]);
 
   useEffect(
@@ -143,7 +177,7 @@ export function useInboxActivity(
     const projects = inboxProjectsForRail(recents, cwd);
     if (projects.length === 0) {
       entriesRef.current = [];
-      applyUnseen(false);
+      applyUnseen();
       return;
     }
 
@@ -165,10 +199,25 @@ export function useInboxActivity(
         const listed = await listInboxItems(projects, query, { force });
         if (cancelled) return;
         const visible = applyInboxFilters(listed.items, filters, "");
+        rememberNotificationProjects(
+          listed.items.map(inboxNotificationProject),
+        );
+        const changed = notifications.current.observe(
+          listed.items,
+          inboxListCacheKey(projects, query),
+          Object.keys(listed.errors) as InboxProvider[],
+        );
+        const visibleKeys = new Set(visible.map(inboxItemKey));
+        // The whole batch is observed even when every cue is suppressed. At most
+        // one eligible project chimes; muted projects cannot consume that slot.
+        for (const item of changed) {
+          if (!visibleKeys.has(inboxItemKey(item))) continue;
+          if (playCue("inboxUnseen", inboxNotificationSubject(item))) break;
+        }
         const entries = seenEntries(visible);
         entriesRef.current = entries;
         seedInboxSeenIfNeeded(entries);
-        applyUnseen(inboxHasUnseenItems(entries));
+        applyUnseen();
 
         const targets = linkedWorkItemTargets(sessionsRef.current);
         const targetKeys = new Set(targets.map((target) => target.key));
@@ -238,10 +287,23 @@ export function useInboxActivity(
     () => linkedSessionUpdates(sessions, workItems, linkedSessionSeenAt),
     [sessions, workItems, linkedSeenRevision],
   );
+  const linkedIndicators = useMemo(() => {
+    const preferences = loadNotificationPreferences();
+    return new Set(
+      [...updates]
+        .filter(([, update]) =>
+          allowsProjectNotificationIndicator(
+            inboxNotificationSubject({ ...update.item, provider: "github" }),
+            preferences,
+          ),
+        )
+        .map(([id]) => id),
+    );
+  }, [updates, notificationRevision]);
   return {
     unseen,
     linkedSessionUpdates: updates,
-    linkedSessionUpdateIds: new Set(updates.keys()),
+    linkedSessionUpdateIds: linkedIndicators,
   };
 }
 

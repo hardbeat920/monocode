@@ -15,6 +15,13 @@ import type {
 import { orchestrator } from "../lib/orchestration";
 import { resizeComposer } from "../lib/composerResize";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
+import {
+  findModel,
+  mergeModelSettings,
+  modelEffortLabel,
+  modelEffortSetting,
+} from "../lib/models";
+import { LAYER } from "../lib/layers";
 import { OrchestrationActions } from "./OrchestrationActions";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
@@ -36,14 +43,19 @@ function AssignmentModel({
 }: {
   task: ProposedTask;
   choices: OrchestrationChoice[];
-  onChange(choice: OrchestrationChoice): void;
+  onChange(
+    choice: OrchestrationChoice,
+    modelSettings: Record<string, string>,
+  ): void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [effortActive, setEffortActive] = useState(0);
+  const [inEffort, setInEffort] = useState(false);
+  const [activeRow, setActiveRow] = useState<HTMLButtonElement | null>(null);
   const anchor = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
-  const activeRef = useRef<HTMLButtonElement>(null);
   const listOverscroll = useLockOverscroll<HTMLDivElement>();
   const selected = choices.find(
     (choice) => choice.harness === task.harness && choice.model === task.model,
@@ -53,6 +65,25 @@ function AssignmentModel({
       .toLowerCase()
       .includes(query.trim().toLowerCase()),
   );
+  const effortForChoice = (choice: OrchestrationChoice) => {
+    const model = findModel(choice.model);
+    return model?.harness === choice.harness
+      ? modelEffortSetting(model)
+      : undefined;
+  };
+  const activeChoice = matches[active];
+  const activeModel = activeChoice ? findModel(activeChoice.model) : undefined;
+  const effort = activeChoice ? effortForChoice(activeChoice) : undefined;
+  const selectedEffortValue = effort
+    ? activeChoice === selected
+      ? (task.modelSettings?.[effort.id] ?? effort.value)
+      : effort.value
+    : undefined;
+  const selectedModel = selected ? findModel(selected.model) : undefined;
+  const selectedEffortLabel =
+    selectedModel && selectedModel.harness === selected?.harness
+      ? modelEffortLabel(selectedModel, task.modelSettings)
+      : undefined;
   // Two things fought this field for focus. The composer takes focus back
   // unless a picker surface is in the DOM, which `data-model-picker` below
   // now declares; and the popover measures itself with `visibility: hidden`
@@ -69,12 +100,46 @@ function AssignmentModel({
     return () => cancelAnimationFrame(frame);
   }, [open]);
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [active]);
-  const pick = (choice: OrchestrationChoice) => {
-    onChange(choice);
+    activeRow?.scrollIntoView({ block: "nearest" });
+  }, [activeRow]);
+  useEffect(() => {
+    if (!effort) {
+      setEffortActive(0);
+      return;
+    }
+    const index = effort.options.findIndex(
+      (option) => option.value === selectedEffortValue,
+    );
+    setEffortActive(index >= 0 ? index : 0);
+  }, [effort, selectedEffortValue]);
+  const pick = (
+    choice: OrchestrationChoice,
+    modelSettings: Record<string, string>,
+  ) => {
+    onChange(choice, modelSettings);
     setOpen(false);
+    setInEffort(false);
     anchor.current?.focus();
+  };
+  const settingsFor = (choice: OrchestrationChoice, effortValue?: string) => {
+    const model = findModel(choice.model);
+    if (!model || model.harness !== choice.harness) return {};
+    const setting = modelEffortSetting(model);
+    return mergeModelSettings(model, {
+      ...(choice === selected ? task.modelSettings : undefined),
+      ...(setting && effortValue ? { [setting.id]: effortValue } : {}),
+    });
+  };
+  const openEffortOrPick = (choice: OrchestrationChoice) => {
+    const model = findModel(choice.model);
+    if (
+      model?.harness === choice.harness &&
+      modelEffortSetting(model)?.options.length
+    ) {
+      setInEffort(true);
+      return;
+    }
+    pick(choice, settingsFor(choice));
   };
   // Arrows walk the list from the search field, the way the app's other
   // pickers work. The keys stop here so the transcript underneath does not
@@ -83,6 +148,14 @@ function AssignmentModel({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       event.stopPropagation();
+      if (inEffort && effort?.options.length) {
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setEffortActive(
+          (index) =>
+            (index + direction + effort.options.length) % effort.options.length,
+        );
+        return;
+      }
       if (!matches.length) return;
       const step = event.key === "ArrowDown" ? 1 : -1;
       setActive((index) =>
@@ -90,11 +163,28 @@ function AssignmentModel({
       );
       return;
     }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (effort?.options.length) setInEffort(true);
+      return;
+    }
+    if (event.key === "ArrowLeft" && inEffort) {
+      event.preventDefault();
+      event.stopPropagation();
+      setInEffort(false);
+      return;
+    }
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      const choice = matches[active];
-      if (choice) pick(choice);
+      if (inEffort) {
+        const option = effort?.options[effortActive];
+        if (activeChoice && option)
+          pick(activeChoice, settingsFor(activeChoice, option.value));
+        return;
+      }
+      if (activeChoice) openEffortOrPick(activeChoice);
     }
   };
   return (
@@ -107,13 +197,16 @@ function AssignmentModel({
         onClick={() => {
           setQuery("");
           setActive(selected ? choices.indexOf(selected) : 0);
+          setInEffort(false);
           setOpen(!open);
         }}
         className="flex h-7 max-w-full items-center gap-1.5 rounded-md bg-content/5 px-2 text-[11px] text-content/60 hover:bg-content/10 hover:text-content"
       >
         <HarnessIcon harness={task.harness} className="size-3.5 shrink-0" />
         <span className="truncate">
-          {selected?.name ?? task.model} · {HARNESS_TITLE[task.harness]}
+          {selected?.name ?? task.model}
+          {selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""} ·{" "}
+          {HARNESS_TITLE[task.harness]}
         </span>
         <ChevronDown className="size-3 shrink-0" />
       </button>
@@ -124,11 +217,16 @@ function AssignmentModel({
           align="start"
           width={260}
           maxHeight={320}
-          onDismiss={() => setOpen(false)}
+          ignore="[data-assignment-model-target]"
+          onDismiss={() => {
+            setOpen(false);
+            setInEffort(false);
+          }}
           data-model-picker
+          data-assignment-model-target
           className="flex flex-col overflow-hidden"
         >
-          <label className="flex shrink-0 items-center gap-2 border-b border-content/10 px-3 py-2.5 text-content/50">
+          <label className="flex shrink-0 items-center gap-2 border-b border-stroke px-3 py-2.5 text-content/50">
             <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
             <input
               ref={search}
@@ -141,6 +239,7 @@ function AssignmentModel({
               onChange={(event) => {
                 setQuery(event.target.value);
                 setActive(0);
+                setInEffort(false);
               }}
               onKeyDown={onSearchKey}
               className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
@@ -155,15 +254,29 @@ function AssignmentModel({
             {matches.map((choice, index) => (
               <button
                 key={`${choice.harness}:${choice.model}`}
-                ref={index === active ? activeRef : undefined}
+                ref={index === active ? setActiveRow : undefined}
                 type="button"
                 role="option"
                 aria-selected={choice === selected}
+                aria-haspopup={
+                  effortForChoice(choice)?.options.length ? "menu" : undefined
+                }
+                aria-expanded={index === active && inEffort}
                 onMouseDown={(event) => event.preventDefault()}
-                onMouseEnter={() => setActive(index)}
-                onClick={() => pick(choice)}
+                onMouseEnter={() => {
+                  setActive(index);
+                  const model = findModel(choice.model);
+                  setInEffort(
+                    model?.harness === choice.harness &&
+                      !!modelEffortSetting(model)?.options.length,
+                  );
+                }}
+                onClick={() => {
+                  setActive(index);
+                  openEffortOrPick(choice);
+                }}
                 className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${
-                  index === active ? "bg-content/10" : ""
+                  index === active ? "bg-selection" : ""
                 }`}
               >
                 <HarnessIcon
@@ -184,6 +297,12 @@ function AssignmentModel({
                     strokeWidth={2}
                   />
                 )}
+                {effortForChoice(choice)?.options.length ? (
+                  <ChevronRight
+                    className="size-3.5 shrink-0 text-content/40"
+                    strokeWidth={1.75}
+                  />
+                ) : null}
               </button>
             ))}
             {!matches.length && (
@@ -194,6 +313,55 @@ function AssignmentModel({
           </div>
         </Popover>
       )}
+      {open &&
+      inEffort &&
+      activeRow &&
+      activeChoice &&
+      activeModel?.harness === activeChoice.harness &&
+      effort ? (
+        <Popover
+          anchor={activeRow}
+          side="right"
+          gap={-4}
+          width={200}
+          layer={LAYER.submenu}
+          role="menu"
+          aria-label={`${activeChoice.name} effort`}
+          ignore="[data-assignment-model-target]"
+          onMouseEnter={() => setInEffort(true)}
+          data-assignment-model-target
+          className="p-1 font-sans"
+        >
+          {effort.options.map((option, index) => {
+            const highlighted = index === effortActive;
+            const selectedOption = option.value === selectedEffortValue;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selectedOption}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setEffortActive(index)}
+                onClick={() =>
+                  pick(activeChoice, settingsFor(activeChoice, option.value))
+                }
+                className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
+                  highlighted ? "bg-selection" : "hover:bg-content/5"
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {selectedOption ? (
+                  <Check
+                    className="size-3.5 shrink-0 text-content/50"
+                    strokeWidth={2}
+                  />
+                ) : null}
+              </button>
+            );
+          })}
+        </Popover>
+      ) : null}
     </div>
   );
 }
@@ -420,10 +588,19 @@ export function OrchestrationPreview({
         </p>
       )}
       {!!proposal.tasks.length && (
-        <ul className="border-t border-content/10 py-1">
+        <ul className="border-t border-stroke py-1">
           {visible.map((task) => {
             const index = proposal.tasks.indexOf(task);
             const open = expanded.includes(task.id);
+            const taskChoice = proposal.settings.choices.find(
+              (choice) =>
+                choice.harness === task.harness && choice.model === task.model,
+            );
+            const taskModel = findModel(task.model);
+            const taskEffort =
+              taskModel?.harness === task.harness
+                ? modelEffortLabel(taskModel, task.modelSettings)
+                : undefined;
             return (
               <li key={task.id}>
                 <div className="flex min-h-9 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1 hover:bg-content/5">
@@ -454,10 +631,11 @@ export function OrchestrationPreview({
                       <AssignmentModel
                         task={task}
                         choices={proposal.settings.choices}
-                        onChange={(choice) =>
+                        onChange={(choice, modelSettings) =>
                           change(task.id, {
                             harness: choice.harness,
                             model: choice.model,
+                            modelSettings,
                           })
                         }
                       />
@@ -471,11 +649,8 @@ export function OrchestrationPreview({
                           className="size-3 shrink-0"
                         />
                         <span className="truncate">
-                          {proposal.settings.choices.find(
-                            (choice) =>
-                              choice.harness === task.harness &&
-                              choice.model === task.model,
-                          )?.name ?? task.model}
+                          {taskChoice?.name ?? task.model}
+                          {taskEffort ? ` · ${taskEffort}` : ""}
                         </span>
                       </span>
                     )}
@@ -535,7 +710,7 @@ export function OrchestrationPreview({
           type="button"
           aria-expanded={showAll}
           onClick={() => setShowAll(!showAll)}
-          className="flex h-8 w-full items-center gap-1.5 border-t border-content/10 px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
+          className="flex h-8 w-full items-center gap-1.5 border-t border-stroke px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
         >
           {showAll ? (
             <ChevronDown className="size-3.5" />
@@ -553,7 +728,7 @@ export function OrchestrationPreview({
         </p>
       )}
       {!planning && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-content/10 px-3 py-2 text-[11px] text-content/45">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stroke px-3 py-2 text-[11px] text-content/45">
           <div className="flex items-center gap-1.5">
             {editable ? (
               <>
@@ -580,7 +755,7 @@ export function OrchestrationPreview({
                       }
                       className={`grid size-5 place-items-center rounded-[5px] text-[11px] leading-none tabular-nums ${
                         proposal.settings.maxWorkers === number
-                          ? "bg-content/15 font-medium text-content"
+                          ? "bg-selection-hover font-medium text-content"
                           : "text-content/45 hover:bg-content/8 hover:text-content"
                       }`}
                     >

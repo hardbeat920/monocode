@@ -3,6 +3,13 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InboxItem } from "../lib/githubTasks";
+import { inboxItemKey } from "../lib/githubTasks";
+import {
+  isInboxEntryUnseen,
+  markInboxItemSeen,
+  seedInboxSeenIfNeeded,
+} from "../lib/inboxSeen";
+import { updateNotificationPreferences } from "../lib/notificationPreferences";
 import type { SessionSummary } from "../lib/sessionStore";
 import { markLinkedSessionUpdateSeen } from "../lib/linkedSessionSeen";
 import { useInboxActivity, type InboxActivity } from "./useInboxUnseen";
@@ -16,7 +23,7 @@ vi.mock("../lib/githubTasks", async (importOriginal) => ({
   githubWorkItem,
   listInboxItems,
 }));
-vi.mock("../lib/sounds", () => ({ noteInboxUnseen: vi.fn() }));
+vi.mock("../lib/sounds", () => ({ playCue: vi.fn() }));
 
 const remote: InboxItem = {
   provider: "github",
@@ -80,10 +87,109 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   localStorage.clear();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("Inbox activity polling", () => {
+  it("updates Inbox and linked-session indicators on category changes without consuming unread activity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T12:00:00Z"));
+    const entry = { key: inboxItemKey(remote), updatedAt: remote.updatedAt };
+    seedInboxSeenIfNeeded([{ ...entry, updatedAt: "2026-09-12T12:00:00Z" }]);
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount();
+    expect(activity.unseen).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
+
+    act(() =>
+      updateNotificationPreferences(["local:/tmp/app"], {
+        disabled: ["pullRequests"],
+      }),
+    );
+    expect(activity.unseen).toBe(false);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    expect(activity.linkedSessionUpdates.has(session.id)).toBe(true);
+    expect(isInboxEntryUnseen(entry)).toBe(true);
+
+    act(() =>
+      updateNotificationPreferences(["local:/tmp/app"], {
+        disabled: [],
+        mutedUntil: Date.now() + 1000,
+      }),
+    );
+    expect(activity.unseen).toBe(false);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(activity.unseen).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
+    expect(isInboxEntryUnseen(entry)).toBe(true);
+  });
+
+  it("updates the dot immediately on mute, resume, and mute expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T12:00:00Z"));
+    const entry = { key: inboxItemKey(remote), updatedAt: remote.updatedAt };
+    seedInboxSeenIfNeeded([{ ...entry, updatedAt: "2026-09-12T12:00:00Z" }]);
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount();
+    expect(activity.unseen).toBe(true);
+
+    act(() =>
+      updateNotificationPreferences(["local:/tmp/app"], {
+        mutedUntil: null,
+      }),
+    );
+    expect(activity.unseen).toBe(false);
+    expect(isInboxEntryUnseen(entry)).toBe(true);
+    act(() =>
+      updateNotificationPreferences(["local:/tmp/app"], {
+        mutedUntil: undefined,
+      }),
+    );
+    expect(activity.unseen).toBe(true);
+    act(() =>
+      updateNotificationPreferences(["local:/tmp/app"], {
+        mutedUntil: Date.now() + 1000,
+      }),
+    );
+    expect(activity.unseen).toBe(false);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(activity.unseen).toBe(true);
+    act(() => markInboxItemSeen(entry));
+    expect(activity.unseen).toBe(false);
+  });
+
+  it("badges only unmuted projects while muted activity stays unread", async () => {
+    const other: InboxItem = {
+      ...remote,
+      repo: "acme/other",
+      url: "https://github.com/acme/other/pull/42",
+      projectPath: "/tmp/other",
+    };
+    const mutedEntry = {
+      key: inboxItemKey(remote),
+      updatedAt: remote.updatedAt,
+    };
+    const otherEntry = { key: inboxItemKey(other), updatedAt: other.updatedAt };
+    seedInboxSeenIfNeeded([
+      { ...mutedEntry, updatedAt: "2026-09-12T12:00:00Z" },
+      { ...otherEntry, updatedAt: "2026-09-12T12:00:00Z" },
+    ]);
+    updateNotificationPreferences(["local:/tmp/app"], {
+      mutedUntil: null,
+    });
+    listInboxItems.mockResolvedValue({ items: [remote, other], errors: {} });
+    await mount();
+
+    expect(activity.unseen).toBe(true);
+    act(() => markInboxItemSeen(otherEntry));
+    expect(activity.unseen).toBe(false);
+    expect(isInboxEntryUnseen(mutedEntry)).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    expect(activity.linkedSessionUpdates.has(session.id)).toBe(true);
+  });
+
   it("reuses the Inbox list for linked-session updates", async () => {
     listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
     await mount();

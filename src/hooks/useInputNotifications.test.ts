@@ -11,9 +11,9 @@ import { newSession, type Session } from "../lib/session";
 import { useInputNotifications } from "./useInputNotifications";
 
 const invoke = vi.hoisted(() =>
-  vi.fn(async (command: string, _args?: Record<string, unknown>) =>
-    command === "notification_permission" ? "granted" : undefined,
-  ),
+  vi.fn(async (command: string) => {
+    if (command === "notification_permission") return "granted";
+  }),
 );
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 

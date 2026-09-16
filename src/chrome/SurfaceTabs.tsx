@@ -243,7 +243,7 @@ export function SurfaceTabs({
   }, [activeFileId, sortable.draggingId]);
 
   return (
-    <div className="flex h-9 min-w-0 shrink-0 border-b border-content/10 bg-content/2">
+    <div className="flex h-9 min-w-0 shrink-0 border-b border-stroke bg-content/2">
       <div
         ref={lockOverscroll}
         role="tablist"
@@ -284,8 +284,8 @@ export function SurfaceTabs({
               sortable.setItemRef(file.id, el);
               if (el && file.id === activeFileId) activeTabRef.current = el;
             }}
-            className={`reorder-item tab-motion group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-content/10 ${
-              active ? "bg-content/8" : "hover:bg-content/5"
+            className={`reorder-item tab-motion group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-stroke ${
+              active ? "bg-selection-subtle" : "hover:bg-content/5"
             } ${
               canDrag ? "cursor-grab active:cursor-grabbing" : ""
             }`}

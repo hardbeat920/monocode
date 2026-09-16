@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInboxCache,
+  githubPrAction,
   githubWorkItem,
   inboxItemKey,
   type GithubWorkItem,
@@ -111,6 +112,37 @@ describe("session work items", () => {
       repo: "openai/codex",
       kind: "pr",
       number: 42,
+    });
+  });
+
+  it("runs a pull request action and caches the refreshed result", async () => {
+    const merged: GithubWorkItem = {
+      kind: "pr",
+      repo: "openai/codex",
+      number: 42,
+      title: "Faster linked navigation",
+      url: "https://github.com/openai/codex/pull/42",
+      state: "merged",
+      updatedAt: "2026-09-09T12:05:00Z",
+      labels: [],
+      assignees: [],
+      draft: false,
+    };
+    vi.mocked(invoke).mockResolvedValue(merged);
+
+    await expect(
+      githubPrAction("/tmp/codex", "openai/codex", 42, "squash"),
+    ).resolves.toEqual(merged);
+    await expect(
+      githubWorkItem("/tmp/codex", "openai/codex", "pr", 42),
+    ).resolves.toEqual(merged);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("git_github_pr_action", {
+      cwd: "/tmp/codex",
+      repo: "openai/codex",
+      number: 42,
+      action: "squash",
     });
   });
 

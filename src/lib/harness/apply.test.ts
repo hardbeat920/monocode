@@ -92,6 +92,7 @@ describe("turn duration", () => {
     expect(session.blocks.at(-1)).toMatchObject({
       role: "system",
       text: "Codex app-server exited",
+      notice: "error",
     });
   });
 });

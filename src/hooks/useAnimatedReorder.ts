@@ -3,25 +3,34 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type PointerEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { flushSync } from "react-dom";
 import { setGrabbing, suppressTextSelection } from "../lib/drag";
 import { reorderMotion } from "../lib/motion";
 import { moveItem } from "../lib/reorder";
 
+export type ReorderExternalDrop<T extends string> = {
+  /** Return true while the pointer is over an external drop target. */
+  onMove: (id: T, event: globalThis.PointerEvent) => boolean;
+  /** Return true when the external target consumed the drop. */
+  onDrop: (id: T, event: globalThis.PointerEvent) => boolean;
+  onEnd?: (id: T) => void;
+};
+
 /** Direct manipulation for a row or column of equal-sized items. */
 export function useAnimatedReorder<T extends string>(
   ids: T[],
   onReorder: (ids: T[], movedId: T) => void,
   axis: "x" | "y" = "x",
+  externalDrop?: ReorderExternalDrop<T>,
 ) {
   const nodes = useRef(new Map<T, HTMLElement>());
   const [draggingId, setDraggingId] = useState<T | null>(null);
-  const latest = useRef({ ids, onReorder });
+  const latest = useRef({ ids, onReorder, externalDrop });
   useLayoutEffect(() => {
-    latest.current = { ids, onReorder };
-  }, [ids, onReorder]);
+    latest.current = { ids, onReorder, externalDrop };
+  }, [ids, onReorder, externalDrop]);
   const cleanup = useRef<(() => void) | null>(null);
   const finishSettling = useRef<(() => void) | null>(null);
   const suppressClickUntil = useRef(0);
@@ -35,7 +44,7 @@ export function useAnimatedReorder<T extends string>(
   }, []);
 
   const onItemPointerDown = useCallback(
-    (id: T, event: PointerEvent) => {
+    (id: T, event: ReactPointerEvent) => {
       if (event.button !== 0) return;
       finishSettling.current?.();
       if (cleanup.current) return;
@@ -83,6 +92,7 @@ export function useAnimatedReorder<T extends string>(
       let destination = from;
       let frame = 0;
       let pointerPosition = startPosition;
+      let overExternalTarget = false;
       let finishTimer: ReturnType<typeof setTimeout> | undefined;
 
       function releasePointer() {
@@ -114,6 +124,7 @@ export function useAnimatedReorder<T extends string>(
         }
         releasePointer();
         if (active) suppressClickUntil.current = performance.now() + 400;
+        latest.current.externalDrop?.onEnd?.(id);
         cleanup.current = null;
         finishSettling.current = null;
         setDraggingId(null);
@@ -164,7 +175,7 @@ export function useAnimatedReorder<T extends string>(
       }
 
       function onScroll() {
-        if (active && !settling && !frame)
+        if (active && !settling && !overExternalTarget && !frame)
           frame = window.requestAnimationFrame(() => paint());
       }
 
@@ -185,13 +196,25 @@ export function useAnimatedReorder<T extends string>(
           handle.style.transition = "none";
           handle.dataset.dragging = "true";
         }
+        overExternalTarget =
+          latest.current.externalDrop?.onMove(id, ev) ?? false;
+        if (overExternalTarget) {
+          window.cancelAnimationFrame(frame);
+          frame = 0;
+          preview(from);
+          return;
+        }
         // Keep the newest position when several input events arrive in one frame.
         if (!frame) frame = window.requestAnimationFrame(() => paint());
       }
 
-      function stop(commit: boolean) {
+      function stop(commit: boolean, event?: globalThis.PointerEvent) {
         if (settling) return;
         if (!active) {
+          reset();
+          return;
+        }
+        if (commit && event && latest.current.externalDrop?.onDrop(id, event)) {
           reset();
           return;
         }
@@ -229,7 +252,7 @@ export function useAnimatedReorder<T extends string>(
       function onUp(ev: globalThis.PointerEvent) {
         if (ev.pointerId !== pointerId) return;
         onMove(ev);
-        stop(true);
+        stop(true, ev);
       }
       function onCancel() {
         stop(false);

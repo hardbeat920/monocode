@@ -40,6 +40,22 @@ function cssColor(expr: string, fallback: string): string {
   return color || fallback;
 }
 
+function cssHexColor(expr: string, fallback: string): string {
+  const color = cssColor(expr, fallback);
+  if (/^#[\da-f]{6}$/i.test(color)) return color;
+  const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+  if (!channels || channels.length < 3 || channels.some(Number.isNaN)) {
+    return fallback;
+  }
+  return `#${channels
+    .map((channel) =>
+      Math.round(Math.min(255, Math.max(0, channel)))
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
 const ANSI_DARK = {
   black: "#1d2428",
   red: "#f87171",
@@ -100,12 +116,22 @@ function monoFont(): string {
   return fromCss || "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
 }
 
-// OSC 10/11/12 replies so CLIs (vim, tmux, …) pick matching colors.
-const OSC_DARK = { fg: "#e8eef2", bg: "#141b1f", cursor: "#4da3f5" };
-const OSC_LIGHT = { fg: "#383a42", bg: "#fafafa", cursor: "#4078f2" };
-
 function oscColors() {
-  return isLightScheme() ? OSC_LIGHT : OSC_DARK;
+  const light = isLightScheme();
+  return {
+    fg: cssHexColor(
+      "var(--color-content)",
+      light ? "#2e2e2e" : "#ebebeb",
+    ),
+    bg: cssHexColor(
+      "var(--color-background-base)",
+      light ? "#f7f7f7" : "#171717",
+    ),
+    cursor: cssHexColor(
+      "var(--color-accent)",
+      light ? "#4078f2" : "#4da3f5",
+    ),
+  };
 }
 
 export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
