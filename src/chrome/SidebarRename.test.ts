@@ -134,6 +134,47 @@ afterEach(() => {
 });
 
 describe("sidebar session multiselection", () => {
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "resets the %s anchor after acting on another session's context menu",
+    (modifier) => {
+      props.sessions = [1, 2, 3, 4].map((n) => ({
+        ...props.sessions[0],
+        id: `session-${n}`,
+        updatedAt: 100 - n,
+      }));
+      props.onPinSession = vi.fn();
+      act(() => render());
+      act(() => container.querySelector('[data-session-card="session-3"]')!
+        .dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          [modifier]: true,
+        })));
+      act(() => container.querySelector('[data-session-card="session-2"]')!
+        .dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+        })));
+      const pin = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((item) => item.textContent === "Pin")!;
+      act(() => pin.click());
+      expect(props.onPinSession).toHaveBeenCalledWith("session-2", true);
+      expect(container.querySelectorAll('[data-session-selected="true"]'))
+        .toHaveLength(0);
+
+      act(() => container.querySelector('[data-session-card="session-4"]')!
+        .dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          shiftKey: true,
+        })));
+      expect(Array.from(
+        container.querySelectorAll('[data-session-selected="true"]'),
+        (el) => el.getAttribute("data-session-card"),
+      )).toEqual(["session-1", "session-2", "session-3", "session-4"]);
+      expect(props.onSelectSession).not.toHaveBeenCalled();
+    },
+  );
+
   it("starts a range at the active session when pagination hides the anchor", () => {
     props.sessions = Array.from({ length: 80 }, (_, index) => ({
       ...props.sessions[0],

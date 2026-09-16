@@ -838,6 +838,7 @@ function SidebarComponent({
     setSessionMenu(null);
     if (!contextSelectionRef.current) return;
     contextSelectionRef.current = false;
+    selectionAnchorRef.current = null;
     setSelectedSessionIds(new Set());
   };
 
