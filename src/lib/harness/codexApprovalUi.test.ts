@@ -21,6 +21,7 @@ let onLine: (line: string) => void;
 const invoke = vi.hoisted(() =>
   vi.fn(async (command: string) => {
     if (command === "notification_permission") return "granted";
+    if (command === "codex_accounts_list") return [];
   }),
 );
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));

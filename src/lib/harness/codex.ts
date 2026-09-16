@@ -1,3 +1,19 @@
+import {
+  accountCredentials,
+  captureExternalAccount,
+  failoverAccounts,
+  isQuotaWallError,
+  isSharedScopeReached,
+  loadCodexAccounts,
+  pickFailoverAccount,
+  quotaResetAt,
+  resetCodexAccounts,
+  respondCodexRefresh,
+  updateAccountState,
+  type CodexAccount,
+  type CodexCredentials,
+  type RateLimitSnapshot,
+} from "./codexAccounts";
 import { nativeModelId } from "../models";
 import type { RuntimeMode } from "../session";
 import { questionPromptTitle, type UserQuestionReply } from "../userQuestion";
@@ -87,6 +103,9 @@ type Live = {
   subagentThreads: Map<string, string>;
   /** Child notifications that arrived before their row was known. */
   pendingSubagent: Map<string, Array<{ method: string; params: unknown }>>;
+  rateLimits?: RateLimitSnapshot;
+  quotaError?: { message: string; codexErrorInfo?: unknown };
+  poolEnabled: boolean;
   /** Agent rows still running, by call id, with the name to settle them under. */
   openAgentRows: Map<string, string>;
 };
@@ -98,6 +117,9 @@ type Resume = {
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
+const sessionAccount = new Map<string, string>();
+const sessionTurns = new Map<string, Promise<void>>();
+const failingOver = new Set<string>();
 const cancelledThreads = new Set<string>();
 
 let resolveCodexBinaryImpl: () => Promise<{ path: string }> =
@@ -110,7 +132,28 @@ export function setCodexBinaryResolver(
   resolveCodexBinaryImpl = fn;
 }
 
+// Keep the queue outside Live: a failover replaces Live and its RPC connection.
+async function enqueueCodexOperation(
+  sessionId: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const previous = sessionTurns.get(sessionId) ?? Promise.resolve();
+  const task = previous.catch(() => undefined).then(operation);
+  sessionTurns.set(sessionId, task);
+  try {
+    await task;
+  } finally {
+    if (sessionTurns.get(sessionId) === task) sessionTurns.delete(sessionId);
+  }
+}
+
 export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
+  await enqueueCodexOperation(input.sessionId, () =>
+    sendQueuedCodexTurn(input),
+  );
+}
+
+async function sendQueuedCodexTurn(input: SendTurnInput): Promise<void> {
   let live: Live;
   try {
     live = await ensureLive(input);
@@ -129,7 +172,7 @@ export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
       live.cancelled = false;
       live.muteUpdates = false;
       try {
-        await runTurn(live, input);
+        await runTurnWithFailover(live, input);
       } catch (error) {
         if (live.cancelled) return;
         throw error;
@@ -139,6 +182,14 @@ export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
 }
 
 export async function compactCodexContext(
+  input: CompactContextInput,
+): Promise<void> {
+  await enqueueCodexOperation(input.sessionId, () =>
+    compactQueuedCodexContext(input),
+  );
+}
+
+async function compactQueuedCodexContext(
   input: CompactContextInput,
 ): Promise<void> {
   let live: Live;
@@ -292,6 +343,7 @@ export async function stopCodexSession(sessionId: string): Promise<void> {
 }
 
 export async function forgetCodexSession(sessionId: string): Promise<void> {
+  sessionAccount.delete(sessionId);
   resumeByThread.delete(sessionId);
   await stopCodexSession(sessionId);
 }
@@ -318,6 +370,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const resume = resumeByThread.get(input.sessionId);
+  const accounts = await loadCodexAccounts().catch(() => []);
   const canResume = resume != null && resume.cwd === input.cwd;
   if (resume && resume.cwd !== input.cwd) {
     resumeByThread.delete(input.sessionId);
@@ -335,6 +388,15 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         handleNotification(live, method, params);
       },
       onRequest: (id, method, params) => {
+        if (method === "account/chatgptAuthTokens/refresh") {
+          void respondCodexRefresh(
+            rpc,
+            id,
+            params,
+            sessionAccount.get(input.sessionId),
+          ).catch(() => undefined);
+          return;
+        }
         const live = liveRef.current;
         const turn = live?.turnDone;
         // The external clock can be requested before thread/start or resume
@@ -368,7 +430,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (line) => rpc.pushLine(line),
     (code) => {
       rpc.close(new Error("Codex app-server exited"));
-      liveByThread.delete(input.sessionId);
+      if (liveByThread.get(input.sessionId) === liveRef.current)
+        liveByThread.delete(input.sessionId);
       const live = liveRef.current;
       if (!live?.muteUpdates) {
         (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
@@ -398,6 +461,24 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       },
     });
     await rpc.notify("initialized", undefined);
+    const pinned = sessionAccount.get(input.sessionId);
+    if (pinned) {
+      try {
+        const credentials = await accountCredentials(pinned);
+        await codexAccountLogin(rpc, credentials);
+        await codexVerifyIdentity(rpc, credentials);
+        await updateAccountState(pinned, { lastUsedAt: Date.now() });
+      } catch (error) {
+        // A rejected account must not poison the session pin: unpin and mark
+        // it so failover can pick a different identity.
+        sessionAccount.delete(input.sessionId);
+        await updateAccountState(pinned, {
+          disabledCause:
+            error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
+        throw error;
+      }
+    }
 
     const model = nativeModelId(input.model);
     const serviceTier = input.modelSettings?.serviceTier;
@@ -424,7 +505,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         threadId = opened.thread?.id ?? resume.threadId;
         didResume = true;
       } catch (error) {
-        if (!isRecoverableThreadResumeError(error)) throw error;
+        if (
+          !failingOver.has(input.sessionId) &&
+          !isRecoverableThreadResumeError(error)
+        )
+          throw error;
         threadId = undefined;
       }
     }
@@ -471,6 +556,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       subagentThreads: new Map(),
       pendingSubagent: new Map(),
       openAgentRows: new Map(),
+      poolEnabled: accounts.length > 0,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -487,6 +573,173 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   } catch (error) {
     rpc.close(error instanceof Error ? error : new Error(String(error)));
     await stopCodexSession(input.sessionId);
+    throw error;
+  }
+}
+
+async function codexAccountLogin(
+  rpc: Pick<JsonRpcClient, "request">,
+  credentials: CodexCredentials,
+): Promise<void> {
+  await rpc
+    .request(
+      "account/login/start",
+      {
+        type: "chatgptAuthTokens",
+        accessToken: credentials.accessToken,
+        chatgptAccountId: credentials.accountId,
+        ...(credentials.planType
+          ? { chatgptPlanType: credentials.planType }
+          : {}),
+      },
+      10_000,
+    )
+    .catch(() => {
+      throw new Error("Codex account login failed");
+    });
+}
+
+async function codexVerifyIdentity(
+  rpc: Pick<JsonRpcClient, "request">,
+  credentials: CodexCredentials,
+): Promise<void> {
+  const identity = await rpc
+    .request<{ account?: { email?: string } }>("account/read", {}, 10_000)
+    .catch(() => {
+      throw new Error("Codex account verification failed");
+    });
+  if (
+    !identity.account?.email ||
+    identity.account.email.toLowerCase() !== credentials.email.toLowerCase()
+  ) {
+    throw new Error("Codex account verification failed");
+  }
+}
+
+// "rejected" means the credentials could not even be fetched (dead refresh
+// token); anything else may be a process problem, so the respawn path makes
+// the definitive call instead of blaming the account.
+async function tryHotAccountSwitch(
+  live: Live,
+  sessionId: string,
+  next: CodexAccount,
+): Promise<"ok" | "rejected" | "unavailable"> {
+  let credentials: CodexCredentials;
+  try {
+    credentials = await accountCredentials(next.id);
+  } catch {
+    return "rejected";
+  }
+  try {
+    await codexAccountLogin(live.rpc, credentials);
+    await codexVerifyIdentity(live.rpc, credentials);
+  } catch {
+    return "unavailable";
+  }
+  sessionAccount.set(sessionId, next.id);
+  await updateAccountState(next.id, { lastUsedAt: Date.now() });
+  return "ok";
+}
+
+async function runTurnWithFailover(
+  initial: Live,
+  input: SendTurnInput,
+): Promise<void> {
+  let live = initial;
+  let switches = 0;
+  let maxSwitches: number | undefined;
+  try {
+    live.poolEnabled = (await loadCodexAccounts().catch(() => [])).length > 0;
+    for (;;) {
+      live.muteUpdates = false;
+      try {
+        await runTurn(live, input);
+        return;
+      } catch (error) {
+        if (live.cancelled || cancelledThreads.has(input.sessionId)) return;
+        const message = error instanceof Error ? error.message : String(error);
+        const info = live.quotaError?.codexErrorInfo;
+        if (!isQuotaWallError(info, message)) throw error;
+        const accounts = await loadCodexAccounts().catch(() => []);
+        if (!accounts.length) throw error;
+        if (isSharedScopeReached(live.rateLimits?.rateLimitReachedType)) {
+          throw new Error(
+            "Codex shared limit reached — wait for reset; switching accounts cannot help.",
+          );
+        }
+        maxSwitches ??= accounts.length;
+        let current = sessionAccount.get(input.sessionId);
+        if (!current) {
+          // External credentials stay in memory; never import them into the pool.
+          try {
+            await captureExternalAccount(live.rpc);
+            current = "external";
+            sessionAccount.set(input.sessionId, current);
+          } catch {
+            /* API-key/unknown external identity is not a return candidate. */
+          }
+        }
+        if (current)
+          await updateAccountState(current, {
+            blockedUntilMs: quotaResetAt(live.rateLimits),
+          });
+        // Hot-switch first (same process, no resume); any in-process failure
+        // falls back to the verified respawn+resume path, which makes the
+        // definitive accept/reject call for the candidate.
+        let switched = false;
+        while (!switched && switches < maxSwitches) {
+          const next = pickFailoverAccount(
+            failoverAccounts(),
+            sessionAccount.get(input.sessionId),
+          );
+          if (!next) break;
+          switches++;
+          input.onEvent({
+            type: "status",
+            text: `Codex account exhausted — switching to ${next.email}`,
+          });
+          const hot = await tryHotAccountSwitch(live, input.sessionId, next);
+          if (hot === "ok") {
+            // The old snapshot described the walled account.
+            live.rateLimits = undefined;
+            switched = true;
+          } else if (hot === "rejected") {
+            await updateAccountState(next.id, {
+              disabledCause: "Codex account credentials unavailable",
+            }).catch(() => undefined);
+          } else {
+            await stopCodexSession(input.sessionId);
+            sessionAccount.set(input.sessionId, next.id);
+            failingOver.add(input.sessionId);
+            try {
+              live = await ensureLive(input);
+              switched = true;
+            } catch {
+              /* ensureLive unpins and disables the rejected account. */
+            } finally {
+              failingOver.delete(input.sessionId);
+            }
+          }
+          if (cancelledThreads.delete(input.sessionId) || live.cancelled)
+            return;
+        }
+        if (!switched) {
+          const resets = failoverAccounts()
+            .filter(
+              (a) => !a.disabledCause && (a.blockedUntilMs ?? 0) > Date.now(),
+            )
+            .map((a) => a.blockedUntilMs!);
+          throw new Error(
+            `Codex accounts exhausted${resets.length ? ` — earliest reset ${new Date(Math.min(...resets)).toISOString()}` : " — sign in again"}`,
+          );
+        }
+      }
+    }
+  } catch (error) {
+    input.onEvent({
+      type: "session.error",
+      message: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
 }
@@ -514,11 +767,14 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 
   live.emittedAssistant = "";
   live.emittedReasoning = "";
+  live.quotaError = undefined;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
     live.turnFailed = reject;
   });
+  // A process/request failure can reject this before turn/start has answered.
+  void turnPromise.catch(() => undefined);
   settlePendingTurn(live);
 
   try {
@@ -532,12 +788,11 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     }
     settlePendingTurn(live);
     await turnPromise;
+    const quotaError = live.quotaError as Live["quotaError"];
+    if (quotaError) throw new Error(quotaError.message);
   } catch (error) {
     if (live.cancelled) return;
-    live.onEvent({
-      type: "session.error",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    // The outer loop decides whether this is terminal or an account failover.
     throw error;
   } finally {
     live.turnDone = null;
@@ -603,10 +858,23 @@ function handleNotification(live: Live, method: string, params: unknown): void {
   // UI uses for busy / stop / "Working for".
   const mapped = mapCodexNotification(method, params);
   if (mapped.diagnostic) {
+    // Diagnostics must not include authentication request/response payloads.
     console.debug(
       `[monocode] codex ${live.threadId} ${method}`,
       mapped.diagnostic,
     );
+  }
+  if (mapped.rateLimits) live.rateLimits = mapped.rateLimits;
+  const terminal = mapped.turnCompleted;
+  const quotaWall =
+    terminal &&
+    live.poolEnabled &&
+    isQuotaWallError(terminal.codexErrorInfo, terminal.error);
+  if (quotaWall) {
+    live.quotaError = {
+      message: terminal.error ?? "Codex usage limit exceeded",
+      codexErrorInfo: terminal.codexErrorInfo,
+    };
   }
   // Codex describes one spawned agent through more than one item type. The
   // first row to name a child thread owns it; a later item for the same thread
@@ -614,6 +882,17 @@ function handleNotification(live: Live, method: string, params: unknown): void {
   const duplicate = bindSubagentThreads(live, method, rec);
   const snapshot = method === "item/completed";
   for (const event of mapped.events) {
+    if (
+      event.type === "session.error" &&
+      live.poolEnabled &&
+      (quotaWall ||
+        (method === "error" &&
+          isQuotaWallError(
+            asRecord(rec?.error)?.codexErrorInfo,
+            event.message,
+          )))
+    )
+      continue;
     if (duplicate && duplicateAgentRow(event)) continue;
     trackAgentRow(live, event);
     if (event.type === "message.delta") {
@@ -1083,6 +1362,10 @@ export function __codexTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();
+  sessionAccount.clear();
+  sessionTurns.clear();
+  failingOver.clear();
+  resetCodexAccounts();
 }
 
 export function __codexTestResumeMap(): Map<string, Resume> {
