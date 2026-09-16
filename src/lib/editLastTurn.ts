@@ -2,7 +2,12 @@ import type { Attachment, Block, HarnessId, Session } from "./session";
 
 /** Harnesses that can rewind provider state before resending an edited prompt. */
 export function harnessSupportsEditLastTurn(harness: HarnessId): boolean {
-  return harness === "pi" || harness === "omp" || harness === "codex";
+  return (
+    harness === "pi" ||
+    harness === "omp" ||
+    harness === "codex" ||
+    harness === "opencode"
+  );
 }
 
 /** Index of the user block that starts the latest turn. */

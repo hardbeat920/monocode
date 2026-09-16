@@ -27,8 +27,10 @@ export {
 export {
   sendOpenCodeTurn,
   compactOpenCodeContext,
+  rewindOpenCodeLastTurn,
   cancelOpenCodeTurn,
   respondOpenCodeApproval,
+  respondOpenCodeQuestion,
   stopOpenCodeSession,
   forgetOpenCodeSession,
   bindOpenCodeSession,

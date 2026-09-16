@@ -45,6 +45,17 @@ describe("editLastTurn", () => {
     expect(canEditLastTurn(session)).toBe(true);
   });
 
+  it("allows edit on idle OpenCode sessions", () => {
+    const session = {
+      ...chat([
+        { id: "u1", role: "user", text: "hello" },
+        { id: "a1", role: "assistant", text: "hi" },
+      ]),
+      harness: "opencode" as const,
+    };
+    expect(canEditLastTurn(session)).toBe(true);
+  });
+
   it("blocks edit while busy, queued, or on unsupported harnesses", () => {
     const base = chat([
       { id: "u1", role: "user", text: "hello" },

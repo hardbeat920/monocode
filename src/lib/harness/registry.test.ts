@@ -134,7 +134,7 @@ describe("harness registry", () => {
       codex: true,
       cursor: false,
       grok: false,
-      opencode: false,
+      opencode: true,
       pi: true,
       omp: true,
       fx: false,
