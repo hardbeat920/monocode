@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Gauge, Search, Star } from "./icons";
+import { Check, ChevronDown, ChevronRight, Search, Star } from "./icons";
 import {
   useEffect,
   useId,
@@ -39,6 +39,11 @@ import { HARNESSES, HARNESS_TITLE, type HarnessId } from "../lib/session";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { LAYER } from "../lib/layers";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  EffortMeter,
+  EffortMeterSpark,
+  orderEffortOptions,
+} from "./EffortMeter";
 import { Popover } from "./Popover";
 import { MOD } from "../lib/platform";
 
@@ -882,31 +887,23 @@ export function EffortPicker({
     getModelSnapshot,
   );
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
   const button = useRef<HTMLButtonElement>(null);
-  const menuId = useId();
   const current = resolveModel(harness, model);
   void catalogVersion;
   const setting = effortSetting(current);
 
   if (!setting) return null;
 
+  const tiers = orderEffortOptions(setting.options);
   const value = settingValue(setting, values);
   const valueLabel = settingValueLabel(setting, values);
+  const selectedIndex = Math.max(
+    0,
+    tiers.findIndex((tier) => tier.value === value),
+  );
   const dismiss = (restoreFocus: boolean) => {
     setOpen(false);
     if (restoreFocus) onClose?.();
-  };
-  const openPicker = () => {
-    const selectedIndex = setting.options.findIndex(
-      (option) => option.value === value,
-    );
-    setActive(selectedIndex >= 0 ? selectedIndex : 0);
-    setOpen(true);
-  };
-  const pick = (optionValue: string) => {
-    onSettingsChange({ ...values, [setting.id]: optionValue });
-    dismiss(true);
   };
 
   return (
@@ -917,16 +914,21 @@ export function EffortPicker({
         title={`Effort: ${valueLabel}`}
         aria-label={`Effort: ${valueLabel}`}
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => (open ? dismiss(true) : openPicker())}
-        className={`flex h-6.5 max-w-28 items-center gap-1 rounded-md px-1.5 ${
+        onClick={() => (open ? dismiss(true) : setOpen(true))}
+        className={`flex h-6.5 max-w-36 items-center gap-1 rounded-md px-1.5 ${
           open
             ? "bg-content/10 text-content"
             : "bg-content/10 text-content hover:bg-content/15"
         }`}
       >
-        <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
+        <EffortMeterSpark
+          tiers={tiers}
+          selectedIndex={selectedIndex}
+          size="mini"
+          className="shrink-0"
+        />
         <span className="min-w-0 truncate text-[11px]">{valueLabel}</span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
@@ -938,59 +940,23 @@ export function EffortPicker({
         <Popover
           anchor={button}
           side="top"
-          width={SETTING_MENU_WIDTH}
-          autoFocus
+          width={248}
           onDismiss={(reason) => dismiss(reason === "escape")}
-          role="menu"
+          role="dialog"
           aria-label="Effort"
-          aria-activedescendant={`${menuId}-${active}`}
-          tabIndex={-1}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              const direction = event.key === "ArrowDown" ? 1 : -1;
-              setActive(
-                (index) =>
-                  (index + direction + setting.options.length) %
-                  setting.options.length,
-              );
-              return;
-            }
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            const option = setting.options[active];
-            if (option) pick(option.value);
-          }}
           data-effort-picker
-          className="p-1 font-sans"
+          className="font-sans"
         >
-          {setting.options.map((option, index) => {
-            const selected = option.value === value;
-            const highlighted = index === active;
-            return (
-              <button
-                key={option.value}
-                id={`${menuId}-${index}`}
-                type="button"
-                role="menuitemradio"
-                aria-checked={selected}
-                onMouseDown={(event) => event.preventDefault()}
-                onMouseEnter={() => setActive(index)}
-                onClick={() => pick(option.value)}
-                className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
-                  highlighted ? "bg-content/10" : "hover:bg-content/5"
-                }`}
-              >
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                {selected ? (
-                  <Check
-                    className="size-3.5 shrink-0 text-content/50"
-                    strokeWidth={2}
-                  />
-                ) : null}
-              </button>
-            );
-          })}
+          <EffortMeter
+            tiers={tiers}
+            value={value}
+            defaultValue={setting.value}
+            modelName={current.name}
+            onChange={(optionValue) =>
+              onSettingsChange({ ...values, [setting.id]: optionValue })
+            }
+            onClose={() => dismiss(true)}
+          />
         </Popover>
       ) : null}
     </>
