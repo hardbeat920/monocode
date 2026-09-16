@@ -50,6 +50,10 @@
           if (isMac) {
             root.classList.add("is-mac");
           }
+          // All platforms want the glass CSS path (native on macOS/Windows,
+          // CSS `backdrop-filter` on Linux), so the body is transparent
+          // from the first frame instead of flashing solid then fading.
+          root.classList.add("has-native-glass");
         } catch (_) {}
       })();
     </script>

@@ -34,7 +34,6 @@ import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useColorScheme } from "../hooks/useColorScheme";
 import {
   applyChatBackground,
   applyChatBackgroundEmptyOpacity,
@@ -1545,7 +1544,6 @@ function useAppearanceSettings() {
 
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
-  const glassDisabled = useColorScheme() === "light";
 
   return (
     <>
@@ -1618,11 +1616,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         <Row
           id="dark-lightness"
           label="Dark-mode lightness"
-          description={
-            glassDisabled
-              ? "This only affects dark mode. Your dark-mode value is preserved."
-              : "Base brightness of the dark theme. Lower values are darker; zero is true black."
-          }
+          description="Base brightness of the dark theme. Lower values are darker; zero is true black."
         >
           <Slider
             label="Dark-mode lightness"
@@ -1631,18 +1625,13 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             min={THEME_DARK_LIGHTNESS_MIN}
             max={THEME_DARK_LIGHTNESS_MAX}
             onChange={appearance.onDarkLightness}
-            disabled={glassDisabled}
           />
         </Row>
       </Group>
 
       <Group
         title="Translucency"
-        description={
-          glassDisabled
-            ? "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved."
-            : "How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes."
-        }
+        description="How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes."
       >
         <Row
           id="sidebar-opacity"
@@ -1656,7 +1645,6 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
             max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
             onChange={appearance.onOpacity}
-            disabled={glassDisabled}
           />
         </Row>
         <Row
@@ -1671,7 +1659,6 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             min={SIDEBAR_BLUR_MIN}
             max={SIDEBAR_BLUR_MAX}
             onChange={appearance.onBlur}
-            disabled={glassDisabled}
           />
         </Row>
         <Row
@@ -1683,7 +1670,6 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             label="Main pane glass"
             on={appearance.bodyGlass}
             onChange={appearance.onBodyGlass}
-            disabled={glassDisabled}
           />
         </Row>
       </Group>
