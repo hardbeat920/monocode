@@ -1541,12 +1541,7 @@ fn is_mcode_agent(path: &Path) -> bool {
 /// Streams the file in 1 MB chunks so very large binaries don't blow up
 /// memory.
 fn file_mentions_mcode_agent(path: &Path) -> bool {
-    const MARKERS: [&str; 4] = [
-        "minimax-code",
-        "Minimax Code",
-        "mcode acp",
-        "MiniMax Code",
-    ];
+    const MARKERS: [&str; 4] = ["minimax-code", "Minimax Code", "mcode acp", "MiniMax Code"];
     const CHUNK: usize = 1024 * 1024;
     const OVERLAP: usize = 64;
 
