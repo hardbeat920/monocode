@@ -4625,6 +4625,13 @@ pub async fn delete_path(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+fn dir_contains(dir: &Path, dest_parent: &Path) -> bool {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dest_parent =
+        std::fs::canonicalize(dest_parent).unwrap_or_else(|_| dest_parent.to_path_buf());
+    dest_parent.starts_with(&dir)
+}
+
 fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     let from = expand_home(from);
     if !from.exists() {
@@ -4634,7 +4641,7 @@ fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dest_parent.starts_with(&from) {
+    if from.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = unique_name_in(
@@ -4662,7 +4669,7 @@ fn move_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dest_parent.starts_with(&from) {
+    if from.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = file_label(&from, from.to_str().unwrap_or("item"));
@@ -5054,6 +5061,24 @@ mod tests {
         assert!(Path::new(&copied).join("a.rs").exists());
 
         let err = copy_path_sync(&src_s, &src_s).unwrap_err();
+        assert!(err.contains("itself"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_rejects_paste_into_self_through_a_symlink_alias() {
+        let dir = tmp("folder-alias");
+        let src = dir.0.join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.rs"), "fn a() {}\n").unwrap();
+        let alias = dir.0.join("alias");
+        std::os::unix::fs::symlink(&src, &alias).unwrap();
+        let src_s = src.to_string_lossy().into_owned();
+        let alias_s = alias.to_string_lossy().into_owned();
+
+        let err = copy_path_sync(&src_s, &alias_s).unwrap_err();
+        assert!(err.contains("itself"));
+        let err = move_path_sync(&src_s, &alias_s).unwrap_err();
         assert!(err.contains("itself"));
     }
 
