@@ -59,6 +59,7 @@ import {
   type GitPr,
 } from "../lib/fs";
 import type { HarnessId } from "../lib/session";
+import { recordInboxSelfActivity } from "../lib/inboxSelfActivity";
 import {
   loadChangesView,
   saveChangesView,
@@ -312,6 +313,16 @@ function ChangedFiles({
     window.alert(error instanceof Error ? error.message : String(error));
   };
 
+  const recordPrActivity = (number = pr?.number) => {
+    if (!number) return;
+    recordInboxSelfActivity({
+      provider: "github",
+      kind: "pr",
+      number,
+      projectPath: cwd,
+    });
+  };
+
   const confirmDefault = async (kind: "push" | "pr") => {
     if (!onDefault || !index?.branch) return true;
     const branch = index.branch;
@@ -407,7 +418,10 @@ function ChangedFiles({
     setMenuOpen(false);
     try {
       await gitCommit(cwd, message);
-      if (push || createPr) await gitPush(cwd);
+      if (push || createPr) {
+        await gitPush(cwd);
+        recordPrActivity();
+      }
       setMessage("");
       onMutated();
       if (createPr) {
@@ -424,9 +438,11 @@ function ChangedFiles({
 
   const sync = async () => {
     if (!index || !(canSync || canPublish)) return;
+    const pushesCommits = index.ahead > 0;
     setBusy("sync");
     try {
       await gitSync(cwd);
+      if (pushesCommits) recordPrActivity();
       onMutated();
       reloadPr();
     } catch (error) {
@@ -447,6 +463,8 @@ function ChangedFiles({
       content.base,
       content.head,
     );
+    const number = Number(/\/pull\/(\d+)(?:[/?#]|$)/.exec(url)?.[1]);
+    if (Number.isInteger(number) && number > 0) recordPrActivity(number);
     await openUrl(url.trim());
   };
 

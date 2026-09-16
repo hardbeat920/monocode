@@ -92,7 +92,12 @@ export function BranchPicker({
   }, [open]);
 
   useEffect(() => {
-    if (open) search.current?.focus();
+    // Popover measures itself off-screen behind `visibility: hidden` before
+    // placing it; focusing during that pass is a no-op in real browsers, so
+    // wait a frame for the popover to actually be visible.
+    if (!open) return;
+    const id = requestAnimationFrame(() => search.current?.focus());
+    return () => cancelAnimationFrame(id);
   }, [open]);
 
   useEffect(() => {

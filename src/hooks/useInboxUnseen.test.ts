@@ -12,18 +12,23 @@ import {
 import { updateNotificationPreferences } from "../lib/notificationPreferences";
 import type { SessionSummary } from "../lib/sessionStore";
 import { markLinkedSessionUpdateSeen } from "../lib/linkedSessionSeen";
+import {
+  clearPendingInboxSelfActivity,
+  recordInboxSelfActivity,
+} from "../lib/inboxSelfActivity";
 import { useInboxActivity, type InboxActivity } from "./useInboxUnseen";
 
-const { githubWorkItem, listInboxItems } = vi.hoisted(() => ({
+const { githubWorkItem, listInboxItems, playCue } = vi.hoisted(() => ({
   githubWorkItem: vi.fn(),
   listInboxItems: vi.fn(),
+  playCue: vi.fn(),
 }));
 vi.mock("../lib/githubTasks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/githubTasks")>()),
   githubWorkItem,
   listInboxItems,
 }));
-vi.mock("../lib/sounds", () => ({ playCue: vi.fn() }));
+vi.mock("../lib/sounds", () => ({ playCue }));
 
 const remote: InboxItem = {
   provider: "github",
@@ -78,6 +83,8 @@ beforeEach(() => {
   localStorage.clear();
   listInboxItems.mockReset();
   githubWorkItem.mockReset();
+  playCue.mockReset();
+  clearPendingInboxSelfActivity();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -89,6 +96,7 @@ afterEach(() => {
   localStorage.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  clearPendingInboxSelfActivity();
 });
 
 describe("Inbox activity polling", () => {
@@ -224,6 +232,37 @@ describe("Inbox activity polling", () => {
       markLinkedSessionUpdateSeen(session.id, Date.parse(remote.updatedAt));
     });
 
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+  });
+
+  it("acknowledges an app-authored revision without a cue or linked-session notification", async () => {
+    let listed = { ...remote, updatedAt: "2026-09-13T11:00:00Z" };
+    listInboxItems.mockImplementation(async () => ({
+      items: [listed],
+      errors: {},
+    }));
+    markLinkedSessionUpdateSeen(session.id, Date.parse(listed.updatedAt));
+    await mount();
+    expect(activity.unseen).toBe(false);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+
+    listed = { ...listed, updatedAt: "2026-09-13T12:05:00Z" };
+    await act(async () => {
+      recordInboxSelfActivity({
+        provider: "github",
+        kind: "pr",
+        repo: listed.repo,
+        number: listed.number,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const entry = { key: inboxItemKey(listed), updatedAt: listed.updatedAt };
+    expect(listInboxItems).toHaveBeenCalledTimes(2);
+    expect(playCue).not.toHaveBeenCalled();
+    expect(isInboxEntryUnseen(entry)).toBe(false);
+    expect(activity.unseen).toBe(false);
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
   });
 });

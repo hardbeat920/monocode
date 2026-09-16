@@ -447,6 +447,12 @@ import {
   type ResumedWorkspace,
 } from "./lib/appLifecycle";
 
+type LinkedWorkItemPanelState = {
+  item: LinkedWorkItem;
+  sessionId: string;
+  cwd: string;
+};
+
 function withPlanStatus(
   session: Session,
   blockId: string,
@@ -686,15 +692,18 @@ export default function App({
   const [searchViewOpen, setSearchViewOpen] = useState(false);
   const [searchViewFocusToken, setSearchViewFocusToken] = useState(0);
   const [inboxViewOpen, setInboxViewOpen] = useState(false);
-  const [linkedWorkItemPanel, setLinkedWorkItemPanel] = useState<{
-    item: LinkedWorkItem;
-    sessionId: string;
-    cwd: string;
-  } | null>(null);
+  const [linkedWorkItemPanels, setLinkedWorkItemPanels] = useState<
+    ReadonlyMap<string, LinkedWorkItemPanelState>
+  >(() => new Map());
   const linkedWorkItemPanelRequest = useRef(0);
-  const closeLinkedWorkItemPanel = useCallback(() => {
+  const closeLinkedWorkItemPanel = useCallback((sessionId: string) => {
     linkedWorkItemPanelRequest.current += 1;
-    setLinkedWorkItemPanel(null);
+    setLinkedWorkItemPanels((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Map(current);
+      next.delete(sessionId);
+      return next;
+    });
   }, []);
   const [inboxAskPortal, setInboxAskPortal] =
     useState<InboxSessionPortal | null>(null);
@@ -1008,28 +1017,27 @@ export default function App({
     sessions.find(
       (session) => activeTab && leafIds(activeTab.layout).includes(session.id),
     );
+  const activeTabSessionIds = activeTab ? leafIds(activeTab.layout) : [];
+  const activeLinkedWorkItemPanel = activeTab
+    ? (linkedWorkItemPanels.get(activeTab.focusedId) ??
+      [...linkedWorkItemPanels.values()]
+        .reverse()
+        .find((panel) => activeTabSessionIds.includes(panel.sessionId)) ??
+      null)
+    : null;
 
+  // Panels are tab-local UI. Keep mounted panels alive while their tab is in
+  // the workspace so switching away preserves the fetched issue and its UI
+  // state, then discard them when their session leaves every open tab.
   useEffect(() => {
-    if (!linkedWorkItemPanel || !activeTab) return;
-    if (leafIds(activeTab.layout).includes(linkedWorkItemPanel.sessionId)) {
-      return;
-    }
-    closeLinkedWorkItemPanel();
-  }, [activeTab, closeLinkedWorkItemPanel, linkedWorkItemPanel]);
-
-  useEffect(() => {
-    if (!linkedWorkItemPanel) return;
-    if (searchViewOpen || inboxViewOpen || notesViewOpen || settingsOpen) {
-      closeLinkedWorkItemPanel();
-    }
-  }, [
-    closeLinkedWorkItemPanel,
-    inboxViewOpen,
-    linkedWorkItemPanel,
-    notesViewOpen,
-    searchViewOpen,
-    settingsOpen,
-  ]);
+    const openSessionIds = new Set(tabs.flatMap((tab) => leafIds(tab.layout)));
+    setLinkedWorkItemPanels((current) => {
+      if ([...current.keys()].every((id) => openSessionIds.has(id))) {
+        return current;
+      }
+      return new Map([...current].filter(([id]) => openSessionIds.has(id)));
+    });
+  }, [tabs]);
 
   const sessionDefaults = active ?? sessions[0];
   const activeSkillContext = active
@@ -3326,13 +3334,7 @@ export default function App({
   }, [inboxAskPortal, inboxViewOpen]);
 
   const onSelectHistorySession = useCallback(
-    async (
-      sessionId: string,
-      options?: { preserveLinkedWorkItemPanel?: boolean },
-    ) => {
-      if (!options?.preserveLinkedWorkItemPanel) {
-        closeLinkedWorkItemPanel();
-      }
+    async (sessionId: string) => {
       let session = await ensureOpenSession(sessionId);
       if (!session || session.inboxAsk) return;
       const parentId =
@@ -3360,7 +3362,6 @@ export default function App({
     },
     [
       appendTab,
-      closeLinkedWorkItemPanel,
       ensureOpenSession,
       focusOpenSession,
       replaceBlankPaneWithSession,
@@ -4723,6 +4724,7 @@ export default function App({
                   id: crypto.randomUUID(),
                   role: "system",
                   text: `${next.harness} is not connected yet — install and sign in to that provider, then retry.`,
+                  notice: "error",
                 },
               ],
             };
@@ -6269,7 +6271,6 @@ export default function App({
     (item: LinkedWorkItem, sessionId: string) => {
       const request = linkedWorkItemPanelRequest.current + 1;
       linkedWorkItemPanelRequest.current = request;
-      setLinkedWorkItemPanel(null);
       setFilePickerOpen(false);
       setSettingsOpen(false);
       setSearchViewOpen(false);
@@ -6279,14 +6280,19 @@ export default function App({
         sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
         history.find((session) => session.id === sessionId)?.cwd ??
         sidebarCwd;
-      void onSelectHistorySession(sessionId, {
-        preserveLinkedWorkItemPanel: true,
-      }).then(() => {
+      void onSelectHistorySession(sessionId).then(() => {
         if (linkedWorkItemPanelRequest.current !== request) return;
         if (!sessionsRef.current.some((session) => session.id === sessionId)) {
           return;
         }
-        setLinkedWorkItemPanel({ item, sessionId, cwd });
+        setLinkedWorkItemPanels((current) => {
+          const next = new Map(current);
+          // Reinsert the panel so it wins if this workspace tab contains
+          // multiple sessions with remembered panels.
+          next.delete(sessionId);
+          next.set(sessionId, { item, sessionId, cwd });
+          return next;
+        });
       });
     },
     [history, onSelectHistorySession, sidebarCwd],
@@ -7135,14 +7141,22 @@ export default function App({
                     </div>
                   </div>
                 </div>
-                {linkedWorkItemPanel ? (
+                {[...linkedWorkItemPanels.values()].map((panel) => (
                   <LinkedWorkItemPanel
-                    target={linkedWorkItemPanel.item}
-                    cwd={linkedWorkItemPanel.cwd}
+                    key={panel.sessionId}
+                    target={panel.item}
+                    cwd={panel.cwd}
                     recents={recents}
-                    onClose={closeLinkedWorkItemPanel}
+                    visible={
+                      !searchViewOpen &&
+                      !settingsOpen &&
+                      !inboxViewOpen &&
+                      !notesViewOpen &&
+                      activeLinkedWorkItemPanel?.sessionId === panel.sessionId
+                    }
+                    onClose={() => closeLinkedWorkItemPanel(panel.sessionId)}
                   />
-                ) : null}
+                ))}
               </main>
             </div>
             {searchViewOpen ? (

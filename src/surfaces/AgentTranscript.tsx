@@ -61,6 +61,7 @@ import {
   type AgentStep,
   type Block,
   type HarnessId,
+  type InterjectionMeta,
   type ModelTarget,
   type PlanBuildTarget,
   type ToolPreview,
@@ -88,6 +89,7 @@ import {
   groupTurns,
   initialThinkingIndex,
   isIncompleteTool,
+  isSubagentBlock,
   isThinkingBlock,
   lastActivityIndex,
   isProseBlock,
@@ -399,6 +401,7 @@ function AgentTranscriptComponent({
           // of the live work and append them after all of the lead's output.
           const items = groupTurnItems(
             turn.filter((block) => !block.orchestration),
+            { settled },
           );
           // Earlier activity groups have already been followed by prose or
           // more work. Only the last one can still be the live group.
@@ -441,7 +444,13 @@ function AgentTranscriptComponent({
             <LiveFoldTitle
               startedAt={startedAt}
               paused={waitingForApproval}
-              waitingLabel={pendingQuestion ? "Waiting for answers" : undefined}
+              waitingLabel={
+                managed && waitingForApproval
+                  ? "Waiting for orchestrator"
+                  : pendingQuestion
+                    ? "Waiting for answers"
+                    : undefined
+              }
               modelName={turnModelName}
             />
           ) : durationMs != null ? (
@@ -572,6 +581,14 @@ function AgentTranscriptComponent({
                             className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
                               offset === foldWork.length - 1
                                 ? "zen-fold-tail"
+                                : ""
+                            }${
+                              // Prose the trail holds is the agent talking
+                              // while it works; the marker lets it read as
+                              // process, not result.
+                              entry.type === "block" &&
+                              isProseBlock(entry.block)
+                                ? " zen-fold-prose"
                                 : ""
                             }`}
                           >
@@ -1693,33 +1710,54 @@ function SubagentStack({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
-  // A run that died opens itself, so the provider's reason is not buried
-  // behind a face that looks like every other finished one. A click takes the
-  // row over from there and it stays where the reader puts it.
-  const [override, setOverride] = useState<Record<string, boolean>>({});
-  const isOpen = (block: Block) =>
-    override[block.id] ?? toolCallState(block) === "rejected";
-
   return (
     <div className="flex min-w-0 flex-col px-4">
       {blocks.map((block) => (
-        <SubagentPanel
+        <SubagentRow
           key={block.id}
           block={block}
           cwd={cwd}
           live={live}
-          open={isOpen(block)}
-          onToggle={() =>
-            setOverride((current) => ({
-              ...current,
-              [block.id]: !isOpen(block),
-            }))
-          }
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * One delegated run's row, stateful about being opened. A run that died opens
+ * itself, so the provider's reason is not buried behind a face that looks like
+ * every other finished one. A click takes the row over from there and it stays
+ * where the reader puts it. The same row serves inside a settled turn's trail,
+ * where the run sits as one step of the work it was spawned from.
+ */
+function SubagentRow({
+  block,
+  cwd,
+  live = false,
+  onOpenFile,
+  onOpenDiff,
+}: {
+  block: Block;
+  cwd?: string;
+  live?: boolean;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+}) {
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? toolCallState(block) === "rejected";
+  return (
+    <SubagentPanel
+      block={block}
+      cwd={cwd}
+      live={live}
+      open={open}
+      onToggle={() => setOverride(!open)}
+      onOpenFile={onOpenFile}
+      onOpenDiff={onOpenDiff}
+    />
   );
 }
 
@@ -1999,6 +2037,12 @@ function ActivityRow({
       />
     );
   }
+  if (block.interjection) {
+    return <ActivityInterjectionRow block={block} />;
+  }
+  if (block.role === "system") {
+    return <ActivityStatusRow block={block} />;
+  }
   if (isProseBlock(block)) {
     return (
       <ActivityNoteRow
@@ -2007,6 +2051,20 @@ function ActivityRow({
         bare
         expandable
         onOpenFile={onOpenFile}
+      />
+    );
+  }
+  // Only a settled turn routes a delegated run here; live turns pin the row
+  // outside the trail. Either way it is the same row, so it still opens onto
+  // the agent's own work.
+  if (isSubagentBlock(block)) {
+    return (
+      <SubagentRow
+        block={block}
+        cwd={cwd}
+        live={live}
+        onOpenFile={onOpenFile}
+        onOpenDiff={onOpenDiff}
       />
     );
   }
@@ -2020,6 +2078,82 @@ function ActivityRow({
       onOpenFile={onOpenFile}
       onOpenDiff={onOpenDiff}
     />
+  );
+}
+
+/** A status row folded into the trail: one muted line, nothing to open. */
+function ActivityStatusRow({ block }: { block: Block }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 py-1">
+      <span
+        title={block.text}
+        className="min-w-0 flex-1 truncate font-sans text-sm text-content/50"
+      >
+        {block.text.trim()}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * An interjection inside the work trail: one compact line naming where it came
+ * from and what it said. It opens on a click, so folding the work never costs
+ * you a note you wanted to read.
+ */
+function ActivityInterjectionRow({ block }: { block: Block }) {
+  const [open, setOpen] = useState(false);
+  const meta = block.interjection;
+  if (!meta) return null;
+  const chrome = interjectionChrome(meta);
+  const summary = proseSummary(block.text);
+  const label = (
+    <span className="min-w-0 flex-1 truncate font-sans text-sm">
+      <span className="text-content/55">{chrome.label}</span>
+      {chrome.severityText ? (
+        <span className={`text-[11px] ${chrome.severityClass}`}>
+          {" "}
+          {chrome.severityText}
+        </span>
+      ) : null}
+      {summary ? (
+        <span className="text-content/50 transition-colors duration-200 group-hover:text-content/75">
+          {" · "}
+          {summary}
+        </span>
+      ) : null}
+    </span>
+  );
+
+  if (!block.text.trim()) {
+    return (
+      <div
+        aria-label={`${chrome.label} note`}
+        className="flex min-w-0 items-center gap-1.5 py-1"
+      >
+        {label}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={
+          open ? `Hide the ${chrome.label} note` : `${chrome.label}: ${summary}`
+        }
+        onClick={() => setOpen((value) => !value)}
+        className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
+      >
+        {label}
+      </button>
+      {open ? (
+        <div className="min-w-0 pb-2">
+          <pre className={INTERJECTION_BODY}>{block.text}</pre>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -2648,20 +2782,20 @@ function ApprovalControls({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const approval = block.approval;
-  if (!approval || approval.decided) return null;
+  if (!approval || approval.decided || !onApproval) return null;
   return (
     <div className="mt-1.5 flex gap-2">
       <button
         type="button"
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
-        onClick={() => onApproval?.(approval.requestId, "allow")}
+        onClick={() => onApproval(approval.requestId, "allow")}
       >
         Allow
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
-        onClick={() => onApproval?.(approval.requestId, "deny")}
+        onClick={() => onApproval(approval.requestId, "deny")}
       >
         Deny
       </button>
@@ -2706,6 +2840,39 @@ function HandoffDivider({ block }: { block: Block }) {
   );
 }
 
+/** The label and severity chrome an interjection wears, wherever it sits. */
+function interjectionChrome(meta: InterjectionMeta): {
+  label: string;
+  severityText?: string;
+  severityClass: string;
+} {
+  const label =
+    meta.customType === "advisor"
+      ? "Advisor"
+      : meta.customType === "custom"
+        ? "Notice"
+        : meta.customType;
+  const severityText =
+    meta.severity === "blocker"
+      ? "Blocker"
+      : meta.severity === "concern"
+        ? "Concern"
+        : meta.severity === "nit"
+          ? "Nit"
+          : undefined;
+  const severityClass =
+    meta.severity === "blocker"
+      ? "text-red-400"
+      : meta.severity === "concern"
+        ? "text-amber-400"
+        : "text-content/55";
+  return { label, severityText, severityClass };
+}
+
+/** The advisory body under an interjection, wherever the note is surfaced. */
+const INTERJECTION_BODY =
+  "min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70";
+
 /** A mid-turn interjection, e.g. OMP advisor notes: a labeled boundary with
  * a collapsible advisory body below it. */
 function InterjectionDivider({ block }: { block: Block }) {
@@ -2732,26 +2899,7 @@ function InterjectionDivider({ block }: { block: Block }) {
 
   const meta = block.interjection;
   if (!meta) return null;
-  const label =
-    meta.customType === "advisor"
-      ? "Advisor"
-      : meta.customType === "custom"
-        ? "Notice"
-        : meta.customType;
-  const severityText =
-    meta.severity === "blocker"
-      ? "Blocker"
-      : meta.severity === "concern"
-        ? "Concern"
-        : meta.severity === "nit"
-          ? "Nit"
-          : undefined;
-  const severityClass =
-    meta.severity === "blocker"
-      ? "text-red-400"
-      : meta.severity === "concern"
-        ? "text-amber-400"
-        : "text-content/55";
+  const { label, severityText, severityClass } = interjectionChrome(meta);
   return (
     <div className="px-4 py-4">
       <div className="flex items-center gap-3">
@@ -2774,7 +2922,7 @@ function InterjectionDivider({ block }: { block: Block }) {
         <div className="mt-2 px-2">
           <pre
             ref={textRef}
-            className={`min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70 ${expanded ? "" : "line-clamp-2"}`}
+            className={`${INTERJECTION_BODY} ${expanded ? "" : "line-clamp-2"}`}
           >
             {block.text}
           </pre>

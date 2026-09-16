@@ -781,6 +781,63 @@ describe("local orchestration", () => {
       "deny",
     );
   });
+  it("returns from wait immediately when a worker already needs input", async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const worker = f.sessions.find(
+      (session) => session.id === f.tasks()[0].sessionId,
+    )!;
+    worker.blocks = [
+      {
+        id: "ask",
+        role: "approval",
+        text: "Run the check",
+        approval: { requestId: 7 },
+      },
+    ];
+
+    const waiting = f.call("wait", { timeoutSeconds: 20 }) as Promise<{
+      tasks: Array<{ needsInput?: { kind: string; requestId: number } }>;
+    }>;
+    expect(vi.getTimerCount()).toBe(0);
+    expect((await waiting).tasks[0].needsInput).toMatchObject({
+      kind: "approval",
+      requestId: 7,
+    });
+  });
+  it("wakes an active wait as soon as a worker needs input", async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const worker = f.sessions.find(
+      (session) => session.id === f.tasks()[0].sessionId,
+    )!;
+
+    const waiting = f.call("wait", { timeoutSeconds: 20 }) as Promise<{
+      tasks: Array<{ needsInput?: { kind: string; requestId: number } }>;
+    }>;
+    expect(vi.getTimerCount()).toBe(1);
+    worker.blocks = [
+      {
+        id: "ask",
+        role: "approval",
+        text: "Run the check",
+        approval: { requestId: 8 },
+      },
+    ];
+    f.manager.sync();
+
+    expect((await waiting).tasks[0].needsInput).toMatchObject({
+      kind: "approval",
+      requestId: 8,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("validates the lead's answer against the agent's own question", async () => {
     const f = setup();
     await f.start();

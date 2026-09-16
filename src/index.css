@@ -930,7 +930,7 @@ header[data-tauri-drag-region] button {
     transform: translateY(-8px);
   }
   to {
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -1236,6 +1236,64 @@ header[data-tauri-drag-region] button {
   border-bottom-left-radius: 8px;
 }
 
+/*
+ * Prose the fold holds is the agent talking while it works — process, not
+ * result. It stays readable at one notch quieter: muted ink, headings
+ * demoted to bold lines, and tighter spacing, so a mid-run note never poses
+ * as the answer it led to.
+ */
+.zen-fold-prose .agent-markdown > :not(:last-child) {
+  margin-block-end: 0.5rem;
+}
+
+.zen-fold-prose .agent-markdown p,
+.zen-fold-prose .agent-markdown li {
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+}
+
+.zen-fold-prose .agent-markdown p strong,
+.zen-fold-prose .agent-markdown p em,
+.zen-fold-prose .agent-markdown p [data-streamdown="strong"],
+.zen-fold-prose .agent-markdown li strong,
+.zen-fold-prose .agent-markdown li em,
+.zen-fold-prose .agent-markdown li [data-streamdown="strong"] {
+  color: color-mix(in srgb, var(--color-content) 80%, transparent) !important;
+}
+
+/* A heading in a work note is a bold line, not a display size. */
+.zen-fold-prose .agent-markdown [data-streamdown="heading-1"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-2"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-3"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-4"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-5"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-6"] {
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 14px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--color-content) 80%, transparent);
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="blockquote"],
+.zen-fold-prose .agent-markdown .markdown-code-shell {
+  margin-block: 0.5rem;
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="code-block"],
+.zen-fold-prose .agent-markdown [data-streamdown="table-wrapper"] {
+  border-color: color-mix(in srgb, var(--color-content) 8%, transparent);
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="table-header-cell"],
+.zen-fold-prose .agent-markdown [data-streamdown="table-cell"] {
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="horizontal-rule"] {
+  margin-block: 0.75rem;
+}
+
 .zen-fold-item[data-fold-state="closed"] {
   display: grid;
   grid-template-rows: 0fr;
@@ -1370,26 +1428,23 @@ html.theme-light .popover-backdrop {
   background: color-mix(in srgb, var(--color-background-base) 10%, transparent);
 }
 
-/* Popover contents grow in from the edge they hang off, sliding the last few
-   pixels out of their trigger. The glass frame stays still: WebKit composites
-   `backdrop-filter` on its own layer and can flash a stale backdrop if that
-   same layer moves and a menu-item hover invalidates it. Still brief — a menu
-   that takes its time reads as lag rather than polish. */
+/* Animate content only; its sibling glass stays still. Finish at `none` and
+   do not retain the animation's transform/opacity compositing state with a
+   forwards fill. Hover repaints should happen in the ordinary resting state. */
 @keyframes popover-open {
   from {
     opacity: 0;
-    transform: translate3d(var(--popover-shift, 0), var(--popover-lift, 0), 0)
+    transform: translate(var(--popover-shift, 0), var(--popover-lift, 0))
       scale(0.94);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: none;
   }
 }
 
 .popover-open {
-  animation: popover-open 170ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  backface-visibility: hidden;
+  animation: popover-open 170ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 .popover-open[data-popover-side="bottom"] {
@@ -1414,8 +1469,7 @@ html.theme-light .popover-backdrop {
   }
 }
 
-/* Centered modals: a short lift rather than a fade. Glass already sits on
-   its own compositor layer, so opacity alone barely reads. */
+/* Centered modals: lift the content inside the stationary glass frame. */
 @keyframes modal-backdrop-in {
   from {
     opacity: 0;
@@ -1441,7 +1495,7 @@ html.theme-light .popover-backdrop {
 }
 
 .modal-panel {
-  animation: modal-panel-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: modal-panel-in 200ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {

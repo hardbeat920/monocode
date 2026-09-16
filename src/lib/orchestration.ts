@@ -1027,9 +1027,12 @@ export class Orchestrator {
     // A worker blocking on the lead changes no run state, so watch for that
     // separately; otherwise the lead sleeps while an agent waits on it.
     const blocked = this.blocked.get(leadId);
+    // Input that arrived before `wait` is already actionable. Only long-poll
+    // while every running worker can still make progress without the lead.
     if (
-      run.tasks.some(activeTask) ||
-      run.tasks.some((task) => task.status === "queued")
+      this.blockedKeys(run).length === 0 &&
+      (run.tasks.some(activeTask) ||
+        run.tasks.some((task) => task.status === "queued"))
     ) {
       await new Promise<void>((resolve) => {
         const finish = () => {

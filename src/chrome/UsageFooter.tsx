@@ -3,21 +3,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
 import {
+  consumeCodexRateLimitResetCredit,
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
 } from "../lib/rateLimitsFetch";
 import {
-  clampUsedPercent,
+  errorRateLimits,
   fetchingRateLimits,
-  formatRateLimitWindowChipLabel,
-  formatUsagePercent,
   idleRateLimits,
   RATE_LIMIT_POLL_MS,
-  rateLimitWindowTooltip,
   shouldFetchProvider,
   type ProviderRateLimits,
   type RateLimitProvider,
-  type RateLimitWindow,
 } from "../lib/rateLimits";
 import { HARNESS_LABEL, HARNESS_TITLE, type HarnessId } from "../lib/session";
 import {
@@ -25,6 +22,7 @@ import {
   type RunningTerminal,
 } from "../lib/terminalTab";
 import { MOD } from "../lib/platform";
+import { UsageProviderChip } from "./UsageProviderChip";
 
 const CLOCK_MS = 30_000;
 
@@ -125,6 +123,31 @@ export function UsageFooter({
     return () => window.clearInterval(timer);
   }, []);
 
+  const consumeCodexReset = useCallback(async (creditId?: string) => {
+    while (inflight.current) await inflight.current;
+    setRefreshing(true);
+    setCodex((current) => fetchingRateLimits("codex", current));
+    let outcome: Awaited<ReturnType<typeof consumeCodexRateLimitResetCredit>>;
+    const operation = (async () => {
+      try {
+        outcome = await consumeCodexRateLimitResetCredit(creditId);
+        setCodex(await fetchCodexRateLimits());
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not use Codex reset";
+        setCodex((current) => errorRateLimits("codex", message, current));
+        throw error;
+      }
+    })();
+    const tracked = operation.finally(() => {
+      inflight.current = null;
+      setRefreshing(false);
+    });
+    inflight.current = tracked;
+    await tracked;
+    return outcome!;
+  }, []);
+
   const showUsage = wantClaude || wantCodex;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
@@ -149,8 +172,14 @@ export function UsageFooter({
     >
       {showUsage ? (
         <>
-          {wantClaude ? <ProviderChip limits={claude} now={now} /> : null}
-          {wantCodex ? <ProviderChip limits={codex} now={now} /> : null}
+          {wantClaude ? <UsageProviderChip limits={claude} now={now} /> : null}
+          {wantCodex ? (
+            <UsageProviderChip
+              limits={codex}
+              now={now}
+              onConsumeReset={consumeCodexReset}
+            />
+          ) : null}
           <button
             type="button"
             className="grid size-4.5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
@@ -309,99 +338,4 @@ function RunningTerminalChip({
       ) : null}
     </>
   );
-}
-
-function ProviderChip({
-  limits,
-  now,
-}: {
-  limits: ProviderRateLimits;
-  now: number;
-}) {
-  const loading =
-    limits.status === "idle" ||
-    (limits.status === "fetching" && !limits.session && !limits.weekly);
-  const disconnected = limits.status === "unavailable";
-  const windows = [
-    limits.session ? { key: "session", window: limits.session } : null,
-    limits.weekly ? { key: "weekly", window: limits.weekly } : null,
-  ].filter((entry): entry is { key: string; window: RateLimitWindow } => {
-    return entry != null;
-  });
-  const tightest = windows.reduce<RateLimitWindow | null>((best, entry) => {
-    if (!best || entry.window.usedPercent > best.usedPercent) {
-      return entry.window;
-    }
-    return best;
-  }, null);
-  const tooltip = windows
-    .map((entry) => rateLimitWindowTooltip(entry.window, now))
-    .join(" · ");
-
-  return (
-    <span
-      className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap"
-      title={
-        tooltip ||
-        limits.error ||
-        (disconnected
-          ? "Not connected"
-          : loading
-            ? "Loading usage…"
-            : undefined)
-      }
-    >
-      <HarnessIcon harness={limits.provider} className="size-3 shrink-0" />
-      {loading ? (
-        <span className="animate-pulse text-content/35">···</span>
-      ) : disconnected ? (
-        <span className="text-content/35">not connected</span>
-      ) : windows.length === 0 ? (
-        <span className="text-content/35">{emptyUsageLabel(limits)}</span>
-      ) : (
-        <>
-          {tightest ? <MiniBar usedPct={tightest.usedPercent} /> : null}
-          <span className="flex min-w-0 items-center gap-1 tabular-nums">
-            {windows.map((entry, index) => (
-              <span key={entry.key} className="inline-flex items-center gap-1">
-                {index > 0 ? <span className="text-content/25">·</span> : null}
-                <span>
-                  {formatUsagePercent(entry.window.usedPercent)}{" "}
-                  {formatRateLimitWindowChipLabel(entry.window, now)}
-                </span>
-              </span>
-            ))}
-          </span>
-        </>
-      )}
-    </span>
-  );
-}
-
-function emptyUsageLabel(limits: ProviderRateLimits): string {
-  if (limits.status !== "error") return "—";
-  const text = limits.error?.toLowerCase() ?? "";
-  if (text.includes("expired") || text.includes("sign-in")) return "expired";
-  return "—";
-}
-
-function MiniBar({ usedPct }: { usedPct: number }) {
-  const pct = clampUsedPercent(usedPct);
-  return (
-    <span
-      className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-content/10"
-      aria-hidden
-    >
-      <span
-        className={`block h-full rounded-full ${barClass(pct)}`}
-        style={{ width: `${pct}%` }}
-      />
-    </span>
-  );
-}
-
-function barClass(pct: number): string {
-  if (pct >= 90) return "bg-red-400";
-  if (pct >= 80) return "bg-amber-400";
-  return "bg-content/45";
 }

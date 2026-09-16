@@ -2111,7 +2111,9 @@ fn git_github_pr_action_for(
 ) -> Result<GitHubWorkItem, String> {
     let args = github_pr_action_args(repo, number, action)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    gh_checked(root, &refs)?;
+    // Successful mutation commands do not always write to stdout. Their exit
+    // status confirms the action ran; the follow-up view fetches the new state.
+    gh_run(root, &refs, true)?;
     git_github_work_item_for(root, repo, "pr", number)
 }
 

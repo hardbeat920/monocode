@@ -109,8 +109,10 @@ describe("linked work item update notice", () => {
       );
     });
     expect(
-      document.body.querySelector('[aria-label^="New activity on"]')?.classList,
-    ).toContain("linked-activity-notice");
+      document.body.querySelector(
+        '[aria-label^="New activity on"] > .linked-activity-notice',
+      ),
+    ).not.toBeNull();
     expect(play).toHaveBeenCalledExactlyOnceWith("chime");
 
     act(() => {

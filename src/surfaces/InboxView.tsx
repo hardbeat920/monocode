@@ -60,6 +60,7 @@ import {
   inboxProjectsForRail,
   listInboxItems,
   peekGithubPrDiff,
+  peekGithubWorkItem,
   peekGithubWorkItemDetails,
   peekGithubWorkItemThread,
   peekInboxList,
@@ -1063,11 +1064,13 @@ export function LinkedWorkItemPanel({
   target,
   cwd,
   recents,
+  visible = true,
   onClose,
 }: {
   target: LinkedWorkItem;
   cwd: string;
   recents: RecentProject[];
+  visible?: boolean;
   onClose: () => void;
 }) {
   const onCloseRef = useRef(onClose);
@@ -1081,9 +1084,16 @@ export function LinkedWorkItemPanel({
     () => inboxProjectOptions(projects, logos),
     [logos, projects],
   );
-  const [item, setItem] = useState<InboxItem | null>(null);
+  const cachedItem = peekGithubWorkItem(
+    target.repo,
+    target.kind,
+    target.number,
+  );
+  const [item, setItem] = useState<InboxItem | null>(() =>
+    cachedItem ? { ...cachedItem, projectPath: cwd, provider: "github" } : null,
+  );
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(cachedItem == null);
   const resize = useDragResize({
     min: LINKED_PANEL_MIN_WIDTH,
     max: () =>
@@ -1105,12 +1115,13 @@ export function LinkedWorkItemPanel({
 
   useEffect(() => {
     let cancelled = false;
-    setItem(null);
+    const cached = peekGithubWorkItem(target.repo, target.kind, target.number);
+    setItem(
+      cached ? { ...cached, projectPath: cwd, provider: "github" } : null,
+    );
     setError(null);
-    setLoading(true);
-    void githubWorkItem(cwd, target.repo, target.kind, target.number, {
-      force: true,
-    })
+    setLoading(cached == null);
+    void githubWorkItem(cwd, target.repo, target.kind, target.number)
       .then((next) => {
         if (cancelled) return;
         setItem({ ...next, projectPath: cwd, provider: "github" });
@@ -1128,6 +1139,7 @@ export function LinkedWorkItemPanel({
   }, [cwd, target.kind, target.number, target.repo]);
 
   useEffect(() => {
+    if (!visible) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -1136,7 +1148,7 @@ export function LinkedWorkItemPanel({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [visible]);
 
   const kindLabel = target.kind === "pr" ? "Pull request" : "Issue";
   return (
@@ -1144,8 +1156,12 @@ export function LinkedWorkItemPanel({
       ref={resize.setPaneRef}
       aria-label={`Linked ${kindLabel.toLowerCase()} #${target.number}`}
       aria-busy={loading}
+      aria-hidden={!visible}
+      inert={!visible || undefined}
       data-linked-work-item-panel
-      className="@container/linked relative flex min-h-0 max-w-full shrink-0 flex-col border-l border-stroke text-content max-[950px]:absolute max-[950px]:inset-y-0 max-[950px]:right-0 max-[950px]:z-30 max-[950px]:shadow-2xl"
+      className={`@container/linked relative min-h-0 max-w-full shrink-0 flex-col border-l border-stroke text-content max-[950px]:absolute max-[950px]:inset-y-0 max-[950px]:right-0 max-[950px]:z-30 max-[950px]:shadow-2xl ${
+        visible ? "flex" : "hidden"
+      }`}
     >
       <div
         role="separator"
@@ -2143,7 +2159,7 @@ export function InboxDetail({
         githubKind,
         item.number,
         body,
-        { inReplyTo: replyTo?.threadId },
+        { inReplyTo: replyTo?.threadId, repo: item.repo },
       );
       setReplyTo(null);
       try {

@@ -22,6 +22,7 @@ import {
   sameProjectPath,
   type RecentProject,
 } from "./recents";
+import { recordInboxSelfActivity } from "./inboxSelfActivity";
 
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
@@ -261,6 +262,14 @@ function workItemLookupKey(
   return `${repo.trim().toLowerCase()}:${kind}:${number}`;
 }
 
+export function peekGithubWorkItem(
+  repo: string,
+  kind: GithubTaskKind,
+  number: number,
+): GithubWorkItem | null {
+  return workItemByKey.get(workItemLookupKey(repo, kind, number)) ?? null;
+}
+
 /** Fetch one exact item after targeted Inbox navigation misses its list cache. */
 export function githubWorkItem(
   cwd: string,
@@ -426,7 +435,7 @@ export async function githubWorkItemComment(
   kind: GithubTaskKind,
   number: number,
   body: string,
-  options?: { inReplyTo?: string },
+  options?: { inReplyTo?: string; repo?: string },
 ): Promise<string> {
   const url = await invoke<string>("git_github_work_item_comment", {
     cwd,
@@ -438,6 +447,11 @@ export async function githubWorkItemComment(
   const key = detailsCacheKey(cwd, kind, number);
   threadByKey.delete(key);
   threadInflight.delete(key);
+  recordInboxSelfActivity(
+    options?.repo
+      ? { provider: "github", kind, number, repo: options.repo }
+      : { provider: "github", kind, number, projectPath: cwd },
+  );
   return url;
 }
 
@@ -469,6 +483,7 @@ export async function githubPrAction(
       ),
     };
   }
+  recordInboxSelfActivity({ provider: "github", kind: "pr", repo, number });
   return item;
 }
 
