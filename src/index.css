@@ -287,6 +287,41 @@ html.chat-background-empty-only
   content-visibility: visible;
 }
 
+/* Keep the action row's space reserved so revealing it never shifts the chat. */
+.user-message-actions {
+  width: fit-content;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .user-message-hover-zone {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .user-message-hover-zone::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: -8px -10px;
+  }
+
+  .user-message-actions {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .user-message-hover-zone:hover .user-message-actions,
+  .user-message-hover-zone:focus-within .user-message-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-message-actions {
+    transition: none;
+  }
+}
+
 .user-message-with-link {
   display: block;
 }

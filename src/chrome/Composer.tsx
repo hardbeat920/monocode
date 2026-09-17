@@ -37,6 +37,7 @@ import {
   revokeAttachment,
 } from "../lib/attachments";
 import { resizeComposer } from "../lib/composerResize";
+import { messageFilesFromClipboard } from "../lib/clipboard";
 import type { ContextUsage } from "../lib/contextUsage";
 import {
   loadProjectFiles,
@@ -1155,6 +1156,21 @@ export function Composer({
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const messageFiles = messageFilesFromClipboard(e.clipboardData);
+    if (messageFiles) {
+      e.preventDefault();
+      const el = e.currentTarget;
+      el.setRangeText(
+        e.clipboardData.getData("text/plain"),
+        el.selectionStart,
+        el.selectionEnd,
+        "end",
+      );
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      if (attachmentsSupported)
+        void attachmentsFromFiles(messageFiles).then(addAttachments);
+      return;
+    }
     const files = filesFromClipboard(e.clipboardData);
     if (files.length === 0) return;
     e.preventDefault();
