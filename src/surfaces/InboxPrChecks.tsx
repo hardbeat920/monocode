@@ -293,10 +293,10 @@ function PrCheckRow({
                     return (
                       <li
                         key={index}
-                        className={`flex items-start gap-2 rounded px-2 py-1 ${step.state === "fail" ? "bg-rose-400/5" : ""}`}
+                        className={`flex items-center gap-2 rounded px-2 py-1 ${step.state === "fail" ? "bg-rose-400/5" : ""}`}
                       >
                         <stepMark.Icon
-                          className={`mt-0.5 size-3 shrink-0 ${stepMark.className}`}
+                          className={`size-3 shrink-0 ${stepMark.className}`}
                           strokeWidth={1.75}
                         />
                         <span className="min-w-0 flex-1 break-words text-content/80">
