@@ -175,7 +175,9 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     // settings. Any failure (no context, load error, context loss) falls
     // back to canvas.
     let webgl: { dispose: () => void } | null = null;
+    let gpuWanted = false;
     const disableGpu = () => {
+      gpuWanted = false;
       try {
         webgl?.dispose();
       } catch {
@@ -185,9 +187,10 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     };
     const enableGpu = () => {
       if (webgl || closed) return;
+      gpuWanted = true;
       void import("@xterm/addon-webgl")
         .then(({ WebglAddon }) => {
-          if (closed || webgl) return;
+          if (closed || webgl || !gpuWanted) return;
           const addon = new WebglAddon();
           addon.onContextLoss(() => {
             disableGpu();
