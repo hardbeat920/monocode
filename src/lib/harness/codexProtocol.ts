@@ -269,6 +269,8 @@ export type MappedCodexNotification = {
     codexErrorInfo?: unknown;
   };
   activeTurnId?: string | null;
+  /** The turn a terminal notification belongs to, when the payload says. */
+  terminalTurnId?: string;
   rateLimits?: RateLimitSnapshot;
 };
 
@@ -518,6 +520,9 @@ function mapTurnTerminal(
         : {}),
     },
     activeTurnId: null,
+    ...(stringField(turn, "id")
+      ? { terminalTurnId: stringField(turn, "id") }
+      : {}),
   };
 }
 

@@ -137,7 +137,7 @@ describe("Codex quota walls", () => {
   });
 });
 
-it("serializes refresh requests, uses previousAccountId and returns the exact wire shape", async () => {
+it("coalesces same-account refreshes and keeps independent accounts parallel", async () => {
   let active = 0;
   let maxActive = 0;
   invoke.mockImplementation(async (command: string, args?: { id: string }) => {
@@ -167,17 +167,28 @@ it("serializes refresh requests, uses previousAccountId and returns the exact wi
   };
   await Promise.all([
     respondCodexRefresh(rpc, 1, { previousAccountId: "two" }, "one"),
-    respondCodexRefresh(rpc, 2, {}, "one"),
+    respondCodexRefresh(rpc, 2, { previousAccountId: "two" }, "one"),
+    respondCodexRefresh(rpc, 3, {}, "one"),
   ]);
-  expect(maxActive).toBe(1);
+  // Two refreshes can overlap (different accounts), but account "two" shares
+  // a single credential fetch across its two requests.
+  expect(maxActive).toBe(2);
+  expect(
+    invoke.mock.calls.filter(
+      ([command, args]) =>
+        command === "codex_account_refresh" &&
+        (args as { id: string }).id === "two",
+    ),
+  ).toHaveLength(1);
   expect(rpc.respond.mock.calls).toEqual([
     [1, { accessToken: "fake-new", chatgptAccountId: "two" }],
-    [2, { accessToken: "fake-new", chatgptAccountId: "one" }],
+    [2, { accessToken: "fake-new", chatgptAccountId: "two" }],
+    [3, { accessToken: "fake-new", chatgptAccountId: "one" }],
   ]);
   expect(rpc.respondError).not.toHaveBeenCalled();
 });
 
-it("bounds refresh failures at three attempts and returns a redacted error", async () => {
+it("makes one refresh attempt per request and returns a redacted error", async () => {
   invoke.mockImplementation(async (command: string) => {
     if (command === "codex_accounts_list") return [account("one")];
     if (command === "codex_account_credentials") return account("one");
@@ -192,7 +203,7 @@ it("bounds refresh failures at three attempts and returns a redacted error", asy
     invoke.mock.calls.filter(
       ([command]) => command === "codex_account_refresh",
     ),
-  ).toHaveLength(3);
+  ).toHaveLength(1);
   expect(rpc.respond).not.toHaveBeenCalled();
   expect(rpc.respondError).toHaveBeenCalledWith("refresh-id", {
     code: -32000,
@@ -229,7 +240,6 @@ it("rereads external tokens at selection, refreshes expiry, and never inserts th
   );
   expect(invoke).toHaveBeenCalledWith("codex_auth_json_refresh", {
     accountId: "external-workspace",
-    lastRefresh: expect.any(String),
   });
   expect(failoverAccounts().find((a) => a.id === "external")?.email).toBe(
     "external@example.invalid",

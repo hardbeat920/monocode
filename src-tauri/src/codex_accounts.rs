@@ -49,12 +49,21 @@ fn pool_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .join("codex-accounts.json"))
 }
 
-fn read_pool(path: &Path) -> Pool {
-    std::fs::read(path)
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<Pool>(&raw).ok())
-        .filter(|pool| pool.version == 1)
-        .unwrap_or_default()
+// Only a missing file means an empty pool. Corrupt or future-version data
+// must error rather than be overwritten by a later write.
+fn read_pool(path: &Path) -> Result<Pool, String> {
+    match std::fs::read(path) {
+        Ok(raw) => {
+            let pool = serde_json::from_slice::<Pool>(&raw)
+                .map_err(|_| "Cannot parse Codex account store".to_string())?;
+            if pool.version != 1 {
+                return Err("Unsupported Codex account store version".into());
+            }
+            Ok(pool)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Pool::default()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn atomic_write(path: &Path, value: &impl Serialize) -> Result<(), String> {
@@ -108,7 +117,7 @@ pub async fn codex_accounts_list(app: tauri::AppHandle) -> Result<Vec<Value>, St
         let _guard = STORE_LOCK
             .lock()
             .map_err(|_| "Credential store unavailable")?;
-        Ok(read_pool(&pool_path(&app)?)
+        Ok(read_pool(&pool_path(&app)?)?
             .accounts
             .iter()
             .map(redacted)
@@ -127,7 +136,7 @@ pub async fn codex_account_upsert(app: tauri::AppHandle, account: Account) -> Re
             .lock()
             .map_err(|_| "Credential store unavailable")?;
         let path = pool_path(&app)?;
-        let mut pool = read_pool(&path);
+        let mut pool = read_pool(&path)?;
         if let Some(existing) = pool.accounts.iter_mut().find(|a| a.id == account.id) {
             *existing = account;
         } else {
@@ -145,7 +154,7 @@ pub async fn codex_account_remove(app: tauri::AppHandle, id: String) -> Result<(
             .lock()
             .map_err(|_| "Credential store unavailable")?;
         let path = pool_path(&app)?;
-        let mut pool = read_pool(&path);
+        let mut pool = read_pool(&path)?;
         pool.accounts.retain(|a| a.id != id);
         atomic_write(&path, &pool)
     })
@@ -164,7 +173,7 @@ pub async fn codex_account_update_state(
             .lock()
             .map_err(|_| "Credential store unavailable")?;
         let path = pool_path(&app)?;
-        let mut pool = read_pool(&path);
+        let mut pool = read_pool(&path)?;
         let account = pool
             .accounts
             .iter_mut()
@@ -196,7 +205,7 @@ pub async fn codex_account_credentials(
         let _guard = STORE_LOCK
             .lock()
             .map_err(|_| "Credential store unavailable")?;
-        read_pool(&pool_path(&app)?)
+        read_pool(&pool_path(&app)?)?
             .accounts
             .into_iter()
             .find(|a| a.id == id)
@@ -278,7 +287,7 @@ pub async fn codex_account_refresh(app: tauri::AppHandle, id: String) -> Result<
             .lock()
             .map_err(|_| "Credential store unavailable")?;
         let path = pool_path(&app)?;
-        let mut pool = read_pool(&path);
+        let mut pool = read_pool(&path)?;
         let account = pool
             .accounts
             .iter_mut()
@@ -374,13 +383,13 @@ mod tests {
     fn pool_roundtrip_redaction_and_atomic_replacement() {
         let dir = std::env::temp_dir().join(format!("monocode-codex-{}", uuid::Uuid::new_v4()));
         let path = dir.join("pool.json");
-        assert!(read_pool(&path).accounts.is_empty());
+        assert!(read_pool(&path).unwrap().accounts.is_empty());
         let pool = Pool {
             version: 1,
             accounts: vec![account()],
         };
         atomic_write(&path, &pool).unwrap();
-        assert_eq!(read_pool(&path).accounts[0].id, "test");
+        assert_eq!(read_pool(&path).unwrap().accounts[0].id, "test");
         let projection = redacted(&pool.accounts[0]);
         assert_eq!(projection["hasTokens"], true);
         assert!(projection.get("accessToken").is_none());
@@ -394,10 +403,10 @@ mod tests {
             );
         }
         atomic_write(&path, &Pool::default()).unwrap();
-        assert!(read_pool(&path).accounts.is_empty());
+        assert!(read_pool(&path).unwrap().accounts.is_empty());
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::write(&path, "broken json").unwrap();
-        assert!(read_pool(&path).accounts.is_empty());
+        assert!(read_pool(&path).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
