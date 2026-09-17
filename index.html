@@ -11,6 +11,9 @@
           var root = document.documentElement;
           var hue = localStorage.getItem("monocode.themeHue");
           var sat = localStorage.getItem("monocode.themeSaturation");
+          var darkLightness = localStorage.getItem(
+            "monocode.themeDarkLightness",
+          );
           var opacity = localStorage.getItem("monocode.sidebarOpacity");
           if (hue != null) {
             var h = Math.max(0, Math.min(360, Number(hue) || 0));
@@ -19,6 +22,10 @@
           if (sat != null) {
             var s = Math.max(0, Math.min(100, Number(sat) || 0));
             root.style.setProperty("--theme-saturation", s + "%");
+          }
+          if (darkLightness != null) {
+            var l = Math.max(0, Math.min(30, Number(darkLightness) || 0));
+            root.style.setProperty("--theme-dark-lightness", l + "%");
           }
           if (opacity != null) {
             var o = Math.max(0.15, Math.min(1, Number(opacity) || 0.85));
@@ -50,8 +57,9 @@
       :root {
         --theme-hue: 240;
         --theme-saturation: 0%;
+        --theme-dark-lightness: 9%;
         --sidebar-opacity: 0.85;
-        --background-lightness: 9%;
+        --background-lightness: var(--theme-dark-lightness);
         --color-background-base: hsl(
           var(--theme-hue) var(--theme-saturation) var(--background-lightness)
         );

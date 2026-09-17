@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { copyText } from "../lib/clipboard";
 import { basename, revealPath } from "../lib/fs";
 import {
+  isAgentTab,
   isChangesTab,
   isCommitTab,
   isFilesystemTab,
@@ -23,6 +24,7 @@ import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { HarnessIcon } from "./HarnessIcon";
 
 type Props = {
   files: FilePaneTab[];
@@ -121,6 +123,16 @@ export function surfaceTabPresentation(
       label: "Session Changes",
       iconName: "CHANGES",
       tooltip: "Changes captured for this session only",
+    };
+  }
+
+  if (isAgentTab(file)) {
+    const name = file.path.trim() || "Agent";
+    return {
+      name,
+      label: name,
+      iconName: "AGENT",
+      tooltip: `${name} — orchestration agent`,
     };
   }
 
@@ -231,7 +243,7 @@ export function SurfaceTabs({
   }, [activeFileId, sortable.draggingId]);
 
   return (
-    <div className="flex h-9 min-w-0 shrink-0 border-b border-content/10 bg-content/2">
+    <div className="flex h-9 min-w-0 shrink-0 border-b border-stroke bg-content/2">
       <div
         ref={lockOverscroll}
         role="tablist"
@@ -263,6 +275,7 @@ export function SurfaceTabs({
         const commit = isCommitTab(file);
         const review = isReviewTab(file) && !changes;
         const terminal = isTerminalTab(file);
+        const agent = isAgentTab(file) ? file.agent : null;
         const { label, iconName, tooltip } = surfaceTabPresentation(file);
         return (
           <div
@@ -271,8 +284,8 @@ export function SurfaceTabs({
               sortable.setItemRef(file.id, el);
               if (el && file.id === activeFileId) activeTabRef.current = el;
             }}
-            className={`reorder-item tab-motion group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-content/10 ${
-              active ? "bg-content/8" : "hover:bg-content/5"
+            className={`reorder-item tab-motion group relative flex w-52 min-w-28 shrink touch-none items-stretch border-r border-stroke ${
+              active ? "bg-selection-subtle" : "hover:bg-content/5"
             } ${
               canDrag ? "cursor-grab active:cursor-grabbing" : ""
             }`}
@@ -323,6 +336,11 @@ export function SurfaceTabs({
             >
               {terminal ? (
                 <Terminal className="size-3.5 shrink-0" strokeWidth={1.75} />
+              ) : agent ? (
+                <HarnessIcon
+                  harness={agent.harness}
+                  className="size-3.5 shrink-0"
+                />
               ) : changes || commit ? (
                 <GitCompare className="size-3.5 shrink-0" strokeWidth={1.75} />
               ) : (

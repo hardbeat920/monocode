@@ -85,7 +85,7 @@ async function render(projects = recents, cwd = "/work/Edefyn") {
   );
 }
 
-it("offers all other rail projects in rail order in one move menu", async () => {
+it("uses the searchable rail project picker when moving a note", async () => {
   const projects = [
     ...recents,
     { path: "/work/Third", openedAt: 3 },
@@ -108,10 +108,9 @@ it("offers all other rail projects in rail order in one move menu", async () => 
   await render(projects, "/work/Active");
   await act(async () => projectButton()!.click());
   const menu = document.querySelector('[aria-label="Project picker"]')!;
-  const items = [
-    ...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-  ];
+  const items = [...menu.querySelectorAll<HTMLButtonElement>("button[title]")];
   expect(items.map((item) => item.title)).toEqual([
+    "/work/Edefyn",
     "/work/Seventh",
     "/work/Fourth",
     "/work/Third",
@@ -120,16 +119,29 @@ it("offers all other rail projects in rail order in one move menu", async () => 
     "/work/Sixth",
     "/work/Active",
   ]);
-  expect(menu.textContent).toContain("Move to project");
-  expect(menu.textContent).not.toContain("Recent projects");
-  expect(menu.textContent).not.toContain("More Projects");
-  await act(async () => items.at(-1)!.click());
+  const search = menu.querySelector<HTMLInputElement>(
+    'input[placeholder="Search projects..."]',
+  );
+  expect(search).not.toBeNull();
+  expect(document.activeElement).toBe(search);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(search, "active");
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const filteredItems = [
+    ...menu.querySelectorAll<HTMLButtonElement>("button[title]"),
+  ];
+  expect(filteredItems.map((item) => item.title)).toEqual(["/work/Active"]);
+  await act(async () => filteredItems[0]!.click());
   expect(stored.sourceCwd).toBe("/work/Active");
 });
 
 function projectButton() {
   return container.querySelector<HTMLButtonElement>(
-    'header button[aria-haspopup="menu"]',
+    'header button[aria-label^="Move note to project"]',
   );
 }
 
@@ -141,7 +153,9 @@ async function chooseProject() {
   ).not.toBeNull();
   await act(async () => button!.click());
   const item = [
-    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '[aria-label="Project picker"] button[title]',
+    ),
   ].find((element) => element.title === "/work/portognjeeen");
   expect(item).toBeDefined();
   await act(async () => item!.click());
@@ -471,7 +485,9 @@ it("clears a failed move error when the saved project is selected again", async 
 
   await act(async () => projectButton()!.click());
   const original = [
-    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '[aria-label="Project picker"] button[title]',
+    ),
   ].find((item) => item.title === "/work/Edefyn");
   expect(original).toBeDefined();
   await act(async () => original!.click());

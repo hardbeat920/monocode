@@ -127,7 +127,7 @@ function HistoryRow({
           row.kind === "HEAD" ? "is-head" : ""
         } ${
           active
-            ? "is-selected bg-content/10 text-content"
+            ? "is-selected bg-selection text-content"
             : "text-content hover:bg-content/5"
         }`}
       >

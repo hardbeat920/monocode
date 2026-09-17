@@ -1,7 +1,13 @@
 import { play, setEnabled, setVolume, type SoundName } from "cuelume";
 import type { LinkedWorkItemUpdateCard } from "./linkedWorkItemActivity";
+import {
+  allowsProjectNotification,
+  type NotificationSubject,
+} from "./notificationPreferences";
+import { inboxNotificationProject } from "./notificationProjects";
 
 const KEY = "monocode.sounds";
+const ENABLED_AT_KEY = "monocode.soundsEnabledAt";
 
 export const SOUNDS_DEFAULT = true;
 
@@ -38,8 +44,10 @@ export function loadSoundsEnabled(): boolean {
 }
 
 export function saveSoundsEnabled(value: boolean) {
+  const resuming = value && !loadSoundsEnabled();
   try {
     localStorage.setItem(KEY, value ? "1" : "0");
+    if (resuming) localStorage.setItem(ENABLED_AT_KEY, String(Date.now()));
   } catch {
     // private mode / quota
   }
@@ -60,14 +68,30 @@ export function initSounds() {
   applySoundEngine();
 }
 
-export function playCue(cue: SoundCue) {
-  if (!loadSoundsEnabled()) return;
+type ProjectSoundCue = "turnFinished" | "inboxUnseen" | "linkedActivity";
+
+/** Project cues require their subject so new sources cannot bypass project policy. */
+export function playCue(cue: Exclude<SoundCue, ProjectSoundCue>): boolean;
+export function playCue(
+  cue: ProjectSoundCue,
+  subject: NotificationSubject,
+): boolean;
+export function playCue(cue: SoundCue, subject?: NotificationSubject): boolean {
+  if (!loadSoundsEnabled()) return false;
+  if (subject && !allowsProjectNotification(subject)) return false;
+  if (subject?.occurredAt !== undefined) {
+    try {
+      if (subject.occurredAt < Number(localStorage.getItem(ENABLED_AT_KEY)))
+        return false;
+    } catch {
+      /* Audio can still play when storage is unavailable. */
+    }
+  }
   applySoundEngine();
   play(CUES[cue]);
+  return true;
 }
 
-let inboxDotOn = false;
-let inboxPrimed = false;
 let announcedUpdate: string | undefined;
 const announcedLinkedActivities = new Set<string>();
 
@@ -86,17 +110,11 @@ export function announceLinkedActivity(
   ]);
   if (announcedLinkedActivities.has(key)) return;
   announcedLinkedActivities.add(key);
-  playCue("linkedActivity");
-}
-
-/**
- * Rising edge of the project-rail inbox dot, after the first snapshot.
- * Launching with items already unseen must not chime.
- */
-export function noteInboxUnseen(isUnseen: boolean) {
-  if (isUnseen && !inboxDotOn && inboxPrimed) playCue("inboxUnseen");
-  inboxDotOn = isUnseen;
-  inboxPrimed = true;
+  playCue("linkedActivity", {
+    projectId: inboxNotificationProject({ ...card, provider: "github" }).id,
+    category: card.kind === "pr" ? "pullRequests" : "issues",
+    occurredAt: card.updatedAt,
+  });
 }
 
 /** One cue per available version, including a later probe of the same build. */
@@ -112,8 +130,6 @@ export function announceUpdateAvailable(version: string | null) {
 
 /** Test helper: forget which notification cues already fired. */
 export function resetSoundCues() {
-  inboxDotOn = false;
-  inboxPrimed = false;
   announcedUpdate = undefined;
   announcedLinkedActivities.clear();
 }

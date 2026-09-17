@@ -13,13 +13,13 @@ vi.mock("cuelume", () => ({
 import {
   announceUpdateAvailable,
   loadSoundsEnabled,
-  noteInboxUnseen,
   playCue,
   resetSoundCues,
   saveSoundsEnabled,
   SOUNDS_DEFAULT,
   SOUNDS_VOLUME,
 } from "./sounds";
+import { updateNotificationPreferences } from "./notificationPreferences";
 
 const KEY = "monocode.sounds";
 
@@ -77,12 +77,12 @@ describe("sounds", () => {
   });
 
   it("plays the mapped cue when enabled", () => {
-    playCue("turnFinished");
+    playCue("turnFinished", { projectId: "work", category: "agentFinished" });
     expect(setVolume).toHaveBeenCalledWith(SOUNDS_VOLUME);
     expect(play).toHaveBeenCalledWith("success");
-    playCue("inboxUnseen");
+    playCue("inboxUnseen", { projectId: "work", category: "issues" });
     expect(play).toHaveBeenCalledWith("bloom");
-    playCue("linkedActivity");
+    playCue("linkedActivity", { projectId: "work", category: "pullRequests" });
     expect(play).toHaveBeenCalledWith("chime");
     playCue("updateAvailable");
     expect(play).toHaveBeenCalledWith("arrival");
@@ -95,25 +95,44 @@ describe("sounds", () => {
   it("is silent when muted", () => {
     saveSoundsEnabled(false);
     play.mockClear();
-    playCue("turnFinished");
+    playCue("turnFinished", { projectId: "work", category: "agentFinished" });
     expect(play).not.toHaveBeenCalled();
   });
 
-  it("does not ding for the first inbox snapshot", () => {
-    noteInboxUnseen(true);
+  it("suppresses project cues without silencing allowed projects or app-wide cues", () => {
+    updateNotificationPreferences(["private"], { mutedUntil: null });
+    playCue("turnFinished", {
+      projectId: "private",
+      category: "agentFinished",
+    });
     expect(play).not.toHaveBeenCalled();
+    playCue("inboxUnseen", { projectId: "work", category: "pullRequests" });
+    playCue("updateAvailable");
+    expect(play.mock.calls).toEqual([["bloom"], ["arrival"]]);
   });
 
-  it("dings once when the inbox dot appears, then again after it clears", () => {
-    noteInboxUnseen(false);
-    noteInboxUnseen(true);
-    expect(play).toHaveBeenCalledTimes(1);
-    expect(play).toHaveBeenCalledWith("bloom");
-    noteInboxUnseen(true);
-    expect(play).toHaveBeenCalledTimes(1);
-    noteInboxUnseen(false);
-    noteInboxUnseen(true);
-    expect(play).toHaveBeenCalledTimes(2);
+  it("does not catch up on project activity from before global sounds were re-enabled", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    try {
+      saveSoundsEnabled(false);
+      vi.setSystemTime(2000);
+      saveSoundsEnabled(true);
+      playCue("inboxUnseen", {
+        projectId: "work",
+        category: "issues",
+        occurredAt: 1500,
+      });
+      expect(play).not.toHaveBeenCalled();
+      playCue("inboxUnseen", {
+        projectId: "work",
+        category: "issues",
+        occurredAt: 2050,
+      });
+      expect(play).toHaveBeenCalledExactlyOnceWith("bloom");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dings once per update version", () => {

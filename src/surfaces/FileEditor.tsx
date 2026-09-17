@@ -448,7 +448,7 @@ export function FileEditor({
           onStageGit={showDiff ? stageGit : undefined}
         />
       )}
-      <footer className="flex h-6 shrink-0 items-center border-t border-content/10 px-2.5 font-mono text-[10.5px] text-content/40">
+      <footer className="flex h-6 shrink-0 items-center border-t border-stroke px-2.5 font-mono text-[10.5px] text-content/40">
         <span className="min-w-0 flex-1 truncate" title={path}>
           {relativePath}
         </span>
@@ -958,7 +958,7 @@ function DiffChunkNav({
 }) {
   return (
     <header
-      className="flex h-8 shrink-0 items-center justify-between gap-3 border-b border-content/10 px-3 pr-1"
+      className="flex h-8 shrink-0 items-center justify-between gap-3 border-b border-stroke px-3 pr-1"
       role="toolbar"
       aria-label="Jump between changes"
     >

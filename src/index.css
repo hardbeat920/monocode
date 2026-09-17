@@ -5,6 +5,23 @@
 
 @custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
 
+@container settings (width < 560px) {
+  .settings-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .settings-row-control {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  .settings-row:has(> .settings-row-control > [role="switch"]:only-child) {
+    flex-direction: row;
+    gap: 1.5rem;
+  }
+}
+
 @theme {
   /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
   --leading-label: 1.4;
@@ -13,6 +30,35 @@
   );
   --color-content: hsl(
     var(--theme-hue) var(--theme-saturation) var(--content-lightness)
+  );
+  /* Structural separators: use border-stroke, divide-stroke, or bg-stroke. */
+  --color-stroke: color-mix(in srgb, var(--color-content) 7%, transparent);
+  /* Interactive fills keep their dark-theme contrast but use gentler ink in
+     light mode. Prefer these over content opacity for selected/raised UI. */
+  --color-selection-subtle: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-subtle-strength),
+    transparent
+  );
+  --color-selection: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-strength),
+    transparent
+  );
+  --color-selection-strong: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-strong-strength),
+    transparent
+  );
+  --color-selection-hover: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-hover-strength),
+    transparent
+  );
+  --color-selection-emphasis: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-emphasis-strength),
+    transparent
   );
   --color-accent: hsl(211 92% 62%);
   --color-skill: #e8c547;
@@ -31,10 +77,16 @@
   --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --theme-hue: 240;
   --theme-saturation: 0%;
+  --theme-dark-lightness: 9%;
   --sidebar-opacity: 0.85;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
-  --background-lightness: 9%;
+  --selection-subtle-strength: 8%;
+  --selection-strength: 10%;
+  --selection-strong-strength: 12%;
+  --selection-hover-strength: 15%;
+  --selection-emphasis-strength: 20%;
+  --background-lightness: var(--theme-dark-lightness);
   --content-lightness: 92%;
   --link-color: #7dd3fc;
   --color-skill: #e8c547;
@@ -53,6 +105,11 @@ html.theme-light {
   --color-skill: #a07c10;
   --color-mention: #0284c7;
   --color-markdown-heading: #be185d;
+  --selection-subtle-strength: 5%;
+  --selection-strength: 6%;
+  --selection-strong-strength: 7%;
+  --selection-hover-strength: 10%;
+  --selection-emphasis-strength: 14%;
   color-scheme: light;
 }
 
@@ -234,6 +291,11 @@ html.chat-background-empty-only
   display: block;
 }
 
+html.has-user-accent .user-message-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+  border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
+}
+
 .user-link-preview {
   display: inline;
   white-space: normal;
@@ -351,22 +413,51 @@ html.theme-light [data-composer-box] {
     0 2px 6px color-mix(in srgb, var(--color-content) 6%, transparent);
 }
 
-html.theme-light .composer-send:not(:disabled) {
+/* Solid primary actions share the composer submit treatment. */
+.primary-action:not(:disabled) {
+  background: white;
+  color: black;
+}
+
+.primary-action:not(:disabled):hover {
+  background: color-mix(in srgb, white 90%, transparent);
+}
+
+.primary-action:disabled {
+  background: color-mix(in srgb, white 30%, transparent);
+  color: color-mix(in srgb, black 40%, transparent);
+}
+
+html.theme-light .primary-action:not(:disabled) {
   background: var(--color-content);
   color: var(--color-background-base);
 }
 
-html.theme-light .composer-send:not(:disabled):hover {
+html.theme-light .primary-action:not(:disabled):hover {
   background: color-mix(in srgb, var(--color-content) 90%, transparent);
 }
 
-html.theme-light .composer-send:disabled {
+html.theme-light .primary-action:disabled {
   background: color-mix(in srgb, var(--color-content) 25%, transparent);
-  color: color-mix(
+  color: color-mix(in srgb, var(--color-background-base) 75%, transparent);
+}
+
+html.has-user-accent .primary-action:not(:disabled) {
+  background: var(--user-accent-color);
+  color: var(--user-accent-foreground);
+}
+
+html.has-user-accent .primary-action:not(:disabled):hover {
+  background: color-mix(
     in srgb,
-    var(--color-background-base) 75%,
-    transparent
+    var(--user-accent-color) 88%,
+    var(--color-content)
   );
+}
+
+html.has-user-accent .primary-action:disabled {
+  background: color-mix(in srgb, var(--user-accent-color) 28%, transparent);
+  color: color-mix(in srgb, var(--color-content) 35%, transparent);
 }
 
 .composer-field {
@@ -756,6 +847,25 @@ header[data-tauri-drag-region] button {
   color: color-mix(in srgb, var(--color-content) 78%, transparent);
 }
 
+/* AgentMarkdown passes dir="auto", so Streamdown puts every block in its own
+   <div dir="..." style="display: contents"> wrapper. A display:contents box
+   drops its own margins, so Streamdown's `space-y-4` on the root (it targets
+   those wrappers) paints no gap at all. Headings, blockquotes and rules keep
+   their spacing because their margin sits on the element itself (mt-6/mb-2,
+   my-4, my-6); paragraphs and lists carry none, so every "\n\n" started a new
+   <p> with no visible gap and the reply read as one dense block (#218).
+   Put the gap back on the block inside the wrapper, top side only, so a reply
+   never ends with a trailing gap. Ignore empty wrappers before the first
+   visible block, and keep lists closer to the paragraph that introduces them. */
+.agent-markdown > div:not(:empty) ~ div > p {
+  margin-top: 1rem;
+}
+
+.agent-markdown > div:not(:empty) ~ div > [data-streamdown="unordered-list"],
+.agent-markdown > div:not(:empty) ~ div > [data-streamdown="ordered-list"] {
+  margin-top: 0.5rem;
+}
+
 .agent-markdown p strong,
 .agent-markdown p em,
 .agent-markdown p [data-streamdown="strong"] {
@@ -820,7 +930,7 @@ header[data-tauri-drag-region] button {
     transform: translateY(-8px);
   }
   to {
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -1126,6 +1236,64 @@ header[data-tauri-drag-region] button {
   border-bottom-left-radius: 8px;
 }
 
+/*
+ * Prose the fold holds is the agent talking while it works — process, not
+ * result. It stays readable at one notch quieter: muted ink, headings
+ * demoted to bold lines, and tighter spacing, so a mid-run note never poses
+ * as the answer it led to.
+ */
+.zen-fold-prose .agent-markdown > :not(:last-child) {
+  margin-block-end: 0.5rem;
+}
+
+.zen-fold-prose .agent-markdown p,
+.zen-fold-prose .agent-markdown li {
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+}
+
+.zen-fold-prose .agent-markdown p strong,
+.zen-fold-prose .agent-markdown p em,
+.zen-fold-prose .agent-markdown p [data-streamdown="strong"],
+.zen-fold-prose .agent-markdown li strong,
+.zen-fold-prose .agent-markdown li em,
+.zen-fold-prose .agent-markdown li [data-streamdown="strong"] {
+  color: color-mix(in srgb, var(--color-content) 80%, transparent) !important;
+}
+
+/* A heading in a work note is a bold line, not a display size. */
+.zen-fold-prose .agent-markdown [data-streamdown="heading-1"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-2"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-3"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-4"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-5"],
+.zen-fold-prose .agent-markdown [data-streamdown="heading-6"] {
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 14px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--color-content) 80%, transparent);
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="blockquote"],
+.zen-fold-prose .agent-markdown .markdown-code-shell {
+  margin-block: 0.5rem;
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="code-block"],
+.zen-fold-prose .agent-markdown [data-streamdown="table-wrapper"] {
+  border-color: color-mix(in srgb, var(--color-content) 8%, transparent);
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="table-header-cell"],
+.zen-fold-prose .agent-markdown [data-streamdown="table-cell"] {
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+}
+
+.zen-fold-prose .agent-markdown [data-streamdown="horizontal-rule"] {
+  margin-block: 0.75rem;
+}
+
 .zen-fold-item[data-fold-state="closed"] {
   display: grid;
   grid-template-rows: 0fr;
@@ -1260,26 +1428,23 @@ html.theme-light .popover-backdrop {
   background: color-mix(in srgb, var(--color-background-base) 10%, transparent);
 }
 
-/* Popover contents grow in from the edge they hang off, sliding the last few
-   pixels out of their trigger. The glass frame stays still: WebKit composites
-   `backdrop-filter` on its own layer and can flash a stale backdrop if that
-   same layer moves and a menu-item hover invalidates it. Still brief — a menu
-   that takes its time reads as lag rather than polish. */
+/* Animate content only; its sibling glass stays still. Finish at `none` and
+   do not retain the animation's transform/opacity compositing state with a
+   forwards fill. Hover repaints should happen in the ordinary resting state. */
 @keyframes popover-open {
   from {
     opacity: 0;
-    transform: translate3d(var(--popover-shift, 0), var(--popover-lift, 0), 0)
+    transform: translate(var(--popover-shift, 0), var(--popover-lift, 0))
       scale(0.94);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: none;
   }
 }
 
 .popover-open {
-  animation: popover-open 170ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  backface-visibility: hidden;
+  animation: popover-open 170ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 .popover-open[data-popover-side="bottom"] {
@@ -1304,8 +1469,158 @@ html.theme-light .popover-backdrop {
   }
 }
 
-/* Centered modals: a short lift rather than a fade. Glass already sits on
-   its own compositor layer, so opacity alone barely reads. */
+/* The selected project mascot turns banked resets into a tiny status scene. */
+.reset-mascot-scene {
+  position: absolute;
+  right: 8px;
+  bottom: 5px;
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.reset-mascot-glow {
+  position: absolute;
+  inset: 14px 8px 3px;
+  z-index: -1;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.14;
+  filter: blur(12px);
+}
+
+.reset-mascot-sprite {
+  width: 56px;
+  height: 56px;
+  overflow: visible;
+  filter: drop-shadow(0 5px 6px rgb(0 0 0 / 0.18));
+  transform-origin: 50% 100%;
+}
+
+.reset-mascot-scene[data-reset-mascot-mood="happy"] .reset-mascot-sprite {
+  animation: reset-mascot-happy-in 720ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+
+.reset-mascot-scene[data-reset-mascot-mood="sad"] .reset-mascot-sprite {
+  transform: translateX(-3px) rotate(-3deg);
+  animation: reset-mascot-sad-in 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  opacity: 0.68;
+}
+
+.reset-mascot-spark {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  transform: rotate(45deg);
+  animation: reset-mascot-spark-in 620ms 260ms cubic-bezier(0.16, 1, 0.3, 1)
+    both;
+}
+
+.reset-mascot-spark-a {
+  top: 8px;
+  right: 7px;
+}
+
+.reset-mascot-spark-b {
+  top: 19px;
+  left: 3px;
+  width: 3px;
+  height: 3px;
+  animation-delay: 360ms;
+}
+
+.reset-mascot-tear {
+  position: absolute;
+  top: 31px;
+  left: 19px;
+  width: 4px;
+  height: 6px;
+  border-radius: 999px 999px 999px 2px;
+  background: #60a5fa;
+  opacity: 0.75;
+  transform: rotate(12deg);
+  animation: reset-mascot-tear-in 680ms 300ms cubic-bezier(0.22, 1, 0.36, 1)
+    both;
+}
+
+@keyframes reset-mascot-happy-in {
+  0% {
+    opacity: 0;
+    transform: translateY(9px) scale(0.82);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-10px) rotate(-3deg) scaleY(1.05);
+  }
+  68% {
+    transform: translateY(0) scaleX(1.08) scaleY(0.92);
+  }
+  84% {
+    transform: translateY(-4px) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes reset-mascot-sad-in {
+  0% {
+    opacity: 0;
+    transform: translateX(8px) rotate(5deg) scale(0.9);
+  }
+  42% {
+    opacity: 0.68;
+    transform: translateX(0) rotate(0);
+  }
+  68% {
+    transform: translateX(-5px) rotate(-5deg);
+  }
+  100% {
+    opacity: 0.68;
+    transform: translateX(-3px) rotate(-3deg);
+  }
+}
+
+@keyframes reset-mascot-spark-in {
+  from {
+    opacity: 0;
+    transform: rotate(45deg) scale(0);
+  }
+  to {
+    opacity: 0.7;
+    transform: rotate(45deg) scale(1);
+  }
+}
+
+@keyframes reset-mascot-tear-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) rotate(12deg) scale(0.5);
+  }
+  to {
+    opacity: 0.75;
+    transform: translateY(0) rotate(12deg) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reset-mascot-sprite,
+  .reset-mascot-spark,
+  .reset-mascot-tear {
+    animation: none !important;
+  }
+}
+
+/* Centered modals: lift the content inside the stationary glass frame. */
 @keyframes modal-backdrop-in {
   from {
     opacity: 0;
@@ -1331,7 +1646,7 @@ html.theme-light .popover-backdrop {
 }
 
 .modal-panel {
-  animation: modal-panel-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: modal-panel-in 200ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {

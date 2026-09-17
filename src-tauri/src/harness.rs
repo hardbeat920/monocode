@@ -357,6 +357,8 @@ pub fn harness_spawn(
         }
     }
 
+    crate::control::configure_child(&app, &session_id, &mut cmd);
+
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
@@ -1238,6 +1240,7 @@ fn resolve_codex() -> Option<PathBuf> {
 
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/codex"));
+        candidates.push(home.join(".bun/bin/codex"));
         candidates.push(home.join(".npm-global/bin/codex"));
         candidates.push(home.join(".cargo/bin/codex"));
         candidates.push(home.join("n/bin/codex"));

@@ -21,4 +21,20 @@ describe("ModalPanel", () => {
     expect(markup).toContain("Body");
     expect(markup).toContain('aria-label="Close"');
   });
+
+  it("can preserve an accessible title with a minimal visual header", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ModalPanel, {
+        title: "Authentication required",
+        description: "Sign in to continue.",
+        minimalHeader: true,
+        onClose: vi.fn(),
+        children: "Provider login",
+      }),
+    );
+
+    expect(markup).toContain('class="sr-only"');
+    expect(markup).toContain("Authentication required");
+    expect(markup).toContain("Provider login");
+  });
 });
