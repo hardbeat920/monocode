@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -97,9 +98,11 @@ export function useProjectTerminals(deps: ProjectTerminalsDeps) {
   );
   const [projectTerminalFocused, setProjectTerminalFocused] = useState(false);
   const projectTerminalsRef = useRef(projectTerminals);
-  projectTerminalsRef.current = projectTerminals;
   const projectTerminalFocusedRef = useRef(projectTerminalFocused);
-  projectTerminalFocusedRef.current = projectTerminalFocused;
+  useLayoutEffect(() => {
+    projectTerminalsRef.current = projectTerminals;
+    projectTerminalFocusedRef.current = projectTerminalFocused;
+  }, [projectTerminals, projectTerminalFocused]);
   const onSplit = useCallback(
     (dir: SplitDir) => {
       if (!activeTab) return;

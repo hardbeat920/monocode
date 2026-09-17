@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -479,7 +480,6 @@ export function useSessionSync(deps: SessionSyncDeps) {
     (activeTab ? focusedFileTab(activeTab)?.cwd : undefined) ??
     projectCwd;
   const sidebarCwdRef = useRef(sidebarCwd);
-  sidebarCwdRef.current = sidebarCwd;
   const sidebarCwdKey =
     sidebarCwd && sidebarCwd !== "~" ? normalizeProjectPath(sidebarCwd) : null;
   const historyFailed =
@@ -492,7 +492,12 @@ export function useSessionSync(deps: SessionSyncDeps) {
     !historyFailed;
   const gitCwd = active ? sessionWorkCwd(active) : sidebarCwd;
   const gitCwdRef = useRef(gitCwd);
-  gitCwdRef.current = gitCwd;
+  // Callback-facing refs: async continuations read these after awaits, so
+  // sync them in a commit-phase effect instead of during render.
+  useLayoutEffect(() => {
+    sidebarCwdRef.current = sidebarCwd;
+    gitCwdRef.current = gitCwd;
+  }, [sidebarCwd, gitCwd]);
   const projectBranches = useProjectBranches(
     sidebarCwd,
     Boolean(sidebarCwd) && sidebarCwd !== "~",
