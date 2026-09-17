@@ -105,9 +105,16 @@ export function ColorPickerPopover({ value, onChange }: Props) {
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
   // Drag listeners remove themselves on pointerup/cancel; this covers
-  // unmount mid-drag (e.g. the popover closing while dragging).
-  const dragCleanup = useRef<(() => void) | null>(null);
-  useEffect(() => () => dragCleanup.current?.(), []);
+  // unmount mid-drag (e.g. the popover closing while dragging). A set, so
+  // concurrent drags on both sliders are each retained.
+  const dragCleanups = useRef(new Set<() => void>());
+  useEffect(() => {
+    const cleanups = dragCleanups.current;
+    return () => {
+      for (const cleanup of cleanups) cleanup();
+      cleanups.clear();
+    };
+  }, []);
 
   useEffect(() => {
     const hex = normalizeHex(value);
@@ -155,12 +162,12 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
-      if (dragCleanup.current === onUp) dragCleanup.current = null;
+      dragCleanups.current.delete(onUp);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
-    dragCleanup.current = onUp;
+    dragCleanups.current.add(onUp);
   };
 
   const onHuePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -181,12 +188,12 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
-      if (dragCleanup.current === onUp) dragCleanup.current = null;
+      dragCleanups.current.delete(onUp);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
-    dragCleanup.current = onUp;
+    dragCleanups.current.add(onUp);
   };
 
   const preview = hsvToHex(hsv.h, hsv.s, hsv.v);
