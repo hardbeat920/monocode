@@ -1285,7 +1285,6 @@ function UserMessageBlock({
               : "rounded-lg border border-content/10"
           }`}
           style={{ zIndex: stickyIndex }}
-          onClick={overflows ? toggle : undefined}
         >
           {block.attachments?.length ? (
             <div
@@ -1328,6 +1327,16 @@ function UserMessageBlock({
             >
               {displayText}
             </pre>
+          ) : null}
+          {overflows ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              className="mt-1 rounded px-1 py-0.5 text-xs text-content/60 hover:bg-content/8 hover:text-content"
+              onClick={toggle}
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
           ) : null}
         </div>
         {text || block.attachments?.length ? (

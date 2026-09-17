@@ -63,6 +63,36 @@ it("copies the full user prompt and confirms success", async () => {
   expect(button!.getAttribute("aria-label")).toBe("Copied");
 });
 
+it("lets keyboard users expand and collapse a truncated prompt", async () => {
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(100);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(20);
+  act(() =>
+    root.render(
+      createElement(AgentTranscript, {
+        blocks: [
+          {
+            id: "prompt",
+            role: "user",
+            text: "First line\nSecond line\nThird line\nFourth line\nFifth line",
+          },
+        ],
+      }),
+    ),
+  );
+
+  const button = container.querySelector<HTMLButtonElement>(
+    'button[aria-expanded="false"]',
+  );
+  expect(button?.textContent).toBe("Show more");
+
+  await act(async () => button!.click());
+  expect(button!.getAttribute("aria-expanded")).toBe("true");
+  expect(button!.textContent).toBe("Show less");
+  expect(container.querySelector("pre")?.classList).not.toContain(
+    "line-clamp-4",
+  );
+});
+
 it("shows a copy error instead of success and allows retry", async () => {
   const write = vi
     .spyOn(navigator.clipboard, "write")

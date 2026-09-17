@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { copyMessage, messageFilesFromClipboard } from "./clipboard";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  MAX_EMBED_BYTES,
   attachmentsFromFiles,
   displayAttachments,
   persistableAttachment,
@@ -82,6 +83,26 @@ it("copies a message with multiple attachments and preserves names and bytes on 
   ).toEqual([97, 98, 99]);
 });
 
+it("rejects clipboard files whose decoded bytes exceed the attachment limit", () => {
+  const base64Length = Math.ceil((MAX_EMBED_BYTES + 1) / 3) * 4;
+  const payload = encodeURIComponent(
+    JSON.stringify([
+      {
+        name: "oversized.bin",
+        mimeType: "application/octet-stream",
+        data: "A".repeat(base64Length),
+      },
+    ]),
+  );
+  const html = `<div data-monocode-files="${payload}"></div>`;
+
+  expect(
+    messageFilesFromClipboard({
+      getData: (type) => (type === "text/html" ? html : ""),
+    }),
+  ).toBeNull();
+});
+
 it("skips restored images without live content while keeping the text", async () => {
   vi.mocked(invoke).mockImplementation(async (_command, args) => {
     if ((args as { path: string }).path === "/old.png") return "YWJj";
@@ -101,6 +122,25 @@ it("skips restored images without live content while keeping the text", async ()
   expect(invoke).not.toHaveBeenCalledWith("read_file_base64", {
     path: "/old.png",
   });
+});
+
+it("keeps the existing clipboard when a message has no copyable content", async () => {
+  await navigator.clipboard.writeText("Previous clipboard");
+
+  await expect(
+    copyMessage("", [
+      {
+        id: "restored",
+        name: "old.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: 3,
+        path: "/old.png",
+      },
+    ]),
+  ).rejects.toThrow("No copyable content");
+
+  expect(await navigator.clipboard.readText()).toBe("Previous clipboard");
 });
 
 it("copies available disk attachments including empty files", async () => {
