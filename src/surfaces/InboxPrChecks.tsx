@@ -177,7 +177,7 @@ function PrCheckRow({
   const body = (
     <>
       <mark.Icon
-        className={`size-3.5 shrink-0 ${mark.className}`}
+        className={`size-4 shrink-0 ${mark.className}`}
         strokeWidth={1.75}
       />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -265,9 +265,12 @@ function PrCheckRow({
           {loading ? (
             <p
               role="status"
-              className="flex items-center gap-2 text-content/50"
+              className="flex items-center gap-2 px-2 py-1 text-content/50"
             >
-              <LoaderCircle className="size-3 animate-spin" />
+              <LoaderCircle
+                className="size-4 shrink-0 animate-spin"
+                strokeWidth={1.75}
+              />
               Loading steps…
             </p>
           ) : null}
@@ -296,7 +299,7 @@ function PrCheckRow({
                         className={`flex items-center gap-2 rounded px-2 py-1 ${step.state === "fail" ? "bg-rose-400/5" : ""}`}
                       >
                         <stepMark.Icon
-                          className={`size-3 shrink-0 ${stepMark.className}`}
+                          className={`size-4 shrink-0 ${stepMark.className}`}
                           strokeWidth={1.75}
                         />
                         <span className="min-w-0 flex-1 break-words text-content/80">
