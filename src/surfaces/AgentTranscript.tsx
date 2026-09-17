@@ -96,6 +96,7 @@ import {
   isSubagentBlock,
   isThinkingBlock,
   lastActivityIndex,
+  latestThinkingStep,
   isProseBlock,
   needsApproval,
   nestedScrollAbsorbsWheel,
@@ -1582,6 +1583,12 @@ function ActivityPhaseGroup({
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
   useLivePhaseScroll(liveScroller, active && open, phase.steps);
   const title = activityPhaseTitle(phase, active);
+  // Closed, the group keeps its newest thought on the header's line. The
+  // steps are what a closed group puts away, but a harness that narrates in
+  // reasoning — Claude writes one line, then thinks for minutes — leaves the
+  // turn with nothing else moving, and the work reads as a stall.
+  const liveThought =
+    active && !open ? latestThinkingStep(phase.steps) : undefined;
   // Opening a group on purpose is also how you read the line that titled it,
   // whole. The auto-open while it runs is a live view, not a reading one, and
   // a one-line note the header already shows in full has nothing to add.
@@ -1662,6 +1669,16 @@ function ActivityPhaseGroup({
         </span>
         {label}
       </button>
+      {liveThought ? (
+        <div className="min-w-0 pl-5">
+          <ActivityThinkingRow
+            block={liveThought}
+            cwd={cwd}
+            bare
+            onOpenFile={onOpenFile}
+          />
+        </div>
+      ) : null}
       <div className="zen-phase-body" data-open={open}>
         {open ? (
           <div

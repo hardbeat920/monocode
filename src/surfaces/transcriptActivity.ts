@@ -160,6 +160,18 @@ export function isThinkingBlock(block: Block): boolean {
   return block.role === "reasoning" && !!block.text.trim();
 }
 
+/**
+ * The newest thought in a run of work: what the agent is on right now. A
+ * closed group folds its steps away, and with harnesses that narrate in
+ * reasoning rather than prose that is everything the turn had to say.
+ */
+export function latestThinkingStep(steps: Block[]): Block | undefined {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (isThinkingBlock(steps[index])) return steps[index];
+  }
+  return undefined;
+}
+
 export function isToolBlock(block: Block): boolean {
   return block.role === "tool" || block.role === "approval";
 }

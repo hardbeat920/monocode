@@ -14,6 +14,7 @@ import {
   hasRunningSubagent,
   initialThinkingIndex,
   lastActivityIndex,
+  latestThinkingStep,
   nestedScrollAbsorbsWheel,
   proseSummary,
   isSubagentBlock,
@@ -1186,6 +1187,25 @@ describe("lastActivityIndex", () => {
         groupTurnItems([{ id: "a", role: "assistant", text: "Hi." }]),
       ),
     ).toBe(-1);
+  });
+});
+
+describe("latestThinkingStep", () => {
+  it("returns the newest thought, whatever ran after it", () => {
+    const steps = [
+      thought("t1", "Reading the config."),
+      shell("a"),
+      thought("t2", "The timeout is the culprit."),
+      shell("b"),
+    ];
+    expect(latestThinkingStep(steps)?.id).toBe("t2");
+  });
+
+  it("skips an empty thought and reports none for work without one", () => {
+    expect(
+      latestThinkingStep([thought("t1", "Reading."), thought("t2", "   ")])?.id,
+    ).toBe("t1");
+    expect(latestThinkingStep([shell("a"), shell("b")])).toBeUndefined();
   });
 });
 
