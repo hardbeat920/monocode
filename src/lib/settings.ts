@@ -83,7 +83,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: "inbox",
     group: "workspace",
     label: "Inbox",
-    description: "Manage Inbox services and notification preferences for each project.",
+    description:
+      "Manage Inbox services and notification preferences for each project.",
     keywords: "github gitlab linear connect token integration",
   },
   {
@@ -148,6 +149,16 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     label: "Working agents",
     keywords: "live running sessions rail card",
   },
+  ...(IS_WIN
+    ? [
+        {
+          id: "close-to-tray",
+          section: "general" as const,
+          label: "Close to tray",
+          keywords: "minimize background quit exit window taskbar windows",
+        },
+      ]
+    : []),
   {
     id: "theme",
     section: "appearance",
