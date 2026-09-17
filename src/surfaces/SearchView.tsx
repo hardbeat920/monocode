@@ -1,5 +1,7 @@
 import { Folder, LoaderCircle, MessageSquare, Search } from "../chrome/icons";
 import {
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -277,21 +279,24 @@ export function SearchView({
     if (active >= hits.length) setActive(0);
   }, [active, hits.length]);
 
-  const openHit = (hit: AppSearchHit | null) => {
-    if (!hit) return;
-    if (hit.kind === "file") {
-      onOpenFile(hit.path, undefined, { exact: true });
-    } else if (hit.kind === "content") {
-      onOpenFile(
-        hit.path,
-        { line: hit.line, column: hit.column },
-        { exact: true },
-      );
-    } else if (hit.kind === "conversation" || hit.kind === "message") {
-      onOpenSession(hit.sessionId);
-    } else onOpenProject(hit.path);
-    onClose();
-  };
+  const openHit = useCallback(
+    (hit: AppSearchHit | null) => {
+      if (!hit) return;
+      if (hit.kind === "file") {
+        onOpenFile(hit.path, undefined, { exact: true });
+      } else if (hit.kind === "content") {
+        onOpenFile(
+          hit.path,
+          { line: hit.line, column: hit.column },
+          { exact: true },
+        );
+      } else if (hit.kind === "conversation" || hit.kind === "message") {
+        onOpenSession(hit.sessionId);
+      } else onOpenProject(hit.path);
+      onClose();
+    },
+    [onClose, onOpenFile, onOpenProject, onOpenSession],
+  );
 
   const onQueryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
@@ -482,11 +487,14 @@ function ResultList({
     pointer.current = { x: event.clientX, y: event.clientY, allow: true };
   };
 
-  const onRowEnter = (index: number) => {
-    if (!pointer.current.allow) return;
-    fromPointer.current = true;
-    onActive(index);
-  };
+  const onRowEnter = useCallback(
+    (index: number) => {
+      if (!pointer.current.allow) return;
+      fromPointer.current = true;
+      onActive(index);
+    },
+    [onActive],
+  );
 
   return (
     <div
@@ -494,38 +502,71 @@ function ResultList({
       aria-label="Search results"
       onMouseMove={onListMouseMove}
     >
-      {hits.map((hit, index) => {
-        const highlighted = index === active;
-        const row = rowCopy(hit, query);
-        return (
-          <button
-            key={hit.id}
-            ref={highlighted ? activeRef : undefined}
-            type="button"
-            role="option"
-            aria-selected={highlighted}
-            onMouseDown={(event) => event.preventDefault()}
-            onMouseEnter={() => onRowEnter(index)}
-            onClick={() => onOpen(hit)}
-            className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-none ${
-              highlighted ? "bg-selection text-content" : "text-content"
-            }`}
-          >
-            <span className="grid size-4 shrink-0 place-items-center">
-              {row.icon}
-            </span>
-            <span className="min-w-0 flex-1 truncate">{row.title}</span>
-            {row.meta ? (
-              <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] text-content/40">
-                {row.meta}
-              </span>
-            ) : null}
-          </button>
-        );
-      })}
+      {hits.map((hit, index) => (
+        <SearchHitRow
+          key={hit.id}
+          hit={hit}
+          index={index}
+          highlighted={index === active}
+          query={query}
+          activeRef={activeRef}
+          onEnter={onRowEnter}
+          onOpen={onOpen}
+        />
+      ))}
     </div>
   );
 }
+
+const SearchHitRow = memo(function SearchHitRow({
+  hit,
+  index,
+  highlighted,
+  query,
+  activeRef,
+  onEnter,
+  onOpen,
+}: {
+  hit: AppSearchHit;
+  index: number;
+  highlighted: boolean;
+  query: string;
+  activeRef: React.RefObject<HTMLButtonElement | null>;
+  onEnter: (index: number) => void;
+  onOpen: (hit: AppSearchHit) => void;
+}) {
+  const row = rowCopy(hit, query);
+  const handleMouseEnter = useCallback(() => {
+    onEnter(index);
+  }, [onEnter, index]);
+  const handleClick = useCallback(() => {
+    onOpen(hit);
+  }, [onOpen, hit]);
+  return (
+    <button
+      ref={highlighted ? activeRef : undefined}
+      type="button"
+      role="option"
+      aria-selected={highlighted}
+      onMouseDown={(event) => event.preventDefault()}
+      onMouseEnter={handleMouseEnter}
+      onClick={handleClick}
+      className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-none ${
+        highlighted ? "bg-selection text-content" : "text-content"
+      }`}
+    >
+      <span className="grid size-4 shrink-0 place-items-center">
+        {row.icon}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{row.title}</span>
+      {row.meta ? (
+        <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] text-content/40">
+          {row.meta}
+        </span>
+      ) : null}
+    </button>
+  );
+});
 
 function rowCopy(
   hit: AppSearchHit,
