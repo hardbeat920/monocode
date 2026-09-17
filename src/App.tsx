@@ -841,6 +841,7 @@ export default function App({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  const rewindingLastTurn = useRef(new Set<string>());
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
   const lastPersistedUserBlock = useRef(new Map<string, string>());
@@ -4436,6 +4437,7 @@ export default function App({
         resendEdited?: boolean;
       },
     ) => {
+      if (rewindingLastTurn.current.has(sessionId)) return false;
       const controlError = orchestrator.submissionError(
         sessionId,
         options?.managed,
@@ -4830,6 +4832,18 @@ export default function App({
         });
         return true;
       }
+      if (
+        options?.resendEdited &&
+        canRewindHarnessLastTurn(current.harness)
+      ) {
+        rewindingLastTurn.current.add(sessionId);
+        const locked = sessionsRef.current.map((session) =>
+          session.id === sessionId ? { ...session, busy: true } : session,
+        );
+        sessionsRef.current = locked;
+        syncDockBadge(locked);
+        setSessions(locked);
+      }
 
       if (proposalId && proposalDraft) {
         const draft = proposalDraft;
@@ -5188,6 +5202,9 @@ export default function App({
           }
         })
         .finally(() => {
+          if (options?.resendEdited) {
+            rewindingLastTurn.current.delete(sessionId);
+          }
           options?.onSettled?.(
             turnGen.current.get(sessionId) !== gen
               ? { status: "cancelled", text: controlText }
