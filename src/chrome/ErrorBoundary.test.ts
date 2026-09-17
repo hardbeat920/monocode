@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -44,25 +44,33 @@ describe("ErrorBoundary", () => {
     const consoleSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    await act(async () => {
-      root.render(
-        createElement(
-          ErrorBoundary,
-          { label: "TestArea", onError },
-          createElement(Boom),
-        ),
-      );
-    });
+    const renderTree = (child: ReactNode) =>
+      act(async () => {
+        root.render(
+          createElement(
+            ErrorBoundary,
+            { label: "TestArea", onError },
+            child,
+          ),
+        );
+      });
+    await renderTree(createElement(Boom));
     expect(container.textContent).toContain("Something went wrong");
     expect(container.textContent).toContain("TestArea");
     expect(container.textContent).toContain("test crash");
     expect(onError).toHaveBeenCalledTimes(1);
 
+    // The crash is fixed while the fallback is showing; retry must recover.
+    await renderTree(createElement("span", null, "recovered"));
+    expect(container.textContent).toContain("Something went wrong");
     const retry = container.querySelector("button");
     expect(retry?.textContent).toBe("Retry");
     await act(async () => {
       retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
+    expect(container.textContent).toContain("recovered");
+    expect(container.textContent).not.toContain("Something went wrong");
+    expect(onError).toHaveBeenCalledTimes(1);
     consoleSpy.mockRestore();
   });
 });
