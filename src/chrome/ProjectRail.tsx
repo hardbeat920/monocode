@@ -1299,7 +1299,7 @@ function ProjectGroupSection({
                     project={group.id}
                     color={projectGroupColor(group)}
                     name={group.mascot ?? null}
-                    className="size-3"
+                    className="size-4"
                   />
                 </span>
                 <ChevronRight
@@ -1467,7 +1467,7 @@ function ProjectCard({
               project={seed}
               color={color}
               name={resolveTabGroupMascot(key, groupMascots)}
-              className="size-3"
+              className="size-4"
               active={busy}
             />
           )}

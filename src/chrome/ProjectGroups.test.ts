@@ -193,3 +193,22 @@ it("creates, styles, assigns, and deletes a group from the rail", async () => {
     document.querySelector('button[aria-label="New project group"]'),
   ).toBeNull();
 });
+
+it("renders rail mascots on integer pixels", async () => {
+  saveProjectGroups([
+    { id: "clients", name: "Client work", collapsed: true, colorIndex: 4 },
+  ]);
+  saveProjectGroupAssignments({ [pathKey("/work/client")]: "clients" });
+  await renderRail();
+
+  const mascotSvgs = [
+    ...container.querySelectorAll(
+      ".project-card-logo svg, [data-group-mascot] svg",
+    ),
+  ];
+  expect(mascotSvgs.length).toBeGreaterThan(0);
+  for (const svg of mascotSvgs) {
+    expect(svg.classList.contains("size-4")).toBe(true);
+    expect(svg.classList.contains("size-3")).toBe(false);
+  }
+});
