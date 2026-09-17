@@ -43,6 +43,7 @@ import { Popover } from "../chrome/Popover";
 import { IconButton, OverlayNav } from "../chrome/TitleBar";
 import { WindowControls } from "../chrome/WindowControls";
 import { useDragResize } from "../hooks/useDragResize";
+import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
 import {
@@ -99,6 +100,7 @@ import {
 } from "../lib/inboxFilters";
 import { copyText } from "../lib/clipboard";
 import { projectKey, projectName } from "../lib/paths";
+import { summarizePrChecks } from "../lib/githubPrChecks";
 import { IS_MAC } from "../lib/platform";
 import { playCue } from "../lib/sounds";
 import { sameProjectPath, type RecentProject } from "../lib/recents";
@@ -158,6 +160,10 @@ import {
   type InboxReplyTarget,
 } from "./InboxComments";
 import { InboxPrDiff } from "./InboxPrDiff";
+import {
+  InboxPrChecks,
+  PrChecksTab,
+} from "./InboxPrChecks";
 import {
   InboxDiscussionPanel,
   type InboxSessionPortal,
@@ -1861,7 +1867,7 @@ export function InboxDetail({
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(cached);
   const [loading, setLoading] = useState(cached == null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"summary" | "code">("summary");
+  const [tab, setTab] = useState<"summary" | "code" | "checks">("summary");
   const [diffMode, setDiffMode] = useState<"hunks" | "full">("hunks");
   const fullFile = inboxShowsFullFileDiff(item) && diffMode === "full";
   const [prDiff, setPrDiff] = useState<GithubPrDiff | null>(cachedDiff);
@@ -1918,6 +1924,25 @@ export function InboxDetail({
     details?.baseRefName?.trim() || thread?.baseRefName?.trim() || "";
   const headRef =
     details?.headRefName?.trim() || thread?.headRefName?.trim() || "";
+
+  // Checks load as soon as a GitHub PR is open, whatever tab is active. The
+  // panel passes revision 0, so its loads ride on mount and the identity key.
+  const prChecksEnabled = githubKind === "pr";
+  const prChecksView = useGithubPrChecks({
+    cwd: item.projectPath || cwd,
+    repo: item.repo,
+    number: item.number,
+    enabled: prChecksEnabled,
+    open: isPr && item.state.trim().toLowerCase() === "open",
+    revision,
+  });
+  const prChecksOverall = prChecksEnabled
+    ? summarizePrChecks({
+        loading: prChecksView.loading,
+        error: prChecksView.error,
+        checks: prChecksView.checks?.checks ?? null,
+      })
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -2485,6 +2510,13 @@ export function InboxDetail({
                     selected={tab === "code"}
                     onSelect={() => setTab("code")}
                   />
+                  {prChecksOverall ? (
+                    <PrChecksTab
+                      overall={prChecksOverall}
+                      selected={tab === "checks"}
+                      onSelect={() => setTab("checks")}
+                    />
+                  ) : null}
                 </div>
                 {tab === "code" && inboxShowsFullFileDiff(item) ? (
                   <div
@@ -2562,6 +2594,13 @@ export function InboxDetail({
               ) : (
                 <p className="text-[13px] text-content/45">No file changes</p>
               )
+            ) : isPr && tab === "checks" ? (
+              <InboxPrChecks
+                view={prChecksView}
+                onRefresh={prChecksView.refresh}
+                cwd={item.projectPath || cwd}
+                repo={item.repo}
+              />
             ) : loading ? (
               <div className="flex justify-center py-10 text-content/40">
                 <LoaderCircle
