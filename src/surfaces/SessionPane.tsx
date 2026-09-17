@@ -10,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "../chrome/Composer";
+import { ErrorBoundary } from "../chrome/ErrorBoundary";
 import { orchestrator, sameCheckout } from "../lib/orchestration";
 import { DiscussionEmpty } from "../chrome/DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../chrome/LinkedWorkItemUpdateNotice";
@@ -415,6 +416,7 @@ export const SessionPane = memo(function SessionPane({
   );
 
   return (
+    <ErrorBoundary label="Session">
     <div
       data-session-drop={session.id}
       data-session-empty={isEmpty}
@@ -607,5 +609,6 @@ export const SessionPane = memo(function SessionPane({
         ) : null}
       </div>
     </div>
+    </ErrorBoundary>
   );
 });

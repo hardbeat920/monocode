@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App";
+import { ErrorBoundary } from "./chrome/ErrorBoundary";
 import { activateWindowAppearance, initAppearance } from "./lib/appearance";
 import { initSounds } from "./lib/sounds";
 import {
@@ -66,13 +67,15 @@ void loadBootWorkspace().then(
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
         <BootGate>
-          <App
-            windowTransfer={windowTransfer}
-            resumed={resumed}
-            installedUpdate={installedUpdate}
-            history={history}
-            historyCwd={historyCwd}
-          />
+          <ErrorBoundary label="MonoCode">
+            <App
+              windowTransfer={windowTransfer}
+              resumed={resumed}
+              installedUpdate={installedUpdate}
+              history={history}
+              historyCwd={historyCwd}
+            />
+          </ErrorBoundary>
         </BootGate>
       </React.StrictMode>,
     );
