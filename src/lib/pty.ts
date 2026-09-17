@@ -37,6 +37,19 @@ function decodeBase64(data: string): Uint8Array {
 }
 
 /**
+ * Decode one backend chunk, dropping it when the payload is malformed
+ * instead of throwing inside the event listener (which would lose the
+ * chunk and any replay accounting around it).
+ */
+export function decodePtyChunk(data: string): Uint8Array | null {
+  try {
+    return decodeBase64(data);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Leading chunks to drop to bring a replay buffer back within budget, and the
  * byte total that remains. Never drops the newest chunk, even when that chunk
  * alone exceeds the budget — replaying something beats replaying nothing.
@@ -81,7 +94,8 @@ function ensureBridge() {
       const { id, data } = event.payload;
       const handler = dataHandlers.get(id);
       if (!handler && !openedPtys.has(id)) return;
-      const chunk = decodeBase64(data);
+      const chunk = decodePtyChunk(data);
+      if (!chunk) return;
       if (handler) handler(chunk);
       else pushBuffered(id, chunk);
     }),
@@ -119,11 +133,21 @@ export async function spawnPty(
   cols: number,
   rows: number,
 ): Promise<void> {
-  await invoke("pty_spawn", { id, cwd, cols, rows });
+  try {
+    await invoke("pty_spawn", { id, cwd, cols, rows });
+  } catch (error) {
+    if (import.meta.env.DEV) console.debug("[pty] spawn failed", id, error);
+    throw error;
+  }
 }
 
 export async function writePty(id: string, data: string): Promise<void> {
-  await invoke("pty_write", { id, data });
+  try {
+    await invoke("pty_write", { id, data });
+  } catch (error) {
+    if (import.meta.env.DEV) console.debug("[pty] write failed", id, error);
+    throw error;
+  }
 }
 
 export async function resizePty(
@@ -131,7 +155,13 @@ export async function resizePty(
   cols: number,
   rows: number,
 ): Promise<void> {
-  await invoke("pty_resize", { id, cols, rows });
+  try {
+    await invoke("pty_resize", { id, cols, rows });
+  } catch (error) {
+    if (import.meta.env.DEV)
+      console.debug("[pty] resize failed", id, error);
+    throw error;
+  }
 }
 
 export async function getPtyStatus(

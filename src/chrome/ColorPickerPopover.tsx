@@ -104,6 +104,10 @@ export function ColorPickerPopover({ value, onChange }: Props) {
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
+  // Drag listeners remove themselves on pointerup/cancel; this covers
+  // unmount mid-drag (e.g. the popover closing while dragging).
+  const dragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanup.current?.(), []);
 
   useEffect(() => {
     const hex = normalizeHex(value);
@@ -151,10 +155,12 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      if (dragCleanup.current === onUp) dragCleanup.current = null;
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
+    dragCleanup.current = onUp;
   };
 
   const onHuePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -175,10 +181,12 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      if (dragCleanup.current === onUp) dragCleanup.current = null;
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
+    dragCleanup.current = onUp;
   };
 
   const preview = hsvToHex(hsv.h, hsv.s, hsv.v);

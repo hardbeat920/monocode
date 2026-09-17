@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { trimReplay } from "./pty";
+import { decodePtyChunk, trimReplay } from "./pty";
 
 const KB = 1024;
 
@@ -33,5 +33,17 @@ describe("trimReplay", () => {
   it("never drops the only chunk", () => {
     const sizes = [512 * KB];
     expect(trimReplay(sizes, 512 * KB)).toEqual({ drop: 0, bytes: 512 * KB });
+  });
+});
+
+describe("decodePtyChunk", () => {
+  it("decodes valid base64", () => {
+    const chunk = decodePtyChunk(btoa("hello"));
+    expect(chunk).not.toBeNull();
+    expect(new TextDecoder().decode(chunk!)).toBe("hello");
+  });
+
+  it("drops malformed payloads instead of throwing", () => {
+    expect(decodePtyChunk("!!!not-base64!!!")).toBeNull();
   });
 });
