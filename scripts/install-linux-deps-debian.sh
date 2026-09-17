@@ -39,4 +39,5 @@ ${SUDO[@]+"${SUDO[@]}"} env DEBIAN_FRONTEND=noninteractive apt-get ${APT_SOURCES
   libxdo-dev \
   librsvg2-dev \
   patchelf \
-  wget
+  wget \
+  zenity
