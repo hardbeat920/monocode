@@ -28,6 +28,7 @@ const SSE_END_EVENT: &str = "harness-sse-end";
 struct HarnessLine {
     session_id: String,
     line: String,
+    pid: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -417,6 +418,7 @@ pub fn harness_spawn(
                 HarnessLine {
                     session_id: stdout_id.clone(),
                     line,
+                    pid,
                 },
             );
         }
@@ -432,6 +434,7 @@ pub fn harness_spawn(
                 HarnessLine {
                     session_id: stderr_id.clone(),
                     line,
+                    pid,
                 },
             );
         }
@@ -465,10 +468,17 @@ pub fn harness_write(
     host: State<HarnessHost>,
     session_id: String,
     line: String,
+    expected_pid: Option<u32>,
 ) -> Result<(), String> {
     let live = host
         .get(&session_id)
         .ok_or_else(|| "Harness process is not running".to_string())?;
+    // The Arc pins this child generation: after a respawn the map holds a new
+    // child, so a pid check refuses to deliver stale frames to a process that
+    // never sent the matching request.
+    if expected_pid.is_some_and(|expected| live.pid != expected) {
+        return Err("Harness process was replaced".to_string());
+    }
     let mut stdin = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
     stdin
         .write_all(line.as_bytes())

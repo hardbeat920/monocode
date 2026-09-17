@@ -1,3 +1,4 @@
+import type { RateLimitSnapshot } from "./codexAccounts";
 import type {
   Attachment,
   RuntimeMode,
@@ -265,8 +266,12 @@ export type MappedCodexNotification = {
   turnCompleted?: {
     status: "completed" | "failed" | "interrupted" | "cancelled";
     error?: string;
+    codexErrorInfo?: unknown;
   };
   activeTurnId?: string | null;
+  /** The turn a terminal notification belongs to, when the payload says. */
+  terminalTurnId?: string;
+  rateLimits?: RateLimitSnapshot;
 };
 
 /**
@@ -280,6 +285,9 @@ export function mapCodexNotification(
   const rec = asRecord(params);
   if (!rec) return { events: [] };
 
+  if (method === "account/rateLimits/updated") {
+    return { events: [], rateLimits: asRecord(rec.rateLimits) ?? undefined };
+  }
   if (method === "item/agentMessage/delta") {
     const delta = streamTextDelta(rec.delta);
     if (!delta) return { events: [] };
@@ -504,8 +512,17 @@ function mapTurnTerminal(
   }
   return {
     events,
-    turnCompleted: { status, ...(error ? { error } : {}) },
+    turnCompleted: {
+      status,
+      ...(error ? { error } : {}),
+      ...(errorObj?.codexErrorInfo != null
+        ? { codexErrorInfo: errorObj.codexErrorInfo }
+        : {}),
+    },
     activeTurnId: null,
+    ...(stringField(turn, "id")
+      ? { terminalTurnId: stringField(turn, "id") }
+      : {}),
   };
 }
 
@@ -807,7 +824,8 @@ function mapSubAgentActivity(
   completed: boolean,
 ): HarnessEvent {
   const kind = (stringField(item, "kind") ?? "").toLowerCase();
-  const path = stringField(item, "agentPath") ?? stringField(item, "agent_path");
+  const path =
+    stringField(item, "agentPath") ?? stringField(item, "agent_path");
   const leaf = path?.split(/[/\\]/).filter(Boolean).pop();
   const title = leaf ? `${formatAgentType(leaf)} subagent` : "Subagent";
   if (kind === "interrupted") {

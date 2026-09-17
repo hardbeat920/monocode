@@ -41,6 +41,11 @@ export class JsonRpcClient {
   private closed = false;
   private readonly includeJsonrpc: boolean;
   private readonly label: string;
+  /**
+   * When set, writes fail if the session's child process was replaced — a
+   * late response must never land in a respawned process's stdin.
+   */
+  expectedPid = 0;
 
   constructor(
     private readonly sessionId: string,
@@ -144,6 +149,7 @@ export class JsonRpcClient {
   }
 
   async respond(id: JsonRpcId, result: unknown): Promise<void> {
+    if (this.closed) return;
     await this.send({
       ...(this.includeJsonrpc ? { jsonrpc: "2.0" } : {}),
       id,
@@ -155,6 +161,7 @@ export class JsonRpcClient {
     id: JsonRpcId,
     error: { code: number; message: string; data?: unknown },
   ): Promise<void> {
+    if (this.closed) return;
     await this.send({
       ...(this.includeJsonrpc ? { jsonrpc: "2.0" } : {}),
       id,
@@ -163,7 +170,12 @@ export class JsonRpcClient {
   }
 
   private async send(payload: object): Promise<void> {
-    await writeChild(this.sessionId, JSON.stringify(payload));
+    if (this.closed) throw new Error("Harness process is not running");
+    await writeChild(
+      this.sessionId,
+      JSON.stringify(payload),
+      this.expectedPid || undefined,
+    );
   }
 
   private handle(msg: JsonRpcMessage) {
