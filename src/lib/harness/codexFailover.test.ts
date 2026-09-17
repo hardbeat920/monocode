@@ -149,8 +149,13 @@ vi.mock("./child", () => ({
     }
   },
 }));
-const { sendCodexTurn, cancelCodexTurn, stopCodexSession, __codexTestReset } =
-  await import("./codex");
+const {
+  sendCodexTurn,
+  cancelCodexTurn,
+  forgetCodexSession,
+  stopCodexSession,
+  __codexTestReset,
+} = await import("./codex");
 const input = (): SendTurnInput => ({
   sessionId: "failover",
   cwd: "/fake/repo",
@@ -456,6 +461,26 @@ it("fails over when the pinned account is rejected at session start", async () =
   expect(
     messages.filter((m) => m.method === "turn/start"),
   ).toHaveLength(1);
+});
+
+it("aborts an in-flight send when the session is forgotten mid-respawn", async () => {
+  let release!: () => void;
+  mocks.spawn.mockResolvedValueOnce(undefined).mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  disableHot = true;
+  const turn = sendCodexTurn(input());
+  await vi.waitFor(() => expect(generation).toBe(2));
+  await forgetCodexSession("failover");
+  release();
+  await turn;
+  // The bumped cancel epoch must outlive the forgotten state: the send never
+  // reaches a replayed turn/start.
+  expect(messages.filter((m) => m.method === "turn/start")).toHaveLength(1);
+  expect(events.filter((e) => e.type === "session.error")).toEqual([]);
 });
 
 it("does not replay the turn when cancelled during respawn", async () => {

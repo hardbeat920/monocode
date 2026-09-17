@@ -355,9 +355,12 @@ export async function stopCodexSession(sessionId: string): Promise<void> {
 }
 
 export async function forgetCodexSession(sessionId: string): Promise<void> {
+  // Bump but keep the epoch: deleting it would reset the stamp to the same
+  // default an in-flight send captured, so the send would never notice the
+  // session was forgotten underneath it.
+  bumpCancel(sessionId);
   sessionAccount.delete(sessionId);
   resumeByThread.delete(sessionId);
-  cancelEpoch.delete(sessionId);
   await stopCodexSession(sessionId);
 }
 
@@ -707,12 +710,11 @@ async function tryHotAccountSwitch(
   }
   try {
     live.accountSwitching = true;
-    try {
-      await codexAccountLogin(live.rpc, credentials);
-      await codexVerifyIdentity(live.rpc, credentials);
-    } finally {
-      live.accountSwitching = false;
-    }
+    await codexAccountLogin(live.rpc, credentials);
+    await codexVerifyIdentity(live.rpc, credentials);
+    // Cleared only on success: on failure the caller kills this process, and
+    // clearing early would reopen the stale-refresh-answer window.
+    live.accountSwitching = false;
   } catch {
     return "unavailable";
   }
@@ -1051,10 +1053,10 @@ function handleNotification(live: Live, method: string, params: unknown): void {
   // Items carry turnId: effects arriving after turnDone was cleared still
   // attribute to the turn they belong to.
   if (
-    (method === "item/started" || method === "item/completed") &&
-    !EFFECT_FREE_ITEM_TYPES.has(
-      stringField(asRecord(rec?.item), "type") ?? "",
-    ) &&
+    (method === "item/started" ||
+      method === "item/completed" ||
+      method === "item/updated") &&
+    !EFFECT_FREE_ITEM_TYPES.has(stringField(asRecord(rec?.item), "type") ?? "") &&
     (live.turnDone != null ||
       (stringField(rec, "turnId") != null &&
         stringField(rec, "turnId") === live.lastTurnId))
