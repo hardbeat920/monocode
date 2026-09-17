@@ -24,6 +24,7 @@ import {
   type IconComponent,
 } from "../chrome/icons";
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -711,6 +712,10 @@ export function InboxView({
   const shownItemCount = listWindowSize(visibleItems.length, listLimit);
   const shownItems = visibleItems.slice(0, shownItemCount);
   const hasMoreItems = shownItemCount < visibleItems.length;
+  const handleSelectCard = useCallback((key: string, updatedAt: string) => {
+    markInboxItemSeen({ key, updatedAt });
+    setSelectedKey(key);
+  }, []);
 
   useEffect(() => {
     setListLimit(LIST_PAGE_SIZE);
@@ -937,6 +942,7 @@ export function InboxView({
                 <li key={key}>
                   <InboxCard
                     item={item}
+                    itemKey={key}
                     active={selected != null && key === inboxItemKey(selected)}
                     logoPath={resolveTabGroupLogo(projectId, logos)}
                     mascotName={resolveTabGroupMascot(projectId, groupMascots)}
@@ -947,13 +953,7 @@ export function InboxView({
                       projectName(item.projectPath),
                     )}
                     relatedSessionCount={relatedSessions.length}
-                    onSelect={() => {
-                      markInboxItemSeen({
-                        key,
-                        updatedAt: item.updatedAt,
-                      });
-                      setSelectedKey(key);
-                    }}
+                    onSelectKey={handleSelectCard}
                   />
                 </li>
               );
@@ -1301,24 +1301,29 @@ function inboxStatusMark(item: InboxItem): InboxStatusMark {
   };
 }
 
-function InboxCard({
+const InboxCard = memo(function InboxCard({
   item,
+  itemKey,
   active,
   logoPath,
   mascotName,
   mascotColor,
   relatedSessionCount,
-  onSelect,
+  onSelectKey,
 }: {
   item: InboxItem;
+  itemKey: string;
   active: boolean;
   logoPath: string | null;
   mascotName: string | null;
   mascotColor: string;
   relatedSessionCount: number;
-  onSelect: () => void;
+  onSelectKey: (key: string, updatedAt: string) => void;
 }) {
   useInboxSeenTick();
+  const handleSelect = useCallback(() => {
+    onSelectKey(itemKey, item.updatedAt);
+  }, [onSelectKey, itemKey, item.updatedAt]);
   const status = inboxStatusMark(item);
   const kindLabel =
     item.kind === "pr"
@@ -1347,7 +1352,7 @@ function InboxCard({
       aria-label={`${status.label} ${kindLabel.toLowerCase()} ${inboxItemRef(
         item,
       )}: ${item.title}${attentionLabel ? `, ${attentionLabel}` : ""}${unseen ? ", new" : ""}${relatedSessionCount > 0 ? `, ${relatedSessionCount} related ${relatedSessionCount === 1 ? "thread" : "threads"}` : ""}`}
-      onClick={onSelect}
+      onClick={handleSelect}
       className={`flex w-full flex-col rounded-md border px-2.5 py-2 text-left ${
         active
           ? "border-transparent bg-selection text-content"
@@ -1422,7 +1427,7 @@ function InboxCard({
       </span>
     </button>
   );
-}
+});
 
 export function inboxShowsFullFileDiff(item: InboxItem): boolean {
   return item.provider === "github" && item.kind === "pr";

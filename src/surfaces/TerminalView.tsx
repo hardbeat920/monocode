@@ -22,6 +22,11 @@ import {
   type TerminalFitMode,
 } from "../lib/terminalLayout";
 import { IS_MAC } from "../lib/platform";
+import {
+  loadTerminalGpu,
+  subscribeTerminalGpu,
+} from "../lib/settings";
+import { supportsWebGL2 } from "../lib/webgl";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -165,6 +170,45 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     term.open(host);
     termRef.current = term;
     let closed = false;
+
+    // GPU-accelerated renderer when WebGL2 is available and enabled in
+    // settings. Any failure (no context, load error, context loss) falls
+    // back to canvas.
+    let webgl: { dispose: () => void } | null = null;
+    let gpuWanted = false;
+    const disableGpu = () => {
+      gpuWanted = false;
+      try {
+        webgl?.dispose();
+      } catch {
+        // Upstream dispose can throw on version skew; canvas survives.
+      }
+      webgl = null;
+    };
+    const enableGpu = () => {
+      if (webgl || closed) return;
+      gpuWanted = true;
+      void import("@xterm/addon-webgl")
+        .then(({ WebglAddon }) => {
+          if (closed || webgl || !gpuWanted) return;
+          const addon = new WebglAddon();
+          addon.onContextLoss(() => {
+            disableGpu();
+          });
+          term.loadAddon(addon);
+          webgl = addon;
+        })
+        .catch(() => undefined);
+    };
+    if (supportsWebGL2() && loadTerminalGpu()) enableGpu();
+    const unsubscribeGpu = subscribeTerminalGpu((enabled) => {
+      if (closed) return;
+      if (enabled) {
+        if (supportsWebGL2()) enableGpu();
+      } else {
+        disableGpu();
+      }
+    });
 
     const onCopy = (event: ClipboardEvent) => {
       const text = term.getSelection();
@@ -342,6 +386,8 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       bufferSub.dispose();
       unsubscribe();
       void starting.catch(() => undefined).then(() => killPty(id));
+      unsubscribeGpu();
+      disableGpu();
       term.dispose();
       termRef.current = null;
       spawned.current = false;

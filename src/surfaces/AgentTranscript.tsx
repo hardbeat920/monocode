@@ -25,6 +25,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AttachmentChip } from "../chrome/AttachmentChip";
+import { ErrorBoundary } from "../chrome/ErrorBoundary";
 import { FilePreview } from "../chrome/FilePreview";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { ToolDiffPreview } from "../chrome/ToolDiffPreview";
@@ -393,6 +394,7 @@ function AgentTranscriptComponent({
   }, [revealBlock, onRevealReady]);
 
   return (
+    <ErrorBoundary label="Transcript">
     <div
       ref={setScroller}
       className="agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5"
@@ -684,6 +686,7 @@ function AgentTranscriptComponent({
         />
       ) : null}
     </div>
+    </ErrorBoundary>
   );
 }
 
@@ -1715,7 +1718,7 @@ function ActivityPhaseGroup({
  * A row is a mascot, a name, and what that agent is doing right now. Click it
  * and the agent's own trail opens underneath.
  */
-function SubagentStack({
+const SubagentStack = memo(function SubagentStack({
   blocks,
   cwd,
   live = false,
@@ -1742,7 +1745,7 @@ function SubagentStack({
       ))}
     </div>
   );
-}
+});
 
 /**
  * One delegated run's row, stateful about being opened. A run that died opens
@@ -1751,7 +1754,7 @@ function SubagentStack({
  * where the reader puts it. The same row serves inside a settled turn's trail,
  * where the run sits as one step of the work it was spawned from.
  */
-function SubagentRow({
+const SubagentRow = memo(function SubagentRow({
   block,
   cwd,
   live = false,
@@ -1777,7 +1780,7 @@ function SubagentRow({
       onOpenDiff={onOpenDiff}
     />
   );
-}
+});
 
 /**
  * One delegated run: its name, what it is doing, and — once opened — the trail

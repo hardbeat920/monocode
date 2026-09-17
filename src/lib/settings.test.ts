@@ -17,6 +17,7 @@ import {
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadTerminalGpu,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
   saveComposerEffortVisible,
@@ -25,6 +26,9 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveTerminalGpu,
+  subscribeTerminalGpu,
+  TERMINAL_GPU_DEFAULT,
 } from "./settings";
 
 const KEY = "monocode.composerRunner";
@@ -34,6 +38,7 @@ const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+const TERMINAL_GPU_KEY = "monocode.terminalGpu";
 
 describe("follow-up behavior setting", () => {
   beforeEach(mockLocalStorage);
@@ -178,6 +183,61 @@ describe("grid arcade enabled setting", () => {
     expect(loadGridArcadeEnabled()).toBe(false);
     saveGridArcadeEnabled(true);
     expect(loadGridArcadeEnabled()).toBe(true);
+  });
+});
+
+describe("terminal gpu setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(TERMINAL_GPU_KEY);
+  });
+
+  it("defaults to on", () => {
+    expect(TERMINAL_GPU_DEFAULT).toBe(true);
+    expect(loadTerminalGpu()).toBe(true);
+  });
+
+  it("persists an off switch", () => {
+    saveTerminalGpu(false);
+    expect(localStorage.getItem(TERMINAL_GPU_KEY)).toBe("0");
+    expect(loadTerminalGpu()).toBe(false);
+    saveTerminalGpu(true);
+    expect(loadTerminalGpu()).toBe(true);
+  });
+
+  it("notifies subscribers with the saved value even when storage fails", () => {
+    const seen: boolean[] = [];
+    const scope = globalThis as unknown as { window?: EventTarget };
+    const previousWindow = scope.window;
+    scope.window = new EventTarget();
+    const failingStore = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => {},
+    };
+    Object.defineProperty(globalThis, "localStorage", {
+      value: failingStore,
+      configurable: true,
+    });
+    try {
+      const unsubscribe = subscribeTerminalGpu((enabled) =>
+        seen.push(enabled),
+      );
+      saveTerminalGpu(false);
+      unsubscribe();
+    } finally {
+      if (previousWindow === undefined) delete scope.window;
+      else scope.window = previousWindow;
+      mockLocalStorage();
+    }
+    expect(seen).toEqual([false]);
+    // A re-read here falls back to the enabled default, which is exactly
+    // why subscribers must trust the event value instead.
+    expect(loadTerminalGpu()).toBe(true);
   });
 });
 
