@@ -17,6 +17,7 @@ import {
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadTerminalGpu,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
   saveComposerEffortVisible,
@@ -25,6 +26,8 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveTerminalGpu,
+  TERMINAL_GPU_DEFAULT,
 } from "./settings";
 
 const KEY = "monocode.composerRunner";
@@ -34,6 +37,7 @@ const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+const TERMINAL_GPU_KEY = "monocode.terminalGpu";
 
 describe("follow-up behavior setting", () => {
   beforeEach(mockLocalStorage);
@@ -178,6 +182,26 @@ describe("grid arcade enabled setting", () => {
     expect(loadGridArcadeEnabled()).toBe(false);
     saveGridArcadeEnabled(true);
     expect(loadGridArcadeEnabled()).toBe(true);
+  });
+});
+
+describe("terminal gpu setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(TERMINAL_GPU_KEY);
+  });
+
+  it("defaults to on", () => {
+    expect(TERMINAL_GPU_DEFAULT).toBe(true);
+    expect(loadTerminalGpu()).toBe(true);
+  });
+
+  it("persists an off switch", () => {
+    saveTerminalGpu(false);
+    expect(localStorage.getItem(TERMINAL_GPU_KEY)).toBe("0");
+    expect(loadTerminalGpu()).toBe(false);
+    saveTerminalGpu(true);
+    expect(loadTerminalGpu()).toBe(true);
   });
 });
 

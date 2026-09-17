@@ -22,6 +22,10 @@ import {
   type TerminalFitMode,
 } from "../lib/terminalLayout";
 import { IS_MAC } from "../lib/platform";
+import {
+  loadTerminalGpu,
+  subscribeTerminalGpu,
+} from "../lib/settings";
 import { supportsWebGL2 } from "../lib/webgl";
 import "@xterm/xterm/css/xterm.css";
 
@@ -167,23 +171,41 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     termRef.current = term;
     let closed = false;
 
-    // GPU-accelerated renderer when WebGL2 is available. Any failure
-    // (no context, load error, context loss) falls back to canvas.
+    // GPU-accelerated renderer when WebGL2 is available and enabled in
+    // settings. Any failure (no context, load error, context loss) falls
+    // back to canvas.
     let webgl: { dispose: () => void } | null = null;
-    if (supportsWebGL2()) {
+    const disableGpu = () => {
+      try {
+        webgl?.dispose();
+      } catch {
+        // Upstream dispose can throw on version skew; canvas survives.
+      }
+      webgl = null;
+    };
+    const enableGpu = () => {
+      if (webgl || closed) return;
       void import("@xterm/addon-webgl")
         .then(({ WebglAddon }) => {
-          if (closed) return;
+          if (closed || webgl) return;
           const addon = new WebglAddon();
           addon.onContextLoss(() => {
-            addon.dispose();
-            if (webgl === addon) webgl = null;
+            disableGpu();
           });
           term.loadAddon(addon);
           webgl = addon;
         })
         .catch(() => undefined);
-    }
+    };
+    if (supportsWebGL2() && loadTerminalGpu()) enableGpu();
+    const unsubscribeGpu = subscribeTerminalGpu(() => {
+      if (closed) return;
+      if (loadTerminalGpu()) {
+        if (supportsWebGL2()) enableGpu();
+      } else {
+        disableGpu();
+      }
+    });
 
     const onCopy = (event: ClipboardEvent) => {
       const text = term.getSelection();
@@ -361,12 +383,8 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       bufferSub.dispose();
       unsubscribe();
       void starting.catch(() => undefined).then(() => killPty(id));
-      try {
-        webgl?.dispose();
-      } catch {
-        // Upstream dispose can throw on version skew; canvas survives.
-      }
-      webgl = null;
+      unsubscribeGpu();
+      disableGpu();
       term.dispose();
       termRef.current = null;
       spawned.current = false;

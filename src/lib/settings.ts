@@ -37,7 +37,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "General",
     description:
       "The build you are running, how MonoCode reaches you, and the panels it shows.",
-    keywords: "version update sounds notifications notes rail",
+    keywords: "version update sounds notifications notes rail gpu hardware acceleration performance terminal",
   },
   {
     id: "appearance",
@@ -148,6 +148,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "general",
     label: "Working agents",
     keywords: "live running sessions rail card",
+  },
+  {
+    id: "hardware-acceleration",
+    section: "general",
+    label: "Hardware acceleration",
+    keywords: "gpu webgl terminal performance render",
   },
   ...(IS_WIN
     ? [
@@ -639,6 +645,42 @@ export function subscribeGridArcadeEnabled(onStoreChange: () => void) {
   window.addEventListener(GRID_ARCADE_ENABLED_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(GRID_ARCADE_ENABLED_CHANGE_EVENT, onStoreChange);
+}
+
+const TERMINAL_GPU_KEY = "monocode.terminalGpu";
+
+export const TERMINAL_GPU_DEFAULT = true;
+
+/** Fired on `window` when the terminal GPU rendering setting flips. */
+export const TERMINAL_GPU_CHANGE_EVENT = "monocode:terminal-gpu-change";
+
+export function loadTerminalGpu(): boolean {
+  try {
+    const raw = localStorage.getItem(TERMINAL_GPU_KEY);
+    if (raw == null) return TERMINAL_GPU_DEFAULT;
+    return raw === "1" || raw === "true";
+  } catch {
+    return TERMINAL_GPU_DEFAULT;
+  }
+}
+
+export function saveTerminalGpu(value: boolean) {
+  try {
+    localStorage.setItem(TERMINAL_GPU_KEY, value ? "1" : "0");
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(TERMINAL_GPU_CHANGE_EVENT, { detail: value }),
+  );
+}
+
+export function subscribeTerminalGpu(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(TERMINAL_GPU_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(TERMINAL_GPU_CHANGE_EVENT, onStoreChange);
 }
 
 const DIFF_VIEWER_KEY = "monocode.diffViewer";

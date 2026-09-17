@@ -192,6 +192,7 @@ import {
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadTerminalGpu,
   saveClaudeHooks,
   saveCloseToTray,
   saveComposerEffortVisible,
@@ -201,6 +202,7 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveTerminalGpu,
   searchSettings,
   settingsSectionDescription,
   settingsSectionLabel,
@@ -559,6 +561,7 @@ function GeneralPage({
     loadLiveAgentsEnabled,
   );
   const [closeToTray, setCloseToTray] = useState(loadCloseToTray);
+  const [terminalGpu, setTerminalGpu] = useState(loadTerminalGpu);
 
   // The user may flip the switch in System Settings and come back: re-read
   // the OS state whenever the window regains focus while the toggle is on.
@@ -597,6 +600,11 @@ function GeneralPage({
   const onCloseToTray = (next: boolean) => {
     saveCloseToTray(next);
     setCloseToTray(next);
+  };
+
+  const onTerminalGpu = (next: boolean) => {
+    saveTerminalGpu(next);
+    setTerminalGpu(next);
   };
 
   return (
@@ -672,6 +680,23 @@ function GeneralPage({
             />
           </Row>
         )}
+      </Group>
+
+      <Group
+        title="Performance"
+        description="How MonoCode uses your hardware to render terminal output."
+      >
+        <Row
+          id="hardware-acceleration"
+          label="Hardware acceleration"
+          description="Render terminals with the GPU (WebGL2) when available, falling back to software rendering otherwise. Applies to open terminals right away, no restart needed."
+        >
+          <Toggle
+            label="Hardware acceleration"
+            on={terminalGpu}
+            onChange={onTerminalGpu}
+          />
+        </Row>
       </Group>
 
       <Group title="About">
