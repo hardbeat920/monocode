@@ -23,6 +23,8 @@ type ExternalAuth = {
   refreshToken: string;
   accountId: string;
   idToken?: string;
+  email?: string | null;
+  planType?: string | null;
 };
 export type RateLimitSnapshot = {
   primary?: { usedPercent?: number; resetsAt?: number } | null;
@@ -223,7 +225,10 @@ export async function accountCredentials(
       }
     }
     external.disabledCause = null;
-    return { ...external, ...auth };
+    // auth carries display-only fields (email may be null); the verified
+    // session identity on `external` wins for CodexAccount fields.
+    const { accessToken, refreshToken, accountId } = auth;
+    return { ...external, accessToken, refreshToken, accountId };
   }
   let account = await invoke<CodexCredentials>("codex_account_credentials", {
     id,
@@ -291,6 +296,40 @@ export function respondCodexRefresh(
       });
     }
   })();
+}
+
+/** Enroll the CLI's current auth.json identity into the pool (idempotent —
+/// re-capturing the same account refreshes its stored tokens). */
+export async function captureCurrentExternalAccount(): Promise<CodexAccount> {
+  const account = await invoke<CodexAccount>(
+    "codex_account_capture_current",
+  );
+  await loadCodexAccounts().catch(() => []);
+  return account;
+}
+
+export async function removeCodexAccount(id: string): Promise<void> {
+  await invoke("codex_account_remove", { id });
+  await loadCodexAccounts().catch(() => []);
+}
+
+export type ExternalAuthInfo = {
+  accountId: string;
+  email: string | null;
+  planType: string | null;
+};
+
+export async function readExternalAuthInfo(): Promise<ExternalAuthInfo | null> {
+  try {
+    const auth = await invoke<ExternalAuth>("codex_auth_json_read");
+    return {
+      accountId: auth.accountId,
+      email: auth.email ?? null,
+      planType: auth.planType ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function resetCodexAccounts(): void {

@@ -13,6 +13,7 @@ import {
 } from "../lib/rateLimits";
 import type { CodexRateLimitResetOutcome } from "../lib/rateLimitsFetch";
 import { HARNESS_TITLE } from "../lib/session";
+import { CodexAccountsSection } from "./CodexAccountsSection";
 import { HarnessIcon } from "./HarnessIcon";
 import { RefreshCw } from "./icons";
 import { Popover, type PopoverDismissReason } from "./Popover";
@@ -214,6 +215,10 @@ export function UsageProviderChip({
               onUse={useReset}
               canUse={Boolean(onConsumeReset)}
             />
+          ) : null}
+
+          {limits.provider === "codex" ? (
+            <CodexAccountsSection now={now} />
           ) : null}
         </Popover>
       ) : null}

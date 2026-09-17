@@ -344,6 +344,7 @@ pub fn run() {
             rate_limits::fetch_claude_usage,
             codex_accounts::codex_accounts_list,
             codex_accounts::codex_account_upsert,
+            codex_accounts::codex_account_capture_current,
             codex_accounts::codex_account_remove,
             codex_accounts::codex_account_update_state,
             codex_accounts::codex_account_credentials,

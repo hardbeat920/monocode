@@ -77,7 +77,12 @@ export async function fetchCodexRateLimits(): Promise<ProviderRateLimits> {
       {},
     );
     const parsed = parseCodexRateLimits(result);
-    if (parsed.session || parsed.weekly || parsed.resetCredits) return parsed;
+    if (parsed.session || parsed.weekly || parsed.resetCredits) {
+      // Harvest whatever the CLI is currently signed in as so it can act as a
+      // failover candidate later. Idempotent; silently skipped when absent.
+      void invoke("codex_account_capture_current").catch(() => undefined);
+      return parsed;
+    }
     const rec = asRecord(result);
     if (rec && !parsed.session && !parsed.weekly) {
       return unavailableRateLimits("codex", "No Codex usage data");

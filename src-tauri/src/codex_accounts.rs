@@ -394,17 +394,104 @@ fn read_auth(path: &Path) -> Result<Value, String> {
 
 fn auth_projection(blob: &Value) -> Result<Value, String> {
     let tokens = &blob["tokens"];
+    let claims = token_field(tokens, "id_token").and_then(jwt_claims);
     Ok(json!({
         "accessToken": token_field(tokens, "access_token").ok_or("Missing Codex access token")?,
         "refreshToken": token_field(tokens, "refresh_token").unwrap_or_default(),
         "accountId": token_field(tokens, "account_id").ok_or("Missing Codex account id")?,
-        "idToken": tokens.get("id_token"), "lastRefresh": blob.get("last_refresh")
+        "idToken": tokens.get("id_token"), "lastRefresh": blob.get("last_refresh"),
+        "email": claims.as_ref().and_then(|c| token_field(c, "email")),
+        "planType": claims
+            .as_ref()
+            .and_then(|c| c.get("https://api.openai.com/auth"))
+            .and_then(|auth| token_field(auth, "chatgpt_plan_type")),
     }))
 }
 
 #[tauri::command]
 pub fn codex_auth_json_read() -> Result<Value, String> {
     auth_projection(&read_auth(&auth_path()?)?)
+}
+
+/// Enroll the CLI's current auth.json identity into the pool so it becomes a
+/// failover candidate after the user signs in elsewhere. Keyed by account id:
+/// re-capturing refreshes stored tokens in place and preserves usage state.
+#[tauri::command]
+pub async fn codex_account_capture_current(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = STORE_LOCK
+            .lock()
+            .map_err(|_| "Credential store unavailable")?;
+        let pool_file = pool_path(&app)?;
+        let blob = read_auth(&auth_path()?)?;
+        let tokens = &blob["tokens"];
+        let account_id = token_field(tokens, "account_id")
+            .ok_or("Missing Codex account id")?
+            .to_string();
+        let access = token_field(tokens, "access_token")
+            .ok_or("Missing Codex access token")?
+            .to_string();
+        let refresh = token_field(tokens, "refresh_token")
+            .ok_or("Missing Codex refresh token")?
+            .to_string();
+        let claims = token_field(tokens, "id_token").and_then(jwt_claims);
+        let email = claims
+            .as_ref()
+            .and_then(|c| token_field(c, "email"))
+            .ok_or("Cannot identify Codex account email")?
+            .to_string();
+        let plan = claims
+            .as_ref()
+            .and_then(|c| c.get("https://api.openai.com/auth"))
+            .and_then(|auth| token_field(auth, "chatgpt_plan_type"))
+            .map(str::to_string);
+        let expiry = jwt_expiry_ms(&access);
+
+        let mut pool = read_pool(&pool_file)?;
+        let existing = pool
+            .accounts
+            .iter_mut()
+            .find(|a| a.account_id == account_id);
+        match existing {
+            Some(account) => {
+                let unchanged = account.access_token == access
+                    && account.refresh_token == refresh
+                    && account.email == email;
+                account.access_token = access;
+                account.refresh_token = refresh;
+                account.email = email;
+                account.plan_type = plan;
+                account.expires_at_ms = expiry;
+                if unchanged {
+                    return Ok(redacted(account));
+                }
+                let projection = redacted(account);
+                atomic_write(&pool_file, &pool)?;
+                Ok(projection)
+            }
+            None => {
+                let account = Account {
+                    id: account_id.clone(),
+                    email,
+                    account_id,
+                    access_token: access,
+                    refresh_token: refresh,
+                    plan_type: plan,
+                    expires_at_ms: expiry,
+                    blocked_until_ms: None,
+                    disabled_cause: None,
+                    added_at: now_ms(),
+                    last_used_at: None,
+                };
+                let projection = redacted(&account);
+                pool.accounts.push(account);
+                atomic_write(&pool_file, &pool)?;
+                Ok(projection)
+            }
+        }
+    })
+    .await
+    .map_err(|_| "Codex account capture worker failed".to_string())?
 }
 
 // Only the external account may write auth.json. Preserve every unknown field.
