@@ -201,9 +201,9 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
         .catch(() => undefined);
     };
     if (supportsWebGL2() && loadTerminalGpu()) enableGpu();
-    const unsubscribeGpu = subscribeTerminalGpu(() => {
+    const unsubscribeGpu = subscribeTerminalGpu((enabled) => {
       if (closed) return;
-      if (loadTerminalGpu()) {
+      if (enabled) {
         if (supportsWebGL2()) enableGpu();
       } else {
         disableGpu();

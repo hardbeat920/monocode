@@ -676,11 +676,15 @@ export function saveTerminalGpu(value: boolean) {
   );
 }
 
-export function subscribeTerminalGpu(onStoreChange: () => void) {
+export function subscribeTerminalGpu(
+  onStoreChange: (enabled: boolean) => void,
+) {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(TERMINAL_GPU_CHANGE_EVENT, onStoreChange);
-  return () =>
-    window.removeEventListener(TERMINAL_GPU_CHANGE_EVENT, onStoreChange);
+  const onEvent = (event: Event) => {
+    onStoreChange((event as CustomEvent<boolean>).detail);
+  };
+  window.addEventListener(TERMINAL_GPU_CHANGE_EVENT, onEvent);
+  return () => window.removeEventListener(TERMINAL_GPU_CHANGE_EVENT, onEvent);
 }
 
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
