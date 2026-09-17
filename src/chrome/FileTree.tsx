@@ -41,6 +41,7 @@ import {
   subscribeDirsChanged,
 } from "../lib/fileTree";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { dragPointToClient } from "../lib/dragPoint";
 import {
   basename,
   clipboardFilePaths,
@@ -147,13 +148,11 @@ function explorerItems(
   target: MenuTarget,
   clip: Clip | null,
   canOpenTerminal: boolean,
-  clipboardHasFiles: boolean,
 ): ExplorerMenuItem[] {
   const pasteParent = target.isDir ? target.path : parentPath(target.path);
-  const pasteIntoSelf =
+  const pasteBlocked =
     !!clip?.isDir &&
     (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`));
-  const pasteBlocked = clip ? pasteIntoSelf : !clipboardHasFiles;
   return [
     { kind: "item", id: "new-file", label: "New File" },
     { kind: "item", id: "new-folder", label: "New Folder" },
@@ -241,7 +240,6 @@ export const FileTree = memo(function FileTree({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [clip, setClip] = useState<Clip | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [clipboardHasFiles, setClipboardHasFiles] = useState(false);
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
@@ -387,8 +385,7 @@ export const FileTree = memo(function FileTree({
     onFileDeleted?.(path);
   };
 
-  const copyExternalFiles = async (paths: string[], targetPath: string) => {
-    const destParent = createParentOf(cwd, targetPath);
+  const copyExternalFiles = async (paths: string[], destParent: string) => {
     let created: string | null = null;
     try {
       for (const from of paths) created = await copyPath(from, destParent);
@@ -403,11 +400,11 @@ export const FileTree = memo(function FileTree({
   };
 
   const pasteAt = async (targetPath: string) => {
+    const destParent = createParentOf(cwd, targetPath);
     if (!clip) {
-      await copyExternalFiles(await clipboardFilePaths(), targetPath);
+      await copyExternalFiles(await clipboardFilePaths(), destParent);
       return;
     }
-    const destParent = createParentOf(cwd, targetPath);
     if (
       clip.isDir &&
       (destParent === clip.path || destParent.startsWith(`${clip.path}/`))
@@ -456,7 +453,7 @@ export const FileTree = memo(function FileTree({
   };
 
   const dropFiles = (paths: string[], targetPath: string) =>
-    run(() => copyExternalFiles(paths, targetPath));
+    run(() => copyExternalFiles(paths, createParentOf(cwd, targetPath)));
   const dropFilesRef = useRef(dropFiles);
   dropFilesRef.current = dropFiles;
 
@@ -465,9 +462,6 @@ export const FileTree = memo(function FileTree({
     setRenaming(null);
     onSelect(target.path);
     setMenu({ x, y, target });
-    void clipboardFilePaths()
-      .then((paths) => setClipboardHasFiles(paths.length > 0))
-      .catch(() => setClipboardHasFiles(false));
   };
 
   const runAction = async (id: string, target: MenuTarget) => {
@@ -587,19 +581,10 @@ export const FileTree = memo(function FileTree({
   }, [menu]);
 
   useEffect(() => {
-    const toClientPoint = (x: number, y: number) => {
-      const scale = window.devicePixelRatio || 1;
-      // Tauri types this as PhysicalPosition, but macOS wry reports logical
-      // points. Only scale down when the point sits outside the CSS viewport.
-      if (scale !== 1 && (x > window.innerWidth || y > window.innerHeight)) {
-        return { x: x / scale, y: y / scale };
-      }
-      return { x, y };
-    };
     const treePathAt = (x: number, y: number): string | null => {
       const root = rootRef.current;
       if (!root) return null;
-      const point = toClientPoint(x, y);
+      const point = dragPointToClient(x, y);
       const el = document.elementFromPoint(point.x, point.y);
       if (!el || !root.contains(el)) return null;
       return el.closest<HTMLElement>("[role='treeitem']")?.title ?? cwd;
@@ -798,12 +783,7 @@ export const FileTree = memo(function FileTree({
         <ExplorerMenu
           x={menu.x}
           y={menu.y}
-          items={explorerItems(
-            menu.target,
-            clip,
-            !!onOpenTerminal,
-            clipboardHasFiles,
-          )}
+          items={explorerItems(menu.target, clip, !!onOpenTerminal)}
           onPick={(id) => {
             const target = menu.target;
             setMenu(null);

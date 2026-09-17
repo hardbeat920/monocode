@@ -209,6 +209,20 @@ describe("FileTree accepts files from outside the tree", () => {
     expect(copied).toEqual([]);
   });
 
+  it("does not read the clipboard when the context menu opens", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await act(async () => render());
+    await act(async () => {
+      row("docs").dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+    expect(document.querySelector("[role='menu']")).not.toBeNull();
+    expect(vi.mocked(invoke).mock.calls.map((c) => c[0])).not.toContain(
+      "clipboard_file_paths",
+    );
+  });
+
   it("copies a native file drop into the hovered folder", async () => {
     await act(async () => render());
     expect(dragDrop.handler).not.toBeNull();
