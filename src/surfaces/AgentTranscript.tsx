@@ -150,7 +150,7 @@ type Props = {
   managed?: boolean;
 };
 
-function AgentTranscriptComponent({
+function AgentTranscriptContent({
   blocks: sourceBlocks,
   busy,
   cwd,
@@ -394,7 +394,6 @@ function AgentTranscriptComponent({
   }, [revealBlock, onRevealReady]);
 
   return (
-    <ErrorBoundary label="Transcript">
     <div
       ref={setScroller}
       className="agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5"
@@ -686,6 +685,13 @@ function AgentTranscriptComponent({
         />
       ) : null}
     </div>
+  );
+}
+
+function AgentTranscriptComponent(props: Props) {
+  return (
+    <ErrorBoundary label="Transcript">
+      <AgentTranscriptContent {...props} />
     </ErrorBoundary>
   );
 }

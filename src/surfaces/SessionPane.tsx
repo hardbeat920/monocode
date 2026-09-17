@@ -144,7 +144,7 @@ type Props = {
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
-export const SessionPane = memo(function SessionPane({
+const SessionPaneContent = memo(function SessionPaneContent({
   session,
   reviewUndoLocked = false,
   visible,
@@ -416,7 +416,6 @@ export const SessionPane = memo(function SessionPane({
   );
 
   return (
-    <ErrorBoundary label="Session">
     <div
       data-session-drop={session.id}
       data-session-empty={isEmpty}
@@ -609,6 +608,13 @@ export const SessionPane = memo(function SessionPane({
         ) : null}
       </div>
     </div>
+  );
+});
+
+export const SessionPane = memo(function SessionPane(props: Props) {
+  return (
+    <ErrorBoundary label="Session">
+      <SessionPaneContent {...props} />
     </ErrorBoundary>
   );
 });
