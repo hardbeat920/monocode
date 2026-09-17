@@ -306,6 +306,13 @@ export async function rewindLastTurn(
   if (asRecord(fork.data)?.cancelled === true) {
     throw new Error("Edit cancelled");
   }
+  const forkState = await live.rpc.request({ type: "get_state" });
+  const providerSessionId = providerSessionIdFromState(forkState.data);
+  if (!providerSessionId) {
+    throw new Error("Pi did not expose the forked session");
+  }
+  bindState(flavor, input.sessionId, live, forkState.data);
+  live.onEvent({ type: "session.providerBound", providerSessionId });
   return { submitted: false };
 }
 

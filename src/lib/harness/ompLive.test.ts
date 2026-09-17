@@ -13,6 +13,7 @@ const transport = vi.hoisted(() => ({
   writeChild: vi.fn(),
   spawnChild: vi.fn(),
   forkData: undefined as unknown,
+  stateSessionId: undefined as string | undefined,
 }));
 
 vi.mock("./child", () => ({
@@ -74,9 +75,9 @@ beforeEach(() => {
   transport.requests.length = 0;
   transport.spawnChild.mockReset();
   transport.spawnChild.mockResolvedValue(undefined);
-  transport.prompt = (id, command) => response(id, command);
   transport.fast = undefined;
   transport.forkData = undefined;
+  transport.stateSessionId = undefined;
   transport.writeChild.mockReset();
   transport.writeChild.mockImplementation(
     async (sessionId: string, line: string) => {
@@ -91,7 +92,7 @@ beforeEach(() => {
         sessionId,
         command,
         command.type === "get_state"
-          ? { sessionId: "provider-session" }
+          ? { sessionId: transport.stateSessionId ?? "provider-session" }
           : command.type === "get_available_commands"
             ? { commands: [{ name: "workflow", source: "custom" }] }
             : command.type === "get_fork_messages"
@@ -153,6 +154,33 @@ describe("Pi-family edit recovery", () => {
         onEvent: () => undefined,
       }),
     ).rejects.toThrow("Edit cancelled");
+  });
+
+  it("rebinds to the provider session created by fork", async () => {
+    const running = await started();
+    frame("omp-test", {
+      type: "prompt_result",
+      id: running.request.id,
+      agentInvoked: false,
+    });
+    await running.turn;
+
+    transport.stateSessionId = "forked-provider-session";
+    const events: HarnessEvent[] = [];
+    await expect(
+      rewindOmpLastTurn({
+        sessionId: "omp-test",
+        cwd: "/repo",
+        model: "omp:default",
+        runtimeMode: "supervised",
+        onEvent: (event) => events.push(event),
+      }),
+    ).resolves.toEqual({ submitted: false });
+
+    expect(events).toContainEqual({
+      type: "session.providerBound",
+      providerSessionId: "forked-provider-session",
+    });
   });
 });
 
