@@ -92,7 +92,12 @@ export function BranchPicker({
   }, [open]);
 
   useEffect(() => {
-    if (open) search.current?.focus();
+    // Popover measures itself off-screen behind `visibility: hidden` before
+    // placing it; focusing during that pass is a no-op in real browsers, so
+    // wait a frame for the popover to actually be visible.
+    if (!open) return;
+    const id = requestAnimationFrame(() => search.current?.focus());
+    return () => cancelAnimationFrame(id);
   }, [open]);
 
   useEffect(() => {
@@ -339,7 +344,7 @@ export function BranchPicker({
             data-branch-picker
             className="flex flex-col overflow-hidden"
           >
-            <label className="flex shrink-0 items-center gap-2 border-b border-content/10 px-2 py-2.5 text-content/50">
+            <label className="flex shrink-0 items-center gap-2 border-b border-stroke px-2 py-2.5 text-content/50">
               <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
               <input
                 ref={search}
@@ -370,7 +375,7 @@ export function BranchPicker({
               onPick={pick}
             />
             {error ? (
-              <p className="max-h-16 shrink-0 overflow-y-auto whitespace-pre-wrap border-t border-content/10 px-2.5 py-2 text-[11px] leading-4 text-red-400/90">
+              <p className="max-h-16 shrink-0 overflow-y-auto whitespace-pre-wrap border-t border-stroke px-2.5 py-2 text-[11px] leading-4 text-red-400/90">
                 {error}
               </p>
             ) : null}
@@ -438,12 +443,12 @@ function BranchList({
               row.kind === "create"
                 ? `mb-1 flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left disabled:opacity-60 ${
                     highlighted
-                      ? "bg-content/15 text-content"
-                      : "bg-content/10 text-content hover:bg-content/15"
+                      ? "bg-selection-hover text-content"
+                      : "bg-selection text-content hover:bg-selection-hover"
                   }`
                 : `flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:opacity-60 ${
                     highlighted || selected
-                      ? "bg-content/10 text-content"
+                      ? "bg-selection text-content"
                       : "text-content hover:bg-content/5"
                   }`
             }

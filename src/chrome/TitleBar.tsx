@@ -1,4 +1,5 @@
 import {
+  CheckCircle,
   ChevronLeft,
   ChevronRight,
   Inbox,
@@ -26,7 +27,10 @@ import { looksLikeProject } from "../lib/recents";
 import type { HarnessId } from "../lib/session";
 import { CwdPicker } from "./CwdPicker";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
-import { useAnimatedReorder } from "../hooks/useAnimatedReorder";
+import {
+  useAnimatedReorder,
+  type ReorderExternalDrop,
+} from "../hooks/useAnimatedReorder";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { HarnessIcon } from "./HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -35,6 +39,12 @@ import { WindowControls } from "./WindowControls";
 import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import type { RecentProject } from "../lib/recents";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
+import {
+  paneDropFromPoint,
+  setExternalPaneDrop,
+  useExternalTitleTabDrop,
+} from "../lib/paneDrop";
+import type { PaneEdge } from "../lib/layout";
 
 export type Tab = {
   id: string;
@@ -48,6 +58,8 @@ export type Tab = {
   harnesses: HarnessId[];
   /** Harnesses with an in-flight turn in this tab. */
   busyHarnesses: HarnessId[];
+  /** Harnesses with a finished response that has not been focused yet. */
+  doneHarnesses?: HarnessId[];
   /** Open file basenames, active files first. */
   files: string[];
   /** Split layout with more than one pane in this tab. */
@@ -71,14 +83,13 @@ type Props = {
   onSelect: (id: string) => void;
   onNew: () => void;
   onNewTerminal?: () => void;
-  onShowTerminal?: () => void;
-  projectTerminalActive?: boolean;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
   onClose: (id: string) => void;
   onCloseMany: (ids: string[], fallbackId: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
+  onPlaceOnPane?: (tabId: string, targetId: string, edge: PaneEdge) => void;
   onGoToFile?: () => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
@@ -176,33 +187,49 @@ export function titleTabContextCloseIds(
 function TabHarnesses({
   harnesses,
   busyHarnesses,
+  doneHarnesses,
   dimmed,
 }: {
   harnesses: HarnessId[];
   busyHarnesses: HarnessId[];
+  doneHarnesses: HarnessId[];
   dimmed: boolean;
 }) {
   const shown = harnesses.slice(0, 3);
   const extra = harnesses.length - shown.length;
   const opacity = dimmed ? "opacity-55" : "opacity-100";
   const busy = new Set(busyHarnesses);
+  const done = new Set(doneHarnesses);
 
   return (
     <span className="flex shrink-0 items-center">
-      {shown.map((harness, i) => (
-        <span
-          key={harness}
-          className={`grid size-3.5 shrink-0 place-items-center ${opacity} ${
-            i > 0 ? "-ml-0.5" : ""
-          }`}
-        >
-          {busy.has(harness) ? (
-            <TerminalSpinner className="inline-block w-3.5 select-none text-center text-[11px] leading-none text-accent" />
-          ) : (
-            <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-          )}
-        </span>
-      ))}
+      {shown.map((harness, i) => {
+        const status = busy.has(harness)
+          ? "busy"
+          : done.has(harness)
+            ? "done"
+            : "idle";
+        return (
+          <span
+            key={harness}
+            data-harness-status={status}
+            className={`grid size-3.5 shrink-0 place-items-center ${
+              status === "done" ? "opacity-100" : opacity
+            } ${i > 0 ? "-ml-0.5" : ""}`}
+          >
+            {status === "busy" ? (
+              <TerminalSpinner className="inline-block w-3.5 select-none text-center text-[11px] leading-none text-accent" />
+            ) : status === "done" ? (
+              <CheckCircle
+                className="size-3.5 shrink-0 text-teal-400"
+                strokeWidth={2}
+              />
+            ) : (
+              <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+            )}
+          </span>
+        );
+      })}
       {extra > 0 ? (
         <span
           className={`pl-0.5 text-[10px] leading-none ${dimmed ? "text-content/50" : "text-content"}`}
@@ -239,6 +266,10 @@ function TitleTabItem({
 }) {
   const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
+  const accessibleTooltip =
+    (tab.doneHarnesses?.length ?? 0) > 0
+      ? `${tooltip} · Response complete`
+      : tooltip;
 
   return (
     <div
@@ -267,24 +298,23 @@ function TitleTabItem({
         if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
           return;
         }
-        onSelect(tab.id);
         if (canDrag) sortable.onItemPointerDown(tab.id, event);
       }}
     >
       <button
         type="button"
-        title={tooltip}
-        aria-label={tooltip}
+        title={accessibleTooltip}
+        aria-label={accessibleTooltip}
         data-tauri-drag-region="false"
         onClick={() => {
           if (sortable.consumeClick()) return;
           onSelect(tab.id);
         }}
-        className={`relative flex h-7.5 min-w-0 flex-1 cursor-default items-center gap-1.5 self-center rounded-md px-2.5 text-left ${
+        className={`relative flex h-7.5 min-w-0 flex-1 cursor-default items-center gap-1.5 self-center rounded-md px-2 text-left ${
           closable ? "pr-7" : "pr-2.5"
         } ${
           active
-            ? "bg-content/10 text-content"
+            ? "bg-selection text-content"
             : "text-content/50 hover:bg-content/5 hover:text-content"
         }`}
       >
@@ -292,6 +322,7 @@ function TitleTabItem({
           <TabHarnesses
             harnesses={tab.harnesses}
             busyHarnesses={tab.busyHarnesses}
+            doneHarnesses={tab.doneHarnesses ?? []}
             dimmed={!active}
           />
         ) : tab.terminal || !fileIcon ? (
@@ -386,6 +417,7 @@ export function IconButton({
   accent,
   disabled,
   onClick,
+  onOpenContextMenu,
   children,
 }: {
   label: string;
@@ -393,6 +425,7 @@ export function IconButton({
   accent?: boolean;
   disabled?: boolean;
   onClick?: () => void;
+  onOpenContextMenu?: (x: number, y: number) => void;
   children: ReactNode;
 }) {
   return (
@@ -407,6 +440,22 @@ export function IconButton({
         if (disabled) return;
         onClick?.();
       }}
+      onContextMenu={onOpenContextMenu ? (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (disabled) return;
+        event.currentTarget.focus();
+        onOpenContextMenu(event.clientX, event.clientY);
+      } : undefined}
+      onKeyDown={onOpenContextMenu ? (event) => {
+        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (disabled) return;
+        event.currentTarget.focus();
+        const rect = event.currentTarget.getBoundingClientRect();
+        onOpenContextMenu(rect.left, rect.bottom);
+      } : undefined}
       className={`grid size-6.5 place-items-center rounded-md ${
         disabled
           ? "text-content/25"
@@ -526,20 +575,49 @@ function TitleBarComponent({
   onSelect,
   onNew,
   onNewTerminal,
-  onShowTerminal,
-  projectTerminalActive = false,
   onOpenSettings,
   onOpenInbox,
   onOpenNotes,
   onClose,
   onCloseMany,
   onReorder,
+  onPlaceOnPane,
   onGoToFile,
   recents = [],
   onSelectProject,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
-  const sortable = useAnimatedReorder(tabIds, onReorder);
+  const externalTabDrop = useMemo<ReorderExternalDrop<string> | undefined>(
+    () =>
+      onPlaceOnPane
+        ? {
+            onMove: (tabId, event) => {
+              if (tabId === activeId) {
+                setExternalPaneDrop(null);
+                return false;
+              }
+              const over = paneDropFromPoint(event.clientX, event.clientY);
+              setExternalPaneDrop({
+                fromId: tabId,
+                overId: over?.id ?? null,
+                edge: over?.edge ?? "left",
+              });
+              return over != null;
+            },
+            onDrop: (tabId, event) => {
+              if (tabId === activeId) return false;
+              const over = paneDropFromPoint(event.clientX, event.clientY);
+              if (!over) return false;
+              onPlaceOnPane(tabId, over.id, over.edge);
+              return true;
+            },
+            onEnd: () => setExternalPaneDrop(null),
+          }
+        : undefined,
+    [activeId, onPlaceOnPane],
+  );
+  const sortable = useAnimatedReorder(tabIds, onReorder, "x", externalTabDrop);
+  const paneToTabDrop = useExternalTitleTabDrop();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(
@@ -687,60 +765,52 @@ function TitleBarComponent({
   // Changes. Without a project that sidebar is gone, so the picker stays here.
   const showProjectButton =
     railClosed && Boolean(onSelectProject) && !showCurrentProject;
-  const trailingControls = (
+  const showTrailingActions =
+    (projectless &&
+      railClosed &&
+      Boolean(onOpenInbox || onOpenNotes || onOpenSettings)) ||
+    (railClosed && !projectless);
+  const trailingControls = showTrailingActions || !IS_MAC ? (
     <div className="flex h-full shrink-0 items-stretch">
-      <div className="flex items-center gap-0.5 px-2">
-        {projectless && railClosed && onOpenInbox ? (
-          <IconButton label="Inbox" onClick={onOpenInbox}>
-            <Inbox className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-        {projectless && railClosed && onOpenNotes ? (
-          <IconButton label="Notes" onClick={onOpenNotes}>
-            <StickyNote className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-        {railClosed && !projectless ? (
-          <>
-            <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
-              <Search className="size-3.5" strokeWidth={1.75} />
+      {showTrailingActions ? (
+        <div className="flex items-center gap-0.5 px-2">
+          {projectless && railClosed && onOpenInbox ? (
+            <IconButton label="Inbox" onClick={onOpenInbox}>
+              <Inbox className="size-3.5" strokeWidth={1.75} />
             </IconButton>
-            <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
-              <Plus className="size-3.5" strokeWidth={1.75} />
+          ) : null}
+          {projectless && railClosed && onOpenNotes ? (
+            <IconButton label="Notes" onClick={onOpenNotes}>
+              <StickyNote className="size-3.5" strokeWidth={1.75} />
             </IconButton>
-          </>
-        ) : null}
-        {!projectless && (onShowTerminal || onNewTerminal) ? (
-          <IconButton
-            label={
-              projectTerminalActive ? "Terminal" : `New Terminal (${MOD}\`)`
-            }
-            accent={projectTerminalActive}
-            onClick={
-              projectTerminalActive
-                ? (onShowTerminal ?? onNewTerminal)
-                : onNewTerminal
-            }
-          >
-            <Terminal className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-        {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
-          <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
-            <Settings className="size-3.5" strokeWidth={1.75} />
-          </IconButton>
-        ) : null}
-      </div>
+          ) : null}
+          {railClosed && !projectless ? (
+            <>
+              <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
+                <Search className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+              <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+                <Plus className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+            </>
+          ) : null}
+          {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
+            <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
+              <Settings className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          ) : null}
+        </div>
+      ) : null}
       {!IS_MAC ? <WindowControls /> : null}
     </div>
-  );
+  ) : null;
 
   // "deep" drags from anywhere in the subtree. The bare attribute only drags
   // on a direct hit, which left every label and spacer dead. Tauri still
   // exempts buttons, links and inputs on its own.
   return (
     <header
-      className="flex h-10 shrink-0 select-none items-stretch border-b border-content/10"
+      className="flex h-10 shrink-0 select-none items-stretch border-b border-stroke"
       data-tauri-drag-region="deep"
     >
       {/* Both the rail and the sidebar step aside without a project, so the
@@ -773,7 +843,7 @@ function TitleBarComponent({
 
       <div
         className={`flex min-w-0 flex-1 items-stretch${
-          showProjectButton ? " border-l border-content/10" : ""
+          showProjectButton ? " border-l border-stroke" : ""
         }`}
       >
         <div
@@ -794,14 +864,24 @@ function TitleBarComponent({
           ) : null}
           <div
             ref={setTabStripRef}
-            className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none px-1.5"
+            data-title-tab-strip
+            className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none pl-1.5 pr-2.5"
           >
             {tabs.map((tab) => (
               <div
                 key={tab.id}
                 className="relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
+                data-title-tab-id={tab.id}
                 data-tauri-drag-region="false"
               >
+                {paneToTabDrop?.targetTabId === tab.id ? (
+                  <span
+                    data-pane-tab-drop-hint
+                    className={`pointer-events-none absolute inset-y-1 z-50 w-0.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] ${
+                      paneToTabDrop.position === "before" ? "left-0" : "right-0"
+                    }`}
+                  />
+                ) : null}
                 <TitleTabItem
                   tab={tab}
                   active={tab.id === activeId}

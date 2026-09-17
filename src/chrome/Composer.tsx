@@ -9,6 +9,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Share,
   Square,
   StickyNote,
   Trash2,
@@ -66,7 +67,7 @@ import type {
   MessageQueueStatus,
   QueuedMessage,
   RuntimeMode,
-  TurnIntent,
+  ComposerTurnOptions,
 } from "../lib/session";
 import { HARNESS_TITLE, harnessSupportsAttachments } from "../lib/session";
 import type {
@@ -181,8 +182,8 @@ type Props = {
   onSubmit: (
     text: string,
     attachments: Attachment[],
-    options?: { intent?: TurnIntent },
-  ) => void;
+    options?: ComposerTurnOptions,
+  ) => boolean | void;
   onStop?: () => void;
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
@@ -218,8 +219,8 @@ function ToolButton({
       onClick={onClick}
       className={`grid size-6.5 shrink-0 place-items-center rounded-md ${
         active
-          ? "bg-content/20 text-content"
-          : "bg-content/10 text-content/50 hover:bg-content/15 hover:text-content"
+          ? "bg-selection-emphasis text-content"
+          : "bg-selection text-content/50 hover:bg-selection-hover hover:text-content"
       } disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content/50`}
     >
       {children}
@@ -282,7 +283,7 @@ function MessageQueue({
         data-message-queue-card
       >
         {paused ? (
-          <div className="flex h-7 items-center gap-2 border-b border-content/10 text-[12px]">
+          <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
             <Pause className="size-3.5" />
             <span className="min-w-0 flex-1 truncate">
               Queue paused because you interrupted
@@ -306,7 +307,7 @@ function MessageQueue({
             <div
               key={message.id}
               className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-content/10" : ""
+                index > 0 ? "border-t border-stroke" : ""
               }`}
             >
               <ListEnd className="size-3.5 shrink-0" />
@@ -467,6 +468,7 @@ export function Composer({
   const [fileDrag, setFileDrag] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
+  const [orchestrationSelected, setOrchestrationSelected] = useState(false);
   const [slash, setSlash] = useState<SlashToken | null>(null);
   const [skillActive, setSkillActive] = useState(0);
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -830,7 +832,10 @@ export function Composer({
       syncHasValue(next, attachmentsRef.current);
       setSlash(null);
       setCreatingSkill(false);
-      if (planCommand) setPlanSelected(true);
+      if (planCommand) {
+        setPlanSelected(true);
+        setOrchestrationSelected(false);
+      }
       el.focus();
     },
     [onPlaceInFolder, openSessionFolderPicker, syncHasValue],
@@ -1004,9 +1009,18 @@ export function Composer({
       : composeInboxMessage(inboxCard, command.text);
     const files = attachments;
     if (!text && files.length === 0 && !noteCard && !handoffCard) return;
-    onSubmit(text, files, {
-      intent: planSelected || command.planning ? "plan" : "default",
+    const accepted = onSubmit(text, files, {
+      intent:
+        planSelected || command.planning
+          ? "plan"
+          : orchestrationSelected
+            ? "orchestrate"
+            : "default",
     });
+    // The app can reject a turn before it is recorded (for example while an
+    // orchestration is paused). Keep the user's text, files and selected mode
+    // intact so resolving the blocker never destroys their work.
+    if (accepted === false) return;
     if (!ref.current) return;
     ref.current.value = "";
     ref.current.style.height = "auto";
@@ -1014,6 +1028,7 @@ export function Composer({
     onDraftChange?.("");
     setAttachments([]);
     setPlanSelected(false);
+    setOrchestrationSelected(false);
     setSessionFolderSelected(false);
     setSessionFolderOpen(false);
     setPlusOpen(false);
@@ -1443,9 +1458,9 @@ export function Composer({
                     <FilePlus className="mt-0.5 size-4 shrink-0" />
                     <span className="min-w-0">
                       <span className="block text-[13px]">Upload file</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
+                      <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
                         {attachmentsSupported
-                          ? "Attach files or images to this message"
+                          ? "Attach files or images"
                           : `${HARNESS_TITLE[harness]} does not support attachments`}
                       </span>
                     </span>
@@ -1456,6 +1471,7 @@ export function Composer({
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setPlanSelected((selected) => !selected);
+                      setOrchestrationSelected(false);
                       setPlusOpen(false);
                       ref.current?.focus();
                     }}
@@ -1464,17 +1480,64 @@ export function Composer({
                     <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px]">Plan mode</span>
-                      <span className="block text-[11px] leading-4 text-content/45">
-                        Create a plan to review before building
+                      <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
+                        Review a plan before building
                       </span>
                     </span>
                     {planSelected ? (
                       <Check className="mt-0.5 size-3.5 shrink-0 text-accent" />
                     ) : null}
                   </button>
+                  {!hideTopBar && (
+                    <button
+                      type="button"
+                      aria-pressed={orchestrationSelected}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setOrchestrationSelected((selected) => !selected);
+                        setPlanSelected(false);
+                        setPlusOpen(false);
+                        ref.current?.focus();
+                      }}
+                      className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
+                    >
+                      <Share className="mt-0.5 size-4 shrink-0 text-fuchsia-300/65" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-[13px]">Orchestrator</span>
+                          <span className="rounded-full bg-fuchsia-300/10 px-1.5 py-0.5 text-[9px] font-medium leading-none tracking-wide text-fuchsia-200/55 mb-px">
+                            v1
+                          </span>
+                        </span>
+                        <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
+                          Plan and coordinate agent work
+                        </span>
+                      </span>
+                      {orchestrationSelected && (
+                        <Check className="mt-0.5 size-3.5 shrink-0 text-fuchsia-300/80" />
+                      )}
+                    </button>
+                  )}
                 </Popover>
               ) : null}
             </div>
+            {orchestrationSelected && (
+              <button
+                type="button"
+                title="Turn off Orchestrator mode"
+                aria-label="Turn off Orchestrator mode"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setOrchestrationSelected(false);
+                  ref.current?.focus();
+                }}
+                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-fuchsia-500/15 px-1.5 text-[11px] font-medium text-fuchsia-700 hover:bg-fuchsia-500/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200/90 dark:hover:bg-fuchsia-400/15"
+              >
+                <Share className="size-3.5" />
+                Orchestrator
+                <X className="size-3" />
+              </button>
+            )}
             {planSelected ? (
               <button
                 type="button"
@@ -1651,7 +1714,7 @@ export function ComposerAction({
         title="Send"
         aria-label="Send"
         onClick={onSend}
-        className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
+        className="composer-send primary-action grid size-6.5 place-items-center rounded-md"
       >
         <ArrowUp className="size-3.5" strokeWidth={2.25} />
       </button>
@@ -1675,7 +1738,7 @@ export function ComposerAction({
       aria-label="Send"
       disabled={!hasValue}
       onClick={onSend}
-      className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90 disabled:cursor-default disabled:bg-white/30 disabled:text-black/40 disabled:hover:bg-white/30"
+      className="composer-send primary-action grid size-6.5 place-items-center rounded-md disabled:cursor-default"
     >
       <ArrowUp className="size-3.5" strokeWidth={2.25} />
     </button>

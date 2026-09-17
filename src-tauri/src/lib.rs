@@ -2,12 +2,15 @@ use tauri::Manager;
 
 mod chat_background;
 mod checkpoint;
+mod control;
+pub mod control_cli;
 mod cursor_store;
 mod fs;
 mod gitlab;
 mod harness;
 mod inbox_media;
 mod linear;
+mod link_preview;
 #[cfg(target_os = "macos")]
 mod macos;
 mod menu;
@@ -198,6 +201,7 @@ pub fn run() {
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
+            control::init(app.handle())?;
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
             menu::install(app.handle())?;
@@ -223,6 +227,15 @@ pub fn run() {
             menu::dispatch(app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
+            control::control_enable,
+            control::control_disable,
+            control::control_reply,
+            control::control_save,
+            control::control_load,
+            control::control_scopes,
+            control::control_attach_worker,
+            control::control_authorize_turn,
+            control::control_turn_finished,
             default_cwd,
             home_dir,
             notifications::notification_permission,
@@ -262,11 +275,13 @@ pub fn run() {
             fs::git_pr_create,
             fs::git_github_status,
             fs::git_github_repo,
+            fs::git_github_repositories,
             fs::git_github_work_item,
             fs::git_github_work_items,
             fs::git_github_work_item_details,
             fs::git_github_work_item_thread,
             fs::git_github_work_item_comment,
+            fs::git_github_pr_action,
             fs::git_github_pr_diff,
             inbox_media::fetch_inbox_media,
             gitlab::gitlab_status,
@@ -285,6 +300,7 @@ pub fn run() {
             linear::linear_issue_details,
             linear::linear_issue_thread,
             linear::linear_issue_comment,
+            link_preview::fetch_link_preview,
             fs::git_branches,
             fs::git_checkout,
             fs::git_create_branch,
@@ -303,6 +319,8 @@ pub fn run() {
             fs::read_binary_file,
             fs::write_attachment,
             fs::read_text_file,
+            fs::omp_session_interjections,
+            fs::omp_active_assistant_texts,
             fs::write_text_file,
             skills::list_skills,
             search::search_project,
@@ -406,6 +424,7 @@ pub fn run() {
         } => {
             window::forget_quit_window(handle, &label);
             let other_window = handle.webview_windows().keys().any(|name| name != &label);
+            control::window_closed(handle, &label);
             if !other_window {
                 reap_harness_children(handle);
             }

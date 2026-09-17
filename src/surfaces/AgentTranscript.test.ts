@@ -25,6 +25,102 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("hides provider authentication errors handled by the sign-in modal", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        harness: "grok",
+        blocks: [
+          {
+            id: "auth-error",
+            role: "system",
+            notice: "error",
+            text: "Authentication required\n\nGrok Build is not signed in.",
+          },
+        ],
+      }),
+    );
+
+    expect(markup).not.toContain("Authentication required");
+    expect(markup).not.toContain("Sign in to Grok Build");
+    expect(markup).not.toContain("<button");
+  });
+
+  it("reveals an orchestration result after the finished turn and before its action row", () => {
+    const card: Block = {
+      id: "proposal",
+      role: "plan",
+      text: "Assignment plan",
+      orchestration: {
+        version: 1,
+        leadId: "lead",
+        cwd: "/repo",
+        request: "Build",
+        author: { harness: "claude", model: "claude:test", name: "Lead" },
+        settings: {
+          choices: [
+            { harness: "claude", model: "claude:test", name: "Worker" },
+          ],
+          maxWorkers: 2,
+        },
+        status: "ready",
+        title: "Proposed assignments",
+        summary: "Implement and verify",
+        tasks: [],
+      },
+    };
+    const blocks: Block[] = [
+      {
+        id: "user",
+        role: "user",
+        text: "Build",
+        startedAt: 1000,
+        durationMs: 500,
+      },
+      card, // Existing records have the card before the work.
+      tool("inspection"),
+      { id: "answer", role: "assistant", text: "The investigation is complete." },
+    ];
+    expect(render(blocks, true)).not.toContain("data-orchestration-review");
+    const finished = render(blocks);
+    expect(finished.indexOf("The investigation is complete.")).toBeLessThan(
+      finished.indexOf("data-orchestration-result"),
+    );
+    expect(finished.indexOf("data-orchestration-review")).toBeLessThan(
+      finished.indexOf('aria-label="Worked for 1s"'),
+    );
+    expect(finished.match(/data-orchestration-review/g)).toHaveLength(1);
+    card.orchestration!.status = "planning";
+    expect(render(blocks)).not.toContain("data-orchestration-review");
+  });
+  it("renders a standalone user URL as a compact link preview", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "https://www.example.com/docs" },
+    ]);
+
+    expect(markup).toContain("data-user-link-preview");
+    expect(markup).toContain("example.com/docs");
+    expect(markup).toContain("Open example.com");
+    expect(markup).toContain("user-link-preview-title");
+    expect(markup).toContain("user-message-with-link");
+    expect(markup).toContain("user-message-bubble");
+    expect(markup).not.toContain("text-ellipsis");
+  });
+
+  it("keeps surrounding prose and previews its first URL", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: "Please check https://example.com/docs",
+      },
+    ]);
+
+    expect(markup).toContain("data-user-link-preview");
+    expect(markup).toContain("Please check");
+    expect(markup).toContain("Open example.com");
+    expect(markup).not.toContain("Please check https://example.com/docs");
+  });
+
   it("keeps each completed turn's recorded model label", () => {
     const blocks: Block[] = [
       {
@@ -111,7 +207,33 @@ describe("AgentTranscript collapsed work", () => {
   });
 
   it("opens a failed subagent's own row on its provider reason", () => {
-    const markup = render([
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
+        {
+          id: "agent",
+          role: "tool",
+          text: "Inspect auth",
+          tool: {
+            callId: "agent-1",
+            kind: "agent",
+            status: "failed",
+            detail: "Child process disconnected",
+          },
+        },
+        { id: "answer", role: "assistant", text: "I could not finish." },
+      ],
+      // Live keeps the run pinned on its own row; settled keeps it there too —
+      // a run that died parks under the fold line, already open on the reason.
+      true,
+    );
+
+    expect(markup).toContain("Inspect auth");
+    expect(markup).toContain("failed");
+    expect(markup).toContain("Child process disconnected");
+    expect(markup).toContain("Hide Inspect auth&#x27;s work");
+
+    const settledMarkup = render([
       { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
       {
         id: "agent",
@@ -126,11 +248,8 @@ describe("AgentTranscript collapsed work", () => {
       },
       { id: "answer", role: "assistant", text: "I could not finish." },
     ]);
-
-    expect(markup).toContain("Inspect auth");
-    expect(markup).toContain("failed");
-    expect(markup).toContain("Child process disconnected");
-    expect(markup).toContain("Hide Inspect auth&#x27;s work");
+    expect(settledMarkup).toContain("Child process disconnected");
+    expect(settledMarkup).toContain("Hide Inspect auth&#x27;s work");
   });
 
   it("gives each running subagent its own row above the work that folds", () => {
@@ -230,26 +349,29 @@ describe("AgentTranscript collapsed work", () => {
   });
 
   it("groups an opened subagent's trail the way the main transcript does", () => {
-    const markup = render([
-      { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
-      {
-        id: "a1",
-        role: "tool",
-        // A failed run opens itself, which is the only way to see an open
-        // panel without a click.
-        text: "Correctness review",
-        tool: { callId: "agent-1", kind: "agent", status: "failed" },
-        agentRun: {
-          name: "Correctness review",
-          steps: [
-            { id: "s1", kind: "message", text: "Reading the diff first." },
-            { id: "s2", kind: "tool", text: "Read src/App.tsx" },
-            { id: "s3", kind: "tool", text: "Read src/lib/session.ts" },
-          ],
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
+        {
+          id: "a1",
+          role: "tool",
+          // A failed run opens itself, which is the only way to see an open
+          // panel without a click.
+          text: "Correctness review",
+          tool: { callId: "agent-1", kind: "agent", status: "failed" },
+          agentRun: {
+            name: "Correctness review",
+            steps: [
+              { id: "s1", kind: "message", text: "Reading the diff first." },
+              { id: "s2", kind: "tool", text: "Read src/App.tsx" },
+              { id: "s3", kind: "tool", text: "Read src/lib/session.ts" },
+            ],
+          },
         },
-      },
-      { id: "answer", role: "assistant", text: "It could not finish." },
-    ]);
+        { id: "answer", role: "assistant", text: "It could not finish." },
+      ],
+      true,
+    );
 
     // The run's own words title a group, with the calls they introduced under
     // it — not one flat dump of every step it took.
@@ -270,28 +392,31 @@ describe("AgentTranscript collapsed work", () => {
   });
 
   it("opens a lone subagent straight into its own transcript", () => {
-    const markup = render([
-      { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
-      {
-        id: "a1",
-        role: "tool",
-        text: "Correctness review",
-        tool: { callId: "agent-1", kind: "agent", status: "completed" },
-        agentRun: {
-          name: "Correctness review",
-          steps: [
-            {
-              id: "s1",
-              kind: "tool",
-              text: "Read src/App.tsx",
-              status: "completed",
-            },
-            { id: "s2", kind: "message", text: "Nothing to flag." },
-          ],
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
+        {
+          id: "a1",
+          role: "tool",
+          text: "Correctness review",
+          tool: { callId: "agent-1", kind: "agent", status: "completed" },
+          agentRun: {
+            name: "Correctness review",
+            steps: [
+              {
+                id: "s1",
+                kind: "tool",
+                text: "Read src/App.tsx",
+                status: "completed",
+              },
+              { id: "s2", kind: "message", text: "Nothing to flag." },
+            ],
+          },
         },
-      },
-      { id: "answer", role: "assistant", text: "Clean." },
-    ]);
+        { id: "answer", role: "assistant", text: "Clean." },
+      ],
+      true,
+    );
 
     // One agent needs no stack header: its own row is the row.
     expect(markup).not.toContain("Show every subagent");
@@ -323,5 +448,100 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup.indexOf("Changed files")).toBeLessThan(
       markup.indexOf('aria-label="Worked for 1s"'),
     );
+  });
+
+  it("renders an advisor interjection between answered work phases", () => {
+    // Live: the interjection lands on its own labeled row. Once the turn
+    // settles it folds into the work trail — covered below.
+    const markup = render(
+      [
+        tool("before"),
+        { id: "answer", role: "assistant", text: "Complete answer." },
+        {
+          id: "advisor",
+          role: "system",
+          text: "Check the fallback.",
+          interjection: { customType: "advisor", severity: "concern" },
+        },
+        tool("after"),
+        { id: "ack", role: "assistant", text: "Checked." },
+      ],
+      true,
+    );
+
+    expect(markup).toContain("Complete answer.");
+    expect(markup).toContain('aria-label="Interjection: Advisor"');
+    expect(markup).toContain("Concern");
+    expect(markup).toContain("Check the fallback.");
+    expect(markup).toContain("Checked.");
+  });
+
+  it("folds a settled turn's interjections into the work trail", () => {
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "Keep me posted" },
+      tool("t1"),
+      {
+        id: "i1",
+        role: "system",
+        text: "ping from #general",
+        interjection: { customType: "irc:incoming" },
+      },
+      {
+        id: "i2",
+        role: "system",
+        text: "another ping",
+        interjection: { customType: "irc:incoming" },
+      },
+      tool("t2"),
+      {
+        id: "i3",
+        role: "system",
+        text: "last ping",
+        interjection: { customType: "irc:incoming" },
+      },
+      {
+        id: "answer",
+        role: "assistant",
+        text: "The investigation is complete.",
+      },
+    ];
+
+    const settled = render(blocks);
+    // One fold line for the whole trail: the calls, and the notes they
+    // absorbed. The dividers themselves stay behind the fold until opened.
+    expect(settled).toContain("Ran 2 commands · 3 notes");
+    expect(settled).toContain("The investigation is complete.");
+    expect(settled).not.toContain('aria-label="Interjection:');
+    expect(settled).not.toContain("ping from #general");
+
+    // While the turn is live the same notes still land as their own rows.
+    const live = render(blocks, true);
+    expect(
+      live.match(/aria-label="Interjection: irc:incoming"/g),
+    ).toHaveLength(3);
+    expect(live).toContain("ping from #general");
+  });
+});
+
+describe("worker assignment prompts", () => {
+  it("hides the assignment envelope and keeps the task text", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        managed: true,
+        blocks: [
+          {
+            id: "u1",
+            role: "user",
+            internal: true,
+            text: "Review the current branch against main.\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Your assigned write scope is: src/App.tsx.\n</monocode_assignment>",
+          },
+          { id: "a1", role: "assistant", text: "Looking now" },
+        ],
+      }),
+    );
+    expect(markup).toContain("Review the current branch against main.");
+    expect(markup).toContain("Looking now");
+    expect(markup).not.toContain("monocode_assignment");
+    expect(markup).not.toContain("You are a worker managed by a MonoCode lead");
   });
 });

@@ -7,10 +7,7 @@ import {
 } from "./approvalToast";
 import { newSession, type Block } from "./session";
 
-function block(
-  role: Block["role"],
-  approval?: Block["approval"],
-): Block {
+function block(role: Block["role"], approval?: Block["approval"]): Block {
   return {
     id: crypto.randomUUID(),
     role,
@@ -23,6 +20,24 @@ function block(
 }
 
 describe("pendingApprovalForSession", () => {
+  it("never toasts a worker approval, which its lead answers instead", () => {
+    const worker = {
+      ...newSession(),
+      id: "worker",
+      orchestrationLeadId: "lead",
+      blocks: [block("tool", { requestId: 42 })],
+    };
+    const leadTab = newTab("lead");
+    const otherTab = newTab("unrelated");
+    const tabs = [leadTab, otherTab];
+    for (const active of [leadTab, otherTab])
+      expect(hiddenApprovalNotices([worker], active.id, tabs, true)).toEqual([]);
+    // The same approval on an ordinary session still reaches the user.
+    const solo = { ...worker, orchestrationLeadId: undefined };
+    expect(
+      hiddenApprovalNotices([solo], otherTab.id, tabs, true)[0].sessionId,
+    ).toBe("worker");
+  });
   it("returns the latest undecided approval", () => {
     const session = newSession();
     session.blocks = [
@@ -62,15 +77,15 @@ describe("isSessionConversationFocused", () => {
   it("is true only when the session pane is focused on the active tab", () => {
     const session = newSession();
     const tab = newTab(session.id);
-    expect(
-      isSessionConversationFocused(session.id, tab.id, [tab], true),
-    ).toBe(true);
-    expect(
-      isSessionConversationFocused(session.id, tab.id, [tab], false),
-    ).toBe(false);
-    expect(
-      isSessionConversationFocused("other", tab.id, [tab], true),
-    ).toBe(false);
+    expect(isSessionConversationFocused(session.id, tab.id, [tab], true)).toBe(
+      true,
+    );
+    expect(isSessionConversationFocused(session.id, tab.id, [tab], false)).toBe(
+      false,
+    );
+    expect(isSessionConversationFocused("other", tab.id, [tab], true)).toBe(
+      false,
+    );
   });
 });
 

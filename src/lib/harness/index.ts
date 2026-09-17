@@ -1,5 +1,12 @@
 export { startHarnessBridge, killAllChildren } from "./child";
 export {
+  harnessLoginArgs,
+  isHarnessAuthError,
+  latestTurnNeedsHarnessLogin,
+  loginHarness,
+  supportsHarnessLogin,
+} from "./auth";
+export {
   applyHarnessEvent,
   appendUser,
   appendSteerUser,

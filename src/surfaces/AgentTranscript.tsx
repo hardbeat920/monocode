@@ -29,6 +29,7 @@ import { FilePreview } from "../chrome/FilePreview";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { ToolDiffPreview } from "../chrome/ToolDiffPreview";
 import { PlanPreview } from "../chrome/PlanPreview";
+import { OrchestrationPreview } from "../chrome/OrchestrationPreview";
 import { TaskListPreview } from "../chrome/TaskListPreview";
 import {
   HandoffButton,
@@ -41,12 +42,17 @@ import { Popover } from "../chrome/Popover";
 import { ProjectMascot } from "../chrome/ProjectMascot";
 import type { ApprovalDecision } from "../lib/harness";
 import {
+  isHarnessAuthError,
+  supportsHarnessLogin,
+} from "../lib/harness/authSupport";
+import {
   isEditTool,
   isReadTool,
   isSearchTool,
   stubFilePreview,
 } from "../lib/harness/preview";
 import { copyText } from "../lib/clipboard";
+import { visibleUserPrompt } from "../lib/orchestration";
 import { playCue } from "../lib/sounds";
 import { legacyTaskListFromText } from "../lib/taskList";
 import { displayPath, resolveWorkspacePath } from "../lib/paths";
@@ -59,6 +65,8 @@ import {
   type AgentStep,
   type Block,
   type HarnessId,
+  type InterjectionMeta,
+  type ModelTarget,
   type PlanBuildTarget,
   type ToolPreview,
   type TurnMetrics,
@@ -71,6 +79,8 @@ import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../lib/appearance";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
+import { parseUserMessageLink } from "../lib/linkPreview";
+import { UserLinkPreview } from "./UserLinkPreview";
 import {
   activityPhaseTitle,
   activityStillRunning,
@@ -83,6 +93,7 @@ import {
   groupTurns,
   initialThinkingIndex,
   isIncompleteTool,
+  isSubagentBlock,
   isThinkingBlock,
   lastActivityIndex,
   isProseBlock,
@@ -114,6 +125,7 @@ type Props = {
   cwd?: string;
   harness?: HarnessId;
   model?: string;
+  modelSettings?: Record<string, string>;
   pendingQuestion?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
@@ -123,8 +135,8 @@ type Props = {
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
-  onSecondOpinion?: (harness: HarnessId, turn: Block[], model: string) => void;
-  onHandoff?: (harness: HarnessId, turn: Block[], model: string) => void;
+  onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
+  onHandoff?: (target: ModelTarget, turn: Block[]) => void;
   onJumpToBottomChange?: (show: boolean) => void;
   onJumpToBottomReady?: (jump: () => void) => void;
   /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
@@ -133,14 +145,17 @@ type Props = {
   latestTurnAccessory?: ReactNode;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
+  /** A worker's transcript: show the orchestrator's turns instead of hiding them. */
+  managed?: boolean;
 };
 
 function AgentTranscriptComponent({
-  blocks,
+  blocks: sourceBlocks,
   busy,
   cwd,
   harness,
   model,
+  modelSettings,
   pendingQuestion = false,
   onApproval,
   onAddToChat,
@@ -157,7 +172,22 @@ function AgentTranscriptComponent({
   onRevealReady,
   latestTurnAccessory,
   visible = true,
+  managed = false,
 }: Props) {
+  const blocks = useMemo(() => {
+    if (!harness || !supportsHarnessLogin(harness)) return sourceBlocks;
+    const visibleBlocks = sourceBlocks.filter(
+      (block) =>
+        !(
+          block.role === "system" &&
+          block.notice === "error" &&
+          isHarnessAuthError(block.text)
+        ),
+    );
+    return visibleBlocks.length === sourceBlocks.length
+      ? sourceBlocks
+      : visibleBlocks;
+  }, [harness, sourceBlocks]);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const scroller = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -182,7 +212,7 @@ function AgentTranscriptComponent({
   );
   const transcriptLayout = useTranscriptLayout();
   const promptAnchor = useTranscriptAnchor();
-  const lastUserId = lastUserBlockId(blocks);
+  const lastUserId = lastUserBlockId(blocks, managed);
   const seenUserId = useRef(lastUserId);
   if (lastUserId !== seenUserId.current) {
     seenUserId.current = lastUserId;
@@ -310,7 +340,7 @@ function AgentTranscriptComponent({
     return () => observer.disconnect();
   }, [scrollerEl, setShowJump, visible]);
 
-  const turns = groupTurns(blocks);
+  const turns = groupTurns(blocks, managed);
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
   const turnsRef = useRef(turns);
@@ -381,10 +411,16 @@ function AgentTranscriptComponent({
         ) : null}
         {visibleTurns.map((turn, turnIndex) => {
           const isLastTurn = firstVisibleTurn + turnIndex === turns.length - 1;
-          const userBlock = turnUserBlock(turn);
+          const userBlock = turnUserBlock(turn, managed);
           const durationMs = userBlock?.durationMs;
           const settled = !(busy && isLastTurn);
-          const items = groupTurnItems(turn);
+          const proposals = turn.filter((block) => block.orchestration);
+          // Proposals are turn results, like the changes card. Keep them out
+          // of the live work and append them after all of the lead's output.
+          const items = groupTurnItems(
+            turn.filter((block) => !block.orchestration),
+            { settled },
+          );
           // Earlier activity groups have already been followed by prose or
           // more work. Only the last one can still be the live group.
           const foldedAt = lastActivityIndex(items);
@@ -426,7 +462,13 @@ function AgentTranscriptComponent({
             <LiveFoldTitle
               startedAt={startedAt}
               paused={waitingForApproval}
-              waitingLabel={pendingQuestion ? "Waiting for answers" : undefined}
+              waitingLabel={
+                managed && waitingForApproval
+                  ? "Waiting for orchestrator"
+                  : pendingQuestion
+                    ? "Waiting for answers"
+                    : undefined
+              }
               modelName={turnModelName}
             />
           ) : durationMs != null ? (
@@ -499,6 +541,7 @@ function AgentTranscriptComponent({
                 planBusy={!!busy}
                 planHarness={harness}
                 planModel={model}
+                planModelSettings={modelSettings}
                 cwd={cwd}
               />
             );
@@ -506,12 +549,10 @@ function AgentTranscriptComponent({
           // do not collapse with it: they are lifted out and parked under the
           // work, where they stay put however often it re-folds.
           const foldEntries = fold
-            ? items
-                .slice(fold.start, fold.end + 1)
-                .map((entry, offset) => ({
-                  entry,
-                  index: fold.start + offset,
-                }))
+            ? items.slice(fold.start, fold.end + 1).map((entry, offset) => ({
+                entry,
+                index: fold.start + offset,
+              }))
             : [];
           const foldSubagents = foldEntries.filter(
             ({ entry }) => entry.type === "subagents",
@@ -559,6 +600,14 @@ function AgentTranscriptComponent({
                               offset === foldWork.length - 1
                                 ? "zen-fold-tail"
                                 : ""
+                            }${
+                              // Prose the trail holds is the agent talking
+                              // while it works; the marker lets it read as
+                              // process, not result.
+                              entry.type === "block" &&
+                              isProseBlock(entry.block)
+                                ? " zen-fold-prose"
+                                : ""
                             }`}
                           >
                             {renderItem(entry, index)}
@@ -586,6 +635,18 @@ function AgentTranscriptComponent({
                 return [foldLineRow, row];
               })}
               {foldLineAt >= items.length ? foldLineRow : null}
+              {settled &&
+                proposals
+                  .filter((block) => block.orchestration?.status !== "planning")
+                  .map((block) => (
+                    <div
+                      key={block.id}
+                      className="px-4 pt-1 pb-2"
+                      data-orchestration-result
+                    >
+                      <OrchestrationPreview block={block} busy={!!busy} />
+                    </div>
+                  ))}
               {isLastTurn && latestTurnAccessory ? latestTurnAccessory : null}
               {durationMs != null && settled ? (
                 <TurnDuration
@@ -602,13 +663,11 @@ function AgentTranscriptComponent({
                   fromHarness={turnHarness}
                   onSecondOpinion={
                     onSecondOpinion
-                      ? (target, model) => onSecondOpinion(target, turn, model)
+                      ? (target) => onSecondOpinion(target, turn)
                       : undefined
                   }
                   onHandoff={
-                    onHandoff
-                      ? (target, model) => onHandoff(target, turn, model)
-                      : undefined
+                    onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
                 />
               ) : null}
@@ -699,8 +758,8 @@ function TurnDuration({
   copyText?: string;
   onSaveNote?: (text: string) => void;
   fromHarness?: HarnessId;
-  onSecondOpinion?: (harness: HarnessId, model: string) => void;
-  onHandoff?: (harness: HarnessId, model: string) => void;
+  onSecondOpinion?: (target: ModelTarget) => void;
+  onHandoff?: (target: ModelTarget) => void;
 }) {
   const label = formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
@@ -804,7 +863,7 @@ function TurnMetricsBadge({
   return (
     <div
       ref={root}
-      className="relative shrink-0"
+      className="relative shrink-0 pl-1"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
@@ -955,6 +1014,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planBusy,
   planHarness,
   planModel,
+  planModelSettings,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -970,6 +1030,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planBusy?: boolean;
   planHarness?: HarnessId;
   planModel?: string;
+  planModelSettings?: Record<string, string>;
 }) {
   if (block.role === "user") {
     return (
@@ -1010,6 +1071,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   }
 
   if (block.role === "plan") {
+    if (block.orchestration) return null;
     const legacyTasks = legacyTaskListFromText(block.text);
     if (legacyTasks) {
       return (
@@ -1027,6 +1089,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
           plan={block.plan}
           harness={planHarness}
           model={planModel}
+          modelSettings={planModelSettings}
           onOpen={onOpenPlan ? () => onOpenPlan(block.id) : undefined}
           onBuild={
             onBuildPlan ? (target) => onBuildPlan(block.id, target) : undefined
@@ -1053,6 +1116,9 @@ const TranscriptBlock = memo(function TranscriptBlock({
   }
 
   if (block.role === "system") {
+    if (block.interjection) {
+      return <InterjectionDivider block={block} />;
+    }
     return (
       <div className="px-4 py-2 text-content/50">
         <pre className="min-w-0 whitespace-pre-wrap break-words">
@@ -1091,10 +1157,15 @@ function UserMessageBlock({
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [singleLine, setSingleLine] = useState(false);
-  const textRef = useRef<HTMLPreElement>(null);
+  const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
-  const text = card && card.kind !== "handoff" ? "" : block.text;
+  const text =
+    card && card.kind !== "handoff" ? "" : visibleUserPrompt(block.text);
+  const messageLink = text ? parseUserMessageLink(text) : null;
+  const displayText = messageLink
+    ? `${messageLink.beforeText}${messageLink.afterText}`
+    : text;
   const chat = layout === "chat";
   const textOnly =
     Boolean(text) && !block.attachments?.length && !card && !note;
@@ -1151,7 +1222,7 @@ function UserMessageBlock({
       }
     >
       <div
-        className={`min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
+        className={`user-message-bubble min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
           chat
             ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
             : "rounded-lg border border-content/10"
@@ -1178,12 +1249,25 @@ function UserMessageBlock({
             <SecondOpinionCard card={card} />
           </div>
         ) : null}
-        {text ? (
+        {messageLink ? (
+          <div
+            ref={(element) => {
+              textRef.current = element;
+            }}
+            className="user-message-with-link min-w-0 whitespace-pre-wrap break-words font-sans text-sm"
+          >
+            {messageLink.beforeText}
+            <UserLinkPreview link={messageLink.link} />
+            {messageLink.afterText}
+          </div>
+        ) : displayText ? (
           <pre
-            ref={textRef}
+            ref={(element) => {
+              textRef.current = element;
+            }}
             className={`min-w-0 whitespace-pre-wrap break-words font-sans text-sm ${expanded ? "" : "line-clamp-4"}`}
           >
-            {text}
+            {displayText}
           </pre>
         ) : null}
       </div>
@@ -1644,33 +1728,54 @@ function SubagentStack({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
-  // A run that died opens itself, so the provider's reason is not buried
-  // behind a face that looks like every other finished one. A click takes the
-  // row over from there and it stays where the reader puts it.
-  const [override, setOverride] = useState<Record<string, boolean>>({});
-  const isOpen = (block: Block) =>
-    override[block.id] ?? toolCallState(block) === "rejected";
-
   return (
     <div className="flex min-w-0 flex-col px-4">
       {blocks.map((block) => (
-        <SubagentPanel
+        <SubagentRow
           key={block.id}
           block={block}
           cwd={cwd}
           live={live}
-          open={isOpen(block)}
-          onToggle={() =>
-            setOverride((current) => ({
-              ...current,
-              [block.id]: !isOpen(block),
-            }))
-          }
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * One delegated run's row, stateful about being opened. A run that died opens
+ * itself, so the provider's reason is not buried behind a face that looks like
+ * every other finished one. A click takes the row over from there and it stays
+ * where the reader puts it. The same row serves inside a settled turn's trail,
+ * where the run sits as one step of the work it was spawned from.
+ */
+function SubagentRow({
+  block,
+  cwd,
+  live = false,
+  onOpenFile,
+  onOpenDiff,
+}: {
+  block: Block;
+  cwd?: string;
+  live?: boolean;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+}) {
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? toolCallState(block) === "rejected";
+  return (
+    <SubagentPanel
+      block={block}
+      cwd={cwd}
+      live={live}
+      open={open}
+      onToggle={() => setOverride(!open)}
+      onOpenFile={onOpenFile}
+      onOpenDiff={onOpenDiff}
+    />
   );
 }
 
@@ -1950,6 +2055,12 @@ function ActivityRow({
       />
     );
   }
+  if (block.interjection) {
+    return <ActivityInterjectionRow block={block} />;
+  }
+  if (block.role === "system") {
+    return <ActivityStatusRow block={block} />;
+  }
   if (isProseBlock(block)) {
     return (
       <ActivityNoteRow
@@ -1958,6 +2069,20 @@ function ActivityRow({
         bare
         expandable
         onOpenFile={onOpenFile}
+      />
+    );
+  }
+  // Only a settled turn routes a delegated run here; live turns pin the row
+  // outside the trail. Either way it is the same row, so it still opens onto
+  // the agent's own work.
+  if (isSubagentBlock(block)) {
+    return (
+      <SubagentRow
+        block={block}
+        cwd={cwd}
+        live={live}
+        onOpenFile={onOpenFile}
+        onOpenDiff={onOpenDiff}
       />
     );
   }
@@ -1971,6 +2096,82 @@ function ActivityRow({
       onOpenFile={onOpenFile}
       onOpenDiff={onOpenDiff}
     />
+  );
+}
+
+/** A status row folded into the trail: one muted line, nothing to open. */
+function ActivityStatusRow({ block }: { block: Block }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 py-1">
+      <span
+        title={block.text}
+        className="min-w-0 flex-1 truncate font-sans text-sm text-content/50"
+      >
+        {block.text.trim()}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * An interjection inside the work trail: one compact line naming where it came
+ * from and what it said. It opens on a click, so folding the work never costs
+ * you a note you wanted to read.
+ */
+function ActivityInterjectionRow({ block }: { block: Block }) {
+  const [open, setOpen] = useState(false);
+  const meta = block.interjection;
+  if (!meta) return null;
+  const chrome = interjectionChrome(meta);
+  const summary = proseSummary(block.text);
+  const label = (
+    <span className="min-w-0 flex-1 truncate font-sans text-sm">
+      <span className="text-content/55">{chrome.label}</span>
+      {chrome.severityText ? (
+        <span className={`text-[11px] ${chrome.severityClass}`}>
+          {" "}
+          {chrome.severityText}
+        </span>
+      ) : null}
+      {summary ? (
+        <span className="text-content/50 transition-colors duration-200 group-hover:text-content/75">
+          {" · "}
+          {summary}
+        </span>
+      ) : null}
+    </span>
+  );
+
+  if (!block.text.trim()) {
+    return (
+      <div
+        aria-label={`${chrome.label} note`}
+        className="flex min-w-0 items-center gap-1.5 py-1"
+      >
+        {label}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={
+          open ? `Hide the ${chrome.label} note` : `${chrome.label}: ${summary}`
+        }
+        onClick={() => setOpen((value) => !value)}
+        className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
+      >
+        {label}
+      </button>
+      {open ? (
+        <div className="min-w-0 pb-2">
+          <pre className={INTERJECTION_BODY}>{block.text}</pre>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -2599,20 +2800,20 @@ function ApprovalControls({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const approval = block.approval;
-  if (!approval || approval.decided) return null;
+  if (!approval || approval.decided || !onApproval) return null;
   return (
     <div className="mt-1.5 flex gap-2">
       <button
         type="button"
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
-        onClick={() => onApproval?.(approval.requestId, "allow")}
+        onClick={() => onApproval(approval.requestId, "allow")}
       >
         Allow
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
-        onClick={() => onApproval?.(approval.requestId, "deny")}
+        onClick={() => onApproval(approval.requestId, "deny")}
       >
         Deny
       </button>
@@ -2657,13 +2858,116 @@ function HandoffDivider({ block }: { block: Block }) {
   );
 }
 
-function lastUserBlockId(blocks: Block[]): string | undefined {
-  return turnUserBlock(blocks)?.id;
+/** The label and severity chrome an interjection wears, wherever it sits. */
+function interjectionChrome(meta: InterjectionMeta): {
+  label: string;
+  severityText?: string;
+  severityClass: string;
+} {
+  const label =
+    meta.customType === "advisor"
+      ? "Advisor"
+      : meta.customType === "custom"
+        ? "Notice"
+        : meta.customType;
+  const severityText =
+    meta.severity === "blocker"
+      ? "Blocker"
+      : meta.severity === "concern"
+        ? "Concern"
+        : meta.severity === "nit"
+          ? "Nit"
+          : undefined;
+  const severityClass =
+    meta.severity === "blocker"
+      ? "text-red-400"
+      : meta.severity === "concern"
+        ? "text-amber-400"
+        : "text-content/55";
+  return { label, severityText, severityClass };
 }
 
-function turnUserBlock(blocks: Block[]): Block | undefined {
+/** The advisory body under an interjection, wherever the note is surfaced. */
+const INTERJECTION_BODY =
+  "min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70";
+
+/** A mid-turn interjection, e.g. OMP advisor notes: a labeled boundary with
+ * a collapsible advisory body below it. */
+function InterjectionDivider({ block }: { block: Block }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const textRef = useRef<HTMLPreElement>(null);
+
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el || !block.text) {
+      setOverflows(false);
+      return;
+    }
+    const measure = () => {
+      if (!expanded) {
+        setOverflows(el.scrollHeight > el.clientHeight + 1);
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [block.text, expanded]);
+
+  const meta = block.interjection;
+  if (!meta) return null;
+  const { label, severityText, severityClass } = interjectionChrome(meta);
+  return (
+    <div className="px-4 py-4">
+      <div className="flex items-center gap-3">
+        <div className="h-px min-w-4 flex-1 bg-content/12" />
+        <div
+          role="separator"
+          aria-label={`Interjection: ${label}`}
+          className="flex items-center gap-2 px-1.5 font-sans text-[12px] text-content/55"
+        >
+          <span>{label}</span>
+          {severityText ? (
+            <span className={`text-[11px] ${severityClass}`}>
+              {severityText}
+            </span>
+          ) : null}
+        </div>
+        <div className="h-px min-w-4 flex-1 bg-content/12" />
+      </div>
+      {block.text ? (
+        <div className="mt-2 px-2">
+          <pre
+            ref={textRef}
+            className={`${INTERJECTION_BODY} ${expanded ? "" : "line-clamp-2"}`}
+          >
+            {block.text}
+          </pre>
+          {overflows ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((value) => !value)}
+              className="mt-1 py-1 font-sans text-xs text-content/55 hover:text-content"
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function lastUserBlockId(blocks: Block[], managed = false): string | undefined {
+  return turnUserBlock(blocks, managed)?.id;
+}
+
+function turnUserBlock(blocks: Block[], managed = false): Block | undefined {
   for (let i = blocks.length - 1; i >= 0; i--) {
-    if (blocks[i].role === "user") return blocks[i];
+    const block = blocks[i];
+    if (block.role === "user" && (managed || !block.internal)) return block;
   }
   return undefined;
 }

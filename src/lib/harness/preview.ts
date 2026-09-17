@@ -4,6 +4,7 @@ import {
   formatShellIntent,
   inferShellIntent,
   rewriteReadableTitle,
+  unwrapShellCommand,
 } from "./shellIntent";
 
 export const MAX_PREVIEW_LINES = 6;
@@ -373,7 +374,7 @@ export function composeToolTitle(opts: {
   const path = opts.path?.trim();
   const query = opts.query?.trim();
   const previewKind = opts.previewKind;
-  const command = firstLine(opts.command);
+  const command = opts.command?.trim();
   const skill = formatSkillName(opts.skill);
 
   if (isAgentTool(kind, title)) {
@@ -404,7 +405,7 @@ export function composeToolTitle(opts: {
   if (previewKind === "shell" || isExecuteTool(kind, title)) {
     const rewritten = rewriteReadableTitle(title, path, query);
     if (rewritten) return rewritten;
-    const script = command || stripExecutePrefix(title);
+    const script = unwrapShellCommand(command || stripExecutePrefix(title));
     const inferred = inferShellIntent(script);
     if (inferred) {
       const inferredPath =
@@ -415,8 +416,8 @@ export function composeToolTitle(opts: {
       const readable = formatShellIntent(inferred, inferredPath, query);
       if (readable) return readable;
     }
-    if (command) return command;
-    const rest = stripExecutePrefix(title);
+    if (command) return firstLine(script);
+    const rest = firstLine(script);
     if (rest && !isWeakToolTitle(rest)) return rest;
     if (title && !isWeakToolTitle(title)) return title;
     return "Shell";

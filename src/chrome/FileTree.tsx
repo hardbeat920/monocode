@@ -621,7 +621,7 @@ export const FileTree = memo(function FileTree({
         onContextMenu={onBackgroundMenu}
       >
         <div
-          className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-content/10 px-2"
+          className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
           onContextMenu={(e) => e.stopPropagation()}
         >
           <HeaderIcon label="New File" onClick={() => startCreate(false)}>
@@ -750,7 +750,7 @@ function HeaderIcon({
       onClick={onClick}
       className={`flex h-6 min-w-0 flex-1 items-center justify-center self-center rounded-md ${
         active
-          ? "bg-content/10 text-content"
+          ? "bg-selection text-content"
           : "text-content/50 hover:bg-content/5 hover:text-content"
       }`}
     >
@@ -797,7 +797,7 @@ function FileTreeDiffButton({
       onClick={onClick}
       className={`relative flex h-6 min-w-0 flex-1 items-center justify-center self-center rounded-md ${
         active
-          ? "bg-content/10 text-content"
+          ? "bg-selection text-content"
           : "text-content/50 hover:bg-content/5 hover:text-content"
       }`}
     >
@@ -955,7 +955,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
           style={{ paddingLeft: 8 + depth * 12 }}
           className={`flex h-7.5 w-full cursor-default items-center gap-1 pr-2 text-left text-[14px] leading-none ${
             selected
-              ? "bg-content/10 text-content"
+              ? "bg-selection text-content"
               : "text-content hover:bg-content/5"
           } ${cutPath === entry.path ? "opacity-50" : ""}`}
         >

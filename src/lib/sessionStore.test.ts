@@ -92,6 +92,35 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("preserves an internal worker's lead, hidden turns, and token metrics", () => {
+    const session = {
+      ...newSession("claude", "/repo"),
+      orchestrationLeadId: "lead",
+    };
+    session.blocks = [
+      {
+        id: "u",
+        role: "user",
+        text: "Bounded assignment",
+        internal: true,
+        turnMetrics: { inputTokens: 100, outputTokens: 20 },
+      },
+    ];
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[0]).toMatchObject({
+      orchestrationLeadId: "lead",
+      internal: true,
+      turnMetrics: { inputTokens: 100, outputTokens: 20 },
+    });
+    expect(session.blocks[0].orchestrationLeadId).toBeUndefined();
+    expect(
+      sanitizeSessionForPersist({
+        ...session,
+        orchestrationLeadId: undefined,
+        blocks: saved.blocks,
+      }).blocks[0],
+    ).toEqual(saved.blocks[0]);
+  });
   it("persists model provenance recorded on a user turn", () => {
     const session = newSession("claude", "/tmp/project", "claude:opus-5");
     session.blocks = [
@@ -192,6 +221,89 @@ describe("sanitizeSessionForPersist", () => {
       role: "handoff",
       handoff: { from: "cursor", to: "claude", status: "ready", pending: true },
     });
+  });
+
+  it("keeps valid interjection chrome only on system blocks", () => {
+    const session = newSession("pi", "/tmp/project");
+    session.blocks = [
+      {
+        id: "i1",
+        role: "system",
+        text: "Review the fallback.",
+        interjection: { customType: " advisor ", severity: "blocker" },
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        text: "Not chrome",
+        interjection: { customType: "advisor", severity: "nit" },
+      },
+    ];
+
+    const persisted = sanitizeSessionForPersist(session);
+    expect(persisted.blocks[0]).toMatchObject({
+      role: "system",
+      text: "Review the fallback.",
+      interjection: { customType: "advisor", severity: "blocker" },
+    });
+    expect(persisted.blocks[1]?.interjection).toBeUndefined();
+  });
+
+  it("drops malformed interjection metadata without dropping its system row", () => {
+    const session = newSession("pi", "/tmp/project");
+    session.blocks = [
+      {
+        id: "i1",
+        role: "system",
+        text: "Still visible",
+        interjection: {
+          customType: " ",
+          severity: "unknown",
+        } as unknown as Block["interjection"],
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]).toEqual({
+      id: "i1",
+      role: "system",
+      text: "Still visible",
+    });
+  });
+
+  it("keeps a notice flag on system blocks and drops anything else", () => {
+    const session = newSession("pi", "/tmp/project");
+    session.blocks = [
+      {
+        id: "e1",
+        role: "system",
+        text: "Provider connection lost",
+        notice: "error",
+      },
+      {
+        id: "i1",
+        role: "system",
+        text: "Turn interrupted when MonoCode quit.",
+        notice: "interrupt",
+      },
+      {
+        id: "b1",
+        role: "system",
+        text: "Mystery",
+        notice: "mystery" as Block["notice"],
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        text: "hi",
+        notice: "error" as Block["notice"],
+      },
+    ];
+
+    const persisted = sanitizeSessionForPersist(session).blocks;
+    expect(persisted[0]?.notice).toBe("error");
+    expect(persisted[1]?.notice).toBe("interrupt");
+    expect(persisted[2]?.notice).toBeUndefined();
+    expect(persisted[3]?.notice).toBeUndefined();
   });
 
   it("keeps a second-opinion card on the user turn", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   closeLeaf,
+  closeSurfacePanes,
   editorTabKey,
   isChangesTab,
   isCommitTab,
@@ -22,6 +23,7 @@ import {
   newTerminalFile,
   newTerminalWorkspaceTab,
   nextTerminalTitle,
+  resetTabToSession,
   isolateTerminalPanes,
   movePane,
   openChangesTab,
@@ -329,7 +331,84 @@ describe("closeLeaf", () => {
   });
 });
 
+describe("closeSurfacePanes", () => {
+  it("keeps the chat and clears every editor pane", () => {
+    const tab = openEditorTab(
+      openEditorTab(newTab("session-a"), newFileTab("/repo/a.ts", "/repo")),
+      newFileTab("/repo/b.ts", "/repo"),
+      { split: "right" },
+    );
+    const next = closeSurfacePanes(tab, "editor");
+    expect(next).not.toBeNull();
+    expect(layoutLeaves(next!.layout).map((pane) => pane.id)).toEqual([
+      "session-a",
+    ]);
+    expect(next!.focusedId).toBe("session-a");
+    expect(next!.editorPanes).toEqual([]);
+  });
+
+  it("keeps a terminal pane when the editor panes go", () => {
+    const tab = openEditorTab(
+      openTerminalTab(newTab("session-a"), newTerminalFile("/repo")),
+      newFileTab("/repo/a.ts", "/repo"),
+    );
+    const next = closeSurfacePanes(closeLeaf(tab, "session-a")!, "editor");
+    expect(next).not.toBeNull();
+    expect(layoutLeaves(next!.layout).map((pane) => pane.id)).toEqual([
+      next!.terminalPanes[0]?.id,
+    ]);
+    expect(next!.editorPanes).toEqual([]);
+  });
+
+  it("returns null when only editor panes remain", () => {
+    const tab = closeLeaf(
+      openEditorTab(newTab("session-a"), newFileTab("/repo/a.ts", "/repo")),
+      "session-a",
+    )!;
+    expect(closeSurfacePanes(tab, "editor")).toBeNull();
+  });
+
+  it("leaves a tab without panes of that kind unchanged", () => {
+    const tab = newTab("session-a");
+    expect(closeSurfacePanes(tab, "editor")).toEqual(tab);
+  });
+});
+
+describe("resetTabToSession", () => {
+  it("keeps id and group, replaces contents with one session leaf", () => {
+    const tab = {
+      ...openEditorTab(newTab("session-a"), newFileTab("/repo/a.ts", "/repo")),
+      groupId: "group-1",
+      diffOpen: true,
+      diffFocused: true,
+    };
+    const next = resetTabToSession(tab, "session-b");
+    expect(next.id).toBe(tab.id);
+    expect(next.groupId).toBe("group-1");
+    expect(next.layout).toEqual(leaf("session-b"));
+    expect(next.focusedId).toBe("session-b");
+    expect(next.editorPanes).toEqual([]);
+    expect(next.terminalPanes).toEqual([]);
+    expect(next.diffOpen).toBe(false);
+    expect(next.diffFocused).toBe(false);
+  });
+});
+
 describe("openEditorTab", () => {
+  it("can put the first file before a focused session", () => {
+    const file = newFileTab("/repo/App.tsx", "/repo");
+    const next = openEditorTab(newTab("session-a"), file, { split: "left" });
+    const leaves = layoutLeaves(next.layout);
+
+    expect(leaves.map((pane) => pane.id)).toEqual([
+      next.editorPanes[0]?.id,
+      "session-a",
+    ]);
+    expect(leaves[0]?.rect).toEqual({ x: 0, y: 0, w: 0.5, h: 1 });
+    expect(leaves[1]?.rect).toEqual({ x: 0.5, y: 0, w: 0.5, h: 1 });
+    expect(next.focusedId).toBe(next.editorPanes[0]?.id);
+  });
+
   it("does not open files into a terminal pane", () => {
     const terminal = openTerminalTab(
       newTab("session-a"),

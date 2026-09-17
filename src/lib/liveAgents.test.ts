@@ -28,6 +28,11 @@ function edit(id: string, path = "src/App.tsx", status = "in_progress"): Block {
 }
 
 describe("liveAgentsFromSessions", () => {
+  it("keeps internal workers in their lead's agent panel", () => {
+    const lead = chat("/repo", { id: "lead", busy: true });
+    const worker = chat("/repo", { id: "worker", busy: true, orchestrationLeadId: "lead" });
+    expect(liveAgentsFromSessions([lead, worker]).map((agent) => agent.id)).toEqual(["lead"]);
+  });
   it("skips idle sessions", () => {
     expect(liveAgentsFromSessions([chat("/tmp/a")])).toEqual([]);
   });

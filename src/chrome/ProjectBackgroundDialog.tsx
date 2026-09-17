@@ -177,7 +177,7 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
                 onClick={() => updateScope(option.value)}
                 className={`rounded-[5px] px-1.5 py-1 ${
                   scope === option.value
-                    ? "bg-content/10 text-content"
+                    ? "bg-selection text-content"
                     : "text-content/50 hover:text-content"
                 }`}
               >
@@ -248,7 +248,7 @@ function ProjectBackgroundRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-t border-content/8 pt-4">
+    <div className="flex items-center justify-between gap-4 border-t border-stroke pt-4">
       <span className="text-[13px] font-medium text-content">{label}</span>
       {children}
     </div>

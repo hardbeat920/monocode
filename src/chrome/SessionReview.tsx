@@ -177,7 +177,7 @@ export function SessionReview({
           </div>
         </div>
         <ul
-          className={`scrollbar-none border-t border-content/10 py-1 ${
+          className={`scrollbar-none border-t border-stroke py-1 ${
             expanded ? "max-h-64 overflow-y-auto" : ""
           }`}
         >
@@ -197,7 +197,7 @@ export function SessionReview({
             type="button"
             aria-expanded={expanded}
             onClick={() => setExpanded((open) => !open)}
-            className="flex h-8 w-full items-center gap-1.5 border-t border-content/10 px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
+            className="flex h-8 w-full items-center gap-1.5 border-t border-stroke px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
           >
             {expanded ? (
               <ChevronDown className="size-3.5" strokeWidth={1.75} />

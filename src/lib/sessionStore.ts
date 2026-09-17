@@ -3,6 +3,8 @@ import { recoverCursorSubagents } from "./harness/cursorSubagents";
 import { persistableAttachment } from "./attachments";
 import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
+import { ompActiveAssistantTexts, ompSessionInterjections } from "./fs";
+import { backfillOmpInterjections, ompStatusSplitTexts } from "./ompInterjections";
 import type {
   AgentRunMeta,
   AgentStep,
@@ -10,6 +12,7 @@ import type {
   HarnessId,
   HandoffMeta,
   HandoffStatus,
+  InterjectionMeta,
   LinkedWorkItem,
   RuntimeMode,
   SecondOpinionMeta,
@@ -20,8 +23,13 @@ import type {
   TurnMetrics,
 } from "./session";
 import { HARNESSES, RUNTIME_MODES } from "./session";
+import { restoreOrchestrationProposal } from "./orchestrationPlan";
+
+import type { OrchestrationSummary } from "./orchestrationSummary";
 
 export type SessionSummary = {
+  orchestrationLeadId?: string;
+  orchestration?: OrchestrationSummary;
   id: string;
   cwd: string;
   harness: HarnessId;
@@ -41,6 +49,7 @@ export type SessionSummary = {
 };
 
 type SessionRecord = {
+  orchestrationLeadId?: string;
   id: string;
   cwd: string;
   harness: string;
@@ -145,10 +154,17 @@ export function sanitizeLinkedWorkItem(
 export function sanitizeSessionForPersist(
   session: Session,
 ): SessionUpsertPayload {
+  const firstUser = session.blocks.findIndex((block) => block.role === "user");
   return {
     ...persistableMeta(session),
     blocks: session.blocks
-      .map(sanitizeBlock)
+      .map((block, index) =>
+        sanitizeBlock(
+          index === firstUser && session.orchestrationLeadId
+            ? { ...block, orchestrationLeadId: session.orchestrationLeadId }
+            : block,
+        ),
+      )
       .filter((block): block is Block => block != null),
   };
 }
@@ -190,7 +206,17 @@ export async function upsertSession(
   const payload = sanitizeSessionForPersist(session);
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
-    return invoke<SessionSummary>("session_upsert", { session: payload });
+    return invoke<SessionSummary>("session_upsert", {
+      session: {
+        ...payload,
+        blocks: payload.blocks.map((block) =>
+          block.orchestrationLeadId &&
+          deletedSessionIds.has(block.orchestrationLeadId)
+            ? { ...block, orchestrationLeadId: undefined }
+            : block,
+        ),
+      },
+    });
   });
   return summary ? normalizeSummary(summary) : null;
 }
@@ -214,7 +240,7 @@ function blockToken(block: Block): number {
 }
 
 export function persistFingerprint(session: Session): string {
-  return `${JSON.stringify(persistableMeta(session))}|${session.blocks
+  return `${JSON.stringify(persistableMeta(session))}|${session.orchestrationLeadId ?? ""}|${session.blocks
     .map(blockToken)
     .join(",")}`;
 }
@@ -278,12 +304,37 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     sessionId,
   });
   if (!record) return null;
-  return recoverCursorSubagents(recordToSession(record));
+  const session = recordToSession(record);
+  if (session.harness !== "omp" || !session.providerSessionId) {
+    return recoverCursorSubagents(session);
+  }
+  try {
+    const anchors = await ompSessionInterjections(session.providerSessionId);
+    // Missing source order must not prevent the existing anchored repair.
+    const source = ompStatusSplitTexts(session.blocks).length
+      ? await ompActiveAssistantTexts(session.providerSessionId).catch(() => [])
+      : [];
+    const blocks = backfillOmpInterjections(session.blocks, anchors, source);
+    if (blocks !== session.blocks) {
+      session.blocks = blocks;
+      // Persist before exposing the restored session to a new live turn.
+      // Re-reading the source on later loads allows partial repairs to retry;
+      // deterministic IDs ensure already repaired transcripts are not written.
+      await upsertSession(session);
+    }
+  } catch {
+    // Source logs may be absent/unreadable. Even a failed write must not stop
+    // restore; the recovered in-memory boundaries can still be displayed.
+  }
+  return session;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
   deletedSessionIds.add(sessionId);
   try {
+    // A lead's workers may still have writes in flight. Finish those before
+    // the deletion transaction strips their ownership metadata.
+    await Promise.all([...sessionWriteQueues.values()]);
     await enqueueSessionWrite(sessionId, () =>
       invoke<void>("session_delete", { sessionId }),
     );
@@ -384,6 +435,15 @@ function sanitizeBlock(block: Block): Block | null {
   if (block.durationMs != null) next.durationMs = block.durationMs;
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
+  if (
+    block.role === "user" &&
+    typeof block.orchestrationLeadId === "string" &&
+    isPersistableId(block.orchestrationLeadId)
+  )
+    next.orchestrationLeadId = block.orchestrationLeadId;
+  // Without this the transcript would show the app's orchestration turns as
+  // the user's own after a reload.
+  if (block.role === "user" && block.internal) next.internal = true;
   const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);
   if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;
@@ -402,6 +462,8 @@ function sanitizeBlock(block: Block): Block | null {
   if (taskList) next.taskList = taskList;
   else if (block.role === "tasks") return null;
   const plan = sanitizePlan(block.plan, block.text);
+  if (block.orchestration)
+    next.orchestration = restoreOrchestrationProposal(block.orchestration);
   if (plan) next.plan = plan;
   else if (block.role === "plan") {
     next.plan = { status: "ready", originalText: block.text };
@@ -413,6 +475,15 @@ function sanitizeBlock(block: Block): Block | null {
   if (secondOpinion) next.secondOpinion = secondOpinion;
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  // Interjection chrome survives restarts only on system blocks; a malformed
+  // payload keeps the ordinary system row rather than losing its body.
+  if (block.role === "system") {
+    const interjection = sanitizeInterjection(block.interjection);
+    if (interjection) next.interjection = interjection;
+    if (block.notice === "error" || block.notice === "interrupt") {
+      next.notice = block.notice;
+    }
+  }
   return next;
 }
 
@@ -466,6 +537,25 @@ function sanitizeTurnModel(value: unknown): TurnModel | undefined {
     return undefined;
   }
   return { harness: harness as HarnessId, id, name };
+}
+
+function sanitizeInterjection(
+  value: Block["interjection"],
+): InterjectionMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const customType =
+    typeof record.customType === "string" ? record.customType.trim() : "";
+  if (!customType) return undefined;
+  const severity = record.severity;
+  return {
+    customType,
+    ...(severity === "nit" || severity === "concern" || severity === "blocker"
+      ? { severity }
+      : {}),
+  };
 }
 
 function sanitizePlan(value: unknown, text: string): PlanBlockMeta | null {
@@ -623,6 +713,10 @@ function recordToSession(record: SessionRecord): Session {
     title: record.title,
     blocks,
     busy: false,
+    orchestrationLeadId: record.orchestrationLeadId ?? blocks.find(
+      (block) =>
+        block.orchestrationLeadId && block.orchestrationLeadId !== record.id,
+    )?.orchestrationLeadId,
     ...(record.providerSessionId
       ? { providerSessionId: record.providerSessionId }
       : {}),

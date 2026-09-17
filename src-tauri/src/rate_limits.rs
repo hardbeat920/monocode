@@ -1,18 +1,15 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::dirs_home;
 
 const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const USER_AGENT: &str = "claude-code/2.1.0";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
-const TOKEN_REFRESH_BUFFER_MS: i64 = 5 * 60 * 1000;
 
 #[cfg(target_os = "macos")]
 const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -30,22 +27,9 @@ pub struct ClaudeUsageFetch {
     pub error: Option<String>,
 }
 
-enum ClaudeCredStore {
-    #[cfg(target_os = "macos")]
-    Keychain {
-        account: String,
-    },
-    File {
-        path: PathBuf,
-    },
-}
-
 struct ClaudeCredentials {
     access_token: String,
-    refresh_token: String,
     expires_at_ms: Option<i64>,
-    blob: Value,
-    store: ClaudeCredStore,
 }
 
 fn usage_result(
@@ -72,7 +56,7 @@ pub async fn fetch_claude_usage() -> Result<ClaudeUsageFetch, String> {
 }
 
 fn fetch_claude_usage_sync() -> Result<ClaudeUsageFetch, String> {
-    let Some(mut creds) = read_claude_credentials() else {
+    let Some(creds) = read_claude_credentials() else {
         return Ok(usage_result(
             "unavailable",
             None,
@@ -81,17 +65,14 @@ fn fetch_claude_usage_sync() -> Result<ClaudeUsageFetch, String> {
         ));
     };
 
-    if token_needs_refresh(creds.expires_at_ms, now_ms()) {
-        refresh_claude_credentials(&mut creds);
+    // Claude Code owns this credential and rotates its refresh token. The
+    // usage footer must remain read-only: independently refreshing here can
+    // race a live CLI (or another MonoCode window) and leave one process with
+    // a spent refresh token, which forces the user through sign-in again.
+    if token_expired(creds.expires_at_ms, now_ms()) {
+        return Ok(usage_error(401));
     }
 
-    let first = fetch_usage_with_token(&creds.access_token);
-    if first.http_status != Some(401) {
-        return Ok(first);
-    }
-    if !refresh_claude_credentials(&mut creds) {
-        return Ok(first);
-    }
     Ok(fetch_usage_with_token(&creds.access_token))
 }
 
@@ -138,68 +119,6 @@ fn usage_error(status: u16) -> ClaudeUsageFetch {
     usage_result("error", Some(status), None, Some(message))
 }
 
-fn refresh_claude_credentials(creds: &mut ClaudeCredentials) -> bool {
-    if creds.refresh_token.is_empty() {
-        return false;
-    }
-    let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
-    let body = json!({
-        "grant_type": "refresh_token",
-        "refresh_token": creds.refresh_token,
-        "client_id": OAUTH_CLIENT_ID,
-    });
-    let Ok(request_body) = serde_json::to_string(&body) else {
-        return false;
-    };
-    let result = agent
-        .post(OAUTH_TOKEN_URL)
-        .set("Content-Type", "application/json")
-        .set("User-Agent", USER_AGENT)
-        .send_string(&request_body);
-    let response = match result {
-        Ok(response) if (200..300).contains(&response.status()) => response,
-        _ => return false,
-    };
-    let Ok(text) = response.into_string() else {
-        return false;
-    };
-    let Ok(payload) = serde_json::from_str::<Value>(&text) else {
-        return false;
-    };
-    let Some(access) = apply_refresh_response(&mut creds.blob, &payload, now_ms()) else {
-        return false;
-    };
-    creds.access_token = access;
-    if let Some(refresh) = string_field(&payload, "refresh_token") {
-        creds.refresh_token = refresh;
-    }
-    creds.expires_at_ms = oauth_expires_at_ms(&creds.blob);
-    persist_claude_credentials(creds)
-}
-
-fn persist_claude_credentials(creds: &ClaudeCredentials) -> bool {
-    let Ok(raw) = serde_json::to_string(&creds.blob) else {
-        return false;
-    };
-    match &creds.store {
-        #[cfg(target_os = "macos")]
-        ClaudeCredStore::Keychain { account } => write_macos_keychain_blob(account, &raw),
-        ClaudeCredStore::File { path } => write_credentials_file(path, &raw),
-    }
-}
-
-fn write_credentials_file(path: &Path, raw: &str) -> bool {
-    if std::fs::write(path, raw).is_err() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-    true
-}
-
 fn read_claude_credentials() -> Option<ClaudeCredentials> {
     #[cfg(target_os = "macos")]
     {
@@ -213,7 +132,7 @@ fn read_claude_credentials() -> Option<ClaudeCredentials> {
 fn read_credentials_file() -> Option<ClaudeCredentials> {
     let path = claude_credentials_path()?;
     let raw = std::fs::read_to_string(&path).ok()?;
-    credentials_from_blob(&raw, ClaudeCredStore::File { path })
+    credentials_from_blob(&raw)
 }
 
 fn claude_credentials_path() -> Option<PathBuf> {
@@ -223,15 +142,12 @@ fn claude_credentials_path() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".claude/.credentials.json"))
 }
 
-fn credentials_from_blob(raw: &str, store: ClaudeCredStore) -> Option<ClaudeCredentials> {
+fn credentials_from_blob(raw: &str) -> Option<ClaudeCredentials> {
     let blob: Value = serde_json::from_str(raw.trim()).ok()?;
     let access_token = extract_access_token(raw)?;
     Some(ClaudeCredentials {
         access_token,
-        refresh_token: extract_refresh_token(&blob).unwrap_or_default(),
         expires_at_ms: oauth_expires_at_ms(&blob),
-        blob,
-        store,
     })
 }
 
@@ -241,20 +157,6 @@ pub(crate) fn extract_access_token(raw: &str) -> Option<String> {
         .get("claudeAiOauth")
         .and_then(|oauth| oauth.get("accessToken"))
         .or_else(|| value.get("accessToken"))
-        .and_then(Value::as_str)?
-        .trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
-}
-
-fn extract_refresh_token(blob: &Value) -> Option<String> {
-    let token = blob
-        .get("claudeAiOauth")
-        .and_then(|oauth| oauth.get("refreshToken"))
-        .or_else(|| blob.get("refreshToken"))
         .and_then(Value::as_str)?
         .trim();
     if token.is_empty() {
@@ -284,65 +186,11 @@ fn oauth_expires_at_ms(blob: &Value) -> Option<i64> {
     }
 }
 
-fn oauth_object_mut(blob: &mut Value) -> Option<&mut Value> {
-    if blob.get("claudeAiOauth").is_some() {
-        blob.get_mut("claudeAiOauth")
-    } else {
-        Some(blob)
-    }
-}
-
-pub(crate) fn apply_refresh_response(
-    blob: &mut Value,
-    response: &Value,
-    now_ms: i64,
-) -> Option<String> {
-    let access = string_field(response, "access_token")?;
-    let oauth = oauth_object_mut(blob)?;
-    oauth["accessToken"] = json!(access);
-    if let Some(refresh) = string_field(response, "refresh_token") {
-        oauth["refreshToken"] = json!(refresh);
-    }
-    if let Some(expires_in) = int_field(response, "expires_in") {
-        oauth["expiresAt"] = json!(now_ms.saturating_add(expires_in.saturating_mul(1000)));
-    }
-    if let Some(refresh_expires_in) = int_field(response, "refresh_token_expires_in") {
-        oauth["refreshTokenExpiresAt"] =
-            json!(now_ms.saturating_add(refresh_expires_in.saturating_mul(1000)));
-    }
-    Some(access)
-}
-
-pub(crate) fn token_needs_refresh(expires_at_ms: Option<i64>, now_ms: i64) -> bool {
-    let Some(expires) = expires_at_ms else {
-        return false;
-    };
-    now_ms.saturating_add(TOKEN_REFRESH_BUFFER_MS) >= expires
-}
-
-fn string_field(value: &Value, key: &str) -> Option<String> {
-    let text = value.get(key)?.as_str()?.trim();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.to_string())
-    }
-}
-
-fn int_field(value: &Value, key: &str) -> Option<i64> {
-    match value.get(key)? {
-        Value::Number(number) => number.as_i64().or_else(|| {
-            number.as_f64().and_then(|float| {
-                if float.is_finite() {
-                    Some(float as i64)
-                } else {
-                    None
-                }
-            })
-        }),
-        Value::String(text) => text.trim().parse().ok(),
-        _ => None,
-    }
+/// An unknown expiry is treated as usable: the usage request itself will 401
+/// if it is not, which produces the same user-facing result without mutating
+/// credentials owned by another process.
+pub(crate) fn token_expired(expires_at_ms: Option<i64>, now_ms: i64) -> bool {
+    expires_at_ms.is_some_and(|expires| now_ms >= expires)
 }
 
 fn now_ms() -> i64 {
@@ -354,49 +202,31 @@ fn now_ms() -> i64 {
 
 #[cfg(target_os = "macos")]
 fn read_macos_keychain_credentials() -> Option<ClaudeCredentials> {
-    let user = keychain_user();
     let candidates = [
-        (user.clone(), {
+        {
             let mut args = keychain_find_args();
             args.push("-w".into());
             args
-        }),
-        (user.clone(), {
+        },
+        {
             let mut args = keychain_find_args();
-            args.extend(["-a".into(), user.clone(), "-w".into()]);
+            args.extend(["-a".into(), keychain_user(), "-w".into()]);
             args
-        }),
-        (KEYCHAIN_FALLBACK_USER.into(), {
+        },
+        {
             let mut args = keychain_find_args();
             args.extend(["-a".into(), KEYCHAIN_FALLBACK_USER.into(), "-w".into()]);
             args
-        }),
+        },
     ];
-    for (account, args) in candidates {
+    for args in candidates {
         if let Some(secret) = security_output(&args) {
-            if let Some(creds) =
-                credentials_from_blob(&secret, ClaudeCredStore::Keychain { account })
-            {
+            if let Some(creds) = credentials_from_blob(&secret) {
                 return Some(creds);
             }
         }
     }
     None
-}
-
-#[cfg(target_os = "macos")]
-fn write_macos_keychain_blob(account: &str, raw: &str) -> bool {
-    let args = vec![
-        "add-generic-password".into(),
-        "-U".into(),
-        "-s".into(),
-        LEGACY_KEYCHAIN_SERVICE.into(),
-        "-a".into(),
-        account.into(),
-        "-w".into(),
-        raw.into(),
-    ];
-    security_ok(&args)
 }
 
 #[cfg(target_os = "macos")]
@@ -426,31 +256,22 @@ fn keychain_user() -> String {
 
 #[cfg(target_os = "macos")]
 fn security_output(args: &[String]) -> Option<String> {
-    security_run(args, true)
+    security_run(args)
 }
 
 #[cfg(target_os = "macos")]
-fn security_ok(args: &[String]) -> bool {
-    security_run(args, false).is_some()
-}
-
-#[cfg(target_os = "macos")]
-fn security_run(args: &[String], require_stdout: bool) -> Option<String> {
+fn security_run(args: &[String]) -> Option<String> {
     use std::process::{Command, Stdio};
     let mut cmd = Command::new("security");
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    run_with_timeout(&mut cmd, KEYCHAIN_TIMEOUT, require_stdout)
+    run_with_timeout(&mut cmd, KEYCHAIN_TIMEOUT)
 }
 
 #[cfg(target_os = "macos")]
-fn run_with_timeout(
-    cmd: &mut std::process::Command,
-    timeout: Duration,
-    require_stdout: bool,
-) -> Option<String> {
+fn run_with_timeout(cmd: &mut std::process::Command, timeout: Duration) -> Option<String> {
     use std::io::Read;
     use std::time::Instant;
     let mut child = cmd.spawn().ok()?;
@@ -465,7 +286,7 @@ fn run_with_timeout(
                 let mut out = String::new();
                 stdout.read_to_string(&mut out).ok()?;
                 let trimmed = out.trim();
-                if require_stdout && trimmed.is_empty() {
+                if trimmed.is_empty() {
                     return None;
                 }
                 return Some(trimmed.to_string());
@@ -509,46 +330,11 @@ mod tests {
     }
 
     #[test]
-    fn token_needs_refresh_uses_five_minute_buffer() {
+    fn token_expired_uses_actual_expiry() {
         let now = 1_000_000;
-        assert!(!token_needs_refresh(
-            Some(now + TOKEN_REFRESH_BUFFER_MS + 1),
-            now
-        ));
-        assert!(token_needs_refresh(
-            Some(now + TOKEN_REFRESH_BUFFER_MS),
-            now
-        ));
-        assert!(token_needs_refresh(Some(now - 1), now));
-        assert!(!token_needs_refresh(None, now));
-    }
-
-    #[test]
-    fn apply_refresh_response_updates_oauth_blob() {
-        let mut blob = json!({
-            "claudeAiOauth": {
-                "accessToken": "old-access",
-                "refreshToken": "old-refresh",
-                "expiresAt": 1,
-                "subscriptionType": "pro"
-            }
-        });
-        let response = json!({
-            "access_token": "new-access",
-            "refresh_token": "new-refresh",
-            "expires_in": 28800,
-            "refresh_token_expires_in": 2592000
-        });
-        let now = 1_700_000_000_000i64;
-        assert_eq!(
-            apply_refresh_response(&mut blob, &response, now).as_deref(),
-            Some("new-access")
-        );
-        let oauth = blob.get("claudeAiOauth").unwrap();
-        assert_eq!(oauth["accessToken"], "new-access");
-        assert_eq!(oauth["refreshToken"], "new-refresh");
-        assert_eq!(oauth["expiresAt"], now + 28_800_000);
-        assert_eq!(oauth["refreshTokenExpiresAt"], now + 2_592_000_000i64);
-        assert_eq!(oauth["subscriptionType"], "pro");
+        assert!(!token_expired(Some(now + 1), now));
+        assert!(token_expired(Some(now), now));
+        assert!(token_expired(Some(now - 1), now));
+        assert!(!token_expired(None, now));
     }
 }

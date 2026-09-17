@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { recordInboxSelfActivity } from "./inboxSelfActivity";
 import { normalizeProjectPath } from "./recents";
 
 export type GitlabKind = "issue" | "pr";
@@ -222,6 +223,7 @@ export async function gitlabWorkItemComment(
   const key = itemKey(repo, kind, number);
   threadByKey.delete(key);
   threadInflight.delete(key);
+  recordInboxSelfActivity({ provider: "gitlab", kind, repo, number });
   return url;
 }
 

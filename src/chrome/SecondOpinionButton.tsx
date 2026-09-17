@@ -27,6 +27,8 @@ import {
   getModelSnapshot,
   getPickerVisibilitySnapshot,
   isPickerProviderVisible,
+  mergeModelSettings,
+  modelEffortSetting,
   modelsFor,
   preferredModelId,
   subscribeModels,
@@ -34,14 +36,19 @@ import {
 } from "../lib/models";
 import { LAYER } from "../lib/layers";
 import { secondOpinionTargets } from "../lib/secondOpinion";
-import { HARNESS_TITLE, type HarnessId } from "../lib/session";
+import {
+  HARNESS_TITLE,
+  type HarnessId,
+  type ModelTarget,
+} from "../lib/session";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "./Popover";
 
 type Props = {
   from: HarnessId;
   fromModel?: string;
-  onPick: (harness: HarnessId, model: string) => void;
+  fromSettings?: Record<string, string>;
+  onPick: (target: ModelTarget) => void;
   icon?: IconComponent;
   title?: string;
   disabledTitle?: string;
@@ -55,6 +62,7 @@ type Props = {
 const MENU_WIDTH = 240;
 const SUBMENU_WIDTH = 240;
 const SUBMENU_MAX_HEIGHT = 288;
+const EFFORT_MENU_WIDTH = 200;
 /** The flyout tucks under the parent menu's edge rather than floating free. */
 const SUBMENU_OVERLAP = -4;
 /** Neither menu is inside the other, so a click in one is not a click away. */
@@ -80,18 +88,21 @@ export function HandoffButton({
 export function BuildTargetButton({
   from,
   model,
+  settings,
   disabled,
   onPick,
 }: {
   from: HarnessId;
   model?: string;
+  settings?: Record<string, string>;
   disabled?: boolean;
-  onPick: (harness: HarnessId, model: string) => void;
+  onPick: (target: ModelTarget) => void;
 }) {
   return (
     <SecondOpinionButton
       from={from}
       fromModel={model}
+      fromSettings={settings}
       onPick={onPick}
       icon={ChevronDown}
       title="Build with another model"
@@ -108,6 +119,7 @@ export function BuildTargetButton({
 export function SecondOpinionButton({
   from,
   fromModel,
+  fromSettings,
   onPick,
   icon: Icon = MessageMultiple,
   title = "Second opinion",
@@ -136,9 +148,14 @@ export function SecondOpinionButton({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [modelActive, setModelActive] = useState(0);
-  const [inSubmenu, setInSubmenu] = useState(false);
+  const [effortActive, setEffortActive] = useState(0);
+  const [menuLevel, setMenuLevel] = useState<"providers" | "models" | "effort">(
+    "providers",
+  );
   const button = useRef<HTMLButtonElement>(null);
   const [activeRow, setActiveRow] = useState<HTMLButtonElement | null>(null);
+  const [activeModelRow, setActiveModelRow] =
+    useState<HTMLButtonElement | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
 
   const probed = hasProbedHarnessAvailability();
@@ -164,6 +181,15 @@ export function SecondOpinionButton({
         ? fromModel
         : preferredModelId(activeHarness)
       : undefined;
+  const activeModel = models[modelActive];
+  const activeEffort = activeModel
+    ? modelEffortSetting(activeModel)
+    : undefined;
+  const selectedEffortValue = activeEffort
+    ? activeModel.id === fromModel
+      ? (fromSettings?.[activeEffort.id] ?? activeEffort.value)
+      : activeEffort.value
+    : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -177,7 +203,7 @@ export function SecondOpinionButton({
 
   useEffect(() => {
     setActive(0);
-    setInSubmenu(false);
+    setMenuLevel("providers");
   }, [open, targets.join(",")]);
 
   useEffect(() => {
@@ -188,6 +214,21 @@ export function SecondOpinionButton({
     const index = models.findIndex((model) => model.id === preferred);
     setModelActive(index >= 0 ? index : 0);
   }, [activeHarness, preferred, models]);
+
+  useEffect(() => {
+    if (!activeEffort) {
+      setEffortActive(0);
+      return;
+    }
+    const index = activeEffort.options.findIndex(
+      (option) => option.value === selectedEffortValue,
+    );
+    setEffortActive(index >= 0 ? index : 0);
+  }, [activeEffort, selectedEffortValue]);
+
+  useEffect(() => {
+    activeModelRow?.scrollIntoView({ block: "nearest" });
+  }, [activeModelRow]);
 
   useEffect(() => {
     if (!open) return;
@@ -205,21 +246,31 @@ export function SecondOpinionButton({
   const disabled = disabledByCaller || noTargets;
   const label = noTargets ? disabledTitle : title;
 
-  const pick = (harness: HarnessId, model: string) => {
+  const pick = (model: (typeof models)[number], effortValue?: string) => {
+    const effort = modelEffortSetting(model);
+    const modelSettings = mergeModelSettings(model, {
+      ...(model.id === fromModel ? fromSettings : undefined),
+      ...(effort && effortValue ? { [effort.id]: effortValue } : {}),
+    });
     setOpen(false);
-    onPick(harness, model);
+    onPick({ harness: model.harness, model: model.id, modelSettings });
   };
 
-  const pickPreferred = (harness: HarnessId) => {
-    pick(
-      harness,
-      harness === from && fromModel ? fromModel : preferredModelId(harness),
-    );
+  const openModels = () => {
+    if (models.length > 0) setMenuLevel("models");
+  };
+
+  const openEffortOrPick = (model: (typeof models)[number]) => {
+    if (modelEffortSetting(model)?.options.length) {
+      setMenuLevel("effort");
+    } else {
+      pick(model);
+    }
   };
 
   const moveHarness = (dir: 1 | -1) => {
     if (targets.length === 0) return;
-    setInSubmenu(false);
+    setMenuLevel("providers");
     setActive((index) => (index + dir + targets.length) % targets.length);
   };
 
@@ -228,48 +279,73 @@ export function SecondOpinionButton({
     setModelActive((index) => (index + dir + models.length) % models.length);
   };
 
+  const moveEffort = (dir: 1 | -1) => {
+    if (!activeEffort?.options.length) return;
+    setEffortActive(
+      (index) =>
+        (index + dir + activeEffort.options.length) %
+        activeEffort.options.length,
+    );
+  };
+
   const onMenuKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (inSubmenu) moveModel(1);
+      if (menuLevel === "effort") moveEffort(1);
+      else if (menuLevel === "models") moveModel(1);
       else moveHarness(1);
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (inSubmenu) moveModel(-1);
+      if (menuLevel === "effort") moveEffort(-1);
+      else if (menuLevel === "models") moveModel(-1);
       else moveHarness(-1);
       return;
     }
     if (event.key === "ArrowRight") {
       event.preventDefault();
-      if (!inSubmenu && models.length > 0) setInSubmenu(true);
+      if (menuLevel === "providers") openModels();
+      else if (menuLevel === "models" && activeEffort?.options.length)
+        setMenuLevel("effort");
       return;
     }
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      setInSubmenu(false);
+      setMenuLevel(menuLevel === "effort" ? "models" : "providers");
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
       if (!activeHarness) return;
-      if (inSubmenu) {
-        const model = models[modelActive];
-        if (model) pick(activeHarness, model.id);
+      if (menuLevel === "effort") {
+        const option = activeEffort?.options[effortActive];
+        if (activeModel && option) pick(activeModel, option.value);
         return;
       }
-      pickPreferred(activeHarness);
+      if (menuLevel === "models") {
+        if (activeModel) openEffortOrPick(activeModel);
+        return;
+      }
+      openModels();
     }
   };
 
   const showSubmenu =
     open &&
-    inSubmenu &&
+    menuLevel !== "providers" &&
     activeRow != null &&
     activeRow.dataset.providerIndex === String(active) &&
     activeHarness != null &&
     models.length > 0;
+  const showEffort =
+    showSubmenu &&
+    menuLevel === "effort" &&
+    activeModelRow != null &&
+    activeModelRow.dataset.modelIndex === String(modelActive) &&
+    activeModel != null &&
+    activeEffort != null &&
+    activeEffort.options.length > 0;
 
   return (
     <>
@@ -342,17 +418,18 @@ export function SecondOpinionButton({
                     onMouseDown={(event) => event.preventDefault()}
                     onMouseEnter={() => {
                       setActive(index);
-                      setInSubmenu(true);
+                      setMenuLevel("models");
                     }}
                     onClick={() => {
                       if (!available && probed) return;
-                      pickPreferred(harness);
+                      setActive(index);
+                      if (modelsFor(harness).length > 0) setMenuLevel("models");
                     }}
                     className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-none ${
                       !available && probed
                         ? "text-content/30"
                         : highlighted
-                          ? "bg-content/10 text-content"
+                          ? "bg-selection text-content"
                           : "text-content hover:bg-content/5"
                     }`}
                   >
@@ -384,7 +461,12 @@ export function SecondOpinionButton({
               layer={LAYER.submenu}
               role="menu"
               aria-label={`${HARNESS_TITLE[activeHarness]} models`}
-              onMouseEnter={() => setInSubmenu(true)}
+              ignore={SELF}
+              onMouseEnter={() =>
+                setMenuLevel((level) =>
+                  level === "providers" ? "models" : level,
+                )
+              }
               data-provider-target
               className="overflow-y-auto overscroll-none p-1"
             >
@@ -393,17 +475,32 @@ export function SecondOpinionButton({
                 return (
                   <button
                     key={model.id}
+                    ref={highlighted ? setActiveModelRow : undefined}
+                    data-model-index={index}
                     type="button"
                     role="menuitem"
+                    aria-haspopup={
+                      modelEffortSetting(model)?.options.length
+                        ? "menu"
+                        : undefined
+                    }
+                    aria-expanded={highlighted && showEffort}
                     onMouseDown={(event) => event.preventDefault()}
                     onMouseEnter={() => {
-                      setInSubmenu(true);
                       setModelActive(index);
+                      setMenuLevel(
+                        modelEffortSetting(model)?.options.length
+                          ? "effort"
+                          : "models",
+                      );
                     }}
-                    onClick={() => pick(activeHarness, model.id)}
+                    onClick={() => {
+                      setModelActive(index);
+                      openEffortOrPick(model);
+                    }}
                     className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-none ${
                       highlighted
-                        ? "bg-content/10 text-content"
+                        ? "bg-selection text-content"
                         : "text-content hover:bg-content/5"
                     }`}
                   >
@@ -413,6 +510,57 @@ export function SecondOpinionButton({
                     {model.id === preferred ? (
                       <Check
                         className="size-3 shrink-0 text-content/45"
+                        strokeWidth={2}
+                      />
+                    ) : null}
+                    {modelEffortSetting(model)?.options.length ? (
+                      <ChevronRight
+                        className="size-3.5 shrink-0 text-content/40"
+                        strokeWidth={1.75}
+                      />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </Popover>
+          ) : null}
+          {showEffort ? (
+            <Popover
+              key={`${activeModel.id}:effort`}
+              anchor={activeModelRow}
+              side="right"
+              gap={SUBMENU_OVERLAP}
+              width={EFFORT_MENU_WIDTH}
+              layer={LAYER.submenu + 1}
+              role="menu"
+              aria-label={`${activeModel.name} effort`}
+              ignore={SELF}
+              onMouseEnter={() => setMenuLevel("effort")}
+              data-provider-target
+              className="p-1 font-sans"
+            >
+              {activeEffort.options.map((option, index) => {
+                const highlighted = index === effortActive;
+                const selected = option.value === selectedEffortValue;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setEffortActive(index)}
+                    onClick={() => pick(activeModel, option.value)}
+                    className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
+                      highlighted ? "bg-selection" : "hover:bg-content/5"
+                    }`}
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {option.label}
+                    </span>
+                    {selected ? (
+                      <Check
+                        className="size-3.5 shrink-0 text-content/50"
                         strokeWidth={2}
                       />
                     ) : null}
