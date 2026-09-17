@@ -464,6 +464,7 @@ export function Composer({
   const highlightRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
   const borrowedAttachmentIdsRef = useRef(new Set<string>());
+  const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
@@ -600,11 +601,10 @@ export function Composer({
   const addAttachments = useCallback(
     (incoming: Attachment[]) => {
       if (!harnessSupportsAttachments(harness) || incoming.length === 0) return;
-      setAttachments((prev) => {
-        const next = mergeAttachments(prev, incoming);
-        syncHasValue(ref.current?.value ?? "", next);
-        return next;
-      });
+      const next = mergeAttachments(attachmentsRef.current, incoming);
+      attachmentsRef.current = next;
+      setAttachments(next);
+      syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
     },
     [harness, syncHasValue],
@@ -612,43 +612,48 @@ export function Composer({
 
   const removeAttachment = useCallback(
     (id: string) => {
-      setAttachments((prev) => {
-        const removed = prev.find((file) => file.id === id);
-        if (removed && !borrowedAttachmentIdsRef.current.delete(removed.id)) {
-          revokeAttachment(removed);
-        }
-        const next = prev.filter((file) => file.id !== id);
-        syncHasValue(ref.current?.value ?? "", next);
-        return next;
-      });
+      const previous = attachmentsRef.current;
+      const removed = previous.find((file) => file.id === id);
+      if (removed && !borrowedAttachmentIdsRef.current.delete(removed.id)) {
+        revokeAttachment(removed);
+      }
+      const next = previous.filter((file) => file.id !== id);
+      attachmentsRef.current = next;
+      setAttachments(next);
+      syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
     },
     [syncHasValue],
   );
   useEffect(() => {
+    const lifecycle = ++attachmentLifecycleRef.current;
     return () => {
-      for (const file of attachmentsRef.current) {
-        if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
-          revokeAttachment(file);
+      queueMicrotask(() => {
+        if (attachmentLifecycleRef.current !== lifecycle) return;
+        for (const file of attachmentsRef.current) {
+          if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
+            revokeAttachment(file);
+          }
         }
-      }
+        attachmentsRef.current = [];
+        borrowedAttachmentIdsRef.current.clear();
+      });
     };
   }, []);
 
   useEffect(() => {
     if (harnessSupportsAttachments(harness)) return;
-    setAttachments((prev) => {
-      if (prev.length === 0) return prev;
-      for (const file of prev) {
-        if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
-          revokeAttachment(file);
-        }
+    const previous = attachmentsRef.current;
+    if (previous.length === 0) return;
+    for (const file of previous) {
+      if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
+        revokeAttachment(file);
       }
-      syncHasValue(ref.current?.value ?? "", []);
-      return [];
-    });
+    }
+    attachmentsRef.current = [];
+    setAttachments([]);
+    syncHasValue(ref.current?.value ?? "", []);
   }, [harness, syncHasValue]);
-
   useEffect(() => {
     const refresh = () => setRunnerEnabled(loadComposerRunner());
     window.addEventListener(COMPOSER_RUNNER_CHANGE_EVENT, refresh);
@@ -1010,25 +1015,23 @@ export function Composer({
       ref.current.style.height = "auto";
       ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
     }
-    setAttachments((previous) => {
-      for (const file of previous) {
-        if (
-          recalledAttachmentIds.has(file.id) ||
-          borrowedAttachmentIdsRef.current.delete(file.id)
-        ) {
-          continue;
-        }
-        revokeAttachment(file);
+    const previous = attachmentsRef.current;
+    for (const file of previous) {
+      if (
+        recalledAttachmentIds.has(file.id) ||
+        borrowedAttachmentIdsRef.current.delete(file.id)
+      ) {
+        continue;
       }
-      borrowedAttachmentIdsRef.current.clear();
-      for (const file of lastTurnRecall.attachments) {
-        borrowedAttachmentIdsRef.current.add(file.id);
-      }
-      return lastTurnRecall.attachments;
-    });
+      revokeAttachment(file);
+    }
+    borrowedAttachmentIdsRef.current.clear();
+    for (const file of lastTurnRecall.attachments) {
+      borrowedAttachmentIdsRef.current.add(file.id);
+    }
+    attachmentsRef.current = lastTurnRecall.attachments;
+    setAttachments(lastTurnRecall.attachments);
     syncHasValue(text, lastTurnRecall.attachments);
-    setResendEdited(true);
-    onEditingLastTurnChange?.(true);
     ref.current?.focus();
   }, [
     editLastTurnSupported,
@@ -1054,14 +1057,14 @@ export function Composer({
     }
     setDraft("");
     onDraftChange?.("");
-    setAttachments((previous) => {
-      for (const file of previous) {
-        if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
-          revokeAttachment(file);
-        }
+    const previous = attachmentsRef.current;
+    for (const file of previous) {
+      if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
+        revokeAttachment(file);
       }
-      return [];
-    });
+    }
+    attachmentsRef.current = [];
+    setAttachments([]);
     setResendEdited(false);
     onEditingLastTurnChange?.(false);
     setPlusOpen(false);
@@ -1128,6 +1131,7 @@ export function Composer({
     setDraft("");
     onDraftChange?.("");
     borrowedAttachmentIdsRef.current.clear();
+    attachmentsRef.current = [];
     setAttachments([]);
     onEditingLastTurnChange?.(false);
     setPlanSelected(false);
