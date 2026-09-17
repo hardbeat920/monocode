@@ -22,6 +22,7 @@ import {
   type TerminalFitMode,
 } from "../lib/terminalLayout";
 import { IS_MAC } from "../lib/platform";
+import { supportsWebGL2 } from "../lib/webgl";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -165,6 +166,24 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     term.open(host);
     termRef.current = term;
     let closed = false;
+
+    // GPU-accelerated renderer when WebGL2 is available. Any failure
+    // (no context, load error, context loss) falls back to canvas.
+    let webgl: { dispose: () => void } | null = null;
+    if (supportsWebGL2()) {
+      void import("@xterm/addon-webgl")
+        .then(({ WebglAddon }) => {
+          if (closed) return;
+          const addon = new WebglAddon();
+          addon.onContextLoss(() => {
+            addon.dispose();
+            if (webgl === addon) webgl = null;
+          });
+          term.loadAddon(addon);
+          webgl = addon;
+        })
+        .catch(() => undefined);
+    }
 
     const onCopy = (event: ClipboardEvent) => {
       const text = term.getSelection();
@@ -342,6 +361,12 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       bufferSub.dispose();
       unsubscribe();
       void starting.catch(() => undefined).then(() => killPty(id));
+      try {
+        webgl?.dispose();
+      } catch {
+        // Upstream dispose can throw on version skew; canvas survives.
+      }
+      webgl = null;
       term.dispose();
       termRef.current = null;
       spawned.current = false;
