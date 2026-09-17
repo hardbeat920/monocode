@@ -123,6 +123,51 @@ describe("InboxDetail layout", () => {
     expect(header).toContain("Code");
   });
 
+  it("adds a Checks tab to GitHub pull requests while Summary stays initial", () => {
+    const markup = renderDetail(item({ kind: "pr", state: "open" }));
+    const headerIndex = markup.indexOf("data-inbox-detail-header");
+    const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
+    const header = markup.slice(headerIndex, scrollIndex);
+
+    expect(header).toContain('aria-label="Checks: Loading checks"');
+    expect(header).toContain('title="Checks: Loading checks"');
+    expect(header).toContain(">Checks<");
+    // Summary is the first selected tab; loading never steals the selection.
+    const summarySelected = markup.indexOf('aria-selected="true"');
+    expect(summarySelected).toBeGreaterThan(-1);
+    expect(summarySelected).toBeLessThan(
+      markup.indexOf('aria-label="Checks: Loading checks"'),
+    );
+  });
+
+  it("keeps the Checks tab off issues and GitLab merge requests", () => {
+    expect(renderDetail(item())).not.toContain('aria-label="Checks:');
+    expect(
+      renderDetail(
+        item({
+          kind: "pr",
+          provider: "gitlab",
+          repo: "acme/platform",
+          url: "https://gitlab.example.com/acme/platform/-/merge_requests/12",
+        }),
+      ),
+    ).not.toContain('aria-label="Checks:');
+  });
+
+  it("shows the Checks tab for linked pull requests in panel mode", () => {
+    const markup = renderToStaticMarkup(
+      createElement(InboxDetail, {
+        item: item({ kind: "pr", state: "open" }),
+        cwd: "/tmp/web",
+        projects: [],
+        revision: 0,
+        mode: "panel",
+        relatedSessions: [],
+      }),
+    );
+    expect(markup).toContain('aria-label="Checks: Loading checks"');
+  });
+
   it("offers GitHub-style actions for an open pull request", () => {
     const markup = renderDetail(item({ kind: "pr", state: "open" }));
 
