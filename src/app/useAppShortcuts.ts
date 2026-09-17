@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   type Dispatch,
   type MutableRefObject,
@@ -192,7 +193,8 @@ export function useAppShortcuts(deps: AppShortcutsDeps) {
     openSettings,
     onOpenApprovalSession,
   });
-  actions.current = {
+  useLayoutEffect(() => {
+    actions.current = {
     onNew,
     onArchiveFocusedSession,
     onCloseOtherTabs,
@@ -219,7 +221,8 @@ export function useAppShortcuts(deps: AppShortcutsDeps) {
     onNavigateProjectList,
     openSettings,
     onOpenApprovalSession,
-  };
+    };
+  });
 
   const debounce = useRef({ name: "", at: 0 });
   const run = useCallback((name: string, fn: () => void) => {
