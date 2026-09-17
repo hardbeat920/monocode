@@ -77,7 +77,6 @@ type Live = {
   cancelled: boolean;
   muteUpdates: boolean;
   activeTurnId: string | null;
-  lastCompletedTurnId: string | null;
   turns: Promise<void>;
   /** Resolves when the current turn completes (or is cancelled). */
   turnDone: (() => void) | null;
@@ -187,7 +186,7 @@ export async function rewindCodexLastTurn(
     throw new Error("Stop the current turn before editing the last message");
   }
 
-  const beforeTurnId = await lastCompletedTurnId(live);
+  const beforeTurnId = await lastUserTurnId(live);
   await live.rpc.request("thread/revert", {
     threadId: live.threadId,
     beforeTurnId,
@@ -195,21 +194,29 @@ export async function rewindCodexLastTurn(
   return { submitted: false };
 }
 
-async function lastCompletedTurnId(live: Live): Promise<string> {
-  if (live.lastCompletedTurnId) return live.lastCompletedTurnId;
-
+async function lastUserTurnId(live: Live): Promise<string> {
   const page = await live.rpc.request<{ data?: unknown[] }>(
     "thread/turns/list",
     {
       threadId: live.threadId,
-      limit: 1,
+      limit: 100,
       sortDirection: "desc",
+      itemsView: "summary",
     },
   );
-  const latest = asRecord(page.data?.[0]);
+  const turns = Array.isArray(page.data) ? page.data : [];
+  const userTurn = turns.find((candidate) => {
+    const turn = asRecord(candidate);
+    return (
+      Array.isArray(turn?.items) &&
+      turn.items.some(
+        (item) => stringField(asRecord(item), "type") === "userMessage",
+      )
+    );
+  });
+  const latest = asRecord(userTurn) ?? asRecord(turns[0]);
   const turnId = stringField(latest, "id");
-  if (!turnId) throw new Error("Codex did not expose the last turn id");
-  live.lastCompletedTurnId = turnId;
+  if (!turnId) throw new Error("Codex did not expose the last user turn id");
   return turnId;
 }
 
@@ -509,7 +516,6 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       cancelled: false,
       muteUpdates: didResume,
       activeTurnId: null,
-      lastCompletedTurnId: null,
       turns: Promise.resolve(),
       turnDone: null,
       turnFailed: null,
@@ -690,9 +696,6 @@ function handleNotification(live: Live, method: string, params: unknown): void {
     live.activeTurnId = mapped.activeTurnId;
   }
   if (mapped.turnCompleted) {
-    const completedTurnId =
-      stringField(asRecord(rec?.turn), "id") ?? live.activeTurnId;
-    if (completedTurnId) live.lastCompletedTurnId = completedTurnId;
     finishActiveTurn(live);
   }
 }

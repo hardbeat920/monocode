@@ -1309,7 +1309,7 @@ describe("codex live turn sequence", () => {
     expect(settled).toBe(true);
   });
 
-  it("reverts the last turn through the paginated thread API", async () => {
+  it("reverts before the latest user turn after compaction", async () => {
     const { turn } = await startTurn("codex-live");
     notify("turn/completed", {
       turn: { id: "turn_1", status: "completed" },
@@ -1323,6 +1323,31 @@ describe("codex live turn sequence", () => {
       model: "codex:gpt-5.4",
       runtimeMode: "supervised",
       onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "thread/turns/list"),
+      "thread/turns/list",
+    );
+    const list = parse().find(
+      (message) => message.method === "thread/turns/list",
+    )!;
+    expect(list.params).toEqual({
+      threadId: "thr_1",
+      limit: 100,
+      sortDirection: "desc",
+      itemsView: "summary",
+    });
+    reply(list.id as number, {
+      data: [
+        {
+          id: "compact_1",
+          items: [{ type: "contextCompaction", id: "compact_item" }],
+        },
+        {
+          id: "turn_1",
+          items: [{ type: "userMessage", id: "user_item" }],
+        },
+      ],
     });
     await waitFor(
       () => parse().some((message) => message.method === "thread/revert"),
