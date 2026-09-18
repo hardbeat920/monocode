@@ -2,8 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 
 const FLUSH_DELAY_MS = 500;
 
-let flushTimer: ReturnType<typeof setTimeout> | null = null;
-let pending: { sessionId: string; text: string } | null = null;
+// Keyed by session id: multiple SessionPanes can be mounted at once (split
+// view), so a single global pending slot would let one pane clobber or flush
+// another session's draft.
+const pending = new Map<string, { text: string; timer: ReturnType<typeof setTimeout> }>();
+
+function clearTimer(sessionId: string): void {
+  const entry = pending.get(sessionId);
+  if (entry) {
+    clearTimeout(entry.timer);
+    pending.delete(sessionId);
+  }
+}
 
 /**
  * Persist the composer draft for a session, debounced per session. Only the
@@ -11,30 +21,32 @@ let pending: { sessionId: string; text: string } | null = null;
  * single `composer_draft_set` invoke.
  */
 export function saveSessionDraft(sessionId: string, text: string): void {
-  pending = { sessionId, text };
-  if (flushTimer !== null) clearTimeout(flushTimer);
-  flushTimer = setTimeout(() => {
-    flushTimer = null;
-    void flushDraft();
-  }, FLUSH_DELAY_MS);
+  clearTimer(sessionId);
+  pending.set(sessionId, {
+    text,
+    timer: setTimeout(() => {
+      pending.delete(sessionId);
+      void flushDraft(sessionId, text);
+    }, FLUSH_DELAY_MS),
+  });
 }
 
-/** Write any pending draft immediately (used when the pane unmounts). */
-export function flushSessionDraft(): void {
-  if (flushTimer !== null) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  void flushDraft();
+/** Write any pending drafts immediately (used when the pane unmounts). */
+export function flushSessionDraft(): Promise<void> {
+  const entries = [...pending.entries()];
+  pending.clear();
+  return Promise.all(
+    entries.map(([sessionId, entry]) => {
+      clearTimeout(entry.timer);
+      return flushDraft(sessionId, entry.text);
+    }),
+  ).then(() => undefined);
 }
 
 /** Drop any pending draft without writing it. */
 export function discardPendingDraft(): void {
-  if (flushTimer !== null) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  pending = null;
+  for (const entry of pending.values()) clearTimeout(entry.timer);
+  pending.clear();
 }
 
 export async function loadSessionDraft(sessionId: string): Promise<string> {
@@ -46,14 +58,11 @@ export async function loadSessionDraft(sessionId: string): Promise<string> {
   }
 }
 
-async function flushDraft(): Promise<void> {
-  if (!pending) return;
-  const { sessionId, text } = pending;
-  pending = null;
-  try {
-    await invoke("composer_draft_set", { sessionId, text });
-  } catch {
-    // Persistence is best-effort: losing a draft on a failed write is
-    // preferable to surfacing an error over every keystroke batch.
+async function flushDraft(sessionId: string, text: string): Promise<void> {
+  if (!text) {
+    // Nothing typed means nothing to keep; clear any stale persisted draft.
+    await invoke("composer_draft_set", { sessionId, text: "" }).catch(() => null);
+    return;
   }
+  await invoke("composer_draft_set", { sessionId, text }).catch(() => null);
 }

@@ -10,7 +10,7 @@ const DRAFT_MAX: usize = 100_000;
 pub fn ensure_drafts_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS composer_drafts (
-           session_id TEXT PRIMARY KEY,
+           session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
            text TEXT NOT NULL DEFAULT '',
            updated_at INTEGER NOT NULL
          );",
@@ -70,10 +70,22 @@ pub fn composer_draft_set(
 mod tests {
     use super::*;
 
+    fn test_conn() -> Connection {
+        // The FK references sessions(id); create a minimal parent so the
+        // draft table can be created and written against a bare connection.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)", [])
+            .unwrap();
+        ensure_drafts_table(&conn).unwrap();
+        conn
+    }
+
     #[test]
     fn drafts_roundtrip_and_clear() {
-        let conn = Connection::open_in_memory().unwrap();
-        ensure_drafts_table(&conn).unwrap();
+        let conn = test_conn();
+        conn.execute("INSERT INTO sessions (id) VALUES ('s-1')", [])
+            .unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         assert_eq!(get_draft(&conn, "s-1").unwrap(), None);
         set_draft(&conn, "s-1", "hello").unwrap();
         assert_eq!(get_draft(&conn, "s-1").unwrap().as_deref(), Some("hello"));
@@ -83,8 +95,10 @@ mod tests {
 
     #[test]
     fn drafts_upsert_keeps_single_row() {
-        let conn = Connection::open_in_memory().unwrap();
-        ensure_drafts_table(&conn).unwrap();
+        let conn = test_conn();
+        conn.execute("INSERT INTO sessions (id) VALUES ('s-1')", [])
+            .unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         set_draft(&conn, "s-1", "first").unwrap();
         set_draft(&conn, "s-1", "second").unwrap();
         let count: i64 = conn
@@ -96,8 +110,9 @@ mod tests {
 
     #[test]
     fn drafts_are_truncated() {
-        let conn = Connection::open_in_memory().unwrap();
-        ensure_drafts_table(&conn).unwrap();
+        let conn = test_conn();
+        conn.execute("INSERT INTO sessions (id) VALUES ('s-1')", [])
+            .unwrap();
         let big = "x".repeat(DRAFT_MAX + 10);
         set_draft(&conn, "s-1", &big).unwrap();
         let stored = get_draft(&conn, "s-1").unwrap().unwrap();

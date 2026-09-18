@@ -25,6 +25,7 @@ import {
   type OrchestrationWorkerDetail,
 } from "./chrome/OrchestrationActions";
 import { flushSync } from "react-dom";
+import { flushSessionDraft } from "./lib/composerDraft";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, message } from "@tauri-apps/plugin-dialog";
@@ -1425,28 +1426,33 @@ export default function App({
         // calls JS `window.destroy`, which Tauri denies without a permission.
         event.preventDefault();
         const toTray = loadCloseToTray();
-        if (hasInFlightSessions(sessionsRef.current)) {
-          flushHarnessEvents();
-          if (!toTray && !IS_MAC) {
-            void closeBusyWindow();
+        void (async () => {
+          // Hide/destroy end the JS context before the draft debounce timer
+          // would fire, so push any pending composer drafts out first.
+          await flushSessionDraft();
+          if (hasInFlightSessions(sessionsRef.current)) {
+            flushHarnessEvents();
+            if (!toTray && !IS_MAC) {
+              void closeBusyWindow();
+              return;
+            }
+            // Not `persistQuitState`: that marks the live turns interrupted.
+            void persistLiveTranscripts(sessionsRef.current);
+            void hideCurrentWindow();
             return;
           }
-          // Not `persistQuitState`: that marks the live turns interrupted.
-          void persistLiveTranscripts(sessionsRef.current);
-          void hideCurrentWindow();
-          return;
-        }
-        void persistQuitState(
-          sessionsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current,
-          projectCwdRef.current,
-          readProjectReturnMemory(),
-          "unload",
-          projectTerminalsRef.current,
-        ).finally(() => {
-          void (toTray ? hideCurrentWindow() : closeCurrentWindow());
-        });
+          await persistQuitState(
+            sessionsRef.current,
+            tabsRef.current,
+            activeTabIdRef.current,
+            projectCwdRef.current,
+            readProjectReturnMemory(),
+            "unload",
+            projectTerminalsRef.current,
+          ).finally(() => {
+            void (toTray ? hideCurrentWindow() : closeCurrentWindow());
+          });
+        })();
       })
       .then((fn) => {
         unlistenClose = fn;
@@ -6925,6 +6931,8 @@ export default function App({
   const onReload = useCallback(() => {
     void (async () => {
       if (!(await confirmReload(dirtyFilesRef.current.size > 0))) return;
+      // The reload tears down JS before the draft debounce timer fires.
+      await flushSessionDraft();
       window.location.reload();
     })();
   }, []);

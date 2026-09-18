@@ -357,7 +357,9 @@ export const SessionPane = memo(function SessionPane({
     };
   }, [session.id]);
   useEffect(() => {
-    return () => flushSessionDraft();
+    return () => {
+      void flushSessionDraft();
+    };
   }, [session.id]);
   const composer = (
     <Composer
