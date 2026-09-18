@@ -1339,13 +1339,15 @@ function UserMessageBlock({
             </button>
           ) : null}
         </div>
-        {text || block.attachments?.length ? (
+        {text || block.attachments?.length || block.startedAt != null ? (
           <div className="user-message-actions flex items-center gap-1 px-3 pt-1">
-            <CopyTurnButton
-              text={text}
-              attachments={block.attachments}
-              label="Copy message"
-            />
+            {text || block.attachments?.length ? (
+              <CopyTurnButton
+                text={text}
+                attachments={block.attachments}
+                label="Copy message"
+              />
+            ) : null}
             {text && onSaveNote ? (
               <SaveNoteButton text={text} onSave={onSaveNote} />
             ) : null}
