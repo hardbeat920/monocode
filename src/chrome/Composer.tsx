@@ -1053,43 +1053,48 @@ export function Composer({
       unlisten?.();
     };
   }, [addAttachments, attachmentsSupported, enabled]);
+  const restoreDraft = useCallback(
+    (text: string, nextAttachments: Attachment[]) => {
+      setDraft(text);
+      onDraftChange?.(text);
+      if (ref.current) {
+        ref.current.value = text;
+        ref.current.style.height = "auto";
+        ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
+      }
+
+      const nextIds = new Set(nextAttachments.map((file) => file.id));
+      for (const file of attachmentsRef.current) {
+        if (
+          nextIds.has(file.id) ||
+          borrowedAttachmentIdsRef.current.delete(file.id)
+        ) {
+          continue;
+        }
+        revokeAttachment(file);
+      }
+      borrowedAttachmentIdsRef.current.clear();
+      for (const file of nextAttachments) {
+        borrowedAttachmentIdsRef.current.add(file.id);
+      }
+      attachmentsRef.current = nextAttachments;
+      setAttachments(nextAttachments);
+      syncHasValue(text, nextAttachments);
+      ref.current?.focus();
+    },
+    [onDraftChange, syncHasValue],
+  );
 
   const recallLastTurn = useCallback(() => {
     if (!editLastTurnSupported || !lastTurnRecall) return;
-    const text = lastTurnRecall.text;
-    const recalledAttachmentIds = new Set(
-      lastTurnRecall.attachments.map((file) => file.id),
-    );
-    setDraft(text);
-    onDraftChange?.(text);
-    if (ref.current) {
-      ref.current.value = text;
-      ref.current.style.height = "auto";
-      ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
-    }
-    const previous = attachmentsRef.current;
-    for (const file of previous) {
-      if (
-        recalledAttachmentIds.has(file.id) ||
-        borrowedAttachmentIdsRef.current.delete(file.id)
-      ) {
-        continue;
-      }
-      revokeAttachment(file);
-    }
-    borrowedAttachmentIdsRef.current.clear();
-    for (const file of lastTurnRecall.attachments) {
-      borrowedAttachmentIdsRef.current.add(file.id);
-    }
-    attachmentsRef.current = lastTurnRecall.attachments;
-    setAttachments(lastTurnRecall.attachments);
-    syncHasValue(text, lastTurnRecall.attachments);
-    ref.current?.focus();
+    restoreDraft(lastTurnRecall.text, lastTurnRecall.attachments);
+    setResendEdited(true);
+    onEditingLastTurnChange?.(true);
   }, [
     editLastTurnSupported,
     lastTurnRecall,
-    onDraftChange,
     onEditingLastTurnChange,
+    restoreDraft,
   ]);
 
   useEffect(() => {
@@ -1171,20 +1176,31 @@ export function Composer({
           : orchestrationSelected
             ? "orchestrate"
             : "default",
-      ...(resendEdited ? { resendEdited: true } : {}),
+      ...(resendEdited
+        ? {
+            resendEdited: true,
+            onResendRejected: () => {
+              restoreDraft(text, files);
+              setResendEdited(true);
+              onEditingLastTurnChange?.(true);
+            },
+          }
+        : {}),
     });
     // The app can reject a turn before it is recorded (for example while an
     // orchestration is paused). Keep the user's text, files and selected mode
     // intact so resolving the blocker never destroys their work.
     if (accepted === false) return;
-    if (!ref.current) return;
-    ref.current.value = "";
-    ref.current.style.height = "auto";
+    if (ref.current) {
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+    }
     setDraft("");
     onDraftChange?.("");
     borrowedAttachmentIdsRef.current.clear();
     attachmentsRef.current = [];
     setAttachments([]);
+    setResendEdited(false);
     onEditingLastTurnChange?.(false);
     setPlanSelected(false);
     setOrchestrationSelected(false);
@@ -1197,7 +1213,6 @@ export function Composer({
     setCreateError(null);
     syncHasValue("", []);
   };
-
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (isImeComposition(e.nativeEvent)) return;
     if (creatingSkill) return;

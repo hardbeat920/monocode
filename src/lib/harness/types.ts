@@ -15,6 +15,7 @@ export type HarnessEvent =
   | { type: "session.ended"; code?: number | null }
   | { type: "session.error"; message: string }
   | { type: "session.providerBound"; providerSessionId: string }
+  | { type: "turn.started"; providerTurnId: string }
   | {
       type: "session.configChanged";
       model?: string;
@@ -157,6 +158,8 @@ export type SteerTurnInput = {
 };
 
 export type RewindLastTurnInput = CompactContextInput & {
+  /** Provider turn boundary for the visible user message, when known. */
+  providerTurnId?: string;
   /** When set, Cursor may resend via session/edit_prompt in one RPC. */
   text?: string;
   attachments?: Attachment[];

@@ -49,6 +49,7 @@ export function canEditLastTurn(session: Session): boolean {
   if (!harnessSupportsEditLastTurn(session.harness)) return false;
   const block = lastUserTurnBlock(session.blocks);
   if (!block) return false;
+  if (session.harness === "codex" && !block.providerTurnId) return false;
   if (block.secondOpinion || block.noteCard) return false;
   if (session.blocks.some((entry) => entry.role === "handoff")) return false;
   return true;

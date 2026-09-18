@@ -1280,7 +1280,9 @@ function UserMessageBlock({
               event.stopPropagation();
               onEdit();
             }}
-            className={`absolute -left-8 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md transition-[background-color,color,opacity] duration-150 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-accent ${
+            className={`absolute ${
+              chat ? "-left-8 top-1/2 -translate-y-1/2" : "right-1.5 top-1.5"
+            } grid size-6 place-items-center rounded-md transition-[background-color,color,opacity] duration-150 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-accent ${
               editing
                 ? "edit-last-turn-button opacity-100"
                 : "text-content/35 opacity-0 hover:bg-content/10 hover:text-content/70 group-hover/usermsg:opacity-100"

@@ -86,6 +86,55 @@ const adapters = new Map<HarnessId, HarnessAdapter>();
  */
 export const HARNESS_IDLE_PARK_MS = 5 * 60_000;
 const idleParkTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const sessionOperationTails = new Map<string, Promise<void>>();
+const sessionSteerTails = new Map<string, Promise<void>>();
+const activeTurnSessions = new Set<string>();
+
+function queueSessionOperation<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionOperationTails.get(sessionId) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  const settled = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionOperationTails.set(sessionId, settled);
+  void settled.then(() => {
+    if (sessionOperationTails.get(sessionId) === settled) {
+      sessionOperationTails.delete(sessionId);
+    }
+  });
+  return current;
+}
+
+function queueSteerOperation<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previousSteer = sessionSteerTails.get(sessionId) ?? Promise.resolve();
+  // A live turn must remain steerable while its long-running send is pending.
+  // Other provider-state operations still form a barrier for the steer.
+  const barrier = activeTurnSessions.has(sessionId)
+    ? Promise.resolve()
+    : (sessionOperationTails.get(sessionId) ?? Promise.resolve());
+  const current = Promise.all([
+    previousSteer.catch(() => undefined),
+    barrier.catch(() => undefined),
+  ]).then(operation);
+  const settled = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionSteerTails.set(sessionId, settled);
+  void settled.then(() => {
+    if (sessionSteerTails.get(sessionId) === settled) {
+      sessionSteerTails.delete(sessionId);
+    }
+  });
+  return current;
+}
 
 function cancelIdlePark(sessionId: string): void {
   const timer = idleParkTimers.get(sessionId);
@@ -134,27 +183,29 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
-export async function sendHarnessTurn(
-  input: SendTurnInput & { harness: HarnessId },
-) {
-  const adapter = requireHarness(input.harness);
-  if (!adapter.live) {
-    throw new Error(`${input.harness} is not connected yet`);
-  }
-  cancelIdlePark(input.sessionId);
-  const controlled = typeof isTauri === "function" && isTauri();
-  if (controlled)
-    await invoke("control_authorize_turn", {
-      sessionId: input.sessionId,
-      cwd: input.cwd,
-    });
-  try {
-    await adapter.sendTurn(input);
-  } finally {
+export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
+  return queueSessionOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.live) {
+      throw new Error(`${input.harness} is not connected yet`);
+    }
+    cancelIdlePark(input.sessionId);
+    const controlled = typeof isTauri === "function" && isTauri();
     if (controlled)
-      await invoke("control_turn_finished", { sessionId: input.sessionId });
-    scheduleIdlePark(input.harness, input.sessionId);
-  }
+      await invoke("control_authorize_turn", {
+        sessionId: input.sessionId,
+        cwd: input.cwd,
+      });
+    activeTurnSessions.add(input.sessionId);
+    try {
+      await adapter.sendTurn(input);
+    } finally {
+      activeTurnSessions.delete(input.sessionId);
+      if (controlled)
+        await invoke("control_turn_finished", { sessionId: input.sessionId });
+      scheduleIdlePark(input.harness, input.sessionId);
+    }
+  });
 }
 
 export function canCompactHarnessContext(id: HarnessId): boolean {
@@ -162,22 +213,24 @@ export function canCompactHarnessContext(id: HarnessId): boolean {
   return adapter?.live === true && adapter.compactContext != null;
 }
 
-export async function compactHarnessContext(
+export function compactHarnessContext(
   input: CompactContextInput & { harness: HarnessId },
 ): Promise<void> {
-  const adapter = requireHarness(input.harness);
-  if (!adapter.live) {
-    throw new Error(`${input.harness} is not connected yet`);
-  }
-  if (!adapter.compactContext) {
-    throw new Error(`${input.harness} does not support manual compaction`);
-  }
-  cancelIdlePark(input.sessionId);
-  try {
-    await adapter.compactContext(input);
-  } finally {
-    scheduleIdlePark(input.harness, input.sessionId);
-  }
+  return queueSessionOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.live) {
+      throw new Error(`${input.harness} is not connected yet`);
+    }
+    if (!adapter.compactContext) {
+      throw new Error(`${input.harness} does not support manual compaction`);
+    }
+    cancelIdlePark(input.sessionId);
+    try {
+      await adapter.compactContext(input);
+    } finally {
+      scheduleIdlePark(input.harness, input.sessionId);
+    }
+  });
 }
 
 export function canSteerHarness(id: HarnessId): boolean {
@@ -191,30 +244,36 @@ export function canRewindHarnessLastTurn(id: HarnessId): boolean {
   return adapter?.live === true && adapter.rewindLastTurn != null;
 }
 
-export async function rewindHarnessLastTurn(
+export function rewindHarnessLastTurn(
   input: RewindLastTurnInput & { harness: HarnessId },
 ): Promise<RewindLastTurnResult> {
-  const adapter = requireHarness(input.harness);
-  if (!adapter.rewindLastTurn) {
-    throw new Error(`${input.harness} does not support editing the last message`);
-  }
-  cancelIdlePark(input.sessionId);
-  try {
-    return await adapter.rewindLastTurn(input);
-  } finally {
-    scheduleIdlePark(input.harness, input.sessionId);
-  }
+  return queueSessionOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.rewindLastTurn) {
+      throw new Error(
+        `${input.harness} does not support editing the last message`,
+      );
+    }
+    cancelIdlePark(input.sessionId);
+    try {
+      return await adapter.rewindLastTurn(input);
+    } finally {
+      scheduleIdlePark(input.harness, input.sessionId);
+    }
+  });
 }
 
-export async function steerHarnessTurn(
+export function steerHarnessTurn(
   input: SteerTurnInput & { harness: HarnessId },
 ): Promise<void> {
-  const adapter = requireHarness(input.harness);
-  if (!adapter.live) {
-    throw new Error(`${input.harness} is not connected yet`);
-  }
-  cancelIdlePark(input.sessionId);
-  await adapter.steerTurn(input);
+  return queueSteerOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.live) {
+      throw new Error(`${input.harness} is not connected yet`);
+    }
+    cancelIdlePark(input.sessionId);
+    await adapter.steerTurn(input);
+  });
 }
 
 export async function cancelHarnessTurn(

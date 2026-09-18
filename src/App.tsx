@@ -213,6 +213,7 @@ import { requestOutgoingHandoff } from "./lib/handoffTurn";
 import { isEditTool } from "./lib/harness/preview";
 import {
   canEditLastTurn,
+  lastUserTurnBlock,
   truncateBeforeLastUserTurn,
 } from "./lib/editLastTurn";
 import {
@@ -789,8 +790,11 @@ export default function App({
   const [settingsAnchor, setSettingsAnchor] = useState<SettingsAnchor | null>(
     null,
   );
-  const [notificationProjectPath, setNotificationProjectPath] = useState<string | null>(null);
-  const [notificationSettingsRequest, setNotificationSettingsRequest] = useState(0);
+  const [notificationProjectPath, setNotificationProjectPath] = useState<
+    string | null
+  >(null);
+  const [notificationSettingsRequest, setNotificationSettingsRequest] =
+    useState(0);
   const [editorNavigation, setEditorNavigation] =
     useState<EditorNavigationTarget | null>(null);
   const editorNavigationToken = useRef(0);
@@ -3823,7 +3827,9 @@ export default function App({
           },
           stop: async () => {
             const run =
-              mode === "delete" ? orchestrator.forSession(sessionId) : undefined;
+              mode === "delete"
+                ? orchestrator.forSession(sessionId)
+                : undefined;
             if (run && (run.status === "active" || run.status === "paused"))
               await orchestrator.stopRun(run.leadId);
             await stopSessionForRemoval(sessionId);
@@ -4629,6 +4635,7 @@ export default function App({
         managed?: boolean;
         orchestrationRetry?: OrchestrationProposal;
         onSettled?: (outcome: ControlOutcome) => void;
+        onResendRejected?: () => void;
         resendEdited?: boolean;
       },
     ) => {
@@ -4665,6 +4672,9 @@ export default function App({
       let current = options?.buildTarget
         ? withPlanBuildTarget(storedCurrent, options.buildTarget)
         : storedCurrent;
+      const editedProviderTurnId = options?.resendEdited
+        ? lastUserTurnBlock(current.blocks)?.providerTurnId
+        : undefined;
       if (options?.resendEdited) {
         if (!canEditLastTurn(current)) return false;
         current = {
@@ -4786,21 +4796,21 @@ export default function App({
         dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
         const cards = userTurnCards(noteCard);
-        setSessions((prev) =>
-          prev.map((s) => {
-            if (s.id !== sessionId) return s;
-            let next: Session = {
-              ...s,
-              inboxCard: rawCommand ? s.inboxCard : undefined,
-              noteCard: rawCommand ? s.noteCard : undefined,
-              handoffCard: rawCommand ? s.handoffCard : undefined,
-            };
-            if (options?.queuedMessageId) {
-              next = dequeueQueuedMessage(next, options.queuedMessageId);
-            }
-            return appendSteerUser(next, submittedText, visible, cards);
-          }),
-        );
+        const nextSessions = sessionsRef.current.map((s) => {
+          if (s.id !== sessionId) return s;
+          let next: Session = {
+            ...s,
+            inboxCard: rawCommand ? s.inboxCard : undefined,
+            noteCard: rawCommand ? s.noteCard : undefined,
+            handoffCard: rawCommand ? s.handoffCard : undefined,
+          };
+          if (options?.queuedMessageId) {
+            next = dequeueQueuedMessage(next, options.queuedMessageId);
+          }
+          return appendSteerUser(next, submittedText, visible, cards);
+        });
+        sessionsRef.current = nextSessions;
+        setSessions(nextSessions);
         void (async () => {
           try {
             const prepared = await prepareAttachments(attachments);
@@ -4967,7 +4977,11 @@ export default function App({
                 pendingSwitch: undefined,
               });
               return appendUser(
-                appendPreparingHandoff(sealed, pendingSwitch.from, next.harness),
+                appendPreparingHandoff(
+                  sealed,
+                  pendingSwitch.from,
+                  next.harness,
+                ),
                 visibleText,
                 visible,
                 cards,
@@ -4982,7 +4996,7 @@ export default function App({
           }),
         );
       };
-      if (!options?.resendEdited) commitSubmittedTurn();
+      if (!options?.resendEdited) flushSync(commitSubmittedTurn);
 
       if (isFirstTurn && live && placeholderTitle) {
         const titleMessage =
@@ -5034,10 +5048,7 @@ export default function App({
         });
         return true;
       }
-      if (
-        options?.resendEdited &&
-        canRewindHarnessLastTurn(current.harness)
-      ) {
+      if (options?.resendEdited && canRewindHarnessLastTurn(current.harness)) {
         rewindingLastTurn.current.add(sessionId);
         const locked = sessionsRef.current.map((session) =>
           session.id === sessionId ? { ...session, busy: true } : session,
@@ -5169,16 +5180,30 @@ export default function App({
         if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
         try {
-          if (options?.resendEdited && canRewindHarnessLastTurn(current.harness)) {
-            await rewindHarnessLastTurn({
-              harness: current.harness,
-              sessionId,
-              cwd: workCwd,
-              model: current.model,
-              modelSettings: current.modelSettings,
-              runtimeMode: current.runtimeMode,
-              onEvent: () => undefined,
-            });
+          if (
+            options?.resendEdited &&
+            canRewindHarnessLastTurn(current.harness)
+          ) {
+            try {
+              await rewindHarnessLastTurn({
+                harness: current.harness,
+                sessionId,
+                cwd: workCwd,
+                model: current.model,
+                modelSettings: current.modelSettings,
+                runtimeMode: current.runtimeMode,
+                ...(editedProviderTurnId
+                  ? { providerTurnId: editedProviderTurnId }
+                  : {}),
+                onEvent: (event) => {
+                  if (turnGen.current.get(sessionId) !== gen) return;
+                  enqueueHarnessEvent(sessionId, event);
+                },
+              });
+            } catch (error) {
+              options?.onResendRejected?.();
+              throw error;
+            }
             if (turnGen.current.get(sessionId) !== gen) {
               const latest = sessionsRef.current.find(
                 (session) => session.id === sessionId,
@@ -5203,7 +5228,7 @@ export default function App({
               return;
             }
           }
-          if (options?.resendEdited) commitSubmittedTurn();
+          if (options?.resendEdited) flushSync(commitSubmittedTurn);
           const prepared = await prepareAttachments(attachments);
           const prompt =
             intent === "build" && approvedPlan
@@ -6102,12 +6127,7 @@ export default function App({
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
         const fresh = {
-          ...newSession(
-            task.harness,
-            run.cwd,
-            task.model,
-            lead.runtimeMode,
-          ),
+          ...newSession(task.harness, run.cwd, task.model, lead.runtimeMode),
           ...(task.modelSettings
             ? {
                 modelSettings: mergeModelSettings(
@@ -6436,7 +6456,12 @@ export default function App({
         });
       },
     }),
-    [onOpenApprovalSession, queueWorkerPanes, onSubmit, updateOrchestrationCard],
+    [
+      onOpenApprovalSession,
+      queueWorkerPanes,
+      onSubmit,
+      updateOrchestrationCard,
+    ],
   );
 
   const onSelectLiveAgent = useCallback(
@@ -6672,11 +6697,14 @@ export default function App({
 
   const onOpenSettings = useCallback(() => openSettings(), [openSettings]);
 
-  const onOpenNotificationSettings = useCallback((path?: string) => {
-    openSettings("inbox", "project-notifications");
-    setNotificationProjectPath(path ?? null);
-    setNotificationSettingsRequest((request) => request + 1);
-  }, [openSettings]);
+  const onOpenNotificationSettings = useCallback(
+    (path?: string) => {
+      openSettings("inbox", "project-notifications");
+      setNotificationProjectPath(path ?? null);
+      setNotificationSettingsRequest((request) => request + 1);
+    },
+    [openSettings],
+  );
 
   const onOpenInboxIntegrations = useCallback(
     (source: ConnectableInboxSource) => openSettings("inbox", source),

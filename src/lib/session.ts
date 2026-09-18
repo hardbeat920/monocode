@@ -69,6 +69,8 @@ export type TurnIntent = "default" | "plan" | "build" | "orchestrate";
 export type ComposerTurnOptions = {
   intent?: TurnIntent;
   resendEdited?: boolean;
+  /** Restore an edited prompt when provider rewind rejects it asynchronously. */
+  onResendRejected?: () => void;
 };
 
 export type PlanStatus = "streaming" | "ready" | "building" | "built";
@@ -231,7 +233,9 @@ export type Block = {
   durationMs?: number;
   /** Stable model label for this turn. Present on newly created user blocks. */
   turnModel?: TurnModel;
-  /** Provider-reported token metrics for this user turn, when available. */
+  /** Provider turn boundary used to replace this user message, when known. */
+  providerTurnId?: string;
+  /** Provider-reported token metrics for this user turn. */
   turnMetrics?: TurnMetrics;
   tool?: {
     callId?: string;

@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 import { Composer, ComposerAction } from "./Composer";
+import type { Attachment, ComposerTurnOptions } from "../lib/session";
 import type { UserQuestionPrompt } from "../lib/userQuestion";
 
 function renderAction(busy: boolean, hasValue: boolean) {
@@ -203,5 +204,66 @@ describe("Composer question focus", () => {
 
     expect(document.activeElement).toBe(searchInput);
     portaledPicker.remove();
+  });
+  it("restores an edited prompt when provider rewind is rejected", async () => {
+    let submittedOptions: ComposerTurnOptions | undefined;
+    const onSubmit = vi.fn(
+      (
+        _text: string,
+        _attachments: Attachment[],
+        options?: ComposerTurnOptions,
+      ) => {
+        submittedOptions = options;
+        return true;
+      },
+    );
+    const onEditingChange = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "codex",
+          model: "codex:gpt-5.4",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: () => {},
+          onCwdChange: () => {},
+          onModelChange: () => {},
+          onRuntimeModeChange: () => {},
+          onSubmit,
+          editLastTurnSupported: true,
+          lastTurnRecall: { text: "original prompt", attachments: [] },
+          onEditingLastTurnChange: onEditingChange,
+        }),
+      ),
+    );
+
+    const textarea = container.querySelector("textarea")!;
+    await act(async () => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+      );
+    });
+    expect(textarea.value).toBe("original prompt");
+    expect(container.querySelector("[data-composer-editing]")).not.toBeNull();
+
+    await act(async () => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(textarea.value).toBe("");
+    expect(submittedOptions?.resendEdited).toBe(true);
+    expect(container.querySelector("[data-composer-editing]")).toBeNull();
+
+    await act(async () => {
+      submittedOptions?.onResendRejected?.();
+    });
+    expect(textarea.value).toBe("original prompt");
+    expect(container.querySelector("[data-composer-editing]")).not.toBeNull();
+    expect(onEditingChange).toHaveBeenCalledWith(true);
+    expect(onEditingChange).toHaveBeenCalledWith(false);
   });
 });

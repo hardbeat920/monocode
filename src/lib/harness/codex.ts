@@ -188,7 +188,7 @@ export async function rewindCodexLastTurn(
     throw new Error("Stop the current turn before editing the last message");
   }
 
-  const beforeTurnId = await lastUserTurnId(live);
+  const beforeTurnId = await lastUserTurnId(live, input.providerTurnId);
   await live.rpc.request("thread/revert", {
     threadId: live.threadId,
     beforeTurnId,
@@ -196,7 +196,13 @@ export async function rewindCodexLastTurn(
   return { submitted: false };
 }
 
-async function lastUserTurnId(live: Live): Promise<string> {
+async function lastUserTurnId(
+  live: Live,
+  providerTurnId?: string,
+): Promise<string> {
+  const exact = providerTurnId?.trim();
+  if (exact) return exact;
+
   const page = await live.rpc.request<{ data?: unknown[] }>(
     "thread/turns/list",
     {
@@ -216,9 +222,9 @@ async function lastUserTurnId(live: Live): Promise<string> {
       )
     );
   });
-  const latest = asRecord(userTurn) ?? asRecord(turns[0]);
+  const latest = asRecord(userTurn);
   const turnId = stringField(latest, "id");
-  if (!turnId) throw new Error("Codex did not expose the last user turn id");
+  if (!turnId) throw new Error("Codex did not expose a user turn id to edit");
   return turnId;
 }
 
@@ -242,6 +248,7 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   }
 
   await live.rpc.request("turn/steer", params);
+  live.onEvent({ type: "turn.started", providerTurnId: turnId });
 }
 
 export function respondCodexApproval(
@@ -603,11 +610,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       "turn/start",
       params,
     );
-    const turnId = response.turn?.id;
+    const turnId = response.turn?.id ?? live.activeTurnId;
     // turn/completed can arrive before turn/start returns; don't resurrect a
     // finished turn's id after finishActiveTurn cleared activeTurnId.
     if (turnId && live.turnDone) {
       live.activeTurnId = live.activeTurnId ?? turnId;
+      live.onEvent({ type: "turn.started", providerTurnId: turnId });
     }
     settlePendingTurn(live);
     await turnPromise;
