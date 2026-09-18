@@ -296,23 +296,6 @@ html.has-user-accent .user-message-bubble {
   border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
 }
 
-.edit-last-turn-accent {
-  color: var(--user-accent-color, var(--color-accent));
-}
-
-.edit-last-turn-banner {
-  border-color: color-mix(
-    in srgb,
-    var(--user-accent-color, var(--color-accent)) 32%,
-    transparent
-  );
-  background: color-mix(
-    in srgb,
-    var(--user-accent-color, var(--color-accent)) 8%,
-    transparent
-  );
-}
-
 .edit-last-turn-composer {
   border-color: color-mix(
     in srgb,

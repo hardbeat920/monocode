@@ -248,6 +248,10 @@ describe("Composer question focus", () => {
     });
     expect(textarea.value).toBe("original prompt");
     expect(container.querySelector("[data-composer-editing]")).not.toBeNull();
+    expect(container.textContent).not.toContain("Editing last message");
+    expect(
+      container.querySelector('button[aria-label="Stop editing last message"]'),
+    ).not.toBeNull();
 
     await act(async () => {
       textarea.dispatchEvent(
@@ -257,10 +261,16 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe("");
     expect(submittedOptions?.resendEdited).toBe(true);
     expect(container.querySelector("[data-composer-editing]")).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Stop editing last message"]'),
+    ).toBeNull();
 
     await act(async () => {
       submittedOptions?.onResendRejected?.();
     });
+    expect(
+      container.querySelector('button[aria-label="Stop editing last message"]'),
+    ).not.toBeNull();
     expect(textarea.value).toBe("original prompt");
     expect(container.querySelector("[data-composer-editing]")).not.toBeNull();
     expect(onEditingChange).toHaveBeenCalledWith(true);

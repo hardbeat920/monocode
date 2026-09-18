@@ -7,7 +7,6 @@ import {
   ListEnd,
   Pause,
   Pencil,
-  PenLine,
   Play,
   Plus,
   Share,
@@ -1479,36 +1478,13 @@ export function Composer({
             />
           </div>
         ) : null}
-        {resendEdited ? (
-          <div
-            data-composer-editing
-            role="status"
-            aria-live="polite"
-            className="edit-last-turn-banner flex min-w-0 items-center justify-between gap-3 rounded-t-lg border px-3 py-1.5 text-[11px]"
-          >
-            <span className="edit-last-turn-accent flex min-w-0 items-center gap-1.5 font-medium">
-              <PenLine className="size-3.5 shrink-0" strokeWidth={1.8} />
-              <span className="truncate">Editing last message</span>
-            </span>
-            <button
-              type="button"
-              title="Stop editing last message"
-              aria-label="Stop editing last message"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={exitEditMode}
-              className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-content/50 transition-colors hover:bg-content/10 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-            >
-              <X className="size-3.5" strokeWidth={1.8} />
-              <span className="hidden sm:inline">Cancel</span>
-            </button>
-          </div>
-        ) : null}
         <div
           ref={boxRef}
           data-composer-box
+          data-composer-editing={resendEdited ? "" : undefined}
           className={`relative z-10 border bg-content/3 backdrop-blur-sm ${
             resendEdited
-              ? "edit-last-turn-composer rounded-b-lg border-t-0"
+              ? "edit-last-turn-composer rounded-lg"
               : "rounded-lg border-content/10 has-focus:border-content/20"
           } ${
             fileDrag
@@ -1821,6 +1797,19 @@ export function Composer({
               </div>
             </div>
 
+            {resendEdited ? (
+              <button
+                type="button"
+                title="Stop editing last message"
+                aria-label="Stop editing last message"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={exitEditMode}
+                className="edit-last-turn-button flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-current/20 px-2 text-[11px] font-medium transition-[background-color,color,border-color] hover:border-current/35 hover:bg-content/15 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <X className="size-3" strokeWidth={1.8} />
+                <span>Cancel edit</span>
+              </button>
+            ) : null}
             <div className="flex shrink-0 items-center gap-1">
               <ComposerAction
                 busy={busy}

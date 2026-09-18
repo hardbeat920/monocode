@@ -1252,9 +1252,9 @@ function UserMessageBlock({
       }`}
     >
       <div
-        className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color,outline-color] duration-200 ${
-          editing ? "edit-last-turn-bubble" : "bg-content/10"
-        } ${
+        className={`user-message-bubble relative min-w-0 py-2 pl-3 font-sans text-content transition-[background-color,outline-color] duration-200 ${
+          onEdit && !chat ? "pr-10" : "pr-3"
+        } ${editing ? "edit-last-turn-bubble" : "bg-content/10"} ${
           chat
             ? `w-fit max-w-xl ${singleLine && !editing ? "rounded-full" : "rounded-xl"}`
             : "rounded-lg border border-content/10"
@@ -1262,15 +1262,6 @@ function UserMessageBlock({
         style={{ zIndex: stickyIndex }}
         onClick={overflows ? toggle : undefined}
       >
-        {editing ? (
-          <div
-            aria-label="Editing this message"
-            className="edit-last-turn-accent mb-1.5 flex items-center justify-end gap-1 text-[10px] font-medium tracking-[0.08em]"
-          >
-            <PenLine className="size-3 shrink-0" strokeWidth={1.8} />
-            <span>Editing this message</span>
-          </div>
-        ) : null}
         {onEdit ? (
           <button
             type="button"
