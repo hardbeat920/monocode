@@ -1733,7 +1733,7 @@ mod tests {
                        ON sessions (cwd, has_user_message, updated_at DESC, id, harness,
                                     model, runtime_mode, title, provider_session_id,
                                     created_at, branch, archived, pinned, linked_work_item_json);
-                     DELETE FROM schema_migrations WHERE version = 16;",
+                     DELETE FROM schema_migrations WHERE version >= 16;",
                 )
                 .unwrap();
                 migrate(&conn).unwrap();
