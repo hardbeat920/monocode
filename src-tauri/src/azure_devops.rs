@@ -1,6 +1,8 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -11,6 +13,10 @@ use tauri::{AppHandle, Manager};
 const DEFAULT_LIMIT: u32 = 40;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
+/// Per-file content cap for hunk generation; larger files stay listed.
+const MAX_DIFF_FILE_BYTES: usize = 512 * 1024;
+/// Hunks render for the first N files; the rest stay listed without hunks.
+const MAX_DIFF_HUNK_FILES: usize = 40;
 const USER_AGENT: &str = "MonoCode";
 const API_VERSION: &str = "7.1";
 const CONNECTION_DATA_API_VERSION: &str = "7.1-preview.1";
@@ -427,8 +433,8 @@ fn azure_devops_mr_diff_for(
         API_VERSION
     );
     let iterations = azure_get(config, &iterations_path)?;
-    let iteration_id = latest_iteration_id(&iterations.value).unwrap_or(0);
-    if iteration_id <= 0 {
+    let Some((iteration_id, source_sha, base_sha)) = latest_iteration_commits(&iterations.value)
+    else {
         return Ok(AzureDevOpsMrDiff {
             additions: 0,
             deletions: 0,
@@ -436,7 +442,7 @@ fn azure_devops_mr_diff_for(
             patch: String::new(),
             truncated: false,
         });
-    }
+    };
     let changes_path = format!(
         "/{}/_apis/git/repositories/{}/pullrequests/{}/iterations/{}/changes?$top=100&api-version={}",
         encode_segment(&project),
@@ -446,7 +452,63 @@ fn azure_devops_mr_diff_for(
         API_VERSION
     );
     let response = azure_get(config, &changes_path)?;
-    Ok(parse_iteration_changes(&response.value, response.truncated))
+    let changes = parse_iteration_change_list(&response.value);
+    let mut files: Vec<AzureDevOpsMrFile> = changes
+        .iter()
+        .map(|change| AzureDevOpsMrFile {
+            path: change.path.clone(),
+            additions: 0,
+            deletions: 0,
+        })
+        .collect();
+    let mut patch = String::new();
+    let mut additions = 0_i64;
+    let mut deletions = 0_i64;
+    let mut truncated = response.truncated;
+    let mut hunked = 0_usize;
+    for (index, change) in changes.iter().enumerate() {
+        if hunked >= MAX_DIFF_HUNK_FILES {
+            truncated = true;
+            break;
+        }
+        match diff_iteration_file(config, &project, &repo_name, change, &source_sha, &base_sha) {
+            Ok(FileDiff::Ready {
+                additions: file_adds,
+                deletions: file_dels,
+                block,
+            }) => {
+                hunked += 1;
+                additions += file_adds;
+                deletions += file_dels;
+                if let Some(file) = files.get_mut(index) {
+                    file.additions = file_adds;
+                    file.deletions = file_dels;
+                }
+                if patch.len() + block.len() > MAX_DIFF_BYTES {
+                    truncated = true;
+                    continue;
+                }
+                patch.push_str(&block);
+            }
+            Ok(FileDiff::Unchanged) => {
+                hunked += 1;
+            }
+            Ok(FileDiff::Skipped { too_large }) => {
+                truncated = truncated || too_large;
+            }
+            Err(_) => {
+                // A single unreadable file must not fail the whole diff; the
+                // file stays listed without hunks.
+            }
+        }
+    }
+    Ok(AzureDevOpsMrDiff {
+        additions,
+        deletions,
+        files,
+        patch,
+        truncated,
+    })
 }
 
 // ---- Pull requests ----
@@ -904,15 +966,18 @@ fn parse_wit_thread(value: &Value, truncated: bool) -> Result<AzureDevOpsWorkIte
     })
 }
 
-fn parse_iteration_changes(value: &Value, truncated: bool) -> AzureDevOpsMrDiff {
+struct IterationChange {
+    path: String,
+    change_type: String,
+}
+
+fn parse_iteration_change_list(value: &Value) -> Vec<IterationChange> {
     let entries = value
         .get("changeEntries")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mut files = Vec::new();
-    let mut patch = String::new();
-    let mut truncated = truncated;
+    let mut changes = Vec::new();
     for entry in &entries {
         let item = entry.get("item");
         let path = item
@@ -929,29 +994,305 @@ fn parse_iteration_changes(value: &Value, truncated: bool) -> AzureDevOpsMrDiff 
         if clean.is_empty() {
             continue;
         }
-        files.push(AzureDevOpsMrFile {
-            path: clean.clone(),
+        changes.push(IterationChange {
+            path: clean,
+            change_type: string_field(entry, "changeType").unwrap_or_default(),
+        });
+    }
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    changes.dedup_by(|a, b| a.path == b.path);
+    changes
+}
+
+/// Outcome of rendering one changed file. `Skipped` keeps the file listed
+/// without hunks; only `too_large` marks the whole diff truncated.
+enum FileDiff {
+    Ready {
+        additions: i64,
+        deletions: i64,
+        block: String,
+    },
+    Unchanged,
+    Skipped {
+        too_large: bool,
+    },
+}
+
+fn diff_iteration_file(
+    config: &AzureDevOpsConfig,
+    project: &str,
+    repo_name: &str,
+    change: &IterationChange,
+    source_sha: &str,
+    base_sha: &str,
+) -> Result<FileDiff, String> {
+    let change_type = change.change_type.to_ascii_lowercase();
+    let need_base = change_type != "add";
+    let need_target = change_type != "delete";
+    if need_base && base_sha.trim().is_empty() {
+        return Ok(FileDiff::Skipped { too_large: false });
+    }
+    if need_target && source_sha.trim().is_empty() {
+        return Ok(FileDiff::Skipped { too_large: false });
+    }
+    let base = if need_base {
+        azure_file_content(config, project, repo_name, &change.path, base_sha)?
+    } else {
+        None
+    };
+    let target = if need_target {
+        azure_file_content(config, project, repo_name, &change.path, source_sha)?
+    } else {
+        None
+    };
+    if let (Some(FileContent::TooLarge), _) | (_, Some(FileContent::TooLarge)) = (&base, &target) {
+        return Ok(FileDiff::Skipped { too_large: true });
+    }
+    if let (Some(FileContent::Binary), _) | (_, Some(FileContent::Binary)) = (&base, &target) {
+        return Ok(FileDiff::Ready {
             additions: 0,
             deletions: 0,
+            block: format!(
+                "diff --git a/{0} b/{0}\nBinary files a/{0} and b/{0} differ\n",
+                change.path
+            ),
         });
-        let block = format!("diff --git a/{clean} b/{clean}\n--- a/{clean}\n+++ b/{clean}\n");
-        if patch.len() + block.len() > MAX_DIFF_BYTES {
-            truncated = true;
-            continue;
-        }
-        patch.push_str(&block);
     }
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    files.dedup_by(|a, b| a.path == b.path);
-    AzureDevOpsMrDiff {
-        additions: 0,
-        deletions: 0,
-        files,
-        patch,
-        truncated,
+    let base_bytes = base.and_then(|content| content.into_text());
+    let target_bytes = target.and_then(|content| content.into_text());
+    if base_bytes.is_none() && target_bytes.is_none() {
+        return Ok(FileDiff::Skipped { too_large: false });
+    }
+    if base_bytes == target_bytes {
+        return Ok(FileDiff::Unchanged);
+    }
+    // Sides are already capped at MAX_DIFF_FILE_BYTES by azure_file_content.
+    let is_add = base_bytes.is_none();
+    let is_delete = target_bytes.is_none();
+    let Some((additions, deletions, hunks)) =
+        git_unified_hunks(base_bytes.as_deref(), target_bytes.as_deref())
+    else {
+        return Ok(FileDiff::Skipped { too_large: false });
+    };
+    let mut block = format!("diff --git a/{0} b/{0}\n", change.path);
+    if is_add {
+        block.push_str("new file mode 100644\n");
+    }
+    if is_delete {
+        block.push_str("deleted file mode 100644\n");
+    }
+    if is_add {
+        block.push_str(&format!("--- /dev/null\n+++ b/{}\n", change.path));
+    } else if is_delete {
+        block.push_str(&format!("--- a/{}\n+++ /dev/null\n", change.path));
+    } else {
+        block.push_str(&format!("--- a/{0}\n+++ b/{0}\n", change.path));
+    }
+    block.push_str(&hunks);
+    Ok(FileDiff::Ready {
+        additions,
+        deletions,
+        block,
+    })
+}
+
+enum FileContent {
+    Text(Vec<u8>),
+    Binary,
+    TooLarge,
+}
+
+impl FileContent {
+    fn into_text(self) -> Option<Vec<u8>> {
+        match self {
+            FileContent::Text(bytes) => Some(bytes),
+            FileContent::Binary | FileContent::TooLarge => None,
+        }
     }
 }
 
+fn is_binary_bytes(bytes: &[u8]) -> bool {
+    bytes.iter().take(8000).any(|byte| *byte == 0)
+}
+
+/// Fetch one file version via the Items API. `Ok(None)` means the path does
+/// not exist at that commit (the other side of an add/delete).
+fn azure_file_content(
+    config: &AzureDevOpsConfig,
+    project: &str,
+    repo_name: &str,
+    path: &str,
+    sha: &str,
+) -> Result<Option<FileContent>, String> {
+    let encoded = path
+        .split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    let url_path = format!(
+        "/{}/_apis/git/repositories/{}/items?path=/{}&versionDescriptor.version={}&versionDescriptor.versionType=commit&includeContent=true&api-version={}",
+        encode_segment(project),
+        encode_segment(repo_name),
+        encoded,
+        encode_segment(sha.trim()),
+        API_VERSION
+    );
+    let (bytes, _) = match azure_get_bytes(config, &url_path) {
+        Ok(content) => content,
+        Err(error) if error == "Azure DevOps did not find that item" => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if bytes.len() > MAX_DIFF_FILE_BYTES {
+        // Oversized bodies stay listed without hunks; the caller marks the
+        // diff truncated.
+        return Ok(Some(FileContent::TooLarge));
+    }
+    Ok(Some(sniff_content(&bytes)))
+}
+
+fn sniff_content(bytes: &[u8]) -> FileContent {
+    let trimmed_start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .map(|start| &bytes[start..])
+        .unwrap_or(&[]);
+    if trimmed_start.starts_with(b"{") {
+        if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(bytes) {
+            if map
+                .get("isTruncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return FileContent::TooLarge;
+            }
+            if let Some(content) = map.get("content").and_then(Value::as_str) {
+                let text = content.as_bytes();
+                if is_binary_bytes(text) {
+                    return FileContent::Binary;
+                }
+                return FileContent::Text(text.to_vec());
+            }
+        }
+    }
+    if is_binary_bytes(bytes) {
+        return FileContent::Binary;
+    }
+    FileContent::Text(bytes.to_vec())
+}
+
+static DIFF_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Unified hunks between two file versions via the local `git` binary (the
+/// provider already requires git for remote detection). Returns `None` when
+/// the sides are identical or git is unavailable/fails, so callers degrade to
+/// a hunk-less file entry instead of failing the whole diff.
+fn git_unified_hunks(old: Option<&[u8]>, new: Option<&[u8]>) -> Option<(i64, i64, String)> {
+    let tag = DIFF_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("monocode-ado-diff-{}-{tag}", std::process::id()));
+    if fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    let cleanup = || {
+        let _ = fs::remove_dir_all(&dir);
+    };
+    let old_path = dir.join("old");
+    let new_path = dir.join("new");
+    if let Some(bytes) = old {
+        if fs::write(&old_path, bytes).is_err() {
+            cleanup();
+            return None;
+        }
+    }
+    if let Some(bytes) = new {
+        if fs::write(&new_path, bytes).is_err() {
+            cleanup();
+            return None;
+        }
+    }
+    let null_file: &Path = if cfg!(windows) {
+        Path::new("NUL")
+    } else {
+        Path::new("/dev/null")
+    };
+    let mut cmd = Command::new("git");
+    crate::hide_window_console(&mut cmd);
+    let output = cmd
+        .args([
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.safecrlf=false",
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--no-index",
+            "--unified=3",
+            "--no-color",
+            "--",
+        ])
+        .arg(if old.is_some() {
+            old_path.as_path()
+        } else {
+            null_file
+        })
+        .arg(if new.is_some() {
+            new_path.as_path()
+        } else {
+            null_file
+        })
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .current_dir(&dir)
+        .output();
+    cleanup();
+    let output = output.ok()?;
+    // Exit 0 means identical; 1 means differences; anything else is a failure.
+    if output
+        .status
+        .code()
+        .is_none_or(|code| code != 0 && code != 1)
+    {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (additions, deletions, hunks, binary) = parse_git_diff_hunks(&stdout);
+    if binary || !hunks.is_empty() {
+        return Some((additions, deletions, hunks));
+    }
+    // Exit 1 without hunks only happens for mode-only changes; surface the
+    // file without hunks rather than dropping it.
+    if output.status.code() == Some(1) {
+        return Some((0, 0, String::new()));
+    }
+    None
+}
+
+/// Split `git diff` output into counts plus the `@@` hunks (or the binary
+/// marker). Header lines are regenerated by the caller with repo paths.
+fn parse_git_diff_hunks(output: &str) -> (i64, i64, String, bool) {
+    let mut additions = 0_i64;
+    let mut deletions = 0_i64;
+    let mut hunks = String::new();
+    let mut in_hunks = false;
+    for line in output.lines() {
+        if line.starts_with("Binary files ") {
+            return (0, 0, String::new(), true);
+        }
+        if line.starts_with("@@") {
+            in_hunks = true;
+        }
+        if !in_hunks {
+            continue;
+        }
+        hunks.push_str(line);
+        hunks.push('\n');
+        if line.starts_with('+') && !line.starts_with("+++") {
+            additions += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            deletions += 1;
+        }
+    }
+    (additions, deletions, hunks, false)
+}
 fn parse_pr_labels(row: &Value) -> Vec<AzureDevOpsLabel> {
     row.get("labels")
         .and_then(Value::as_array)
@@ -1113,16 +1454,32 @@ fn short_ref(value: &str) -> String {
         .to_string()
 }
 
-fn latest_iteration_id(value: &Value) -> Option<i64> {
-    value
-        .get("value")
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.get("id").and_then(Value::as_i64))
-                .max()
-        })
-        .unwrap_or_else(|| value.get("id").and_then(Value::as_i64))
+fn latest_iteration_commits(value: &Value) -> Option<(i64, String, String)> {
+    let rows = value.get("value").and_then(Value::as_array)?;
+    let row = rows
+        .iter()
+        .filter(|row| row.get("id").and_then(Value::as_i64).unwrap_or(0) > 0)
+        .max_by_key(|row| row.get("id").and_then(Value::as_i64).unwrap_or(0))?;
+    let id = row.get("id").and_then(Value::as_i64)?;
+    let commit_id = |key: &str| {
+        row.get(key)
+            .and_then(|commit| string_field(commit, "commitId"))
+            .unwrap_or_default()
+    };
+    let source = commit_id("sourceRefCommit");
+    if source.trim().is_empty() {
+        return None;
+    }
+    let base = commit_id("commonRefCommit");
+    let base = if base.trim().is_empty() {
+        commit_id("targetRefCommit")
+    } else {
+        base
+    };
+    if base.trim().is_empty() {
+        return None;
+    }
+    Some((id, source, base))
 }
 
 // ---- Validation ----
@@ -1245,6 +1602,39 @@ fn azure_agent() -> ureq::Agent {
 fn read_azure_response(
     result: Result<ureq::Response, ureq::Error>,
 ) -> Result<AzureResponse, String> {
+    let (bytes, status, truncated) = read_azure_bytes(result)?;
+    let body = String::from_utf8(bytes)
+        .map_err(|_| "Azure DevOps returned an unreadable response".to_string())?;
+    if !(200..300).contains(&status) {
+        return Err(azure_http_error(status, &body));
+    }
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|_| "Azure DevOps returned invalid JSON".to_string())?;
+    Ok(AzureResponse { value, truncated })
+}
+
+/// Raw-bytes variant for file content, which is not necessarily UTF-8 JSON.
+fn azure_get_bytes(config: &AzureDevOpsConfig, path: &str) -> Result<(Vec<u8>, bool), String> {
+    let url = format!("{}{}", config.url.trim_end_matches('/'), path);
+    let agent = azure_agent();
+    let (bytes, status, truncated) = read_azure_bytes(
+        agent
+            .get(&url)
+            .set("Authorization", &basic_auth(&config.token))
+            .set("Accept", "application/json")
+            .set("User-Agent", USER_AGENT)
+            .call(),
+    )?;
+    if !(200..300).contains(&status) {
+        let body = String::from_utf8_lossy(&bytes);
+        return Err(azure_http_error(status, &body));
+    }
+    Ok((bytes, truncated))
+}
+
+fn read_azure_bytes(
+    result: Result<ureq::Response, ureq::Error>,
+) -> Result<(Vec<u8>, u16, bool), String> {
     let response = match result {
         Ok(response) => response,
         Err(ureq::Error::Status(401, _) | ureq::Error::Status(403, _)) => {
@@ -1264,15 +1654,12 @@ fn read_azure_response(
         .header("x-ms-continuationtoken")
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
-    let body = response
-        .into_string()
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
         .map_err(|_| "Azure DevOps returned an unreadable response".to_string())?;
-    if !(200..300).contains(&status) {
-        return Err(azure_http_error(status, &body));
-    }
-    let value: Value = serde_json::from_str(&body)
-        .map_err(|_| "Azure DevOps returned invalid JSON".to_string())?;
-    Ok(AzureResponse { value, truncated })
+    Ok((bytes, status, truncated))
 }
 
 fn azure_http_error(status: u16, body: &str) -> String {
@@ -1837,15 +2224,86 @@ mod tests {
     }
 
     #[test]
-    fn builds_iteration_diff_headers() {
+    fn builds_iteration_change_list() {
         let value = json!({ "changeEntries": [
             { "item": { "path": "/src/new.ts", "isFolder": false }, "changeType": "add" },
             { "item": { "path": "/", "isFolder": true }, "changeType": "edit" }
         ]});
-        let diff = parse_iteration_changes(&value, false);
-        assert_eq!(diff.files.len(), 1);
-        assert_eq!(diff.files[0].path, "src/new.ts");
-        assert!(diff.patch.contains("diff --git a/src/new.ts b/src/new.ts"));
+        let changes = parse_iteration_change_list(&value);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "src/new.ts");
+        assert_eq!(changes[0].change_type, "add");
+    }
+
+    #[test]
+    fn parses_git_diff_hunks_and_counts() {
+        let output = "diff --git a/src/a.ts b/src/a.ts\n\
+            new file mode 100644\n\
+            index 0000000..3b18e51\n\
+            --- /dev/null\n\
+            +++ b/src/a.ts\n\
+            @@ -0,0 +1,2 @@\n\
+            +one\n\
+            +two\n";
+        let (additions, deletions, hunks, binary) = parse_git_diff_hunks(output);
+        assert_eq!((additions, deletions), (2, 0));
+        assert!(hunks.contains("@@ -0,0 +1,2 @@"));
+        assert!(hunks.contains("+two"));
+        assert!(!binary);
+
+        let binary_output =
+            "diff --git a/img.png b/img.png\nBinary files a/img.png and b/img.png differ\n";
+        let (_, _, _, binary) = parse_git_diff_hunks(binary_output);
+        assert!(binary);
+    }
+
+    #[test]
+    fn builds_unified_hunks_with_git() {
+        // git is a hard runtime requirement (remote detection shells out to
+        // it), so the test environment is expected to provide it.
+        let Some((additions, deletions, hunks)) =
+            git_unified_hunks(Some(b"one\ntwo\n"), Some(b"one\nTWO\nthree\n"))
+        else {
+            panic!("git diff should be available in the test environment");
+        };
+        assert_eq!((additions, deletions), (2, 1));
+        assert!(hunks.contains("@@"));
+        assert!(hunks.contains("+TWO"));
+        assert!(
+            git_unified_hunks(Some(b"same\n"), Some(b"same\n")).is_none(),
+            "identical sides produce no hunks"
+        );
+    }
+
+    #[test]
+    fn reads_latest_iteration_commits() {
+        let value = json!({ "value": [
+            { "id": 1,
+              "sourceRefCommit": { "commitId": "aaa" },
+              "targetRefCommit": { "commitId": "base1" } },
+            { "id": 2,
+              "sourceRefCommit": { "commitId": "bbb" },
+              "commonRefCommit": { "commitId": "base2" },
+              "targetRefCommit": { "commitId": "other" } }
+        ]});
+        assert_eq!(
+            latest_iteration_commits(&value),
+            Some((2, "bbb".to_string(), "base2".to_string()))
+        );
+        assert!(latest_iteration_commits(&json!({ "value": [] })).is_none());
+    }
+
+    #[test]
+    fn sniffs_json_wrapped_and_binary_content() {
+        let wrapped = serde_json::json!({ "content": "hello\n" });
+        let raw = serde_json::to_vec(&wrapped).unwrap();
+        match sniff_content(&raw) {
+            FileContent::Text(bytes) => assert_eq!(bytes, b"hello\n"),
+            _ => panic!("expected text content"),
+        }
+        assert!(matches!(sniff_content(b"a\0b"), FileContent::Binary));
+        let truncated = serde_json::to_vec(&serde_json::json!({ "isTruncated": true })).unwrap();
+        assert!(matches!(sniff_content(&truncated), FileContent::TooLarge));
     }
 
     #[test]
