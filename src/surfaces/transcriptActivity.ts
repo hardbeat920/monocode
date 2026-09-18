@@ -160,6 +160,18 @@ export function isThinkingBlock(block: Block): boolean {
   return block.role === "reasoning" && !!block.text.trim();
 }
 
+/**
+ * The newest thought in a run of work: what the agent is on right now, for a
+ * header that would otherwise be counting calls while the agent narrates
+ * somewhere the reader cannot see.
+ */
+export function latestThinkingStep(steps: Block[]): Block | undefined {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (isThinkingBlock(steps[index])) return steps[index];
+  }
+  return undefined;
+}
+
 export function isToolBlock(block: Block): boolean {
   return block.role === "tool" || block.role === "approval";
 }
@@ -752,14 +764,30 @@ export function workKind(steps: Block[]): ActivityPhaseKind {
 /**
  * The group's header: the agent's own line if it wrote one, otherwise what the
  * calls add up to.
+ *
+ * An open live group has no line of its own only when the harness narrates in
+ * reasoning instead of prose, and then the count is the one thing on screen
+ * that is not moving. There the header follows the newest thought, the way it
+ * follows the agent's words when the agent writes any. Collapsing the group is
+ * a reading choice and keeps the count; so does a group that has settled, so
+ * nothing the agent only thought stays in a transcript being read back.
  */
-export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
+export function activityPhaseTitle(
+  phase: ActivityPhase,
+  live = false,
+  open = false,
+): string {
   const failure = subagentFailureSummary(phase.steps);
   if (failure) return failure;
   if (phase.headline) {
     const summary = proseSummary(phase.headline.text);
     if (summary) return summary;
     return phase.headline.role === "reasoning" ? "Thinking" : "Working";
+  }
+  if (live && open) {
+    const thought = latestThinkingStep(phase.steps);
+    const summary = thought ? proseSummary(thought.text) : "";
+    if (summary) return summary;
   }
   return workSummaryLine(phase.steps, live);
 }

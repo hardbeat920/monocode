@@ -581,6 +581,46 @@ describe("activityPhaseTitle", () => {
     ).toBe("Found it — the tokens live in globals.css.");
   });
 
+  it("follows the newest thought while the live group is open", () => {
+    const phase = buildActivityPhases([
+      thought("t1", "Reading the runbook to find where detection is set."),
+      read("r1", "docs/runbook.md"),
+      thought("t2", "The tracker resets the boxes at 40 m."),
+      shell("s1"),
+    ])[0];
+
+    expect(activityPhaseTitle(phase, true, true)).toBe(
+      "The tracker resets the boxes at 40 m.",
+    );
+  });
+
+  it("keeps the count once the group is closed or settled", () => {
+    const blocks = [
+      thought("t1", "The tracker resets the boxes at 40 m."),
+      read("r1", "docs/runbook.md"),
+    ];
+    const phase = buildActivityPhases(blocks)[0];
+
+    expect(activityPhaseTitle(phase, true, false)).toBe("Reading runbook.md");
+    expect(activityPhaseTitle(phase, false, false)).toBe("Read runbook.md");
+  });
+
+  it("still prefers the agent's own line to a thought", () => {
+    const phase = buildActivityPhases([
+      note("n1", "Now the lab code."),
+      thought("t1", "Weighing the options."),
+      read("r1"),
+    ])[0];
+
+    expect(activityPhaseTitle(phase, true, true)).toBe("Now the lab code.");
+  });
+
+  it("counts the calls until the agent has thought anything", () => {
+    const phase = buildActivityPhases([read("r1", "a.ts"), read("r2", "b.ts")])[0];
+
+    expect(activityPhaseTitle(phase, true, true)).toBe("Reading 2 files");
+  });
+
   it("says what the calls add up to, in the tense of the moment", () => {
     expect(title([read("r1", "a.ts"), read("r2", "b.ts")], true)).toBe(
       "Reading 2 files",

@@ -95,6 +95,7 @@ import {
   isIncompleteTool,
   isSubagentBlock,
   isThinkingBlock,
+  latestThinkingStep,
   lastActivityIndex,
   isProseBlock,
   needsApproval,
@@ -1580,8 +1581,18 @@ function ActivityPhaseGroup({
   const waiting = phase.steps.some(needsApproval);
   const open = waiting || (override ?? active);
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
-  useLivePhaseScroll(liveScroller, active && open, phase.steps);
-  const title = activityPhaseTitle(phase, active);
+  const title = activityPhaseTitle(phase, active, open);
+  // What the header is holding while the group runs, so the trail under it
+  // starts one step back: a header repeating the row beneath it says the same
+  // thing twice, and the thought drops into the trail as the agent moves on.
+  const titling =
+    active && open && !phase.headline
+      ? latestThinkingStep(phase.steps)
+      : undefined;
+  const steps = titling
+    ? phase.steps.filter((block) => block !== titling)
+    : phase.steps;
+  useLivePhaseScroll(liveScroller, active && open, steps);
   // Opening a group on purpose is also how you read the line that titled it,
   // whole. The auto-open while it runs is a live view, not a reading one, and
   // a one-line note the header already shows in full has nothing to add.
@@ -1683,7 +1694,7 @@ function ActivityPhaseGroup({
                   />
                 </div>
               ) : null}
-              {phase.steps.map((block) => (
+              {steps.map((block) => (
                 <div
                   key={block.id}
                   className={`zen-phase-step${active ? " zen-step-in" : ""}`}
