@@ -441,6 +441,55 @@ html.is-reordering * {
   user-select: none !important;
 }
 
+html.is-explorer-file-dragging,
+html.is-explorer-file-dragging * {
+  cursor: grabbing !important;
+}
+
+.explorer-file-drag-preview {
+  position: fixed !important;
+  inset: 0 auto auto 0 !important;
+  z-index: 2147483647;
+  display: flex !important;
+  width: max-content !important;
+  max-width: min(280px, calc(100vw - 16px));
+  height: 26px !important;
+  align-items: center;
+  gap: 6px;
+  margin: 0 !important;
+  padding: 0 9px 0 7px !important;
+  overflow: hidden;
+  pointer-events: none !important;
+  border: 1px solid color-mix(in srgb, var(--color-content) 12%, transparent);
+  border-radius: 5px;
+  background: color-mix(
+    in srgb,
+    var(--color-background-base) 96%,
+    var(--color-content) 4%
+  ) !important;
+  box-shadow:
+    0 4px 12px rgb(0 0 0 / 18%),
+    0 1px 2px rgb(0 0 0 / 20%);
+  color: var(--color-content) !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  white-space: nowrap;
+  opacity: 0.94 !important;
+  will-change: transform;
+  contain: paint;
+}
+
+.explorer-file-drag-preview > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+html.theme-light .explorer-file-drag-preview {
+  background: var(--color-background-base) !important;
+  opacity: 1 !important;
+}
+
 html.is-resizing,
 html.is-resizing * {
   cursor: col-resize !important;
@@ -1467,14 +1516,14 @@ header[data-tauri-drag-region] button {
   }
 }
 
-/* Keep the original content tint in dark mode. In light mode, use the base
-   color at the same opacity so the surface stays translucent without graying. */
+/* Keep the original glass tint in dark mode. Light popovers use an opaque
+   surface so underlying content cannot show through. */
 .popover-backdrop {
   background: color-mix(in srgb, var(--color-content) 2%, transparent);
 }
 
 html.theme-light .popover-backdrop {
-  background: color-mix(in srgb, var(--color-background-base) 10%, transparent);
+  background: var(--color-background-base);
 }
 
 /* Animate content only; its sibling glass stays still. Finish at `none` and
@@ -1515,6 +1564,157 @@ html.theme-light .popover-backdrop {
 @media (prefers-reduced-motion: reduce) {
   .popover-open {
     animation: none;
+  }
+}
+
+/* The selected project mascot turns banked resets into a tiny status scene. */
+.reset-mascot-scene {
+  position: absolute;
+  right: 8px;
+  bottom: 5px;
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.reset-mascot-glow {
+  position: absolute;
+  inset: 14px 8px 3px;
+  z-index: -1;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.14;
+  filter: blur(12px);
+}
+
+.reset-mascot-sprite {
+  width: 56px;
+  height: 56px;
+  overflow: visible;
+  filter: drop-shadow(0 5px 6px rgb(0 0 0 / 0.18));
+  transform-origin: 50% 100%;
+}
+
+.reset-mascot-scene[data-reset-mascot-mood="happy"] .reset-mascot-sprite {
+  animation: reset-mascot-happy-in 720ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+
+.reset-mascot-scene[data-reset-mascot-mood="sad"] .reset-mascot-sprite {
+  transform: translateX(-3px) rotate(-3deg);
+  animation: reset-mascot-sad-in 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  opacity: 0.68;
+}
+
+.reset-mascot-spark {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  transform: rotate(45deg);
+  animation: reset-mascot-spark-in 620ms 260ms cubic-bezier(0.16, 1, 0.3, 1)
+    both;
+}
+
+.reset-mascot-spark-a {
+  top: 8px;
+  right: 7px;
+}
+
+.reset-mascot-spark-b {
+  top: 19px;
+  left: 3px;
+  width: 3px;
+  height: 3px;
+  animation-delay: 360ms;
+}
+
+.reset-mascot-tear {
+  position: absolute;
+  top: 31px;
+  left: 19px;
+  width: 4px;
+  height: 6px;
+  border-radius: 999px 999px 999px 2px;
+  background: #60a5fa;
+  opacity: 0.75;
+  transform: rotate(12deg);
+  animation: reset-mascot-tear-in 680ms 300ms cubic-bezier(0.22, 1, 0.36, 1)
+    both;
+}
+
+@keyframes reset-mascot-happy-in {
+  0% {
+    opacity: 0;
+    transform: translateY(9px) scale(0.82);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-10px) rotate(-3deg) scaleY(1.05);
+  }
+  68% {
+    transform: translateY(0) scaleX(1.08) scaleY(0.92);
+  }
+  84% {
+    transform: translateY(-4px) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes reset-mascot-sad-in {
+  0% {
+    opacity: 0;
+    transform: translateX(8px) rotate(5deg) scale(0.9);
+  }
+  42% {
+    opacity: 0.68;
+    transform: translateX(0) rotate(0);
+  }
+  68% {
+    transform: translateX(-5px) rotate(-5deg);
+  }
+  100% {
+    opacity: 0.68;
+    transform: translateX(-3px) rotate(-3deg);
+  }
+}
+
+@keyframes reset-mascot-spark-in {
+  from {
+    opacity: 0;
+    transform: rotate(45deg) scale(0);
+  }
+  to {
+    opacity: 0.7;
+    transform: rotate(45deg) scale(1);
+  }
+}
+
+@keyframes reset-mascot-tear-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) rotate(12deg) scale(0.5);
+  }
+  to {
+    opacity: 0.75;
+    transform: translateY(0) rotate(12deg) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reset-mascot-sprite,
+  .reset-mascot-spark,
+  .reset-mascot-tear {
+    animation: none !important;
   }
 }
 

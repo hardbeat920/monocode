@@ -25,6 +25,26 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("hides provider authentication errors handled by the sign-in modal", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        harness: "grok",
+        blocks: [
+          {
+            id: "auth-error",
+            role: "system",
+            notice: "error",
+            text: "Authentication required\n\nGrok Build is not signed in.",
+          },
+        ],
+      }),
+    );
+
+    expect(markup).not.toContain("Authentication required");
+    expect(markup).not.toContain("Sign in to Grok Build");
+    expect(markup).not.toContain("<button");
+  });
+
   it("reveals an orchestration result after the finished turn and before its action row", () => {
     const card: Block = {
       id: "proposal",
@@ -58,11 +78,7 @@ describe("AgentTranscript collapsed work", () => {
       },
       card, // Existing records have the card before the work.
       tool("inspection"),
-      {
-        id: "answer",
-        role: "assistant",
-        text: "The investigation is complete.",
-      },
+      { id: "answer", role: "assistant", text: "The investigation is complete." },
     ];
     expect(render(blocks, true)).not.toContain("data-orchestration-review");
     const finished = render(blocks);
@@ -483,7 +499,11 @@ describe("AgentTranscript collapsed work", () => {
         text: "last ping",
         interjection: { customType: "irc:incoming" },
       },
-      { id: "answer", role: "assistant", text: "The investigation is complete." },
+      {
+        id: "answer",
+        role: "assistant",
+        text: "The investigation is complete.",
+      },
     ];
 
     const settled = render(blocks);

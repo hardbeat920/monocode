@@ -16,6 +16,7 @@ import {
   filterTabsForProject,
   findOpenSessionTab,
   findTabForProject,
+  openAddToChatSessionPane,
   planWorkspaceTabClose,
   replaceGroupInTabOrder,
   workspaceTabProject,
@@ -111,6 +112,41 @@ describe("findOpenSessionTab", () => {
         "parked-session",
       ),
     ).toBe(ghost);
+  });
+});
+
+describe("openAddToChatSessionPane", () => {
+  it("opens and focuses a chat beside the focused file pane", () => {
+    const file = newFileTab("/workspace/readme.md", "/workspace");
+    const pane = { id: "editor", files: [file], activeFileId: file.id };
+    const fileOnly: WorkspaceTab = {
+      ...newTab(pane.id),
+      id: "file-tab",
+      editorPanes: [pane],
+      diffFocused: true,
+    };
+
+    const opened = openAddToChatSessionPane({
+      tab: fileOnly,
+      sessions: [],
+      sessionId: "new-chat",
+    });
+
+    expect(leafIds(opened!.layout)).toEqual([pane.id, "new-chat"]);
+    expect(opened?.focusedId).toBe("new-chat");
+    expect(opened?.diffFocused).toBe(false);
+    expect(opened?.editorPanes).toEqual([pane]);
+  });
+
+  it("leaves add-to-chat routing to an existing session pane", () => {
+    const chatTab = tab("chat-tab", "existing-chat");
+    expect(
+      openAddToChatSessionPane({
+        tab: chatTab,
+        sessions: [session("existing-chat", "/workspace")],
+        sessionId: "unused-chat",
+      }),
+    ).toBeNull();
   });
 });
 

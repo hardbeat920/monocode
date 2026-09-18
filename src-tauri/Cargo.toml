@@ -20,6 +20,8 @@ tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
+unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 tauri-plugin-dialog = "2"
@@ -32,6 +34,7 @@ tauri-plugin-process = "2"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
 portable-pty = { version = "0.9", path = "../vendor/portable-pty" }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
 tauri-winrt-notification = "0.8"
@@ -41,7 +44,7 @@ windows = { version = "0.62", features = ["UI_Notifications"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSButton", "NSColor", "NSControl", "NSDockTile", "NSGraphics", "NSImage", "NSLayoutAnchor", "NSLayoutConstraint", "NSMenu", "NSMenuItem", "NSResponder", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSButton", "NSColor", "NSControl", "NSDockTile", "NSGraphics", "NSImage", "NSLayoutAnchor", "NSLayoutConstraint", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSError", "NSString"] }
 objc2-user-notifications = { version = "0.3.2", features = ["UNUserNotificationCenter", "UNNotification", "UNNotificationAction", "UNNotificationCategory", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "block2"] }
 raw-window-handle = "0.6"

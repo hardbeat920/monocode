@@ -67,6 +67,7 @@ type Live = {
   rpc: JsonRpcClient;
   threadId: string;
   cwd: string;
+  providerAccountId?: string;
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -96,6 +97,7 @@ type Live = {
 type Resume = {
   threadId: string;
   cwd: string;
+  providerAccountId?: string;
 };
 
 const liveByThread = new Map<string, Live>();
@@ -354,15 +356,24 @@ export function bindCodexSession(
   threadId: string,
   providerSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const providerThreadId = providerSessionId.trim();
   if (!threadId || !providerThreadId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { threadId: providerThreadId, cwd });
+  resumeByThread.set(threadId, {
+    threadId: providerThreadId,
+    cwd,
+    providerAccountId,
+  });
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
-  if (existing && existing.cwd === input.cwd) {
+  if (
+    existing &&
+    existing.cwd === input.cwd &&
+    existing.providerAccountId === input.providerAccountId
+  ) {
     existing.onEvent = input.onEvent;
     return existing;
   }
@@ -372,8 +383,15 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canResume = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
+  const canResume =
+    resume != null &&
+    resume.cwd === input.cwd &&
+    resume.providerAccountId === input.providerAccountId;
+  if (
+    resume &&
+    (resume.cwd !== input.cwd ||
+      resume.providerAccountId !== input.providerAccountId)
+  ) {
     resumeByThread.delete(input.sessionId);
   }
 
@@ -436,7 +454,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["app-server"], input.cwd);
+  await spawnChild(input.sessionId, path, ["app-server"], input.cwd, {
+    provider: "codex",
+    id: input.providerAccountId ?? "default",
+  });
 
   try {
     await rpc.request("initialize", {
@@ -506,6 +527,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       rpc,
       threadId,
       cwd: input.cwd,
+      providerAccountId: input.providerAccountId,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       onEvent: input.onEvent,
@@ -531,6 +553,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.set(input.sessionId, {
       threadId,
       cwd: input.cwd,
+      providerAccountId: input.providerAccountId,
     });
     live.onEvent({
       type: "session.providerBound",

@@ -42,6 +42,7 @@ export type WorkspaceSessionStub = {
   runtimeMode: RuntimeMode;
   title: string;
   providerSessionId?: string;
+  providerAccountId?: string;
   branch?: string;
   worktreeCwd?: string;
 };
@@ -312,6 +313,9 @@ function sessionStub(session: Session): WorkspaceSessionStub | null {
     ...(session.providerSessionId
       ? { providerSessionId: session.providerSessionId }
       : {}),
+    ...(session.providerAccountId
+      ? { providerAccountId: session.providerAccountId }
+      : {}),
     ...(session.branch ? { branch: session.branch } : {}),
     ...(session.worktreeCwd ? { worktreeCwd: session.worktreeCwd } : {}),
   };
@@ -332,6 +336,9 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
     ...(stub.inboxAsk ? { inboxAsk: stub.inboxAsk } : {}),
     ...(stub.providerSessionId
       ? { providerSessionId: stub.providerSessionId }
+      : {}),
+    ...(stub.providerAccountId
+      ? { providerAccountId: stub.providerAccountId }
       : {}),
     ...(stub.branch ? { branch: stub.branch } : {}),
     ...(stub.worktreeCwd ? { worktreeCwd: stub.worktreeCwd } : {}),
@@ -368,6 +375,10 @@ function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
       ? { inboxAsk: value.inboxAsk as InboxAskContext } : {}),
     ...(typeof value.providerSessionId === "string" && value.providerSessionId
       ? { providerSessionId: value.providerSessionId }
+      : {}),
+    ...(typeof value.providerAccountId === "string" &&
+    /^[A-Za-z0-9_-]+$/.test(value.providerAccountId)
+      ? { providerAccountId: value.providerAccountId }
       : {}),
     ...(typeof value.branch === "string" && value.branch.trim()
       ? { branch: value.branch.trim() }

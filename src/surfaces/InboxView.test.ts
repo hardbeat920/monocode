@@ -1,7 +1,12 @@
+import { invoke } from "@tauri-apps/api/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import type { InboxItem } from "../lib/githubTasks";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearInboxCache,
+  githubWorkItemDetails,
+  type InboxItem,
+} from "../lib/githubTasks";
 import type { LinkedWorkItem } from "../lib/session";
 import type { SessionSummary } from "../lib/sessionStore";
 import {
@@ -9,6 +14,8 @@ import {
   inboxShowsFullFileDiff,
   LinkedWorkItemPanel,
 } from "./InboxView";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 function item(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -296,5 +303,37 @@ describe("InboxDetail layout", () => {
     expect(header).toContain("Related thread");
     expect(header).toContain("Review MonoCode Pull Request");
     expect(body).not.toContain("Review MonoCode Pull Request");
+  });
+});
+
+describe("InboxDetail PR branch row", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    clearInboxCache();
+  });
+
+  it("offers a copy action for the head branch name", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      body: "",
+      author: "octocat",
+      baseRefName: "main",
+      headRefName: "feature/inbox-branch-copy",
+    } as never);
+    await githubWorkItemDetails("/tmp/web", "acme/web", "pr", 157);
+
+    const markup = renderDetail(
+      item({ kind: "pr", repo: "acme/web", number: 157 }),
+    );
+
+    expect(markup).toContain("main ← feature/inbox-branch-copy");
+    expect(markup).toContain("Copy branch name");
+  });
+
+  it("has nothing to copy when the PR carries no branch info", () => {
+    const markup = renderDetail(
+      item({ kind: "pr", repo: "acme/web", number: 999 }),
+    );
+
+    expect(markup).not.toContain("Copy branch name");
   });
 });

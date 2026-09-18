@@ -25,6 +25,7 @@ const TEXT_EFFORT = "low";
 type LiveText = {
   rpc: JsonRpcClient;
   cwd: string;
+  providerAccountId?: string;
   threadId: string;
   model: string;
   effort: string;
@@ -76,6 +77,7 @@ export function warmupCodexText(cwd: string): Promise<void> {
 /** Codex app-server turn that reuses a warm process, like Cursor text generation. */
 export async function runCodexTextPrompt(input: {
   cwd: string;
+  providerAccountId?: string;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
@@ -89,10 +91,11 @@ export async function runCodexTextPrompt(input: {
 
 async function promptOnLive(input: {
   cwd: string;
+  providerAccountId?: string;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd);
+  const session = await ensureLive(input.cwd, input.providerAccountId);
   session.output = "";
   session.collecting = true;
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -140,12 +143,24 @@ async function promptOnLive(input: {
   }
 }
 
-async function ensureLive(cwd: string): Promise<LiveText> {
+async function ensureLive(
+  cwd: string,
+  providerAccountId?: string,
+): Promise<LiveText> {
   const model = pickTextModel();
   const effort = pickTextEffort(model);
   if (live && !live.closed) {
-    if (live.cwd === cwd && live.model === model && live.effort === effort) {
+    if (
+      live.cwd === cwd &&
+      live.model === model &&
+      live.effort === effort &&
+      live.providerAccountId === providerAccountId
+    ) {
       return live;
+    }
+    if (live.providerAccountId !== providerAccountId) {
+      await dropLive();
+      return startLive(cwd, providerAccountId);
     }
     try {
       live.model = model;
@@ -156,10 +171,13 @@ async function ensureLive(cwd: string): Promise<LiveText> {
       await dropLive();
     }
   }
-  return startLive(cwd);
+  return startLive(cwd, providerAccountId);
 }
 
-async function startLive(cwd: string): Promise<LiveText> {
+async function startLive(
+  cwd: string,
+  providerAccountId?: string,
+): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveCodexBinary();
   const sessionRef: { session: LiveText | null } = { session: null };
@@ -180,6 +198,7 @@ async function startLive(cwd: string): Promise<LiveText> {
   const session: LiveText = {
     rpc,
     cwd,
+    providerAccountId,
     threadId: "",
     model,
     effort: pickTextEffort(model),
@@ -205,7 +224,10 @@ async function startLive(cwd: string): Promise<LiveText> {
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, ["app-server"], cwd);
+    await spawnChild(TEXT_CHILD_ID, path, ["app-server"], cwd, {
+      provider: "codex",
+      id: providerAccountId ?? "default",
+    });
     await rpc.request(
       "initialize",
       {

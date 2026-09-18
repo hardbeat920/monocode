@@ -25,7 +25,7 @@ Actions, with the JSON object each one takes:
             One task, including its latest result.
   wait      {"timeoutSeconds":20}
             Block until a task changes state, or until the timeout (0-25).
-            Returns at once when nothing is running or queued.
+            Returns at once when paused, stopped, or nothing is running or queued.
   respond   {"taskId":"...","requestId":7,"decision":"allow"|"deny"}
             Answer an approval an agent is blocked on. Agents never prompt the
             user; list, get and wait report the prompt as that task's
@@ -38,7 +38,7 @@ Actions, with the JSON object each one takes:
             work it has already done. Use this the moment you see it going
             the wrong way; message only lands once it has stopped.
   message   {"taskId":"...","text":"..."}
-            Send a completed or failed worker another turn; it keeps its
+            Send a completed, failed or cancelled worker another turn; it keeps its
             session, scope and history.
   cancel    {"taskId":"..."}
             Cancel a task, whether it is running or still queued.
@@ -50,6 +50,11 @@ Actions, with the JSON object each one takes:
 Usual loop: list -> delegate ... -> wait or get -> steer an agent that drifts,
 unblock one with respond or answer -> inspect the changes yourself -> message
 for corrections -> review each task -> finish.
+
+When paused, list, get and wait still return the reason and recovery steps.
+Do not keep polling or retry mutations. Explain the pause and ask the user to
+click Resume in MonoCode. Then inspect saved changes and retry interrupted
+tasks with message. Interrupted tasks are failed, not completed or discarded.
 
 Output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 The exit code is 0 only when "ok" is true.

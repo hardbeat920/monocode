@@ -23,6 +23,7 @@ export type OrchestrationTask = {
   prompt: string;
   files: string[];
   scopes: string[];
+  scratchDir?: string;
   dependsOn: string[];
   status: TaskStatus;
   accepted: boolean;
@@ -44,6 +45,7 @@ export type OrchestrationRun = {
   tasks: OrchestrationTask[];
   error?: string;
   continuations: number;
+  lastPauseReason?: string;
   requests: Record<string, { signature: string; result: unknown }>;
 };
 export type ControlOutcome = {
@@ -55,7 +57,10 @@ export type OrchestrationHost = {
   session(id: string): Session | undefined;
   sessions(): Session[];
   choices(): { harness: HarnessId; models: { id: string; name: string }[] }[];
-  createWorker(run: OrchestrationRun, task: OrchestrationTask): Promise<void>;
+  createWorker(
+    run: OrchestrationRun,
+    task: OrchestrationTask,
+  ): Promise<string | void>;
   submit(
     id: string,
     text: string,
@@ -78,6 +83,7 @@ type Storage = {
   enable(id: string, cwd: string): Promise<string>;
   disable(id: string): Promise<void>;
   scopes(cwd: string, files: string[]): Promise<string[]>;
+  resolvePath(path: string): Promise<string>;
 };
 const storage: Storage = {
   save: (run) =>
@@ -93,6 +99,7 @@ const storage: Storage = {
   enable: (sessionId, cwd) => invoke("control_enable", { sessionId, cwd }),
   disable: (sessionId) => invoke("control_disable", { sessionId }),
   scopes: (cwd, files) => invoke("control_scopes", { cwd, files }),
+  resolvePath: (path) => invoke("control_write_path", { path }),
 };
 
 /**
@@ -147,8 +154,15 @@ const ASSIGNMENT_BLOCK =
   /(?:\r?\n[ \t]*)*<monocode_assignment\b[^>]*>[\s\S]*?<\/monocode_assignment>/gi;
 
 /** Prompt the worker receives, including the envelope the transcript hides. */
-export function workerTurnPrompt(prompt: string, files: string[]): string {
-  return `${prompt}\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Work in this shared checkout. Your assigned write scope is: ${files.join(", ")}. Read other files as needed, but do not edit outside your scope. If another file or shared operation is needed, report the blocker and stop so the lead can assign a new task. Do not spawn agents, create worktrees, switch branches, stage/commit changes, install dependencies or run broad formatters/generators unless this task owns '.' and explicitly requires that operation. Do not undo another agent's changes. Other workers may be editing concurrently; report focused checks, changed files, remaining issues and a concise final result.\n</monocode_assignment>`;
+export function workerTurnPrompt(
+  prompt: string,
+  files: string[],
+  scratchDir?: string,
+): string {
+  const scratch = scratchDir
+    ? ` Temporary helpers and test output may be written in your private scratch directory: ${JSON.stringify(scratchDir)}. TMPDIR, TMP and TEMP point there. Use this directory for scratch files; do not write elsewhere outside the project. Deliver final changes in your assigned project files.`
+    : "";
+  return `${prompt}\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Work in this shared checkout. Your assigned write scope is: ${files.join(", ")}.${scratch} Read other files as needed, but do not edit outside your scope. If another file or shared operation is needed, report the blocker and stop so the lead can assign a new task. Do not spawn agents, create worktrees, switch branches, stage/commit changes, install dependencies or run broad formatters/generators unless this task owns '.' and explicitly requires that operation. Do not undo another agent's changes. Other workers may be editing concurrently; report focused checks, changed files, remaining issues and a concise final result.\n</monocode_assignment>`;
 }
 
 /** Task text a person should see: the assignment envelope stays in the send. */
@@ -260,6 +274,8 @@ export class Orchestrator {
   private waking = new Set<string>();
   private blocked = new Map<string, string>();
   private announced = new Map<string, Set<string>>();
+  private attempts = new Map<string, symbol>();
+  private writeChecks = new Map<string, Set<Promise<void>>>();
   private inflight = new Map<
     string,
     { signature: string; promise: Promise<unknown> }
@@ -591,6 +607,10 @@ export class Orchestrator {
           (previous?.status === "paused" ? previous.tasks : []),
         continuations: 0,
         requests: previous?.status === "paused" ? previous.requests : {},
+        lastPauseReason:
+          previous?.status === "paused"
+            ? (previous.error ?? previous.lastPauseReason)
+            : undefined,
       });
     } catch (error) {
       await this.store.disable(leadId);
@@ -631,7 +651,7 @@ export class Orchestrator {
     const run = this.run(id);
     if (!run || run.status !== "active") return prompt;
     const cli = `${shellPath(run.cli)} control`;
-    return `${prompt}\n\n<monocode_orchestration>\nYou are the lead of a local MonoCode run. Coordinate the user's task using ${cli}. Run \`${cli} --help\` before your first command; it documents every action, its exact JSON fields and the retry rule. Credentials are already in your environment; never print them.\nEach call prints one JSON line and exits non-zero unless "ok" is true; read the "error" text, it says what to do next. Unknown JSON fields are rejected rather than ignored, so fix the field name instead of guessing. If a call fails before reaching MonoCode, retry it with the "requestId" from that response so the work is never queued twice.\nUse list to discover allowed harness/model IDs. Delegate bounded tasks with project-relative files (directories reserve their descendants), self-contained prompts and dependsOn task IDs. Use the same checkout. You may read and plan; leave file edits to workers. Never start workers outside this CLI. Workers with overlapping files are queued. For installs, Git mutations, generators or broad formatting, assign a separate task with files ["."] and wait for other workers to finish.\nAgents never prompt the user. When one needs an approval or answers a question, list, get and wait report it as needsInput on that task, and you decide with respond or answer; it stays stopped until you do. Judge the request against the task you assigned, and put it to the user in this conversation only when the call is genuinely theirs.\nSteer a running agent with steer to correct its course without losing its work; use message only once it has stopped. Read results with get or wait; completed means a turn finished, not that the work passed review. Review the actual changes, message a worker for fixes, and use review to accept each completed task. Cancel discarded tasks. A failed task blocks finish until you retry it with message or drop it with cancel. Call finish only when required work and combined validation are complete. You receive worker results automatically when idle; use bounded wait calls while supervising. Do not expose credentials, use worktrees, switch branches or silently escalate worker permissions.\n</monocode_orchestration>`;
+    return `${prompt}\n\n<monocode_orchestration>\nYou are the lead of a local MonoCode run. Coordinate the user's task using ${cli}. Run \`${cli} --help\` before your first command; it documents every action, its exact JSON fields and the retry rule. Credentials are already in your environment; never print them.\nEach call prints one JSON line and exits non-zero unless "ok" is true; read the "error" text, it says what to do next. Unknown JSON fields are rejected rather than ignored, so fix the field name instead of guessing. If a call fails before reaching MonoCode, retry it with the "requestId" from that response so the work is never queued twice.\nUse list to discover allowed harness/model IDs. Delegate bounded tasks with project-relative files (directories reserve their descendants), self-contained prompts and dependsOn task IDs. Use the same checkout. You may read and plan; leave file edits to workers. Never start workers outside this CLI. Workers with overlapping files are queued. For installs, Git mutations, generators or broad formatting, assign a separate task with files ["."] and wait for other workers to finish.\nAgents never prompt the user. When one needs an approval or answers a question, list, get and wait report it as needsInput on that task, and you decide with respond or answer; it stays stopped until you do. Judge the request against the task you assigned, and put it to the user in this conversation only when the call is genuinely theirs.\nSteer a running agent with steer to correct its course without losing its work; use message only once it has stopped. Read results with get or wait; completed means a turn finished, not that the work passed review. Review the actual changes, message a worker for fixes, and use review to accept each completed task. Cancel discarded tasks. A failed task blocks finish until you retry it with message or drop it with cancel. Call finish only when required work and combined validation are complete. You receive worker results automatically when idle; use bounded wait calls while supervising. If the run is paused, list/get/wait remain readable and explain the reason. Stop polling, report that reason, and ask the user to click Resume; interrupted tasks require review and an explicit message retry after Resume. Do not expose credentials, use worktrees, switch branches or silently escalate worker permissions.\n</monocode_orchestration>`;
   }
   async handle(
     leadId: string,
@@ -665,8 +685,10 @@ export class Orchestrator {
       .catch(() => undefined)
       .then(async () => {
         const run = this.run(leadId);
-        if (!run || run.status !== "active")
-          throw new Error("This run is not active");
+        if (!run)
+          throw new Error("No orchestration run was found for this lead");
+        if (run.status !== "active" && !["list", "get"].includes(action))
+          throw new Error(this.inactiveReason(run));
         if (
           !["list", "get"].includes(action) &&
           Object.keys(run.requests).length >= 512
@@ -693,6 +715,7 @@ export class Orchestrator {
       ...run,
       cli: undefined,
       requests: undefined,
+      recovery: run.status === "active" ? undefined : this.inactiveReason(run),
       tasks: run.tasks.map((task) => ({
         ...task,
         prompt: undefined,
@@ -701,6 +724,11 @@ export class Orchestrator {
         needsInput: this.pendingInput(task),
       })),
     };
+  }
+  private inactiveReason(run: OrchestrationRun): string {
+    return run.status === "paused"
+      ? `This run is paused. ${run.error ?? "Work was interrupted."} list, get and wait remain available for inspection. Do not retry mutations or keep polling: explain the pause and ask the user to click Resume in MonoCode. After Resume, inspect saved changes and use message to retry interrupted tasks; they will not restart automatically.`
+      : `This run is ${run.status}. Inspect results with list or get; do not keep retrying commands for this run.`;
   }
   /**
    * What a worker is blocked on. Workers have no user-facing prompt: the lead
@@ -803,6 +831,9 @@ export class Orchestrator {
         const target = task();
         return {
           ...target,
+          runStatus: run.status,
+          recovery:
+            run.status === "active" ? undefined : this.inactiveReason(run),
           scopes: undefined,
           waitingFor: this.waitingFor(this.run(run.leadId)!, target),
           needsInput: this.pendingInput(target),
@@ -949,7 +980,11 @@ export class Orchestrator {
         const decision = text(input.decision, "decision", 16);
         if (decision !== "allow" && decision !== "deny")
           throw new Error('decision must be "allow" or "deny"');
-        this.host!.respondApproval(target.sessionId, pending.requestId, decision);
+        this.host!.respondApproval(
+          target.sessionId,
+          pending.requestId,
+          decision,
+        );
         return record(this.run(run.leadId)!, {
           taskId: target.id,
           decision,
@@ -1014,8 +1049,7 @@ export class Orchestrator {
   }
   private async wait(leadId: string, input: Record<string, unknown>) {
     const run = this.run(leadId);
-    if (!run || run.status !== "active")
-      throw new Error("This run is not active");
+    if (!run) throw new Error("No orchestration run was found for this lead");
     const seconds = input.timeoutSeconds ?? 20;
     if (
       typeof seconds !== "number" ||
@@ -1030,6 +1064,7 @@ export class Orchestrator {
     // Input that arrived before `wait` is already actionable. Only long-poll
     // while every running worker can still make progress without the lead.
     if (
+      run.status === "active" &&
       this.blockedKeys(run).length === 0 &&
       (run.tasks.some(activeTask) ||
         run.tasks.some((task) => task.status === "queued"))
@@ -1088,6 +1123,9 @@ export class Orchestrator {
             await this.stopRun(run.leadId);
             break;
           }
+          const attempt = Symbol();
+          this.attempts.set(task.sessionId, attempt);
+          this.writeChecks.set(task.sessionId, new Set());
           await this.patchTask(run.leadId, task.id, { status: "running" });
           try {
             if (
@@ -1102,25 +1140,42 @@ export class Orchestrator {
               throw new Error(
                 "The assigned harness/model is no longer available. Review this task before retrying.",
               );
-            await this.host.createWorker(run, task);
+            const scratchDir = await this.host.createWorker(run, task);
             if (
               this.run(run.leadId)?.status !== "active" ||
               this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
                 ?.status !== "running"
             )
               continue;
-            const prompt = workerTurnPrompt(task.prompt, task.files);
+            if (scratchDir)
+              await this.patchTask(run.leadId, task.id, { scratchDir });
+            if (
+              this.run(run.leadId)?.status !== "active" ||
+              this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
+                ?.status !== "running"
+            )
+              continue;
+            const prompt = workerTurnPrompt(
+              task.prompt,
+              task.files,
+              scratchDir || undefined,
+            );
             this.host.submit(task.sessionId, prompt, (outcome) => {
-              void this.settle(run.leadId, task.id, outcome).catch(
+              void this.settle(run.leadId, task.id, outcome, attempt).catch(
                 console.error,
               );
             });
           } catch (error) {
-            await this.settle(run.leadId, task.id, {
-              status: "failed",
-              text: "",
-              error: messageOf(error),
-            });
+            await this.settle(
+              run.leadId,
+              task.id,
+              {
+                status: "failed",
+                text: "",
+                error: messageOf(error),
+              },
+              attempt,
+            );
           }
         }
       }
@@ -1138,9 +1193,29 @@ export class Orchestrator {
     leadId: string,
     taskId: string,
     outcome: ControlOutcome,
+    attempt: symbol,
   ) {
-    const task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
-    if (!task || task.status !== "running") return;
+    let task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
+    if (!task || this.attempts.get(task.sessionId) !== attempt) return;
+    if (task?.status === "cancelling") {
+      if (outcome.text)
+        await this.patchTask(leadId, taskId, {
+          result: outcome.text.slice(-20_000),
+        });
+      return;
+    }
+    if (task.status !== "running") return;
+    // A fast final response must not make an unchecked write reviewable.
+    await Promise.all(this.writeChecks.get(task.sessionId) ?? []);
+    task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
+    if (
+      !task ||
+      task.status !== "running" ||
+      this.attempts.get(task.sessionId) !== attempt
+    )
+      return;
+    this.attempts.delete(task.sessionId);
+    this.writeChecks.delete(task.sessionId);
     await this.patchTask(leadId, taskId, {
       status: outcome.status,
       result: outcome.text.slice(-20_000),
@@ -1151,18 +1226,24 @@ export class Orchestrator {
     void this.pump();
     this.sync();
   }
-  async cancelTask(leadId: string, taskId: string) {
+  async cancelTask(leadId: string, taskId: string, interruption?: string) {
     const task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
     if (!task || task.status === "cancelled") return;
     if (activeTask(task)) {
-      await this.patchTask(leadId, taskId, { status: "cancelling" });
+      await this.patchTask(leadId, taskId, {
+        status: "cancelling",
+        ...(interruption ? { error: interruption } : {}),
+      });
       await this.host!.stop(task.sessionId);
     }
     await this.patchTask(leadId, taskId, {
-      status: "cancelled",
+      status: interruption ? "failed" : "cancelled",
+      ...(interruption ? { error: interruption } : {}),
       accepted: false,
       delivered: false,
     });
+    this.attempts.delete(task.sessionId);
+    this.writeChecks.delete(task.sessionId);
     void this.pump();
   }
   /**
@@ -1178,11 +1259,16 @@ export class Orchestrator {
   ) {
     const run = this.run(leadId);
     if (!run || run.status !== "active") return;
-    await this.commit({ ...(patch ? patch(run) : run), status: "paused", error });
+    await this.commit({
+      ...(patch ? patch(run) : run),
+      status: "paused",
+      error,
+      lastPauseReason: error,
+    });
     await Promise.all(
       this.run(leadId)!
         .tasks.filter(activeTask)
-        .map((task) => this.cancelTask(leadId, task.id)),
+        .map((task) => this.cancelTask(leadId, task.id, error)),
     );
   }
   async stopRun(leadId: string) {
@@ -1239,39 +1325,44 @@ export class Orchestrator {
   }
   /** Drain control writes before the database removes a lead or one of its workers. */
   deleteSession(id: string, remove: () => Promise<void>): Promise<void> {
-    const result = this.actions.catch(() => undefined).then(async () => {
-      const run = this.forSession(id);
-      if (
-        run &&
-        (run.status === "active" ||
-          run.status === "paused" ||
-          run.tasks.some(activeTask))
-      ) {
-        await this.stopRun(run.leadId);
-      }
-      await this.saves.catch(() => undefined);
-      await remove();
-      this.deleted.add(id);
-      if (!run) return;
-      this.runs = this.runs.filter((entry) => entry.leadId !== run.leadId);
-      this.persisted.delete(run.leadId);
-      this.blocked.delete(run.leadId);
-      this.announced.delete(run.leadId);
-      this.emit();
-      if (run.leadId !== id) {
-        // Read the transaction's pruned graph; never save the pre-delete snapshot.
-        const updated = await this.store.load(run.leadId).catch((error) => {
-          console.error("Could not reload orchestration after deletion", error);
-          this.loaded.delete(run.leadId);
-          return null;
-        });
-        if (updated) {
-          this.runs = [...this.runs, updated];
-          this.persisted.set(run.leadId, updated);
-          this.emit();
+    const result = this.actions
+      .catch(() => undefined)
+      .then(async () => {
+        const run = this.forSession(id);
+        if (
+          run &&
+          (run.status === "active" ||
+            run.status === "paused" ||
+            run.tasks.some(activeTask))
+        ) {
+          await this.stopRun(run.leadId);
         }
-      }
-    });
+        await this.saves.catch(() => undefined);
+        await remove();
+        this.deleted.add(id);
+        if (!run) return;
+        this.runs = this.runs.filter((entry) => entry.leadId !== run.leadId);
+        this.persisted.delete(run.leadId);
+        this.blocked.delete(run.leadId);
+        this.announced.delete(run.leadId);
+        this.emit();
+        if (run.leadId !== id) {
+          // Read the transaction's pruned graph; never save the pre-delete snapshot.
+          const updated = await this.store.load(run.leadId).catch((error) => {
+            console.error(
+              "Could not reload orchestration after deletion",
+              error,
+            );
+            this.loaded.delete(run.leadId);
+            return null;
+          });
+          if (updated) {
+            this.runs = [...this.runs, updated];
+            this.persisted.set(run.leadId, updated);
+            this.emit();
+          }
+        }
+      });
     this.actions = result.catch(() => undefined);
     return result;
   }
@@ -1367,6 +1458,9 @@ export class Orchestrator {
               )
               .join("\n\n");
             const body = [
+              current.lastPauseReason
+                ? `Previous interruption: ${current.lastPauseReason}\nInspect the saved edits before continuing. Retry interrupted tasks with message; cancel only work that is no longer required. Dependent validation remains queued until its prerequisites pass review.`
+                : "",
               results.length
                 ? `Worker results are ready. Review the work, request corrections through the CLI when needed, and finish the original task.\n\n${summary}`
                 : "",
@@ -1376,27 +1470,23 @@ export class Orchestrator {
             ]
               .filter(Boolean)
               .join("\n\n");
-            this.host!.submit(
-              run.leadId,
-              body,
-              (outcome) => {
-                if (outcome.status !== "completed") {
-                  void this.pause(
-                    run.leadId,
-                    outcome.error ??
-                      "Lead continuation was interrupted. Its agents were stopped; review and resume.",
-                    (current) => ({
-                      ...current,
-                      tasks: current.tasks.map((task) =>
-                        results.some((item) => item.id === task.id)
-                          ? { ...task, delivered: false }
-                          : task,
-                      ),
-                    }),
-                  ).catch(console.error);
-                } else this.sync();
-              },
-            );
+            this.host!.submit(run.leadId, body, (outcome) => {
+              if (outcome.status !== "completed") {
+                void this.pause(
+                  run.leadId,
+                  outcome.error ??
+                    "Lead continuation was interrupted. Its agents were stopped; review and resume.",
+                  (current) => ({
+                    ...current,
+                    tasks: current.tasks.map((task) =>
+                      results.some((item) => item.id === task.id)
+                        ? { ...task, delivered: false }
+                        : task,
+                    ),
+                  }),
+                ).catch(console.error);
+              } else this.sync();
+            });
           } catch (error) {
             console.error("Orchestration continuation failed", error);
           } finally {
@@ -1416,36 +1506,53 @@ export class Orchestrator {
       !run ||
       run.status !== "active" ||
       !task ||
-      event.preview?.kind !== "write"
+      event.preview?.kind !== "write" ||
+      ["failed", "error", "cancelled"].includes(event.status ?? "")
     )
       return;
     const paths =
       event.paths ?? (event.preview.path ? [event.preview.path] : []);
-    for (const path of paths) {
-      const absolute = /^(?:[\\/]|[a-z]:[\\/])/i.test(path)
-        ? path
-        : `${run.canonicalRoot ?? run.cwd}/${path}`;
-      const normalized = orchestrationPathKey(absolute);
-      if (
-        task.scopes.some((scope) =>
-          scopeContains(orchestrationPathKey(scope), normalized),
+    const attempt = this.attempts.get(id);
+    const stillRunning = () =>
+      this.run(run.leadId)?.status === "active" &&
+      this.attempts.get(id) === attempt &&
+      this.run(run.leadId)?.tasks.some(
+        (entry) => entry.id === task.id && entry.status === "running",
+      );
+    const checks = this.writeChecks.get(id);
+    const check = (async () => {
+      for (const path of paths) {
+        const absolute = /^(?:[\\/]|[a-z]:[\\/])/i.test(path)
+          ? path
+          : `${run.cwd}/${path}`;
+        let resolved: string;
+        try {
+          resolved = await this.store.resolvePath(absolute);
+        } catch (error) {
+          if (stillRunning())
+            await this.pause(
+              run.leadId,
+              `Could not verify ${task.title}'s write to ${path}: ${messageOf(error)}. Review the files before resuming.`,
+            );
+          return;
+        }
+        if (!stillRunning()) return;
+        const normalized = orchestrationPathKey(resolved);
+        if (
+          [...task.scopes, ...(task.scratchDir ? [task.scratchDir] : [])].some(
+            (scope) => scopeContains(orchestrationPathKey(scope), normalized),
+          )
         )
-      )
-        continue;
-      void (async () => {
-        await this.commit({
-          ...this.run(run.leadId)!,
-          status: "paused",
-          error: `${task.title} reported a write outside its assignment: ${path}. Review the shared files before resuming.`,
-        });
-        await Promise.all(
-          this.run(run.leadId)!
-            .tasks.filter(activeTask)
-            .map((entry) => this.cancelTask(run.leadId, entry.id)),
+          continue;
+        await this.pause(
+          run.leadId,
+          `${task.title} reported a write outside its assignment: ${path}. Review the shared files before resuming.`,
         );
-      })().catch(console.error);
-      break;
-    }
+        return;
+      }
+    })().catch(console.error);
+    checks?.add(check);
+    void check.finally(() => checks?.delete(check));
   }
 }
 

@@ -98,6 +98,16 @@ afterEach(() => {
 });
 
 describe("file tab context menu", () => {
+  it("keeps the default cursor on reorderable file tabs", () => {
+    const tabs = container.querySelectorAll<HTMLElement>('[role="tab"]');
+    expect(tabs).toHaveLength(2);
+    for (const tab of tabs) {
+      expect(tab.className).toContain("cursor-default");
+      expect(tab.className).not.toContain("cursor-grab");
+      expect(tab.parentElement?.className).not.toContain("cursor-grab");
+    }
+  });
+
   it("selects the right-clicked tab and exposes its file actions", () => {
     const menu = openSecondMenu();
     expect(props.onSelectFile).toHaveBeenCalledWith("second");

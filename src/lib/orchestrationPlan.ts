@@ -32,6 +32,8 @@ export type OrchestrationProposal = {
   summary: string;
   tasks: ProposedTask[];
   error?: string;
+  /** Kept only for invalid cards so a retry can repair the response directly. */
+  response?: string;
 };
 
 function required(value: unknown, label: string, max = 30_000): string {
@@ -157,17 +159,27 @@ export function validateProposedTasks(
 ): ProposedTask[] {
   if (!Array.isArray(value) || !value.length || value.length > 40)
     throw new Error("Provide 1 to 40 assignments");
-  const tasks = value.map((value) => {
+  const tasks = value.map((value, index) => {
     const task = record(value);
-    const harness = required(task.harness, "a harness", 32) as HarnessId;
-    const model = required(task.model, "a model", 256);
+    const label = `assignment ${index + 1}${typeof task.id === "string" ? ` (${task.id})` : ""}`;
+    const model = required(task.model, `a model for ${label}`, 256);
+    // Models already identify their harness in our catalog. Recover an omitted
+    // redundant field without another model call, but never override a choice.
+    const matches = settings.choices.filter((choice) => choice.model === model);
+    const harnesses = [...new Set(matches.map((choice) => choice.harness))];
+    const missingHarness = task.harness == null || task.harness === "";
+    const harness = required(
+      missingHarness && harnesses.length === 1 ? harnesses[0] : task.harness,
+      `a harness for ${label}; use an exact harness/model pair from the available catalog`,
+      32,
+    ) as HarnessId;
     if (
       !settings.choices.some(
         (choice) => choice.harness === harness && choice.model === model,
       )
     )
       throw new Error(
-        "An assignment uses a model outside the available catalog",
+        `The harness/model pair for ${label} is outside the available catalog: ${harness} / ${model}`,
       );
     const id = required(task.id, "an assignment ID", 64);
     if (!/^[A-Za-z0-9_-]+$/.test(id))
@@ -259,16 +271,46 @@ export function completeOrchestrationProposal(
       tasks: validateProposedTasks(input.tasks, draft.settings, draft.cwd),
       status: "ready",
       error: undefined,
+      response: undefined,
     };
   } catch (reason) {
     return {
       ...draft,
       status: "invalid",
+      response: response.slice(-200_000),
       error:
         error ??
         `Could not prepare the assignment card: ${reason instanceof Error ? reason.message : String(reason)}`,
     };
   }
+}
+
+export function orchestrationRepairPrompt(
+  proposal: OrchestrationProposal,
+): string {
+  return [
+    orchestrationPlanningPrompt(
+      proposal.request,
+      proposal.settings,
+      proposal.cwd,
+    ),
+    "Correct the previous proposal using the validation error below. Reuse your investigation and task breakdown; do not inspect the project again or run tools. Return only the corrected <monocode_proposal> JSON. Include an exact harness and model on every task. Do not execute any assignments.",
+    `Validation error: ${proposal.error ?? "The previous proposal was invalid"}`,
+    `<previous_response>\n${proposal.response?.slice(-60_000) ?? ""}\n</previous_response>`,
+  ].join("\n\n");
+}
+
+/** At most one corrective turn; provider failures and cancellation never loop. */
+export async function completeOrRepairOrchestrationProposal(
+  draft: OrchestrationProposal,
+  response: string,
+  repair: (prompt: string) => Promise<string>,
+  canRepair: () => boolean,
+): Promise<OrchestrationProposal> {
+  const first = completeOrchestrationProposal(draft, response);
+  if (first.status !== "invalid" || !canRepair()) return first;
+  const corrected = await repair(orchestrationRepairPrompt(first));
+  return completeOrchestrationProposal(draft, corrected);
 }
 
 export function proposalMarkdown(proposal: OrchestrationProposal): string {

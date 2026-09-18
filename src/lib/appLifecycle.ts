@@ -9,6 +9,7 @@ import {
 import {
   hasInFlightSessions,
   inFlightRefs,
+  isInFlightSession,
   markTurnInterrupted,
   quitWhileBusyMessage,
   wasTurnInterrupted,
@@ -99,46 +100,102 @@ export function setQuitWorkspace(
   };
 }
 
-export async function handleQuitRequested(): Promise<void> {
+/**
+ * Persist this window for a quit the coordinator has already confirmed.
+ * Exiting is `confirm_quit`'s job, once every window has reported ready.
+ */
+export async function handleQuitRequested(): Promise<boolean> {
   if (liveWorkspace) {
     liveWorkspace.flush();
-    await confirmQuitAndExit(
-      liveWorkspace.sessions(),
-      liveWorkspace.tabs(),
-      liveWorkspace.activeTabId(),
-      liveWorkspace.projectCwd(),
-      liveWorkspace.projectReturnMemory(),
-      liveWorkspace.projectTerminals(),
-    );
-    return;
+    quitting = true;
+    try {
+      await persistQuitState(
+        liveWorkspace.sessions(),
+        liveWorkspace.tabs(),
+        liveWorkspace.activeTabId(),
+        liveWorkspace.projectCwd(),
+        liveWorkspace.projectReturnMemory(),
+        "quit",
+        liveWorkspace.projectTerminals(),
+      );
+      return true;
+    } catch {
+      quitting = false;
+      return false;
+    }
   }
   const { resumed } = await loadBootWorkspace();
   const pending = resumed ?? bootingResumed;
-  if (pending) {
-    quitting = true;
-    try {
-      await persistBootingResume(pending);
-      await invoke("confirm_quit");
-    } catch {
-      quitting = false;
-    }
-    return;
+  quitting = true;
+  if (!pending) return true;
+  try {
+    await persistBootingResume(pending);
+    return true;
+  } catch {
+    quitting = false;
+    return false;
   }
-  await invoke("confirm_quit");
+}
+
+/** Each window counts its own live turns; Rust sums them into one decision. */
+export async function reportQuitPoll(id: number): Promise<void> {
+  let inFlight = 0;
+  if (liveWorkspace) {
+    liveWorkspace.flush();
+    // Every running turn, not just the resumable ones `inFlightRefs` keeps:
+    // an Inbox Ask still counts as work nobody agreed to throw away.
+    inFlight = liveWorkspace.sessions().filter(isInFlightSession).length;
+  }
+  await invoke("quit_poll_reply", { id, inFlight }).catch(() => undefined);
+}
+
+/** The one quit dialog, shown by whichever window the coordinator picked. */
+export async function askQuitConfirmation(
+  id: number,
+  inFlight: number,
+): Promise<void> {
+  let confirmed = false;
+  if (!quitDialogOpen) {
+    quitDialogOpen = true;
+    try {
+      confirmed = await ask(quitWhileBusyMessage(inFlight), {
+        title: "MonoCode",
+        kind: "warning",
+        okLabel: "Quit",
+      });
+    } catch {
+      confirmed = false;
+    } finally {
+      quitDialogOpen = false;
+    }
+  }
+  await invoke("quit_decision", { id, confirmed }).catch(() => undefined);
+}
+
+export async function commitQuit(id: number): Promise<void> {
+  const persisted = await handleQuitRequested();
+  await invoke("quit_ready", { id, persisted }).catch(() => undefined);
+}
+
+/**
+ * A quit that stopped part-way because another window could not save. This
+ * window is staying open, so it must go back to persisting on unload.
+ */
+export function abortQuit(): void {
+  quitting = false;
 }
 
 /** Confirm and stop this window's work without terminating other windows. */
 export async function closeBusyWindow(): Promise<void> {
   if (!liveWorkspace) return;
   liveWorkspace.flush();
-  await confirmQuitAndExit(
+  await confirmAndCloseWindow(
     liveWorkspace.sessions(),
     liveWorkspace.tabs(),
     liveWorkspace.activeTabId(),
     liveWorkspace.projectCwd(),
     liveWorkspace.projectReturnMemory(),
     liveWorkspace.projectTerminals(),
-    true,
   );
 }
 
@@ -275,6 +332,7 @@ export function bindResumedSessions(sessions: Session[]): void {
       session.id,
       session.providerSessionId,
       sessionWorkCwd(session),
+      session.providerAccountId,
     );
   }
 }
@@ -308,29 +366,37 @@ export async function persistQuitState(
 ): Promise<void> {
   const refs = inFlightRefs(sessions, tabs);
   const interrupted = new Set(refs.map((ref) => ref.sessionId));
+  // A quit ends the process, so a swallowed write is work that never comes
+  // back: let it reject and let the caller call the quit off. An unload is a
+  // reload, where best effort is enough and failing loudly helps nobody.
+  const write = <T,>(pending: Promise<T>): Promise<T | null> =>
+    mode === "quit" ? pending : pending.catch(() => null);
+
   await Promise.all(
     sessions.map(async (session) => {
       if (!shouldPersistSession(session)) return;
       const payload = interrupted.has(session.id)
         ? markTurnInterrupted(session)
         : session;
-      await upsertSession(payload).catch(() => null);
+      await write(upsertSession(payload));
     }),
   );
-  await saveWorkspaceSnapshot(
-    collectWorkspaceSnapshot(
-      tabs,
-      sessions,
-      activeTabId,
-      projectCwd,
-      memory,
-      projectTerminals,
+  await write(
+    saveWorkspaceSnapshot(
+      collectWorkspaceSnapshot(
+        tabs,
+        sessions,
+        activeTabId,
+        projectCwd,
+        memory,
+        projectTerminals,
+      ),
     ),
-  ).catch(() => undefined);
+  );
   // Vite/webview reload must not wipe a restored snapshot: those chats are idle
   // in this process until Continue runs.
   if (mode === "quit" || refs.length > 0) {
-    await replaceInFlightSessions(refs).catch(() => undefined);
+    await write(replaceInFlightSessions(refs));
   }
 }
 
@@ -360,27 +426,23 @@ async function persistBootingResume(workspace: ResumedWorkspace): Promise<void> 
   ).catch(() => undefined);
 }
 
-async function confirmQuitAndExit(
+async function confirmAndCloseWindow(
   sessions: Session[],
   tabs: WorkspaceTab[],
   activeTabId: string,
   projectCwd: string,
   memory: ProjectReturnMemory,
   projectTerminals: ProjectTerminalDock[] = [],
-  closeWindow = false,
 ): Promise<void> {
   if (quitDialogOpen) return;
   quitDialogOpen = true;
   try {
     const refs = inFlightRefs(sessions, tabs);
     if (refs.length > 0) {
-      const ok = await ask(closeWindow
-        ? "Close this window and stop its running chats? Other windows will stay open."
-        : quitWhileBusyMessage(refs.length), {
-        title: "MonoCode",
-        kind: "warning",
-        okLabel: closeWindow ? "Close window" : "Quit",
-      });
+      const ok = await ask(
+        "Close this window and stop its running chats? Other windows will stay open.",
+        { title: "MonoCode", kind: "warning", okLabel: "Close window" },
+      );
       if (!ok) return;
     }
     quitting = true;
@@ -394,12 +456,8 @@ async function confirmQuitAndExit(
         "quit",
         projectTerminals,
       );
-      if (closeWindow) {
-        await reapWindowRuntime(sessions, tabs, projectTerminals, false);
-        await closeCurrentWindow();
-      } else {
-        await invoke("confirm_quit");
-      }
+      await reapWindowRuntime(sessions, tabs, projectTerminals, false);
+      await closeCurrentWindow();
     } catch {
       quitting = false;
     }

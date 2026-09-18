@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   completeOrchestrationProposal,
+  completeOrRepairOrchestrationProposal,
+  orchestrationRepairPrompt,
   orchestrationPlanningPrompt,
   proposalBlock,
   validateProposedTasks,
@@ -41,6 +43,104 @@ const payload = {
 };
 
 describe("orchestration proposals", () => {
+  it("recovers an omitted harness from an exact, unambiguous catalog model without another turn", async () => {
+    const repair = vi.fn();
+    const result = await completeOrRepairOrchestrationProposal(
+      draft,
+      JSON.stringify({ ...payload, tasks: [{ ...task, harness: undefined }] }),
+      repair,
+      () => true,
+    );
+    expect(result.status).toBe("ready");
+    expect(result.tasks[0].harness).toBe("codex");
+    expect(repair).not.toHaveBeenCalled();
+    expect(result.response).toBeUndefined();
+  });
+
+  it("never guesses ambiguous harnesses or replaces an explicit unavailable choice", () => {
+    const settings = {
+      ...draft.settings,
+      choices: [
+        { harness: "codex" as const, model: "shared", name: "One" },
+        { harness: "opencode" as const, model: "shared", name: "Two" },
+      ],
+    };
+    expect(() =>
+      validateProposedTasks(
+        [{ ...task, model: "shared", harness: undefined }],
+        settings,
+      ),
+    ).toThrow("a harness for assignment 1 (ui)");
+    expect(() =>
+      validateProposedTasks([{ ...task, harness: "opencode" }], draft.settings),
+    ).toThrow("outside the available catalog");
+    expect(() =>
+      validateProposedTasks(
+        [{ ...task, model: "unknown", harness: undefined }],
+        settings,
+      ),
+    ).toThrow("available catalog");
+  });
+
+  it("repairs malformed output once with the failed response, exact error and catalog", async () => {
+    const invalid = JSON.stringify({
+      ...payload,
+      tasks: [{ ...task, model: "unknown" }],
+    });
+    const repair = vi.fn(async () => JSON.stringify(payload));
+    const result = await completeOrRepairOrchestrationProposal(
+      draft,
+      invalid,
+      repair,
+      () => true,
+    );
+    expect(result.status).toBe("ready");
+    expect(repair).toHaveBeenCalledOnce();
+    const prompt = repair.mock.calls[0][0];
+    expect(prompt).toContain("assignment 1 (ui)");
+    expect(prompt).toContain(invalid);
+    expect(prompt).toContain("do not inspect the project again or run tools");
+    expect(prompt).toContain('"model":"codex:test"');
+  });
+
+  it("stops after one unsuccessful repair and retains its response for manual retry", async () => {
+    const repair = vi.fn(async () => "Still invalid");
+    const result = await completeOrRepairOrchestrationProposal(
+      draft,
+      "Invalid",
+      repair,
+      () => true,
+    );
+    expect(repair).toHaveBeenCalledOnce();
+    expect(result.status).toBe("invalid");
+    expect(result.tasks).toEqual([]);
+    expect(result.response).toBe("Still invalid");
+    expect(orchestrationRepairPrompt(result)).toContain("Still invalid");
+  });
+
+  it("does not spend a repair turn after cancellation or retry a failed provider", async () => {
+    const repair = vi.fn(async () => {
+      throw new Error("Provider unavailable");
+    });
+    const result = await completeOrRepairOrchestrationProposal(
+      draft,
+      "Invalid",
+      repair,
+      () => false,
+    );
+    expect(result.status).toBe("invalid");
+    expect(repair).not.toHaveBeenCalled();
+    await expect(
+      completeOrRepairOrchestrationProposal(
+        draft,
+        "Invalid",
+        repair,
+        () => true,
+      ),
+    ).rejects.toThrow("Provider unavailable");
+    expect(repair).toHaveBeenCalledOnce();
+  });
+
   it("prompts the current lead with the available model catalog and no execution authority", () => {
     const prompt = orchestrationPlanningPrompt(
       draft.request,

@@ -11,11 +11,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { rememberNotificationProjects } from "../lib/notificationProjects";
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async () => ({
-    root: "/work/private",
-    commonDir: null,
-    remote: "https://github.com/person/private.git",
-  })),
+  invoke: vi.fn(async (command: string) => {
+    if (command === "list_external_editors") {
+      return [
+        { id: "vscode", name: "Visual Studio Code" },
+        { id: "zed", name: "Zed" },
+      ];
+    }
+    if (command === "open_in_external_editor") return;
+    return {
+      root: "/work/private",
+      commonDir: null,
+      remote: "https://github.com/person/private.git",
+    };
+  }),
   convertFileSrc: (path: string) => path,
 }));
 vi.mock("../hooks/useProjectDiffStats", () => ({
@@ -46,6 +55,43 @@ function button(label: string) {
   expect(result, label).toBeDefined();
   return result!;
 }
+
+it("opens a project in a detected editor from the project context menu", async () => {
+  await act(async () =>
+    root.render(
+      createElement(ProjectRail, {
+        cwd: "/work/private",
+        recents: [],
+        onSelectProject: vi.fn(),
+        onOpenProject: vi.fn(),
+      }),
+    ),
+  );
+  act(() =>
+    container
+      .querySelector('button[aria-current="true"]')!
+      .dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          clientX: 40,
+          clientY: 80,
+        }),
+      ),
+  );
+
+  const openInEditor = button("Open in editor");
+  act(() =>
+    openInEditor.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+  );
+  expect(
+    document.querySelector('[role="menu"][aria-label="Open in editor"]'),
+  ).not.toBeNull();
+  await act(async () => button("Zed").click());
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("open_in_external_editor", {
+    editorId: "zed",
+    cwd: "/work/private",
+  });
+});
 
 it("opens path-based project actions immediately without Git discovery", async () => {
   rememberNotificationProjects([{

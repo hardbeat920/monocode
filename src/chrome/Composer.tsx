@@ -38,6 +38,10 @@ import {
   revokeAttachment,
 } from "../lib/attachments";
 import { resizeComposer } from "../lib/composerResize";
+import {
+  EXPLORER_FILE_POINTER_DRAG_EVENT,
+  type ExplorerFilePointerDragDetail,
+} from "../lib/drag";
 import type { ContextUsage } from "../lib/contextUsage";
 import {
   loadProjectFiles,
@@ -143,6 +147,8 @@ import type { LastTurnRecall } from "../lib/editLastTurn";
 type Props = {
   enabled?: boolean;
   focused: boolean;
+  /** Bump to force a refocus even when `focused` was already true (e.g. window regains OS focus). */
+  focusToken?: number;
   shell?: boolean;
   harness: HarnessId;
   model: string;
@@ -403,6 +409,7 @@ function MessageQueue({
 export function Composer({
   enabled = true,
   focused,
+  focusToken,
   hotkeys = false,
   shell = false,
   harness,
@@ -466,6 +473,7 @@ export function Composer({
   const borrowedAttachmentIdsRef = useRef(new Set<string>());
   const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
+  const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
@@ -729,6 +737,11 @@ export function Composer({
     const el = ref.current;
     if (!el || !initialDraft) return;
     if (el.value !== initialDraft) el.value = initialDraft;
+    if (!positionedInitialDraft.current) {
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+      positionedInitialDraft.current = true;
+    }
     resizeComposer(el);
   }, [initialDraft]);
 
@@ -894,14 +907,28 @@ export function Composer({
 
   useEffect(() => {
     if (!focused) return;
+
+    const composer = ref.current?.closest("[data-composer]");
+    const activeComposer = document.activeElement?.closest("[data-composer]");
+    if (activeComposer && activeComposer !== composer) return;
+
+    if (
+      composer?.querySelector(
+        "[data-skill-picker], [data-session-folder-picker], [data-mention-picker], [data-composer-plus], [data-question-form]",
+      )
+    )
+      return;
+    // Model/access/branch/settings/file pickers render through a portal into
+    // document.body (see Popover.tsx), so they never appear under this
+    // composer's own DOM subtree — check the whole document for those.
     if (
       document.querySelector(
-        "[data-model-picker], [data-access-picker], [data-model-settings], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-session-folder-picker], [data-mention-picker], [data-composer-plus]",
+        "[data-model-picker], [data-access-picker], [data-model-settings], [data-file-picker], [data-branch-picker]",
       )
     )
       return;
     ref.current?.focus();
-  }, [focused]);
+  }, [focused, question, busy, focusToken]);
 
   useEffect(() => {
     if (!enabled) {
@@ -962,10 +989,31 @@ export function Composer({
       void attachmentsFromFiles(files).then(addAttachments);
     };
 
+    const onExplorerFilePointerDrag = (event: Event) => {
+      const detail = (event as CustomEvent<ExplorerFilePointerDragDetail>)
+        .detail;
+      if (!detail || detail.type === "end") {
+        setFileDrag(false);
+        return;
+      }
+      const over = overTarget(detail.x, detail.y);
+      if (detail.type === "move") {
+        setFileDrag(over && attachmentsSupported);
+        return;
+      }
+      setFileDrag(false);
+      if (!over || !attachmentsSupported) return;
+      void attachmentsFromPaths([detail.path]).then(addAttachments);
+    };
+
     const root = dropRoot();
     root?.addEventListener("dragover", onDragOver);
     root?.addEventListener("dragleave", onDragLeave);
     root?.addEventListener("drop", onDrop);
+    window.addEventListener(
+      EXPLORER_FILE_POINTER_DRAG_EVENT,
+      onExplorerFilePointerDrag,
+    );
 
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -998,6 +1046,10 @@ export function Composer({
       root?.removeEventListener("dragover", onDragOver);
       root?.removeEventListener("dragleave", onDragLeave);
       root?.removeEventListener("drop", onDrop);
+      window.removeEventListener(
+        EXPLORER_FILE_POINTER_DRAG_EVENT,
+        onExplorerFilePointerDrag,
+      );
       unlisten?.();
     };
   }, [addAttachments, attachmentsSupported, enabled]);

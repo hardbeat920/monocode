@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { newSession } from "../session";
+import { newSession, type RuntimeMode } from "../session";
 import { applyHarnessEvent } from "./apply";
 
 let onStdout: ((line: string) => void) | undefined;
@@ -79,12 +79,15 @@ const waitFor = async (predicate: () => boolean, label: string) => {
   throw new Error(`timed out waiting for ${label}`);
 };
 
-function turn(events: HarnessEvent[]) {
+function turn(
+  events: HarnessEvent[],
+  options: { runtimeMode?: RuntimeMode } = {},
+) {
   return sendOpenCodeTurn({
     sessionId: "opencode-live",
     cwd: "/repo",
     model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
-    runtimeMode: "supervised",
+    runtimeMode: options.runtimeMode ?? "supervised",
     text: "delegate the investigation",
     attachments: [],
     onEvent: (event) => events.push(event),
@@ -479,6 +482,71 @@ describe("OpenCode edit recovery", () => {
       body: JSON.stringify({ messageID: "message_latest" }),
     });
     await expect(rewind).resolves.toEqual({ submitted: false });
+  });
+});
+describe("OpenCode access modes", () => {
+  it("updates a live session when access changes and auto-allows residual full-access prompts", async () => {
+    const events: HarnessEvent[] = [];
+    const first = turn(events);
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/prompt_async"),
+        ),
+      "first prompt",
+    );
+    idle();
+    await first;
+
+    const second = turn(events, { runtimeMode: "full-access" });
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(
+          ([input]) =>
+            input.method === "PATCH" &&
+            new URL(input.url).pathname === "/session/session_1",
+        ),
+      "permission update",
+    );
+    expect(harnessHttp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "PATCH",
+        url: "http://127.0.0.1:4096/session/session_1?directory=%2Frepo",
+        body: JSON.stringify({
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        }),
+      }),
+    );
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.filter(([input]) =>
+          input.url.includes("/prompt_async"),
+        ).length === 2,
+      "second prompt",
+    );
+
+    askPermission("session_1", "permission_residual");
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(
+          ([input]) =>
+            new URL(input.url).pathname ===
+            "/permission/permission_residual/reply",
+        ),
+      "automatic full-access reply",
+    );
+    expect(harnessHttp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ reply: "once" }),
+      }),
+    );
+    expect(
+      events.some((event) => event.type === "approval.requested"),
+    ).toBe(false);
+
+    idle();
+    await second;
   });
 });
 

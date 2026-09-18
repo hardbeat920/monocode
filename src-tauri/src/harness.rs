@@ -10,7 +10,7 @@ use std::time::Duration;
 #[cfg(not(windows))]
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::dirs_home;
@@ -22,6 +22,15 @@ const STDERR_EVENT: &str = "harness-stderr";
 const EXIT_EVENT: &str = "harness-exit";
 const SSE_EVENT: &str = "harness-sse";
 const SSE_END_EVENT: &str = "harness-sse-end";
+
+const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessAccount {
+    provider: String,
+    id: String,
+}
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -306,6 +315,19 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Nous Research Hermes Agent (`hermes`).
+#[tauri::command(async)]
+pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
+    resolve_hermes()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Hermes Agent CLI not found. Install it from https://hermes-agent.nousresearch.com, run `hermes model`, then retry."
+                .into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -326,6 +348,7 @@ pub fn harness_spawn(
     command: String,
     args: Vec<String>,
     cwd: String,
+    account: Option<HarnessAccount>,
 ) -> Result<u32, String> {
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
     if let Some(prev) = prev {
@@ -347,6 +370,7 @@ pub fn harness_spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
+    apply_provider_account(&app, &mut cmd, account.as_ref())?;
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
@@ -434,6 +458,74 @@ pub fn harness_spawn(
     });
 
     Ok(pid)
+}
+
+pub(crate) fn provider_account_dir(
+    app: &AppHandle,
+    provider: &str,
+    account_id: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(account_id) = account_id.filter(|id| *id != DEFAULT_PROVIDER_ACCOUNT_ID) else {
+        return Ok(None);
+    };
+    if provider != "claude" && provider != "codex" {
+        return Err("Provider account profiles are only supported for Claude and Codex".into());
+    }
+    if account_id.is_empty()
+        || account_id.len() > 80
+        || !account_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Invalid provider account id".into());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("provider-accounts")
+        .join(provider)
+        .join(account_id);
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        format!(
+            "Could not create the {provider} account directory {}: {error}",
+            dir.display()
+        )
+    })?;
+    Ok(Some(dir))
+}
+
+fn apply_provider_account(
+    app: &AppHandle,
+    cmd: &mut Command,
+    account: Option<&HarnessAccount>,
+) -> Result<(), String> {
+    let Some(account) = account else {
+        return Ok(());
+    };
+    let Some(dir) = provider_account_dir(app, &account.provider, Some(&account.id))? else {
+        return Ok(());
+    };
+    match account.provider.as_str() {
+        "claude" => {
+            // Claude scopes both its ordinary config and its macOS Keychain
+            // credential to these exact strings. Setting both keeps profiles
+            // isolated on every supported platform.
+            cmd.env("CLAUDE_CONFIG_DIR", &dir)
+                .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", &dir)
+                .env_remove("ANTHROPIC_API_KEY")
+                .env_remove("ANTHROPIC_AUTH_TOKEN")
+                .env_remove("CLAUDE_CODE_OAUTH_TOKEN");
+        }
+        "codex" => {
+            cmd.env("CODEX_HOME", &dir)
+                .env_remove("OPENAI_API_KEY")
+                .env_remove("CODEX_API_KEY")
+                .env_remove("CODEX_ACCESS_TOKEN");
+        }
+        _ => unreachable!("provider_account_dir validates the provider"),
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -998,6 +1090,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "grok"
             | "omp"
             | "fx"
+            | "hermes"
             | "pi"
             | "worker-server"
             | "app-server"
@@ -1413,6 +1506,38 @@ fn resolve_grok() -> Option<PathBuf> {
     }
 
     first_binary_matching(candidates, is_grok_agent)
+}
+
+fn resolve_hermes() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        // Official per-user installer, then its underlying virtualenv in case
+        // the launcher symlink has not been added to PATH yet.
+        candidates.push(home.join(".local/bin/hermes"));
+        candidates.push(home.join(".hermes/hermes-agent/venv/bin/hermes"));
+        candidates.push(home.join(".hermes/hermes-agent/.venv/bin/hermes"));
+        candidates.push(home.join(".npm-global/bin/hermes"));
+        candidates.push(home.join(".cargo/bin/hermes"));
+        candidates.push(home.join("n/bin/hermes"));
+    }
+    #[cfg(windows)]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        // Native Windows installer launchers, then the underlying virtualenv.
+        candidates.push(local_app_data.join("hermes/bin/hermes"));
+        candidates.push(local_app_data.join("hermes/hermes-agent/venv/Scripts/hermes"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/hermes"));
+    candidates.push(PathBuf::from("/usr/local/bin/hermes"));
+    candidates.push(PathBuf::from("/usr/bin/hermes"));
+    candidates.push(PathBuf::from("/snap/bin/hermes"));
+    if let Some(from_shell) = which_via_login_shell("hermes") {
+        candidates.push(from_shell);
+    }
+
+    first_binary(candidates)
 }
 
 fn is_pi_coding_agent(path: &Path) -> bool {
@@ -2626,6 +2751,7 @@ mod reap_logic_tests {
             "/opt/homebrew/bin/node /Users/n/.local/share/cursor-agent/versions/x/index.js worker-server"
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
+        assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(

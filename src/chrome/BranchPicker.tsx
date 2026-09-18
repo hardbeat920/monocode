@@ -18,6 +18,7 @@ import {
 } from "../lib/fs";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { useProjectBranchesState } from "../hooks/useProjectBranches";
+import { CreateBranchDialog } from "./CreateBranchDialog";
 import { Popover } from "./Popover";
 import { SwitchBranchDialog } from "./SwitchBranchDialog";
 
@@ -31,9 +32,9 @@ type Props = {
 
 const MENU_WIDTH = 280;
 
-type Row =
-  | { kind: "create"; name: string }
-  | { kind: "branch"; branch: GitBranchInfo };
+type CreateRow = { kind: "create"; name: string };
+type BranchRow = { kind: "branch"; branch: GitBranchInfo };
+type Row = CreateRow | BranchRow;
 
 type PendingSwitch =
   | { kind: "create"; name: string }
@@ -54,6 +55,7 @@ export function BranchPicker({
   const [active, setActive] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
   const [blocked, setBlocked] = useState<PendingSwitch | null>(null);
   const [blockedError, setBlockedError] = useState<string | null>(null);
   const [blockedBusy, setBlockedBusy] = useState<"stash" | "commit" | null>(
@@ -75,6 +77,7 @@ export function BranchPicker({
 
   const dismiss = (restore: boolean) => {
     setOpen(false);
+    setCreating(false);
     setQuery("");
     setError(null);
     setBusy(false);
@@ -103,6 +106,7 @@ export function BranchPicker({
   useEffect(() => {
     if (enabled) return;
     setOpen(false);
+    setCreating(false);
     setQuery("");
     setError(null);
     setBusy(false);
@@ -111,7 +115,15 @@ export function BranchPicker({
     setBlockedBusy(null);
   }, [enabled]);
 
-  const rows = useMemo((): Row[] => {
+  const createName = query.trim();
+  const createTaken = (projectBranches?.branches ?? []).some(
+    (entry) => !entry.remote && entry.name === createName,
+  );
+  const createRow: CreateRow | null = createTaken
+    ? null
+    : { kind: "create", name: createName };
+
+  const rows = useMemo((): BranchRow[] => {
     const branches = projectBranches?.branches ?? [];
     const name = query.trim();
     const needle = name.toLowerCase();
@@ -123,22 +135,14 @@ export function BranchPicker({
           return hay.toLowerCase().includes(needle);
         })
       : branches;
-    const taken = branches.some(
-      (entry) => !entry.remote && entry.name === name,
-    );
     const selected = branch || projectBranches?.current;
-    const create: Row[] =
-      name && !taken ? [{ kind: "create", name }] : [];
-    return [
-      ...create,
-      ...filtered.map((entry) => ({
-        kind: "branch" as const,
-        branch: {
-          ...entry,
-          current: entry.name === selected && !entry.remote,
-        },
-      })),
-    ];
+    return filtered.map((entry) => ({
+      kind: "branch" as const,
+      branch: {
+        ...entry,
+        current: entry.name === selected && !entry.remote,
+      },
+    }));
   }, [branch, projectBranches, query]);
 
   useEffect(() => {
@@ -159,7 +163,10 @@ export function BranchPicker({
   const failMessage = (err: unknown) =>
     err instanceof Error ? err.message : String(err);
 
-  const run = async (pending: PendingSwitch) => {
+  const run = async (
+    pending: PendingSwitch,
+    source: "picker" | "dialog" = "picker",
+  ) => {
     if (busy || blocked) return;
     setBusy(true);
     setError(null);
@@ -170,6 +177,7 @@ export function BranchPicker({
       const message = failMessage(err);
       if (isCheckoutBlockedByChanges(message)) {
         setOpen(false);
+        setCreating(false);
         setQuery("");
         setError(null);
         setBusy(false);
@@ -180,7 +188,7 @@ export function BranchPicker({
       }
       setError(message);
       setBusy(false);
-      search.current?.focus();
+      if (source === "picker") search.current?.focus();
     }
   };
 
@@ -203,6 +211,13 @@ export function BranchPicker({
 
   const pick = (row: Row) => {
     if (row.kind === "create") {
+      if (!row.name) {
+        setOpen(false);
+        setQuery("");
+        setError(null);
+        setCreating(true);
+        return;
+      }
       void run({ kind: "create", name: row.name });
       return;
     }
@@ -232,6 +247,10 @@ export function BranchPicker({
     }
     if (e.key === "Enter") {
       e.preventDefault();
+      if (createName && createRow) {
+        pick(createRow);
+        return;
+      }
       const row = rows[active];
       if (row) pick(row);
     }
@@ -331,6 +350,21 @@ export function BranchPicker({
             }}
           />
         ) : null}
+        {creating ? (
+          <CreateBranchDialog
+            busy={busy}
+            error={error}
+            onCreate={(name) => {
+              void run({ kind: "create", name }, "dialog");
+            }}
+            onCancel={() => {
+              if (busy) return;
+              setCreating(false);
+              setError(null);
+              onCloseRef.current?.();
+            }}
+          />
+        ) : null}
         {open ? (
           <Popover
             anchor={root}
@@ -379,6 +413,24 @@ export function BranchPicker({
                 {error}
               </p>
             ) : null}
+            {createRow ? (
+              <div className="shrink-0 border-t border-stroke p-1 px-1.5">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pick(createRow)}
+                  className="flex h-7.5 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-content/75 hover:bg-content/8 hover:text-content disabled:opacity-60"
+                >
+                  <Plus className="size-4 shrink-0" strokeWidth={1.75} />
+                  <span className="min-w-0 truncate">
+                    {createRow.name
+                      ? `Create and checkout ${createRow.name}`
+                      : "New branch"}
+                  </span>
+                </button>
+              </div>
+            ) : null}
           </Popover>
         ) : null}
       </div>
@@ -394,12 +446,12 @@ function BranchList({
   onActive,
   onPick,
 }: {
-  rows: Row[];
+  rows: BranchRow[];
   active: number;
   busy: boolean;
   emptyLabel: string;
   onActive: (index: number) => void;
-  onPick: (row: Row) => void;
+  onPick: (row: BranchRow) => void;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -410,7 +462,9 @@ function BranchList({
 
   if (rows.length === 0) {
     return (
-      <div className="px-3 py-4 text-[12px] text-content/50">{emptyLabel}</div>
+      <div className="min-h-0 flex-1 px-3 py-4 text-[12px] text-content/50">
+        {emptyLabel}
+      </div>
     );
   }
 
@@ -423,14 +477,10 @@ function BranchList({
     >
       {rows.map((row, index) => {
         const highlighted = index === active;
-        const selected = row.kind === "branch" && row.branch.current;
+        const selected = row.branch.current;
         return (
           <button
-            key={
-              row.kind === "create"
-                ? `create:${row.name}`
-                : `${row.branch.remote ?? "local"}:${row.branch.name}`
-            }
+            key={`${row.branch.remote ?? "local"}:${row.branch.name}`}
             ref={highlighted ? activeRef : undefined}
             type="button"
             role="option"
@@ -439,47 +489,28 @@ function BranchList({
             onMouseDown={(e) => e.preventDefault()}
             onMouseEnter={() => onActive(index)}
             onClick={() => onPick(row)}
-            className={
-              row.kind === "create"
-                ? `mb-1 flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left disabled:opacity-60 ${
-                    highlighted
-                      ? "bg-selection-hover text-content"
-                      : "bg-selection text-content hover:bg-selection-hover"
-                  }`
-                : `flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:opacity-60 ${
-                    highlighted || selected
-                      ? "bg-selection text-content"
-                      : "text-content hover:bg-content/5"
-                  }`
-            }
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:opacity-60 ${
+              highlighted || selected
+                ? "bg-selection text-content"
+                : "text-content hover:bg-content/5"
+            }`}
           >
-            {row.kind === "create" ? (
-              <>
-                <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 truncate text-[12px]">
-                  Create and checkout {row.name}
-                </span>
-              </>
+            {selected ? (
+              <Check className="size-3.5 shrink-0" strokeWidth={1.75} />
             ) : (
-              <>
-                {selected ? (
-                  <Check className="size-3.5 shrink-0" strokeWidth={1.75} />
-                ) : (
-                  <GitBranch
-                    className="size-3.5 shrink-0 text-content/50"
-                    strokeWidth={1.75}
-                  />
-                )}
-                <span className="min-w-0 flex-1 truncate font-mono text-[12px]">
-                  {row.branch.name}
-                </span>
-                {row.branch.remote ? (
-                  <span className="shrink-0 text-[10px] text-content/40">
-                    {row.branch.remote}
-                  </span>
-                ) : null}
-              </>
+              <GitBranch
+                className="size-3.5 shrink-0 text-content/50"
+                strokeWidth={1.75}
+              />
             )}
+            <span className="min-w-0 flex-1 truncate font-mono text-[12px]">
+              {row.branch.name}
+            </span>
+            {row.branch.remote ? (
+              <span className="shrink-0 text-[10px] text-content/40">
+                {row.branch.remote}
+              </span>
+            ) : null}
           </button>
         );
       })}

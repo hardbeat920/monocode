@@ -175,6 +175,12 @@ export const MODELS: AgentModel[] = [
     name: "GLM 5.2 Fast",
     nativeId: "zai/glm-5.2-fast",
   },
+  {
+    id: "hermes:default",
+    harness: "hermes",
+    name: "Configured model",
+    nativeId: "",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -186,6 +192,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   pi: "pi:default",
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
+  hermes: "hermes:default",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -213,6 +220,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "pi",
   "omp",
   "fx",
+  "hermes",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];

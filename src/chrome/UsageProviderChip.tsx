@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   clampUsedPercent,
   formatRateLimitWindowChipLabel,
@@ -12,13 +12,27 @@ import {
   type RateLimitWindow,
 } from "../lib/rateLimits";
 import type { CodexRateLimitResetOutcome } from "../lib/rateLimitsFetch";
+import { mascotPath, projectMascot } from "../lib/projectMascots";
+import { projectKey, projectName } from "../lib/paths";
 import { HARNESS_TITLE } from "../lib/session";
+import {
+  loadTabGroupColors,
+  loadTabGroupCustomColors,
+  loadTabGroupMascots,
+  resolveTabGroupColor,
+  resolveTabGroupMascot,
+} from "../lib/tabGroups";
 import { HarnessIcon } from "./HarnessIcon";
-import { RefreshCw } from "./icons";
+import { ArrowLeft, Check, ChevronRight, Plus, RefreshCw } from "./icons";
 import { Popover, type PopoverDismissReason } from "./Popover";
+import {
+  ProviderSignInPanel,
+  type ProviderSignInState,
+} from "./ProviderSignInPanel";
+import type { ProviderAccount } from "../lib/providerAccounts";
 
 type UsageWindowEntry = {
-  key: "session" | "weekly";
+  key: "session" | "weekly" | "monthly";
   window: RateLimitWindow;
 };
 
@@ -28,22 +42,48 @@ type ResetActionState =
 export function UsageProviderChip({
   limits,
   now,
+  project,
+  accounts = [],
+  accountId,
+  onSelectAccount,
+  onAddAccount,
   onConsumeReset,
+  onReconnect,
 }: {
   limits: ProviderRateLimits;
   now: number;
+  project?: string;
+  accounts?: ProviderAccount[];
+  accountId?: string;
+  onSelectAccount?: (accountId: string) => void;
+  onAddAccount?: (label: string) => Promise<ProviderAccount>;
   onConsumeReset?: (creditId?: string) => Promise<CodexRateLimitResetOutcome>;
+  onReconnect?: () => Promise<void>;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const [accountView, setAccountView] = useState<"usage" | "accounts" | "add">(
+    "usage",
+  );
   const [resetAction, setResetAction] = useState<ResetActionState>("idle");
   const [activeResetKey, setActiveResetKey] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
+  const [reconnectState, setReconnectState] =
+    useState<ProviderSignInState>("idle");
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
   const loading =
     limits.status === "idle" ||
-    (limits.status === "fetching" && !limits.session && !limits.weekly);
+    (limits.status === "fetching" &&
+      !limits.session &&
+      !limits.weekly &&
+      !limits.monthly);
   const disconnected = limits.status === "unavailable";
   const windows = usageWindows(limits);
+  const loginView = Boolean(
+    onReconnect &&
+    windows.length === 0 &&
+    (needsProviderLogin(limits) || reconnectState !== "idle"),
+  );
   const tightest = windows.reduce<RateLimitWindow | null>((best, entry) => {
     if (!best || entry.window.usedPercent > best.usedPercent) {
       return entry.window;
@@ -54,12 +94,31 @@ export function UsageProviderChip({
     .map((entry) => rateLimitWindowTooltip(entry.window, now))
     .join(" · ");
   const providerLabel = HARNESS_TITLE[limits.provider];
+  const activeAccount = accounts.find((account) => account.id === accountId);
+  const canManageAccounts = Boolean(
+    activeAccount && onSelectAccount && onAddAccount,
+  );
+  const mascotProject = project ? projectName(project) : providerLabel;
+  const appearanceKey = project ? projectKey(project) : mascotProject;
+  const mascotName = resolveTabGroupMascot(
+    appearanceKey,
+    loadTabGroupMascots(),
+  );
+  const mascotColor = resolveTabGroupColor(
+    appearanceKey,
+    loadTabGroupColors(),
+    loadTabGroupCustomColors(),
+    mascotProject,
+  );
 
   useEffect(() => {
     if (open) return;
     setResetAction("idle");
     setActiveResetKey(null);
     setResetError(null);
+    setReconnectState("idle");
+    setReconnectError(null);
+    setAccountView("usage");
   }, [open]);
 
   const dismiss = (reason: PopoverDismissReason) => {
@@ -87,12 +146,27 @@ export function UsageProviderChip({
     }
   };
 
+  const reconnect = async () => {
+    if (!onReconnect) return;
+    setReconnectState("running");
+    setReconnectError(null);
+    try {
+      await onReconnect();
+      setReconnectState("complete");
+    } catch (error) {
+      setReconnectError(
+        error instanceof Error ? error.message : "Could not complete sign-in",
+      );
+      setReconnectState("error");
+    }
+  };
+
   return (
     <>
       <button
         ref={trigger}
         type="button"
-        className="-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content active:scale-[0.97]"
+        className="-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]"
         aria-label={`${providerLabel} usage details`}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -116,6 +190,11 @@ export function UsageProviderChip({
           <span className="text-content/35">{emptyUsageLabel(limits)}</span>
         ) : (
           <>
+            {accounts.length > 1 && activeAccount ? (
+              <span className="max-w-24 truncate text-content/45">
+                {activeAccount.label}
+              </span>
+            ) : null}
             {tightest ? <MiniBar usedPct={tightest.usedPercent} /> : null}
             <span className="flex min-w-0 items-center gap-1 tabular-nums">
               {windows.map((entry, index) => (
@@ -149,75 +228,309 @@ export function UsageProviderChip({
           role="dialog"
           aria-label={`${providerLabel} usage details`}
           tabIndex={-1}
-          className="overflow-y-auto p-2.5 text-content"
+          className={`overflow-y-auto text-content ${accountView === "usage" && loginView ? "" : "p-2.5"}`}
         >
-          <div className="flex items-start gap-2.5 px-1 pb-2.5 pt-0.5">
-            <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.06] ring-1 ring-inset ring-content/[0.07]">
-              <HarnessIcon harness={limits.provider} className="size-4" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-[13px] font-medium leading-4">
-                {providerLabel} usage
-              </h2>
-              <p className="mt-0.5 text-[10px] leading-4 text-content/40">
-                {updatedLabel(limits, now)}
-              </p>
-            </div>
-            {limits.status === "fetching" ? (
-              <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-content/40">
-                <RefreshCw
-                  className="size-2.5 animate-spin"
-                  strokeWidth={1.75}
-                  aria-hidden
-                />
-                Updating
-              </span>
-            ) : null}
-          </div>
-
-          {limits.status === "error" && windows.length > 0 ? (
-            <p className="mb-2 rounded-lg bg-amber-400/10 px-2.5 py-2 text-[10px] leading-4 text-amber-700 dark:text-amber-300">
-              Couldn’t refresh. Showing the last available snapshot.
-            </p>
-          ) : null}
-
-          {windows.length > 0 ? (
-            <div className="flex flex-col gap-1.5">
-              {windows.map((entry) => (
-                <UsageWindowCard
-                  key={entry.key}
-                  kind={entry.key}
-                  window={entry.window}
-                  now={now}
-                />
-              ))}
-            </div>
-          ) : (
-            <EmptyUsageState limits={limits} loading={loading} />
-          )}
-
-          {limits.provider === "codex" ? (
-            <BankedResets
-              limits={limits}
-              now={now}
-              action={resetAction}
-              activeResetKey={activeResetKey}
-              error={resetError}
-              onConfirm={(creditId) => {
-                setActiveResetKey(creditId);
-                setResetAction("confirming");
+          {accountView === "accounts" && activeAccount ? (
+            <ProviderAccountPicker
+              providerLabel={providerLabel}
+              accounts={accounts}
+              accountId={activeAccount.id}
+              onBack={() => setAccountView("usage")}
+              onAdd={() => setAccountView("add")}
+              onSelect={(nextAccountId) => {
+                onSelectAccount?.(nextAccountId);
+                setOpen(false);
               }}
-              onCancel={() => {
-                setActiveResetKey(null);
-                setResetAction("idle");
-              }}
-              onUse={useReset}
-              canUse={Boolean(onConsumeReset)}
             />
-          ) : null}
+          ) : accountView === "add" ? (
+            <AddProviderAccount
+              providerLabel={providerLabel}
+              onBack={() => setAccountView("accounts")}
+              onAdd={onAddAccount}
+              onComplete={() => setOpen(false)}
+            />
+          ) : loginView ? (
+            <>
+              {canManageAccounts && activeAccount ? (
+                <AccountSwitchRow
+                  account={activeAccount}
+                  onClick={() => setAccountView("accounts")}
+                />
+              ) : null}
+              <ProviderSignInPanel
+                harness={limits.provider}
+                state={reconnectState}
+                error={reconnectError}
+                onSignIn={() => void reconnect()}
+              />
+            </>
+          ) : (
+            <>
+              <div className="flex items-start gap-2.5 px-1 pb-2.5 pt-0.5">
+                <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.06] ring-1 ring-inset ring-content/[0.07]">
+                  <HarnessIcon harness={limits.provider} className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-[13px] font-medium leading-4">
+                    {providerLabel} usage
+                  </h2>
+                  <p className="mt-0.5 text-[10px] leading-4 text-content/40">
+                    {updatedLabel(limits, now)}
+                  </p>
+                  {canManageAccounts && activeAccount ? (
+                    <button
+                      type="button"
+                      className="mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55 hover:bg-content/10 hover:text-content"
+                      aria-label={`Switch ${providerLabel} account`}
+                      onClick={() => setAccountView("accounts")}
+                    >
+                      <span className="truncate">{activeAccount.label}</span>
+                      <ChevronRight
+                        className="size-2.5 shrink-0"
+                        strokeWidth={1.75}
+                        aria-hidden
+                      />
+                    </button>
+                  ) : null}
+                </div>
+                {limits.status === "fetching" ? (
+                  <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-content/40">
+                    <RefreshCw
+                      className="size-2.5 animate-spin"
+                      strokeWidth={1.75}
+                      aria-hidden
+                    />
+                    Updating
+                  </span>
+                ) : null}
+              </div>
+
+              {limits.status === "error" && windows.length > 0 ? (
+                <p className="mb-2 rounded-lg bg-amber-400/10 px-2.5 py-2 text-[10px] leading-4 text-amber-700 dark:text-amber-300">
+                  Couldn’t refresh. Showing the last available snapshot.
+                </p>
+              ) : null}
+
+              {windows.length > 0 ? (
+                <div className="flex flex-col gap-1.5">
+                  {windows.map((entry) => (
+                    <UsageWindowCard
+                      key={entry.key}
+                      kind={entry.key}
+                      window={entry.window}
+                      now={now}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyUsageState limits={limits} loading={loading} />
+              )}
+
+              {limits.provider === "codex" ? (
+                <BankedResets
+                  limits={limits}
+                  now={now}
+                  action={resetAction}
+                  activeResetKey={activeResetKey}
+                  error={resetError}
+                  mascotProject={mascotProject}
+                  mascotName={mascotName}
+                  mascotColor={mascotColor}
+                  onConfirm={(creditId) => {
+                    setActiveResetKey(creditId);
+                    setResetAction("confirming");
+                  }}
+                  onCancel={() => {
+                    setActiveResetKey(null);
+                    setResetAction("idle");
+                  }}
+                  onUse={useReset}
+                  canUse={Boolean(onConsumeReset)}
+                />
+              ) : null}
+            </>
+          )}
         </Popover>
       ) : null}
     </>
+  );
+}
+
+function AccountSwitchRow({
+  account,
+  onClick,
+}: {
+  account: ProviderAccount;
+  onClick: () => void;
+}) {
+  return (
+    <div className="px-2.5 pt-2.5">
+      <button
+        type="button"
+        className="flex h-8 w-full items-center gap-2 rounded-lg bg-content/[0.045] px-2.5 text-left text-[11px] ring-1 ring-inset ring-content/[0.06] hover:bg-content/[0.08]"
+        aria-label={`Switch account from ${account.label}`}
+        onClick={onClick}
+      >
+        <span className="min-w-0 flex-1 truncate">{account.label}</span>
+        <span className="text-[10px] text-content/40">Switch</span>
+        <ChevronRight
+          className="size-3 shrink-0 text-content/35"
+          strokeWidth={1.75}
+          aria-hidden
+        />
+      </button>
+    </div>
+  );
+}
+
+function ProviderAccountPicker({
+  providerLabel,
+  accounts,
+  accountId,
+  onBack,
+  onAdd,
+  onSelect,
+}: {
+  providerLabel: string;
+  accounts: ProviderAccount[];
+  accountId: string;
+  onBack: () => void;
+  onAdd: () => void;
+  onSelect: (accountId: string) => void;
+}) {
+  return (
+    <div>
+      <div className="flex h-7 items-center gap-1">
+        <button
+          type="button"
+          className="grid size-6 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
+          aria-label="Back to usage"
+          onClick={onBack}
+        >
+          <ArrowLeft className="size-3.5" strokeWidth={1.75} aria-hidden />
+        </button>
+        <h2 className="text-[13px] font-medium">{providerLabel} accounts</h2>
+      </div>
+      <p className="mt-1 px-1 text-[10px] leading-4 text-content/40">
+        Each conversation stays pinned to the account that started it.
+      </p>
+      <div className="mt-2 flex flex-col gap-1" role="listbox">
+        {accounts.map((account) => {
+          const selected = account.id === accountId;
+          return (
+            <button
+              key={account.id}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              className={`flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[11px] ring-1 ring-inset transition-colors ${
+                selected
+                  ? "bg-accent/10 text-content ring-accent/20"
+                  : "bg-content/[0.035] text-content/70 ring-content/[0.06] hover:bg-content/[0.075] hover:text-content"
+              }`}
+              onClick={() => onSelect(account.id)}
+            >
+              <span className="min-w-0 flex-1 truncate">{account.label}</span>
+              {selected ? (
+                <Check
+                  className="size-3.5 shrink-0 text-accent"
+                  strokeWidth={1.9}
+                  aria-hidden
+                />
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        className="mt-2 flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[11px] text-content/55 hover:bg-content/[0.07] hover:text-content"
+        onClick={onAdd}
+      >
+        <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
+        Add account
+      </button>
+    </div>
+  );
+}
+
+function AddProviderAccount({
+  providerLabel,
+  onBack,
+  onAdd,
+  onComplete,
+}: {
+  providerLabel: string;
+  onBack: () => void;
+  onAdd?: (label: string) => Promise<ProviderAccount>;
+  onComplete: () => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!onAdd || !label.trim() || running) return;
+    setRunning(true);
+    setError(null);
+    try {
+      await onAdd(label);
+      onComplete();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Could not add this account",
+      );
+      setRunning(false);
+    }
+  };
+
+  return (
+    <form onSubmit={(event) => void submit(event)}>
+      <div className="flex h-7 items-center gap-1">
+        <button
+          type="button"
+          className="grid size-6 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:opacity-40"
+          aria-label="Back to accounts"
+          disabled={running}
+          onClick={onBack}
+        >
+          <ArrowLeft className="size-3.5" strokeWidth={1.75} aria-hidden />
+        </button>
+        <h2 className="text-[13px] font-medium">Add {providerLabel} account</h2>
+      </div>
+      <p className="mt-1 px-1 text-[10px] leading-4 text-content/40">
+        Give this account a local name, then finish sign-in in your browser.
+      </p>
+      <label className="mt-3 block text-[10px] font-medium text-content/55">
+        Account name
+        <input
+          autoFocus
+          type="text"
+          maxLength={48}
+          value={label}
+          disabled={running}
+          placeholder="Work or Personal"
+          className="mt-1.5 h-8 w-full rounded-lg border border-content/10 bg-content/[0.04] px-2.5 text-[11px] text-content outline-none placeholder:text-content/25 focus:border-accent/45 disabled:opacity-55"
+          onChange={(event) => setLabel(event.target.value)}
+        />
+      </label>
+      <button
+        type="submit"
+        className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-content px-3 text-[11px] font-medium text-background-base hover:bg-content/85 disabled:cursor-default disabled:opacity-45"
+        disabled={running || !label.trim()}
+      >
+        {running ? (
+          <RefreshCw className="size-3.5 animate-spin" aria-hidden />
+        ) : null}
+        {running ? "Waiting for browser…" : "Sign in and add account"}
+      </button>
+      {error ? (
+        <p className="mt-2 text-[10px] leading-4 text-red-500" role="status">
+          {error}
+        </p>
+      ) : null}
+    </form>
   );
 }
 
@@ -227,6 +540,9 @@ function usageWindows(limits: ProviderRateLimits): UsageWindowEntry[] {
       ? ({ key: "session", window: limits.session } as const)
       : null,
     limits.weekly ? ({ key: "weekly", window: limits.weekly } as const) : null,
+    limits.monthly
+      ? ({ key: "monthly", window: limits.monthly } as const)
+      : null,
   ].filter((entry): entry is UsageWindowEntry => entry != null);
 }
 
@@ -246,7 +562,9 @@ function UsageWindowCard({
       ? "5-hour limit"
       : kind === "weekly"
         ? "Weekly limit"
-        : `${formatWindowLabel(window.windowMinutes)} limit`;
+        : kind === "monthly"
+          ? "Monthly limit"
+          : `${formatWindowLabel(window.windowMinutes)} limit`;
   return (
     <section className="rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
       <div className="flex items-baseline justify-between gap-3">
@@ -293,6 +611,9 @@ function BankedResets({
   action,
   activeResetKey,
   error,
+  mascotProject,
+  mascotName,
+  mascotColor,
   onConfirm,
   onCancel,
   onUse,
@@ -303,6 +624,9 @@ function BankedResets({
   action: ResetActionState;
   activeResetKey: string | null;
   error: string | null;
+  mascotProject: string;
+  mascotName: string | null;
+  mascotColor: string;
   onConfirm: (rowKey: string) => void;
   onCancel: () => void;
   onUse: (credit: RateLimitResetCredit | undefined, rowKey: string) => void;
@@ -318,11 +642,19 @@ function BankedResets({
     ...detailedCredits,
     ...Array.from({ length: unlistedCount }, () => null),
   ];
+  const hasBankedReset = count != null && count > 0;
   return (
-    <section className="mt-2.5 border-t border-content/[0.08] px-1 pt-2.5">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <h3 className="text-[11px] font-medium">Banked resets</h3>
+    <section className="mt-2.5 border-t border-content/[0.08] pt-2.5">
+      <div className="relative min-h-[78px] overflow-hidden rounded-lg bg-content/[0.04] px-3 py-3 pr-[84px] ring-1 ring-inset ring-content/[0.06]">
+        <div className="relative z-10 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-[11px] font-medium">Banked resets</h3>
+            {count != null ? (
+              <span className="rounded-full bg-content/[0.07] px-1.5 py-px text-[9px] font-medium tabular-nums text-content/65 ring-1 ring-inset ring-content/[0.07]">
+                {count}
+              </span>
+            ) : null}
+          </div>
           <p className="mt-0.5 text-[10px] leading-4 text-content/40">
             {count == null
               ? "Not reported by this account"
@@ -331,16 +663,17 @@ function BankedResets({
                 : `${count} ${count === 1 ? "reset" : "resets"} available`}
           </p>
         </div>
-        {count != null ? (
-          <span className="rounded-full bg-content/[0.07] px-2 py-0.5 text-[10px] font-medium tabular-nums text-content/65 ring-1 ring-inset ring-content/[0.07]">
-            {count}
-          </span>
-        ) : null}
+        <BankedResetMascot
+          project={mascotProject}
+          name={mascotName}
+          color={mascotColor}
+          happy={hasBankedReset}
+        />
       </div>
 
       {count != null && count > 0 ? (
         <div
-          className="mt-2 max-h-56 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
+          className="mt-2 max-h-56 overflow-y-auto overscroll-contain"
           aria-label="Available banked resets"
         >
           <div className="flex flex-col gap-1.5">
@@ -367,6 +700,90 @@ function BankedResets({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function BankedResetMascot({
+  project,
+  name,
+  color,
+  happy,
+}: {
+  project: string;
+  name: string | null;
+  color: string;
+  happy: boolean;
+}) {
+  const mascot = projectMascot(project, name);
+  const spritePath = `${mascot.restPath}${mascotFacePlatePath(mascot.rest)}`;
+  const maskId = `banked-reset-mascot-${useId().replace(/:/g, "")}`;
+  return (
+    <div
+      className="reset-mascot-scene"
+      data-reset-mascot-mood={happy ? "happy" : "sad"}
+      data-mascot-name={mascot.name}
+      style={{ color }}
+      aria-hidden
+    >
+      <span className="reset-mascot-glow" />
+      {happy ? (
+        <>
+          <span className="reset-mascot-spark reset-mascot-spark-a" />
+          <span className="reset-mascot-spark reset-mascot-spark-b" />
+        </>
+      ) : null}
+      <svg
+        className="reset-mascot-sprite"
+        viewBox="0 0 8 8"
+        shapeRendering="crispEdges"
+      >
+        <defs>
+          <mask
+            id={maskId}
+            maskUnits="userSpaceOnUse"
+            x="0"
+            y="0"
+            width="8"
+            height="8"
+          >
+            <rect width="8" height="8" fill="black" />
+            <path d={spritePath} fill="white" />
+            {happy ? (
+              <g fill="black">
+                <rect x="2" y="3" width="1" height="1" />
+                <rect x="5" y="3" width="1" height="1" />
+                <rect x="2" y="4" width="1" height="1" />
+                <rect x="5" y="4" width="1" height="1" />
+                <rect x="3" y="5" width="2" height="1" />
+              </g>
+            ) : (
+              <g fill="black">
+                <rect x="1" y="3" width="1" height="1" />
+                <rect x="4" y="3" width="1" height="1" />
+                <rect x="3" y="4" width="2" height="1" />
+                <rect x="2" y="5" width="1" height="1" />
+                <rect x="5" y="5" width="1" height="1" />
+              </g>
+            )}
+          </mask>
+        </defs>
+        <path d={spritePath} fill="currentColor" mask={`url(#${maskId})`} />
+      </svg>
+      {!happy ? <span className="reset-mascot-tear" /> : null}
+    </div>
+  );
+}
+
+/** Fill only the middle of each face row before cutting the mood back out. */
+function mascotFacePlatePath(rows: readonly string[]): string {
+  return mascotPath(
+    rows.map((row, y) => {
+      if (y < 2 || y > 5) return ".".repeat(row.length);
+      const first = row.indexOf("#");
+      const last = row.lastIndexOf("#");
+      if (first < 0) return ".".repeat(row.length);
+      return `${".".repeat(first)}${"#".repeat(last - first + 1)}${".".repeat(row.length - last - 1)}`;
+    }),
   );
 }
 
@@ -498,6 +915,19 @@ function EmptyUsageState({
         </p>
       ) : null}
     </div>
+  );
+}
+
+export function needsProviderLogin(limits: ProviderRateLimits): boolean {
+  if (limits.status === "unavailable") return true;
+  if (limits.status !== "error") return false;
+  const text = limits.error?.toLowerCase() ?? "";
+  return (
+    text.includes("expired") ||
+    text.includes("sign-in") ||
+    text.includes("not signed in") ||
+    text.includes("not connected") ||
+    text.includes("authentication")
   );
 }
 

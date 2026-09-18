@@ -58,6 +58,7 @@ type SessionRecord = {
   runtimeMode: string;
   title: string;
   providerSessionId?: string | null;
+  providerAccountId?: string | null;
   blocks: Block[];
   contextUsed?: number | null;
   contextWindow?: number | null;
@@ -77,6 +78,7 @@ type SessionUpsertPayload = {
   runtimeMode: string;
   title: string;
   providerSessionId?: string;
+  providerAccountId?: string;
   blocks: Block[];
   contextUsed?: number;
   contextWindow?: number;
@@ -113,6 +115,9 @@ function persistableMeta(
     title: session.title,
     ...(session.providerSessionId && isPersistableId(session.providerSessionId)
       ? { providerSessionId: session.providerSessionId }
+      : {}),
+    ...(session.providerAccountId && isPersistableId(session.providerAccountId)
+      ? { providerAccountId: session.providerAccountId }
       : {}),
     ...(session.context ? { contextUsed: session.context.used } : {}),
     ...(session.context?.window
@@ -719,6 +724,9 @@ function recordToSession(record: SessionRecord): Session {
     )?.orchestrationLeadId,
     ...(record.providerSessionId
       ? { providerSessionId: record.providerSessionId }
+      : {}),
+    ...(record.providerAccountId
+      ? { providerAccountId: record.providerAccountId }
       : {}),
     ...(record.branch ? { branch: record.branch } : {}),
     ...(record.worktreeCwd ? { worktreeCwd: record.worktreeCwd } : {}),
