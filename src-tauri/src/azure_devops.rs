@@ -1209,11 +1209,11 @@ fn git_unified_hunks(old: Option<&[u8]>, new: Option<&[u8]>) -> Option<(i64, i64
             return None;
         }
     }
-    let null_file: &Path = if cfg!(windows) {
-        Path::new("NUL")
-    } else {
-        Path::new("/dev/null")
-    };
+    // Isolate the subprocess from user configuration: a global
+    // `diff.external`, textconv driver, or attributes file could otherwise
+    // replace the unified output this parser expects.
+    let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let null_file: &Path = Path::new(null_device);
     let mut cmd = Command::new("git");
     crate::hide_window_console(&mut cmd);
     let output = cmd
@@ -1224,8 +1224,14 @@ fn git_unified_hunks(old: Option<&[u8]>, new: Option<&[u8]>) -> Option<(i64, i64
             "core.safecrlf=false",
             "-c",
             "core.quotepath=false",
+        ])
+        .arg("-c")
+        .arg(format!("core.attributesFile={null_device}"))
+        .args([
             "diff",
             "--no-index",
+            "--no-ext-diff",
+            "--no-textconv",
             "--unified=3",
             "--no-color",
             "--",
@@ -1241,6 +1247,7 @@ fn git_unified_hunks(old: Option<&[u8]>, new: Option<&[u8]>) -> Option<(i64, i64
             null_file
         })
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", null_device)
         .current_dir(&dir)
         .output();
     cleanup();
@@ -1602,7 +1609,7 @@ fn azure_agent() -> ureq::Agent {
 fn read_azure_response(
     result: Result<ureq::Response, ureq::Error>,
 ) -> Result<AzureResponse, String> {
-    let (bytes, status, truncated) = read_azure_bytes(result)?;
+    let (bytes, status, truncated) = read_azure_bytes(result, None)?;
     let body = String::from_utf8(bytes)
         .map_err(|_| "Azure DevOps returned an unreadable response".to_string())?;
     if !(200..300).contains(&status) {
@@ -1624,6 +1631,9 @@ fn azure_get_bytes(config: &AzureDevOpsConfig, path: &str) -> Result<(Vec<u8>, b
             .set("Accept", "application/json")
             .set("User-Agent", USER_AGENT)
             .call(),
+        // One byte past the cap is enough to flag the content as too large
+        // without buffering an unbounded blob.
+        Some(MAX_DIFF_FILE_BYTES),
     )?;
     if !(200..300).contains(&status) {
         let body = String::from_utf8_lossy(&bytes);
@@ -1634,6 +1644,7 @@ fn azure_get_bytes(config: &AzureDevOpsConfig, path: &str) -> Result<(Vec<u8>, b
 
 fn read_azure_bytes(
     result: Result<ureq::Response, ureq::Error>,
+    max_bytes: Option<usize>,
 ) -> Result<(Vec<u8>, u16, bool), String> {
     let response = match result {
         Ok(response) => response,
@@ -1655,10 +1666,15 @@ fn read_azure_bytes(
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
     let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|_| "Azure DevOps returned an unreadable response".to_string())?;
+    let read_result = if let Some(max_bytes) = max_bytes {
+        response
+            .into_reader()
+            .take((max_bytes as u64).saturating_add(1))
+            .read_to_end(&mut bytes)
+    } else {
+        response.into_reader().read_to_end(&mut bytes)
+    };
+    read_result.map_err(|_| "Azure DevOps returned an unreadable response".to_string())?;
     Ok((bytes, status, truncated))
 }
 
