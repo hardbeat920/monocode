@@ -1272,7 +1272,7 @@ function UserMessageBlock({
     <div
       data-prompt-anchor={block.id}
       className={`user-message-row ${
-        chat ? "flex flex-col items-end pt-1.5 pr-4 pb-4 pl-14" : "p-1.5 pb-3"
+        chat ? "flex flex-col items-end pt-1.5 pr-4 pb-5 pl-14" : "p-1.5 pb-4"
       }`}
     >
       <div
