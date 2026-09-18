@@ -2,6 +2,7 @@ use tauri::Manager;
 
 mod chat_background;
 mod checkpoint;
+mod composer_draft;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -379,6 +380,8 @@ pub fn run() {
             session_store::session_take_in_flight,
             session_store::workspace_set_snapshot,
             session_store::workspace_get_snapshot,
+            composer_draft::composer_draft_get,
+            composer_draft::composer_draft_set,
             notes::notes_list,
             notes::notes_get,
             notes::notes_upsert,

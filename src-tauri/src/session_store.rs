@@ -632,6 +632,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 17 {
+        crate::composer_draft::ensure_drafts_table(conn)?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (17, ?1)",
+            params![now_millis()],
+        )?;
+    }
     // Create even when a version row already exists (another build may have
     // used the same numbers, or a previous run recorded the version without
     // the table). Restore writes into these; missing tables look like a
@@ -660,6 +667,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
          ON sessions (id) WHERE inbox_ask IS NOT NULL;",
     )?;
     crate::notes::ensure_notes_table(conn)?;
+    crate::composer_draft::ensure_drafts_table(conn)?;
     crate::reminders::ensure_table(conn)?;
     ensure_orchestration_history(conn)?;
     Ok(())
@@ -1405,6 +1413,10 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
         [session_id],
     )?;
     tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+    tx.execute(
+        "DELETE FROM composer_drafts WHERE session_id = ?1",
+        [session_id],
+    )?;
     tx.commit()
 }
 
