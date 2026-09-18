@@ -4,7 +4,10 @@ import { persistableAttachment } from "./attachments";
 import type { ContextUsage } from "./contextUsage";
 import { normalizeProjectPath } from "./recents";
 import { ompActiveAssistantTexts, ompSessionInterjections } from "./fs";
-import { backfillOmpInterjections, ompStatusSplitTexts } from "./ompInterjections";
+import {
+  backfillOmpInterjections,
+  ompStatusSplitTexts,
+} from "./ompInterjections";
 import type {
   AgentRunMeta,
   AgentStep,
@@ -442,6 +445,12 @@ function sanitizeBlock(block: Block): Block | null {
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
   if (
     block.role === "user" &&
+    typeof block.providerTurnId === "string" &&
+    isPersistableId(block.providerTurnId)
+  )
+    next.providerTurnId = block.providerTurnId;
+  if (
+    block.role === "user" &&
     typeof block.orchestrationLeadId === "string" &&
     isPersistableId(block.orchestrationLeadId)
   )
@@ -718,10 +727,12 @@ function recordToSession(record: SessionRecord): Session {
     title: record.title,
     blocks,
     busy: false,
-    orchestrationLeadId: record.orchestrationLeadId ?? blocks.find(
-      (block) =>
-        block.orchestrationLeadId && block.orchestrationLeadId !== record.id,
-    )?.orchestrationLeadId,
+    orchestrationLeadId:
+      record.orchestrationLeadId ??
+      blocks.find(
+        (block) =>
+          block.orchestrationLeadId && block.orchestrationLeadId !== record.id,
+      )?.orchestrationLeadId,
     ...(record.providerSessionId
       ? { providerSessionId: record.providerSessionId }
       : {}),

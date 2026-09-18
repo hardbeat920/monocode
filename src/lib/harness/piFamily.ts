@@ -31,6 +31,7 @@ import {
   turnMetricsFromUsage,
   extensionUiResponse,
   extensionUiTitle,
+  forkMessagesFromRpcData,
   isAgentSettled,
   isPiThinkingLevel,
   mergeToolInput,
@@ -61,6 +62,7 @@ import type {
   CompactContextInput,
   HarnessEvent,
   HarnessSessionInput,
+  RewindLastTurnInput,
   SendTurnInput,
   SteerTurnInput,
 } from "./types";
@@ -277,6 +279,41 @@ export async function compactContext(
       }
     });
   await live.turns;
+}
+
+export async function rewindLastTurn(
+  flavor: PiFlavor,
+  input: RewindLastTurnInput,
+): Promise<{ submitted: boolean }> {
+  const state = stateFor(flavor);
+  let live = state.liveByThread.get(input.sessionId);
+  if (!live || live.cwd !== input.cwd) {
+    live = await ensureLive(flavor, input);
+  } else {
+    live.onEvent = input.onEvent;
+    await applyModel(flavor, live, input);
+  }
+  if (live.activeTurn) {
+    throw new Error("Stop the current turn before editing the last message");
+  }
+
+  const forkMessages = await live.rpc.request({ type: "get_fork_messages" });
+  const messages = forkMessagesFromRpcData(forkMessages.data);
+  const last = messages[messages.length - 1];
+  if (!last) throw new Error("No user message to edit");
+
+  const fork = await live.rpc.request({ type: "fork", entryId: last.entryId });
+  if (asRecord(fork.data)?.cancelled === true) {
+    throw new Error("Edit cancelled");
+  }
+  const forkState = await live.rpc.request({ type: "get_state" });
+  const providerSessionId = providerSessionIdFromState(forkState.data);
+  if (!providerSessionId) {
+    throw new Error("Pi did not expose the forked session");
+  }
+  bindState(flavor, input.sessionId, live, forkState.data);
+  live.onEvent({ type: "session.providerBound", providerSessionId });
+  return { submitted: false };
 }
 
 export async function steerTurn(

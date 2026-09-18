@@ -164,8 +164,10 @@ import {
   bindHarnessSession,
   cancelHarnessTurn,
   canCompactHarnessContext,
+  canRewindHarnessLastTurn,
   canSteerHarness,
   compactHarnessContext,
+  rewindHarnessLastTurn,
   forgetHarnessSession,
   generateHarnessTitle,
   isLiveHarness,
@@ -209,6 +211,11 @@ import {
 } from "./lib/handoff";
 import { requestOutgoingHandoff } from "./lib/handoffTurn";
 import { isEditTool } from "./lib/harness/preview";
+import {
+  canEditLastTurn,
+  lastUserTurnBlock,
+  truncateBeforeLastUserTurn,
+} from "./lib/editLastTurn";
 import {
   beginSessionTurn,
   captureSessionCheckpoint,
@@ -786,8 +793,11 @@ export default function App({
   const [settingsAnchor, setSettingsAnchor] = useState<SettingsAnchor | null>(
     null,
   );
-  const [notificationProjectPath, setNotificationProjectPath] = useState<string | null>(null);
-  const [notificationSettingsRequest, setNotificationSettingsRequest] = useState(0);
+  const [notificationProjectPath, setNotificationProjectPath] = useState<
+    string | null
+  >(null);
+  const [notificationSettingsRequest, setNotificationSettingsRequest] =
+    useState(0);
   const [editorNavigation, setEditorNavigation] =
     useState<EditorNavigationTarget | null>(null);
   const editorNavigationToken = useRef(0);
@@ -882,6 +892,7 @@ export default function App({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  const rewindingLastTurn = useRef(new Set<string>());
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
   const lastPersistedUserBlock = useRef(new Map<string, string>());
@@ -3821,7 +3832,9 @@ export default function App({
           },
           stop: async () => {
             const run =
-              mode === "delete" ? orchestrator.forSession(sessionId) : undefined;
+              mode === "delete"
+                ? orchestrator.forSession(sessionId)
+                : undefined;
             if (run && (run.status === "active" || run.status === "paused"))
               await orchestrator.stopRun(run.leadId);
             await stopSessionForRemoval(sessionId);
@@ -4627,8 +4640,11 @@ export default function App({
         managed?: boolean;
         orchestrationRetry?: OrchestrationProposal;
         onSettled?: (outcome: ControlOutcome) => void;
+        onResendRejected?: () => void;
+        resendEdited?: boolean;
       },
     ) => {
+      if (rewindingLastTurn.current.has(sessionId)) return false;
       const controlError = orchestrator.submissionError(
         sessionId,
         options?.managed,
@@ -4658,9 +4674,19 @@ export default function App({
       if (removingSessionIds.current.has(sessionId)) return false;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
       if (!storedCurrent) return false;
-      const current = options?.buildTarget
+      let current = options?.buildTarget
         ? withPlanBuildTarget(storedCurrent, options.buildTarget)
         : storedCurrent;
+      const editedProviderTurnId = options?.resendEdited
+        ? lastUserTurnBlock(current.blocks)?.providerTurnId
+        : undefined;
+      if (options?.resendEdited) {
+        if (!canEditLastTurn(current)) return false;
+        current = {
+          ...current,
+          blocks: truncateBeforeLastUserTurn(current.blocks),
+        };
+      }
       const intent = options?.intent ?? "default";
       if (intent === "orchestrate") {
         try {
@@ -4790,21 +4816,21 @@ export default function App({
         dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
         const cards = userTurnCards(noteCard);
-        setSessions((prev) =>
-          prev.map((s) => {
-            if (s.id !== sessionId) return s;
-            let next: Session = {
-              ...s,
-              inboxCard: rawCommand ? s.inboxCard : undefined,
-              noteCard: rawCommand ? s.noteCard : undefined,
-              handoffCard: rawCommand ? s.handoffCard : undefined,
-            };
-            if (options?.queuedMessageId) {
-              next = dequeueQueuedMessage(next, options.queuedMessageId);
-            }
-            return appendSteerUser(next, submittedText, visible, cards);
-          }),
-        );
+        const nextSessions = sessionsRef.current.map((s) => {
+          if (s.id !== sessionId) return s;
+          let next: Session = {
+            ...s,
+            inboxCard: rawCommand ? s.inboxCard : undefined,
+            noteCard: rawCommand ? s.noteCard : undefined,
+            handoffCard: rawCommand ? s.handoffCard : undefined,
+          };
+          if (options?.queuedMessageId) {
+            next = dequeueQueuedMessage(next, options.queuedMessageId);
+          }
+          return appendSteerUser(next, submittedText, visible, cards);
+        });
+        sessionsRef.current = nextSessions;
+        setSessions(nextSessions);
         void (async () => {
           try {
             const prepared = await prepareAttachments(attachments);
@@ -4899,85 +4925,98 @@ export default function App({
       }
 
       dismissNoticesForContinuedSession(sessionId);
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sessionId) return s;
-          const selected = options?.buildTarget
-            ? withPlanBuildTarget(s, options.buildTarget)
-            : s;
-          const titled = isFirstTurn ? titleSeed : selected.title;
-          let next: Session = {
-            ...selected,
-            providerAccountId,
-            inboxCard: rawCommand ? s.inboxCard : undefined,
-            noteCard: rawCommand ? s.noteCard : undefined,
-            handoffCard: rawCommand ? s.handoffCard : undefined,
-          };
-          if (approvedPlan && intent === "build") {
-            next = {
-              ...next,
-              blocks: next.blocks.map((block) =>
-                block.id === approvedPlan.id
-                  ? {
-                      ...block,
-                      plan: {
-                        ...(block.plan ?? { status: "ready" as const }),
-                        status: "building" as const,
-                        approvedText: block.text,
-                      },
-                    }
-                  : block,
-              ),
+      const commitSubmittedTurn = () => {
+        setSessions((prev) =>
+          prev.map((s) => {
+            if (s.id !== sessionId) return s;
+            const selected = options?.buildTarget
+              ? withPlanBuildTarget(s, options.buildTarget)
+              : s;
+            const titled = isFirstTurn ? titleSeed : selected.title;
+            let next: Session = {
+              ...selected,
+              providerAccountId,
+              inboxCard: rawCommand ? s.inboxCard : undefined,
+              noteCard: rawCommand ? s.noteCard : undefined,
+              handoffCard: rawCommand ? s.handoffCard : undefined,
             };
-          }
-          if (options?.queuedMessageId) {
-            next = dequeueQueuedMessage(next, options.queuedMessageId);
-          }
-          if (!live) {
-            return {
-              ...next,
-              title: titled,
-              pendingSwitch: undefined,
-              busy: false,
-              blocks: [
-                ...next.blocks,
-                {
-                  id: crypto.randomUUID(),
-                  role: "user",
-                  text: visibleText,
-                  ...(visible.length > 0 ? { attachments: visible } : {}),
-                  ...cards,
-                },
-                {
-                  id: crypto.randomUUID(),
-                  role: "system",
-                  text: `${next.harness} is not connected yet — install and sign in to that provider, then retry.`,
-                  notice: "error",
-                },
-              ],
-            };
-          }
-          if (pendingSwitch) {
-            const sealed = stopStreaming({
-              ...next,
-              title: titled,
-              pendingSwitch: undefined,
-            });
+            if (options?.resendEdited) {
+              next = {
+                ...next,
+                blocks: truncateBeforeLastUserTurn(next.blocks),
+              };
+            }
+            if (approvedPlan && intent === "build") {
+              next = {
+                ...next,
+                blocks: next.blocks.map((block) =>
+                  block.id === approvedPlan.id && block.role === "plan"
+                    ? {
+                        ...block,
+                        plan: {
+                          ...(block.plan ?? { status: "ready" as const }),
+                          status: "building" as const,
+                          approvedText: block.text,
+                        },
+                      }
+                    : block,
+                ),
+              };
+            }
+            if (options?.queuedMessageId) {
+              next = dequeueQueuedMessage(next, options.queuedMessageId);
+            }
+            if (!live) {
+              return {
+                ...next,
+                title: titled,
+                pendingSwitch: undefined,
+                busy: false,
+                blocks: [
+                  ...next.blocks,
+                  {
+                    id: crypto.randomUUID(),
+                    role: "user",
+                    text: visibleText,
+                    ...(visible.length > 0 ? { attachments: visible } : {}),
+                    ...cards,
+                  },
+                  {
+                    id: crypto.randomUUID(),
+                    role: "system",
+                    text: `${next.harness} is not connected yet — install and sign in to that provider, then retry.`,
+                    notice: "error",
+                  },
+                ],
+              };
+            }
+            if (pendingSwitch) {
+              const sealed = stopStreaming({
+                ...next,
+                title: titled,
+                pendingSwitch: undefined,
+              });
+              return appendUser(
+                appendPreparingHandoff(
+                  sealed,
+                  pendingSwitch.from,
+                  next.harness,
+                ),
+                visibleText,
+                visible,
+                cards,
+              );
+            }
             return appendUser(
-              appendPreparingHandoff(sealed, pendingSwitch.from, next.harness),
+              { ...next, title: titled },
               visibleText,
               visible,
               cards,
             );
-          }
-          return appendUser(
-            { ...next, title: titled },
-            visibleText,
-            visible,
-            cards,
-          );
-        }),
-      );
+          }),
+        );
+      };
+      if (!options?.resendEdited) flushSync(commitSubmittedTurn);
 
       if (isFirstTurn && live && placeholderTitle) {
         const titleMessage =
@@ -5028,6 +5067,15 @@ export default function App({
           error: "Harness is not connected",
         });
         return true;
+      }
+      if (options?.resendEdited && canRewindHarnessLastTurn(current.harness)) {
+        rewindingLastTurn.current.add(sessionId);
+        const locked = sessionsRef.current.map((session) =>
+          session.id === sessionId ? { ...session, busy: true } : session,
+        );
+        sessionsRef.current = locked;
+        syncDockBadge(locked);
+        setSessions(locked);
       }
 
       if (proposalId && proposalDraft) {
@@ -5152,6 +5200,55 @@ export default function App({
         if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
         try {
+          if (
+            options?.resendEdited &&
+            canRewindHarnessLastTurn(current.harness)
+          ) {
+            try {
+              await rewindHarnessLastTurn({
+                harness: current.harness,
+                sessionId,
+                cwd: workCwd,
+                model: current.model,
+                modelSettings: current.modelSettings,
+                runtimeMode: current.runtimeMode,
+                ...(editedProviderTurnId
+                  ? { providerTurnId: editedProviderTurnId }
+                  : {}),
+                onEvent: (event) => {
+                  if (turnGen.current.get(sessionId) !== gen) return;
+                  enqueueHarnessEvent(sessionId, event);
+                },
+              });
+            } catch (error) {
+              options?.onResendRejected?.();
+              throw error;
+            }
+            if (turnGen.current.get(sessionId) !== gen) {
+              const latest = sessionsRef.current.find(
+                (session) => session.id === sessionId,
+              );
+              if (
+                !latest ||
+                (!latest.busy &&
+                  latest.providerSessionId === current.providerSessionId)
+              ) {
+                await forgetHarnessSession(current.harness, sessionId);
+                if (latest) {
+                  setSessions((prev) =>
+                    prev.map((session) =>
+                      session.id === sessionId &&
+                      session.providerSessionId === current.providerSessionId
+                        ? { ...session, providerSessionId: undefined }
+                        : session,
+                    ),
+                  );
+                }
+              }
+              return;
+            }
+          }
+          if (options?.resendEdited) flushSync(commitSubmittedTurn);
           const prepared = await prepareAttachments(attachments);
           const prompt =
             intent === "build" && approvedPlan
@@ -5387,6 +5484,9 @@ export default function App({
           }
         })
         .finally(() => {
+          if (options?.resendEdited) {
+            rewindingLastTurn.current.delete(sessionId);
+          }
           options?.onSettled?.(
             turnGen.current.get(sessionId) !== gen
               ? { status: "cancelled", text: controlText }
@@ -6046,12 +6146,7 @@ export default function App({
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
         const fresh = {
-          ...newSession(
-            task.harness,
-            run.cwd,
-            task.model,
-            lead.runtimeMode,
-          ),
+          ...newSession(task.harness, run.cwd, task.model, lead.runtimeMode),
           ...(task.modelSettings
             ? {
                 modelSettings: mergeModelSettings(
@@ -6380,7 +6475,12 @@ export default function App({
         });
       },
     }),
-    [onOpenApprovalSession, queueWorkerPanes, onSubmit, updateOrchestrationCard],
+    [
+      onOpenApprovalSession,
+      queueWorkerPanes,
+      onSubmit,
+      updateOrchestrationCard,
+    ],
   );
 
   const onSelectLiveAgent = useCallback(
@@ -6632,11 +6732,14 @@ export default function App({
 
   const onOpenSettings = useCallback(() => openSettings(), [openSettings]);
 
-  const onOpenNotificationSettings = useCallback((path?: string) => {
-    openSettings("inbox", "project-notifications");
-    setNotificationProjectPath(path ?? null);
-    setNotificationSettingsRequest((request) => request + 1);
-  }, [openSettings]);
+  const onOpenNotificationSettings = useCallback(
+    (path?: string) => {
+      openSettings("inbox", "project-notifications");
+      setNotificationProjectPath(path ?? null);
+      setNotificationSettingsRequest((request) => request + 1);
+    },
+    [openSettings],
+  );
 
   const onOpenInboxIntegrations = useCallback(
     (source: ConnectableInboxSource) => openSettings("inbox", source),

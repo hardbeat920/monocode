@@ -141,6 +141,7 @@ import {
   type SessionFolder,
 } from "../lib/sessionFolders";
 import { SessionFolderPicker } from "./SessionFolderPicker";
+import type { LastTurnRecall } from "../lib/editLastTurn";
 
 type Props = {
   enabled?: boolean;
@@ -169,6 +170,8 @@ type Props = {
   handoffCard?: HandoffComposerCard;
   question?: UserQuestionPrompt;
   busy?: boolean;
+  editLastTurnSupported?: boolean;
+  lastTurnRecall?: LastTurnRecall | null;
   queuedMessages?: QueuedMessage[];
   queueStatus?: MessageQueueStatus;
   hotkeys?: boolean;
@@ -200,6 +203,8 @@ type Props = {
   onResumeQueue?: () => void;
   onOpenFile?: (path: string) => void;
   onDraftChange?: (text: string) => void;
+  onRecallLastTurnReady?: (recall: () => void) => void;
+  onEditingLastTurnChange?: (editing: boolean) => void;
   children?: ReactNode;
 };
 
@@ -427,6 +432,8 @@ export function Composer({
   handoffCard,
   question,
   busy = false,
+  editLastTurnSupported = false,
+  lastTurnRecall = null,
   queuedMessages = [],
   queueStatus,
   onFocus,
@@ -453,6 +460,8 @@ export function Composer({
   onResumeQueue,
   onOpenFile,
   onDraftChange,
+  onRecallLastTurnReady,
+  onEditingLastTurnChange,
   children,
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -460,6 +469,8 @@ export function Composer({
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
+  const borrowedAttachmentIdsRef = useRef(new Set<string>());
+  const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
@@ -501,6 +512,7 @@ export function Composer({
   const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
+  const [resendEdited, setResendEdited] = useState(false);
   const [runnerEnabled, setRunnerEnabled] = useState(loadComposerRunner);
   const [runnerLive, setRunnerLive] = useState(
     () => busy && loadComposerRunner(),
@@ -596,11 +608,10 @@ export function Composer({
   const addAttachments = useCallback(
     (incoming: Attachment[]) => {
       if (!harnessSupportsAttachments(harness) || incoming.length === 0) return;
-      setAttachments((prev) => {
-        const next = mergeAttachments(prev, incoming);
-        syncHasValue(ref.current?.value ?? "", next);
-        return next;
-      });
+      const next = mergeAttachments(attachmentsRef.current, incoming);
+      attachmentsRef.current = next;
+      setAttachments(next);
+      syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
     },
     [harness, syncHasValue],
@@ -608,34 +619,48 @@ export function Composer({
 
   const removeAttachment = useCallback(
     (id: string) => {
-      setAttachments((prev) => {
-        const removed = prev.find((file) => file.id === id);
-        if (removed) revokeAttachment(removed);
-        const next = prev.filter((file) => file.id !== id);
-        syncHasValue(ref.current?.value ?? "", next);
-        return next;
-      });
+      const previous = attachmentsRef.current;
+      const removed = previous.find((file) => file.id === id);
+      if (removed && !borrowedAttachmentIdsRef.current.delete(removed.id)) {
+        revokeAttachment(removed);
+      }
+      const next = previous.filter((file) => file.id !== id);
+      attachmentsRef.current = next;
+      setAttachments(next);
+      syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
     },
     [syncHasValue],
   );
-
   useEffect(() => {
+    const lifecycle = ++attachmentLifecycleRef.current;
     return () => {
-      for (const file of attachmentsRef.current) revokeAttachment(file);
+      queueMicrotask(() => {
+        if (attachmentLifecycleRef.current !== lifecycle) return;
+        for (const file of attachmentsRef.current) {
+          if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
+            revokeAttachment(file);
+          }
+        }
+        attachmentsRef.current = [];
+        borrowedAttachmentIdsRef.current.clear();
+      });
     };
   }, []);
 
   useEffect(() => {
     if (harnessSupportsAttachments(harness)) return;
-    setAttachments((prev) => {
-      if (prev.length === 0) return prev;
-      for (const file of prev) revokeAttachment(file);
-      syncHasValue(ref.current?.value ?? "", []);
-      return [];
-    });
+    const previous = attachmentsRef.current;
+    if (previous.length === 0) return;
+    for (const file of previous) {
+      if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
+        revokeAttachment(file);
+      }
+    }
+    attachmentsRef.current = [];
+    setAttachments([]);
+    syncHasValue(ref.current?.value ?? "", []);
   }, [harness, syncHasValue]);
-
   useEffect(() => {
     const refresh = () => setRunnerEnabled(loadComposerRunner());
     window.addEventListener(COMPOSER_RUNNER_CHANGE_EVENT, refresh);
@@ -1034,6 +1059,88 @@ export function Composer({
       unlisten?.();
     };
   }, [addAttachments, attachmentsSupported, enabled]);
+  const restoreDraft = useCallback(
+    (text: string, nextAttachments: Attachment[]) => {
+      setDraft(text);
+      onDraftChange?.(text);
+      if (ref.current) {
+        ref.current.value = text;
+        ref.current.style.height = "auto";
+        ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
+      }
+
+      const nextIds = new Set(nextAttachments.map((file) => file.id));
+      for (const file of attachmentsRef.current) {
+        if (
+          nextIds.has(file.id) ||
+          borrowedAttachmentIdsRef.current.delete(file.id)
+        ) {
+          continue;
+        }
+        revokeAttachment(file);
+      }
+      borrowedAttachmentIdsRef.current.clear();
+      for (const file of nextAttachments) {
+        borrowedAttachmentIdsRef.current.add(file.id);
+      }
+      attachmentsRef.current = nextAttachments;
+      setAttachments(nextAttachments);
+      syncHasValue(text, nextAttachments);
+      ref.current?.focus();
+    },
+    [onDraftChange, syncHasValue],
+  );
+
+  const recallLastTurn = useCallback(() => {
+    if (!editLastTurnSupported || !lastTurnRecall) return;
+    restoreDraft(lastTurnRecall.text, lastTurnRecall.attachments);
+    setResendEdited(true);
+    onEditingLastTurnChange?.(true);
+  }, [
+    editLastTurnSupported,
+    lastTurnRecall,
+    onEditingLastTurnChange,
+    restoreDraft,
+  ]);
+
+  useEffect(() => {
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+  }, [sessionId, onEditingLastTurnChange]);
+
+  useEffect(() => {
+    if (editLastTurnSupported) return;
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+  }, [editLastTurnSupported, onEditingLastTurnChange]);
+  const exitEditMode = useCallback(() => {
+    if (ref.current) {
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+    }
+    setDraft("");
+    onDraftChange?.("");
+    const previous = attachmentsRef.current;
+    for (const file of previous) {
+      if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
+        revokeAttachment(file);
+      }
+    }
+    attachmentsRef.current = [];
+    setAttachments([]);
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+    setPlusOpen(false);
+    setSlash(null);
+    setMention(null);
+    syncHasValue("", []);
+    ref.current?.focus();
+  }, [onDraftChange, onEditingLastTurnChange, syncHasValue]);
+
+  useEffect(() => {
+    if (!editLastTurnSupported || !onRecallLastTurnReady) return;
+    onRecallLastTurnReady(recallLastTurn);
+  }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
   const submit = (value: string) => {
     const folderCommand = consumeSessionFolderCommand(value);
@@ -1075,17 +1182,32 @@ export function Composer({
           : orchestrationSelected
             ? "orchestrate"
             : "default",
+      ...(resendEdited
+        ? {
+            resendEdited: true,
+            onResendRejected: () => {
+              restoreDraft(text, files);
+              setResendEdited(true);
+              onEditingLastTurnChange?.(true);
+            },
+          }
+        : {}),
     });
     // The app can reject a turn before it is recorded (for example while an
     // orchestration is paused). Keep the user's text, files and selected mode
     // intact so resolving the blocker never destroys their work.
     if (accepted === false) return;
-    if (!ref.current) return;
-    ref.current.value = "";
-    ref.current.style.height = "auto";
+    if (ref.current) {
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+    }
     setDraft("");
     onDraftChange?.("");
+    borrowedAttachmentIdsRef.current.clear();
+    attachmentsRef.current = [];
     setAttachments([]);
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
     setPlanSelected(false);
     setOrchestrationSelected(false);
     setSessionFolderSelected(false);
@@ -1097,7 +1219,6 @@ export function Composer({
     setCreateError(null);
     syncHasValue("", []);
   };
-
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (isImeComposition(e.nativeEvent)) return;
     if (creatingSkill) return;
@@ -1205,6 +1326,18 @@ export function Composer({
         }
         setSlash(null);
       }
+    }
+
+    if (
+      e.key === "ArrowUp" &&
+      editLastTurnSupported &&
+      navigationEmpty &&
+      e.currentTarget.selectionStart === 0 &&
+      e.currentTarget.selectionEnd === 0
+    ) {
+      e.preventDefault();
+      recallLastTurn();
+      return;
     }
 
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1355,10 +1488,17 @@ export function Composer({
         <div
           ref={boxRef}
           data-composer-box
-          className={`relative z-10 rounded-lg border bg-content/3 backdrop-blur-sm ${
+          data-composer-editing={resendEdited ? "" : undefined}
+          className={`relative z-10 border bg-content/3 backdrop-blur-sm ${
+            resendEdited
+              ? "edit-last-turn-composer rounded-lg"
+              : "rounded-lg border-content/10 has-focus:border-content/20"
+          } ${
             fileDrag
               ? "border-accent/60"
-              : "border-content/10 has-focus:border-content/20"
+              : resendEdited
+                ? ""
+                : "border-content/10 has-focus:border-content/20"
           }`}
         >
           {fileDrag ? (
@@ -1429,7 +1569,7 @@ export function Composer({
             <div
               ref={highlightRef}
               aria-hidden
-              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap break-words px-3 text-sm leading-5.5 text-content font-sans ${
+              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap wrap-break-word px-3 text-sm leading-5.5 text-content font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
             >
@@ -1456,7 +1596,7 @@ export function Composer({
                         ? "Ask, build, / for commands, @ for references... "
                         : "Ask, build, / for commands, @ for references... "
               }
-              className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
+              className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
               onFocus={onFocus}
@@ -1664,6 +1804,19 @@ export function Composer({
               </div>
             </div>
 
+            {resendEdited ? (
+              <button
+                type="button"
+                title="Stop editing last message"
+                aria-label="Stop editing last message"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={exitEditMode}
+                className="edit-last-turn-button flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-current/20 px-2 text-[11px] font-medium transition-[background-color,color,border-color] hover:border-current/35 hover:bg-content/15 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <X className="size-3" strokeWidth={1.8} />
+                <span>Cancel edit</span>
+              </button>
+            ) : null}
             <div className="flex shrink-0 items-center gap-1">
               <ComposerAction
                 busy={busy}

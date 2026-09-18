@@ -24,6 +24,7 @@ const {
   keepCodexQuestionOpen,
   respondCodexApproval,
   respondCodexQuestion,
+  rewindCodexLastTurn,
   sendCodexTurn,
   stopCodexSession,
   __codexTestReset,
@@ -42,6 +43,9 @@ function reply(id: number, result: unknown) {
 
 function notify(method: string, params: unknown) {
   onLine!(JSON.stringify({ method, params }));
+}
+function withoutTurnIdentity(events: HarnessEvent[]) {
+  return events.filter((event) => event.type !== "turn.started");
 }
 
 const waitFor = async (pred: () => boolean, label: string) => {
@@ -148,7 +152,9 @@ describe("codex live turn sequence", () => {
     notify("warning", { threadId: "thr_1", message: fallback });
     await Promise.resolve();
     expect(settled).not.toHaveBeenCalled();
-    expect(events).toEqual(beforeRetries);
+    expect(withoutTurnIdentity(events)).toEqual(
+      withoutTurnIdentity(beforeRetries),
+    );
     expect(debug).toHaveBeenCalledTimes(6);
     expect(debug).toHaveBeenCalledWith(expect.any(String), fallback);
 
@@ -414,7 +420,7 @@ describe("codex live turn sequence", () => {
         willRetry: false,
       });
       await Promise.resolve();
-      expect(events).toEqual(before);
+      expect(withoutTurnIdentity(events)).toEqual(withoutTurnIdentity(before));
       expect(settled).not.toHaveBeenCalled();
       respondCodexApproval("codex-live", approval.requestId, decision);
       await waitFor(
@@ -1349,6 +1355,132 @@ describe("codex live turn sequence", () => {
     });
     await compact;
     expect(settled).toBe(true);
+  });
+
+  it("reverts before the latest user turn after compaction", async () => {
+    const { turn } = await startTurn("codex-live");
+    notify("turn/completed", {
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+    sent.length = 0;
+
+    const rollback = rewindCodexLastTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "thread/turns/list"),
+      "thread/turns/list",
+    );
+    const list = parse().find(
+      (message) => message.method === "thread/turns/list",
+    )!;
+    expect(list.params).toEqual({
+      threadId: "thr_1",
+      limit: 100,
+      sortDirection: "desc",
+      itemsView: "summary",
+    });
+    reply(list.id as number, {
+      data: [
+        {
+          id: "compact_1",
+          items: [{ type: "contextCompaction", id: "compact_item" }],
+        },
+        {
+          id: "turn_1",
+          items: [{ type: "userMessage", id: "user_item" }],
+        },
+      ],
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "thread/revert"),
+      "thread/revert",
+    );
+    const request = parse().find(
+      (message) => message.method === "thread/revert",
+    )!;
+    expect(request.params).toEqual({
+      threadId: "thr_1",
+      beforeTurnId: "turn_1",
+    });
+    reply(request.id as number, {});
+    expect(await rollback).toEqual({ submitted: false });
+  });
+  it("uses the persisted provider turn boundary without listing turns", async () => {
+    const { turn } = await startTurn("codex-live");
+    notify("turn/completed", {
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+    sent.length = 0;
+
+    const rollback = rewindCodexLastTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      providerTurnId: "turn_exact",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "thread/revert"),
+      "thread/revert",
+    );
+    expect(
+      parse().some((message) => message.method === "thread/turns/list"),
+    ).toBe(false);
+    const request = parse().find(
+      (message) => message.method === "thread/revert",
+    )!;
+    expect(request.params).toEqual({
+      threadId: "thr_1",
+      beforeTurnId: "turn_exact",
+    });
+    reply(request.id as number, {});
+    await expect(rollback).resolves.toEqual({ submitted: false });
+  });
+
+  it("rejects editing when the provider exposes no user turn", async () => {
+    const { turn } = await startTurn("codex-live");
+    notify("turn/completed", {
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+    sent.length = 0;
+
+    const rollback = rewindCodexLastTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "thread/turns/list"),
+      "thread/turns/list",
+    );
+    const list = parse().find(
+      (message) => message.method === "thread/turns/list",
+    )!;
+    reply(list.id as number, {
+      data: [
+        {
+          id: "compact_1",
+          items: [{ type: "contextCompaction", id: "compact_item" }],
+        },
+      ],
+    });
+    await expect(rollback).rejects.toThrow(
+      "Codex did not expose a user turn id to edit",
+    );
+    expect(parse().some((message) => message.method === "thread/revert")).toBe(
+      false,
+    );
   });
 });
 

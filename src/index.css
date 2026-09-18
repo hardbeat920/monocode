@@ -296,6 +296,38 @@ html.has-user-accent .user-message-bubble {
   border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
 }
 
+.edit-last-turn-composer {
+  border-color: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 32%,
+    transparent
+  );
+}
+
+.edit-last-turn-bubble {
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 10%,
+    transparent
+  );
+  outline: 1px solid
+    color-mix(
+      in srgb,
+      var(--user-accent-color, var(--color-accent)) 45%,
+      transparent
+    );
+  outline-offset: 1px;
+}
+
+.edit-last-turn-button {
+  color: var(--user-accent-color, var(--color-accent));
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 10%,
+    transparent
+  );
+}
+
 .user-link-preview {
   display: inline;
   white-space: normal;

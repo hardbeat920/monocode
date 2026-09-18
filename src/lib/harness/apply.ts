@@ -120,6 +120,18 @@ export function applyHarnessEvent(
       });
     case "session.providerBound":
       return { ...session, providerSessionId: event.providerSessionId };
+    case "turn.started": {
+      const index = lastMatchingBlock(
+        session.blocks,
+        (block) => block.role === "user",
+      );
+      if (index < 0) return session;
+      const block = session.blocks[index];
+      if (block.providerTurnId === event.providerTurnId) return session;
+      const blocks = session.blocks.slice();
+      blocks[index] = { ...block, providerTurnId: event.providerTurnId };
+      return { ...session, blocks };
+    }
     case "session.configChanged":
       return {
         ...session,
@@ -634,7 +646,12 @@ function appendStatus(session: Session, text: string): Session {
 function appendBlock(session: Session, block: Block): Session {
   return {
     ...session,
-    blocks: [...(block.role === "system" && !block.interjection ? session.blocks : sealLastStream(session.blocks)), block],
+    blocks: [
+      ...(block.role === "system" && !block.interjection
+        ? session.blocks
+        : sealLastStream(session.blocks)),
+      block,
+    ],
   };
 }
 
@@ -647,9 +664,17 @@ function patchStreaming(
 ): Session {
   if (!text && role === "reasoning") return session;
   let index = session.blocks.length - 1;
-  while (index >= 0 && session.blocks[index].role === "system" && !session.blocks[index].interjection) index--;
+  while (
+    index >= 0 &&
+    session.blocks[index].role === "system" &&
+    !session.blocks[index].interjection
+  )
+    index--;
   const last = session.blocks[index];
-  if (last?.role === role && (index === session.blocks.length - 1 || last.streaming)) {
+  if (
+    last?.role === role &&
+    (index === session.blocks.length - 1 || last.streaming)
+  ) {
     const nextText = joinStreamText(last.text, text);
     if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
@@ -1023,7 +1048,12 @@ function findToolIndex(
 
 function sealLastStream(blocks: Block[]): Block[] {
   let index = blocks.length - 1;
-  while (index >= 0 && blocks[index].role === "system" && !blocks[index].interjection) index--;
+  while (
+    index >= 0 &&
+    blocks[index].role === "system" &&
+    !blocks[index].interjection
+  )
+    index--;
   const last = blocks[index];
   if (
     !last?.streaming ||

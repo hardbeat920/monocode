@@ -5,6 +5,7 @@ import {
   forgetOpenCodeSession,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
+  rewindOpenCodeLastTurn,
   sendOpenCodeTurn,
   steerOpenCodeTurn,
   stopOpenCodeSession,
@@ -22,6 +23,7 @@ import { registerHarness, type HarnessAdapter } from "./registry";
 export const openCodeAdapter: HarnessAdapter = {
   id: "opencode",
   live: true,
+  rewindLastTurn: rewindOpenCodeLastTurn,
   sendTurn: sendOpenCodeTurn,
   compactContext: compactOpenCodeContext,
   steerTurn: steerOpenCodeTurn,
