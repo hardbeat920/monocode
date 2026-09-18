@@ -999,7 +999,9 @@ export function dedupeInboxItems(
   );
   const best = new Map<string, InboxItem>();
   for (const item of items) {
-    const key = inboxIdentityKey(item);
+    // Keyed with the provider prefix so identical repo/kind/number triples
+    // from different providers never collapse into one card.
+    const key = inboxItemKey(item);
     const current = best.get(key);
     if (!current || preferInboxItem(item, current, rank)) best.set(key, item);
   }

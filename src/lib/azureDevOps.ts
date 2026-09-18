@@ -204,7 +204,9 @@ export async function azureDevOpsWorkItemThread(
     },
   )
     .then((thread) => {
-      threadByKey.set(key, thread);
+      // A forced refresh or cache clear supersedes this request: skip the
+      // write so a stale completion cannot repopulate the cache.
+      if (threadInflight.get(key) === pending) threadByKey.set(key, thread);
       return thread;
     })
     .finally(() => {
@@ -252,7 +254,8 @@ export async function azureDevOpsMrDiff(
     number,
   })
     .then((diff) => {
-      diffByKey.set(key, diff);
+      // Same staleness guard as the thread cache above.
+      if (diffInflight.get(key) === pending) diffByKey.set(key, diff);
       return diff;
     })
     .finally(() => {

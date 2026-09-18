@@ -258,6 +258,39 @@ describe("dedupeInboxItems", () => {
     ];
     expect(dedupeInboxItems(rows)).toHaveLength(2);
   });
+
+  it("keeps identical repo/kind/number triples from different providers", () => {
+    const rows = [
+      item({
+        provider: "github",
+        kind: "issue",
+        number: 9,
+        updatedAt: "2026-08-27T10:00:00Z",
+        repo: "acme/web",
+      }),
+      item({
+        provider: "gitlab",
+        kind: "issue",
+        number: 9,
+        updatedAt: "2026-08-27T10:00:00Z",
+        repo: "acme/web",
+      }),
+      item({
+        provider: "azuredevops",
+        kind: "issue",
+        number: 9,
+        updatedAt: "2026-08-27T10:00:00Z",
+        repo: "acme/web",
+      }),
+    ];
+    const deduped = dedupeInboxItems(rows);
+    expect(deduped).toHaveLength(3);
+    expect(deduped.map((entry) => entry.provider).sort()).toEqual([
+      "azuredevops",
+      "github",
+      "gitlab",
+    ]);
+  });
 });
 
 describe("groupProjectsByRepo", () => {

@@ -226,7 +226,8 @@ pub async fn azure_devops_work_item_details(
 ) -> Result<AzureDevOpsWorkItemDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
+        // Boards work items carry only the project name in `repo`, so per-kind
+        // validation happens inside the helper instead of here.
         azure_devops_work_item_details_for(&config, &repo, &kind, number)
     })
     .await
@@ -242,7 +243,6 @@ pub async fn azure_devops_work_item_thread(
 ) -> Result<AzureDevOpsWorkItemThread, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
         azure_devops_work_item_thread_for(&config, &repo, &kind, number)
     })
     .await
@@ -259,7 +259,6 @@ pub async fn azure_devops_work_item_comment(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
         azure_devops_work_item_comment_for(&config, &repo, &kind, number, &body)
     })
     .await
@@ -329,8 +328,8 @@ fn azure_devops_work_item_details_for(
     number: i64,
 ) -> Result<AzureDevOpsWorkItemDetails, String> {
     validate_item(kind, number)?;
-    let (project, repo_name) = split_repo(repo)?;
     if kind == "pr" {
+        let (project, repo_name) = split_repo(repo)?;
         let path = format!(
             "/{}/_apis/git/repositories/{}/pullrequests/{}?api-version={}",
             encode_segment(&project),
@@ -356,8 +355,8 @@ fn azure_devops_work_item_thread_for(
     number: i64,
 ) -> Result<AzureDevOpsWorkItemThread, String> {
     validate_item(kind, number)?;
-    let (project, repo_name) = split_repo(repo)?;
     if kind == "pr" {
+        let (project, repo_name) = split_repo(repo)?;
         let path = format!(
             "/{}/_apis/git/repositories/{}/pullrequests/{}/threads?api-version={}",
             encode_segment(&project),
@@ -389,8 +388,8 @@ fn azure_devops_work_item_comment_for(
     if body.is_empty() {
         return Err("Comment cannot be empty".into());
     }
-    let (project, repo_name) = split_repo(repo)?;
     if kind == "pr" {
+        let (project, repo_name) = split_repo(repo)?;
         let path = format!(
             "/{}/_apis/git/repositories/{}/pullrequests/{}/threads?api-version={}",
             encode_segment(&project),
@@ -1315,18 +1314,22 @@ fn normalize_azure_devops_url(raw: &str) -> Result<String, String> {
     } else {
         format!("https://dev.azure.com/{raw}")
     };
-    if !with_scheme.starts_with("https://") && !with_scheme.starts_with("http://") {
-        return Err("Azure DevOps URL must use HTTP or HTTPS".into());
+    // The PAT travels on every request as Basic auth, so cleartext HTTP is
+    // never accepted, including for on-premises hosts.
+    if !with_scheme.starts_with("https://") {
+        return Err("Azure DevOps URL must use HTTPS".into());
     }
     let (_, rest) = with_scheme
         .split_once("://")
         .ok_or_else(|| "Azure DevOps URL is invalid".to_string())?;
     let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    if authority.is_empty()
-        || !authority.contains('.')
-        || authority.contains('@')
-        || authority.contains(':')
-    {
+    if authority.contains('@') {
+        return Err("Azure DevOps URL is invalid".into());
+    }
+    // Accept on-premises authorities such as `tfs.contoso.com:8080` or a
+    // dotless `tfs` host; the port must be numeric when present.
+    let (host, port) = authority.split_once(':').unwrap_or((authority, ""));
+    if host.is_empty() || (!port.is_empty() && port.parse::<u16>().is_err()) {
         return Err("Azure DevOps URL is invalid".into());
     }
     let mut segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
@@ -1514,7 +1517,7 @@ fn parse_azure_remote(remote: &str) -> Option<(String, String, String)> {
 }
 
 fn percent_decode(value: &str) -> String {
-    let mut out = String::new();
+    let mut out: Vec<u8> = Vec::new();
     let bytes = value.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
@@ -1522,15 +1525,18 @@ fn percent_decode(value: &str) -> String {
             if let (Some(high), Some(low)) =
                 (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
             {
-                out.push((high * 16 + low) as char);
+                out.push(high * 16 + low);
                 index += 3;
                 continue;
             }
         }
-        out.push(bytes[index] as char);
+        out.push(bytes[index]);
         index += 1;
     }
-    out.trim().trim_end_matches(".git").to_string()
+    String::from_utf8_lossy(&out)
+        .trim()
+        .trim_end_matches(".git")
+        .to_string()
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -1667,9 +1673,21 @@ mod tests {
             normalize_azure_devops_url("https://dev.azure.com/myorg/_git/repo").unwrap(),
             "https://dev.azure.com/myorg"
         );
+        assert_eq!(
+            normalize_azure_devops_url("https://tfs.contoso.com:8080/tfs/DefaultCollection")
+                .unwrap(),
+            "https://tfs.contoso.com:8080/tfs/DefaultCollection"
+        );
+        assert_eq!(
+            normalize_azure_devops_url("https://tfs/tfs/DefaultCollection").unwrap(),
+            "https://tfs/tfs/DefaultCollection"
+        );
         assert!(normalize_azure_devops_url("").is_err());
         assert!(normalize_azure_devops_url("https://dev.azure.com").is_err());
         assert!(normalize_azure_devops_url("ftp://dev.azure.com/myorg").is_err());
+        assert!(normalize_azure_devops_url("http://dev.azure.com/myorg").is_err());
+        assert!(normalize_azure_devops_url("https://tfs.contoso.com:abc/tfs/col").is_err());
+        assert!(normalize_azure_devops_url("https://user@tfs.contoso.com/tfs/col").is_err());
     }
 
     #[test]
@@ -1835,5 +1853,13 @@ mod tests {
         assert_eq!(validate_repo(" platform/web ").unwrap(), "platform/web");
         assert!(validate_repo("platform").is_err());
         assert!(validate_repo("platform/web/extra").is_err());
+    }
+
+    #[test]
+    fn decodes_utf8_percent_sequences() {
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+        assert_eq!(percent_decode("my%20project"), "my project");
+        // Malformed sequences pass through untouched.
+        assert_eq!(percent_decode("100%"), "100%");
     }
 }
