@@ -26,6 +26,7 @@ import {
   saveLiveAgentsEnabled,
   saveNotesEnabled,
 } from "./settings";
+import { MOD, SHIFT } from "./platform";
 
 const KEY = "monocode.composerRunner";
 const COMPOSER_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
@@ -182,6 +183,24 @@ describe("grid arcade enabled setting", () => {
 });
 
 describe("workspace navigation keybindings", () => {
+  it("documents the command palette and reload shortcuts", () => {
+    expect(
+      KEYBINDINGS.filter((row) =>
+        ["App: Command Palette", "View: Reload"].includes(row.command),
+      ),
+    ).toEqual([
+      {
+        command: "App: Command Palette",
+        keys: `${MOD}${SHIFT}P`,
+        when: "Always",
+      },
+      {
+        command: "View: Reload",
+        keys: `${MOD}${SHIFT}R`,
+        when: "Always",
+      },
+    ]);
+  });
   it("documents session and project cycling in the shortcut list", () => {
     const rows = KEYBINDINGS.filter((row) =>
       /^(Session|Project): (Previous|Next)$/.test(row.command),

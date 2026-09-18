@@ -197,8 +197,10 @@ export function TabGroupMenu({
     <>
       <Popover
         anchor={{ x, y }}
+        side="right"
         gap={0}
         width={MENU_WIDTH}
+        constrainHeight={false}
         onDismiss={(reason) => {
           if (reason === "escape" && submenu) closeSubmenu();
           else onClose();
@@ -212,7 +214,7 @@ export function TabGroupMenu({
         onContextMenu={(e) => e.preventDefault()}
         onMouseEnter={cancelSubmenuClose}
         onMouseLeave={scheduleSubmenuClose}
-        className="overflow-y-auto overscroll-none p-2"
+        className="p-2"
       >
         {leadingAction ? (
           <>

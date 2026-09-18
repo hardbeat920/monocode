@@ -60,16 +60,27 @@ async function startTurn(
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     resume?: boolean;
+    providerAccountId?: string;
+    resumeProviderAccountId?: string;
+    expectResume?: boolean;
     beforeThreadReply?: () => Promise<void>;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
-  if (options.resume) bindCodexSession(sessionId, "thr_1", "/repo");
+  if (options.resume) {
+    bindCodexSession(
+      sessionId,
+      "thr_1",
+      "/repo",
+      options.resumeProviderAccountId,
+    );
+  }
   const turn = sendCodexTurn({
     sessionId,
     cwd: "/repo",
     model: "codex:gpt-5.4",
     modelSettings: {},
+    providerAccountId: options.providerAccountId,
     runtimeMode: options.runtimeMode ?? "supervised",
     intent: options.intent,
     text: "summarize the changelog",
@@ -82,7 +93,8 @@ async function startTurn(
     "initialize",
   );
   reply(parse().find((m) => m.method === "initialize")!.id as number, {});
-  const threadMethod = options.resume ? "thread/resume" : "thread/start";
+  const threadMethod =
+    (options.expectResume ?? options.resume) ? "thread/resume" : "thread/start";
   await waitFor(
     () => parse().some((m) => m.method === threadMethod),
     threadMethod,
@@ -151,6 +163,37 @@ describe("codex live turn sequence", () => {
     expect(session.blocks).toMatchObject([
       { role: "assistant", text: "The answer", streaming: false },
     ]);
+  });
+
+  it("resumes a legacy thread when the missing account resolves to default", async () => {
+    const { turn } = await startTurn("codex-live", {
+      resume: true,
+      providerAccountId: "default",
+    });
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      true,
+    );
+    expect(parse().some((message) => message.method === "thread/start")).toBe(
+      false,
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("does not resume a legacy default thread under a named account", async () => {
+    const { turn } = await startTurn("codex-live", {
+      resume: true,
+      providerAccountId: "account-work",
+      expectResume: false,
+    });
+    expect(parse().some((message) => message.method === "thread/start")).toBe(
+      true,
+    );
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      false,
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
   });
 
   it("still surfaces a terminal failure after transport retries", async () => {

@@ -1,13 +1,17 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
   Check,
   ChevronDown,
   ImagePlus,
   Loader,
+  Pencil,
+  Plus,
   RefreshCw,
   RotateCcw,
   Search,
+  Trash2,
   X,
 } from "../chrome/icons";
 import {
@@ -20,6 +24,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
@@ -125,6 +130,7 @@ import {
   subscribeHarnessAvailability,
 } from "../lib/harness/availability";
 import { refreshHarnessCatalogs } from "../lib/harness/registry";
+import { loginHarness } from "../lib/harness/auth";
 import {
   defaultModelId,
   getModelSnapshot,
@@ -153,6 +159,18 @@ import {
   sessionDisplayTitle,
   type HarnessId,
 } from "../lib/session";
+import {
+  newProviderAccount,
+  providerAccounts,
+  PROVIDER_ACCOUNT_PROVIDERS,
+  removeProviderAccount,
+  renameProviderAccount,
+  saveProviderAccount,
+  subscribeProviderAccounts,
+  type ProviderAccount,
+  type ProviderAccountProvider,
+} from "../lib/providerAccounts";
+import { removeProviderAccountCredentials } from "../lib/providerAccountCredentials";
 import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
@@ -184,6 +202,7 @@ import {
   filterKeybindings,
   KEYBINDINGS,
   loadClaudeHooks,
+  loadCloseToTray,
   loadComposerEffortVisible,
   loadComposerRunner,
   loadDiffViewer,
@@ -192,6 +211,7 @@ import {
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   saveClaudeHooks,
+  saveCloseToTray,
   saveComposerEffortVisible,
   saveComposerRunner,
   saveDiffViewer,
@@ -556,6 +576,7 @@ function GeneralPage({
   const [liveAgentsEnabled, setLiveAgentsEnabled] = useState(
     loadLiveAgentsEnabled,
   );
+  const [closeToTray, setCloseToTray] = useState(loadCloseToTray);
 
   // The user may flip the switch in System Settings and come back: re-read
   // the OS state whenever the window regains focus while the toggle is on.
@@ -589,6 +610,11 @@ function GeneralPage({
   const onLiveAgentsEnabled = (next: boolean) => {
     saveLiveAgentsEnabled(next);
     setLiveAgentsEnabled(next);
+  };
+
+  const onCloseToTray = (next: boolean) => {
+    saveCloseToTray(next);
+    setCloseToTray(next);
   };
 
   return (
@@ -651,6 +677,19 @@ function GeneralPage({
             onChange={onLiveAgentsEnabled}
           />
         </Row>
+        {IS_WIN && (
+          <Row
+            id="close-to-tray"
+            label="Close to tray"
+            description="Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window."
+          >
+            <Toggle
+              label="Close to tray"
+              on={closeToTray}
+              onChange={onCloseToTray}
+            />
+          </Row>
+        )}
       </Group>
 
       <Group title="About">
@@ -1931,6 +1970,8 @@ function ProvidersPage() {
 
   return (
     <>
+      <ProviderAccountsSettings />
+
       <Group
         title="Agent CLIs"
         description="A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
@@ -1966,6 +2007,300 @@ function ProvidersPage() {
         </Row>
       </Group>
     </>
+  );
+}
+
+type AccountEditor = {
+  provider: ProviderAccountProvider;
+  accountId?: string;
+  label: string;
+};
+
+function ProviderAccountsSettings() {
+  const [, setVersion] = useState(0);
+  const [editor, setEditor] = useState<AccountEditor | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(
+    () => subscribeProviderAccounts(() => setVersion((value) => value + 1)),
+    [],
+  );
+
+  const startAdd = (provider: ProviderAccountProvider) => {
+    setError(null);
+    setEditor({ provider, label: "" });
+  };
+
+  const startRename = (account: ProviderAccount) => {
+    setError(null);
+    setEditor({
+      provider: account.provider,
+      accountId: account.id,
+      label: account.label,
+    });
+  };
+
+  const submitEditor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editor || !editor.label.trim() || working) return;
+    const key = editor.accountId
+      ? `rename:${editor.provider}:${editor.accountId}`
+      : `add:${editor.provider}`;
+    setWorking(key);
+    setError(null);
+    try {
+      if (editor.accountId) {
+        renameProviderAccount(editor.provider, editor.accountId, editor.label);
+      } else {
+        const account = newProviderAccount(editor.provider, editor.label);
+        await loginHarness(editor.provider, account.id);
+        saveProviderAccount(account);
+      }
+      setEditor(null);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not save this account",
+      );
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const removeAccount = async (account: ProviderAccount) => {
+    if (account.isDefault || working) return;
+    const confirmed = await ask(
+      `Remove “${account.label}”? Its stored credentials will be deleted and any running turns for this account will stop. Existing conversations stay in history, but cannot continue until you switch accounts.`,
+      {
+        title: `Remove ${HARNESS_TITLE[account.provider]} account`,
+        kind: "warning",
+        okLabel: "Remove account",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!confirmed) return;
+    const key = `remove:${account.provider}:${account.id}`;
+    setWorking(key);
+    setError(null);
+    try {
+      await removeProviderAccountCredentials(account.provider, account.id);
+      removeProviderAccount(account.provider, account.id);
+      if (
+        editor?.provider === account.provider &&
+        editor.accountId === account.id
+      ) {
+        setEditor(null);
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not remove this account",
+      );
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  return (
+    <Group
+      id="provider-accounts"
+      title="Accounts"
+      description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
+    >
+      {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
+        const accounts = providerAccounts(provider);
+        const adding = editor?.provider === provider && !editor.accountId;
+        return (
+          <div
+            key={provider}
+            className="border-b border-content/5 last:border-b-0"
+          >
+            <div className="flex items-center gap-4 px-4 py-3.5">
+              <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.05] ring-1 ring-inset ring-content/[0.06]">
+                  <HarnessIcon harness={provider} className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium text-content">
+                    {HARNESS_TITLE[provider]}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-content/40">
+                    {accounts.length}{" "}
+                    {accounts.length === 1 ? "account" : "accounts"}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={Boolean(working)}
+                onClick={() => startAdd(provider)}
+                className="flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] text-content/70 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+              >
+                <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
+                Add account
+              </button>
+            </div>
+            <div className="border-t border-content/5 bg-content/[0.015] pl-10">
+              {accounts.map((account) => {
+                const editing =
+                  editor?.provider === provider &&
+                  editor.accountId === account.id;
+                const removing = working === `remove:${provider}:${account.id}`;
+                return editing ? (
+                  <ProviderAccountEditor
+                    key={account.id}
+                    editor={editor}
+                    working={Boolean(working)}
+                    onLabel={(label) =>
+                      setEditor((current) =>
+                        current ? { ...current, label } : current,
+                      )
+                    }
+                    onCancel={() => setEditor(null)}
+                    onSubmit={submitEditor}
+                  />
+                ) : (
+                  <div
+                    key={account.id}
+                    className="flex h-12 items-center gap-3 border-b border-content/5 px-4 py-2 last:border-b-0"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12px] text-content/85">
+                        {account.label}
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-content/35">
+                        {account.isDefault
+                          ? "Provider CLI profile"
+                          : "Isolated profile"}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {account.isDefault ? (
+                        <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
+                          Default
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={Boolean(working)}
+                        aria-label={`Rename ${account.label}`}
+                        title="Rename account"
+                        onClick={() => startRename(account)}
+                        className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96] disabled:opacity-35"
+                      >
+                        <Pencil className="size-3.5" strokeWidth={1.75} />
+                      </button>
+                      {!account.isDefault ? (
+                        <button
+                          type="button"
+                          disabled={Boolean(working)}
+                          aria-label={`Remove ${account.label}`}
+                          title="Remove account"
+                          onClick={() => void removeAccount(account)}
+                          className="grid size-7 place-items-center rounded-md text-content/35 transition-transform duration-150 hover:bg-red-400/10 hover:text-red-400 active:scale-[0.96] disabled:opacity-35"
+                        >
+                          {removing ? (
+                            <Loader className="size-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3.5" strokeWidth={1.75} />
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+              {adding && editor ? (
+                <ProviderAccountEditor
+                  editor={editor}
+                  working={Boolean(working)}
+                  onLabel={(label) =>
+                    setEditor((current) =>
+                      current ? { ...current, label } : current,
+                    )
+                  }
+                  onCancel={() => setEditor(null)}
+                  onSubmit={submitEditor}
+                />
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+      {error ? (
+        <p
+          className="border-t border-content/5 px-4 py-2.5 text-[11px] leading-4 text-red-400"
+          role="alert"
+        >
+          {error}
+        </p>
+      ) : null}
+    </Group>
+  );
+}
+
+function ProviderAccountEditor({
+  editor,
+  working,
+  onLabel,
+  onCancel,
+  onSubmit,
+}: {
+  editor: AccountEditor;
+  working: boolean;
+  onLabel: (label: string) => void;
+  onCancel: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const adding = !editor.accountId;
+  return (
+    <form
+      className="flex h-12 items-center border-b border-content/5 px-4 py-2 last:border-b-0"
+      onSubmit={onSubmit}
+    >
+      <div
+        data-provider-account-editor-field
+        className="flex items-center pr-1 h-8 min-w-0 flex-1 overflow-hidden rounded-md border border-content/10 bg-content/[0.04] focus-within:border-accent/45"
+      >
+        <label className="h-full min-w-0 flex-1">
+          <span className="sr-only">Account name</span>
+          <input
+            autoFocus
+            type="text"
+            maxLength={48}
+            value={editor.label}
+            disabled={working}
+            placeholder="Work or Personal"
+            aria-label={`${adding ? "New" : "Rename"} ${HARNESS_TITLE[editor.provider]} account`}
+            onChange={(event) => onLabel(event.target.value)}
+            className="h-full w-full bg-transparent px-2.5 text-[12px] text-content outline-none placeholder:text-content/25 disabled:opacity-50"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={working}
+          onClick={onCancel}
+          className="flex h-6 shrink-0 items-center rounded-[4.5px] bg-content/[0.05] px-2.5 text-[11px] text-content/45 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:opacity-40"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={working || !editor.label.trim()}
+          className="ml-1 flex h-6 shrink-0 items-center gap-1.5 rounded-[4.5px] bg-content px-2.5 text-[11px] font-medium text-background-base transition-transform duration-150 hover:bg-content/85 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+        >
+          {working ? <Loader className="size-3 animate-spin" /> : null}
+          {adding
+            ? working
+              ? "Waiting for browser…"
+              : "Sign in and add"
+            : "Save"}
+        </button>
+      </div>
+    </form>
   );
 }
 

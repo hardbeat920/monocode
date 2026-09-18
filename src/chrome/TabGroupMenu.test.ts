@@ -81,6 +81,18 @@ function renderMenu(onExtraPick = vi.fn()) {
   return onExtraPick;
 }
 
+it("fully expands the context menu without an internal scroll region", () => {
+  renderMenu();
+
+  const menu = document.querySelector<HTMLElement>(
+    '[role="menu"][aria-label="Tab group actions"]',
+  )!;
+  expect(menu.classList).not.toContain("overflow-y-auto");
+  expect(menu.style.maxHeight).toBe("");
+  expect(menu.parentElement?.style.maxHeight).toBe("");
+  expect(menu.dataset.popoverSide).toBe("right");
+});
+
 it("closes the mute submenu when the pointer enters the leading action", () => {
   renderMenu();
 

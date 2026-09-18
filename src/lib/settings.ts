@@ -1,4 +1,4 @@
-import { ALT, IS_MAC, MOD, SHIFT } from "./platform";
+import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "./platform";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -68,8 +68,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "agents",
     label: "Providers",
     description:
-      "Agent CLIs MonoCode can drive, and the model new sessions start with.",
-    keywords: "model harness claude codex gemini cli default hooks",
+      "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with.",
+    keywords:
+      "account sign in login model harness claude codex gemini cli default hooks",
   },
   {
     id: "skills",
@@ -83,7 +84,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: "inbox",
     group: "workspace",
     label: "Inbox",
-    description: "Manage Inbox services and notification preferences for each project.",
+    description:
+      "Manage Inbox services and notification preferences for each project.",
     keywords: "github gitlab linear connect token integration",
   },
   {
@@ -148,6 +150,16 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     label: "Working agents",
     keywords: "live running sessions rail card",
   },
+  ...(IS_WIN
+    ? [
+        {
+          id: "close-to-tray",
+          section: "general" as const,
+          label: "Close to tray",
+          keywords: "minimize background quit exit window taskbar windows",
+        },
+      ]
+    : []),
   {
     id: "theme",
     section: "appearance",
@@ -249,6 +261,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "chat",
     label: "Empty session games",
     keywords: "pacman snake arcade grid fun",
+  },
+  {
+    id: "provider-accounts",
+    section: "providers",
+    label: "Provider accounts",
+    keywords: "account sign in login rename remove delete credentials profile",
   },
   {
     id: "claude-hooks",
@@ -567,6 +585,30 @@ export function subscribeLiveAgentsEnabled(onStoreChange: () => void) {
     window.removeEventListener(LIVE_AGENTS_ENABLED_CHANGE_EVENT, onStoreChange);
 }
 
+const CLOSE_TO_TRAY_KEY = "monocode.closeToTray";
+
+export const CLOSE_TO_TRAY_DEFAULT = true;
+
+export function loadCloseToTray(): boolean {
+  // Close to tray is Windows-only: nowhere else installs a tray icon.
+  if (!IS_WIN) return false;
+  try {
+    const raw = localStorage.getItem(CLOSE_TO_TRAY_KEY);
+    if (raw == null) return CLOSE_TO_TRAY_DEFAULT;
+    return raw === "1" || raw === "true";
+  } catch {
+    return CLOSE_TO_TRAY_DEFAULT;
+  }
+}
+
+export function saveCloseToTray(value: boolean) {
+  try {
+    localStorage.setItem(CLOSE_TO_TRAY_KEY, value ? "1" : "0");
+  } catch {
+    // private mode / quota
+  }
+}
+
 const GRID_ARCADE_ENABLED_KEY = "monocode.gridArcadeEnabled";
 
 export const GRID_ARCADE_ENABLED_DEFAULT = true;
@@ -685,11 +727,13 @@ export type KeybindingRow = {
 export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Search", keys: `${MOD}K`, when: "Always" },
   { command: "App: Go to File", keys: `${MOD}P`, when: "Always" },
+  { command: "App: Command Palette", keys: `${MOD}${SHIFT}P`, when: "Always" },
   { command: "App: Find in Files", keys: `${MOD}${SHIFT}F`, when: "Always" },
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
+  { command: "View: Reload", keys: `${MOD}${SHIFT}R`, when: "Always" },
   { command: "View: Zoom In", keys: `${MOD}+`, when: "Always" },
   { command: "View: Zoom Out", keys: `${MOD}-`, when: "Always" },
   { command: "View: Reset Zoom", keys: `${MOD}0`, when: "Always" },

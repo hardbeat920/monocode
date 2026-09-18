@@ -32,7 +32,7 @@ import {
 import type { ProviderAccount } from "../lib/providerAccounts";
 
 type UsageWindowEntry = {
-  key: "session" | "weekly";
+  key: "session" | "weekly" | "monthly";
   window: RateLimitWindow;
 };
 
@@ -47,6 +47,7 @@ export function UsageProviderChip({
   accountId,
   onSelectAccount,
   onAddAccount,
+  onManageAccounts,
   onConsumeReset,
   onReconnect,
 }: {
@@ -57,6 +58,7 @@ export function UsageProviderChip({
   accountId?: string;
   onSelectAccount?: (accountId: string) => void;
   onAddAccount?: (label: string) => Promise<ProviderAccount>;
+  onManageAccounts?: () => void;
   onConsumeReset?: (creditId?: string) => Promise<CodexRateLimitResetOutcome>;
   onReconnect?: () => Promise<void>;
 }) {
@@ -73,7 +75,10 @@ export function UsageProviderChip({
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const loading =
     limits.status === "idle" ||
-    (limits.status === "fetching" && !limits.session && !limits.weekly);
+    (limits.status === "fetching" &&
+      !limits.session &&
+      !limits.weekly &&
+      !limits.monthly);
   const disconnected = limits.status === "unavailable";
   const windows = usageWindows(limits);
   const loginView = Boolean(
@@ -92,9 +97,8 @@ export function UsageProviderChip({
     .join(" · ");
   const providerLabel = HARNESS_TITLE[limits.provider];
   const activeAccount = accounts.find((account) => account.id === accountId);
-  const canManageAccounts = Boolean(
-    activeAccount && onSelectAccount && onAddAccount,
-  );
+  const canManageAccounts = Boolean(onSelectAccount && onAddAccount);
+  const activeAccountLabel = activeAccount?.label ?? "Removed account";
   const mascotProject = project ? projectName(project) : providerLabel;
   const appearanceKey = project ? projectKey(project) : mascotProject;
   const mascotName = resolveTabGroupMascot(
@@ -227,13 +231,21 @@ export function UsageProviderChip({
           tabIndex={-1}
           className={`overflow-y-auto text-content ${accountView === "usage" && loginView ? "" : "p-2.5"}`}
         >
-          {accountView === "accounts" && activeAccount ? (
+          {accountView === "accounts" ? (
             <ProviderAccountPicker
               providerLabel={providerLabel}
               accounts={accounts}
-              accountId={activeAccount.id}
+              accountId={accountId ?? ""}
               onBack={() => setAccountView("usage")}
               onAdd={() => setAccountView("add")}
+              onManage={
+                onManageAccounts
+                  ? () => {
+                      setOpen(false);
+                      onManageAccounts();
+                    }
+                  : undefined
+              }
               onSelect={(nextAccountId) => {
                 onSelectAccount?.(nextAccountId);
                 setOpen(false);
@@ -248,9 +260,9 @@ export function UsageProviderChip({
             />
           ) : loginView ? (
             <>
-              {canManageAccounts && activeAccount ? (
+              {canManageAccounts ? (
                 <AccountSwitchRow
-                  account={activeAccount}
+                  accountLabel={activeAccountLabel}
                   onClick={() => setAccountView("accounts")}
                 />
               ) : null}
@@ -274,14 +286,14 @@ export function UsageProviderChip({
                   <p className="mt-0.5 text-[10px] leading-4 text-content/40">
                     {updatedLabel(limits, now)}
                   </p>
-                  {canManageAccounts && activeAccount ? (
+                  {canManageAccounts ? (
                     <button
                       type="button"
                       className="mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55 hover:bg-content/10 hover:text-content"
                       aria-label={`Switch ${providerLabel} account`}
                       onClick={() => setAccountView("accounts")}
                     >
-                      <span className="truncate">{activeAccount.label}</span>
+                      <span className="truncate">{activeAccountLabel}</span>
                       <ChevronRight
                         className="size-2.5 shrink-0"
                         strokeWidth={1.75}
@@ -354,10 +366,10 @@ export function UsageProviderChip({
 }
 
 function AccountSwitchRow({
-  account,
+  accountLabel,
   onClick,
 }: {
-  account: ProviderAccount;
+  accountLabel: string;
   onClick: () => void;
 }) {
   return (
@@ -365,10 +377,10 @@ function AccountSwitchRow({
       <button
         type="button"
         className="flex h-8 w-full items-center gap-2 rounded-lg bg-content/[0.045] px-2.5 text-left text-[11px] ring-1 ring-inset ring-content/[0.06] hover:bg-content/[0.08]"
-        aria-label={`Switch account from ${account.label}`}
+        aria-label={`Switch account from ${accountLabel}`}
         onClick={onClick}
       >
-        <span className="min-w-0 flex-1 truncate">{account.label}</span>
+        <span className="min-w-0 flex-1 truncate">{accountLabel}</span>
         <span className="text-[10px] text-content/40">Switch</span>
         <ChevronRight
           className="size-3 shrink-0 text-content/35"
@@ -386,6 +398,7 @@ function ProviderAccountPicker({
   accountId,
   onBack,
   onAdd,
+  onManage,
   onSelect,
 }: {
   providerLabel: string;
@@ -393,6 +406,7 @@ function ProviderAccountPicker({
   accountId: string;
   onBack: () => void;
   onAdd: () => void;
+  onManage?: () => void;
   onSelect: (accountId: string) => void;
 }) {
   return (
@@ -447,6 +461,17 @@ function ProviderAccountPicker({
         <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
         Add account
       </button>
+      {onManage ? (
+        <button
+          type="button"
+          className="mt-0.5 flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[11px] text-content/45 hover:bg-content/[0.07] hover:text-content"
+          onClick={() => {
+            onManage();
+          }}
+        >
+          Manage accounts…
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -537,6 +562,9 @@ function usageWindows(limits: ProviderRateLimits): UsageWindowEntry[] {
       ? ({ key: "session", window: limits.session } as const)
       : null,
     limits.weekly ? ({ key: "weekly", window: limits.weekly } as const) : null,
+    limits.monthly
+      ? ({ key: "monthly", window: limits.monthly } as const)
+      : null,
   ].filter((entry): entry is UsageWindowEntry => entry != null);
 }
 
@@ -556,7 +584,9 @@ function UsageWindowCard({
       ? "5-hour limit"
       : kind === "weekly"
         ? "Weekly limit"
-        : `${formatWindowLabel(window.windowMinutes)} limit`;
+        : kind === "monthly"
+          ? "Monthly limit"
+          : `${formatWindowLabel(window.windowMinutes)} limit`;
   return (
     <section className="rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
       <div className="flex items-baseline justify-between gap-3">

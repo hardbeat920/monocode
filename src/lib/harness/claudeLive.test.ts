@@ -29,6 +29,7 @@ vi.mock("./child", () => ({
 }));
 
 const {
+  bindClaudeSession,
   compactClaudeContext,
   respondClaudeApproval,
   respondClaudeQuestion,
@@ -152,6 +153,32 @@ describe("claude model switching", () => {
     );
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await second;
+  });
+});
+
+describe("claude legacy account resume", () => {
+  it("resumes a legacy thread when the missing account resolves to default", async () => {
+    bindClaudeSession("s1", "legacy-session", "/repo");
+    const { turn } = await startTurn("s1", {
+      providerAccountId: "default",
+    });
+    expect(spawned[0]).toEqual(
+      expect.arrayContaining(["--resume", "legacy-session"]),
+    );
+    expect(spawned[0]).not.toContain("--session-id");
+    emit({ type: "result", subtype: "success", session_id: "legacy-session" });
+    await turn;
+  });
+
+  it("does not resume a legacy default thread under a named account", async () => {
+    bindClaudeSession("s1", "legacy-session", "/repo");
+    const { turn } = await startTurn("s1", {
+      providerAccountId: "account-work",
+    });
+    expect(spawned[0]).not.toContain("--resume");
+    expect(spawned[0]).toContain("--session-id");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
   });
 });
 

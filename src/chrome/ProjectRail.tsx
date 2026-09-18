@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   Archive,
   BellOff,
   ChevronDown,
@@ -30,7 +31,14 @@ import {
   PROJECT_RAIL_WIDTH_MIN,
   saveProjectRailWidth,
 } from "../lib/appearance";
-import { basename, revealPath, type GitDiffStats } from "../lib/fs";
+import {
+  basename,
+  listExternalEditors,
+  openInExternalEditor,
+  revealPath,
+  type ExternalEditor,
+  type GitDiffStats,
+} from "../lib/fs";
 import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
 import { pathKey, projectKey, projectName } from "../lib/paths";
 import {
@@ -109,6 +117,7 @@ function projectMenuExtraItems(
   canRemove: boolean,
   canConfigureNotifications: boolean,
   notificationReady: boolean,
+  externalEditors: ExternalEditor[] | null,
   projectGroups: ProjectGroup[],
   currentProjectGroupId?: string,
 ): TabGroupMenuExtraItem[] {
@@ -145,6 +154,36 @@ function projectMenuExtraItems(
       ? { id: "unpin", label: "Unpin project", icon: PinOff }
       : { id: "pin", label: "Pin project", icon: Pin },
     { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
+    {
+      id: "external-editor",
+      label: "Open in editor",
+      icon: AppWindow,
+      disabled: externalEditors === null,
+      submenu:
+        externalEditors === null
+          ? [
+              {
+                kind: "item",
+                id: "external-editor:loading",
+                label: "Looking for editors…",
+                disabled: true,
+              },
+            ]
+          : externalEditors.length > 0
+            ? externalEditors.map((editor) => ({
+                kind: "item" as const,
+                id: `external-editor:${editor.id}`,
+                label: editor.name,
+              }))
+            : [
+                {
+                  kind: "item",
+                  id: "external-editor:none",
+                  label: "No supported editors found",
+                  disabled: true,
+                },
+              ],
+    },
     {
       id: "notifications-mute",
       label: "Mute notifications",
@@ -257,6 +296,9 @@ export function ProjectRail({
   const [projectGroupAssignments, setProjectGroupAssignments] = useState(
     loadProjectGroupAssignments,
   );
+  const [externalEditors, setExternalEditors] = useState<
+    ExternalEditor[] | null
+  >(null);
   const [projectMenu, setProjectMenu] = useState<{
     x: number;
     y: number;
@@ -274,7 +316,7 @@ export function ProjectRail({
     path: string;
     project: NotificationProject;
   } | null>(null);
-  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [projectMenuError, setProjectMenuError] = useState<string | null>(null);
   const notificationPreferences = useProjectNotificationPreferences();
   const allProjects = useMemo(
     () => collectRailProjects(recents, cwd),
@@ -285,13 +327,25 @@ export function ProjectRail({
   const readyNotificationProject = notificationPath
     ? knownNotificationProject(notificationPath)
     : undefined;
-  const notificationMenuError = notificationError;
   const menuMuteStatus = readyNotificationProject
     ? notificationMuteStatus(notificationPreferences[readyNotificationProject.id])
     : null;
   useEffect(() => {
-    setNotificationError(null);
+    setProjectMenuError(null);
   }, [notificationPath]);
+  useEffect(() => {
+    let active = true;
+    void listExternalEditors()
+      .then((installed) => {
+        if (active) setExternalEditors(Array.isArray(installed) ? installed : []);
+      })
+      .catch(() => {
+        if (active) setExternalEditors([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   const [inboxMenu, setInboxMenu] = useState<{
     x: number;
     y: number;
@@ -538,9 +592,24 @@ export function ProjectRail({
       try {
         updateNotificationPreferences([readyNotificationProject.id], { mutedUntil });
       } catch {
-        setNotificationError("Could not save notification preferences. Please try again.");
+        setProjectMenuError("Could not save notification preferences. Please try again.");
         return false;
       }
+    }
+    else if (action.startsWith("external-editor:")) {
+      const editorId = action.slice("external-editor:".length);
+      if (!externalEditors?.some((editor) => editor.id === editorId)) return false;
+      void openInExternalEditor(editorId, path)
+        .then(() => {
+          setProjectMenu(null);
+          menuTrigger.current?.focus();
+        })
+        .catch((error: unknown) => {
+          setProjectMenuError(
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      return false;
     }
     else if (action === "notifications-settings") {
       onOpenNotificationSettings?.(path);
@@ -821,11 +890,12 @@ export function ProjectRail({
             Boolean(onRemoveProject),
             Boolean(onOpenNotificationSettings),
             Boolean(readyNotificationProject),
+            externalEditors,
             projectGroups,
             projectGroupIdForPath(projectMenu.path, projectGroupAssignments),
           )}
-          footer={notificationMenuError ? (
-            <p role="alert" className="px-2 py-1 text-xs text-red-400">{notificationMenuError}</p>
+          footer={projectMenuError ? (
+            <p role="alert" className="px-2 py-1 text-xs text-red-400">{projectMenuError}</p>
           ) : null}
           onExtraPick={onProjectMenuPick}
         />

@@ -191,7 +191,6 @@ export function SurfaceTabs({
   const [menu, setMenu] = useState<SurfaceTabMenu | null>(null);
   const fileIds = files.map((file) => file.id);
   const sortable = useAnimatedReorder(fileIds, onReorder);
-  const canDrag = files.length > 1;
   const menuFile = menu
     ? files.find((file) => file.id === menu.fileId)
     : undefined;
@@ -284,9 +283,7 @@ export function SurfaceTabs({
               sortable.setItemRef(file.id, el);
               if (el && file.id === activeFileId) activeTabRef.current = el;
             }}
-            className={`reorder-item tab-motion group relative flex h-full w-56 min-w-28 shrink touch-none items-center ${
-              canDrag ? "cursor-grab active:cursor-grabbing" : ""
-            }`}
+            className="reorder-item tab-motion group relative flex h-full w-56 min-w-28 shrink touch-none items-center"
             onMouseDownCapture={(event) => {
               if (event.button === 1) event.preventDefault();
             }}
@@ -326,9 +323,7 @@ export function SurfaceTabs({
                 if (sortable.consumeClick()) return;
                 onSelectFile(file.id);
               }}
-              className={`relative flex h-7.5 min-w-0 flex-1 items-center gap-1.5 self-center rounded-md px-2 pr-7 text-left text-[13px] ${
-                canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-default"
-              } ${
+              className={`relative flex h-7.5 min-w-0 flex-1 cursor-default items-center gap-1.5 self-center rounded-md px-2 pr-7 text-left text-[13px] ${
                 active
                   ? "bg-selection text-content"
                   : "text-content/50 hover:bg-content/5 hover:text-content"

@@ -2,6 +2,8 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { SettingsView } from "./SettingsView";
 import { rememberNotificationProjects } from "../lib/notificationProjects";
 import {
@@ -9,6 +11,7 @@ import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "../lib/settings";
+import { providerAccounts, saveProviderAccount } from "../lib/providerAccounts";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -21,6 +24,7 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -72,6 +76,75 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("manages named accounts independently for each supported provider", async () => {
+    saveProviderAccount({
+      id: "account-work",
+      provider: "codex",
+      label: "Wrk",
+    });
+    await render("providers");
+
+    expect(container.textContent).toContain("Claude Code");
+    expect(container.textContent).toContain("Codex");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Rename Default account"]',
+        )!
+        .click(),
+    );
+    const defaultInput = container.querySelector<HTMLInputElement>(
+      '[aria-label="Rename Claude Code account"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(defaultInput, "Primary");
+      defaultInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('button[type="submit"]')!
+        .click(),
+    );
+    expect(providerAccounts("claude")[0]?.label).toBe("Primary");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Rename Wrk"]')!
+        .click(),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Rename Codex account"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "Work");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('button[type="submit"]')!
+        .click(),
+    );
+    expect(providerAccounts("codex")[1]?.label).toBe("Work");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove Work"]')!
+        .click(),
+    );
+    expect(ask).toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("provider_account_remove", {
+      provider: "codex",
+      accountId: "account-work",
+    });
+    expect(providerAccounts("codex")).toHaveLength(1);
+  });
+
   it("reopens, scrolls to, focuses and highlights the same project on a repeated notification settings request", async () => {
     vi.useFakeTimers();
     const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");

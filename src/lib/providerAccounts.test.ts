@@ -4,7 +4,10 @@ import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
   newProviderAccount,
   providerAccountLabel,
+  providerAccountExists,
   providerAccounts,
+  removeProviderAccount,
+  renameProviderAccount,
   saveProviderAccount,
   selectedProviderAccountId,
   selectProviderAccount,
@@ -127,5 +130,74 @@ describe("provider accounts", () => {
     );
     selectProviderAccount("codex", "/repo/one", "missing");
     expect(selectedProviderAccountId("codex", "/repo/one")).toBe(work.id);
+  });
+
+  it("renames a named account without changing its identity or order", () => {
+    saveProviderAccount({
+      id: "account-work",
+      provider: "codex",
+      label: "Wrk",
+    });
+    saveProviderAccount({
+      id: "account-personal",
+      provider: "codex",
+      label: "Personal",
+    });
+
+    expect(
+      renameProviderAccount("codex", "account-work", "  Work   account  "),
+    ).toEqual({
+      id: "account-work",
+      provider: "codex",
+      label: "Work account",
+    });
+    expect(providerAccounts("codex").map((account) => account.id)).toEqual([
+      DEFAULT_PROVIDER_ACCOUNT_ID,
+      "account-work",
+      "account-personal",
+    ]);
+  });
+
+  it("removes named account metadata and every project selection", () => {
+    const work = {
+      id: "account-work",
+      provider: "claude" as const,
+      label: "Work",
+    };
+    saveProviderAccount(work);
+    selectProviderAccount("claude", "/repo/one", work.id);
+    selectProviderAccount("claude", "/repo/two", work.id);
+
+    expect(removeProviderAccount("claude", work.id)).toBe(true);
+    expect(providerAccountExists("claude", work.id)).toBe(false);
+    expect(selectedProviderAccountId("claude", "/repo/one")).toBe(
+      DEFAULT_PROVIDER_ACCOUNT_ID,
+    );
+    expect(selectedProviderAccountId("claude", "/repo/two")).toBe(
+      DEFAULT_PROVIDER_ACCOUNT_ID,
+    );
+  });
+
+  it("renames but does not remove the provider-owned default account", () => {
+    expect(renameProviderAccount("codex", "default", "  Personal  ")).toEqual({
+      id: DEFAULT_PROVIDER_ACCOUNT_ID,
+      provider: "codex",
+      label: "Personal",
+      isDefault: true,
+    });
+    expect(removeProviderAccount("codex", "default")).toBe(false);
+    expect(providerAccounts("codex")[0]?.label).toBe("Personal");
+  });
+
+  it("preserves a custom default name when named profiles change", () => {
+    renameProviderAccount("claude", "default", "Primary");
+    saveProviderAccount({
+      id: "account-work",
+      provider: "claude",
+      label: "Work",
+    });
+    removeProviderAccount("claude", "account-work");
+
+    expect(providerAccounts("claude")[0]?.label).toBe("Primary");
   });
 });

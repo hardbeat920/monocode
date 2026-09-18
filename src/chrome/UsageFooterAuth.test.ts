@@ -64,6 +64,7 @@ function signedOutLimits(provider: RateLimitProvider): ProviderRateLimits {
     provider,
     session: null,
     weekly: null,
+    monthly: null,
     resetCredits: null,
     updatedAt: Date.now(),
     error: `${provider} is not signed in`,

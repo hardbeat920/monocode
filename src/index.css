@@ -427,6 +427,55 @@ html.is-reordering * {
   user-select: none !important;
 }
 
+html.is-explorer-file-dragging,
+html.is-explorer-file-dragging * {
+  cursor: grabbing !important;
+}
+
+.explorer-file-drag-preview {
+  position: fixed !important;
+  inset: 0 auto auto 0 !important;
+  z-index: 2147483647;
+  display: flex !important;
+  width: max-content !important;
+  max-width: min(280px, calc(100vw - 16px));
+  height: 26px !important;
+  align-items: center;
+  gap: 6px;
+  margin: 0 !important;
+  padding: 0 9px 0 7px !important;
+  overflow: hidden;
+  pointer-events: none !important;
+  border: 1px solid color-mix(in srgb, var(--color-content) 12%, transparent);
+  border-radius: 5px;
+  background: color-mix(
+    in srgb,
+    var(--color-background-base) 96%,
+    var(--color-content) 4%
+  ) !important;
+  box-shadow:
+    0 4px 12px rgb(0 0 0 / 18%),
+    0 1px 2px rgb(0 0 0 / 20%);
+  color: var(--color-content) !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  white-space: nowrap;
+  opacity: 0.94 !important;
+  will-change: transform;
+  contain: paint;
+}
+
+.explorer-file-drag-preview > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+html.theme-light .explorer-file-drag-preview {
+  background: var(--color-background-base) !important;
+  opacity: 1 !important;
+}
+
 html.is-resizing,
 html.is-resizing * {
   cursor: col-resize !important;
@@ -1453,14 +1502,14 @@ header[data-tauri-drag-region] button {
   }
 }
 
-/* Keep the original content tint in dark mode. In light mode, use the base
-   color at the same opacity so the surface stays translucent without graying. */
+/* Keep the original glass tint in dark mode. Light popovers use an opaque
+   surface so underlying content cannot show through. */
 .popover-backdrop {
   background: color-mix(in srgb, var(--color-content) 2%, transparent);
 }
 
 html.theme-light .popover-backdrop {
-  background: color-mix(in srgb, var(--color-background-base) 10%, transparent);
+  background: var(--color-background-base);
 }
 
 /* Animate content only; its sibling glass stays still. Finish at `none` and

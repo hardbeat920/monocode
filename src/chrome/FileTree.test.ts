@@ -10,6 +10,10 @@ import {
   saveSelected,
 } from "../lib/fileTree";
 import type { FsEntry } from "../lib/fs";
+import {
+  EXPLORER_FILE_POINTER_DRAG_EVENT,
+  type ExplorerFilePointerDragDetail,
+} from "../lib/drag";
 import { FileTree } from "./FileTree";
 
 const { iconRender, directories, clipboardFiles, copied, dragDrop } =
@@ -247,5 +251,117 @@ describe("FileTree accepts files from outside the tree", () => {
     document.elementFromPoint = () => document.body;
     await nativeDrop(["/Users/me/Desktop/a.txt"]);
     expect(copied).toEqual([]);
+  });
+});
+
+describe("FileTree starts Explorer file drags", () => {
+  beforeEach(async () => {
+    directories.set(cwd, [folder("docs"), file("first.ts")]);
+    await refreshDir(cwd);
+  });
+
+  it("publishes a pointer-driven file drop without opening the file", async () => {
+    await act(async () => render());
+    const fileRow = row("first.ts");
+    const folderRow = row("docs");
+    const events: ExplorerFilePointerDragDetail[] = [];
+    const onDrag = (event: Event) => {
+      events.push((event as CustomEvent<ExplorerFilePointerDragDetail>).detail);
+    };
+    window.addEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+
+    act(() => {
+      fileRow.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          button: 0,
+          pointerId: 1,
+          clientX: 10,
+          clientY: 10,
+          bubbles: true,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          pointerId: 1,
+          clientX: 30,
+          clientY: 30,
+        }),
+      );
+    });
+
+    const preview = document.querySelector<HTMLElement>(
+      ".explorer-file-drag-preview",
+    );
+    expect(preview).not.toBeNull();
+    expect(preview?.getAttribute("aria-hidden")).toBe("true");
+    expect(preview?.textContent).toContain("first.ts");
+    expect(preview?.children).toHaveLength(2);
+    expect(preview?.querySelectorAll('[data-icon="first.ts"]')).toHaveLength(1);
+    expect(preview?.style.transform).toBe("translate3d(18px, 17px, 0)");
+
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          pointerId: 1,
+          clientX: 36,
+          clientY: 38,
+        }),
+      );
+    });
+    expect(preview?.style.transform).toBe("translate3d(24px, 25px, 0)");
+
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          pointerId: 1,
+          clientX: 40,
+          clientY: 40,
+        }),
+      );
+      fileRow.click();
+    });
+
+    expect(document.querySelector(".explorer-file-drag-preview")).toBeNull();
+    expect(events.some((event) => event.type === "move")).toBe(true);
+    expect(events.slice(-2)).toEqual([
+      {
+        type: "drop",
+        path: `${cwd}/first.ts`,
+        x: 40,
+        y: 40,
+      },
+      { type: "end", path: `${cwd}/first.ts` },
+    ]);
+    expect(props.onOpenFile).not.toHaveBeenCalled();
+
+    events.length = 0;
+    act(() => {
+      folderRow.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          button: 0,
+          pointerId: 2,
+          clientX: 10,
+          clientY: 10,
+          bubbles: true,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          pointerId: 2,
+          clientX: 40,
+          clientY: 40,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          pointerId: 2,
+          clientX: 40,
+          clientY: 40,
+        }),
+      );
+    });
+    expect(events).toEqual([]);
+
+    window.removeEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
   });
 });

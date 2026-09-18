@@ -1,35 +1,73 @@
 import { pathKey } from "./paths";
-import type { RateLimitProvider } from "./rateLimits";
+import type { HarnessId } from "./session";
 
 const ACCOUNTS_KEY = "monocode.providerAccounts.v1";
 const SELECTIONS_KEY = "monocode.providerAccountSelections.v1";
 const CHANGE_EVENT = "monocode-provider-accounts-changed";
 
 export const DEFAULT_PROVIDER_ACCOUNT_ID = "default";
+const DEFAULT_PROVIDER_ACCOUNT_LABEL = "Default account";
+
+/** Legacy sessions predate persisted account ids and belong to the default profile. */
+export function sameProviderAccountId(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  return (
+    (left ?? DEFAULT_PROVIDER_ACCOUNT_ID) ===
+    (right ?? DEFAULT_PROVIDER_ACCOUNT_ID)
+  );
+}
+
+/** Providers whose CLIs support isolated, locally named account profiles. */
+export const PROVIDER_ACCOUNT_PROVIDERS = [
+  "claude",
+  "codex",
+] as const satisfies readonly HarnessId[];
+
+export type ProviderAccountProvider =
+  (typeof PROVIDER_ACCOUNT_PROVIDERS)[number];
+
+export function supportsProviderAccounts(
+  provider: HarnessId,
+): provider is ProviderAccountProvider {
+  return PROVIDER_ACCOUNT_PROVIDERS.some((candidate) => candidate === provider);
+}
 
 export type ProviderAccount = {
   id: string;
-  provider: RateLimitProvider;
+  provider: ProviderAccountProvider;
   label: string;
   isDefault?: boolean;
 };
 
-type StoredAccounts = Partial<Record<RateLimitProvider, ProviderAccount[]>>;
+type StoredAccounts = Partial<
+  Record<ProviderAccountProvider, ProviderAccount[]>
+>;
 type StoredSelections = Record<
   string,
-  Partial<Record<RateLimitProvider, string>>
+  Partial<Record<ProviderAccountProvider, string>>
 >;
 
 export function providerAccounts(
-  provider: RateLimitProvider,
+  provider: ProviderAccountProvider,
 ): ProviderAccount[] {
   const stored = readRecord<StoredAccounts>(ACCOUNTS_KEY);
   const seen = new Set<string>([DEFAULT_PROVIDER_ACCOUNT_ID]);
   const accounts = Array.isArray(stored[provider]) ? stored[provider] : [];
+  let defaultLabel = DEFAULT_PROVIDER_ACCOUNT_LABEL;
+  let foundDefault = false;
   const profiles = accounts.flatMap((account) => {
     const id = validAccountId(account?.id) ? account.id : "";
     const label = cleanLabel(account?.label);
-    if (!id || id === DEFAULT_PROVIDER_ACCOUNT_ID || !label || seen.has(id)) {
+    if (id === DEFAULT_PROVIDER_ACCOUNT_ID) {
+      if (label && !foundDefault) {
+        defaultLabel = label;
+        foundDefault = true;
+      }
+      return [];
+    }
+    if (!id || !label || seen.has(id)) {
       return [];
     }
     seen.add(id);
@@ -39,7 +77,7 @@ export function providerAccounts(
     {
       id: DEFAULT_PROVIDER_ACCOUNT_ID,
       provider,
-      label: "Default account",
+      label: defaultLabel,
       isDefault: true,
     },
     ...profiles,
@@ -47,7 +85,7 @@ export function providerAccounts(
 }
 
 export function newProviderAccount(
-  provider: RateLimitProvider,
+  provider: ProviderAccountProvider,
   label: string,
 ): ProviderAccount {
   return {
@@ -68,32 +106,92 @@ export function saveProviderAccount(account: ProviderAccount): void {
   const label = cleanLabel(account.label);
   if (!label) return;
   const stored = readRecord<StoredAccounts>(ACCOUNTS_KEY);
-  const storedAccounts = stored[account.provider];
-  const accounts = Array.isArray(storedAccounts) ? storedAccounts : [];
-  const next = accounts.flatMap((entry) => {
-    if (!isRecord(entry)) return [];
-    const id = validAccountId(entry.id) ? entry.id : "";
-    const storedLabel = cleanLabel(entry.label);
-    if (
-      !id ||
-      id === DEFAULT_PROVIDER_ACCOUNT_ID ||
-      id === account.id ||
-      !storedLabel
-    ) {
-      return [];
-    }
-    return [{ id, provider: account.provider, label: storedLabel }];
-  });
-  stored[account.provider] = [
+  const next = providerAccounts(account.provider).filter(
+    (entry) => entry.id !== account.id,
+  );
+  stored[account.provider] = serializeProviderAccounts([
     ...next,
-    { ...account, label, isDefault: undefined },
-  ];
+    { id: account.id, provider: account.provider, label },
+  ]);
   writeJson(ACCOUNTS_KEY, stored);
   announceChange();
 }
 
+export function renameProviderAccount(
+  provider: ProviderAccountProvider,
+  accountId: string,
+  label: string,
+): ProviderAccount | null {
+  if (!validAccountId(accountId)) return null;
+  const nextLabel = cleanLabel(label);
+  if (!nextLabel) return null;
+  const accounts = providerAccounts(provider);
+  const target = accounts.find((account) => account.id === accountId);
+  if (!target) return null;
+  const renamed = { ...target, label: nextLabel };
+  const stored = readRecord<StoredAccounts>(ACCOUNTS_KEY);
+  stored[provider] = serializeProviderAccounts(
+    accounts.map((account) => (account.id === accountId ? renamed : account)),
+  );
+  writeJson(ACCOUNTS_KEY, stored);
+  announceChange();
+  return renamed;
+}
+
+/** Remove account metadata after native credential cleanup has succeeded. */
+export function removeProviderAccount(
+  provider: ProviderAccountProvider,
+  accountId: string,
+): boolean {
+  if (accountId === DEFAULT_PROVIDER_ACCOUNT_ID || !validAccountId(accountId)) {
+    return false;
+  }
+  const accounts = providerAccounts(provider);
+  if (!accounts.some((account) => account.id === accountId)) return false;
+  const stored = readRecord<StoredAccounts>(ACCOUNTS_KEY);
+  stored[provider] = serializeProviderAccounts(
+    accounts.filter((account) => account.id !== accountId),
+  );
+  writeJson(ACCOUNTS_KEY, stored);
+
+  const selections = readRecord<StoredSelections>(SELECTIONS_KEY);
+  for (const [key, selection] of Object.entries(selections)) {
+    if (!isRecord(selection) || selection[provider] !== accountId) continue;
+    const nextSelection = { ...selection };
+    delete nextSelection[provider];
+    if (Object.keys(nextSelection).length === 0) delete selections[key];
+    else selections[key] = nextSelection;
+  }
+  writeJson(SELECTIONS_KEY, selections);
+  announceChange();
+  return true;
+}
+
+function serializeProviderAccounts(
+  accounts: ProviderAccount[],
+): ProviderAccount[] {
+  return accounts.flatMap((account) => {
+    const label = cleanLabel(account.label);
+    if (!label) return [];
+    if (
+      account.id === DEFAULT_PROVIDER_ACCOUNT_ID &&
+      label === DEFAULT_PROVIDER_ACCOUNT_LABEL
+    ) {
+      return [];
+    }
+    return [{ id: account.id, provider: account.provider, label }];
+  });
+}
+
+export function providerAccountExists(
+  provider: ProviderAccountProvider,
+  accountId: string | undefined,
+): boolean {
+  return providerAccounts(provider).some((account) => account.id === accountId);
+}
+
 export function selectedProviderAccountId(
-  provider: RateLimitProvider,
+  provider: ProviderAccountProvider,
   project: string | undefined,
 ): string {
   const selections = readRecord<StoredSelections>(SELECTIONS_KEY);
@@ -104,7 +202,7 @@ export function selectedProviderAccountId(
 }
 
 export function selectProviderAccount(
-  provider: RateLimitProvider,
+  provider: ProviderAccountProvider,
   project: string | undefined,
   accountId: string,
 ): void {
@@ -119,7 +217,7 @@ export function selectProviderAccount(
 }
 
 export function providerAccountLabel(
-  provider: RateLimitProvider,
+  provider: ProviderAccountProvider,
   accountId: string | undefined,
 ): string {
   return (

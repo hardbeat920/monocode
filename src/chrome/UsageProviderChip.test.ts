@@ -23,6 +23,7 @@ function codexLimits(): ProviderRateLimits {
       windowMinutes: 10_080,
       resetsAt: now + 2 * 86_400_000 + 23 * 3_600_000,
     },
+    monthly: null,
     resetCredits: {
       availableCount: 2,
       credits: [
@@ -85,6 +86,7 @@ describe("UsageProviderChip", () => {
       provider: "claude",
       session: null,
       weekly: null,
+      monthly: null,
       resetCredits: null,
       updatedAt: now,
       error: "Claude sign-in expired",
@@ -110,6 +112,7 @@ describe("UsageProviderChip", () => {
       provider: "claude",
       session: null,
       weekly: null,
+      monthly: null,
       resetCredits: null,
       updatedAt: now,
       error: "Claude usage is unavailable for this account",
@@ -176,7 +179,7 @@ describe("UsageProviderChip", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("does not display another account when the pinned account is missing", async () => {
+  it("keeps account switching available when the pinned account was removed", async () => {
     act(() =>
       root.render(
         createElement(UsageProviderChip, {
@@ -201,9 +204,10 @@ describe("UsageProviderChip", () => {
     const trigger = button("Codex usage details");
     expect(trigger.textContent).not.toContain("Default account");
     await act(async () => trigger.click());
-    expect(
-      document.querySelector('[aria-label="Switch Codex account"]'),
-    ).toBeNull();
+    expect(document.body.textContent).toContain("Removed account");
+    await act(async () => button("Switch Codex account").click());
+    expect(document.body.textContent).toContain("Default account");
+    expect(document.body.textContent).toContain("Work");
   });
 
   it("shows and deliberately consumes a banked reset", async () => {

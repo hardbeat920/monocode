@@ -7,9 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.50] - 2026-09-17
+
 ### Added
 
 - Hermes Agent is available as an ACP harness with live model discovery, image and file attachments, permission prompts, in-flight redirects, and persisted session resume. Install Hermes, configure a provider with `hermes model`, and MonoCode will add it to the model picker. In #282.
+- Projects can be organized into persistent, collapsible groups in the project rail, with custom names, colors, and mascots. Projects can be assigned or returned to the ungrouped section from their context menu.
+- On Windows, closing a window can hide it to the system tray so running agents continue; the behavior is enabled by default, configurable in Settings, and paired with tray actions to reopen or fully quit MonoCode. Full quits coordinate every window, count all running turns, ask once, wait for workspace saves, recover from stale confirmations, and abort safely if required persistence fails. In #224 by @goujandev.
+- Claude Code and Codex support multiple named accounts. Add or switch accounts from the usage footer; each project remembers its selection, and existing conversations remain pinned to the account that started them. In #280.
+- OpenCode Go usage appears in the status-bar footer with five-hour, weekly, and monthly limits and reset countdowns. Credential discovery supports environment overrides, JSON and JSONC configuration, and XDG data directories. In #263 by @D3nnis72.
+- The branch picker can create a branch through a dedicated name dialog, with the new branch immediately available for selection.
+- Files can be dragged from the Explorer into the Composer, with a drag preview and the same attachment handling as files added through the picker.
+- Project menus can open a project in a detected external editor on macOS, Windows, and Linux.
+- Binary and image viewers can copy the original file to the macOS clipboard from their toolbar or context menu, with temporary success feedback.
+- GitHub pull-request headers include an action to copy the head branch name. Closes #248 in #273 by @bluzername.
+- Contributors can set `MONOCODE_DEV_APP_NAME` to run a separately named macOS development app without changing the default bundle identity. Invalid names and path traversal are rejected. In #284 by @MichaelOgunjimi.
+
+### Changed
+
+- Workspace and file tabs have more consistent alignment, spacing, active-state highlighting, rounded corners, and cursor behavior, while the terminal dock uses a simpler trailing layout.
+- Changing an OpenCode session's access mode updates its live permissions immediately, and switching to Full Access automatically resolves residual approval prompts.
+- Orchestrated workers use private scratch directories and canonical write-path checks. Paused runs remain inspectable, interrupted work can be retried after resuming, and invalid orchestration proposals are repaired before results are published.
+
+### Fixed
+
+- Pasting or dropping files from Finder into the file tree works reliably on macOS, including safe handling of symlink aliases; drop targeting also accounts for Windows display scaling. In #264 by @kartava.
+- The Composer regains focus after answering a question, finishing an agent turn, or returning to the MonoCode window without stealing focus from another Composer or an open picker. In #292 by @MichaelOgunjimi.
+- Context menus can use their intrinsic height, tab-group menus open on the correct side, light-theme popovers remain opaque, and reorderable tabs use the default cursor.
+- Unix orchestration scratch directories retain restrictive `0700` permissions when their ownership is transferred to the worker.
 
 ## [0.1.49] - 2026-09-16
 

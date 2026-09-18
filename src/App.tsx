@@ -218,7 +218,7 @@ import {
   prepareSessionCheckpoint,
 } from "./lib/checkpoint";
 import { notifyDirsChanged } from "./lib/fileTree";
-import { nudgeWatchedFiles } from "./lib/fileWatch";
+import { invalidateWatchedFiles, nudgeWatchedFiles } from "./lib/fileWatch";
 import { type EditorNavigationTarget, type OpenFileFn } from "./lib/search";
 import {
   mergeModelSettings,
@@ -258,16 +258,24 @@ import {
   applyPlaceSessionOnPane,
   filterTabsForProject,
   findOpenSessionTab,
+  openAddToChatSessionPane,
   planWorkspaceTabClose,
   workspaceTabCwd,
   focusedWorkspaceTabCwd,
 } from "./lib/workspaceTabGroups";
+import {
+  ADD_TO_CHAT_EVENT,
+  composerSeedForAddToChat,
+  type AddToChatRequest,
+} from "./lib/quoteDraft";
 import { runSessionRemoval } from "./lib/sessionRemoval";
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
+  providerAccountExists,
   selectedProviderAccountId,
+  supportsProviderAccounts,
+  type ProviderAccountProvider,
 } from "./lib/providerAccounts";
-import type { RateLimitProvider } from "./lib/rateLimits";
 import {
   HARNESSES,
   HARNESS_LABEL,
@@ -402,6 +410,7 @@ import { markLinkedSessionUpdateSeen } from "./lib/linkedSessionSeen";
 import { linearIssueDetails, peekLinearIssueDetails } from "./lib/linear";
 import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "./lib/gitlab";
 import {
+  loadCloseToTray,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   loadDiffViewer,
@@ -446,9 +455,10 @@ import type { InstalledUpdate } from "./lib/updateNotice";
 import {
   bindResumedSessions,
   closeBusyWindow,
+  closeCurrentWindow,
+  confirmReload,
   hasInFlightSessions,
   hideCurrentWindow,
-  closeCurrentWindow,
   isAppQuitting,
   persistLiveTranscripts,
   persistQuitState,
@@ -689,6 +699,7 @@ export default function App({
       !!tab && resumed.sessions.some((session) => session.id === tab.focusedId)
     );
   });
+  const [composerFocusToken, setComposerFocusToken] = useState(0);
   /** Tab id -> project name, kept in sync with the rendered title tabs. */
   const tabProjectsRef = useRef(new Map<string, string>());
   const projectOfTab = useCallback(
@@ -781,6 +792,8 @@ export default function App({
     useState<EditorNavigationTarget | null>(null);
   const editorNavigationToken = useRef(0);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [filePickerInitialQuery, setFilePickerInitialQuery] = useState("");
+  const [filePickerResetToken, setFilePickerResetToken] = useState(0);
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(
     () => new Set(windowTransfer?.dirtyFileIds ?? []),
   );
@@ -1074,6 +1087,60 @@ export default function App({
   }, [tabs]);
 
   const sessionDefaults = active ?? sessions[0];
+
+  useEffect(() => {
+    const openSessionForAddToChat = (event: Event) => {
+      const detail = (event as CustomEvent<AddToChatRequest>).detail;
+      if (!detail?.text) return;
+
+      const currentTabs = tabsRef.current;
+      const currentSessions = sessionsRef.current;
+      const tab =
+        currentTabs.find((entry) => entry.id === activeTabIdRef.current) ??
+        currentTabs[0];
+      if (!tab) return;
+      const mountedSessionIds = new Set(
+        currentSessions.map((session) => session.id),
+      );
+      if (leafIds(tab.layout).some((id) => mountedSessionIds.has(id))) return;
+
+      const cwd =
+        focusedWorkspaceTabCwd(tab, currentSessions) ??
+        sessionDefaults?.cwd ??
+        projectCwdRef.current;
+      const composerSeed = composerSeedForAddToChat(detail.text, detail.mode);
+      if (!composerSeed) return;
+
+      const session = {
+        ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+        composerSeed,
+      };
+      const openedTab = openAddToChatSessionPane({
+        tab,
+        sessions: currentSessions,
+        sessionId: session.id,
+      });
+      // A mounted session pane owns the normal add-to-chat path.
+      if (!openedTab) return;
+
+      const nextSessions = [...currentSessions, session];
+      const nextTabs = currentTabs.map((entry) =>
+        entry.id === tab.id ? openedTab : entry,
+      );
+      sessionsRef.current = nextSessions;
+      tabsRef.current = nextTabs;
+      setSessions(nextSessions);
+      setTabs(nextTabs);
+      setActiveTabId(tab.id);
+      setProjectTerminalFocused(false);
+      setComposerFocused(true);
+    };
+
+    window.addEventListener(ADD_TO_CHAT_EVENT, openSessionForAddToChat);
+    return () =>
+      window.removeEventListener(ADD_TO_CHAT_EVENT, openSessionForAddToChat);
+  }, [sessionDefaults?.cwd, sessionDefaults?.runtimeMode]);
+
   const activeSkillContext = active
     ? nativeSkillContextForSession(active)
     : null;
@@ -1137,7 +1204,11 @@ export default function App({
   }, [activeHarness]);
 
   const usageProviders = useMemo(() => {
-    if (active?.harness === "claude" || active?.harness === "codex") {
+    if (
+      active?.harness === "claude" ||
+      active?.harness === "codex" ||
+      active?.harness === "opencode"
+    ) {
       return [active.harness];
     }
     return [];
@@ -1280,6 +1351,17 @@ export default function App({
         if (focused) {
           flushHarnessEvents();
           syncDockBadge(sessionsRef.current);
+          if (
+            document.activeElement === document.body &&
+            !projectTerminalFocusedRef.current &&
+            !searchViewOpenRef.current &&
+            !inboxViewOpenRef.current &&
+            !notesViewOpenRef.current &&
+            !settingsOpenRef.current
+          ) {
+            setComposerFocused(true);
+            setComposerFocusToken((token) => token + 1);
+          }
         }
       })
       .then((fn) => {
@@ -1314,12 +1396,14 @@ export default function App({
         // Listening here makes close our job. Letting the default path run
         // calls JS `window.destroy`, which Tauri denies without a permission.
         event.preventDefault();
+        const toTray = loadCloseToTray();
         if (hasInFlightSessions(sessionsRef.current)) {
           flushHarnessEvents();
-          if (!IS_MAC) {
+          if (!toTray && !IS_MAC) {
             void closeBusyWindow();
             return;
           }
+          // Not `persistQuitState`: that marks the live turns interrupted.
           void persistLiveTranscripts(sessionsRef.current);
           void hideCurrentWindow();
           return;
@@ -1333,7 +1417,7 @@ export default function App({
           "unload",
           projectTerminalsRef.current,
         ).finally(() => {
-          void closeCurrentWindow();
+          void (toTray ? hideCurrentWindow() : closeCurrentWindow());
         });
       })
       .then((fn) => {
@@ -1690,7 +1774,7 @@ export default function App({
   );
 
   const onSelectProviderAccount = useCallback(
-    (provider: RateLimitProvider, accountId: string) => {
+    (provider: ProviderAccountProvider, accountId: string) => {
       if (!active || active.harness !== provider) return;
       const currentId = active.providerAccountId ?? DEFAULT_PROVIDER_ACCOUNT_ID;
       if (currentId === accountId) return;
@@ -4625,11 +4709,26 @@ export default function App({
       if (isPreparingHandoff(current)) return false;
       saveRecentModelChoice(current.harness, current.model);
       const workCwd = sessionWorkCwd(current);
-      const providerAccountId =
-        current.harness === "claude" || current.harness === "codex"
-          ? (current.providerAccountId ??
-            selectedProviderAccountId(current.harness, current.cwd))
-          : undefined;
+      const accountProvider = supportsProviderAccounts(current.harness)
+        ? current.harness
+        : undefined;
+      const providerAccountId = accountProvider
+        ? (current.providerAccountId ??
+          selectedProviderAccountId(accountProvider, current.cwd))
+        : undefined;
+      if (
+        accountProvider &&
+        providerAccountId &&
+        !providerAccountExists(accountProvider, providerAccountId)
+      ) {
+        enqueueHarnessEvent(sessionId, {
+          type: "session.error",
+          message:
+            "This conversation uses a removed provider account. Switch accounts from the usage control to start a new conversation.",
+        });
+        flushHarnessEvents();
+        return false;
+      }
       const submittedText = intent === "build" ? "Build approved plan" : text;
       const rawCommand = isNativeCommandPrompt(submittedText, current.harness);
       const harnessText = rawCommand
@@ -5713,11 +5812,10 @@ export default function App({
             cwd: workCwd,
             model: current.model,
             modelSettings: current.modelSettings,
-            providerAccountId:
-              current.harness === "claude" || current.harness === "codex"
-                ? (current.providerAccountId ??
-                  selectedProviderAccountId(current.harness, current.cwd))
-                : undefined,
+            providerAccountId: supportsProviderAccounts(current.harness)
+              ? (current.providerAccountId ??
+                selectedProviderAccountId(current.harness, current.cwd))
+              : undefined,
             runtimeMode: current.runtimeMode,
             onEvent: (event) => {
               if (turnGen.current.get(sessionId) !== gen) return;
@@ -6409,7 +6507,23 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setFilePickerInitialQuery("");
+    setFilePickerResetToken((token) => token + 1);
     setFilePickerOpen(true);
+  }, []);
+  const onOpenCommandPalette = useCallback(() => {
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setFilePickerInitialQuery(">");
+    setFilePickerResetToken((token) => token + 1);
+    setFilePickerOpen(true);
+  }, []);
+  const onReload = useCallback(() => {
+    void (async () => {
+      if (!(await confirmReload(dirtyFilesRef.current.size > 0))) return;
+      window.location.reload();
+    })();
   }, []);
 
   const onFindInProject = useCallback(() => {
@@ -6657,6 +6771,8 @@ export default function App({
     onFocusDir,
     onToggleSidebar,
     onGoToFile,
+    onOpenCommandPalette,
+    onReload,
     onFindInProject,
     onOpenSearch,
     onOpenInbox,
@@ -6685,6 +6801,8 @@ export default function App({
     onFocusDir,
     onToggleSidebar,
     onGoToFile,
+    onOpenCommandPalette,
+    onReload,
     onFindInProject,
     onOpenSearch,
     onOpenInbox,
@@ -6848,6 +6966,18 @@ export default function App({
         run("go_to_file", actions.current.onGoToFile);
         return;
       }
+      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        e.stopPropagation();
+        run("open_command_palette", actions.current.onOpenCommandPalette);
+        return;
+      }
+      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        e.stopPropagation();
+        run("reload", actions.current.onReload);
+        return;
+      }
       if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
         const target = e.target instanceof Element ? e.target : null;
         if (target?.closest(".monocode-terminal") && e.ctrlKey && !e.metaKey) {
@@ -6923,7 +7053,11 @@ export default function App({
       listen("open_project", () => {
         void actions.current.pickProject();
       }),
-      listen("go_to_file", () => actions.current.onGoToFile()),
+      listen("go_to_file", () => run("go_to_file", actions.current.onGoToFile)),
+      listen("open_command_palette", () =>
+        run("open_command_palette", actions.current.onOpenCommandPalette),
+      ),
+      listen("reload", () => run("reload", actions.current.onReload)),
       listen("open_search", () => actions.current.onOpenSearch()),
       listen("open_inbox", () => actions.current.onOpenInbox()),
       listen("open_notes", () => actions.current.onOpenNotes()),
@@ -7295,6 +7429,7 @@ export default function App({
                               composerFocused={
                                 composerFocused && !projectTerminalFocused
                               }
+                              composerFocusToken={composerFocusToken}
                               onSelectFile={onSelectFileSurface}
                               onCloseFile={onCloseFile}
                               onCloseOtherFiles={onCloseOtherFiles}
@@ -7368,6 +7503,7 @@ export default function App({
                         focused={visible}
                         inSplit={false}
                         composerFocused={composerFocused}
+                        composerFocusToken={composerFocusToken}
                       />
                     </SessionSurface>
                   );
@@ -7429,6 +7565,9 @@ export default function App({
                 session={usageSession}
                 project={active?.cwd ?? projectCwd}
                 onSelectAccount={onSelectProviderAccount}
+                onManageAccounts={() =>
+                  openSettings("providers", "provider-accounts")
+                }
                 terminals={runningTerminals}
                 terminalOpen={runningTerminalOpen}
                 onToggleTerminal={onToggleRunningTerminal}
@@ -7450,10 +7589,15 @@ export default function App({
 
           {filePickerOpen ? (
             <FilePicker
+              key={filePickerResetToken}
               open
               cwd={gitCwd}
               openPaths={openFilePaths}
+              initialQuery={filePickerInitialQuery}
               onOpenFile={onOpenFile}
+              onRunAction={(id) => {
+                if (id === "reload") actions.current.onReload();
+              }}
               onClose={() => setFilePickerOpen(false)}
             />
           ) : null}
@@ -7742,15 +7886,24 @@ function nudgeOpenEditors(event: HarnessEvent, cwd: string) {
   }
 
   if (!isEditTool(event.kind, event.title, event.preview)) return;
-  const raw = event.preview?.path;
-  const resolved = raw ? (resolveWorkspacePath(raw, cwd) ?? raw) : undefined;
-  if (resolved) {
-    nudgeWatchedFiles([resolved]);
-  } else if (completed) {
-    nudgeWatchedFiles();
+  const resolved = [
+    ...(event.paths ?? []),
+    ...(event.preview?.path ? [event.preview.path] : []),
+  ]
+    .map((path) => resolveWorkspacePath(path, cwd) ?? path)
+    .filter((path, index, paths) => paths.indexOf(path) === index);
+  if (completed) {
+    // A successful edit is authoritative. Reload it even if a startup race or
+    // coarse filesystem timestamp makes the mtime appear unchanged.
+    invalidateWatchedFiles(resolved.length > 0 ? resolved : undefined);
+  } else if (resolved.length > 0) {
+    nudgeWatchedFiles(resolved);
   }
   if (completed) {
-    window.setTimeout(() => nudgeWatchedFiles(), 150);
+    window.setTimeout(
+      () => nudgeWatchedFiles(resolved.length > 0 ? resolved : undefined),
+      150,
+    );
     notifyGitChanged();
     nudgeWorkspace(cwd);
   }

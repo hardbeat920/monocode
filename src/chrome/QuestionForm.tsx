@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { Check, MessageSquare } from "./icons";
 import {
   CUSTOM_OPTION_ID,
@@ -199,6 +205,54 @@ function QuestionFields({
   const options = displayOptions(question);
   const customSelected = selected.some((id) => isCustomId(question, id));
   const customId = customOptionId(question);
+  const [highlighted, setHighlighted] = useState(() => {
+    const selectedIndex = options.findIndex((option) =>
+      selected.includes(option.id),
+    );
+    return selectedIndex >= 0 ? selectedIndex : 0;
+  });
+  const optionButtons = useRef<Array<HTMLButtonElement | null>>([]);
+
+  const highlight = (index: number) => {
+    setHighlighted(index);
+    optionButtons.current[index]?.focus();
+  };
+
+  const onOptionKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const offset = event.key === "ArrowDown" ? 1 : -1;
+      highlight((index + offset + options.length) % options.length);
+      return;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      highlight(event.key === "Home" ? 0 : options.length - 1);
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect(options[index].id);
+      return;
+    }
+
+    const shortcut = Number(event.key);
+    if (
+      Number.isInteger(shortcut) &&
+      shortcut >= 1 &&
+      shortcut <= Math.min(options.length, 9)
+    ) {
+      event.preventDefault();
+      const shortcutIndex = shortcut - 1;
+      highlight(shortcutIndex);
+      onSelect(options[shortcutIndex].id);
+    }
+  };
 
   return (
     <fieldset className="min-w-0" aria-label={question.header || question.prompt}>
@@ -216,18 +270,36 @@ function QuestionFields({
           className="mt-1.5 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
         />
       ) : (
-        <div className="mt-1.5 flex max-h-52 flex-col gap-1 overflow-y-auto" role="group">
-          {options.map((option) => {
+        <div
+          className="mt-1.5 flex max-h-52 flex-col gap-1 overflow-y-auto"
+          role="group"
+        >
+          {options.map((option, optionIndex) => {
             const isCustom =
               isOtherOption(option) || option.id === CUSTOM_OPTION_ID;
             const active = selected.includes(option.id);
             return (
               <div key={option.id}>
                 <button
+                  ref={(button) => {
+                    optionButtons.current[optionIndex] = button;
+                  }}
                   type="button"
                   aria-pressed={active}
-                  onClick={() => onSelect(option.id)}
-                  className={`flex w-full items-start gap-2 rounded-md border px-2 py-1.5 text-left ${
+                  aria-keyshortcuts={
+                    optionIndex < 9 ? String(optionIndex + 1) : undefined
+                  }
+                  data-highlighted={
+                    highlighted === optionIndex ? "true" : undefined
+                  }
+                  tabIndex={highlighted === optionIndex ? 0 : -1}
+                  onFocus={() => setHighlighted(optionIndex)}
+                  onKeyDown={(event) => onOptionKeyDown(event, optionIndex)}
+                  onClick={() => {
+                    setHighlighted(optionIndex);
+                    onSelect(option.id);
+                  }}
+                  className={`flex w-full items-start gap-2 rounded-md border px-2 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent ${
                     active
                       ? "border-content/35 bg-selection"
                       : "border-content/10 hover:bg-content/5"
