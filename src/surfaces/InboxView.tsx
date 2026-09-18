@@ -144,6 +144,18 @@ import {
   type GitlabWorkItemThread,
 } from "../lib/gitlab";
 import {
+  AZUREDEVOPS_CHANGE_EVENT,
+  azureDevOpsConnected,
+  azureDevOpsMrDiff,
+  azureDevOpsWorkItemComment,
+  azureDevOpsWorkItemDetails,
+  azureDevOpsWorkItemThread,
+  peekAzureDevOpsMrDiff,
+  peekAzureDevOpsWorkItemDetails,
+  peekAzureDevOpsWorkItemThread,
+  type AzureDevOpsWorkItemThread,
+} from "../lib/azureDevOps";
+import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
   loadTabGroupMascots,
@@ -478,7 +490,11 @@ export function InboxView({
   useEffect(() => {
     const onChange = () => setRefresh((value) => value + 1);
     window.addEventListener(GITLAB_CHANGE_EVENT, onChange);
-    return () => window.removeEventListener(GITLAB_CHANGE_EVENT, onChange);
+    window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
+    return () => {
+      window.removeEventListener(GITLAB_CHANGE_EVENT, onChange);
+      window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
+    };
   }, []);
 
   // The mount read does the real work: opening Settings unmounts this view, so
@@ -493,7 +509,8 @@ export function InboxView({
         githubStatus(),
         linearConnected(),
         gitlabConnected(),
-      ]).then(([github, linear, gitlab]) => {
+        azureDevOpsConnected(),
+      ]).then(([github, linear, gitlab, azuredevops]) => {
         if (cancelled || generation !== latest) return;
         setConnections((prev) => ({
           github:
@@ -508,16 +525,22 @@ export function InboxView({
             gitlab.status === "fulfilled"
               ? gitlab.value.connected
               : prev.gitlab,
+          azuredevops:
+            azuredevops.status === "fulfilled"
+              ? azuredevops.value.connected
+              : prev.azuredevops,
         }));
       });
     };
     read();
     window.addEventListener(LINEAR_CHANGE_EVENT, read);
     window.addEventListener(GITLAB_CHANGE_EVENT, read);
+    window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, read);
       window.removeEventListener(GITLAB_CHANGE_EVENT, read);
+      window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
     };
   }, []);
 
@@ -598,6 +621,7 @@ export function InboxView({
           github: message,
           linear: message,
           gitlab: message,
+          azuredevops: message,
         });
       })
       .finally(() => {
@@ -909,10 +933,12 @@ export function InboxView({
                     : "No matching issues or pull requests"
                 : source === "linear"
                   ? "No Linear issues match these filters"
-                  : source === "gitlab"
+                  : source === "gitlab" || source === "azuredevops"
                     ? activeFilters.assignedToMe
                       ? "Nothing needs your attention"
-                      : "No GitLab items match these filters"
+                      : source === "gitlab"
+                        ? "No GitLab items match these filters"
+                        : "No ADO items match these filters"
                     : "No issues or pull requests match these filters"
               : source === "linear"
                 ? "No Linear issues"
@@ -1331,7 +1357,7 @@ function InboxCard({
   const linear = item.provider === "linear";
   const source = linear ? item.teamName || item.repo : item.repo || name;
   const attentionLabel =
-    item.provider === "gitlab"
+    item.provider === "gitlab" || item.provider === "azuredevops"
       ? gitlabAttentionLabel(item.attentionReason ?? "")
       : "";
   const unseen = isInboxEntryUnseen({
@@ -1822,6 +1848,7 @@ export function InboxDetail({
   const panel = mode === "panel";
   const linear = item.provider === "linear";
   const gitlab = item.provider === "gitlab";
+  const azuredevops = item.provider === "azuredevops";
   const isPr = !linear && item.kind === "pr";
   const githubKind =
     item.provider === "github" && (item.kind === "issue" || item.kind === "pr")
@@ -1831,33 +1858,51 @@ export function InboxDetail({
     item.kind === "pr"
       ? gitlab
         ? "Review on GitLab"
-        : "Review on GitHub"
+        : azuredevops
+          ? "Review on ADO"
+          : "Review on GitHub"
       : linear
         ? "Open in Linear"
         : gitlab
           ? "Open on GitLab"
-          : "Open on GitHub";
+          : azuredevops
+            ? "Open on ADO"
+            : "Open on GitHub";
   const gitlabKind =
     gitlab && (item.kind === "issue" || item.kind === "pr") ? item.kind : null;
+  const azureDevOpsKind =
+    azuredevops && (item.kind === "issue" || item.kind === "pr")
+      ? item.kind
+      : null;
   const cached = linear
     ? peekLinearIssueDetails(item.id ?? "")
     : gitlabKind
       ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
-      : githubKind
-        ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
-        : null;
+      : azureDevOpsKind
+        ? peekAzureDevOpsWorkItemDetails(
+            item.repo,
+            azureDevOpsKind,
+            item.number,
+          )
+        : githubKind
+          ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+          : null;
   const cachedDiff = isPr
     ? gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
-      : peekGithubPrDiff(item.repo, item.number)
+      : azuredevops
+        ? peekAzureDevOpsMrDiff(item.repo, item.number)
+        : peekGithubPrDiff(item.repo, item.number)
     : null;
   const cachedThread = linear
     ? peekLinearIssueThread(item.id ?? "")
     : gitlabKind
       ? peekGitlabWorkItemThread(item.repo, gitlabKind, item.number)
-      : githubKind
-        ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
-        : null;
+      : azureDevOpsKind
+        ? peekAzureDevOpsWorkItemThread(item.repo, azureDevOpsKind, item.number)
+        : githubKind
+          ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
+          : null;
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(cached);
   const [loading, setLoading] = useState(cached == null);
   const [error, setError] = useState<string | null>(null);
@@ -1868,7 +1913,11 @@ export function InboxDetail({
   const [diffLoading, setDiffLoading] = useState(isPr && cachedDiff == null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [thread, setThread] = useState<
-    GithubWorkItemThread | LinearIssueThread | GitlabWorkItemThread | null
+    | GithubWorkItemThread
+    | LinearIssueThread
+    | GitlabWorkItemThread
+    | AzureDevOpsWorkItemThread
+    | null
   >(cachedThread);
   const [threadLoading, setThreadLoading] = useState(cachedThread == null);
   const [threadError, setThreadError] = useState<string | null>(null);
@@ -1882,7 +1931,8 @@ export function InboxDetail({
   const [startProject, setStartProject] = useState(defaultProject);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const chooseStartProject = linear || (gitlab && !item.projectPath);
+  const chooseStartProject =
+    linear || ((gitlab || azuredevops) && !item.projectPath);
   const status = linear
     ? item.state || inboxItemStatus(item)
     : inboxItemStatus(item);
@@ -1891,9 +1941,10 @@ export function InboxDetail({
   const source = linear
     ? item.teamName || item.repo
     : item.repo || projectName(item.projectPath);
-  const attentionLabel = gitlab
-    ? gitlabAttentionLabel(item.attentionReason ?? "")
-    : "";
+  const attentionLabel =
+    gitlab || azuredevops
+      ? gitlabAttentionLabel(item.attentionReason ?? "")
+      : "";
   const markdownCwd = chooseStartProject
     ? startProject || cwd
     : item.projectPath || cwd;
@@ -1925,9 +1976,15 @@ export function InboxDetail({
       ? peekLinearIssueDetails(item.id ?? "")
       : gitlabKind
         ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
-        : githubKind
-          ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
-          : null;
+        : azureDevOpsKind
+          ? peekAzureDevOpsWorkItemDetails(
+              item.repo,
+              azureDevOpsKind,
+              item.number,
+            )
+          : githubKind
+            ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+            : null;
     if (cachedDetails) {
       setDetails(cachedDetails);
       setLoading(false);
@@ -1943,14 +2000,20 @@ export function InboxDetail({
         : Promise.reject(new Error("Missing Linear issue"))
       : gitlabKind
         ? gitlabWorkItemDetails(item.repo, gitlabKind, item.number)
-        : githubKind
-          ? githubWorkItemDetails(
-              item.projectPath,
+        : azureDevOpsKind
+          ? azureDevOpsWorkItemDetails(
               item.repo,
-              githubKind,
+              azureDevOpsKind,
               item.number,
             )
-          : Promise.reject(new Error("Unknown inbox item"));
+          : githubKind
+            ? githubWorkItemDetails(
+                item.projectPath,
+                item.repo,
+                githubKind,
+                item.number,
+              )
+            : Promise.reject(new Error("Unknown inbox item"));
     void pending
       .then((next) => {
         if (cancelled) return;
@@ -1969,6 +2032,7 @@ export function InboxDetail({
       cancelled = true;
     };
   }, [
+    azureDevOpsKind,
     githubKind,
     gitlabKind,
     item.id,
@@ -2044,6 +2108,39 @@ export function InboxDetail({
         cancelled = true;
       };
     }
+    if (azureDevOpsKind) {
+      const cachedThread = peekAzureDevOpsWorkItemThread(
+        item.repo,
+        azureDevOpsKind,
+        item.number,
+      );
+      if (cachedThread) {
+        setThread(cachedThread);
+        setThreadLoading(false);
+        setThreadError(null);
+      } else {
+        setThreadLoading(true);
+        setThreadError(null);
+        setThread(null);
+      }
+      void azureDevOpsWorkItemThread(item.repo, azureDevOpsKind, item.number)
+        .then((next) => {
+          if (cancelled) return;
+          setThread(next);
+          setThreadError(null);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          if (cachedThread) return;
+          setThreadError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          if (!cancelled) setThreadLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!githubKind) return;
     const cachedThread = peekGithubWorkItemThread(
       item.repo,
@@ -2082,6 +2179,7 @@ export function InboxDetail({
       cancelled = true;
     };
   }, [
+    azureDevOpsKind,
     githubKind,
     gitlabKind,
     item.id,
@@ -2097,7 +2195,9 @@ export function InboxDetail({
     let cancelled = false;
     const cachedDiff = gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
-      : peekGithubPrDiff(item.repo, item.number, fullFile);
+      : azuredevops
+        ? peekAzureDevOpsMrDiff(item.repo, item.number)
+        : peekGithubPrDiff(item.repo, item.number, fullFile);
     if (cachedDiff) {
       setPrDiff(cachedDiff);
       setDiffLoading(false);
@@ -2109,9 +2209,11 @@ export function InboxDetail({
     }
     const pending = gitlab
       ? gitlabMrDiff(item.repo, item.number)
-      : githubPrDiff(item.projectPath, item.repo, item.number, {
-          fullContext: fullFile,
-        });
+      : azuredevops
+        ? azureDevOpsMrDiff(item.repo, item.number)
+        : githubPrDiff(item.projectPath, item.repo, item.number, {
+            fullContext: fullFile,
+          });
     void pending
       .then((next) => {
         if (cancelled) return;
@@ -2130,6 +2232,7 @@ export function InboxDetail({
       cancelled = true;
     };
   }, [
+    azuredevops,
     fullFile,
     gitlab,
     isPr,
@@ -2163,6 +2266,30 @@ export function InboxDetail({
             await gitlabWorkItemThread(item.repo, gitlabKind, item.number, {
               force: true,
             }),
+          );
+        } catch (err: unknown) {
+          setPostError(err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
+      if (azureDevOpsKind) {
+        await azureDevOpsWorkItemComment(
+          item.repo,
+          azureDevOpsKind,
+          item.number,
+          body,
+        );
+        setReplyTo(null);
+        try {
+          setThread(
+            await azureDevOpsWorkItemThread(
+              item.repo,
+              azureDevOpsKind,
+              item.number,
+              {
+                force: true,
+              },
+            ),
           );
         } catch (err: unknown) {
           setPostError(err instanceof Error ? err.message : String(err));
@@ -2235,10 +2362,11 @@ export function InboxDetail({
       {panel ? (
         <button
           type="button"
-          title={externalActionLabel}
+          title={item.url ? externalActionLabel : "No link available"}
           aria-label={externalActionLabel}
+          disabled={!item.url}
           onClick={() => void openUrl(item.url)}
-          className={`${ACTION_PANEL_HEADER} ml-auto shrink-0`}
+          className={`${ACTION_PANEL_HEADER} ml-auto shrink-0 disabled:opacity-40`}
         >
           <ExternalLink className="size-3.5" strokeWidth={1.75} />
           <span className="@max-[420px]/linked:hidden">
@@ -2454,8 +2582,10 @@ export function InboxDetail({
                 {panel ? null : (
                   <button
                     type="button"
+                    title={item.url ? externalActionLabel : "No link available"}
+                    disabled={!item.url}
                     onClick={() => void openUrl(item.url)}
-                    className={ACTION_GHOST}
+                    className={`${ACTION_GHOST} disabled:opacity-40`}
                   >
                     <ExternalLink className="size-3.5" strokeWidth={1.75} />
                     {externalActionLabel}
@@ -2588,7 +2718,9 @@ export function InboxDetail({
                   error={threadError}
                   cwd={markdownCwd}
                   provider={item.provider}
-                  replyMode={linear ? "parent" : gitlab ? undefined : "thread"}
+                  replyMode={
+                    linear ? "parent" : gitlab || azuredevops ? undefined : "thread"
+                  }
                   onReply={setReplyTo}
                 />
                 <InboxCommentForm

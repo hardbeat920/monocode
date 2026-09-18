@@ -410,6 +410,10 @@ import { markLinkedSessionUpdateSeen } from "./lib/linkedSessionSeen";
 import { linearIssueDetails, peekLinearIssueDetails } from "./lib/linear";
 import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "./lib/gitlab";
 import {
+  azureDevOpsWorkItemDetails,
+  peekAzureDevOpsWorkItemDetails,
+} from "./lib/azureDevOps";
+import {
   loadCloseToTray,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
@@ -3457,7 +3461,21 @@ export default function App({
                       item.number,
                     ))
                   ).body
-                : undefined;
+                : item.provider === "azuredevops" &&
+                    (item.kind === "issue" || item.kind === "pr")
+                  ? (
+                      peekAzureDevOpsWorkItemDetails(
+                        item.repo,
+                        item.kind,
+                        item.number,
+                      ) ??
+                      (await azureDevOpsWorkItemDetails(
+                        item.repo,
+                        item.kind,
+                        item.number,
+                      ))
+                    ).body
+                  : undefined;
           session = {
             ...newDefaultSession(cwd),
             title: `Ask · ${item.title}`,

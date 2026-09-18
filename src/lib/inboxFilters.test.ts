@@ -498,43 +498,79 @@ describe("pruneInboxFilters", () => {
 describe("visibleInboxSources", () => {
   it("drops sources that are known to be disconnected", () => {
     expect(
-      visibleInboxSources({ github: false, linear: false, gitlab: false }),
+      visibleInboxSources({
+        github: false,
+        linear: false,
+        gitlab: false,
+        azuredevops: false,
+      }),
     ).toEqual([]);
     expect(
-      visibleInboxSources({ github: true, linear: false, gitlab: false }),
+      visibleInboxSources({
+        github: true,
+        linear: false,
+        gitlab: false,
+        azuredevops: false,
+      }),
     ).toEqual(["github"]);
     expect(
-      visibleInboxSources({ github: false, linear: true, gitlab: false }),
+      visibleInboxSources({
+        github: false,
+        linear: true,
+        gitlab: false,
+        azuredevops: false,
+      }),
     ).toEqual(["linear"]);
     expect(
-      visibleInboxSources({ github: true, linear: true, gitlab: true }),
-    ).toEqual(["github", "linear", "gitlab"]);
+      visibleInboxSources({
+        github: true,
+        linear: true,
+        gitlab: true,
+        azuredevops: true,
+      }),
+    ).toEqual(["github", "linear", "gitlab", "azuredevops"]);
   });
 
   it("keeps unresolved sources visible so tabs do not flash away", () => {
     expect(
-      visibleInboxSources({ github: null, linear: null, gitlab: null }),
-    ).toEqual(["github", "linear", "gitlab"]);
+      visibleInboxSources({
+        github: null,
+        linear: null,
+        gitlab: null,
+        azuredevops: null,
+      }),
+    ).toEqual(["github", "linear", "gitlab", "azuredevops"]);
   });
 });
 
 describe("connectableInboxSources", () => {
   it("offers only the sources confirmed to be disconnected", () => {
     expect(
-      connectableInboxSources({ github: true, linear: false, gitlab: true }),
+      connectableInboxSources({
+        github: true,
+        linear: false,
+        gitlab: true,
+        azuredevops: true,
+      }),
     ).toEqual(["linear"]);
     expect(
       connectableInboxSources({
         github: false,
         linear: false,
         gitlab: false,
+        azuredevops: false,
       }),
-    ).toEqual(["github", "linear", "gitlab"]);
+    ).toEqual(["github", "linear", "gitlab", "azuredevops"]);
   });
 
   it("offers nothing while the checks are unresolved", () => {
     expect(
-      connectableInboxSources({ github: null, linear: null, gitlab: null }),
+      connectableInboxSources({
+        github: null,
+        linear: null,
+        gitlab: null,
+        azuredevops: null,
+      }),
     ).toEqual([]);
   });
 });
@@ -546,6 +582,7 @@ describe("resolveInboxSource", () => {
         github: true,
         linear: false,
         gitlab: true,
+        azuredevops: false,
       }),
     ).toBe("github");
     expect(
@@ -553,6 +590,7 @@ describe("resolveInboxSource", () => {
         github: false,
         linear: false,
         gitlab: true,
+        azuredevops: false,
       }),
     ).toBe("gitlab");
   });
@@ -563,6 +601,7 @@ describe("resolveInboxSource", () => {
         github: false,
         linear: false,
         gitlab: false,
+        azuredevops: false,
       }),
     ).toBe("github");
   });
@@ -573,6 +612,7 @@ describe("resolveInboxSource", () => {
         github: false,
         linear: true,
         gitlab: false,
+        azuredevops: false,
       }),
     ).toBe("linear");
     expect(
@@ -580,6 +620,7 @@ describe("resolveInboxSource", () => {
         github: true,
         linear: false,
         gitlab: false,
+        azuredevops: false,
       }),
     ).toBe("github");
   });
@@ -614,11 +655,17 @@ describe("inbox connection cache", () => {
   beforeEach(mockLocalStorage);
 
   it("round-trips the last known connect state", () => {
-    saveInboxConnections({ github: true, linear: true, gitlab: false });
+    saveInboxConnections({
+      github: true,
+      linear: true,
+      gitlab: false,
+      azuredevops: false,
+    });
     expect(loadInboxConnections()).toEqual({
       github: true,
       linear: true,
       gitlab: false,
+      azuredevops: false,
     });
   });
 
@@ -627,6 +674,7 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       gitlab: null,
+      azuredevops: null,
     });
   });
 
@@ -636,12 +684,14 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       gitlab: null,
+      azuredevops: null,
     });
     localStorage.setItem(KEY, '{"linear":"yes"}');
     expect(loadInboxConnections()).toEqual({
       github: null,
       linear: null,
       gitlab: null,
+      azuredevops: null,
     });
   });
 });

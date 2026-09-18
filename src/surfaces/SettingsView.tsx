@@ -187,6 +187,11 @@ import {
   saveGitlabConfig,
 } from "../lib/gitlab";
 import {
+  azureDevOpsConnected,
+  disconnectAzureDevOps,
+  saveAzureDevOpsConfig,
+} from "../lib/azureDevOps";
+import {
   disconnectLinear,
   LINEAR_CHANGE_EVENT,
   linearConnected,
@@ -931,6 +936,22 @@ function InboxPage({
       </Group>
 
       <Group
+        id="azuredevops"
+        title={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark
+              provider="azuredevops"
+              className="size-4 shrink-0"
+            />
+            ADO
+          </span>
+        }
+        description="Pull requests and Boards work items from your ADO organization."
+      >
+        <AzureDevOpsSettings />
+      </Group>
+
+      <Group
         id="linear"
         title={
           <span className="flex items-center gap-2">
@@ -1114,6 +1135,129 @@ function GitlabSettings() {
                 }}
                 placeholder="glpat-…"
                 aria-label="GitLab access token"
+                autoComplete="off"
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+              />
+            </label>
+            <SecondaryButton
+              onClick={() => void onSave()}
+              disabled={busy || !token.trim()}
+            >
+              {busy ? "Saving" : "Connect"}
+            </SecondaryButton>
+          </div>
+        )}
+      </Row>
+      {error ? (
+        <p className="border-b border-content/5 px-4 pb-3 text-[12px] text-red-400/90 last:border-b-0">
+          {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function AzureDevOpsSettings() {
+  const [url, setUrl] = useState("https://dev.azure.com/myorg");
+  const [token, setToken] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void azureDevOpsConnected()
+      .then((status) => {
+        if (cancelled) return;
+        setConnected(status.connected);
+        if (status.url) setUrl(status.url);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled)
+          setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSave = async () => {
+    if (!token.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await saveAzureDevOpsConfig(url, token);
+      setUrl(status.url);
+      setToken("");
+      setConnected(status.connected);
+      clearInboxCache();
+    } catch (err: unknown) {
+      setConnected(false);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDisconnect = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await disconnectAzureDevOps(url);
+      setConnected(false);
+      setUrl(status.url || url);
+      clearInboxCache();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Row
+        label="Connection"
+        description="Connect your ADO organization with a personal access token (Boards + Repos read). The token is stored locally and Disconnect deletes it."
+      >
+        {connected ? (
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            <span className="max-w-56 truncate text-[12px] text-content/50">
+              {url}
+            </span>
+            <SecondaryButton
+              onClick={() => void onDisconnect()}
+              disabled={busy}
+            >
+              Disconnect
+            </SecondaryButton>
+          </div>
+        ) : (
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+              <input
+                type="url"
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                placeholder="https://dev.azure.com/myorg"
+                aria-label="Azure DevOps organization URL"
+                autoComplete="url"
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+              />
+            </label>
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+              <input
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void onSave();
+                }}
+                placeholder="PAT…"
+                aria-label="Azure DevOps personal access token"
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"

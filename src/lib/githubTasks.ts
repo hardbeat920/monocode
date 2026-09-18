@@ -17,6 +17,14 @@ import {
   type GitlabWorkItem,
 } from "./gitlab";
 import {
+  azureDevOpsConnected,
+  azureDevOpsRepo,
+  clearAzureDevOpsCache,
+  listAzureDevOpsTodos,
+  listAzureDevOpsWorkItems,
+  type AzureDevOpsWorkItem,
+} from "./azureDevOps";
+import {
   collectRailProjects,
   normalizeProjectPath,
   sameProjectPath,
@@ -53,7 +61,7 @@ export type GithubWorkItem = {
   repo: string;
 };
 
-export type InboxProvider = "github" | "linear" | "gitlab";
+export type InboxProvider = "github" | "linear" | "gitlab" | "azuredevops";
 
 export type InboxItem = Omit<GithubWorkItem, "kind"> & {
   kind: InboxKind;
@@ -187,6 +195,7 @@ export function clearInboxCache() {
   prDiffByKey.clear();
   prDiffInflight.clear();
   clearGitlabCache();
+  clearAzureDevOpsCache();
 }
 
 export function inboxListCacheKey(
@@ -693,9 +702,20 @@ async function fetchInboxItems(
     if (gitlab.error) errors.gitlab = gitlab.error;
   }
 
+  let azureDevOpsItems: InboxItem[] = [];
+  if ((await azureDevOpsConnected()).connected) {
+    const azuredevops = await fetchAzureDevOpsInboxItems(
+      unique,
+      query,
+      preferredPaths,
+    );
+    azureDevOpsItems = azuredevops.items;
+    if (azuredevops.error) errors.azuredevops = azuredevops.error;
+  }
+
   return {
     items: dedupeInboxItems(
-      [...github.items, ...linearItems, ...gitlabItems],
+      [...github.items, ...linearItems, ...gitlabItems, ...azureDevOpsItems],
       preferredPaths,
     ),
     errors,
@@ -759,6 +779,63 @@ async function fetchGitlabInboxItems(
   return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
 }
 
+async function fetchAzureDevOpsInboxItems(
+  projects: readonly { path: string }[],
+  query: InboxQuery,
+  preferredPaths: readonly string[],
+): Promise<{ items: InboxItem[]; error?: string }> {
+  const resolved = await Promise.all(
+    projects.map(async (project) => {
+      try {
+        return {
+          path: project.path,
+          repo: (await azureDevOpsRepo(project.path)).trim(),
+        };
+      } catch {
+        return { path: project.path, repo: "" };
+      }
+    }),
+  );
+  const grouped = groupProjectsByRepo(
+    resolved.filter((project) => project.repo.length > 0),
+  );
+
+  if (query.assignedToMe) {
+    const localPathByRepo = new Map(
+      grouped.map((project) => [project.repo.toLowerCase(), project.path]),
+    );
+    const jobs = (["issue", "pr"] as const).map(async (kind) => {
+      const items = await listAzureDevOpsTodos({
+        kind,
+        limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
+      });
+      return items.map((item) =>
+        azureDevOpsWorkItemToInboxItem(
+          item,
+          localPathByRepo.get(item.repo.toLowerCase()) ?? "",
+          item.repo,
+        ),
+      );
+    });
+    return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
+  }
+
+  const jobs = grouped.flatMap((project) =>
+    (["issue", "pr"] as const).map(async (kind) => {
+      const items = await listAzureDevOpsWorkItems(project.path, {
+        kind,
+        assignedToMe: false,
+        state: query.state,
+        limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
+      });
+      return items.map((item) =>
+        azureDevOpsWorkItemToInboxItem(item, project.path, project.repo),
+      );
+    }),
+  );
+  return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
+}
+
 async function fetchLinearInboxItems(query: InboxQuery): Promise<InboxItem[]> {
   const hiddenIds = query.linearHiddenTeamIds ?? loadHiddenLinearTeamIds();
   let teamIds: string[] | null = null;
@@ -810,6 +887,19 @@ function gitlabWorkItemToInboxItem(
   return {
     ...item,
     provider: "gitlab",
+    repo: item.repo || repo,
+    projectPath,
+  };
+}
+
+function azureDevOpsWorkItemToInboxItem(
+  item: AzureDevOpsWorkItem,
+  projectPath: string,
+  repo: string,
+): InboxItem {
+  return {
+    ...item,
+    provider: "azuredevops",
     repo: item.repo || repo,
     projectPath,
   };
@@ -1031,7 +1121,12 @@ export function inboxStartDraft(item: InboxItem, body?: string): string {
     return `${lines.join("\n")}\n`;
   }
   const kind = item.kind === "pr" ? "pull request" : "issue";
-  const provider = item.provider === "gitlab" ? "GitLab" : "GitHub";
+  const provider =
+    item.provider === "gitlab"
+      ? "GitLab"
+      : item.provider === "azuredevops"
+        ? "ADO"
+        : "GitHub";
   const providerKind =
     item.provider === "gitlab" && item.kind === "pr" ? "merge request" : kind;
   const title =
