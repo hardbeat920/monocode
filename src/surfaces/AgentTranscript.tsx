@@ -95,7 +95,7 @@ import {
   isIncompleteTool,
   isSubagentBlock,
   isThinkingBlock,
-  latestThinkingStep,
+  liveTitleThought,
   lastActivityIndex,
   isProseBlock,
   needsApproval,
@@ -1585,10 +1585,7 @@ function ActivityPhaseGroup({
   // What the header is holding while the group runs, so the trail under it
   // starts one step back: a header repeating the row beneath it says the same
   // thing twice, and the thought drops into the trail as the agent moves on.
-  const titling =
-    active && open && !phase.headline
-      ? latestThinkingStep(phase.steps)
-      : undefined;
+  const titling = active && open ? liveTitleThought(phase) : undefined;
   const steps = titling
     ? phase.steps.filter((block) => block !== titling)
     : phase.steps;

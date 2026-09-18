@@ -605,6 +605,16 @@ describe("activityPhaseTitle", () => {
     expect(activityPhaseTitle(phase, false, false)).toBe("Read runbook.md");
   });
 
+  it("counts the calls when the newest thought is all code", () => {
+    const phase = buildActivityPhases([
+      thought("t1", "The tracker resets the boxes at 40 m."),
+      thought("t2", "```sh\nnpm test -- detect\n```"),
+      read("r1", "docs/runbook.md"),
+    ])[0];
+
+    expect(activityPhaseTitle(phase, true, true)).toBe("Reading runbook.md");
+  });
+
   it("still prefers the agent's own line to a thought", () => {
     const phase = buildActivityPhases([
       note("n1", "Now the lab code."),

@@ -165,11 +165,23 @@ export function isThinkingBlock(block: Block): boolean {
  * header that would otherwise be counting calls while the agent narrates
  * somewhere the reader cannot see.
  */
-export function latestThinkingStep(steps: Block[]): Block | undefined {
+function latestThinkingStep(steps: Block[]): Block | undefined {
   for (let index = steps.length - 1; index >= 0; index -= 1) {
     if (isThinkingBlock(steps[index])) return steps[index];
   }
   return undefined;
+}
+
+/**
+ * The thought a live group hangs in its header, if it has one: the newest, and
+ * only when the agent wrote no line of its own and the thought leaves
+ * something a single line can hold. A thought that is all code summarises to
+ * nothing, so the header counts calls instead and the thought stays a step.
+ */
+export function liveTitleThought(phase: ActivityPhase): Block | undefined {
+  if (phase.headline) return undefined;
+  const thought = latestThinkingStep(phase.steps);
+  return thought && proseSummary(thought.text) ? thought : undefined;
 }
 
 export function isToolBlock(block: Block): boolean {
@@ -785,9 +797,8 @@ export function activityPhaseTitle(
     return phase.headline.role === "reasoning" ? "Thinking" : "Working";
   }
   if (live && open) {
-    const thought = latestThinkingStep(phase.steps);
-    const summary = thought ? proseSummary(thought.text) : "";
-    if (summary) return summary;
+    const thought = liveTitleThought(phase);
+    if (thought) return proseSummary(thought.text);
   }
   return workSummaryLine(phase.steps, live);
 }

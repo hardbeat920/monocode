@@ -121,6 +121,22 @@ describe("the header of a live group", () => {
     expect(header().textContent).toBe("Running 2 commands");
   });
 
+  it("leaves a thought the header cannot show as a step", () => {
+    act(() =>
+      root.render(
+        createElement(AgentTranscript, {
+          blocks: turn(think("r1", "```sh\nnpm test -- detect\n```", true)),
+          busy: true,
+        }),
+      ),
+    );
+
+    expect(header().textContent).toBe("Running a command");
+    expect(
+      container.querySelector('button[aria-label^="Show thinking:"]'),
+    ).not.toBeNull();
+  });
+
   it("keeps reasoning off a group the reader closed", () => {
     act(() =>
       root.render(
