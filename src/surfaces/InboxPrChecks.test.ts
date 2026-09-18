@@ -72,6 +72,106 @@ const render = (element: React.ReactElement) => {
 const buttonByLabel = (label: string) =>
   container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
+it("filters attention checks without hiding cancelled or unknown outcomes", () => {
+  render(
+    createElement(InboxPrChecks, {
+      view: view({
+        checks: {
+          headOid: "abc",
+          checks: [
+            check({ name: "Tests", state: "fail" }),
+            check({ name: "Build", state: "pending" }),
+            check({ name: "Deploy", state: "cancel" }),
+            check({ name: "External scan", state: "unknown" }),
+            check({ name: "Lint", state: "pass" }),
+            check({ name: "Publish", state: "skipping" }),
+          ],
+        },
+      }),
+      onRefresh: () => {},
+    }),
+  );
+  const attention = buttonByLabel("Needs attention: 4");
+  expect(attention?.getAttribute("aria-pressed")).toBe("true");
+  const visibleNames = () =>
+    Array.from(container.querySelectorAll("li:not([hidden]) [data-check-name]"))
+      .filter((el) => !el.closest("[hidden]"))
+      .map((el) => el.textContent);
+  expect(visibleNames()).toEqual(["Tests", "Build", "Deploy", "External scan"]);
+  act(() => buttonByLabel("All checks: 6")?.click());
+  expect(visibleNames()).toEqual([
+    "Tests",
+    "Build",
+    "Deploy",
+    "External scan",
+    "Lint",
+    "Publish",
+  ]);
+  act(() => attention?.click());
+  expect(visibleNames()).toEqual(["Tests", "Build", "Deploy", "External scan"]);
+});
+
+it("shows annotation source from the checked commit and links to that same revision", async () => {
+  const headOid = "a".repeat(40);
+  invoke.mockImplementation(async (command) => {
+    if (command === "git_github_check_details")
+      return {
+        steps: [],
+        notice: null,
+        annotations: [
+          {
+            path: "src/preview test.ts",
+            line: 2,
+            level: "failure",
+            message: "Assertion failed\nExpected: 200\nReceived: 500",
+          },
+        ],
+      };
+    if (command === "git_commit_file_diff")
+      return {
+        current:
+          "const status = response.status;\nexpect(status).toBe(200);\nfinish();",
+        original: "",
+        binary: false,
+        tooLarge: false,
+      };
+    throw new Error("Unexpected command");
+  });
+  render(
+    createElement(InboxPrChecks, {
+      cwd: "/tmp/web",
+      repo: "acme/web",
+      onRefresh: () => {},
+      view: view({
+        checks: {
+          headOid,
+          checks: [
+            check({
+              name: "Tests",
+              state: "fail",
+              url: "https://github.com/acme/web/actions/runs/9/job/123",
+            }),
+          ],
+        },
+      }),
+    }),
+  );
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledWith("git_commit_file_diff", {
+    cwd: "/tmp/web",
+    sha: headOid,
+    relative: "src/preview test.ts",
+  });
+  expect(container.textContent).toContain("expect(status).toBe(200);");
+  expect(container.textContent).toContain("Received: 500");
+  await act(async () =>
+    buttonByLabel("View src/preview test.ts:2 on GitHub")?.click(),
+  );
+  expect(openUrl).toHaveBeenCalledWith(
+    `https://github.com/acme/web/blob/${headOid}/src/preview%20test.ts#L2`,
+  );
+});
+
 it("opens the only failed Actions job and shows its failed step and error", async () => {
   invoke.mockResolvedValueOnce({
     steps: [
@@ -127,7 +227,8 @@ it("opens the only failed Actions job and shows its failed step and error", asyn
   expect(toggle?.getAttribute("aria-expanded")).toBe("true");
   act(() => toggle?.click());
   expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-  expect(container.textContent).not.toContain("Expected 2, received 1");
+  expect(container.textContent).not.toContain("src/app.test.ts:42");
+  expect(container.textContent).toContain("Expected 2, received 1");
   expect(container.textContent).toContain("Failed at Run tests");
 });
 
@@ -280,7 +381,8 @@ it("keeps rows without a valid HTTP(S) URL unlinked", async () => {
       onRefresh: () => {},
     }),
   );
-  expect(container.querySelectorAll("button")).toHaveLength(1); // refresh only
+  expect(container.querySelectorAll("li button")).toHaveLength(0);
+  expect(buttonByLabel("Refresh checks")).not.toBeNull();
   expect(container.textContent).toContain("ftp job");
   expect(container.textContent).toContain("no url job");
   expect(openUrl).not.toHaveBeenCalled();

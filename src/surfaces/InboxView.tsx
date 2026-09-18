@@ -1,3 +1,4 @@
+import type { CiRepairRequest } from "../lib/ciRepair";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
@@ -318,6 +319,15 @@ function InboxDetailTab({
   );
 }
 
+type CiRepairProps = {
+  repairSessions?: readonly SessionSummary[];
+  onRepairChecks?: (
+    item: InboxItem,
+    request: CiRepairRequest,
+    sessionId?: string,
+  ) => Promise<void>;
+};
+
 type Props = {
   onAsk: (item: InboxItem) => Promise<string>;
   onAskRestart: (item: InboxItem) => Promise<string>;
@@ -328,6 +338,8 @@ type Props = {
   onClose?: () => void;
   onToggleSidebar?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
+  repairSessions?: CiRepairProps["repairSessions"];
+  onRepairChecks?: CiRepairProps["onRepairChecks"];
   sessions?: readonly SessionSummary[];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   /** Session-card destination to reveal after the Inbox list loads. */
@@ -346,6 +358,8 @@ export function InboxView({
   onClose,
   onToggleSidebar,
   onStart,
+  repairSessions,
+  onRepairChecks,
   sessions = [],
   onOpenSession,
   target = null,
@@ -1048,6 +1062,8 @@ export function InboxView({
               }
               onDiscuss={() => setDiscussionOpen(true)}
               onStart={onStart}
+              repairSessions={repairSessions}
+              onRepairChecks={onRepairChecks}
               onOpenSession={onOpenSession}
               onItemChange={updateInboxItem}
             />
@@ -1071,12 +1087,16 @@ export function InboxView({
 }
 
 export function LinkedWorkItemPanel({
+  repairSessions,
+  onRepairChecks,
   target,
   cwd,
   recents,
   visible = true,
   onClose,
 }: {
+  repairSessions?: CiRepairProps["repairSessions"];
+  onRepairChecks?: CiRepairProps["onRepairChecks"];
   target: LinkedWorkItem;
   cwd: string;
   recents: RecentProject[];
@@ -1201,6 +1221,8 @@ export function LinkedWorkItemPanel({
             revision={0}
             relatedSessions={[]}
             mode="panel"
+            repairSessions={repairSessions}
+            onRepairChecks={onRepairChecks}
             onItemChange={setItem}
           />
         ) : error ? (
@@ -1236,6 +1258,8 @@ function InboxDetailBody({
   relatedSessions,
   onDiscuss,
   onStart,
+  repairSessions,
+  onRepairChecks,
   onOpenSession,
   onItemChange,
 }: {
@@ -1246,6 +1270,8 @@ function InboxDetailBody({
   relatedSessions: readonly SessionSummary[];
   onDiscuss?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
+  repairSessions?: CiRepairProps["repairSessions"];
+  onRepairChecks?: CiRepairProps["onRepairChecks"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   onItemChange?: (item: InboxItem) => void;
 }) {
@@ -1267,6 +1293,8 @@ function InboxDetailBody({
       relatedSessions={relatedSessions}
       onDiscuss={onDiscuss}
       onStart={onStart}
+      repairSessions={repairSessions}
+      onRepairChecks={onRepairChecks}
       onOpenSession={onOpenSession}
       onItemChange={onItemChange}
     />
@@ -1810,6 +1838,8 @@ export function InboxDetail({
   mode = "inbox",
   onDiscuss,
   onStart,
+  repairSessions,
+  onRepairChecks,
   onOpenSession,
   onItemChange,
 }: {
@@ -1821,6 +1851,8 @@ export function InboxDetail({
   mode?: "inbox" | "panel";
   onDiscuss?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
+  repairSessions?: CiRepairProps["repairSessions"];
+  onRepairChecks?: CiRepairProps["onRepairChecks"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   onItemChange?: (item: InboxItem) => void;
 }) {
@@ -2600,6 +2632,23 @@ export function InboxDetail({
                 onRefresh={prChecksView.refresh}
                 cwd={item.projectPath || cwd}
                 repo={item.repo}
+                repair={
+                  onRepairChecks &&
+                  item.provider === "github" &&
+                  item.projectPath
+                    ? {
+                        number: item.number,
+                        sessions: (repairSessions ?? []).filter(
+                          (session) =>
+                            !session.archived &&
+                            !session.orchestrationLeadId &&
+                            sameProjectPath(session.cwd, item.projectPath),
+                        ),
+                        onStart: (request, sessionId) =>
+                          onRepairChecks(item, request, sessionId),
+                      }
+                    : undefined
+                }
               />
             ) : loading ? (
               <div className="flex justify-center py-10 text-content/40">

@@ -1168,7 +1168,11 @@ function UserMessageBlock({
     : text;
   const chat = layout === "chat";
   const textOnly =
-    Boolean(text) && !block.attachments?.length && !card && !note;
+    Boolean(text) &&
+    !block.attachments?.length &&
+    !card &&
+    !note &&
+    !block.ciContext;
 
   // Only the chat layout rounds a single line; the document layout always uses
   // the square corners, so it never needs the measurement at all.
@@ -1269,6 +1273,23 @@ function UserMessageBlock({
           >
             {displayText}
           </pre>
+        ) : null}
+        {block.ciContext ? (
+          <details
+            className="group/ci mt-2 min-w-0 border-t border-content/10 pt-2"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
+              <span>CI context</span>
+            </summary>
+            <p className="mt-2 text-xs text-content/50">
+              CI instructions and failure details included with this request.
+            </p>
+            <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
+              {block.ciContext}
+            </pre>
+          </details>
         ) : null}
       </div>
     </div>

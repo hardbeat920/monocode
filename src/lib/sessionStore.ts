@@ -480,6 +480,13 @@ function sanitizeBlock(block: Block): Block | null {
   if (secondOpinion) next.secondOpinion = secondOpinion;
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  if (
+    block.role === "user" &&
+    typeof block.ciContext === "string" &&
+    block.ciContext
+  ) {
+    next.ciContext = block.ciContext;
+  }
   // Interjection chrome survives restarts only on system blocks; a malformed
   // payload keeps the ordinary system row rather than losing its body.
   if (block.role === "system") {

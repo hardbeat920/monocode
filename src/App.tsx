@@ -1,3 +1,4 @@
+import type { CiRepairRequest } from "./lib/ciRepair";
 import { invoke } from "@tauri-apps/api/core";
 import { orchestrator, type ControlOutcome } from "./lib/orchestration";
 import { modelsFor } from "./lib/models";
@@ -4533,6 +4534,7 @@ export default function App({
       attachments: Attachment[] = [],
       options?: {
         secondOpinion?: SecondOpinionMeta;
+        ciRepair?: CiRepairRequest;
         followUpBehavior?: FollowUpBehavior;
         noteCard?: NoteComposerCard;
         handoffCard?: HandoffComposerCard;
@@ -4632,9 +4634,12 @@ export default function App({
           : undefined;
       const submittedText = intent === "build" ? "Build approved plan" : text;
       const rawCommand = isNativeCommandPrompt(submittedText, current.harness);
-      const harnessText = rawCommand
-        ? submittedText
-        : composeNoteMessage(noteCard, submittedText);
+      const ciContext = options?.ciRepair?.prompt;
+      const harnessText =
+        ciContext ??
+        (rawCommand
+          ? submittedText
+          : composeNoteMessage(noteCard, submittedText));
 
       const pendingSwitch =
         current.pendingSwitch && current.pendingSwitch.from !== current.harness
@@ -4788,6 +4793,7 @@ export default function App({
             : submittedText;
       const cards = {
         ...(rawCommand ? undefined : userTurnCards(noteCard, card)),
+        ...(ciContext ? { ciContext } : {}),
         // The orchestrator writes these turns, not the user; hide them.
         ...(options?.managed ? { internal: true } : {}),
       };
@@ -6367,6 +6373,19 @@ export default function App({
       (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id),
     );
   }, [history, sessions, storedLinkedSessions]);
+  const repairSessions = useMemo(
+    () => [
+      ...new Map(
+        [
+          ...history,
+          ...sessions
+            .filter((session) => !session.inboxAsk)
+            .map((session) => summaryFromSession(session)),
+        ].map((session) => [session.id, session]),
+      ).values(),
+    ],
+    [history, sessions],
+  );
   const openProjectSessions = useMemo(
     () =>
       sessions
@@ -6484,6 +6503,60 @@ export default function App({
       void onSelectHistorySession(sessionId);
     },
     [onSelectHistorySession],
+  );
+
+  const onRepairChecks = useCallback(
+    async (
+      item: InboxItem,
+      request: CiRepairRequest,
+      sessionId?: string,
+    ) => {
+      const cwd = item.projectPath;
+      if (!cwd) throw new Error("Choose a local project for this PR first.");
+      let session = sessionId ? await ensureOpenSession(sessionId) : undefined;
+      if (
+        sessionId &&
+        (!session ||
+          session.inboxAsk ||
+          session.orchestrationLeadId ||
+          !sameProjectPath(session.cwd, cwd))
+      ) {
+        throw new Error("Choose a chat from this project.");
+      }
+      if (
+        session &&
+        (session.busy || session.pendingSwitch || isPreparingHandoff(session))
+      ) {
+        throw new Error(
+          "This chat is busy. Choose another chat or start a new one.",
+        );
+      }
+      if (!session) {
+        session = {
+          ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+          title: `Fix CI #${item.number}: ${item.title}`,
+          linkedWorkItem: linkedWorkItemFromInboxItem(item) ?? undefined,
+        };
+        const next = [...sessionsRef.current, session];
+        sessionsRef.current = next;
+        setSessions(next);
+      }
+      if (!onSubmit(session.id, request.text, [], { ciRepair: request }))
+        throw new Error(
+          "Could not start this fix. Choose another chat and try again.",
+        );
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setSearchViewOpen(false);
+      setSidebarTab("sessions");
+      await onSelectHistorySession(session.id);
+    },
+    [
+      ensureOpenSession,
+      onSubmit,
+      onSelectHistorySession,
+      sessionDefaults?.runtimeMode,
+    ],
   );
 
   const onOpenNotes = useCallback(() => {
@@ -7318,6 +7391,8 @@ export default function App({
                 </div>
                 {[...linkedWorkItemPanels.values()].map((panel) => (
                   <LinkedWorkItemPanel
+                    repairSessions={repairSessions}
+                    onRepairChecks={onRepairChecks}
                     key={panel.sessionId}
                     target={panel.item}
                     cwd={panel.cwd}
@@ -7385,6 +7460,8 @@ export default function App({
                 onAskRestart={onRestartInboxAsk}
                 onAskMount={setInboxAskPortal}
                 sessions={inboxRelatedSessions}
+                repairSessions={repairSessions}
+                onRepairChecks={onRepairChecks}
                 onOpenSession={onOpenInboxSession}
                 onOpenIntegrations={onOpenInboxIntegrations}
               />

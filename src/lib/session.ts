@@ -259,6 +259,8 @@ export type Block = {
   secondOpinion?: SecondOpinionMeta;
   /** Note chip shown on this user turn. Body is not stored; the harness already received it. */
   noteCard?: NoteCardMeta;
+  /** Exact CI repair instructions and evidence supplied with this user turn. */
+  ciContext?: string;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
   interjection?: InterjectionMeta;
   /**

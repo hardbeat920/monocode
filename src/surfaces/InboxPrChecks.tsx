@@ -1,5 +1,7 @@
+import { CheckRepairForm, type CheckRepair } from "./CheckRepairForm";
+import { CheckEvidence } from "./CheckEvidence";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle,
@@ -11,10 +13,12 @@ import {
   LoaderCircle,
   Minus,
   RefreshCw,
+  Sparkles,
   type IconComponent,
 } from "../chrome/icons";
 import type { GithubPrChecksView } from "../hooks/useGithubPrChecks";
 import {
+  CHECK_STATES,
   checkDuration,
   checkStateLabel,
   countChecks,
@@ -44,7 +48,10 @@ function overallMark(overall: GithubPrChecksOverall): {
     case "fail":
       return { Icon: CircleX, className: "text-rose-400/90" };
     case "pending":
-      return { Icon: LoaderCircle, className: "animate-spin text-content/55" };
+      return {
+        Icon: LoaderCircle,
+        className: "animate-spin text-amber-400/70",
+      };
     case "pass":
       return { Icon: CheckCircle, className: "text-emerald-400/90" };
     case "neutral":
@@ -120,15 +127,23 @@ function PrCheckRow({
   check,
   cwd,
   repo,
+  headOid,
   autoExpand,
   refreshToken,
+  onFix,
+  fixAnchor,
 }: {
   check: GithubPrCheck;
   cwd: string;
   repo: string;
+  headOid: string;
   autoExpand: boolean;
   refreshToken: unknown;
+  onFix?: (anchor: HTMLButtonElement) => void;
+  fixAnchor?: HTMLButtonElement;
 }) {
+  const fixRef = useRef<HTMLButtonElement>(null);
+  const fixOpen = Boolean(fixAnchor && fixAnchor === fixRef.current);
   const jobId = githubActionsJobId(check.url, repo);
   const expandable = Boolean(cwd && jobId);
   const [expanded, setExpanded] = useState(autoExpand && expandable);
@@ -171,52 +186,57 @@ function PrCheckRow({
   const duration = checkDuration(check.startedAt, check.completedAt);
   const workflow = check.workflow.trim();
   const meta = [workflow, status, duration].filter((part) => part).join(" · ");
+  const failedStep = details?.steps
+    .filter((step) => step.state === "fail")
+    .map((step) => step.name)
+    .join(", ");
+  const failureMessage = details?.annotations
+    .find((annotation) => annotation.level === "failure")
+    ?.message.split(/\r?\n/)
+    .find((line) => line.trim());
+  const subtitle =
+    failureMessage || (failedStep ? `Failed at ${failedStep}` : status);
   const title = `${check.name} · ${status}${duration ? `, took ${duration}` : ""}${workflow ? `, ${workflow}` : ""}`;
   const url = check.url;
   const linked = isHttpUrl(url);
   const body = (
     <>
-      <mark.Icon
-        className={`size-4 shrink-0 ${mark.className}`}
-        strokeWidth={1.75}
-      />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="min-w-0 truncate text-[13px] leading-snug text-content">
-          {check.name}
-        </span>
-        {meta ? (
-          <span className="min-w-0 truncate text-[11px] leading-snug text-content/45">
-            {meta}
-          </span>
-        ) : null}
-        {details?.steps.some((step) => step.state === "fail") ? (
-          <span className="truncate text-[11px] text-rose-400/90">
-            Failed at{" "}
-            {details.steps
-              .filter((step) => step.state === "fail")
-              .map((step) => step.name)
-              .join(", ")}
-          </span>
-        ) : null}
+      <span className="grid h-7 w-5 shrink-0 place-items-center">
+        <mark.Icon className={`size-4 ${mark.className}`} strokeWidth={1.75} />
       </span>
-      {expandable ? (
-        <ChevronRight
-          className={`size-3 shrink-0 text-content/45 ${expanded ? "rotate-90" : ""}`}
-          strokeWidth={1.75}
-        />
-      ) : linked ? (
-        <ExternalLink
-          className="size-3 shrink-0 text-content/35"
-          strokeWidth={1.75}
-        />
-      ) : null}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 items-baseline gap-2.5">
+          <span
+            data-check-name
+            title={check.name}
+            className="min-w-0 truncate text-[14px] font-medium leading-snug tracking-[-0.15px] text-content @max-[420px]/checks:text-[12px]"
+          >
+            {check.name}
+          </span>
+          {workflow ? (
+            <span className="min-w-0 shrink-[2] truncate text-[11px] text-content/40 @max-[560px]/checks:hidden">
+              {workflow}
+            </span>
+          ) : null}
+        </span>
+        <span
+          title={subtitle}
+          className="mt-0.5 min-w-0 truncate text-[12px] leading-relaxed text-content/55 @max-[420px]/checks:text-[11px]"
+        >
+          {subtitle}
+        </span>
+        <span className="sr-only">
+          {meta}
+          {failureMessage && failedStep ? `; Failed at ${failedStep}` : ""}
+        </span>
+      </span>
     </>
   );
   const className =
-    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-content/5";
+    "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-md text-left";
   return (
-    <li>
-      <div className="flex min-w-0 items-center gap-1">
+    <li className={`min-w-0 rounded-xl ${expanded ? "bg-content/[0.02]" : ""}`}>
+      <div className="group/check flex min-w-0 items-center gap-2 rounded-xl px-2 py-3 hover:bg-content/[0.02] @max-[420px]/checks:gap-1">
         {expandable ? (
           <button
             type="button"
@@ -245,22 +265,62 @@ function PrCheckRow({
             {body}
           </div>
         )}
-        {expandable && linked ? (
+        {duration ? (
+          <span className="mr-1 shrink-0 text-[10px] tabular-nums text-content/40 @max-[480px]/checks:hidden">
+            {duration}
+          </span>
+        ) : null}
+        {onFix ? (
+          <button
+            type="button"
+            ref={fixRef}
+            onClick={(event) => onFix(event.currentTarget)}
+            aria-haspopup="dialog"
+            aria-expanded={fixOpen}
+            aria-label={`Fix ${check.name} with AI`}
+            title="Fix with AI"
+            className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.03] text-content/65 hover:bg-selection hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
+          >
+            <Sparkles className="size-3.5" strokeWidth={1.75} />
+          </button>
+        ) : (
+          <span className="size-7 shrink-0" aria-hidden="true" />
+        )}
+        {expandable ? (
+          <button
+            type="button"
+            aria-label={`${expanded ? "Collapse" : "Expand"} ${check.name} details`}
+            aria-expanded={expanded}
+            aria-controls={detailsId}
+            onClick={() => setExpanded(!expanded)}
+            className="grid size-7 shrink-0 place-items-center rounded-lg text-content/40 hover:bg-content/5 hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
+          >
+            <ChevronRight
+              className={`size-3 transition-transform motion-reduce:transition-none ${expanded ? "rotate-90" : ""}`}
+              strokeWidth={1.75}
+            />
+          </button>
+        ) : (
+          <span className="size-7 shrink-0" aria-hidden="true" />
+        )}
+        {linked ? (
           <button
             type="button"
             title="View full log on GitHub"
             aria-label={`View ${check.name} on GitHub`}
             onClick={() => void openUrl(url)}
-            className={REFRESH_BUTTON}
+            className={`${REFRESH_BUTTON} opacity-60 group-hover/check:opacity-100 focus-visible:opacity-100`}
           >
             <ExternalLink className="size-3" strokeWidth={1.75} />
           </button>
-        ) : null}
+        ) : (
+          <span className="size-6 shrink-0" aria-hidden="true" />
+        )}
       </div>
       {expanded ? (
         <div
           id={detailsId}
-          className="mb-3 ml-3.5 mr-2 min-w-0 border-l border-stroke pl-4 py-2 text-[12px]"
+          className="min-w-0 space-y-3 py-3 pl-10 pr-3 text-[12px] @max-[420px]/checks:pl-3"
         >
           {loading ? (
             <p
@@ -289,50 +349,54 @@ function PrCheckRow({
           ) : null}
           {details ? (
             <>
+              {details.annotations.length ? (
+                <CheckEvidence
+                  annotations={details.annotations}
+                  cwd={cwd}
+                  repo={repo}
+                  headOid={headOid}
+                />
+              ) : null}
               {details.steps.length ? (
-                <ol className="space-y-1" aria-label={`${check.name} steps`}>
-                  {details.steps.map((step, index) => {
-                    const stepMark = checkMark(step.state);
-                    return (
-                      <li
-                        key={index}
-                        className={`flex items-center gap-2 rounded px-2 py-1 ${step.state === "fail" ? "bg-rose-400/5" : ""}`}
-                      >
-                        <stepMark.Icon
-                          className={`size-4 shrink-0 ${stepMark.className}`}
-                          strokeWidth={1.75}
-                        />
-                        <span className="min-w-0 flex-1 break-words text-content/80">
-                          {step.name}
-                          <span className="sr-only">
-                            : {checkStateLabel(step.state)}
+                <details className="group/steps">
+                  <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-content/50 hover:text-content [&::-webkit-details-marker]:hidden">
+                    <ChevronRight className="size-3 transition-transform group-open/steps:rotate-90 motion-reduce:transition-none" />
+                    View run steps
+                    <span className="ml-auto pl-2 text-right text-[10px] text-content/35 @max-[420px]/checks:hidden">
+                      {describeCheckCounts(countChecks(details.steps))}
+                    </span>
+                  </summary>
+                  <ol className="space-y-1" aria-label={`${check.name} steps`}>
+                    {details.steps.map((step, index) => {
+                      const stepMark = checkMark(step.state);
+                      return (
+                        <li
+                          key={index}
+                          className={`flex items-center gap-2 rounded px-2 py-1 ${step.state === "fail" ? "bg-rose-400/5" : ""}`}
+                        >
+                          <stepMark.Icon
+                            className={`size-4 shrink-0 ${stepMark.className}`}
+                            strokeWidth={1.75}
+                          />
+                          <span className="min-w-0 flex-1 break-words text-content/80">
+                            {step.name}
+                            <span className="sr-only">
+                              : {checkStateLabel(step.state)}
+                            </span>
                           </span>
-                        </span>
-                        <span className="shrink-0 tabular-nums text-content/45">
-                          {checkDuration(step.startedAt, step.completedAt)}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ol>
+                          <span className="shrink-0 tabular-nums text-content/45">
+                            {checkDuration(step.startedAt, step.completedAt)}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </details>
               ) : (
                 <p className="text-content/50">
                   No steps reported for this job.
                 </p>
               )}
-              {details.annotations.map((annotation, index) => (
-                <div key={index} className="mt-3 border-t border-stroke pt-3">
-                  <p
-                    className={`mb-1 break-all text-[11px] ${annotation.level === "failure" ? "text-rose-400/90" : "text-content/60"}`}
-                  >
-                    {annotation.path}
-                    {annotation.line > 0 ? `:${annotation.line}` : ""}
-                  </p>
-                  <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-content/80">
-                    {annotation.message}
-                  </pre>
-                </div>
-              ))}
               {check.state === "fail" &&
               !details.annotations.length &&
               !details.notice ? (
@@ -363,13 +427,24 @@ export function InboxPrChecks({
   onRefresh,
   cwd = "",
   repo = "",
+  repair,
 }: {
   view: GithubPrChecksView;
   onRefresh: () => void;
   cwd?: string;
   repo?: string;
+  repair?: CheckRepair;
 }) {
   const { checks, loading, refreshing, error, stale } = view;
+  const [filter, setFilter] = useState<"attention" | "all">("attention");
+  const [showOthers, setShowOthers] = useState(false);
+  const allFixRef = useRef<HTMLButtonElement>(null);
+  const [selection, setSelection] = useState<{
+    checks: GithubPrCheck[];
+    anchor: HTMLButtonElement;
+  } | null>(null);
+  const checksIdentity = JSON.stringify(checks);
+  useEffect(() => setSelection(null), [cwd, repo, checksIdentity, stale]);
   if (loading) {
     return (
       <div className="flex justify-center py-10 text-content/40">
@@ -397,67 +472,215 @@ export function InboxPrChecks({
     );
   }
   const rows = checks ? sortChecks(checks.checks) : [];
+  const counts = countChecks(rows);
+  const attention =
+    counts.fail + counts.pending + counts.cancel + counts.unknown;
+  const activeFilter = attention ? filter : "all";
+  const groups = CHECK_STATES.map((state) => ({
+    state,
+    rows: rows.filter((row) => row.state === state),
+    hidden:
+      activeFilter === "attention" &&
+      !showOthers &&
+      (state === "pass" || state === "skipping"),
+  }));
+  const headline = counts.fail
+    ? `${counts.fail} ${counts.fail === 1 ? "check needs" : "checks need"} a fix`
+    : counts.pending
+      ? `${counts.pending} ${counts.pending === 1 ? "check is" : "checks are"} running`
+      : attention
+        ? `${attention} ${attention === 1 ? "check needs" : "checks need"} attention`
+        : counts.pass
+          ? "Checks passed"
+          : "No checks ran";
+  const summary = describeCheckCounts({ ...counts, fail: 0 });
   return (
     <section
       data-inbox-pr-checks
       aria-label="Pull request checks"
-      className="flex flex-col gap-2"
+      className="@container/checks flex min-w-0 flex-col gap-2"
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <p className="text-[11px] text-content/60">
-          {describeCheckCounts(countChecks(rows))}
-        </p>
-        {refreshing ? (
-          <LoaderCircle
-            className="size-3 shrink-0 animate-spin text-content/40"
-            strokeWidth={1.75}
-          />
-        ) : null}
-        {stale && error ? (
-          <p
-            role="status"
-            className="min-w-0 truncate text-[11px] text-content/50"
+      <div className="mb-3 flex min-w-0 flex-wrap items-start justify-between gap-3 px-2">
+        <div className="min-w-0">
+          {rows.length ? (
+            <>
+              <h2 className="text-[18px] font-medium leading-snug tracking-[-0.35px] @max-[420px]/checks:text-[16px]">
+                {headline}
+              </h2>
+              {summary ? (
+                <p className="mt-1 text-[12px] text-content/55">
+                  {summary.charAt(0).toUpperCase() + summary.slice(1)}.
+                </p>
+              ) : null}
+              <span className="sr-only">{describeCheckCounts(counts)}</span>
+            </>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {repair &&
+          !stale &&
+          !refreshing &&
+          rows.some((row) => row.state === "fail") ? (
+            <button
+              ref={allFixRef}
+              type="button"
+              onClick={(event) =>
+                setSelection({
+                  checks: rows.filter((row) => row.state === "fail"),
+                  anchor: event.currentTarget,
+                })
+              }
+              aria-haspopup="dialog"
+              aria-label="Fix all failed"
+              aria-expanded={Boolean(
+                selection && selection.anchor === allFixRef.current,
+              )}
+              className="primary-action inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
+            >
+              <Sparkles className="size-3.5" strokeWidth={1.75} />
+              Fix all failed
+              <span
+                aria-hidden="true"
+                className="ml-1 border-l border-current/20 pl-2 text-[10px] opacity-55"
+              >
+                {counts.fail}
+              </span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            title="Refresh checks"
+            aria-label="Refresh checks"
+            disabled={refreshing}
+            onClick={onRefresh}
+            className={REFRESH_BUTTON}
           >
-            Saved results may be out of date.
-          </p>
-        ) : null}
-        <span className="min-w-0 flex-1" />
-        <button
-          type="button"
-          title="Refresh checks"
-          aria-label="Refresh checks"
-          disabled={refreshing}
-          onClick={onRefresh}
-          className={REFRESH_BUTTON}
-        >
-          {refreshing ? (
-            <LoaderCircle
-              className="size-3.5 animate-spin"
-              strokeWidth={1.75}
-            />
-          ) : (
-            <RefreshCw className="size-3.5" strokeWidth={1.75} />
-          )}
-        </button>
+            {refreshing ? (
+              <LoaderCircle
+                className="size-3.5 animate-spin"
+                strokeWidth={1.75}
+              />
+            ) : (
+              <RefreshCw className="size-3.5" strokeWidth={1.75} />
+            )}
+          </button>
+        </div>
       </div>
+      {stale && error ? (
+        <p role="status" className="px-2 text-[12px] text-content/55">
+          Saved results may be out of date.
+        </p>
+      ) : null}
+      {selection && repair ? (
+        <CheckRepairForm
+          key={`${cwd}:${repo}:${checksIdentity}:${JSON.stringify(selection.checks)}`}
+          anchor={selection.anchor}
+          checks={selection.checks}
+          headOid={checks?.headOid ?? ""}
+          cwd={cwd}
+          repo={repo}
+          repair={repair}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
+      {rows.length > 0 ? (
+        <div className="flex items-center justify-between gap-3 py-2">
+          <div
+            className="inline-flex gap-0.5 rounded-lg border border-stroke bg-content/[0.02] p-0.5"
+            aria-label="Filter checks"
+          >
+            {(
+              [
+                ["attention", "Needs attention", attention],
+                ["all", "All checks", rows.length],
+              ] as const
+            ).map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                aria-label={`${label}: ${count}`}
+                aria-pressed={activeFilter === value}
+                disabled={value === "attention" && !attention}
+                onClick={() => {
+                  setFilter(value);
+                  setShowOthers(false);
+                  setSelection(null);
+                }}
+                className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-[12px] disabled:opacity-40 ${activeFilter === value ? "bg-selection text-content shadow-sm" : "text-content/50 hover:text-content"}`}
+              >
+                {label}
+                <span className="tabular-nums text-content/40">{count}</span>
+              </button>
+            ))}
+          </div>
+          <span className="text-[10px] text-content/40 @max-[420px]/checks:hidden">
+            {counts.fail ? "Failures first" : ""}
+          </span>
+        </div>
+      ) : null}
       {rows.length === 0 ? (
         <p className="text-[13px] text-content/45">No checks reported</p>
       ) : (
-        <ul className="flex flex-col gap-0.5">
-          {rows.map((check, index) => (
-            <PrCheckRow
-              key={`${cwd}:${repo}:${checks?.headOid}:${check.url ?? `${index}:${check.workflow}:${check.name}`}`}
-              check={check}
-              cwd={cwd}
-              repo={repo}
-              autoExpand={
-                check.state === "fail" &&
-                rows.filter((row) => row.state === "fail").length === 1
-              }
-              refreshToken={checks}
-            />
-          ))}
-        </ul>
+        <>
+          {groups.map((group) =>
+            group.rows.length ? (
+              <div
+                key={group.state}
+                hidden={group.hidden}
+                className={group.hidden ? "hidden" : ""}
+              >
+                <h3 className="mb-1.5 mt-3 flex items-center gap-2 px-2 text-[12px] font-normal text-content/55">
+                  {checkStateLabel(group.state)}
+                  <span className="text-[10px] text-content/35">
+                    {group.rows.length}
+                  </span>
+                </h3>
+                <ul className="flex flex-col gap-0.5">
+                  {group.rows.map((check, index) => (
+                    <PrCheckRow
+                      key={`${cwd}:${repo}:${checks?.headOid}:${check.url ?? `${index}:${check.workflow}:${check.name}`}`}
+                      check={check}
+                      onFix={
+                        repair &&
+                        !stale &&
+                        !refreshing &&
+                        check.state === "fail"
+                          ? (anchor) =>
+                              setSelection({ checks: [check], anchor })
+                          : undefined
+                      }
+                      fixAnchor={selection?.anchor}
+                      cwd={cwd}
+                      repo={repo}
+                      headOid={checks?.headOid ?? ""}
+                      autoExpand={
+                        check === rows.find((row) => row.state === "fail")
+                      }
+                      refreshToken={checks}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ) : null,
+          )}
+          {activeFilter === "attention" && counts.pass + counts.skipping > 0 ? (
+            <button
+              type="button"
+              aria-expanded={showOthers}
+              onClick={() => setShowOthers(!showOthers)}
+              className="mt-3 flex items-center gap-2 border-t border-stroke px-2 pt-4 text-left text-[11px] text-content/50 hover:text-content"
+            >
+              <ChevronRight
+                className={`size-3 ${showOthers ? "rotate-90" : ""}`}
+              />
+              {describeCheckCounts({
+                ...countChecks([]),
+                pass: counts.pass,
+                skipping: counts.skipping,
+              })}
+            </button>
+          ) : null}
+        </>
       )}
     </section>
   );

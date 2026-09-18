@@ -98,7 +98,7 @@ export function sortChecks(checks: readonly GithubPrCheck[]): GithubPrCheck[] {
 }
 
 export function countChecks(
-  checks: readonly GithubPrCheck[],
+  checks: readonly Pick<GithubPrCheck, "state">[],
 ): Record<GithubPrCheckState, number> {
   const counts: Record<GithubPrCheckState, number> = {
     pass: 0,

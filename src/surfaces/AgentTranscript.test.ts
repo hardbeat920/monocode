@@ -25,6 +25,25 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("offers the saved CI context in a collapsed disclosure beside the short request", () => {
+    const markup = render([
+      {
+        id: "ci-repair",
+        role: "user",
+        text: "Fix 1 failed CI check for acme/web PR #42.",
+        ciContext:
+          "Checked commit: abc123\n\nRun tests: expected <main>, received <script>",
+      },
+    ]);
+    expect(markup).toContain("Fix 1 failed CI check for acme/web PR #42.");
+    expect(markup).toMatch(/<details\b[^>]*>/);
+    expect(markup).not.toMatch(/<details\b[^>]*\bopen[\s=>]/);
+    expect(markup).toContain("CI context</span>");
+    expect(markup).toContain(
+      "Checked commit: abc123\n\nRun tests: expected &lt;main&gt;, received &lt;script&gt;",
+    );
+  });
+
   it("hides provider authentication errors handled by the sign-in modal", () => {
     const markup = renderToStaticMarkup(
       createElement(AgentTranscript, {
