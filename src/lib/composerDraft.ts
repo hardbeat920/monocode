@@ -12,6 +12,10 @@ const pending = new Map<string, { text: string; timer: ReturnType<typeof setTime
 // resurrect stale text.
 const inFlight = new Map<string, Promise<void>>();
 
+// Sessions whose row has been deleted: pending drafts are dropped and saves
+// are suppressed so no write can fail against the missing row.
+const discarded = new Set<string>();
+
 function clearTimer(sessionId: string): void {
   const entry = pending.get(sessionId);
   if (entry) {
@@ -38,6 +42,7 @@ function writeDraft(sessionId: string, text: string): Promise<void> {
  * single `composer_draft_set` invoke.
  */
 export function saveSessionDraft(sessionId: string, text: string): void {
+  if (discarded.has(sessionId)) return;
   clearTimer(sessionId);
   pending.set(sessionId, {
     text,
@@ -93,11 +98,12 @@ export function discardPendingDraft(): void {
 }
 
 /**
- * Drop one session's pending draft without writing it (used when a session
- * is deleted: the row is gone, so a late write would only fail).
+ * Drop one session's pending draft and suppress further saves for it (used
+ * after the session's row is deleted: a late write would only fail).
  */
 export function discardSessionDraft(sessionId: string): void {
   clearTimer(sessionId);
+  discarded.add(sessionId);
 }
 
 export async function loadSessionDraft(sessionId: string): Promise<string> {

@@ -4135,14 +4135,9 @@ export default function App({
             if (latest) await flushSessionCheckpoint(sessionId);
             if (mode === "delete") {
               // The delete strips the row (and its draft, via FK cascade);
-              // drop the pending write first so unmount-flushing the pane
-              // cannot fail against a session that no longer exists.
+              // discard the pending write first so no in-flight or unmount
+              // flush can fail against a session that no longer exists.
               discardSessionDraft(sessionId);
-              window.dispatchEvent(
-                new CustomEvent<string>("monocode:session-deleted", {
-                  detail: sessionId,
-                }),
-              );
               await orchestrator.deleteSession(sessionId, () =>
                 deleteSession(sessionId),
               );
