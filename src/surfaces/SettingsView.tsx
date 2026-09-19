@@ -1220,7 +1220,7 @@ function AzureDevOpsSettings() {
     <>
       <Row
         label="Connection"
-        description="Connect your ADO organization with a personal access token (Boards + Repos read). The token is stored locally and Disconnect deletes it."
+        description="Connect your ADO organization with a personal access token (Boards + Repos read & write for comments). The token is stored locally and Disconnect deletes it."
       >
         {connected ? (
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">

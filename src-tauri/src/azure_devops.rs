@@ -374,9 +374,12 @@ fn azure_devops_work_item_thread_for(
         let pr_url = pr_web_url(config, &project, &repo_name, number);
         return parse_pr_thread(&response.value, &pr_url, response.truncated);
     }
+    let project = wit_project(repo)?;
     let path = format!(
-        "/_apis/wit/workitems/{}/comments?api-version={}",
-        number, WIT_COMMENTS_API_VERSION
+        "/{}/_apis/wit/workitems/{}/comments?api-version={}",
+        encode_segment(&project),
+        number,
+        WIT_COMMENTS_API_VERSION
     );
     let response = azure_get(config, &path)?;
     parse_wit_thread(&response.value, response.truncated)
@@ -410,9 +413,12 @@ fn azure_devops_work_item_comment_for(
         azure_post_json(config, &path, payload)?;
         return Ok(pr_web_url(config, &project, &repo_name, number));
     }
+    let project = wit_project(repo)?;
     let path = format!(
-        "/_apis/wit/workitems/{}/comments?api-version={}",
-        number, WIT_COMMENTS_API_VERSION
+        "/{}/_apis/wit/workitems/{}/comments?api-version={}",
+        encode_segment(&project),
+        number,
+        WIT_COMMENTS_API_VERSION
     );
     let response = azure_post_json(config, &path, json!({ "text": body }))?;
     Ok(string_field(&response.value, "url").unwrap_or_default())
@@ -751,8 +757,8 @@ fn parse_pr(row: &Value, repo: &str, base_url: &str) -> Option<AzureDevOpsWorkIt
             .or_else(|| pr_url_from_parts(repo, base_url, number))
             .unwrap_or_default(),
         state: normalize_pr_state(&status),
-        updated_at: string_field(row, "creationDate")
-            .or_else(|| string_field(row, "closedDate"))
+        updated_at: string_field(row, "closedDate")
+            .or_else(|| string_field(row, "creationDate"))
             .unwrap_or_default(),
         labels: parse_pr_labels(row),
         assignees: parse_pr_assignees(row),
@@ -925,7 +931,10 @@ fn parse_wit_thread(value: &Value, truncated: bool) -> Result<AzureDevOpsWorkIte
     let mut comments: Vec<AzureDevOpsWorkItemComment> = rows
         .iter()
         .filter_map(|row| {
-            let id = row.get("id").and_then(Value::as_i64)?;
+            let id = row
+                .get("commentId")
+                .or_else(|| row.get("id"))
+                .and_then(Value::as_i64)?;
             let body = string_field(row, "text").unwrap_or_default();
             if body.is_empty() {
                 return None;
@@ -1505,6 +1514,21 @@ fn validate_item(kind: &str, number: i64) -> Result<(), String> {
         return Err("Invalid Azure DevOps item number".into());
     }
     Ok(())
+}
+
+/// Boards work items carry only the project name in `repo` (e.g. `"platform"`
+/// instead of `"platform/web"`), so comment paths take the leading segment.
+fn wit_project(repo: &str) -> Result<String, String> {
+    let project = repo
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if project.is_empty() || project == "." || project == ".." {
+        return Err("Invalid Azure DevOps project".into());
+    }
+    Ok(project)
 }
 
 fn split_repo(repo: &str) -> Result<(String, String), String> {
@@ -2320,6 +2344,56 @@ mod tests {
         assert!(matches!(sniff_content(b"a\0b"), FileContent::Binary));
         let truncated = serde_json::to_vec(&serde_json::json!({ "isTruncated": true })).unwrap();
         assert!(matches!(sniff_content(&truncated), FileContent::TooLarge));
+    }
+
+    #[test]
+    fn parses_boards_comments_with_comment_id() {
+        // Real shape of GET {project}/_apis/wit/workitems/{id}/comments.
+        let value = json!({
+            "count": 2,
+            "totalCount": 2,
+            "comments": [
+                {
+                    "commentId": 101,
+                    "text": "First comment",
+                    "createdDate": "2026-09-10T10:00:00Z",
+                    "createdBy": { "displayName": "Maya" },
+                    "url": "https://dev.azure.com/acme/_apis/wit/workItems/193/comments/101"
+                },
+                {
+                    "commentId": 102,
+                    "text": "",
+                    "createdDate": "2026-09-11T10:00:00Z",
+                    "createdBy": { "displayName": "Ada" },
+                    "url": "https://dev.azure.com/acme/_apis/wit/workItems/193/comments/102"
+                }
+            ]
+        });
+        let thread = parse_wit_thread(&value, false).unwrap();
+        assert_eq!(thread.comments.len(), 1);
+        assert_eq!(thread.comments[0].id, "101");
+        assert_eq!(thread.comments[0].body, "First comment");
+        assert_eq!(thread.comments[0].author, "Maya");
+    }
+
+    #[test]
+    fn prefers_closed_date_for_pull_requests() {
+        let row = json!({
+            "pullRequestId": 9,
+            "title": "Ship",
+            "status": "completed",
+            "creationDate": "2026-09-01T10:00:00Z",
+            "closedDate": "2026-09-12T10:00:00Z"
+        });
+        let item = parse_pr(&row, "platform/web", "https://dev.azure.com/acme").unwrap();
+        assert_eq!(item.updated_at, "2026-09-12T10:00:00Z");
+    }
+
+    #[test]
+    fn extracts_wit_project_from_repo() {
+        assert_eq!(wit_project("platform").unwrap(), "platform");
+        assert_eq!(wit_project("platform/web").unwrap(), "platform");
+        assert!(wit_project(" ").is_err());
     }
 
     #[test]

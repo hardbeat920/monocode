@@ -69,6 +69,7 @@ export const AZUREDEVOPS_CHANGE_EVENT = "monocode:azuredevops-change";
 
 const repoByPath = new Map<string, string>();
 const detailsByKey = new Map<string, AzureDevOpsWorkItemDetails>();
+const detailsInflight = new Map<string, Promise<AzureDevOpsWorkItemDetails>>();
 const threadByKey = new Map<string, AzureDevOpsWorkItemThread>();
 const threadInflight = new Map<string, Promise<AzureDevOpsWorkItemThread>>();
 const diffByKey = new Map<string, AzureDevOpsMrDiff>();
@@ -81,6 +82,7 @@ function itemKey(repo: string, kind: AzureDevOpsKind, number: number): string {
 export function clearAzureDevOpsCache() {
   repoByPath.clear();
   detailsByKey.clear();
+  detailsInflight.clear();
   threadByKey.clear();
   threadInflight.clear();
   diffByKey.clear();
@@ -166,12 +168,24 @@ export async function azureDevOpsWorkItemDetails(
   kind: AzureDevOpsKind,
   number: number,
 ): Promise<AzureDevOpsWorkItemDetails> {
-  const details = await invoke<AzureDevOpsWorkItemDetails>(
+  const key = itemKey(repo, kind, number);
+  const cached = detailsInflight.get(key);
+  if (cached) return cached;
+  const pending = invoke<AzureDevOpsWorkItemDetails>(
     "azure_devops_work_item_details",
     { repo, kind, number },
-  );
-  detailsByKey.set(itemKey(repo, kind, number), details);
-  return details;
+  )
+    .then((details) => {
+      // A cache clear (e.g. org change) supersedes this request: skip the
+      // write so a stale completion cannot repopulate the cache.
+      if (detailsInflight.get(key) === pending) detailsByKey.set(key, details);
+      return details;
+    })
+    .finally(() => {
+      if (detailsInflight.get(key) === pending) detailsInflight.delete(key);
+    });
+  detailsInflight.set(key, pending);
+  return pending;
 }
 
 export function peekAzureDevOpsWorkItemThread(
