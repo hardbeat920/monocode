@@ -30,6 +30,8 @@ function oldBlocks(): Block[] {
   ];
 }
 
+// Only work folds — prose and interjections keep their rows, so a repaired
+// answer is out of the fold by construction, not by boundary luck.
 function foldedIds(blocks: Block[]) {
   const items = groupTurnItems(groupTurns(blocks)[0]);
   return foldedBlocks(items, foldableWork(items)!).map(block => block.id);
@@ -38,11 +40,11 @@ function foldedIds(blocks: Block[]) {
 describe("OMP persisted interjection repair", () => {
   it("restores the complete answer outside the work fold without inventing a turn", () => {
     const before = oldBlocks();
-    expect(foldedIds(before)).toContain("a1");
+    expect(foldedIds(before)).toEqual(["r1", "t1", "r2", "t2"]);
     const repaired = backfillOmpInterjections(before, [anchor]);
     expect(repaired[4]).toMatchObject({ id: "omp-interjection-review", role: "system", text: anchor.text, interjection: { customType: "advisor", severity: "concern" } });
     expect(groupTurns(repaired)).toHaveLength(1);
-    expect(foldedIds(repaired)).toEqual(["r2", "t2"]);
+    expect(foldedIds(repaired)).toEqual(["r1", "t1", "r2", "t2"]);
     expect(before.map(block => block.id)).toEqual(["u", "r1", "t1", "a1", "r2", "t2", "a2"]);
   });
 
@@ -53,12 +55,12 @@ describe("OMP persisted interjection repair", () => {
     expect(repaired.map(block => block.id)).toEqual(["u", "r1", "t1", "a1", "r2", "t2", "a2", "omp-interjection-review"]);
   });
 
-  it("keeps unanchored progress prose folding and rejects approximate matches", () => {
+  it("keeps the work folding and rejects approximate matches", () => {
     const blocks = oldBlocks();
     expect(backfillOmpInterjections(blocks, [])).toBe(blocks);
     expect(backfillOmpInterjections(blocks, [{ ...anchor, afterAssistantText: "The complete" }])).toBe(blocks);
     expect(backfillOmpInterjections(blocks, [{ ...anchor, afterAssistantText: ` ${anchor.afterAssistantText}` }])).toBe(blocks);
-    expect(foldedIds(blocks)).toContain("a1");
+    expect(foldedIds(blocks)).toEqual(["r1", "t1", "r2", "t2"]);
   });
 
   it("does not duplicate repaired or already captured live boundaries", () => {
@@ -144,7 +146,7 @@ describe("OMP persisted interjection repair", () => {
     expect(repaired.filter(block => block.interjection).map(block => block.id)).toEqual([
       "omp-interjection-tool-note", "omp-interjection-review", "omp-interjection-chained-note",
     ]);
-    expect(foldedIds(repaired)).toEqual(["r2", "t2"]);
+    expect(foldedIds(repaired)).toEqual(["r1", "t1", "r2", "t2"]);
     expect(repaired.filter(block => !block.interjection)).toEqual(oldBlocks());
     expect(backfillOmpInterjections(repaired, [earlier, anchor, later])).toBe(repaired);
   });
@@ -472,7 +474,7 @@ describe("persisted session loading", () => {
       throw new Error(command);
     });
     const first = await getSession(record.id);
-    expect(foldedIds(first!.blocks)).toEqual(["r2", "t2"]);
+    expect(foldedIds(first!.blocks)).toEqual(["r1", "t1", "r2", "t2"]);
     const second = await getSession(record.id);
     expect(second!.blocks).toEqual(first!.blocks);
     expect(writes).toBe(1);
@@ -580,6 +582,6 @@ describe("persisted session loading", () => {
       if (command === "omp_session_interjections") return [anchor];
       throw new Error("Database unavailable");
     });
-    expect(foldedIds((await getSession(record.id))!.blocks)).toEqual(["r2", "t2"]);
+    expect(foldedIds((await getSession(record.id))!.blocks)).toEqual(["r1", "t1", "r2", "t2"]);
   });
 });

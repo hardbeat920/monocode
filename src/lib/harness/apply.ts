@@ -145,6 +145,9 @@ export function applyHarnessEvent(
         interjection: {
           customType: event.customType,
           ...(event.severity ? { severity: event.severity } : {}),
+          // A note that lands mid-message splits the answer: the prose after
+          // it is a continuation, not a reply addressed to the note.
+          ...(sealsStream(session.blocks) ? { splitStream: true } : {}),
         },
       });
     default:
@@ -1019,6 +1022,23 @@ function findToolIndex(
     }
     return normalizeLabel(block.text || block.tool?.title || "") === needle;
   });
+}
+
+/** True when the next appended row would close an open prose stream. */
+function sealsStream(blocks: Block[]): boolean {
+  let index = blocks.length - 1;
+  while (
+    index >= 0 &&
+    blocks[index].role === "system" &&
+    !blocks[index].interjection
+  ) {
+    index--;
+  }
+  const last = blocks[index];
+  return (
+    !!last?.streaming &&
+    (last.role === "assistant" || last.role === "reasoning")
+  );
 }
 
 function sealLastStream(blocks: Block[]): Block[] {

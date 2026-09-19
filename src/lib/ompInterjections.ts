@@ -342,6 +342,12 @@ export function backfillOmpInterjections(
         offset: node.offset + split,
         next: end.next,
       };
+      // The last note before the suffix owns the flag the transcript reads
+      // to tell a continuation from a reply addressed to the note.
+      end.block = {
+        ...end.block,
+        interjection: { ...end.block.interjection!, splitStream: true },
+      };
       // The suffix belongs to this boundary, not to an insertion's old index.
       // Index it now so later source anchors can target it in this same pass.
       end.next = continuation;

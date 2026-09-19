@@ -19,7 +19,13 @@ export type TurnItem =
   | { type: "block"; block: Block }
   | { type: "activity"; blocks: Block[] }
   /** Delegated runs spawned together, kept out of the folding work trail. */
-  | { type: "subagents"; blocks: Block[] };
+  | { type: "subagents"; blocks: Block[] }
+  /**
+   * A side-channel exchange: a run of interjections (advisor notes, async
+   * results, IRC) plus the prose reply addressed to them, when there is one.
+   * Content, not work — the fold's span may cross it but never hides it.
+   */
+  | { type: "exchange"; notes: Block[]; reply?: Block };
 
 export function needsApproval(block: Block): boolean {
   return !!block.approval && !block.approval.decided;
@@ -131,10 +137,9 @@ function isStatusStep(block: Block): boolean {
  *
  * A status row ("Advisor reviewed this turn") is turn chrome, not transcript
  * text: it joins the work around it instead of splitting the group. An
- * interjection stays a standalone block while the turn is live — the reader
- * should see it land — and joins the trail only once the turn settles, which
- * is the caller's branch to make. A notice — an error, an interruption — is
- * neither work nor chrome, so it keeps its own row live and settled alike.
+ * interjection is reader content delivered mid-turn, so it keeps its own row
+ * live and settled alike. A notice — an error, an interruption — is neither
+ * work nor chrome, so it keeps its own row too.
  */
 export function isActivityBlock(block: Block): boolean {
   if (isThinkingBlock(block)) return true;
@@ -236,10 +241,13 @@ export function groupTurns(blocks: Block[], managed = false): Block[][] {
  * Assistant prose always stands on its own, including progress updates between
  * groups, so the readable transcript never disappears into activity chrome.
  *
- * A settled turn puts every kind of process into the trail: interjections and
- * delegated runs, which keep their own rows while the turn is live so the
- * reader sees them land and knows where to watch, fold in once there is
- * nothing left to watch — what remains is the prompt, the work, and the answer.
+ * A settled turn absorbs delegated runs into the trail: while live they keep
+ * their own rows so the reader sees them land and knows where to watch; once
+ * there is nothing left to watch they are work like any other call — except
+ * one that died, which keeps its own row under the fold. Interjections are
+ * reader content, not process: they keep their own rows live and settled
+ * alike, so a note that was delivered between answers is still there between
+ * them on review.
  */
 export function groupTurnItems(
   blocks: Block[],
@@ -276,7 +284,14 @@ export function groupTurnItems(
       else items.push({ type: "subagents", blocks: [block] });
       return;
     }
-    if (isActivityBlock(block) || (settled && !!block.interjection)) {
+    if (block.interjection) {
+      flush();
+      const last = items[items.length - 1];
+      if (last?.type === "exchange") last.notes.push(block);
+      else items.push({ type: "exchange", notes: [block] });
+      return;
+    }
+    if (isActivityBlock(block)) {
       activity.push(block);
       return;
     }
@@ -284,7 +299,204 @@ export function groupTurnItems(
     items.push({ type: "block", block });
   });
   flush();
+
+  // Status rows between notes are chrome, not a boundary: interjections
+  // separated only by status rows are one exchange, markers kept in place.
+  for (let index = 0; index + 2 < items.length; index += 1) {
+    const first = items[index];
+    const between = items[index + 1];
+    const second = items[index + 2];
+    if (
+      first.type === "exchange" &&
+      between.type === "activity" &&
+      between.blocks.every((block) => block.role === "system") &&
+      second.type === "exchange"
+    ) {
+      first.notes.push(...between.blocks, ...second.notes);
+      items.splice(index + 1, 2);
+      index -= 1;
+    }
+  }
+
+  // Prose directly after an exchange is the reply addressed to it — unless
+  // it continues a message the last note split, or claiming it would leave
+  // the turn with no visible answer at all.
+  let remaining = items.filter(
+    (item) => item.type === "block" && isProseBlock(item.block),
+  ).length;
+  for (let index = 0; index < items.length && remaining > 1; index += 1) {
+    const item = items[index];
+    if (item.type !== "exchange") continue;
+    const next = items[index + 1];
+    if (
+      next?.type !== "block" ||
+      !isProseBlock(next.block) ||
+      isExchangeContinuation(item.notes, next.block)
+    ) {
+      continue;
+    }
+    item.reply = next.block;
+    items.splice(index + 1, 1);
+    remaining -= 1;
+  }
   return items;
+}
+
+/**
+ * Prose after an exchange that continues the message a note split: the
+ * boundary landed mid-answer, so what follows is answer, not reply. Live
+ * notes carry `splitStream`; reconstructed ones are known by the
+ * continuation block's synthesized id.
+ */
+function isExchangeContinuation(notes: Block[], block: Block): boolean {
+  return (
+    block.id.endsWith("-continuation") ||
+    !!notes[notes.length - 1]?.interjection?.splitStream
+  );
+}
+
+/**
+ * A settled turn's fold: everything between the first work group and the
+ * terminal message — tools, step narration, routine advisor exchanges —
+ * behind the one line that says how long it took. Position cannot separate
+ * a delivered mid-turn answer from running commentary, so this does not
+ * pretend to: it is an "earlier conversation and work" disclosure, and the
+ * fold line counts what it holds. The terminal assistant message — with
+ * the fragments a splitStream note cut off it, which reconstruction still
+ * evidences — always keeps its row. Notices, open approvals, delegated
+ * runs, and exchanges carrying a blocker or a non-advisor channel keep
+ * theirs too, splitting the fold into runs under one control.
+ */
+export function settledFold(items: TurnItem[]): WorkFold | undefined {
+  // Anything still in flight — a pending approval, a running call — is not
+  // scenery: keep the turn open until it resolves.
+  if (items.some(itemInFlight)) return undefined;
+  const proseAt = (index: number) => {
+    const item = items[index];
+    return item?.type === "block" && isProseBlock(item.block)
+      ? item.block
+      : undefined;
+  };
+  let last = -1;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (proseAt(index)) {
+      last = index;
+      break;
+    }
+  }
+  // No terminal message means there is no visible response to stand in for
+  // what the fold would hide.
+  if (last < 0) return undefined;
+  // The terminal message is the last prose block — not the trailing run of
+  // prose items, which in this data model are separate messages (adjacent
+  // fragments of one message only exist where a note split it, and carry
+  // evidence). Walk back over that evidence alone: a continuation opening
+  // the protected region pulls in the note that split it and the earlier
+  // fragment it continues.
+  let terminal = last;
+  for (;;) {
+    const exchange = items[terminal - 1];
+    const before = proseAt(terminal - 2);
+    const fragment = proseAt(terminal);
+    if (
+      exchange?.type === "exchange" &&
+      before &&
+      fragment &&
+      isExchangeContinuation(exchange.notes, fragment)
+    ) {
+      terminal -= 2;
+      continue;
+    }
+    break;
+  }
+  const start = firstWorkIndex(items);
+  if (start < 0 || start >= terminal) return undefined;
+  return { start, end: terminal - 1 };
+}
+
+/** Anything in the turn that is still moving is not scenery. */
+function itemInFlight(item: TurnItem): boolean {
+  if (item.type === "activity") return activityStillRunning(item.blocks);
+  if (item.type === "subagents") return hasRunningSubagent(item.blocks);
+  if (item.type === "exchange") return false;
+  return (
+    needsApproval(item.block) || toolCallState(item.block) === "pending"
+  );
+}
+
+/**
+ * What hides inside a settled fold: finished work, earlier prose, routine
+ * advisor exchanges. What keeps its row: notices, approvals still open,
+ * delegated runs, and exchanges carrying a blocker or a channel with no
+ * collapse contract.
+ */
+export function isSettledFoldMember(item: TurnItem): boolean {
+  if (item.type === "activity") return isCollapsibleWork(item);
+  if (item.type === "subagents") return false;
+  if (item.type === "exchange") {
+    return item.notes.every(
+      (note) =>
+        !note.interjection ||
+        (note.interjection.customType === "advisor" &&
+          note.interjection.severity !== "blocker"),
+    );
+  }
+  return (
+    isProseBlock(item.block) &&
+    !isNoticeBlock(item.block) &&
+    !needsApproval(item.block)
+  );
+}
+
+/** What the settled fold's line discloses: hidden messages and inputs. */
+export function foldContentCounts(
+  items: TurnItem[],
+  fold: WorkFold,
+): { messages: number; inputs: number } {
+  let messages = 0;
+  let inputs = 0;
+  for (const item of items.slice(fold.start, fold.end + 1)) {
+    if (item.type === "exchange") {
+      if (isSettledFoldMember(item)) {
+        inputs += item.notes.filter((note) => note.interjection).length;
+        if (item.reply) messages += 1;
+      }
+      continue;
+    }
+    if (item.type === "block" && isProseBlock(item.block)) messages += 1;
+  }
+  return { messages, inputs };
+}
+
+/**
+ * Prose talking to itself between two finished work groups is step
+ * narration — demote it, never hide it. A maximal prose run demotes as a
+ * unit when work flanks both ends. Both flanks must be collapsible groups
+ * with real calls inside: a group that is still running, awaiting approval,
+ * failed, or holds only status rows is live context or a decision point,
+ * and the prose beside it keeps full strength. Content boundaries —
+ * exchanges, subagent rows, notices — never demote what they touch; the
+ * incident answer's successor is an exchange, which is exactly what keeps
+ * delivered answers out of this rule.
+ */
+export function isNarrationItem(items: TurnItem[], index: number): boolean {
+  const isProse = (item: TurnItem | undefined) =>
+    item?.type === "block" && isProseBlock(item.block);
+  if (!isProse(items[index])) return false;
+  let start = index;
+  while (isProse(items[start - 1])) start -= 1;
+  let end = index;
+  while (isProse(items[end + 1])) end += 1;
+  return isWorkFlank(items[start - 1]) && isWorkFlank(items[end + 1]);
+}
+
+/** A completed work group with real calls in it — scenery, not live context. */
+function isWorkFlank(item: TurnItem | undefined): boolean {
+  if (item?.type !== "activity" || !isCollapsibleWork(item)) return false;
+  return (
+    item.blocks.some((block) => block.role !== "system") &&
+    !item.blocks.some((block) => toolCallState(block) === "rejected")
+  );
 }
 
 /**
@@ -768,20 +980,18 @@ export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
 export type WorkFold = { start: number; end: number };
 
 /**
- * The work a turn can put away: everything from the first thing the agent did
- * up to the last group it has already narrated past, leaving the user's
- * message above and the answer that summarised the work below.
+ * The work a turn can put away: the span runs from the first thing the agent
+ * did up to the last work group it has already answered past. The span may
+ * cross reader content — prose the agent already delivered, interjections
+ * that landed between answers, pinned runs — but only work groups collapse.
+ * Later work does not turn an earlier answer into narration: there is no
+ * reliable signal separating a delivered answer from running commentary, so
+ * prose always keeps its row rather than gambling on position.
  *
- * Prose following a group puts its work away, except for calls still awaiting
- * approval. As the turn streams, each new paragraph folds the work and running
- * commentary before it, leaving the final answer visible. A late approval can
- * reopen that boundary so its controls remain available.
- *
- * Persisted interjections (system blocks with interjection chrome) are neither
- * prose nor work, so while the turn is live they stand on their own and stop
- * the fold: an answer the harness already showed never folds behind an
- * interjection that arrived after it. A settled turn groups them into the
- * trail itself, where the fold simply spans them.
+ * Prose following a group puts its work away, except for groups still in
+ * flight — a call awaiting approval or still running keeps its row, because
+ * you cannot judge a diff you cannot see. A late approval can reopen that
+ * boundary so its controls remain available.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;
@@ -789,7 +999,7 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.type === "activity") {
-      if (answered && isFoldableItem(item)) {
+      if (answered && isCollapsibleWork(item)) {
         end = index;
         break;
       }
@@ -798,44 +1008,50 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
     if (item.type === "block" && isProseBlock(item.block)) answered = true;
   }
   if (end < 0) return undefined;
-  // Only work and the agent's commentary on it fold. A plan, a task list or a
-  // call waiting on approval stays where the agent put it.
   let start = end;
-  while (start > 0 && isFoldableItem(items[start - 1])) start -= 1;
+  while (start > 0 && canSpanWork(items[start - 1])) start -= 1;
   return { start, end };
 }
 
-function isFoldableItem(item: TurnItem): boolean {
-  // A stack of delegated runs is work, so the fold reaches across it and the
-  // turn's status line stays at the top. The rows themselves never collapse —
-  // the transcript pins them outside the fold's body.
-  if (item.type === "subagents") return true;
-  return item.type === "activity"
-    ? !item.blocks.some(needsApproval)
-    : isProseBlock(item.block);
+/**
+ * Work the fold actually hides: an activity group with nothing in flight. A
+ * group holding a call that is still running or awaiting approval keeps its
+ * row — a spinner or pending controls are not scenery.
+ */
+export function isCollapsibleWork(item: TurnItem): boolean {
+  return item.type === "activity" && !activityStillRunning(item.blocks);
 }
 
 /**
- * Where a turn's work begins, fold or no fold: the line the work folds behind
- * has a place to sit from the start, so it fades in rather than appearing
- * under the reader's eye and shoving the answer down.
+ * What the fold's span may cross without hiding it. Reader content — prose,
+ * interjections — and pinned delegated-run rows stay put whether the work is
+ * open or closed; only collapsible work inside the span folds. Anything else
+ * (a notice, a plan, a task list, an approval on its own row) bounds the span:
+ * work behind it was not answered for by the prose ahead of it.
  */
-export function firstFoldableIndex(items: TurnItem[]): number {
-  return items.findIndex(isFoldableItem);
+function canSpanWork(item: TurnItem): boolean {
+  if (item.type === "subagents" || item.type === "exchange") return true;
+  if (item.type === "activity") return isCollapsibleWork(item);
+  if (isNoticeBlock(item.block)) return false;
+  return isProseBlock(item.block) || !!item.block.interjection;
 }
 
-/** Every block inside a fold, work and commentary alike. */
+/**
+ * Where the fold line sits, fold or no fold: the first work group, so the line
+ * the work folds behind has a place to sit from the start. It anchors on work,
+ * not on prose — a reply that opens with text keeps its words above the status
+ * line instead of the line landing on top of them.
+ */
+export function firstWorkIndex(items: TurnItem[]): number {
+  return items.findIndex(isCollapsibleWork);
+}
+
+/** The work blocks a fold hides — never the reader content its span crosses. */
 export function foldedBlocks(items: TurnItem[], fold: WorkFold): Block[] {
   return items
     .slice(fold.start, fold.end + 1)
     .flatMap((item) =>
-      item.type === "block"
-        ? [item.block]
-        : // Delegated runs keep their own rows, so they are not part of what
-          // the fold summarises.
-          item.type === "subagents"
-          ? []
-          : item.blocks,
+      item.type === "activity" && isCollapsibleWork(item) ? item.blocks : [],
     );
 }
 

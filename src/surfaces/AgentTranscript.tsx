@@ -88,19 +88,24 @@ import {
   activityStillRunning,
   buildActivityPhases,
   editVerb,
-  firstFoldableIndex,
+  firstWorkIndex,
   foldableWork,
+  foldContentCounts,
   foldedBlocks,
   groupTurnItems,
   groupTurns,
   initialThinkingIndex,
+  isCollapsibleWork,
   isIncompleteTool,
+  isNarrationItem,
+  isSettledFoldMember,
   isSubagentBlock,
   isThinkingBlock,
   lastActivityIndex,
   isProseBlock,
   needsApproval,
   nestedScrollAbsorbsWheel,
+  settledFold,
   proseSummary,
   subagentBrief,
   subagentModelName,
@@ -448,10 +453,15 @@ function AgentTranscriptComponent({
             ? (turnModel?.harness ?? harnessForTurn(blocks, turn, harness))
             : undefined;
           // Work the turn has already answered for folds away behind one line,
-          // leaving the prompt and the answer to it.
+          // leaving the prompt and the answer to it. Settled turns fold
+          // wider: the whole earlier conversation — work, narration, routine
+          // exchanges — under the "Worked for" line, with the terminal
+          // message and anything still needing eyes kept out.
           const turnId = turn[0].id;
-          const fold = foldableWork(items);
+          const fold = settled ? settledFold(items) : foldableWork(items);
           const folded = fold ? foldedBlocks(items, fold) : [];
+          const foldCounts =
+            fold && settled ? foldContentCounts(items, fold) : undefined;
           const workOpen = openWork[turnId] ?? false;
           // The fold line is the turn's status line from the first token to
           // the last: the mark, and the clock beside it. It never moves, so a
@@ -475,23 +485,68 @@ function AgentTranscriptComponent({
               }
               modelName={turnModelName}
             />
-          ) : durationMs != null ? (
-            formatWorkingDuration(durationMs, turnModelName, true)
           ) : (
-            workSummaryLine(folded)
+            <>
+              {durationMs != null
+                ? formatWorkingDuration(durationMs, turnModelName, true)
+                : workSummaryLine(folded)}
+              {foldCounts &&
+              (foldCounts.messages > 0 || foldCounts.inputs > 0) ? (
+                <span className="text-content/35">
+                  {[
+                    foldCounts.messages > 0
+                      ? `${foldCounts.messages} earlier message${foldCounts.messages > 1 ? "s" : ""}`
+                      : "",
+                    foldCounts.inputs > 0
+                      ? `${foldCounts.inputs} advisor input${foldCounts.inputs > 1 ? "s" : ""}`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .map((part) => ` · ${part}`)}
+                </span>
+              ) : null}
+            </>
           );
           const showFoldLine = live || durationMs != null || !!fold;
-          // It sits where the work starts, from before there is any: the row
-          // is there from the first token, so nothing shoves the answer down
-          // when the turn folds.
-          const firstWork = firstFoldableIndex(items);
+          // The line sits at the first work group, from before there is any:
+          // the row is there from the first token, so nothing shoves the
+          // answer down when the turn folds. The span may start on prose it
+          // only crosses — the line anchors on the work it actually hides.
+          const firstWork = firstWorkIndex(items);
           const foldLineAt = fold
-            ? fold.start
-            : firstWork >= 0
-              ? firstWork
-              : items.length;
+            ? items.findIndex(
+                (item, index) =>
+                  index >= fold.start &&
+                  index <= fold.end &&
+                  isCollapsibleWork(item),
+              )
+            : firstWork;
+          const foldLineIndex = foldLineAt >= 0 ? foldLineAt : items.length;
           const renderItem = (item: TurnItem, itemIndex: number) =>
-            item.type === "subagents" ? (
+            item.type === "exchange" ? (
+              <ExchangeRow
+                key={turnItemKey(item)}
+                notes={item.notes}
+                reply={item.reply}
+                renderBlock={(block) => (
+                  <TranscriptBlock
+                    block={block}
+                    layout={transcriptLayout}
+                    stickyIndex={0}
+                    onApproval={onApproval}
+                    onOpenFile={onOpenFile}
+                    onOpenDiff={onOpenDiff}
+                    onOpenPlan={onOpenPlan}
+                    onBuildPlan={onBuildPlan}
+                    planBusy={!!busy}
+                    planHarness={harness}
+                    planModel={model}
+                    planModelSettings={modelSettings}
+                    cwd={cwd}
+                  />
+                )}
+              />
+            ) : item.type === "subagents" ? (
               <SubagentStack
                 key={item.blocks[0].id}
                 blocks={item.blocks}
@@ -535,7 +590,8 @@ function AgentTranscriptComponent({
                   itemIndex > 0 &&
                   (items[itemIndex - 1]?.type === "activity" ||
                     items[itemIndex - 1]?.type === "subagents" ||
-                    (itemIndex === foldLineAt && showFoldLine))
+                    items[itemIndex - 1]?.type === "exchange" ||
+                    (itemIndex === foldLineIndex && showFoldLine))
                 }
                 onApproval={onApproval}
                 onSaveNote={onSaveNote}
@@ -551,21 +607,6 @@ function AgentTranscriptComponent({
                 cwd={cwd}
               />
             );
-          // The fold reaches across a stack of delegated runs, but those rows
-          // do not collapse with it: they are lifted out and parked under the
-          // work, where they stay put however often it re-folds.
-          const foldEntries = fold
-            ? items.slice(fold.start, fold.end + 1).map((entry, offset) => ({
-                entry,
-                index: fold.start + offset,
-              }))
-            : [];
-          const foldSubagents = foldEntries.filter(
-            ({ entry }) => entry.type === "subagents",
-          );
-          const foldWork = foldEntries.filter(
-            ({ entry }) => entry.type !== "subagents",
-          );
           const foldLineRow = (
             <TurnRow key="work-fold" folded={!showFoldLine}>
               <WorkFoldLine
@@ -591,56 +632,72 @@ function AgentTranscriptComponent({
               }`}
             >
               {items.flatMap((item, itemIndex) => {
-                const inFold =
+                const inSpan =
                   !!fold && itemIndex >= fold.start && itemIndex <= fold.end;
-                if (inFold) {
-                  if (itemIndex !== fold.start) return [];
+                // Settled folds hide earlier prose and routine exchanges
+                // alongside finished work; live folds hide only finished
+                // work and the narration it sandwiches. What keeps its row —
+                // the terminal message, notices, open approvals, delegated
+                // runs, exceptional exchanges — splits the fold into runs
+                // under the one control.
+                const memberAt = (index: number) => {
+                  const entry = items[index];
+                  if (!entry) return false;
+                  if (settled) return isSettledFoldMember(entry);
+                  return (
+                    isCollapsibleWork(entry) ||
+                    isNarrationItem(items, index)
+                  );
+                };
+                if (inSpan && memberAt(itemIndex)) {
+                  // Contiguous members share one folded wrapper; visible
+                  // content between runs closes it and the next run opens a
+                  // new one, all under the same control.
+                  if (itemIndex > fold.start && memberAt(itemIndex - 1)) {
+                    return [];
+                  }
+                  let runEnd = itemIndex;
+                  while (runEnd + 1 <= fold.end && memberAt(runEnd + 1)) {
+                    runEnd += 1;
+                  }
+                  const run = items.slice(itemIndex, runEnd + 1);
+                  const tail = runEnd === fold.end;
                   return [
-                    foldLineRow,
-                    <TurnRow key="work-details" folded={!workOpen}>
+                    ...(itemIndex === foldLineIndex ? [foldLineRow] : []),
+                    <TurnRow key={`work-run-${turnItemKey(item)}`} folded={!workOpen}>
                       {() =>
-                        foldWork.map(({ entry, index }, offset) => (
+                        run.map((entry, offset) => (
                           <div
                             key={turnItemKey(entry)}
-                            className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
-                              offset === foldWork.length - 1
+                            className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail${
+                              entry.type === "block" ? " zen-narration" : ""
+                            } ${
+                              tail && offset === run.length - 1
                                 ? "zen-fold-tail"
-                                : ""
-                            }${
-                              // Prose the trail holds is the agent talking
-                              // while it works; the marker lets it read as
-                              // process, not result.
-                              entry.type === "block" &&
-                              isProseBlock(entry.block)
-                                ? " zen-fold-prose"
                                 : ""
                             }`}
                           >
-                            {renderItem(entry, index)}
+                            {renderItem(entry, itemIndex + offset)}
                           </div>
                         ))
                       }
                     </TurnRow>,
-                    // Delegated runs sit under the agent's own work, not
-                    // among it: they are a second thing the turn is doing,
-                    // and reading them as the first steps of the main trail
-                    // is what made them look like its work.
-                    ...foldSubagents.map(({ entry, index }) => (
-                      <div key={turnItemKey(entry)} className="flow-root pb-1">
-                        {renderItem(entry, index)}
-                      </div>
-                    )),
                   ];
                 }
                 const row = (
-                  <div key={turnItemKey(item)} className="flow-root pb-1">
+                  <div
+                    key={turnItemKey(item)}
+                    className={`flow-root pb-1${
+                      isNarrationItem(items, itemIndex) ? " zen-narration" : ""
+                    }`}
+                  >
                     {renderItem(item, itemIndex)}
                   </div>
                 );
-                if (itemIndex !== foldLineAt) return row;
+                if (itemIndex !== foldLineIndex) return row;
                 return [foldLineRow, row];
               })}
-              {foldLineAt >= items.length ? foldLineRow : null}
+              {foldLineIndex >= items.length ? foldLineRow : null}
               {settled &&
                 proposals
                   .filter((block) => block.orchestration?.status !== "planning")
@@ -1468,7 +1525,8 @@ function TurnRow({
 
 /** A turn item's identity, stable as the group it names grows. */
 function turnItemKey(item: TurnItem): string {
-  return item.type === "block" ? item.block.id : item.blocks[0].id;
+  if (item.type === "block") return item.block.id;
+  return item.type === "exchange" ? item.notes[0].id : item.blocks[0].id;
 }
 
 /**
@@ -3023,29 +3081,54 @@ const INTERJECTION_BODY =
   "min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70";
 
 /** A mid-turn interjection, e.g. OMP advisor notes: a labeled boundary with
- * a collapsible advisory body below it. */
-function InterjectionDivider({ block }: { block: Block }) {
-  const [expanded, setExpanded] = useState(false);
+ * the advisory body below it. Notes are content the reader asked to see, so
+ * the body shows in full; the collapse toggle only appears past two lines. */
+/** An interjection's body, expanded until measured too tall for its clamp. */
+function InterjectionBody({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(true);
   const [overflows, setOverflows] = useState(false);
   const textRef = useRef<HTMLPreElement>(null);
 
   useLayoutEffect(() => {
     const el = textRef.current;
-    if (!el || !block.text) {
+    if (!el || !text) {
       setOverflows(false);
       return;
     }
     const measure = () => {
-      if (!expanded) {
-        setOverflows(el.scrollHeight > el.clientHeight + 1);
-      }
+      // Overflow is only knowable while the body is unclamped; once known it
+      // stays known, since a block's text never shrinks underneath it.
+      if (expanded) setOverflows(el.scrollHeight > 41);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [block.text, expanded]);
+  }, [text, expanded]);
 
+  return (
+    <div className="mt-2 px-2">
+      <pre
+        ref={textRef}
+        className={`${INTERJECTION_BODY} ${expanded ? "" : "line-clamp-2"}`}
+      >
+        {text}
+      </pre>
+      {overflows ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-1 py-1 font-sans text-xs text-content/55 hover:text-content"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function InterjectionDivider({ block }: { block: Block }) {
   const meta = block.interjection;
   if (!meta) return null;
   const { label, severityText, severityClass } = interjectionChrome(meta);
@@ -3067,24 +3150,131 @@ function InterjectionDivider({ block }: { block: Block }) {
         </div>
         <div className="h-px min-w-4 flex-1 bg-content/12" />
       </div>
-      {block.text ? (
-        <div className="mt-2 px-2">
-          <pre
-            ref={textRef}
-            className={`${INTERJECTION_BODY} ${expanded ? "" : "line-clamp-2"}`}
-          >
-            {block.text}
-          </pre>
-          {overflows ? (
-            <button
-              type="button"
-              aria-expanded={expanded}
-              onClick={() => setExpanded((value) => !value)}
-              className="mt-1 py-1 font-sans text-xs text-content/55 hover:text-content"
-            >
-              {expanded ? "Show less" : "Show more"}
-            </button>
-          ) : null}
+      {block.text ? <InterjectionBody text={block.text} /> : null}
+    </div>
+  );
+}
+
+/**
+ * A side-channel exchange: one slim row for a run of interjections and the
+ * reply addressed to them, expanded on demand. Routine advisor notes start
+ * closed — a count and a preview keep the signal without the divider noise —
+ * while a blocker or a channel with no collapse contract (async results,
+ * IRC) stays open. The reader drills in: answer, then the exchange, then
+ * each note inside it.
+ */
+function ExchangeRow({
+  notes,
+  reply,
+  renderBlock,
+}: {
+  notes: Block[];
+  reply?: Block;
+  renderBlock: (block: Block) => ReactNode;
+}) {
+  const [override, setOverride] = useState<boolean | null>(null);
+  const interjections = notes.filter((note) => note.interjection);
+  const defaultOpen = interjections.some(
+    (note) =>
+      note.interjection!.severity === "blocker" ||
+      note.interjection!.customType !== "advisor",
+  );
+  const open = override ?? defaultOpen;
+
+  const counts = new Map<string, number>();
+  for (const note of interjections) {
+    const { label } = interjectionChrome(note.interjection!);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const summary =
+    counts.size === 1 && counts.has("Advisor")
+      ? `Advisor${interjections.length > 1 ? ` ×${interjections.length}` : ""}`
+      : `Side inputs · ${[...counts].map(([label, count]) => `${label}${count > 1 ? ` ×${count}` : ""}`).join(" · ")}`;
+  const topSeverity = interjections.reduce<InterjectionMeta | undefined>(
+    (top, note) => {
+      const severity = note.interjection!.severity;
+      if (!top) return note.interjection;
+      const rank = { blocker: 3, concern: 2, nit: 1 } as const;
+      return rank[severity ?? "nit"] > rank[top.severity ?? "nit"]
+        ? note.interjection
+        : top;
+    },
+    undefined,
+  );
+  const { severityText, severityClass } = topSeverity
+    ? interjectionChrome(topSeverity)
+    : { severityText: undefined, severityClass: "text-content/55" };
+  // With a reply attached, the collapsed row previews what the agent said
+  // back — if the reply was misclassified, its first line still shows.
+  const preview = proseSummary(
+    reply?.text ?? interjections[interjections.length - 1]?.text ?? "",
+  );
+
+  return (
+    <div data-exchange>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOverride(!open)}
+        className="group flex w-full min-w-0 items-center gap-1.5 px-4 py-1 text-left"
+      >
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-content/45 ${open ? "rotate-90" : ""}`}
+          strokeWidth={1.75}
+        />
+        <span className="shrink-0 font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
+          {summary}
+        </span>
+        {severityText ? (
+          <span className={`shrink-0 text-[11px] ${severityClass}`}>
+            {severityText}
+          </span>
+        ) : null}
+        {reply ? (
+          <span className="shrink-0 text-[11px] text-content/40">reply</span>
+        ) : null}
+        <span className="min-w-0 flex-1 truncate font-sans text-xs text-content/35">
+          {preview}
+        </span>
+      </button>
+      {open ? (
+        <div className="pl-5 zen-fold-rail">
+          <div className="flex min-w-0 flex-col gap-2 pb-1 pr-4">
+            {notes.map((note) =>
+              note.interjection ? (
+                <div key={note.id}>
+                  <div className="flex items-center gap-2 px-2 font-sans text-[11px] text-content/45">
+                    <span>{interjectionChrome(note.interjection).label}</span>
+                    {interjectionChrome(note.interjection).severityText ? (
+                      <span
+                        className={
+                          interjectionChrome(note.interjection).severityClass
+                        }
+                      >
+                        {interjectionChrome(note.interjection).severityText}
+                      </span>
+                    ) : null}
+                  </div>
+                  <InterjectionBody text={note.text} />
+                </div>
+              ) : (
+                <div
+                  key={note.id}
+                  className="px-2 font-sans text-[11px] text-content/40"
+                >
+                  {note.text}
+                </div>
+              ),
+            )}
+            {reply ? (
+              <div className="mt-1 border-l-2 border-content/10 pl-3">
+                <div className="pb-1 font-sans text-[11px] uppercase tracking-wide text-content/40">
+                  Reply
+                </div>
+                {renderBlock(reply)}
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>

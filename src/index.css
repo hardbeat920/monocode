@@ -1328,61 +1328,46 @@ header[data-tauri-drag-region] button {
 }
 
 /*
- * Prose the fold holds is the agent talking while it works — process, not
- * result. It stays readable at one notch quieter: muted ink, headings
- * demoted to bold lines, and tighter spacing, so a mid-run note never poses
- * as the answer it led to.
+ * Narration — prose the agent addressed to itself between two completed work
+ * groups — stays readable at one notch quieter: muted ink, headings demoted
+ * to bold lines, tighter spacing. It is a presentation hint, not a semantic
+ * claim: the text is never clamped, folded, or required to expand.
  */
-.zen-fold-prose .agent-markdown > :not(:last-child) {
+.zen-narration .agent-markdown > :not(:last-child) {
   margin-block-end: 0.5rem;
 }
 
-.zen-fold-prose .agent-markdown p,
-.zen-fold-prose .agent-markdown li {
-  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+.zen-narration .agent-markdown p,
+.zen-narration .agent-markdown li {
+  color: color-mix(in srgb, var(--color-content) 60%, transparent);
 }
 
-.zen-fold-prose .agent-markdown p strong,
-.zen-fold-prose .agent-markdown p em,
-.zen-fold-prose .agent-markdown p [data-streamdown="strong"],
-.zen-fold-prose .agent-markdown li strong,
-.zen-fold-prose .agent-markdown li em,
-.zen-fold-prose .agent-markdown li [data-streamdown="strong"] {
-  color: color-mix(in srgb, var(--color-content) 80%, transparent) !important;
+.zen-narration .agent-markdown p strong,
+.zen-narration .agent-markdown p em,
+.zen-narration .agent-markdown p [data-streamdown="strong"],
+.zen-narration .agent-markdown li strong,
+.zen-narration .agent-markdown li em,
+.zen-narration .agent-markdown li [data-streamdown="strong"] {
+  color: color-mix(in srgb, var(--color-content) 75%, transparent) !important;
 }
 
-/* A heading in a work note is a bold line, not a display size. */
-.zen-fold-prose .agent-markdown [data-streamdown="heading-1"],
-.zen-fold-prose .agent-markdown [data-streamdown="heading-2"],
-.zen-fold-prose .agent-markdown [data-streamdown="heading-3"],
-.zen-fold-prose .agent-markdown [data-streamdown="heading-4"],
-.zen-fold-prose .agent-markdown [data-streamdown="heading-5"],
-.zen-fold-prose .agent-markdown [data-streamdown="heading-6"] {
+/* A heading inside narration is a bold line, not a display size. */
+.zen-narration .agent-markdown [data-streamdown="heading-1"],
+.zen-narration .agent-markdown [data-streamdown="heading-2"],
+.zen-narration .agent-markdown [data-streamdown="heading-3"],
+.zen-narration .agent-markdown [data-streamdown="heading-4"],
+.zen-narration .agent-markdown [data-streamdown="heading-5"],
+.zen-narration .agent-markdown [data-streamdown="heading-6"] {
   margin-top: 0.75rem;
   margin-bottom: 0.25rem;
   font-size: 14px;
   font-weight: 600;
-  color: color-mix(in srgb, var(--color-content) 80%, transparent);
+  color: color-mix(in srgb, var(--color-content) 75%, transparent);
 }
 
-.zen-fold-prose .agent-markdown [data-streamdown="blockquote"],
-.zen-fold-prose .agent-markdown .markdown-code-shell {
+.zen-narration .agent-markdown [data-streamdown="blockquote"],
+.zen-narration .agent-markdown .markdown-code-shell {
   margin-block: 0.5rem;
-}
-
-.zen-fold-prose .agent-markdown [data-streamdown="code-block"],
-.zen-fold-prose .agent-markdown [data-streamdown="table-wrapper"] {
-  border-color: color-mix(in srgb, var(--color-content) 8%, transparent);
-  background: color-mix(in srgb, var(--color-content) 4%, transparent);
-}
-
-.zen-fold-prose .agent-markdown [data-streamdown="table-header-cell"],
-.zen-fold-prose .agent-markdown [data-streamdown="table-cell"] {
-  color: color-mix(in srgb, var(--color-content) 65%, transparent);
-}
-
-.zen-fold-prose .agent-markdown [data-streamdown="horizontal-rule"] {
-  margin-block: 0.75rem;
 }
 
 .zen-fold-item[data-fold-state="closed"] {

@@ -120,6 +120,11 @@ export type InterjectionMeta = {
   customType: string;
   /** Highest severity among this interjection's retained notes, when any is known. */
   severity?: InterjectionSeverity;
+  /**
+   * The note sealed an open assistant stream, so the prose after it continues
+   * the message it interrupted — a continuation, not a reply to the note.
+   */
+  splitStream?: boolean;
 };
 
 export type ToolPreviewKind = "read" | "write" | "shell" | "search";
