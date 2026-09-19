@@ -15,6 +15,9 @@ describe("composerDraft", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     invoke.mockReset();
+    // flushDraft chains `.catch` on the invoke result, so the default mock
+    // must resolve (Once-stubs registered per test still take priority).
+    invoke.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
