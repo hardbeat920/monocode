@@ -28,6 +28,7 @@ export function SourceControl({
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <GitChangesPanel
+        key={cwd}
         cwd={cwd}
         enabled={enabled}
         textHarness={textHarness}

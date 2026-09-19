@@ -42,6 +42,7 @@ import {
   gitDiffIndex,
   gitDiscardAll,
   gitDiscardFile,
+  gitHeadMessage,
   gitPrCreate,
   gitPrStatus,
   gitPush,
@@ -249,6 +250,7 @@ function ChangedFiles({
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [amend, setAmend] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [stagedExpanded, setStagedExpanded] = useState(stagedOpen);
   const [changesExpanded, setChangesExpanded] = useState(changesOpen);
@@ -267,7 +269,10 @@ function ChangedFiles({
     !!index.defaultBranch &&
     index.branch === index.defaultBranch;
   const canGenerate = files.length > 0 && !busy;
-  const canCommit = staged.length > 0 && message.trim().length > 0 && !busy;
+  const canCommit =
+    (staged.length > 0 || amend) && message.trim().length > 0 && !busy;
+  /** HEAD is not on the upstream yet, so a plain push still fast-forwards after an amend. */
+  const headUnpushed = !index?.upstream || (index?.ahead ?? 0) > 0;
   const canCreatePr =
     hasRemote &&
     !hasOpenPr &&
@@ -282,9 +287,11 @@ function ChangedFiles({
     hasRemote &&
     Boolean(index?.upstream) &&
     ((index?.ahead ?? 0) > 0 || (index?.behind ?? 0) > 0);
-  const canCommitPush = canCommit && hasRemote && !diverged;
+  const canCommitPush =
+    canCommit && hasRemote && !diverged && (!amend || headUnpushed);
   const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
-  const canEditMessage = staged.length > 0 && !busy;
+  const canEditMessage = (staged.length > 0 || amend) && !busy;
+  const canOpenMenu = !!index?.branch && !busy;
 
   useEffect(() => {
     if (!enabled) return;
@@ -406,6 +413,29 @@ function ChangedFiles({
     }
   };
 
+  const toggleAmend = async () => {
+    setMenuOpen(false);
+    if (amend) {
+      setAmend(false);
+      return;
+    }
+    try {
+      const head = await gitHeadMessage(cwd);
+      if (!message.trim()) setMessage(head);
+      setAmend(true);
+    } catch (error) {
+      fail(error);
+    }
+  };
+
+  const confirmAmend = async () => {
+    if (!amend || headUnpushed) return true;
+    return confirmNative(
+      "Amend a commit that is already pushed? MonoCode cannot push the result. You will need a force push from the terminal.",
+      "Amend",
+    );
+  };
+
   const commit = async (push: boolean, createPr = false) => {
     if (!canCommit) return;
     if (
@@ -414,15 +444,17 @@ function ChangedFiles({
     ) {
       return;
     }
+    if (!(await confirmAmend())) return;
     setBusy(createPr ? "pr" : "commit");
     setMenuOpen(false);
     try {
-      await gitCommit(cwd, message);
+      await gitCommit(cwd, message, amend);
       if (push || createPr) {
         await gitPush(cwd);
         recordPrActivity();
       }
       setMessage("");
+      setAmend(false);
       onMutated();
       if (createPr) {
         await openCreatedPr();
@@ -495,7 +527,11 @@ function ChangedFiles({
             ref={messageRef}
             rows={1}
             value={message}
-            placeholder={`Message (${MOD}↩ to commit)`}
+            placeholder={
+              amend
+                ? `Amend message (${MOD}↩ to amend)`
+                : `Message (${MOD}↩ to commit)`
+            }
             disabled={!canEditMessage}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
@@ -533,23 +569,28 @@ function ChangedFiles({
             className="flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-l-md bg-content text-[12px] font-medium text-background-base disabled:opacity-40"
           >
             <Check className="size-3.5" strokeWidth={2} />
-            Commit
+            {amend ? "Amend Commit" : "Commit"}
           </button>
 
           <button
             type="button"
             title="Commit options"
             aria-label="Commit options"
-            disabled={!canCommit}
+            disabled={!canOpenMenu}
             onClick={() => setMenuOpen((open) => !open)}
             className="grid h-7 w-7 shrink-0 place-items-center rounded-r-md border-l border-background-base/10 bg-content text-background-base disabled:opacity-40"
           >
             <ChevronDown className="size-3.5" strokeWidth={2} />
           </button>
           {menuOpen ? (
-            <div className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border border-content/10 bg-background-base py-1 shadow-lg">
+            <div
+              role="menu"
+              aria-label="Commit options"
+              className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
+            >
               <button
                 type="button"
+                role="menuitem"
                 disabled={!canCommitPush}
                 onClick={() => void commit(true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
@@ -558,11 +599,27 @@ function ChangedFiles({
               </button>
               <button
                 type="button"
+                role="menuitem"
                 disabled={!canCommitPushPr}
                 onClick={() => void commit(true, true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
                 Commit, Push & Create PR
+              </button>
+              <div className="my-1 border-t border-content/10" />
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={amend}
+                onClick={() => void toggleAmend()}
+                className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10"
+              >
+                <span className="grid size-3.5 shrink-0 place-items-center">
+                  {amend ? (
+                    <Check className="size-3.5" strokeWidth={2} />
+                  ) : null}
+                </span>
+                Amend Last Commit
               </button>
             </div>
           ) : null}

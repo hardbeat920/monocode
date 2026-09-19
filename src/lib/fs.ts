@@ -242,8 +242,16 @@ export function gitUnstageAll(cwd: string): Promise<void> {
   return invoke<void>("git_unstage_all", { cwd });
 }
 
-export function gitCommit(cwd: string, message: string): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message });
+export function gitCommit(
+  cwd: string,
+  message: string,
+  amend = false,
+): Promise<void> {
+  return invoke<void>("git_commit", { cwd, message, amend });
+}
+
+export function gitHeadMessage(cwd: string): Promise<string> {
+  return invoke<string>("git_head_message", { cwd });
 }
 
 export type GitStagedContext = {

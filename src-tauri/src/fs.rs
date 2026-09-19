@@ -721,10 +721,25 @@ pub async fn git_staged_context(cwd: String) -> Result<GitStagedContext, String>
         .map_err(|e| e.to_string())?
 }
 
-/// Create a commit from the current index.
+/// Create a commit from the current index, or rewrite HEAD with it when `amend` is set.
 #[tauri::command]
-pub async fn git_commit(cwd: String, message: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || git_commit_for(&expand_home(&cwd), &message))
+pub async fn git_commit(cwd: String, message: String, amend: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        if amend {
+            git_commit_amend_for(&root, &message)
+        } else {
+            git_commit_for(&root, &message)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Full message (subject and body) of the commit at HEAD.
+#[tauri::command]
+pub async fn git_head_message(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git_head_message_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1933,11 +1948,26 @@ fn git_staged_context_for(root: &Path) -> Result<GitStagedContext, String> {
 }
 
 fn git_commit_for(root: &Path, message: &str) -> Result<(), String> {
+    git_commit_args(root, message, &[])
+}
+
+fn git_commit_amend_for(root: &Path, message: &str) -> Result<(), String> {
+    git_commit_args(root, message, &["--amend"])
+}
+
+fn git_commit_args(root: &Path, message: &str, extra: &[&str]) -> Result<(), String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("Commit message cannot be empty".into());
     }
-    git_checked(root, &["commit", "--cleanup=strip", "-m", message])
+    let mut args = vec!["commit"];
+    args.extend_from_slice(extra);
+    args.extend(["--cleanup=strip", "-m", message]);
+    git_checked(root, &args)
+}
+
+fn git_head_message_for(root: &Path) -> Result<String, String> {
+    git_stdout(root, &["log", "-1", "--pretty=%B"]).ok_or_else(|| "No commits yet".to_string())
 }
 
 fn git_push_for(root: &Path) -> Result<(), String> {
@@ -5786,6 +5816,71 @@ mod tests {
     fn git_commit_rejects_empty_message() {
         let dir = tmp("git-commit-empty");
         assert!(git_commit_for(&dir.0, "   ").is_err());
+    }
+
+    #[test]
+    fn git_commit_amend_rewrites_head_with_staged_changes() {
+        let dir = tmp("git-commit-amend");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+        git_commit_amend_for(&dir.0, "amended").unwrap();
+        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        assert_eq!(
+            git_stdout(&dir.0, &["rev-list", "--count", "HEAD"]).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
+            Some("amended")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["show", "HEAD:a.txt"]).as_deref(),
+            Some("beta")
+        );
+    }
+
+    #[test]
+    fn git_commit_amend_rewords_without_staged_changes() {
+        let dir = tmp("git-commit-reword");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        git_commit_amend_for(&dir.0, "reworded").unwrap();
+        assert_eq!(
+            git_stdout(&dir.0, &["rev-list", "--count", "HEAD"]).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
+            Some("reworded")
+        );
+    }
+
+    #[test]
+    fn git_head_message_returns_subject_and_body() {
+        let dir = tmp("git-head-message");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+        git_commit_for(&dir.0, "Subject line\n\nBody text").unwrap();
+        assert_eq!(
+            git_head_message_for(&dir.0).unwrap(),
+            "Subject line\n\nBody text"
+        );
+    }
+
+    #[test]
+    fn git_head_message_fails_without_commits() {
+        let dir = tmp("git-head-message-empty");
+        if !init_git(&dir.0, "main", None) {
+            return;
+        }
+        assert!(git_head_message_for(&dir.0).is_err());
     }
 
     #[test]

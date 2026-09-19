@@ -273,6 +273,7 @@ pub fn run() {
             fs::git_stage_all,
             fs::git_unstage_all,
             fs::git_commit,
+            fs::git_head_message,
             fs::git_staged_context,
             fs::git_push,
             fs::git_pull,
