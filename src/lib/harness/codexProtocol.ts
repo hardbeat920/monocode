@@ -6,6 +6,7 @@ import type {
   TurnIntent,
   TurnMetrics,
 } from "../session";
+import { parseRemotePath } from "../remote";
 import {
   attachmentPath,
   attachmentPathText,
@@ -104,8 +105,11 @@ export function buildThreadStartParams(input: {
     input.runtimeMode,
     input.controlsAgents,
   );
+  // The wire cwd must be the remote path — app-server runs on the server and
+  // cannot use the `ssh://` URI form the session carries as identity.
+  const remote = parseRemotePath(input.cwd);
   return {
-    cwd: input.cwd,
+    cwd: remote ? remote.path : input.cwd,
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
     sandboxPolicy: config.sandboxPolicy,

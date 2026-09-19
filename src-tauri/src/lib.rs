@@ -2,6 +2,8 @@ use tauri::Manager;
 
 mod chat_background;
 mod checkpoint;
+mod connection_discovery;
+mod connections;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -22,6 +24,7 @@ mod project_logo;
 mod pty;
 mod rate_limits;
 mod reminders;
+mod remote;
 mod search;
 mod session_store;
 mod skills;
@@ -204,6 +207,7 @@ pub fn run() {
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
+            connections::init(app.handle());
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             reminders::init(app.handle());
@@ -243,6 +247,16 @@ pub fn run() {
             control::control_turn_finished,
             default_cwd,
             home_dir,
+            connections::connections_list,
+            connection_discovery::connections_ssh_hosts,
+            connection_discovery::connections_containers,
+            connection_discovery::connections_browse,
+            connections::connections_save,
+            connections::connections_remove,
+            connections::connections_test,
+            remote::remote_home,
+            remote::remote_resolve_agent,
+            remote::remote_harness_exec,
             notifications::notification_permission,
             notifications::request_notification_permission,
             notifications::show_notification,

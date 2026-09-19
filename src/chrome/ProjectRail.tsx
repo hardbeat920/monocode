@@ -4,6 +4,7 @@ import {
   BellOff,
   ChevronDown,
   ChevronRight,
+  Folder,
   FolderOpen,
   FolderPlus,
   FolderTree,
@@ -15,6 +16,7 @@ import {
   File,
   Plus,
   Search,
+  ServerIcon,
   Settings,
   Trash2,
 } from "./icons";
@@ -40,6 +42,7 @@ import {
   type GitDiffStats,
 } from "../lib/fs";
 import { IS_MAC, IS_WIN, MOD } from "../lib/platform";
+import { isRemotePath } from "../lib/remote";
 import { pathKey, projectKey, projectName } from "../lib/paths";
 import {
   collectRailProjects,
@@ -80,6 +83,7 @@ import {
   type ProjectGroup,
 } from "../lib/projectGroups";
 import type { LiveAgent } from "../lib/liveAgents";
+import { LAYER } from "../lib/layers";
 import { LiveAgentsPreview } from "./LiveAgentsPreview";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { ProjectBackgroundDialog } from "./ProjectBackgroundDialog";
@@ -121,6 +125,7 @@ function projectMenuExtraItems(
   externalEditors: ExternalEditor[] | null,
   projectGroups: ProjectGroup[],
   currentProjectGroupId?: string,
+  remote = false,
 ): TabGroupMenuExtraItem[] {
   const groupSubmenu: ExplorerMenuItem[] = [
     { kind: "item", id: "project-group:new", label: "New group…" },
@@ -154,37 +159,43 @@ function projectMenuExtraItems(
     pinned
       ? { id: "unpin", label: "Unpin project", icon: PinOff }
       : { id: "pin", label: "Pin project", icon: Pin },
-    { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
-    {
-      id: "external-editor",
-      label: "Open in editor",
-      icon: AppWindow,
-      disabled: externalEditors === null,
-      submenu:
-        externalEditors === null
-          ? [
-              {
-                kind: "item",
-                id: "external-editor:loading",
-                label: "Looking for editors…",
-                disabled: true,
-              },
-            ]
-          : externalEditors.length > 0
-            ? externalEditors.map((editor) => ({
-                kind: "item" as const,
-                id: `external-editor:${editor.id}`,
-                label: editor.name,
-              }))
-            : [
-                {
-                  kind: "item",
-                  id: "external-editor:none",
-                  label: "No supported editors found",
-                  disabled: true,
-                },
-              ],
-    },
+    // Finder reveal and local editors are machine-bound; remote projects
+    // only offer what works over the connection.
+    ...(remote
+      ? []
+      : [
+          { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
+          {
+            id: "external-editor",
+            label: "Open in editor",
+            icon: AppWindow,
+            disabled: externalEditors === null,
+            submenu:
+              externalEditors === null
+                ? [
+                    {
+                      kind: "item" as const,
+                      id: "external-editor:loading",
+                      label: "Looking for editors…",
+                      disabled: true,
+                    },
+                  ]
+                : externalEditors.length > 0
+                  ? externalEditors.map((editor) => ({
+                      kind: "item" as const,
+                      id: `external-editor:${editor.id}`,
+                      label: editor.name,
+                    }))
+                  : [
+                      {
+                        kind: "item" as const,
+                        id: "external-editor:none",
+                        label: "No supported editors found",
+                        disabled: true,
+                      },
+                    ],
+          },
+        ]),
     {
       id: "notifications-mute",
       label: "Mute notifications",
@@ -229,6 +240,7 @@ type Props = {
   onTogglePanel?: () => void;
   onSelectProject: (path: string) => void;
   onOpenProject: () => void;
+  onConnectServer?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   liveAgents?: LiveAgent[];
   activeSessionId?: string;
@@ -263,6 +275,7 @@ export function ProjectRail({
   onTogglePanel,
   onSelectProject,
   onOpenProject,
+  onConnectServer,
   onRemoveProject,
   liveAgents = [],
   activeSessionId,
@@ -794,6 +807,7 @@ export function ProjectRail({
                   : undefined
               }
               onAdd={onOpenProject}
+              onConnectServer={onConnectServer}
               cwd={cwd}
               busy={busy}
               sortable={projectSortable}
@@ -895,6 +909,7 @@ export function ProjectRail({
             externalEditors,
             projectGroups,
             projectGroupIdForPath(projectMenu.path, projectGroupAssignments),
+            isRemotePath(projectMenu.path),
           )}
           footer={projectMenuError ? (
             <p role="alert" className="px-2 py-1 text-xs text-red-400">{projectMenuError}</p>
@@ -1032,6 +1047,7 @@ function ProjectSection({
   muteStatuses,
   emptyLabel,
   onAdd,
+  onConnectServer,
   cwd,
   busy,
   sortable,
@@ -1052,6 +1068,7 @@ function ProjectSection({
   muteStatuses: ReadonlyMap<string, string | null>;
   emptyLabel?: string;
   onAdd?: () => void;
+  onConnectServer?: () => void;
   cwd: string;
   busy: Set<string>;
   sortable: SortableHandle;
@@ -1069,7 +1086,11 @@ function ProjectSection({
 }) {
   return (
     <div className="shrink-0 mb-2">
-      <ProjectSectionHeader label={label} onAdd={onAdd} />
+      <ProjectSectionHeader
+        label={label}
+        onAdd={onAdd}
+        onConnectServer={onConnectServer}
+      />
       {items.length === 0 && emptyLabel ? (
         <p className="px-4 pb-1 text-[11px] leading-tight text-content/40">
           {emptyLabel}
@@ -1105,11 +1126,16 @@ function ProjectSectionHeader({
   label,
   onAdd,
   onAddGroup,
+  onConnectServer,
 }: {
   label: string;
   onAdd?: () => void;
   onAddGroup?: (x: number, y: number) => void;
+  /** When set, the + button offers local folders and remote servers. */
+  onConnectServer?: () => void;
 }) {
+  const [addMenu, setAddMenu] = useState(false);
+  const addRef = useRef<HTMLButtonElement>(null);
   return (
     <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
       <span className="min-w-0 flex-1 truncate px-1 text-xs text-content/50">
@@ -1131,14 +1157,56 @@ function ProjectSectionHeader({
       ) : null}
       {onAdd ? (
         <button
+          ref={addRef}
           type="button"
           title="Open project"
           aria-label="Open project"
-          onClick={onAdd}
+          aria-expanded={addMenu}
+          aria-haspopup="menu"
+          onClick={() => {
+            if (onConnectServer) setAddMenu(true);
+            else onAdd();
+          }}
           className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
         >
           <Plus className="size-3.5" strokeWidth={1.75} />
         </button>
+      ) : null}
+      {onAdd && onConnectServer && addMenu ? (
+        <Popover
+          anchor={addRef}
+          role="menu"
+          aria-label="Open project"
+          width={220}
+          layer={LAYER.popover}
+          className="py-1"
+          onDismiss={() => setAddMenu(false)}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[13px] text-content/80 hover:bg-content/5"
+            onClick={() => {
+              setAddMenu(false);
+              onAdd();
+            }}
+          >
+            <Folder className="size-3.5 shrink-0 text-content/45" aria-hidden />
+            Open local folder…
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[13px] text-content/80 hover:bg-content/5"
+            onClick={() => {
+              setAddMenu(false);
+              onConnectServer();
+            }}
+          >
+            <ServerIcon className="size-3.5 shrink-0 text-content/45" aria-hidden />
+            Open remote folder…
+          </button>
+        </Popover>
       ) : null}
     </div>
   );

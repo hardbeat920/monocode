@@ -1,4 +1,6 @@
 import { nativeModelId } from "../models";
+import { parseRemotePath } from "../remote";
+import { resolveRemoteAgent } from "../connections";
 import { sameProviderAccountId } from "../providerAccounts";
 import type { RuntimeMode } from "../session";
 import { loadClaudeHooks } from "../settings";
@@ -365,7 +367,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveClaudeBinaryImpl();
+  const remote = parseRemotePath(input.cwd);
+  const { path } = remote
+    ? await resolveRemoteAgent(remote.connectionId, "claude")
+    : { path: (await resolveClaudeBinaryImpl()).path };
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =
     canResume && resume ? resume.sessionId : crypto.randomUUID();
@@ -436,7 +441,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     path,
     buildClaudeSpawnArgs(launch),
     input.cwd,
-    { provider: "claude", id: input.providerAccountId ?? "default" },
+    // Remote sessions run with the server's own login state; the local
+    // provider-account dirs do not apply.
+    remote
+      ? undefined
+      : { provider: "claude", id: input.providerAccountId ?? "default" },
   );
 
   liveByThread.set(input.sessionId, live);

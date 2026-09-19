@@ -223,6 +223,9 @@ pub fn control_enable(
     session_id: String,
     cwd: String,
 ) -> Result<String, String> {
+    if crate::remote::parse_remote(&cwd).is_some() {
+        return Err("Orchestration control is not available for remote projects.".into());
+    }
     let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
     if !cwd.is_dir() {
         return Err("Choose a project folder first".into());
@@ -340,6 +343,11 @@ pub fn control_authorize_turn(
     session_id: String,
     cwd: String,
 ) -> Result<(), String> {
+    // Remote sessions never carry a control endpoint (their agent runs on
+    // the server), and their `ssh://` cwd has no local form to canonicalize.
+    if crate::remote::parse_remote(&cwd).is_some() {
+        return Ok(());
+    }
     let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
     let cwd = comparison_path(&cwd);
     let mut inner = host
@@ -428,7 +436,7 @@ pub fn control_reply(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn control_save(
     store: State<'_, crate::session_store::SessionStore>,
     lead_id: String,
@@ -443,7 +451,7 @@ pub fn control_save(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn control_load(
     store: State<'_, crate::session_store::SessionStore>,
     lead_id: String,

@@ -133,8 +133,20 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let workdir = working_dir(&cwd);
-    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
+    // Remote projects run their terminal over `ssh -tt` instead of a local
+    // shell. The ssh client only needs a valid local cwd to start from.
+    let remote = crate::remote::parse_remote(&cwd);
+    let workdir = match &remote {
+        Some(_) => dirs_home()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        None => working_dir(&cwd),
+    };
+    let _reservation = if remote.is_some() {
+        None
+    } else {
+        Some(crate::worktree_lifecycle::reserve_spawn(&workdir)?)
+    };
     if let Some(prev) = host.remove(&id) {
         terminate(prev.pid);
         #[cfg(unix)]
@@ -143,19 +155,66 @@ pub fn pty_spawn(
 
     #[cfg(unix)]
     {
-        spawn_unix(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_unix(
+            app,
+            host,
+            id,
+            cwd,
+            workdir,
+            cols.max(2),
+            rows.max(2),
+            remote,
+        )
     }
 
     #[cfg(windows)]
     {
-        spawn_windows(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_windows(
+            app,
+            host,
+            id,
+            cwd,
+            workdir,
+            cols.max(2),
+            rows.max(2),
+            remote,
+        )
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (app, cwd, cols, rows);
+        let _ = (app, cwd, cols, rows, remote);
         Err("Terminals are not supported on this platform.".into())
     }
+}
+
+/// The local argv that lands the user in an interactive login shell on the
+/// remote target, inside the project directory. `ssh -tt` keeps password
+/// prompts and resize flowing through the PTY; the inner `sh -c` resolves
+/// $SHELL on the target instead of guessing it here.
+fn remote_terminal_command(
+    app: &AppHandle,
+    remote: &crate::remote::RemoteRef,
+) -> Result<(String, Vec<String>), String> {
+    let profile = crate::connections::require_profile(app, &remote.connection_id)?;
+    let mut ssh = crate::remote::ssh_command(app, &profile, true)?;
+    let remote_string = crate::remote::remote_command_string(
+        profile.container.as_deref(),
+        Some(&remote.path),
+        &[
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "exec ${SHELL:-/bin/sh} -l".to_string(),
+        ],
+        true,
+    );
+    ssh.arg("--").arg(remote_string);
+    let program = ssh.get_program().to_string_lossy().into_owned();
+    let args = ssh
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    Ok((program, args))
 }
 
 #[tauri::command]
@@ -242,20 +301,26 @@ pub fn pty_kill_all(host: State<'_, PtyHost>) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn spawn_unix(
     app: AppHandle,
     host: State<PtyHost>,
     id: String,
+    cwd: String,
     workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
+    remote: Option<crate::remote::RemoteRef>,
 ) -> Result<(), String> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
-    let (shell, args) = default_shell();
+    let (shell, args) = match &remote {
+        Some(remote_ref) => remote_terminal_command(&app, remote_ref)?,
+        None => default_shell(),
+    };
     let (master, slave) = open_pty(cols, rows)?;
 
     let mut cmd = Command::new(&shell);
@@ -303,7 +368,7 @@ fn spawn_unix(
     let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
 
     let live = Arc::new(LivePty {
-        cwd: workdir.clone(),
+        cwd: host_cwd(&cwd, &workdir),
         writer: Mutex::new(Box::new(writer)),
         master_fd: master,
         pid,
@@ -371,17 +436,23 @@ fn spawn_unix(
 }
 
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn spawn_windows(
     app: AppHandle,
     host: State<PtyHost>,
     id: String,
+    cwd: String,
     workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
+    remote: Option<crate::remote::RemoteRef>,
 ) -> Result<(), String> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-    let (shell, args) = default_shell();
+    let (shell, args) = match &remote {
+        Some(remote_ref) => remote_terminal_command(&app, remote_ref)?,
+        None => default_shell(),
+    };
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -419,7 +490,7 @@ fn spawn_windows(
         .map_err(|err| format!("Failed to write to terminal: {err}"))?;
 
     let live = Arc::new(LivePty {
-        cwd: workdir.clone(),
+        cwd: host_cwd(&cwd, &workdir),
         writer: Mutex::new(Box::new(writer)),
         master: Mutex::new(pair.master),
         pid,
@@ -467,6 +538,17 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
         return path;
     }
     dirs_home().map(std::path::PathBuf::from).unwrap_or(path)
+}
+
+/// The cwd a LivePty records for coordination (`has_working_dir` against
+/// local worktrees). Remote terminals keep their URI — it never matches a
+/// local worktree, which is exactly right.
+fn host_cwd(cwd: &str, workdir: &std::path::Path) -> std::path::PathBuf {
+    if crate::remote::parse_remote(cwd).is_some() {
+        std::path::PathBuf::from(cwd)
+    } else {
+        workdir.to_path_buf()
+    }
 }
 
 fn default_shell() -> (String, Vec<String>) {

@@ -1,4 +1,6 @@
 import { nativeModelId } from "../models";
+import { parseRemotePath } from "../remote";
+import { resolveRemoteAgent } from "../connections";
 import { sameProviderAccountId } from "../providerAccounts";
 import type { RuntimeMode } from "../session";
 import { questionPromptTitle, type UserQuestionReply } from "../userQuestion";
@@ -342,7 +344,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveCodexBinaryImpl();
+  const remote = parseRemotePath(input.cwd);
+  const { path } = remote
+    ? await resolveRemoteAgent(remote.connectionId, "codex")
+    : { path: (await resolveCodexBinaryImpl()).path };
   const liveRef: { current: Live | null } = { current: null };
 
   const rpc = new JsonRpcClient(
@@ -401,10 +406,16 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["app-server"], input.cwd, {
-    provider: "codex",
-    id: input.providerAccountId ?? "default",
-  });
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["app-server"],
+    input.cwd,
+    // Remote sessions run with the server's own login state.
+    remote
+      ? undefined
+      : { provider: "codex", id: input.providerAccountId ?? "default" },
+  );
 
   try {
     await rpc.request("initialize", {

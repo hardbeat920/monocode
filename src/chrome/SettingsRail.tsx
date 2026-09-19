@@ -9,6 +9,7 @@ import {
   Palette,
   SlidersHorizontal,
   Sparkles,
+  Terminal,
   type IconComponent,
 } from "./icons";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -25,6 +26,7 @@ const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   providers: Bot,
   skills: Sparkles,
   inbox: Inbox,
+  servers: Terminal,
   worktrees: FolderTree,
   archive: Archive,
 };

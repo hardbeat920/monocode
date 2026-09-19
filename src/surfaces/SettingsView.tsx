@@ -247,6 +247,7 @@ import {
 
 import { SkillsPage } from "./SkillsPage";
 import { ProjectNotificationSettings } from "./ProjectNotificationSettings";
+import { ServersPage } from "./ServerSettings";
 import { WorktreesPage } from "./WorktreesPage";
 import { removeWorktree, type RemoveWorktree } from "../lib/worktrees";
 import type { Session } from "../lib/session";
@@ -426,6 +427,7 @@ export function SettingsView({
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
               {section === "providers" ? <ProvidersPage /> : null}
+              {section === "servers" ? <ServersPage /> : null}
               {section === "worktrees" ? (
                 <WorktreesPage
                   cwd={cwd}

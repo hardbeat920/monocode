@@ -61,6 +61,27 @@ let bootPromise: Promise<BootWorkspace> | null = null;
 let quitting = false;
 let quitDialogOpen = false;
 let bootingResumed: ResumedWorkspace | null = null;
+
+// Startup must remain bounded even when another MonoCode process is holding
+// the shared SQLite store. Tauri's rusqlite calls can wait on a database lock
+// longer than the UI should keep the splash visible, so boot uses a safe
+// empty fallback and lets the late request finish in the background.
+const BOOT_IO_TIMEOUT_MS = 3000;
+
+function withBootTimeout<T>(
+  pending: Promise<T>,
+  fallback: T,
+  timeoutMs = BOOT_IO_TIMEOUT_MS,
+): Promise<T> {
+  // Consume a late rejection after the timeout so a locked/closed backend
+  // cannot turn into an unhandled rejection in the webview.
+  const settled = pending.catch(() => fallback);
+  return Promise.race([
+    settled,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), timeoutMs)),
+  ]);
+}
+
 let liveWorkspace: {
   sessions: () => Session[];
   tabs: () => WorkspaceTab[];
@@ -172,7 +193,15 @@ export async function askQuitConfirmation(
 }
 
 export async function commitQuit(id: number): Promise<void> {
-  const persisted = await handleQuitRequested();
+  // A rejected save must still report ready with persisted=false — the
+  // coordinator decides what to do with that; staying silent would stall a
+  // quit it has already confirmed.
+  let persisted = false;
+  try {
+    persisted = await handleQuitRequested();
+  } catch {
+    persisted = false;
+  }
   await invoke("quit_ready", { id, persisted }).catch(() => undefined);
 }
 
@@ -209,12 +238,11 @@ export function loadBootWorkspace(): Promise<BootWorkspace> {
     bootPromise = (async () => {
       const hintedCwd = lastProjectPath();
       const historyHint = listProjectHistory(hintedCwd);
-      const windowTransfer = await loadWindowTransfer();
+      const windowTransfer = await withBootTimeout(loadWindowTransfer(), null);
       if (windowTransfer) {
-        const listed = await historyForCwd(
-          windowTransfer.projectCwd,
-          hintedCwd,
-          historyHint,
+        const listed = await withBootTimeout(
+          historyForCwd(windowTransfer.projectCwd, hintedCwd, historyHint),
+          null,
         );
         return {
           windowTransfer,
@@ -224,13 +252,16 @@ export function loadBootWorkspace(): Promise<BootWorkspace> {
         };
       }
       const [resumed, hinted] = await Promise.all([
-        loadResumedWorkspace(),
-        historyHint,
+        withBootTimeout(loadResumedWorkspace(), null),
+        withBootTimeout(historyHint, null),
       ]);
-      const listed = await historyForCwd(
-        resumed?.projectCwd ?? hintedCwd,
-        hintedCwd,
-        Promise.resolve(hinted),
+      const listed = await withBootTimeout(
+        historyForCwd(
+          resumed?.projectCwd ?? hintedCwd,
+          hintedCwd,
+          Promise.resolve(hinted),
+        ),
+        null,
       );
       return {
         windowTransfer: null,

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isRemotePath } from "./remote";
 import { HARNESSES, type HarnessId, type Session } from "./session";
 import { pathKey } from "./paths";
 import type { ApprovalDecision, HarnessEvent } from "./harness/types";
@@ -491,6 +492,12 @@ export class Orchestrator {
     }
   }
   async hydrate(id: string) {
+    // The Rust control store is local-only. Avoid probing it for remote
+    // sessions while their SSH-backed persistence may still be running.
+    const session = this.host?.session(id);
+    if (!session || isRemotePath(session.cwd)) {
+      return;
+    }
     if (this.loaded.has(id) || this.run(id)) return;
     this.loaded.add(id);
     try {

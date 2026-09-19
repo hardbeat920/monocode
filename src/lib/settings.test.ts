@@ -284,6 +284,7 @@ describe("settings navigation", () => {
       "providers",
       "skills",
       "inbox",
+      "servers",
       "archive",
       "worktrees",
     ]);

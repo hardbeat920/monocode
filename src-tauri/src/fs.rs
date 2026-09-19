@@ -16,10 +16,10 @@ pub(crate) const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntry {
-    name: String,
-    path: String,
-    is_dir: bool,
-    ignored: bool,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) is_dir: bool,
+    pub(crate) ignored: bool,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -331,6 +331,9 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
 /// Immediate children of `path` (project tree). Folders first, then files.
 #[tauri::command(async)]
 pub fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    if let Some(remote) = crate::remote::parse_remote(&path) {
+        return crate::remote::remote_list_dir(&remote);
+    }
     let dir = expand_home(&path);
     let reader = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let ignore = Ignore::load(&dir);
@@ -387,6 +390,9 @@ pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String>
 }
 
 pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, String> {
+    if let Some(remote) = crate::remote::parse_remote(cwd) {
+        return crate::remote::remote_list_project_files(&remote);
+    }
     let root = expand_home(cwd);
     if !root.is_dir() {
         return Err(format!("{}: Not a directory", root.display()));
@@ -401,10 +407,8 @@ pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, Str
 }
 
 fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
-    let output = git_cmd()
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-co", "--exclude-standard", "-z"])
+    let output = git_invocation(root, &["ls-files", "-co", "--exclude-standard", "-z"])
+        .ok()?
         .output()
         .ok()?;
     if !output.status.success() {
@@ -1899,13 +1903,7 @@ fn git_index_mode(root: &Path, relative: &str) -> Option<String> {
 }
 
 fn git_hash_object(root: &Path, relative: &str, contents: &[u8]) -> Result<String, String> {
-    let mut child = git_cmd()
-        .arg("--no-pager")
-        .arg("-C")
-        .arg(root)
-        .args(["hash-object", "-w", "--path", relative, "--stdin"])
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let mut child = git_invocation(root, &["hash-object", "-w", "--path", relative, "--stdin"])?
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -3386,6 +3384,9 @@ fn gh_checked(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
+    if crate::remote::parse_remote(&root.to_string_lossy()).is_some() {
+        return Err("PR actions are not available for remote projects yet.".into());
+    }
     let program = crate::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
@@ -3449,21 +3450,38 @@ fn git_cmd() -> Command {
     cmd
 }
 
-pub(crate) fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
-    let output = git_cmd()
-        .arg("--no-pager")
+/// The git invocation for `root`: a local git child, or ssh-wrapped remote
+/// git when the root is an `ssh://` URI. `--no-pager`, `-C`, and the git env
+/// vars are baked in here so every caller quotes its arguments exactly once.
+pub(crate) fn git_invocation(root: &Path, args: &[&str]) -> Result<Command, String> {
+    if let Some(remote) = crate::remote::parse_remote(&root.to_string_lossy()) {
+        return crate::remote::git_command(&remote, args);
+    }
+    let mut cmd = git_cmd();
+    cmd.arg("--no-pager")
         .arg("-C")
         .arg(root)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|e| e.to_string())?;
-    if output.status.success() {
+        .env("GIT_TERMINAL_PROMPT", "0");
+    Ok(cmd)
+}
+
+pub(crate) fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
+    let output = if let Some(remote) = crate::remote::parse_remote(&root.to_string_lossy()) {
+        crate::remote::git_capture(&remote, args)?
+    } else {
+        crate::remote::CapturedOutput::from_output(
+            git_invocation(root, args)?
+                .output()
+                .map_err(|e| e.to_string())?,
+        )
+    };
+    if output.success {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = output.stderr;
+    let stdout = output.stdout;
     let msg = stderr.trim();
     if !msg.is_empty() {
         return Err(msg.to_string());
@@ -3484,29 +3502,20 @@ fn git_run(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = git_cmd()
-        .arg("--no-pager")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .ok()?;
-    if git_status_ok(&output.status, args) {
-        return Some(output.stdout);
+    let output = if let Some(remote) = crate::remote::parse_remote(&root.to_string_lossy()) {
+        crate::remote::git_capture(&remote, args).ok()?
+    } else {
+        crate::remote::CapturedOutput::from_output(git_invocation(root, args).ok()?.output().ok()?)
+    };
+    if git_status_ok(output.code, args) {
+        return Some(output.stdout.into_bytes());
     }
     None
 }
 
 fn git_output_capped(root: &Path, args: &[&str], max_bytes: usize) -> Option<(Vec<u8>, bool)> {
-    let mut child = git_cmd()
-        .arg("--no-pager")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let mut child = git_invocation(root, args)
+        .ok()?
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -3535,15 +3544,15 @@ fn git_output_capped(root: &Path, args: &[&str], max_bytes: usize) -> Option<(Ve
         buf.extend_from_slice(&chunk[..n]);
     }
     let status = child.wait().ok()?;
-    if git_status_ok(&status, args) {
+    if git_status_ok(status.code(), args) {
         Some((buf, false))
     } else {
         None
     }
 }
 
-fn git_status_ok(status: &std::process::ExitStatus, args: &[&str]) -> bool {
-    status.success() || (status.code() == Some(1) && args.first().copied() == Some("diff"))
+fn git_status_ok(code: Option<i32>, args: &[&str]) -> bool {
+    code == Some(0) || (code == Some(1) && args.first().copied() == Some("diff"))
 }
 
 fn git_branch(root: &Path) -> Option<String> {
@@ -3732,12 +3741,7 @@ fn git_branch_name(root: &Path, name: &str) -> Result<String, String> {
     if name.is_empty() {
         return Err("Branch name cannot be empty".into());
     }
-    let output = git_cmd()
-        .arg("-C")
-        .arg(root)
-        .args(["check-ref-format", "--branch", name])
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let output = git_invocation(root, &["check-ref-format", "--branch", name])?
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
@@ -3871,11 +3875,15 @@ fn git_ahead_behind(root: &Path, base: &str) -> (i64, i64) {
 }
 
 fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
-    let output = git_cmd().arg("-C").arg(root).args(args).output().ok()?;
-    if !output.status.success() {
+    let output = if let Some(remote) = crate::remote::parse_remote(&root.to_string_lossy()) {
+        crate::remote::git_capture(&remote, args).ok()?
+    } else {
+        crate::remote::CapturedOutput::from_output(git_invocation(root, args).ok()?.output().ok()?)
+    };
+    if !output.success {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let text = output.stdout.trim().to_string();
     if text.is_empty() {
         None
     } else {
@@ -4077,6 +4085,28 @@ fn already_exists(label: &str) -> String {
 /// nest. Returns the created path.
 #[tauri::command(async)]
 pub fn create_path(parent: String, name: String, is_dir: bool) -> Result<String, String> {
+    if let Some(remote) = crate::remote::parse_remote(&parent) {
+        let dest = crate::remote::join_remote_path(&remote.path, &name)?;
+        let dest_ref = crate::remote::RemoteRef {
+            connection_id: remote.connection_id.clone(),
+            path: dest.clone(),
+        };
+        let label = file_label(Path::new(&dest), &name);
+        let created = if is_dir {
+            crate::remote::remote_create_dir(&dest_ref)
+        } else {
+            // No-clobber create: an existing file is a collision, not a
+            // silent overwrite (same contract as the local branch).
+            crate::remote::remote_create_file(&dest_ref)
+        };
+        if let Err(error) = created {
+            if error.contains("already exists") {
+                return Err(already_exists(&label));
+            }
+            return Err(error);
+        }
+        return Ok(crate::remote::remote_uri(&remote.connection_id, &dest));
+    }
     let parent_dir = expand_home(&parent);
     let dest = resolve_under(&parent_dir, &name)?;
     let label = file_label(&dest, &name);
@@ -4298,8 +4328,8 @@ const MAX_STAT_FILES: usize = 64;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMtime {
-    path: String,
-    mtime_ms: Option<u64>,
+    pub(crate) path: String,
+    pub(crate) mtime_ms: Option<u64>,
 }
 
 fn file_mtime_ms(meta: &std::fs::Metadata) -> Option<u64> {
@@ -4315,17 +4345,40 @@ pub fn stat_files(paths: Vec<String>) -> Result<Vec<FileMtime>, String> {
     if paths.len() > MAX_STAT_FILES {
         return Err("Too many paths".into());
     }
-    Ok(paths
-        .into_iter()
-        .map(|path| {
-            let expanded = expand_home(&path);
-            let mtime_ms = std::fs::metadata(&expanded)
-                .ok()
-                .filter(|meta| meta.is_file())
-                .and_then(|meta| file_mtime_ms(&meta));
-            FileMtime { path, mtime_ms }
-        })
-        .collect())
+    let stat_local = |path: String| {
+        let expanded = expand_home(&path);
+        let mtime_ms = std::fs::metadata(&expanded)
+            .ok()
+            .filter(|meta| meta.is_file())
+            .and_then(|meta| file_mtime_ms(&meta));
+        FileMtime { path, mtime_ms }
+    };
+    if paths
+        .iter()
+        .any(|path| crate::remote::parse_remote(path).is_some())
+    {
+        // One ssh round-trip per connection covers the whole batch; local
+        // paths in the same batch still get their mtime locally.
+        let mut grouped: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut local_paths = Vec::new();
+        for path in paths {
+            if let Some(remote) = crate::remote::parse_remote(&path) {
+                grouped.entry(remote.connection_id).or_default().push(path);
+            } else {
+                local_paths.push(path);
+            }
+        }
+        let mut out = Vec::new();
+        for (_, group) in grouped {
+            if let Some(remote) = crate::remote::parse_remote(&group[0]) {
+                out.extend(crate::remote::remote_stat_files(&remote, &group));
+            }
+        }
+        out.extend(local_paths.into_iter().map(stat_local));
+        return Ok(out);
+    }
+    Ok(paths.into_iter().map(stat_local).collect())
 }
 
 #[derive(Serialize)]
@@ -4371,6 +4424,13 @@ pub async fn read_file_base64(path: String) -> Result<String, String> {
 }
 
 fn read_file_base64_sync(path: &str) -> Result<String, String> {
+    if let Some(remote) = crate::remote::parse_remote(path) {
+        let bytes = crate::remote::remote_read_bytes(&remote, MAX_ATTACHMENT_EMBED_BYTES)?;
+        return Ok(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            bytes,
+        ));
+    }
     let path = expand_home(path);
     let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
@@ -4403,6 +4463,9 @@ pub async fn read_binary_file(path: String) -> Result<tauri::ipc::Response, Stri
 }
 
 fn read_binary_file_sync(path: &str) -> Result<Vec<u8>, String> {
+    if let Some(remote) = crate::remote::parse_remote(path) {
+        return crate::remote::remote_read_bytes(&remote, MAX_PREVIEW_BYTES);
+    }
     let path = expand_home(path);
     let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
@@ -4482,6 +4545,13 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 }
 
 fn read_text_file_sync(path: &str) -> Result<String, String> {
+    if let Some(remote) = crate::remote::parse_remote(path) {
+        let bytes = crate::remote::remote_read_bytes(&remote, MAX_TEXT_FILE_BYTES)?;
+        if bytes.contains(&0) {
+            return Err("Binary files cannot be edited.".into());
+        }
+        return String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8.".into());
+    }
     let path = expand_home(path);
     let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
@@ -4510,6 +4580,9 @@ pub async fn write_text_file(path: String, content: String) -> Result<(), String
 }
 
 fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
+    if let Some(remote) = crate::remote::parse_remote(path) {
+        return crate::remote::remote_write(&remote, content.as_bytes());
+    }
     if content.len() as u64 > MAX_TEXT_FILE_BYTES {
         return Err(format!(
             "File is too large to save (maximum {} MB).",
@@ -4638,6 +4711,37 @@ fn unique_name_in(dir: &Path, name: &str) -> String {
     }
 }
 
+/// `unique_name_in` for a remote directory: "name", "name copy", "name copy 2"…
+fn unique_remote_name(
+    dest_parent: &crate::remote::RemoteRef,
+    name: &str,
+) -> Result<String, String> {
+    let entries = crate::remote::remote_list_dir(dest_parent)?;
+    let taken: std::collections::HashSet<String> =
+        entries.into_iter().map(|entry| entry.name).collect();
+    let (stem, ext) = split_stem_ext(name);
+    let mut n = 0u32;
+    loop {
+        let candidate = match n {
+            0 => name.to_string(),
+            1 => format!("{stem} copy{ext}"),
+            _ => format!("{stem} copy {n}{ext}"),
+        };
+        if !taken.contains(&candidate) {
+            return crate::remote::join_remote_path(&dest_parent.path, &candidate);
+        }
+        n += 1;
+        if n > 1000 {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let fallback = format!("{stem} copy {stamp}{ext}");
+            return crate::remote::join_remote_path(&dest_parent.path, &fallback);
+        }
+    }
+}
+
 fn copy_recursive(from: &Path, to: &Path) -> Result<(), String> {
     let meta = std::fs::metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
     if meta.is_dir() {
@@ -4654,7 +4758,7 @@ fn copy_recursive(from: &Path, to: &Path) -> Result<(), String> {
     }
 }
 
-fn rename_path_sync(path: &str, name: &str) -> Result<String, String> {
+fn rename_path_local(path: &str, name: &str) -> Result<String, String> {
     let from = expand_home(path);
     if !from.exists() {
         return Err(format!("{}: No such file or directory", from.display()));
@@ -4703,7 +4807,37 @@ pub async fn rename_path(path: String, name: String) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+fn rename_path_sync(path: &str, name: &str) -> Result<String, String> {
+    if let Some(remote) = crate::remote::parse_remote(path) {
+        let base = remote
+            .path
+            .trim_end_matches('/')
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_string())
+            .unwrap_or_else(|| "/".to_string());
+        let dest_path = crate::remote::join_remote_path(&base, name)?;
+        if dest_path == remote.path {
+            return Ok(path.to_string());
+        }
+        let dest = crate::remote::RemoteRef {
+            connection_id: remote.connection_id.clone(),
+            path: dest_path.clone(),
+        };
+        if let Err(error) = crate::remote::remote_rename(&remote, &dest) {
+            if error.contains("already exists") {
+                return Err(already_exists(&file_label(Path::new(&dest_path), name)));
+            }
+            return Err(error);
+        }
+        return Ok(crate::remote::remote_uri(&remote.connection_id, &dest_path));
+    }
+    rename_path_local(path, name)
+}
+
 fn delete_path_sync(path: &str) -> Result<(), String> {
+    if let Some(remote) = crate::remote::parse_remote(path) {
+        return crate::remote::remote_delete(&remote);
+    }
     let path = expand_home(path);
     if !path.exists() {
         return Err(format!("{}: No such file or directory", path.display()));
@@ -4730,6 +4864,25 @@ fn dir_contains(dir: &Path, dest_parent: &Path) -> bool {
 }
 
 fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
+    if let (Some(remote_from), Some(remote_dest)) = (
+        crate::remote::parse_remote(from),
+        crate::remote::parse_remote(dest_parent),
+    ) {
+        if remote_from.connection_id != remote_dest.connection_id {
+            return Err("Cannot copy between different servers.".into());
+        }
+        let name = file_label(Path::new(&remote_from.path), "copy");
+        let dest_path = unique_remote_name(&remote_dest, &name)?;
+        let dest = crate::remote::RemoteRef {
+            connection_id: remote_dest.connection_id.clone(),
+            path: dest_path.clone(),
+        };
+        crate::remote::remote_copy(&remote_from, &dest)?;
+        return Ok(crate::remote::remote_uri(
+            &remote_dest.connection_id,
+            &dest_path,
+        ));
+    }
     let from = expand_home(from);
     if !from.exists() {
         return Err(format!("{}: No such file or directory", from.display()));
@@ -4758,6 +4911,33 @@ pub async fn copy_path(from: String, dest_parent: String) -> Result<String, Stri
 }
 
 fn move_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
+    if let (Some(remote_from), Some(remote_dest)) = (
+        crate::remote::parse_remote(from),
+        crate::remote::parse_remote(dest_parent),
+    ) {
+        if remote_from.connection_id != remote_dest.connection_id {
+            return Err("Cannot move between different servers.".into());
+        }
+        let name = file_label(Path::new(&remote_from.path), "item");
+        let dest_path = crate::remote::join_remote_path(&remote_dest.path, &name)?;
+        if dest_path == remote_from.path {
+            return Ok(from.to_string());
+        }
+        let dest = crate::remote::RemoteRef {
+            connection_id: remote_dest.connection_id.clone(),
+            path: dest_path.clone(),
+        };
+        if let Err(error) = crate::remote::remote_move(&remote_from, &dest) {
+            if error.contains("already exists") {
+                return Err(already_exists(&name));
+            }
+            return Err(error);
+        }
+        return Ok(crate::remote::remote_uri(
+            &remote_dest.connection_id,
+            &dest_path,
+        ));
+    }
     let from = expand_home(from);
     if !from.exists() {
         return Err(format!("{}: No such file or directory", from.display()));

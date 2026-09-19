@@ -14,6 +14,7 @@ import {
 import { revealPath } from "../lib/fs";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { isEqualOrInside, pathKey, prettyCwd, projectName } from "../lib/paths";
+import { isRemotePath } from "../lib/remote";
 import { loadArchivedProjects, type RecentProject } from "../lib/recents";
 import type { Session } from "../lib/session";
 import {
@@ -196,18 +197,20 @@ export function WorktreesPage({
                     {tree.locked && <span>Locked</span>}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  disabled={tree.missing}
-                  aria-label={`Reveal ${tree.branch ?? "worktree"}`}
-                  title="Reveal folder"
-                  onClick={() =>
-                    void revealPath(tree.path).catch((e) => setError(String(e)))
-                  }
-                  className="rounded-md p-1.5 text-content/40 hover:bg-content/8 hover:text-content disabled:opacity-30"
-                >
-                  <FolderOpen className="size-4" />
-                </button>
+                {!isRemotePath(tree.path) && (
+                  <button
+                    type="button"
+                    disabled={tree.missing}
+                    aria-label={`Reveal ${tree.branch ?? "worktree"}`}
+                    title="Reveal folder"
+                    onClick={() =>
+                      void revealPath(tree.path).catch((e) => setError(String(e)))
+                    }
+                    className="rounded-md p-1.5 text-content/40 hover:bg-content/8 hover:text-content disabled:opacity-30"
+                  >
+                    <FolderOpen className="size-4" />
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={!!blocked || refreshingAfterFailure || !!loadError}

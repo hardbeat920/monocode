@@ -14,7 +14,11 @@ export default defineConfig(async ({ mode }) => {
     server: {
       port: 1420,
       strictPort: true,
-      host: host || false,
+      // Pin IPv4 loopback: with `false` vite binds whatever `localhost`
+      // resolves to first (here ::1 only), and webview subresource requests
+      // that land on 127.0.0.1 get refused mid-page — a splash that never
+      // finishes loading. TAURI_DEV_HOST still wins for device testing.
+      host: host || "127.0.0.1",
       hmr: stable
         ? false
         : host

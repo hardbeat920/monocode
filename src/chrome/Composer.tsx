@@ -1851,6 +1851,7 @@ export function Composer({
                   values={modelSettings}
                   hideSettings={controlsBeside}
                   hotkeys={hotkeys && enabled}
+                  cwd={cwd}
                   onChange={onModelChange}
                   onSettingsChange={(settings) =>
                     onModelSettingsChange?.(settings)

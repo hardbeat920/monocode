@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -930,13 +929,11 @@ fn encode_path_component(value: &str) -> String {
 }
 
 fn gitlab_repo_for(root: &Path, gitlab_url: &str) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
-    let output = cmd
-        .args(["config", "--get-regexp", r"^remote\..*\.url$"])
-        .current_dir(root)
-        .output()
-        .map_err(|_| "Could not run git".to_string())?;
+    // Remote projects read their remotes over ssh via the shared invocation.
+    let output =
+        crate::fs::git_invocation(root, &["config", "--get-regexp", r"^remote\..*\.url$"])?
+            .output()
+            .map_err(|_| "Could not run git".to_string())?;
     if !output.status.success() && output.status.code() != Some(1) {
         return Err("Could not read git remotes".into());
     }
@@ -1082,7 +1079,7 @@ fn delete_config(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
+pub(crate) fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::io::Write;
