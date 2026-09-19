@@ -2,7 +2,6 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -1189,18 +1188,31 @@ fn sniff_content(bytes: &[u8]) -> FileContent {
     FileContent::Text(bytes.to_vec())
 }
 
-static DIFF_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Creates a temporary directory with an unpredictable name and, on Unix,
+/// owner-only permissions, so other local users on a shared machine cannot
+/// guess or read the diff scratch files.
+fn create_secure_tmp_dir() -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("monocode-ado-diff-{}", uuid::Uuid::new_v4()));
+    if fs::create_dir(&dir).is_err() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).is_err() {
+            let _ = fs::remove_dir_all(&dir);
+            return None;
+        }
+    }
+    Some(dir)
+}
 
 /// Unified hunks between two file versions via the local `git` binary (the
 /// provider already requires git for remote detection). Returns `None` when
 /// the sides are identical or git is unavailable/fails, so callers degrade to
 /// a hunk-less file entry instead of failing the whole diff.
 fn git_unified_hunks(old: Option<&[u8]>, new: Option<&[u8]>) -> Option<(i64, i64, String)> {
-    let tag = DIFF_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("monocode-ado-diff-{}-{tag}", std::process::id()));
-    if fs::create_dir_all(&dir).is_err() {
-        return None;
-    }
+    let dir = create_secure_tmp_dir()?;
     let cleanup = || {
         let _ = fs::remove_dir_all(&dir);
     };
@@ -1519,12 +1531,7 @@ fn validate_item(kind: &str, number: i64) -> Result<(), String> {
 /// Boards work items carry only the project name in `repo` (e.g. `"platform"`
 /// instead of `"platform/web"`), so comment paths take the leading segment.
 fn wit_project(repo: &str) -> Result<String, String> {
-    let project = repo
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let project = repo.split('/').next().unwrap_or("").trim().to_string();
     if project.is_empty() || project == "." || project == ".." {
         return Err("Invalid Azure DevOps project".into());
     }
