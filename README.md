@@ -67,6 +67,17 @@ npm run build:linux
 The Linux build emits `.deb` and AppImage bundles under `target/release/bundle/`.
 Tauri loads `src-tauri/tauri.linux.conf.json` automatically for Linux development and builds.
 
+To build from source and add MonoCode to your current user's application menu
+without creating a package, run:
+
+```bash
+npm run install:linux:desktop
+```
+
+This installs the release binary under `~/.local/bin` and a freedesktop launcher
+under `$XDG_DATA_HOME` (or `~/.local/share` when it is unset). It does not require
+`sudo`. Remove both with `npm run uninstall:linux:desktop`.
+
 ### Windows packages
 
 ```bash
