@@ -135,6 +135,7 @@ export type GitDiffIndex = {
   ahead: number;
   behind: number;
   aheadOfDefault: number;
+  headPushed: boolean;
 };
 
 export function gitDiffIndex(cwd: string): Promise<GitDiffIndex> {

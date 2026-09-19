@@ -529,6 +529,7 @@ pub struct GitDiffIndex {
     pub ahead: i64,
     pub behind: i64,
     pub ahead_of_default: i64,
+    pub head_pushed: bool,
 }
 
 /// Changed files in the opened folder, with per-file line counts and status.
@@ -1340,6 +1341,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
         ahead: sync.ahead,
         behind: sync.behind,
         ahead_of_default: sync.ahead_of_default,
+        head_pushed: sync.head_pushed,
     }
 }
 
@@ -3708,6 +3710,7 @@ struct GitSync {
     ahead: i64,
     behind: i64,
     ahead_of_default: i64,
+    head_pushed: bool,
 }
 
 fn git_sync_for(root: &Path) -> GitSync {
@@ -3730,6 +3733,17 @@ fn git_sync_for(root: &Path) -> GitSync {
     } else {
         ahead
     };
+    let head_pushed = git_stdout(
+        root,
+        &[
+            "for-each-ref",
+            "--count=1",
+            "--contains",
+            "HEAD",
+            "refs/remotes",
+        ],
+    )
+    .is_some();
     GitSync {
         remote,
         upstream,
@@ -3737,6 +3751,7 @@ fn git_sync_for(root: &Path) -> GitSync {
         ahead,
         behind,
         ahead_of_default,
+        head_pushed,
     }
 }
 
@@ -5977,6 +5992,41 @@ mod tests {
         assert_eq!(range.base, "main");
         assert_eq!(range.head, "feature");
         assert!(range.commit_summary.contains("feature work"));
+    }
+
+    #[test]
+    fn git_sync_marks_head_pushed_without_upstream() {
+        let repo = tmp("git-pushed-repo");
+        let origin = tmp("git-pushed-origin");
+        if !init_git_commit(&repo.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        if Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&origin.0)
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let origin_url = origin.0.to_string_lossy().into_owned();
+        if !git(&repo.0, &["remote", "add", "origin", &origin_url])
+            || !git(&repo.0, &["push", "-u", "origin", "main"])
+            || !git(&repo.0, &["checkout", "-b", "feature"])
+        {
+            return;
+        }
+        std::fs::write(repo.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&repo.0, "a.txt").unwrap();
+        git_commit_for(&repo.0, "feature work").unwrap();
+        assert!(!git_diff_index_for(&repo.0).head_pushed);
+        if !git(&repo.0, &["push", "origin", "feature"]) {
+            return;
+        }
+        let index = git_diff_index_for(&repo.0);
+        assert_eq!(index.upstream, None);
+        assert!(index.head_pushed);
     }
 
     #[test]

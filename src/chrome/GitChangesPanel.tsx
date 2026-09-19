@@ -271,8 +271,6 @@ function ChangedFiles({
   const canGenerate = files.length > 0 && !busy;
   const canCommit =
     (staged.length > 0 || amend) && message.trim().length > 0 && !busy;
-  /** HEAD is not on the upstream yet, so a plain push still fast-forwards after an amend. */
-  const headUnpushed = !index?.upstream || (index?.ahead ?? 0) > 0;
   const canCreatePr =
     hasRemote &&
     !hasOpenPr &&
@@ -288,7 +286,7 @@ function ChangedFiles({
     Boolean(index?.upstream) &&
     ((index?.ahead ?? 0) > 0 || (index?.behind ?? 0) > 0);
   const canCommitPush =
-    canCommit && hasRemote && !diverged && (!amend || headUnpushed);
+    canCommit && hasRemote && !diverged && (!amend || !index?.headPushed);
   const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
   const canEditMessage = (staged.length > 0 || amend) && !busy;
   const canOpenMenu = !!index?.branch && !busy;
@@ -429,7 +427,7 @@ function ChangedFiles({
   };
 
   const confirmAmend = async () => {
-    if (!amend || headUnpushed) return true;
+    if (!amend || !index?.headPushed) return true;
     return confirmNative(
       "Amend a commit that is already pushed? MonoCode cannot push the result. You will need a force push from the terminal.",
       "Amend",
@@ -1491,7 +1489,8 @@ function sameIndex(prev: GitDiffIndex | null, next: GitDiffIndex): boolean {
     prev.defaultBranch !== next.defaultBranch ||
     prev.ahead !== next.ahead ||
     prev.behind !== next.behind ||
-    prev.aheadOfDefault !== next.aheadOfDefault
+    prev.aheadOfDefault !== next.aheadOfDefault ||
+    prev.headPushed !== next.headPushed
   ) {
     return false;
   }
