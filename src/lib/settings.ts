@@ -229,6 +229,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "zoom font size bigger smaller ui",
   },
   {
+    id: "show-excluded-files",
+    section: "appearance",
+    label: "Show excluded files",
+    keywords: "explorer gitignore ignored hidden files tree",
+  },
+  {
     id: "chat-background",
     section: "appearance",
     label: "Chat background",

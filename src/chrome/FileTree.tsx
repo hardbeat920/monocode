@@ -14,6 +14,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -26,6 +27,10 @@ import {
   type NameIssue,
 } from "../lib/fileName";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
+import {
+  loadShowExcludedFiles,
+  subscribeShowExcludedFiles,
+} from "../lib/appearance";
 import {
   createParentOf,
   dirsTouchedByCreate,
@@ -107,6 +112,7 @@ type TreeCtxValue = {
   cutPath: string | null;
   dragOverPath: string | null;
   epoch: number;
+  showExcludedFiles: boolean;
   gitStatuses?: GitStatusMap;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
@@ -257,6 +263,11 @@ export const FileTree = memo(function FileTree({
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
+  const showExcludedFiles = useSyncExternalStore(
+    subscribeShowExcludedFiles,
+    loadShowExcludedFiles,
+    loadShowExcludedFiles,
+  );
   const creatingRef = useRef(creating);
   creatingRef.current = creating;
   const fileDragCleanup = useRef<(() => void) | null>(null);
@@ -832,6 +843,7 @@ export const FileTree = memo(function FileTree({
         cutPath: clip?.mode === "cut" ? clip.path : null,
         dragOverPath,
         epoch,
+        showExcludedFiles,
         gitStatuses,
         onToggle: toggle,
         onSelect,
@@ -1074,8 +1086,11 @@ function TreeChildren({
         onCancel={() => ctx.onCreateCancel(creating.id)}
       />
     ) : null;
-  const folders = entries?.filter((e) => e.isDir) ?? [];
-  const files = entries?.filter((e) => !e.isDir) ?? [];
+  const visible = ctx.showExcludedFiles
+    ? entries
+    : entries?.filter((e) => !e.ignored);
+  const folders = visible?.filter((e) => e.isDir) ?? [];
+  const files = visible?.filter((e) => !e.isDir) ?? [];
   const pad = { paddingLeft: 28 + depth * 12 };
 
   return (
