@@ -108,6 +108,28 @@ function irc(id: string, text = "new message in #general"): Block {
 }
 
 describe("transcriptFilePaths", () => {
+  it("collects every file a multi-file edit touched", () => {
+    const edited: Block = {
+      id: "multi",
+      role: "tool",
+      text: "Edit /repo/src/one.ts",
+      tool: {
+        kind: "edit",
+        status: "completed",
+        preview: {
+          kind: "write",
+          path: "/repo/src/one.ts",
+          fileName: "one.ts",
+        },
+        paths: ["/repo/src/one.ts", "/repo/src/two.ts"],
+      },
+    };
+    expect(transcriptFilePaths([edited])).toEqual([
+      "/repo/src/one.ts",
+      "/repo/src/two.ts",
+    ]);
+  });
+
   it("returns unique structured file paths without scraping prose", () => {
     expect(
       transcriptFilePaths([

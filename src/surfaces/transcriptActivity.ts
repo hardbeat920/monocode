@@ -21,12 +21,20 @@ export type TurnItem =
   /** Delegated runs spawned together, kept out of the folding work trail. */
   | { type: "subagents"; blocks: Block[] };
 
-/** File paths backed by structured tool events in this transcript. */
+/**
+ * File paths backed by structured tool events in this transcript. A multi-file
+ * edit previews one file and lists the rest, so both are read: otherwise every
+ * shortened link but the first one resolves on the file name alone.
+ */
 export function transcriptFilePaths(blocks: readonly Block[]): string[] {
   const paths = new Set<string>();
   for (const block of blocks) {
     const path = block.tool?.preview?.path?.trim();
     if (path) paths.add(path);
+    for (const edited of block.tool?.paths ?? []) {
+      const trimmed = edited.trim();
+      if (trimmed) paths.add(trimmed);
+    }
   }
   return [...paths];
 }

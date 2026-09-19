@@ -244,7 +244,9 @@ export async function resolveFileOpenRequest(
   options?: FileOpenOptions,
 ): Promise<string> {
   if (options?.exact) return path;
-  return (await resolveOpenablePath(cwd, path, options?.candidatePaths)) ?? path;
+  return (
+    (await resolveOpenablePath(cwd, path, options?.candidatePaths)) ?? path
+  );
 }
 
 function resolveReferencedPath(
