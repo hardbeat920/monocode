@@ -341,6 +341,7 @@ import {
   queuedMessageForSubmit,
 } from "./lib/messageQueue";
 import { dropContextWindow } from "./lib/contextUsage";
+import { discardSessionDraft } from "./lib/composerDraft";
 import {
   deleteSession,
   getSession,
@@ -1455,8 +1456,14 @@ export default function App({
         const toTray = loadCloseToTray();
         void (async () => {
           // Hide/destroy end the JS context before the draft debounce timer
-          // would fire, so push any pending composer drafts out first.
-          await flushSessionDraft();
+          // would fire, so push any pending composer drafts out first. If a
+          // draft write fails, stay open rather than tearing down with the
+          // draft unsaved.
+          try {
+            await flushSessionDraft();
+          } catch {
+            return;
+          }
           if (hasInFlightSessions(sessionsRef.current)) {
             flushHarnessEvents();
             if (!toTray && !IS_MAC) {
@@ -4127,6 +4134,15 @@ export default function App({
           persist: async (latest) => {
             if (latest) await flushSessionCheckpoint(sessionId);
             if (mode === "delete") {
+              // The delete strips the row (and its draft, via FK cascade);
+              // drop the pending write first so unmount-flushing the pane
+              // cannot fail against a session that no longer exists.
+              discardSessionDraft(sessionId);
+              window.dispatchEvent(
+                new CustomEvent<string>("monocode:session-deleted", {
+                  detail: sessionId,
+                }),
+              );
               await orchestrator.deleteSession(sessionId, () =>
                 deleteSession(sessionId),
               );
@@ -7356,8 +7372,14 @@ export default function App({
   const onReload = useCallback(() => {
     void (async () => {
       if (!(await confirmReload(dirtyFilesRef.current.size > 0))) return;
-      // The reload tears down JS before the draft debounce timer fires.
-      await flushSessionDraft();
+      // The reload tears down JS before the draft debounce timer fires. If a
+      // draft write fails, stay on this page rather than reloading with the
+      // draft unsaved.
+      try {
+        await flushSessionDraft();
+      } catch {
+        return;
+      }
       window.location.reload();
     })();
   }, []);

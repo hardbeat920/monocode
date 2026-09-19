@@ -84,11 +84,56 @@ describe("composerDraft", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("swallows write failures", async () => {
+  it("timer-fired write failures are swallowed silently", async () => {
     invoke.mockRejectedValueOnce(new Error("db locked"));
     saveSessionDraft("s-4", "text");
     await vi.advanceTimersByTimeAsync(600);
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushSessionDraft re-pends failed writes, rejects only if still unwritten", async () => {
+    invoke
+      .mockRejectedValueOnce(new Error("db locked"))
+      .mockResolvedValueOnce(undefined);
+    saveSessionDraft("s-4", "text");
+    await expect(flushSessionDraft()).resolves.toBeUndefined();
+    // First write failed, retry on the next pass succeeded.
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenNthCalledWith(2, "composer_draft_set", {
+      sessionId: "s-4",
+      text: "text",
+    });
+  });
+
+  it("flushSessionDraft rejects when a write keeps failing", async () => {
+    invoke.mockRejectedValue(new Error("db locked"));
+    saveSessionDraft("s-5", "text");
+    await expect(flushSessionDraft()).rejects.toThrow("composer_draft_set failed");
+  });
+
+  it("flushSessionDraft drains saves added while a write is in flight", async () => {
+    let releaseFirst: (() => void) | undefined;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    saveSessionDraft("s-6", "first");
+    const flush = flushSessionDraft();
+    // While the first write hangs, the pane saves again.
+    saveSessionDraft("s-6", "second");
+    await vi.advanceTimersByTimeAsync(600);
+    releaseFirst?.();
+    await expect(flush).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
+      sessionId: "s-6",
+      text: "first",
+    });
+    expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
+      sessionId: "s-6",
+      text: "second",
+    });
   });
 
   it("loads a draft and treats failures as empty", async () => {

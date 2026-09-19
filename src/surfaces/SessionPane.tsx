@@ -69,6 +69,7 @@ import {
 import type { SessionFolderTarget } from "../lib/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../lib/linkedSessionSeen";
 import {
+  discardPendingDraft,
   flushSessionDraft,
   loadSessionDraft,
   saveSessionDraft,
@@ -361,6 +362,9 @@ export const SessionPane = memo(function SessionPane({
   const dockComposer =
     !draftBlock && (!isEmpty || inSplit || !!session.inboxAsk);
   const draftRef = useRef<string | undefined>(undefined);
+  // Set when the session is deleted: pending drafts are dropped and further
+  // saves are suppressed (the DB row is gone; a write would only fail).
+  const draftDiscarded = useRef(false);
   // Persisted draft for this session, loaded once per pane mount. The Composer
   // picks up late loads through its `initialDraft` sync effect.
   const [restoredDraft, setRestoredDraft] = useState<string | undefined>(
@@ -378,8 +382,26 @@ export const SessionPane = memo(function SessionPane({
     };
   }, [session.id]);
   useEffect(() => {
+    // The delete flow drops this session's pending draft before removing the
+    // row (FK cascade would make a late write fail). Also suppress further
+    // saves until the pane unmounts.
+    const onSessionDeleted = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (id !== session.id) return;
+      draftDiscarded.current = true;
+      discardPendingDraft();
+    };
+    window.addEventListener("monocode:session-deleted", onSessionDeleted);
+    return () =>
+      window.removeEventListener("monocode:session-deleted", onSessionDeleted);
+  }, [session.id]);
+  useEffect(() => {
     return () => {
-      void flushSessionDraft();
+      // On unmount the pane cannot know whether the session is being deleted
+      // (delete flow already discarded pending drafts) or just hidden by the
+      // tree. A flush that fails is left pending; a silent success would only
+      // come from a write that actually landed.
+      flushSessionDraft().catch(() => null);
     };
   }, [session.id]);
   const composer = (
@@ -415,7 +437,9 @@ export const SessionPane = memo(function SessionPane({
       }
       onDraftChange={(text) => {
         draftRef.current = text;
-        saveSessionDraft(session.id, text);
+        // After a delete, the pending draft is dropped and saves stop so the
+        // unmount flush cannot write against a missing row.
+        if (!draftDiscarded.current) saveSessionDraft(session.id, text);
       }}
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}
