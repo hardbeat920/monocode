@@ -26,6 +26,11 @@ export type CheckpointFileDiff = {
   tooLarge: boolean;
 };
 
+export type CheckpointApplyResult = {
+  files: string[];
+  alreadyApplied: number;
+};
+
 const REVIEW_CHANGED = "monocode-review-changed";
 const checkpointQueues = new Map<string, Promise<void>>();
 
@@ -128,6 +133,37 @@ export function sessionCheckpointStatus(
       sessionId,
       cwd,
     }),
+  );
+}
+
+/** Apply one isolated worker's captured delta to its lead checkout. */
+export function applySessionCheckpoint(
+  sessionId: string,
+  fromCwd: string,
+  toCwd: string,
+): Promise<CheckpointApplyResult> {
+  return enqueueCheckpoint(sessionId, () =>
+    invoke<CheckpointApplyResult>("session_checkpoint_apply", {
+      sessionId,
+      fromCwd,
+      toCwd,
+    }),
+  );
+}
+
+/** True only when the checkout still matches its seeded, pre-worker state. */
+export function sessionCheckpointCleanupSafe(
+  sessionId: string,
+  cwd: string,
+): Promise<boolean> {
+  return enqueueCheckpoint(sessionId, () =>
+    invoke<boolean>("session_checkpoint_cleanup_safe", { sessionId, cwd }),
+  );
+}
+
+export function forgetSessionCheckpoint(sessionId: string): Promise<void> {
+  return enqueueCheckpoint(sessionId, () =>
+    invoke<void>("session_checkpoint_forget", { sessionId }),
   );
 }
 

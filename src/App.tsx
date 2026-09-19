@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { orchestrator, type ControlOutcome } from "./lib/orchestration";
+import {
+  orchestrationCheckoutCwd,
+  orchestrationProjectCwd,
+  orchestrator,
+  workspaceIdentity,
+  type ControlOutcome,
+} from "./lib/orchestration";
 import { modelsFor } from "./lib/models";
 import { isHarnessAvailable } from "./lib/harness/availability";
 import {
@@ -51,11 +57,19 @@ import {
 } from "./chrome/DeleteSessionDialog";
 import {
   assertWorktreeFilesClosed,
+  createOrchestrationWorktree,
+  createWorktree,
   detachSessionWorktree,
   checkWorktreeRemoval,
   listWorktrees,
+  namedWorktreeBranch,
+  orchestrationWorktreeBranchName,
+  removeOrchestrationBranch,
+  removeOrchestrationWorktree,
   removeWorktree,
+  renameWorktreeBranch,
   sessionInWorktree,
+  temporaryWorktreeBranchName,
   worktreeSessionIds,
   type Worktree,
 } from "./lib/worktrees";
@@ -182,6 +196,7 @@ import {
   compactHarnessContext,
   forgetHarnessSession,
   generateHarnessTitle,
+  generateHarnessBranchName,
   isLiveHarness,
   latestTurnNeedsHarnessLogin,
   probeHarnessAvailability,
@@ -225,11 +240,14 @@ import { requestOutgoingHandoff } from "./lib/handoffTurn";
 import { isEditTool } from "./lib/harness/preview";
 import {
   beginSessionTurn,
+  applySessionCheckpoint,
   captureSessionCheckpoint,
+  forgetSessionCheckpoint,
   flushSessionCheckpoint,
   keepSessionChanges,
   notifyReviewChanged,
   prepareSessionCheckpoint,
+  sessionCheckpointCleanupSafe,
 } from "./lib/checkpoint";
 import { notifyDirsChanged } from "./lib/fileTree";
 import { invalidateWatchedFiles, nudgeWatchedFiles } from "./lib/fileWatch";
@@ -314,6 +332,7 @@ import {
   type SecondOpinionMeta,
   type Session,
   type TurnIntent,
+  type WorkspaceMode,
 } from "./lib/session";
 
 import {
@@ -697,7 +716,7 @@ export default function App({
   );
   const [sessionDeleteDialog, setSessionDeleteDialog] = useState<{
     title: string;
-    unusedWorktree?: string;
+    unusedWorktree: string;
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
   const switchingWorktrees = useRef(new Map<string, string>());
@@ -1197,6 +1216,14 @@ export default function App({
     !historyFailed;
   const gitCwd =
     activeFile?.cwd ?? (active ? sessionWorkCwd(active) : sidebarCwd);
+  const gitCwdBranches = useProjectBranches(
+    gitCwd,
+    Boolean(gitCwd) && gitCwd !== "~",
+  );
+  const explorerRootLabel =
+    active?.worktreeCwd && sameProjectPath(gitCwd, sessionWorkCwd(active))
+      ? active.branch || gitCwdBranches?.current || undefined
+      : undefined;
   const gitCwdRef = useRef(gitCwd);
   gitCwdRef.current = gitCwd;
   const projectBranches = useProjectBranches(
@@ -1535,7 +1562,11 @@ export default function App({
     const liveIds = new Set(sessions.map((session) => session.id));
     const visibleIds = openSessionIds(tabsRef.current);
     for (const session of sessions) {
-      if (removingSessionIds.current.has(session.id) || switchingWorktrees.current.has(session.id)) continue;
+      if (
+        removingSessionIds.current.has(session.id) ||
+        switchingWorktrees.current.has(session.id)
+      )
+        continue;
       if (observedSessions.current.get(session.id) === session) continue;
       observedSessions.current.set(session.id, session);
       const parked = !visibleIds.has(session.id);
@@ -1578,7 +1609,11 @@ export default function App({
       pendingPersist.current.clear();
       void Promise.all(
         dirty.map(async (session) => {
-          if (removingSessionIds.current.has(session.id) || switchingWorktrees.current.has(session.id)) return;
+          if (
+            removingSessionIds.current.has(session.id) ||
+            switchingWorktrees.current.has(session.id)
+          )
+            return;
           const fingerprint = persistFingerprint(session);
           if (lastPersisted.current.get(session.id) === fingerprint) return;
           const summary = await upsertSession(session).catch(() => null);
@@ -4005,15 +4040,19 @@ export default function App({
             // A failed lookup must never offer filesystem cleanup.
           }
         }
-        const choice = await new Promise<SessionDeleteChoice>((resolve) => {
-          setSessionDeleteDialog({ title: label, unusedWorktree, resolve });
-        });
-        deleteConfirmationPending.current = false;
-        if (!choice.confirmed) {
-          removingSessionIds.current.delete(sessionId);
-          return false;
+        if (!unusedWorktree) {
+          deleteConfirmationPending.current = false;
+        } else {
+          const choice = await new Promise<SessionDeleteChoice>((resolve) => {
+            setSessionDeleteDialog({ title: label, unusedWorktree, resolve });
+          });
+          deleteConfirmationPending.current = false;
+          if (!choice.confirmed) {
+            removingSessionIds.current.delete(sessionId);
+            return false;
+          }
+          if (choice.deleteWorktree) deleteWorktreePath = unusedWorktree;
         }
-        if (choice.deleteWorktree) deleteWorktreePath = unusedWorktree;
       }
       invalidateLoadedSession(sessionId);
       pendingPersist.current.delete(sessionId);
@@ -4063,7 +4102,9 @@ export default function App({
               await orchestrator.stopRun(run.leadId);
             await stopSessionForRemoval(sessionId);
             if (mode === "delete") {
-              const latest = sessionsRef.current.find((s) => s.id === sessionId);
+              const latest = sessionsRef.current.find(
+                (s) => s.id === sessionId,
+              );
               const harnesses: HarnessId[] = latest
                 ? sessionChildHarnesses(latest)
                 : [seed?.harness ?? "cursor"];
@@ -4410,6 +4451,8 @@ export default function App({
                 branch: undefined,
                 worktreeCwd: undefined,
                 worktreeRemoved: undefined,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
               }
             : s,
         ),
@@ -4457,6 +4500,54 @@ export default function App({
       notifyReviewChanged(sessionId);
     },
     [persistSession],
+  );
+
+  const onWorkspaceModeChange = useCallback(
+    (sessionId: string, mode: WorkspaceMode, base?: string) => {
+      setSessions((prev) =>
+        prev.map((session) => {
+          if (
+            session.id !== sessionId ||
+            (!isBlankSession(session) &&
+              !(session.workspaceMode && !session.worktreeCwd && !session.busy))
+          ) {
+            return session;
+          }
+          return mode === "worktree"
+            ? base || session.worktreeBase
+              ? {
+                  ...session,
+                  workspaceMode: "worktree",
+                  worktreeBase: base || session.worktreeBase,
+                }
+              : session
+            : {
+                ...session,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
+              };
+        }),
+      );
+    },
+    [],
+  );
+
+  const onWorktreeBaseChange = useCallback(
+    (sessionId: string, base: string) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId &&
+          (isBlankSession(session) ||
+            (!!session.workspaceMode &&
+              !session.worktreeCwd &&
+              !session.busy)) &&
+          session.workspaceMode === "worktree"
+            ? { ...session, worktreeBase: base }
+            : session,
+        ),
+      );
+    },
+    [],
   );
 
   const onWorktreeChange = useCallback(
@@ -5004,6 +5095,53 @@ export default function App({
     [],
   );
 
+  const onSaveDraft = useCallback(
+    (sessionId: string, text: string, attachments: Attachment[] = []) => {
+      const current = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      if (
+        !current ||
+        current.busy ||
+        current.blocks.length > 0 ||
+        current.inboxAsk ||
+        current.worktreeRemoved ||
+        (!text.trim() && attachments.length === 0)
+      ) {
+        return false;
+      }
+      const placeholderTitle = canReplaceSessionTitle(
+        current.title,
+        current.harness,
+        HARNESS_LABEL[current.harness],
+      );
+      const title = placeholderTitle
+        ? titleFromPrompt(text, current.harness, attachments)
+        : current.title;
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId && session.blocks.length === 0
+            ? {
+                ...session,
+                title,
+                blocks: [
+                  {
+                    id: crypto.randomUUID(),
+                    role: "user",
+                    text,
+                    ...(attachments.length > 0 ? { attachments } : {}),
+                    draft: true,
+                  },
+                ],
+              }
+            : session,
+        ),
+      );
+      return true;
+    },
+    [],
+  );
+
   const onSubmit = useCallback(
     (
       sessionId: string,
@@ -5020,6 +5158,7 @@ export default function App({
         buildTarget?: PlanBuildTarget;
         managed?: boolean;
         orchestrationRetry?: OrchestrationProposal;
+        draftBlockId?: string;
         onSettled?: (outcome: ControlOutcome) => void;
       },
     ) => {
@@ -5063,9 +5202,26 @@ export default function App({
         )
       )
         return false;
-      const current = options?.buildTarget
-        ? withPlanBuildTarget(storedCurrent, options.buildTarget)
+      const draftBlock = options?.draftBlockId
+        ? storedCurrent.blocks.find(
+            (block) =>
+              block.id === options.draftBlockId &&
+              block.role === "user" &&
+              block.draft,
+          )
+        : undefined;
+      if (options?.draftBlockId && !draftBlock) return false;
+      const draftCleared = draftBlock
+        ? {
+            ...storedCurrent,
+            blocks: storedCurrent.blocks.filter(
+              (block) => block.id !== draftBlock.id,
+            ),
+          }
         : storedCurrent;
+      const current = options?.buildTarget
+        ? withPlanBuildTarget(draftCleared, options.buildTarget)
+        : draftCleared;
       const intent = options?.intent ?? "default";
       if (intent === "orchestrate") {
         try {
@@ -5113,7 +5269,9 @@ export default function App({
       }
       if (isPreparingHandoff(current)) return false;
       saveRecentModelChoice(current.harness, current.model);
-      const workCwd = sessionWorkCwd(current);
+      const initialWorkCwd = sessionWorkCwd(current);
+      const createDraftWorktree =
+        !current.worktreeCwd && current.workspaceMode === "worktree";
       const accountProvider = supportsProviderAccounts(current.harness)
         ? current.harness
         : undefined;
@@ -5147,7 +5305,9 @@ export default function App({
 
       if (current.busy && !pendingSwitch) {
         const followUpBehavior =
-          intent === "plan" || intent === "orchestrate"
+          current.worktreePreparing ||
+          intent === "plan" ||
+          intent === "orchestrate"
             ? "queue"
             : (options?.followUpBehavior ?? loadFollowUpBehavior());
         if (followUpBehavior === "queue") {
@@ -5216,12 +5376,12 @@ export default function App({
             const prompt = await preparePrompt(harnessText, {
               harness: current.harness,
               sessionId,
-              cwd: workCwd,
+              cwd: initialWorkCwd,
             });
             await steerHarnessTurn({
               harness: current.harness,
               sessionId,
-              cwd: workCwd,
+              cwd: initialWorkCwd,
               model: current.model,
               modelSettings: current.modelSettings,
               text: inboxAskPrompt(
@@ -5254,6 +5414,7 @@ export default function App({
             version: 1,
             leadId: sessionId,
             cwd: current.cwd,
+            checkoutCwd: initialWorkCwd,
             request: harnessText,
             author: {
               harness: current.harness,
@@ -5268,11 +5429,12 @@ export default function App({
           }
         : undefined;
       const isFirstTurn = current.blocks.length === 0;
-      const placeholderTitle = canReplaceSessionTitle(
-        current.title,
-        current.harness,
-        HARNESS_LABEL[current.harness],
-      );
+      const placeholderTitle =
+        canReplaceSessionTitle(
+          current.title,
+          current.harness,
+          HARNESS_LABEL[current.harness],
+        ) || !!draftBlock;
       const titleSeed =
         isFirstTurn &&
         !current.inboxCard &&
@@ -5307,13 +5469,22 @@ export default function App({
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
-          const selected = options?.buildTarget
-            ? withPlanBuildTarget(s, options.buildTarget)
+          const draftRemoved = draftBlock
+            ? {
+                ...s,
+                blocks: s.blocks.filter((block) => block.id !== draftBlock.id),
+              }
             : s;
+          const selected = options?.buildTarget
+            ? withPlanBuildTarget(draftRemoved, options.buildTarget)
+            : draftRemoved;
           const titled = isFirstTurn ? titleSeed : selected.title;
           let next: Session = {
             ...selected,
             providerAccountId,
+            worktreePreparing: createDraftWorktree
+              ? true
+              : selected.worktreePreparing,
             inboxCard: rawCommand ? s.inboxCard : undefined,
             noteCard: rawCommand ? s.noteCard : undefined,
             handoffCard: rawCommand ? s.handoffCard : undefined,
@@ -5384,7 +5555,8 @@ export default function App({
         }),
       );
 
-      if (isFirstTurn && live && placeholderTitle) {
+      const launchTitleGeneration = (workCwd: string) => {
+        if (!isFirstTurn || !live || !placeholderTitle) return;
         const titleMessage =
           harnessText || attachments.map((file) => file.name).join(", ");
         void generateHarnessTitle(current.harness, {
@@ -5421,7 +5593,7 @@ export default function App({
             );
           })
           .catch(() => undefined);
-      }
+      };
 
       if (!live) {
         if (pendingSwitch) {
@@ -5459,6 +5631,61 @@ export default function App({
       let nativeProposalText = "";
       let completedProposal: OrchestrationProposal | undefined;
       void (async () => {
+        let workCwd = initialWorkCwd;
+        if (createDraftWorktree) {
+          const tree = await createWorktree(
+            current.cwd,
+            temporaryWorktreeBranchName(),
+            current.worktreeBase || "HEAD",
+            false,
+          );
+          workCwd = tree.path;
+          if (proposalDraft)
+            proposalDraft = { ...proposalDraft, checkoutCwd: tree.path };
+          setSessions((prev) =>
+            prev.map((session) =>
+              session.id === sessionId
+                ? {
+                    ...session,
+                    worktreeCwd: tree.path,
+                    branch: tree.branch ?? undefined,
+                    workspaceMode: undefined,
+                    worktreeBase: undefined,
+                    worktreePreparing: undefined,
+                  }
+                : session,
+            ),
+          );
+          notifyReviewChanged(sessionId);
+
+          const branchMessage =
+            harnessText || attachments.map((file) => file.name).join(", ");
+          void generateHarnessBranchName(
+            pickTextHarness(current.harness),
+            workCwd,
+            branchMessage,
+          )
+            .then(async (fragment) => {
+              const branch = fragment ? namedWorktreeBranch(fragment) : null;
+              if (!branch) return;
+              const renamed = await renameWorktreeBranch(
+                current.cwd,
+                tree.path,
+                branch,
+              );
+              setSessions((prev) =>
+                prev.map((session) =>
+                  session.id === sessionId &&
+                  pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
+                    ? { ...session, branch: renamed.branch ?? undefined }
+                    : session,
+                ),
+              );
+            })
+            .catch(() => undefined);
+        }
+        launchTitleGeneration(workCwd);
+        if (turnGen.current.get(sessionId) !== gen) return;
         if (proposalDraft && proposalId) {
           const settings = await discoverOrchestrationSettings();
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -5576,7 +5803,7 @@ export default function App({
               : orchestrationPlanningPrompt(
                   prompt,
                   proposalDraft.settings,
-                  proposalDraft.cwd,
+                  proposalDraft.checkoutCwd ?? proposalDraft.cwd,
                 )
             : intent === "plan" && !rawCommand
               ? planTurnPrompt(prompt)
@@ -5773,21 +6000,24 @@ export default function App({
             });
             flushHarnessEvents();
             setSessions((prev) =>
-              prev.map((session) =>
-                session.id === sessionId
-                  ? proposalId && proposalDraft
-                    ? withOrchestrationProposal(
-                        stopStreaming(session),
-                        proposalId,
-                        completeOrchestrationProposal(
-                          proposalDraft,
-                          "",
-                          controlOutcome.error,
-                        ),
-                      )
-                    : stopStreaming(session)
-                  : session,
-              ),
+              prev.map((session) => {
+                if (session.id !== sessionId) return session;
+                const stopped = {
+                  ...stopStreaming(session),
+                  worktreePreparing: undefined,
+                };
+                return proposalId && proposalDraft
+                  ? withOrchestrationProposal(
+                      stopped,
+                      proposalId,
+                      completeOrchestrationProposal(
+                        proposalDraft,
+                        "",
+                        controlOutcome.error,
+                      ),
+                    )
+                  : stopped;
+              }),
             );
           }
         })
@@ -6285,9 +6515,10 @@ export default function App({
           const completed = isPreparingHandoff(stopped)
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
-          return completed.queuedMessages?.length
-            ? { ...completed, queueStatus: "paused" }
-            : completed;
+          const ready = { ...completed, worktreePreparing: undefined };
+          return ready.queuedMessages?.length
+            ? { ...ready, queueStatus: "paused" }
+            : ready;
         }),
       );
       if (session) {
@@ -6413,6 +6644,43 @@ export default function App({
           models: modelsFor(harness).map(({ id, name }) => ({ id, name })),
         })),
       createWorker: async (run, task) => {
+        const projectCwd = orchestrationProjectCwd(run);
+        const leadCheckoutCwd = orchestrationCheckoutCwd(run);
+        const lead = sessionsRef.current.find(
+          (session) => session.id === run.leadId,
+        );
+        if (!lead) throw new Error("Lead session is unavailable");
+        const workspace =
+          task.workspacePolicy === "shared"
+            ? workspaceIdentity(projectCwd, leadCheckoutCwd)
+            : task.workspace
+              ? await listWorktrees(leadCheckoutCwd).then((listed) => {
+                  const tree = listed.worktrees.find(
+                    (entry) =>
+                      pathKey(entry.path) ===
+                      pathKey(task.workspace!.checkoutCwd),
+                  );
+                  if (!tree)
+                    throw new Error(
+                      "This worker's retained worktree is missing. Its saved changes cannot be retried automatically.",
+                    );
+                  return workspaceIdentity(
+                    projectCwd,
+                    tree.path,
+                    tree.branch ?? task.workspace!.branch,
+                  );
+                })
+              : await createOrchestrationWorktree(
+                  leadCheckoutCwd,
+                  orchestrationWorktreeBranchName(task.id),
+                ).then((tree) =>
+                  workspaceIdentity(
+                    projectCwd,
+                    tree.path,
+                    tree.branch ?? undefined,
+                  ),
+                );
+        const checkoutCwd = workspace.checkoutCwd;
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
@@ -6420,31 +6688,37 @@ export default function App({
         const existing = sessionsRef.current.find(
           (session) => session.id === task.sessionId,
         );
-        const lead = sessionsRef.current.find(
-          (session) => session.id === run.leadId,
-        );
-        if (!lead) throw new Error("Lead session is unavailable");
         if (existing) {
           if (
             existing.harness !== task.harness ||
             existing.model !== task.model ||
-            existing.cwd !== run.cwd
+            !sameProjectPath(existing.cwd, projectCwd) ||
+            (!existing.worktreeRemoved &&
+              !sameProjectPath(sessionWorkCwd(existing), checkoutCwd))
           )
             throw new Error(
               "This worker's configuration changed. Restore its approved harness, model and project before retrying.",
             );
           // The lead's runtime mode governs its agents, including across a
           // change mid-run: auto stays auto, supervised asks the lead.
-          if (existing.runtimeMode !== lead.runtimeMode) {
-            const synced = { ...existing, runtimeMode: lead.runtimeMode };
-            await upsertSession(synced);
-            const next = sessionsRef.current.map((session) =>
-              session.id === synced.id ? synced : session,
-            );
-            sessionsRef.current = next;
-            setSessions(next);
-          }
-          return scratchDir;
+          const synced = {
+            ...existing,
+            cwd: projectCwd,
+            worktreeCwd: sameProjectPath(projectCwd, checkoutCwd)
+              ? undefined
+              : checkoutCwd,
+            branch: workspace.branch,
+            worktreeRemoved: false,
+            runtimeMode: lead.runtimeMode,
+            orchestrationLeadId: run.leadId,
+          };
+          await upsertSession(synced);
+          const next = sessionsRef.current.map((session) =>
+            session.id === synced.id ? synced : session,
+          );
+          sessionsRef.current = next;
+          setSessions(next);
+          return { scratchDir, workspace };
         }
         const restored = await getSession(task.sessionId);
         if (
@@ -6455,7 +6729,10 @@ export default function App({
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
         const fresh = {
-          ...newSession(task.harness, run.cwd, task.model, lead.runtimeMode),
+          ...newSession(task.harness, projectCwd, task.model, lead.runtimeMode),
+          ...(sameProjectPath(projectCwd, checkoutCwd)
+            ? {}
+            : { worktreeCwd: checkoutCwd, branch: workspace.branch }),
           ...(task.modelSettings
             ? {
                 modelSettings: mergeModelSettings(
@@ -6469,8 +6746,14 @@ export default function App({
           ? {
               ...restored,
               busy: false,
-              cwd: run.cwd,
-              worktreeCwd: undefined,
+              cwd: projectCwd,
+              worktreeCwd: sameProjectPath(projectCwd, checkoutCwd)
+                ? undefined
+                : checkoutCwd,
+              branch: sameProjectPath(projectCwd, checkoutCwd)
+                ? undefined
+                : workspace.branch,
+              worktreeRemoved: false,
               runtimeMode: lead.runtimeMode,
             }
           : {
@@ -6484,7 +6767,7 @@ export default function App({
             worker.harness,
             worker.id,
             worker.providerSessionId,
-            worker.cwd,
+            sessionWorkCwd(worker),
             worker.providerAccountId,
           );
         await upsertSession(worker);
@@ -6492,7 +6775,149 @@ export default function App({
         sessionsRef.current = next;
         setSessions(next);
         // Workers belong to the lead's agent panel; no workspace tab is created.
-        return scratchDir;
+        return { scratchDir, workspace };
+      },
+      integrateWorker: async (run, task) => {
+        const fromCwd = task.workspace?.checkoutCwd;
+        if (!fromCwd)
+          throw new Error("This worker's isolated checkout is unavailable");
+        const session = sessionsRef.current.find(
+          (entry) => entry.id === task.sessionId,
+        );
+        if (session)
+          await Promise.all(
+            sessionChildHarnesses(session).map((harness) =>
+              stopHarnessSession(harness, task.sessionId),
+            ),
+          );
+        await invoke("harness_kill", { sessionId: task.sessionId });
+        await invoke("control_turn_finished", { sessionId: task.sessionId });
+        await flushSessionCheckpoint(task.sessionId);
+        const listed = await listWorktrees(orchestrationCheckoutCwd(run));
+        const workerTree = listed.worktrees.find((tree) =>
+          sameProjectPath(tree.path, fromCwd),
+        );
+        const leadTree = listed.worktrees.find((tree) =>
+          sameProjectPath(tree.path, orchestrationCheckoutCwd(run)),
+        );
+        if (!workerTree || !leadTree)
+          throw new Error(
+            "The worker or lead checkout is no longer registered. The worker worktree was kept.",
+          );
+        if (workerTree.head !== leadTree.head)
+          throw new Error(
+            "The worker or lead branch moved while this task was running. The worker worktree was kept for manual review.",
+          );
+        return applySessionCheckpoint(
+          task.sessionId,
+          fromCwd,
+          orchestrationCheckoutCwd(run),
+        );
+      },
+      cleanupWorker: async (run, task, onlyIfUnchanged) => {
+        const workspace = task.workspace;
+        if (!workspace || workspace.kind !== "worktree") return true;
+        const path = workspace.checkoutCwd;
+        await flushSessionCheckpoint(task.sessionId);
+        const listed = await listWorktrees(orchestrationCheckoutCwd(run));
+        const exists = listed.worktrees.some(
+          (tree) => pathKey(tree.path) === pathKey(path),
+        );
+        if (!exists && onlyIfUnchanged) return false;
+        const workerTree = listed.worktrees.find(
+          (tree) => pathKey(tree.path) === pathKey(path),
+        );
+        const leadTree = listed.worktrees.find((tree) =>
+          sameProjectPath(tree.path, orchestrationCheckoutCwd(run)),
+        );
+        if (
+          exists &&
+          (!workerTree || !leadTree || workerTree.head !== leadTree.head)
+        ) {
+          if (onlyIfUnchanged) return false;
+          throw new Error(
+            "The worker or lead branch moved before cleanup. The worker worktree was kept for manual review.",
+          );
+        }
+        if (onlyIfUnchanged) {
+          const safe = await sessionCheckpointCleanupSafe(task.sessionId, path);
+          if (!safe) return false;
+        } else if (exists) {
+          // Re-verify immediately before destructive cleanup. The operation is
+          // idempotent, so this also finishes a partially applied integration.
+          await applySessionCheckpoint(
+            task.sessionId,
+            path,
+            orchestrationCheckoutCwd(run),
+          );
+        }
+
+        if (exists) {
+          onStop(task.sessionId, true);
+          const session = sessionsRef.current.find(
+            (entry) => entry.id === task.sessionId,
+          );
+          if (session) {
+            await Promise.all(
+              sessionChildHarnesses(session).map((harness) =>
+                stopHarnessSession(harness, task.sessionId),
+              ),
+            );
+          }
+          await invoke("harness_kill", { sessionId: task.sessionId });
+          await invoke("control_turn_finished", {
+            sessionId: task.sessionId,
+          });
+          await flushSessionWrites();
+          checkOpenWorktreeFiles(path);
+          const removed = await removeOrchestrationWorktree(
+            orchestrationCheckoutCwd(run),
+            path,
+          );
+          const affected = new Set([task.sessionId, ...removed.sessionIds]);
+          sessionsRef.current = sessionsRef.current.map((session) =>
+            affected.has(session.id)
+              ? detachSessionWorktree(session, removed.projectCwd, path)
+              : session,
+          );
+          setSessions(sessionsRef.current);
+          const detachSummary = (entry: SessionSummary) =>
+            affected.has(entry.id)
+              ? detachSessionWorktree(entry, removed.projectCwd, path)
+              : entry;
+          setHistory((current) => current.map(detachSummary));
+          setStoredLinkedSessions((current) => current.map(detachSummary));
+          if (session)
+            await Promise.allSettled(
+              sessionChildHarnesses(session).map((harness) =>
+                forgetHarnessSession(harness, task.sessionId),
+              ),
+            );
+        } else {
+          const detached = sessionsRef.current.find(
+            (entry) => entry.id === task.sessionId,
+          );
+          if (detached && !detached.worktreeRemoved) {
+            const next = detachSessionWorktree(
+              detached,
+              orchestrationProjectCwd(run),
+              path,
+            );
+            sessionsRef.current = sessionsRef.current.map((entry) =>
+              entry.id === task.sessionId ? next : entry,
+            );
+            setSessions(sessionsRef.current);
+            if (shouldPersistSession(next)) await upsertSession(next);
+          }
+        }
+        if (workspace.branch)
+          await removeOrchestrationBranch(
+            orchestrationCheckoutCwd(run),
+            workspace.branch,
+          );
+        await forgetSessionCheckpoint(task.sessionId);
+        notifyReviewChanged(task.sessionId);
+        return true;
       },
       submit: (id, text, done) => {
         // Commit the new turn before the scheduler or confirmation updates
@@ -6559,7 +6984,7 @@ export default function App({
         }
       },
     });
-  }, [onSubmit, onStop]);
+  }, [checkOpenWorktreeFiles, onSubmit, onStop]);
 
   useEffect(() => {
     orchestrator.sync();
@@ -7558,10 +7983,13 @@ export default function App({
     onCwdChange,
     onBranchChange,
     onWorktreeChange,
+    onWorkspaceModeChange,
+    onWorktreeBaseChange,
     onManageWorktrees: () => openSettings("worktrees"),
     onModelChange,
     onModelSettingsChange,
     onRuntimeModeChange,
+    onSaveDraft,
     onSubmit,
     onStop,
     onCompactContext,
@@ -7601,6 +8029,7 @@ export default function App({
           <Sidebar
             cwd={sidebarCwd}
             gitCwd={gitCwd}
+            explorerRootLabel={explorerRootLabel}
             open
             tab={sidebarTab}
             onTabChange={setSidebarTab}

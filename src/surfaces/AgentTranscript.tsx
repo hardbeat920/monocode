@@ -1,4 +1,5 @@
 import {
+  ArrowUp,
   Check,
   ChevronRight,
   CircleDashed,
@@ -131,6 +132,7 @@ type Props = {
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
+  onSendDraft?: (block: Block) => boolean | void;
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
@@ -161,6 +163,7 @@ function AgentTranscriptComponent({
   onApproval,
   onAddToChat,
   onSaveNote,
+  onSendDraft,
   onSaveSelectionNote,
   onOpenFile,
   onOpenDiff,
@@ -536,6 +539,7 @@ function AgentTranscriptComponent({
                 }
                 onApproval={onApproval}
                 onSaveNote={onSaveNote}
+                onSendDraft={onSendDraft}
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
@@ -1057,6 +1061,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   cwd,
   onApproval,
   onSaveNote,
+  onSendDraft,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -1074,6 +1079,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   cwd?: string;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
+  onSendDraft?: (block: Block) => boolean | void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -1089,7 +1095,9 @@ const TranscriptBlock = memo(function TranscriptBlock({
         block={block}
         layout={layout}
         stickyIndex={stickyIndex}
+        cwd={cwd}
         onSaveNote={onSaveNote}
+        onSendDraft={onSendDraft}
       />
     );
   }
@@ -1201,12 +1209,16 @@ function UserMessageBlock({
   block,
   layout,
   stickyIndex,
+  cwd,
   onSaveNote,
+  onSendDraft,
 }: {
   block: Block;
   layout: TranscriptLayout;
   stickyIndex: number;
+  cwd?: string;
   onSaveNote?: (text: string) => void | Promise<void>;
+  onSendDraft?: (block: Block) => boolean | void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -1222,7 +1234,11 @@ function UserMessageBlock({
     : text;
   const chat = layout === "chat";
   const textOnly =
-    Boolean(text) && !block.attachments?.length && !card && !note;
+    Boolean(text) &&
+    !block.draft &&
+    !block.attachments?.length &&
+    !card &&
+    !note;
 
   // Only the chat layout rounds a single line; the document layout always uses
   // the square corners, so it never needs the measurement at all.
@@ -1279,7 +1295,12 @@ function UserMessageBlock({
         className={`user-message-hover-zone min-w-0 ${chat ? "flex w-fit max-w-full flex-col items-end" : "w-full"}`}
       >
         <div
-          className={`user-message-bubble min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
+          data-draft={block.draft ? "true" : undefined}
+          className={`user-message-bubble min-w-0 px-3 py-2 font-sans text-content ${
+            block.draft
+              ? "border border-dashed border-content/30 bg-content/4"
+              : "bg-content/10"
+          } ${
             chat
               ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
               : "rounded-lg border border-content/10"
@@ -1314,7 +1335,7 @@ function UserMessageBlock({
               data-selectable-agent-response={block.id}
             >
               {messageLink.beforeText}
-              <UserLinkPreview link={messageLink.link} />
+              <UserLinkPreview link={messageLink.link} cwd={cwd} compact />
               {messageLink.afterText}
             </div>
           ) : displayText ? (
@@ -1337,6 +1358,24 @@ function UserMessageBlock({
             >
               {expanded ? "Show less" : "Show more"}
             </button>
+          ) : null}
+          {block.draft ? (
+            <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
+              <span className="flex items-center gap-1.5 text-xs text-content/50">
+                <CircleDashed className="size-3.5" strokeWidth={1.75} />
+                Draft
+              </span>
+              <button
+                type="button"
+                title="Send draft"
+                aria-label="Send draft"
+                onClick={() => onSendDraft?.(block)}
+                className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
+              >
+                Send
+                <ArrowUp className="size-3.5" strokeWidth={2.25} />
+              </button>
+            </div>
           ) : null}
         </div>
         {text || block.attachments?.length || block.startedAt != null ? (

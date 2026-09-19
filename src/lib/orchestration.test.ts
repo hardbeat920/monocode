@@ -12,6 +12,7 @@ import {
 } from "./orchestration";
 import { newSession } from "./session";
 import type { OrchestrationProposal } from "./orchestrationPlan";
+import { normalizeOrchestrationRun } from "./orchestrationState";
 import { previewFromToolPart } from "./harness/opencodeProtocol";
 
 function setup() {
@@ -25,8 +26,8 @@ function setup() {
       async () => "/Applications/MonoCode.app/Contents/MacOS/monocode",
     ),
     disable: vi.fn(async () => {}),
-    scopes: vi.fn(async (_cwd: string, files: string[]) =>
-      files.map((file) => (file === "." ? "/repo" : `/repo/${file}`)),
+    scopes: vi.fn(async (cwd: string, files: string[]) =>
+      files.map((file) => (file === "." ? cwd : `${cwd}/${file}`)),
     ),
     resolvePath: vi.fn(async (path: string) => path),
   };
@@ -46,8 +47,19 @@ function setup() {
         id: task.sessionId,
         busy: false,
       });
-      return `/private/var/folders/test/T/monocode-worker-${task.sessionId}`;
+      return {
+        scratchDir: `/private/var/folders/test/T/monocode-worker-${task.sessionId}`,
+        workspace: {
+          id: `checkout:/worktrees/${task.id}`,
+          projectCwd: run.cwd,
+          checkoutCwd: `/worktrees/${task.id}`,
+          kind: "worktree" as const,
+          branch: `mc/orch-${task.id}`,
+        },
+      };
     }),
+    integrateWorker: vi.fn(async () => ({ files: [], alreadyApplied: 0 })),
+    cleanupWorker: vi.fn(async () => true),
     submit: vi.fn((id, _text, done) => {
       const session = sessions.find((session) => session.id === id)!;
       session.busy = true;
@@ -110,6 +122,11 @@ describe("worker assignment prompts", () => {
     expect(sent.startsWith("Review the branch.")).toBe(true);
     expect(sent).toContain("<monocode_assignment>");
     expect(sent).toContain("src/App.tsx");
+    expect(sent).toContain("override any contradictory wording");
+    expect(sent).toContain("stage, commit, push");
+    expect(sent).toContain(
+      "Git finalization remains the lead's responsibility",
+    );
     expect(visibleUserPrompt(sent)).toBe("Review the branch.");
   });
 });
@@ -270,6 +287,24 @@ describe("local orchestration", () => {
       '"Investigating the failure" is still running in this checkout. Stop it before resuming orchestration.',
     );
   });
+  it("checks the new checkout rather than a stopped run's old checkout", async () => {
+    const f = setup();
+    await f.start();
+    await f.manager.stopRun("lead");
+    f.lead.worktreeCwd = "/repo-worktrees/new";
+    f.sessions.push({
+      ...newSession("codex", "/repo"),
+      id: "old-checkout-work",
+      title: "Old checkout work",
+      busy: true,
+    });
+
+    await f.manager.start("lead", ["codex"], 2);
+
+    expect(f.manager.run("lead")?.workspace?.checkoutCwd).toBe(
+      "/repo-worktrees/new",
+    );
+  });
   it("never launches a partial plan when one assignment has invalid scopes", async () => {
     const f = setup();
     f.lead.busy = false;
@@ -371,20 +406,213 @@ describe("local orchestration", () => {
     ).toBe(true);
     expect(scopesOverlap(["//?/d:/"], ["D:/Projects/Repo"])).toBe(true);
   });
+  it("preserves case for POSIX checkout and scope identities", () => {
+    expect(orchestrationPathKey("/repo/Foo")).toBe("/repo/Foo");
+    expect(scopesOverlap(["/repo/Foo"], ["/repo/foo/file.ts"])).toBe(false);
+  });
+  it("records the selected worktree separately from the project identity", async () => {
+    const f = setup();
+    f.lead.worktreeCwd = "/repo-worktrees/feature";
+    f.lead.branch = "feature";
+    f.store.scopes.mockImplementation(async (cwd: string, files: string[]) =>
+      files.map((file) => (file === "." ? cwd : `${cwd}/${file}`)),
+    );
+
+    await f.start();
+
+    expect(f.manager.run("lead")).toMatchObject({
+      version: 2,
+      cwd: "/repo",
+      workspace: {
+        projectCwd: "/repo",
+        checkoutCwd: "/repo-worktrees/feature",
+        kind: "worktree",
+        branch: "feature",
+      },
+    });
+    expect(f.store.enable).toHaveBeenCalledWith(
+      "lead",
+      "/repo-worktrees/feature",
+    );
+    await f.delegate(["src/a"]);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    expect(f.tasks()[0].scopes).toEqual(["/repo-worktrees/feature/src/a"]);
+    expect(f.manager.run("lead")?.dispatches?.[0].workspace).toMatchObject({
+      projectCwd: "/repo",
+      checkoutCwd: "/repo-worktrees/feature",
+    });
+  });
+  it("starts an approved proposal only in the checkout it inspected", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    f.lead.worktreeCwd = "/repo-worktrees/feature";
+    const card = {
+      ...proposal(),
+      checkoutCwd: "/repo-worktrees/feature",
+    };
+    f.store.scopes.mockImplementation(async (cwd: string, files: string[]) =>
+      files.map((file) => (file === "." ? cwd : `${cwd}/${file}`)),
+    );
+
+    await f.manager.startApproved("lead", "card", card);
+    expect(f.manager.run("lead")?.workspace?.checkoutCwd).toBe(
+      "/repo-worktrees/feature",
+    );
+
+    const moved = setup();
+    moved.lead.busy = false;
+    moved.lead.worktreeCwd = "/repo-worktrees/other";
+    await expect(
+      moved.manager.startApproved("lead", "card", card),
+    ).rejects.toThrow("proposal's checkout");
+
+    const switched = setup();
+    switched.lead.busy = false;
+    switched.lead.worktreeCwd = "/repo-worktrees/feature";
+    switched.store.scopes.mockImplementation(
+      async (cwd: string, files: string[]) => {
+        switched.lead.worktreeCwd = "/repo-worktrees/other";
+        return files.map((file) => `${cwd}/${file}`);
+      },
+    );
+    await expect(
+      switched.manager.startApproved("lead", "card", card),
+    ).rejects.toThrow("proposal's checkout");
+    expect(switched.store.enable).not.toHaveBeenCalled();
+  });
+  it("persists dispatch authority and binds review to the completed attempt", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["src/a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const task = f.tasks()[0];
+    const dispatchId = task.activeDispatchId!;
+
+    expect(dispatchId).toBeTruthy();
+    await vi.waitFor(() =>
+      expect(f.saved.get("lead")?.dispatches).toContainEqual(
+        expect.objectContaining({
+          id: dispatchId,
+          taskId: task.id,
+          state: "running",
+          stage: "turn_submitted",
+        }),
+      ),
+    );
+    f.completions.get(task.sessionId)!({
+      status: "completed",
+      text: "Done",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    expect(f.tasks()[0]).toMatchObject({
+      activeDispatchId: undefined,
+      lastDispatchId: dispatchId,
+    });
+    expect(f.manager.run("lead")?.dispatches?.[0]).toMatchObject({
+      id: dispatchId,
+      state: "completed",
+      stage: "settled",
+      result: "Done",
+    });
+    await f.call("review", { taskId: task.id });
+    expect(f.tasks()[0].acceptedDispatchId).toBe(dispatchId);
+    expect(f.host.integrateWorker).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: task.id }),
+    );
+    expect(f.host.cleanupWorker).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: task.id }),
+      false,
+    );
+    expect(f.tasks()[0].workspace).toBeUndefined();
+    expect(f.manager.run("lead")?.dispatches?.[0].stage).toBe("cleaned");
+  });
+  it("reports a cancelled dirty worktree instead of silently orphaning it", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["src/a"]);
+    await vi.waitFor(() =>
+      expect(f.tasks()[0].workspace?.checkoutCwd).toContain("/worktrees/"),
+    );
+    const task = f.tasks()[0];
+    vi.mocked(f.host.cleanupWorker).mockResolvedValue(false);
+
+    await f.call("cancel", { taskId: task.id });
+    const result = await f.call("finish");
+
+    expect(result).toEqual({
+      finished: true,
+      cleanupPending: [`/worktrees/${task.id}`],
+    });
+    expect(f.tasks()[0].workspace?.checkoutCwd).toBe(`/worktrees/${task.id}`);
+    expect(f.host.cleanupWorker).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: task.id }),
+      true,
+    );
+  });
+  it("keeps an isolated worker recoverable when integration conflicts", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["src/a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const task = f.tasks()[0];
+    f.completions.get(task.sessionId)!({
+      status: "completed",
+      text: "Done",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    vi.mocked(f.host.integrateWorker).mockRejectedValueOnce(
+      new Error("lead checkout changed"),
+    );
+
+    await expect(f.call("review", { taskId: task.id })).rejects.toThrow(
+      "lead checkout changed",
+    );
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0].workspace?.checkoutCwd).toBe(`/worktrees/${task.id}`);
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+
+    await f.call("review", { taskId: task.id });
+    expect(f.tasks()[0].accepted).toBe(true);
+    expect(f.host.integrateWorker).toHaveBeenCalledTimes(2);
+  });
+  it("does not let a late completion settle a newer retry", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["src/a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const task = f.tasks()[0];
+    const firstDispatchId = task.activeDispatchId!;
+    const late = f.completions.get(task.sessionId)!;
+
+    await f.call("cancel", { taskId: task.id });
+    await f.call("message", { taskId: task.id, text: "Retry" });
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    const retryDispatchId = f.tasks()[0].activeDispatchId!;
+    late({ status: "completed", text: "Stale result" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(f.tasks()[0]).toMatchObject({
+      status: "running",
+      activeDispatchId: retryDispatchId,
+      result: "",
+    });
+    expect(f.manager.run("lead")?.dispatches).toHaveLength(2);
+  });
   it("runs disjoint workers concurrently and queues overlap", async () => {
     const f = setup();
     await f.start();
     await f.delegate(["src/a"]);
     await f.delegate(["src/b"]);
     await f.delegate(["src/a/file.ts"]);
-    await vi.waitFor(() =>
-      expect(f.tasks().map((task) => task.status)).toEqual([
-        "running",
-        "running",
-        "queued",
-      ]),
-    );
-    expect(f.host.submit).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    expect(f.tasks().map((task) => task.status)).toEqual([
+      "running",
+      "running",
+      "queued",
+    ]);
     f.completions.get(f.tasks()[0].sessionId)!({
       status: "completed",
       text: "Implemented A",
@@ -498,20 +726,78 @@ describe("local orchestration", () => {
     expect(f.manager.run("lead")!.status).toBe("paused");
     expect(f.host.submit).toHaveBeenCalledTimes(1);
   });
-  it("pauses and stops workers when a reported write escapes its scope", async () => {
+  it("blocks only the worker that escapes its scope and allows an explicit re-scope", async () => {
     const f = setup();
     await f.start();
     await f.delegate(["src/a"]);
-    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    await f.delegate(["src/c"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    const offender = f.tasks()[0];
+    const independent = f.tasks()[1];
     f.manager.observe(f.tasks()[0].sessionId, {
       type: "tool.started",
       callId: "edit",
       title: "Edit",
       preview: { kind: "write", path: "src/a/../b/file.ts" },
     });
-    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
-    expect(f.manager.run("lead")!.status).toBe("paused");
-    expect(f.manager.run("lead")!.error).toContain("outside its assignment");
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+    expect(f.tasks()[0].error).toContain("outside its assignment");
+    expect(f.tasks()[1].status).toBe("running");
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.manager.run("lead")!.error).toBeUndefined();
+    expect(f.host.stop).toHaveBeenCalledWith(offender.sessionId);
+    expect(f.host.stop).not.toHaveBeenCalledWith(independent.sessionId);
+
+    await f.call("retry", {
+      taskId: offender.id,
+      text: "The additional file is required; continue carefully.",
+      files: ["src/a", "src/b"],
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    expect(f.tasks()[0].files).toEqual(["src/a", "src/b"]);
+    expect(f.tasks()[0].scopes).toEqual(["/repo/src/a", "/repo/src/b"]);
+  });
+  it("migrates an old global scope pause into one blocked task and resumable collateral work", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["src/a"], { title: "Offender" });
+    await f.delegate(["src/b"], { title: "Independent" });
+    await vi.waitFor(() =>
+      expect(f.tasks().every((task) => task.activeDispatchId)).toBe(true),
+    );
+    const current = structuredClone(f.manager.run("lead")!);
+    const reason =
+      "Offender reported a write outside its assignment: /outside. Review the shared files before resuming.";
+    const legacy = {
+      ...current,
+      status: "paused" as const,
+      error: reason,
+      tasks: current.tasks.map((task) => ({
+        ...task,
+        status: "failed" as const,
+        error: reason,
+        lastDispatchId: task.activeDispatchId,
+        activeDispatchId: undefined,
+      })),
+      dispatches: current.dispatches?.map((dispatch) => ({
+        ...dispatch,
+        state: "failed" as const,
+        error: reason,
+      })),
+    };
+
+    const migrated = normalizeOrchestrationRun(legacy);
+
+    expect(migrated.tasks.map((task) => task.status)).toEqual([
+      "blocked",
+      "interrupted",
+    ]);
+    expect(migrated.tasks.map((task) => task.delivered)).toEqual([false, true]);
+    expect(migrated.dispatches?.map((dispatch) => dispatch.state)).toEqual([
+      "blocked",
+      "interrupted",
+    ]);
+    await f.manager.stopRun("lead");
   });
   it("allows OpenCode scratch writes only in that worker's private directory", async () => {
     const f = setup();
@@ -554,38 +840,43 @@ describe("local orchestration", () => {
     expect(f.tasks().every((task) => task.status === "running")).toBe(true);
     f.manager.observe(worker.sessionId, write(`${other.scratchDir}/helper.py`));
     await vi.waitFor(() =>
-      expect(f.tasks().every((task) => task.status === "failed")).toBe(true),
-    );
-    expect(f.manager.run("lead")!.error).toContain("outside its assignment");
-  });
-
-  it("keeps a paused run inspectable and preserves unfinished work across Resume", async () => {
-    const f = setup();
-    await f.start();
-    await f.delegate(["brief.py"]);
-    await f.delegate(["commands.py"]);
-    const dependencies = f.tasks().map((task) => task.id);
-    await f.delegate(["."], { dependsOn: dependencies, title: "Validation" });
-    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
-    f.manager.observe(f.tasks()[0].sessionId, {
-      type: "tool.started",
-      callId: "outside",
-      title: "Write",
-      preview: { kind: "write", path: "/outside.py" },
-    });
-    await vi.waitFor(() =>
       expect(f.tasks().map((task) => task.status)).toEqual([
-        "failed",
-        "failed",
-        "queued",
+        "blocked",
+        "running",
       ]),
     );
+    expect(f.tasks()[0].error).toContain("outside its assignment");
+    expect(f.manager.run("lead")!.status).toBe("active");
+  });
+
+  it("keeps a paused run inspectable and automatically continues interrupted work on Resume", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.startApproved("lead", "card", proposal());
+    await vi.waitFor(() => expect(f.host.createWorker).toHaveBeenCalledOnce());
+    const interrupted = f.tasks().find((task) => task.title === "Types")!;
+    const queued = f.tasks().find((task) => task.title === "UI")!;
+    f.completions.get("lead")!({
+      status: "failed",
+      text: "",
+      error: "Lead provider disconnected",
+    });
+    await vi.waitFor(() =>
+      expect(f.manager.run("lead")?.status).toBe("paused"),
+    );
+    await vi.waitFor(() =>
+      expect(f.tasks().find((task) => task.id === interrupted.id)?.status).toBe(
+        "interrupted",
+      ),
+    );
+    const pausedTask = f.tasks().find((task) => task.id === interrupted.id)!;
+    expect(pausedTask.status).toBe("interrupted");
+    expect(queued.status).toBe("queued");
     const reason = f.manager.run("lead")!.error;
-    expect(f.tasks()[0].error).toBe(reason);
     expect(await f.call("list")).toMatchObject({
       run: { status: "paused", error: reason },
     });
-    expect(await f.call("get", { taskId: dependencies[0] })).toMatchObject({
+    expect(await f.call("get", { taskId: interrupted.id })).toMatchObject({
       runStatus: "paused",
       error: reason,
     });
@@ -597,32 +888,29 @@ describe("local orchestration", () => {
       ),
     });
     await expect(
-      f.call("message", { taskId: dependencies[0], text: "Continue" }),
+      f.call("message", { taskId: interrupted.id, text: "Continue" }),
     ).rejects.toThrow("click Resume");
     await expect(f.call("finish")).rejects.toThrow(reason);
-    f.lead.busy = false;
+    const submitsBeforeResume = vi.mocked(f.host.submit).mock.calls.length;
     await f.manager.start("lead", ["codex"], 2);
-    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(3));
-    expect(vi.mocked(f.host.submit).mock.calls[2]).toEqual([
-      "lead",
-      expect.stringContaining(reason!),
-      expect.any(Function),
-    ]);
-    expect(f.manager.run("lead")!.lastPauseReason).toBe(reason);
-    expect(f.tasks().map((task) => task.status)).toEqual([
-      "failed",
-      "failed",
-      "queued",
-    ]);
-    await expect(f.call("finish")).rejects.toThrow(
-      "Review all remaining tasks",
+    await vi.waitFor(() =>
+      expect(vi.mocked(f.host.submit).mock.calls.length).toBeGreaterThan(
+        submitsBeforeResume,
+      ),
     );
-    await f.call("message", {
-      taskId: dependencies[0],
-      text: "Inspect saved edits and finish",
-    });
-    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
-    expect(f.tasks()[2].status).toBe("queued");
+    expect(f.manager.run("lead")!.lastPauseReason).toBe(reason);
+    expect(f.tasks().find((task) => task.id === interrupted.id)?.status).toBe(
+      "running",
+    );
+    expect(f.tasks().find((task) => task.id === queued.id)?.status).toBe(
+      "queued",
+    );
+    const resumed = vi
+      .mocked(f.host.submit)
+      .mock.calls.slice(submitsBeforeResume)
+      .find(([id]) => id === interrupted.sessionId);
+    expect(resumed?.[1]).toContain("Continue the existing assignment");
+    expect(resumed?.[1]).toContain("retained worker checkout");
     await f.manager.stopRun("lead");
   });
 
@@ -639,8 +927,8 @@ describe("local orchestration", () => {
       title: "Write",
       preview: { kind: "write", path: `${task.scratchDir}/link/commands.py` },
     });
-    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
-    expect(f.manager.run("lead")!.status).toBe("paused");
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+    expect(f.manager.run("lead")!.status).toBe("active");
   });
 
   it("waits for scope verification before publishing a completed result", async () => {
@@ -666,9 +954,9 @@ describe("local orchestration", () => {
     f.completions.get(task.sessionId)!({ status: "completed", text: "Done" });
     expect(f.tasks()[0].status).toBe("running");
     resolve("/outside.py");
-    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
     await expect(f.call("review", { taskId: task.id })).rejects.toThrow(
-      "paused",
+      "blocked",
     );
   });
 
@@ -816,7 +1104,7 @@ describe("local orchestration", () => {
     f.manager.sync();
     expect(f.host.submit).toHaveBeenCalledTimes(2);
   });
-  it("recovers interrupted tasks as failed instead of re-executing edits", async () => {
+  it("recovers interrupted tasks without claiming completion and continues them on Resume", async () => {
     const f = setup();
     await f.start();
     await f.delegate(["a"]);
@@ -829,8 +1117,15 @@ describe("local orchestration", () => {
     restored.bind(f.host);
     await restored.hydrate("lead");
     expect(restored.run("lead")?.status).toBe("paused");
-    expect(restored.run("lead")?.tasks[0].status).toBe("failed");
+    expect(restored.run("lead")?.tasks[0].status).toBe("interrupted");
     expect(f.host.submit).toHaveBeenCalledTimes(1);
+    await restored.start("lead", ["codex"], 2);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    expect(restored.run("lead")?.tasks[0].status).toBe("running");
+    expect(vi.mocked(f.host.submit).mock.calls[1][1]).toContain(
+      "Continue the existing assignment",
+    );
+    await restored.stopRun("lead");
   });
   it("does not claim a turn or run is successful before review", async () => {
     const f = setup();
@@ -1089,8 +1384,7 @@ describe("local orchestration", () => {
     );
     const running = f.tasks().find((task) => task.title === "Types")!;
     expect(running.status).toBe("running");
-    // The lead's turn dies. Its agents must not carry on editing the shared
-    // checkout with nobody left to review them.
+    // The lead's turn dies. Its agents must not carry on without supervision.
     f.completions.get("lead")!({
       status: "failed",
       text: "",
@@ -1101,7 +1395,7 @@ describe("local orchestration", () => {
     );
     await vi.waitFor(() =>
       expect(f.tasks().find((task) => task.title === "Types")!.status).toBe(
-        "failed",
+        "interrupted",
       ),
     );
     expect(f.host.stop).toHaveBeenCalledWith(running.sessionId);

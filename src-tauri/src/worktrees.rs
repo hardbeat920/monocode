@@ -4,7 +4,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::fs::{expand_home, git_checked, path_to_js};
+use crate::fs::{expand_home, git_checked, git_diff_files_for, path_to_js, resolve_repo_path};
 use crate::session_store::SessionStore;
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -230,13 +230,212 @@ fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Workt
 }
 
 #[tauri::command(async)]
-pub fn git_worktree_create(
+pub async fn git_worktree_create(
     cwd: String,
     branch: String,
     base: String,
     existing: bool,
 ) -> Result<Worktree, String> {
-    create(&expand_home(&cwd), &branch, &base, existing)
+    tauri::async_runtime::spawn_blocking(move || {
+        create(&expand_home(&cwd), &branch, &base, existing)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn copy_checkout_state(source: &Path, target: &Path) -> Result<(), String> {
+    for file in git_diff_files_for(source).files {
+        let relative = resolve_repo_path(source, &file.relative)?;
+        let from = source.join(&relative);
+        let to = target.join(&relative);
+        if path_contains_symlink(source, &relative) || path_contains_symlink(target, &relative) {
+            return Err(format!(
+                "Cannot seed orchestration worktree: {relative} contains a symbolic link"
+            ));
+        }
+        match std::fs::symlink_metadata(&from) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+                return Err(format!(
+                    "Cannot seed orchestration worktree: {relative} is not a regular file"
+                ));
+            }
+            Ok(meta) => {
+                if let Some(parent) = to.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
+                std::fs::set_permissions(&to, meta.permissions()).map_err(|e| e.to_string())?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if to.is_file() || to.is_symlink() {
+                    std::fs::remove_file(&to).map_err(|e| e.to_string())?;
+                } else if to.exists() {
+                    return Err(format!(
+                        "Cannot seed orchestration worktree: {relative} is a directory"
+                    ));
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn path_contains_symlink(root: &Path, relative: &str) -> bool {
+    let mut current = root.to_path_buf();
+    for part in relative.split('/') {
+        current.push(part);
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
+fn file_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|meta| meta.permissions().mode() & 0o777)
+}
+
+#[cfg(not(unix))]
+fn file_mode(_path: &Path) -> Option<u32> {
+    None
+}
+
+fn checkout_state_matches(source: &Path, target: &Path) -> bool {
+    let source_files = git_diff_files_for(source).files;
+    let target_files = git_diff_files_for(target).files;
+    let source_paths: Vec<&str> = source_files
+        .iter()
+        .map(|file| file.relative.as_str())
+        .collect();
+    let target_paths: Vec<&str> = target_files
+        .iter()
+        .map(|file| file.relative.as_str())
+        .collect();
+    if source_paths != target_paths {
+        return false;
+    }
+    source_paths.into_iter().all(|relative| {
+        if path_contains_symlink(source, relative) || path_contains_symlink(target, relative) {
+            return false;
+        }
+        let from = source.join(relative);
+        let to = target.join(relative);
+        match (
+            std::fs::symlink_metadata(&from),
+            std::fs::symlink_metadata(&to),
+        ) {
+            (Err(left), Err(right))
+                if left.kind() == std::io::ErrorKind::NotFound
+                    && right.kind() == std::io::ErrorKind::NotFound =>
+            {
+                true
+            }
+            (Ok(left), Ok(right)) if left.is_file() && right.is_file() => {
+                file_mode(&from) == file_mode(&to)
+                    && matches!(
+                        (std::fs::read(from), std::fs::read(to)),
+                        (Ok(left), Ok(right)) if left == right
+                    )
+            }
+            _ => false,
+        }
+    })
+}
+
+fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
+    if let Some(tree) = list(root)?
+        .into_iter()
+        .find(|tree| tree.branch.as_deref() == Some(branch))
+    {
+        let source_head = git(root, &["rev-parse", "HEAD"])?;
+        if tree.head != source_head.trim() || !checkout_state_matches(root, Path::new(&tree.path)) {
+            return Err(format!(
+                "The recovered orchestration worktree for {branch} is incomplete or has unexpected changes. It was kept for manual review."
+            ));
+        }
+        return Ok(tree);
+    }
+    let branch_ref = format!("refs/heads/{branch}");
+    let branch_exists = git(root, &["rev-parse", "--verify", &branch_ref]).is_ok();
+    if branch_exists {
+        let head = git(root, &["rev-parse", "HEAD"])?;
+        let branch_head = git(root, &["rev-parse", &branch_ref])?;
+        if head.trim() != branch_head.trim() {
+            return Err(format!(
+                "The recovery branch {branch} no longer starts at this checkout. Remove or rename it before retrying."
+            ));
+        }
+    }
+    let tree = create(root, branch, "HEAD", branch_exists)?;
+    if let Err(error) = copy_checkout_state(root, Path::new(&tree.path)) {
+        let _ = remove(root, Path::new(&tree.path), true);
+        if !branch_exists {
+            let _ = git(root, &["branch", "-D", branch]);
+        }
+        return Err(error);
+    }
+    Ok(tree)
+}
+
+/// Create an isolated worker checkout with the lead checkout's current file
+/// contents as its baseline. Reusing the deterministic branch makes a crash
+/// between Git creation and run-state persistence recoverable.
+#[tauri::command(async)]
+pub async fn git_orchestration_worktree_create(
+    cwd: String,
+    branch: String,
+) -> Result<Worktree, String> {
+    tauri::async_runtime::spawn_blocking(move || create_seeded(&expand_home(&cwd), branch.trim()))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn rename_branch(root: &Path, path: &Path, branch: &str) -> Result<Worktree, String> {
+    let branch = branch.trim();
+    if branch.starts_with('-') || branch.starts_with('@') || branch.is_empty() {
+        return Err("Enter a valid branch name".into());
+    }
+    git(root, &["check-ref-format", "--branch", branch])?;
+    let tree = list(root)?
+        .into_iter()
+        .find(|tree| same_path(Path::new(&tree.path), path))
+        .ok_or("This path is not a registered worktree of this repository")?;
+    if tree.is_main {
+        return Err("The main working copy cannot be renamed here".into());
+    }
+    let current = tree.branch.as_deref().ok_or("The worktree is detached")?;
+    if !current.starts_with("mc/") && !current.starts_with("monocode/") {
+        return Err("Only automatically created worktree branches can be renamed".into());
+    }
+    if current == branch {
+        return Ok(tree);
+    }
+    git(Path::new(&tree.path), &["branch", "-m", branch])?;
+    list(root)?
+        .into_iter()
+        .find(|entry| same_path(Path::new(&entry.path), path))
+        .ok_or_else(|| "Branch renamed, but its worktree could not be found".into())
+}
+
+#[tauri::command(async)]
+pub async fn git_worktree_rename_branch(
+    cwd: String,
+    path: String,
+    branch: String,
+) -> Result<Worktree, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        rename_branch(&expand_home(&cwd), &expand_home(&path), &branch)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn removal_target(root: &Path, path: &Path) -> Result<Worktree, String> {
@@ -521,6 +720,59 @@ pub fn git_worktree_remove(
     )
 }
 
+#[tauri::command(async)]
+pub fn git_orchestration_worktree_remove(
+    cwd: String,
+    path: String,
+    store: State<'_, SessionStore>,
+    terminals: State<'_, crate::pty::PtyHost>,
+    agents: State<'_, crate::harness::HarnessHost>,
+) -> Result<WorktreeRemoval, String> {
+    let root = expand_home(&cwd);
+    let path = expand_home(&path);
+    let _reservation = crate::worktree_lifecycle::reserve_removal(&path)?;
+    if terminals.has_working_dir(&path) || agents.has_working_dir(&path) {
+        return Err("Close the terminals and agent processes using this worktree first.".into());
+    }
+    let tree = removal_target(&root, &path)?;
+    let branch = tree.branch.clone();
+    let conn = store.lock_conn()?;
+    let removed = remove_with_sessions(&conn, &root, &path, true, true)?;
+    if let Some(branch) = branch {
+        if branch.starts_with("mc/orch-") {
+            if let Err(error) = git(Path::new(&removed.project_cwd), &["branch", "-D", &branch]) {
+                eprintln!("Orchestration worktree removed; temporary branch cleanup will need a retry: {error}");
+            }
+        }
+    }
+    Ok(removed)
+}
+
+#[tauri::command(async)]
+pub async fn git_orchestration_branch_remove(cwd: String, branch: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        let branch = branch.trim();
+        if !branch.starts_with("mc/orch-") {
+            return Err("Only orchestration temporary branches can be removed here".into());
+        }
+        git(&root, &["check-ref-format", "--branch", branch])?;
+        let branch_ref = format!("refs/heads/{branch}");
+        if git(&root, &["rev-parse", "--verify", &branch_ref]).is_err() {
+            return Ok(());
+        }
+        if list(&root)?
+            .iter()
+            .any(|tree| tree.branch.as_deref() == Some(branch))
+        {
+            return Err("The orchestration branch still has a worktree".into());
+        }
+        git(&root, &["branch", "-D", branch]).map(|_| ())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,6 +864,55 @@ mod tests {
     }
 
     #[test]
+    fn orchestration_worktree_starts_from_the_lead_checkout_contents() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        std::fs::write(root.join("tracked.txt"), "head\n").unwrap();
+        std::fs::write(root.join("deleted.txt"), "delete me\n").unwrap();
+        git_checked(&root, &["add", "."]).unwrap();
+        git_checked(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "files",
+            ],
+        )
+        .unwrap();
+        std::fs::write(root.join("tracked.txt"), "lead dirty\n").unwrap();
+        std::fs::write(root.join("untracked.txt"), "lead new\n").unwrap();
+        std::fs::remove_file(root.join("deleted.txt")).unwrap();
+
+        let tree = create_seeded(&root, "mc/orch-testworker").unwrap();
+        let worker = Path::new(&tree.path);
+        assert_eq!(
+            std::fs::read_to_string(worker.join("tracked.txt")).unwrap(),
+            "lead dirty\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worker.join("untracked.txt")).unwrap(),
+            "lead new\n"
+        );
+        assert!(!worker.join("deleted.txt").exists());
+        assert_eq!(
+            create_seeded(&root, "mc/orch-testworker").unwrap().path,
+            tree.path
+        );
+
+        std::fs::write(root.join("tracked.txt"), "later lead edit\n").unwrap();
+        assert!(create_seeded(&root, "mc/orch-testworker").is_err());
+        assert_eq!(
+            std::fs::read_to_string(worker.join("tracked.txt")).unwrap(),
+            "lead dirty\n"
+        );
+        remove(&root, worker, true).unwrap();
+    }
+
+    #[test]
     fn reuses_branches_and_rejects_locked_or_unregistered_paths() {
         let repo = repo();
         let root = repo.0.join("repo");
@@ -624,6 +925,24 @@ mod tests {
         git_checked(&root, &["worktree", "lock", &tree.path]).unwrap();
         assert!(remove(&root, Path::new(&tree.path), true).is_err());
         assert!(remove(&root, &repo.0, true).is_err());
+    }
+
+    #[test]
+    fn renames_only_temporary_worktree_branches() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        let tree = create(&root, "mc/12345678", "main", false).unwrap();
+        let renamed = rename_branch(&root, Path::new(&tree.path), "mc/faster-worktrees").unwrap();
+        assert_eq!(renamed.branch.as_deref(), Some("mc/faster-worktrees"));
+        assert!(git(
+            &root,
+            &["rev-parse", "--verify", "refs/heads/mc/faster-worktrees"]
+        )
+        .is_ok());
+        assert!(rename_branch(&root, &root, "mc/nope").is_err());
+
+        let regular = create(&root, "feature/manual", "main", false).unwrap();
+        assert!(rename_branch(&root, Path::new(&regular.path), "mc/should-not-change").is_err());
     }
 
     #[test]

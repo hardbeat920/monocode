@@ -247,19 +247,35 @@ describe("UsageProviderChip", () => {
     expect(document.body.textContent).toContain("Codex usage was reset.");
   });
 
-  it("uses the project's picked mascot and gives an empty bank a sad pose", async () => {
+  it("uses the project's picked mascot when banked resets are available", async () => {
     const project = "/repo/mascot-lab";
     saveTabGroupMascot(projectKey(project), "cat");
-    const limits = codexLimits();
-    limits.resetCredits = { availableCount: 0, credits: [] };
     act(() =>
-      root.render(createElement(UsageProviderChip, { limits, now, project })),
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: codexLimits(),
+          now,
+          project,
+        }),
+      ),
     );
 
     await act(async () => button("Codex usage details").click());
-    const mascot = document.querySelector('[data-reset-mascot-mood="sad"]');
+    const mascot = document.querySelector('[data-reset-mascot-mood="happy"]');
     expect(mascot?.getAttribute("data-mascot-name")).toBe("cat");
-    expect(document.body.textContent).toContain("No resets available");
+  });
+
+  it("hides the banked resets card when no resets are available", async () => {
+    const limits = codexLimits();
+    limits.resetCredits = { availableCount: 0, credits: [] };
+    act(() => root.render(createElement(UsageProviderChip, { limits, now })));
+
+    await act(async () => button("Codex usage details").click());
+    expect(document.body.textContent).not.toContain("Banked resets");
+    expect(document.querySelector(".reset-mascot-scene")).toBeNull();
+    expect(
+      document.querySelector('[aria-label="Available banked resets"]'),
+    ).toBeNull();
   });
 
   it("keeps aggregate-only resets visible as claimable rows", async () => {

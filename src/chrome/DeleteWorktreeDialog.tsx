@@ -1,12 +1,10 @@
 import {
-  useEffect,
-  useRef,
   useState,
   type ComponentType,
   type FormEvent,
   type ReactNode,
 } from "react";
-import { prettyCwd, projectName } from "../lib/paths";
+import { prettyCwd } from "../lib/paths";
 import { type Worktree } from "../lib/worktrees";
 import { Modal } from "./Modal";
 import {
@@ -64,20 +62,10 @@ export function DeleteWorktreeDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [deleteSessions, setDeleteSessions] = useState(false);
-  const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string>();
-  const input = useRef<HTMLInputElement>(null);
-  // The modal focuses its close button on mount, so claim focus on the next frame.
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => input.current?.focus());
-    return () => cancelAnimationFrame(frame);
-  }, []);
-  const folder = projectName(tree.path);
-  const confirmed =
-    confirmation.trim().toLowerCase() === folder.toLowerCase() && !!folder;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy || !confirmed) return;
+    if (busy) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -181,24 +169,6 @@ export function DeleteWorktreeDialog({
             </button>
           </div>
         )}
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[12.5px] text-content/70">
-            Type <span className="font-mono text-content">{folder}</span> to
-            confirm
-          </span>
-          <input
-            ref={input}
-            aria-label={`Type ${folder} to confirm`}
-            className="h-9 rounded-md border border-content/10 bg-background-base px-2.5 font-mono text-[13px] outline-none placeholder:text-content/25 focus:border-content/25 disabled:opacity-50"
-            value={confirmation}
-            disabled={busy}
-            placeholder={folder}
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            onChange={(e) => setConfirmation(e.target.value)}
-          />
-        </label>
         {error && (
           <p role="alert" className="break-words text-[12.5px] text-red-400">
             {error}
@@ -215,7 +185,7 @@ export function DeleteWorktreeDialog({
           </button>
           <button
             type="submit"
-            disabled={busy || !confirmed}
+            disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-md bg-red-500/20 px-3 py-1.5 font-medium text-red-400 hover:bg-red-500/30 disabled:opacity-40 disabled:hover:bg-red-500/20 active:scale-[0.97]"
           >
             {busy && <Loader className="size-3.5 animate-spin" />}

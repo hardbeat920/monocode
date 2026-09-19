@@ -40,14 +40,14 @@ afterEach(async () => {
 it("autofocuses the branch search input only once the popover frame is visible", async () => {
   const seenVisibility: (string | undefined)[] = [];
   const nativeFocus = HTMLInputElement.prototype.focus;
-  vi.spyOn(HTMLInputElement.prototype, "focus").mockImplementation(
-    function (this: HTMLInputElement) {
-      const frame = this.closest("[data-popover-side]")
-        ?.parentElement as HTMLElement | null;
-      seenVisibility.push(frame?.style.visibility);
-      return nativeFocus.call(this);
-    },
-  );
+  vi.spyOn(HTMLInputElement.prototype, "focus").mockImplementation(function (
+    this: HTMLInputElement,
+  ) {
+    const frame = this.closest("[data-popover-side]")
+      ?.parentElement as HTMLElement | null;
+    seenVisibility.push(frame?.style.visibility);
+    return nativeFocus.call(this);
+  });
 
   act(() =>
     root.render(createElement(BranchPicker, { cwd: "/repo", branch: "main" })),
@@ -65,6 +65,24 @@ it("autofocuses the branch search input only once the popover frame is visible",
   // the popover's pre-paint measure pass must never be where focus lands.
   expect(seenVisibility).not.toContain("hidden");
   expect(document.activeElement).toBe(input);
+});
+
+it("uses the interface typeface for branch names and search", async () => {
+  act(() =>
+    root.render(createElement(BranchPicker, { cwd: "/repo", branch: "main" })),
+  );
+  await act(async () => {});
+  await act(async () => container.querySelector("button")!.click());
+
+  const picker = document.querySelector<HTMLElement>("[data-branch-picker]")!;
+  const search = picker.querySelector<HTMLInputElement>(
+    'input[aria-label="Search or create a branch"]',
+  )!;
+  const branchName = picker.querySelector<HTMLElement>('[role="option"] span')!;
+
+  expect(search.className).toContain("font-sans");
+  expect(branchName.className).not.toContain("font-mono");
+  expect(branchName.className).toContain("font-medium");
 });
 
 it("asks for a branch name before creating from the fixed action", async () => {
@@ -95,9 +113,9 @@ it("asks for a branch name before creating from the fixed action", async () => {
   await act(async () => {});
   expect(document.activeElement).toBe(input);
 
-  const submit = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent === "Create branch",
-  )!;
+  const submit = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Create branch")!;
   expect(submit.disabled).toBe(true);
 
   const setter = Object.getOwnPropertyDescriptor(
@@ -111,10 +129,7 @@ it("asks for a branch name before creating from the fixed action", async () => {
   expect(submit.disabled).toBe(false);
 
   await act(async () => submit.click());
-  expect(gitCreateBranch).toHaveBeenCalledWith(
-    "/repo",
-    "feature/picker",
-  );
+  expect(gitCreateBranch).toHaveBeenCalledWith("/repo", "feature/picker");
 });
 
 it("updates the branch creation row with the entered name", async () => {

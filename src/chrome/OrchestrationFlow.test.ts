@@ -924,7 +924,7 @@ describe("orchestration composer and card", () => {
     );
 
     expect(container.textContent).toContain(
-      "Interrupted tasks stay stopped for the lead to review.",
+      "Resume continues interrupted workers from their retained checkouts",
     );
     expect(container.textContent).toContain(
       "Investigating the failure is still running in this project.",

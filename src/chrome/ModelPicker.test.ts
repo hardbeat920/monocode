@@ -63,7 +63,7 @@ vi.mock("./Popover", () => ({
     ),
 }));
 
-import { EffortPicker, ModelPicker } from "./ModelPicker";
+import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import {
   resetHarnessModelOverlays,
   saveRecentModelChoice,
@@ -303,6 +303,74 @@ describe("model picker", () => {
     expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
   });
 
+  it("names the source of same-name favorites from different providers", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:auto",
+        harness: "cursor",
+        name: "Auto",
+        nativeId: "auto",
+      },
+      {
+        id: "cursor:muse-spark-1.3",
+        harness: "cursor",
+        name: "Muse Spark 1.3",
+        nativeId: "muse-spark-1.3",
+      },
+    ]);
+    setHarnessModels("opencode", [
+      {
+        id: "opencode:opencode-go/muse-spark-1.3",
+        harness: "opencode",
+        name: "Muse Spark 1.3",
+        nativeId: "opencode-go/muse-spark-1.3",
+        provider: { id: "opencode-go", name: "OpenCode Go" },
+      },
+    ]);
+    localStorage.setItem(
+      "monocode.favoriteModels",
+      JSON.stringify([
+        "cursor:auto",
+        "cursor:muse-spark-1.3",
+        "opencode:opencode-go/muse-spark-1.3",
+      ]),
+    );
+
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:auto",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    act(() => trigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"))!;
+    hover(modelRow);
+    const favoritesTab = container.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-label="Favorites"]',
+    )!;
+    act(() => favoritesTab.click());
+
+    const options = [
+      ...container.querySelectorAll('[role="option"]'),
+    ].map((option) => option.getAttribute("aria-label"));
+    expect(options).toEqual([
+      "Auto, Cursor",
+      "Muse Spark 1.3, Cursor",
+      "Muse Spark 1.3, OpenCode Go",
+    ]);
+  });
+
   it("can move effort into a dedicated composer control", () => {
     const onSettingsChange = vi.fn();
     act(() =>
@@ -314,11 +382,11 @@ describe("model picker", () => {
             harness: "grok",
             model: "grok:grok-4.6",
             values: { effort: "high" },
-            hideEffort: true,
+            hideSettings: true,
             onChange: vi.fn(),
             onSettingsChange,
           }),
-          createElement(EffortPicker, {
+          createElement(ModelControlPills, {
             harness: "grok",
             model: "grok:grok-4.6",
             values: { effort: "high" },
@@ -352,6 +420,485 @@ describe("model picker", () => {
     keyDown(effortMenu, "ArrowUp");
     keyDown(effortMenu, "Enter");
     expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
+  });
+
+  it("opens the model list with no intermediate menu when settings live beside the picker", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:composer-2.5",
+        harness: "cursor",
+        name: "Composer 2.5",
+        nativeId: "composer-2.5",
+        settings: [
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "false", label: "Off" },
+              { value: "true", label: "On" },
+            ],
+          },
+        ],
+      },
+    ]);
+    const onSettingsChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(
+          "div",
+          null,
+          createElement(ModelPicker, {
+            harness: "cursor",
+            model: "cursor:composer-2.5",
+            values: { fast: "false" },
+            hideSettings: true,
+            onChange: vi.fn(),
+            onSettingsChange,
+          }),
+          createElement(ModelControlPills, {
+            harness: "cursor",
+            model: "cursor:composer-2.5",
+            values: { fast: "false" },
+            onSettingsChange,
+          }),
+        ),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    )!;
+    act(() => modelTrigger.click());
+    expect(
+      container.querySelector('[role="menu"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[role="dialog"][aria-label="Models"]'),
+    ).not.toBeNull();
+
+    const fastPill = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Fast: Off"]',
+    )!;
+    expect(fastPill.getAttribute("aria-pressed")).toBe("false");
+    act(() => fastPill.click());
+    expect(onSettingsChange).toHaveBeenCalledWith({ fast: "true" });
+  });
+
+  it("renders the OpenCode variant as a beside-picker pill", () => {
+    setHarnessModels("opencode", [
+      {
+        id: "opencode:some-cloud/spark-1",
+        harness: "opencode",
+        name: "Spark 1",
+        nativeId: "some-cloud/spark-1",
+        provider: { id: "some-cloud", name: "Some Cloud" },
+        settings: [
+          {
+            id: "variant",
+            label: "Variant",
+            kind: "select",
+            value: "high",
+            options: [
+              { value: "low", label: "Low" },
+              { value: "medium", label: "Medium" },
+              { value: "high", label: "High" },
+              { value: "xhigh", label: "Extra High" },
+            ],
+          },
+        ],
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelControlPills, {
+          harness: "opencode",
+          model: "opencode:some-cloud/spark-1",
+          values: { variant: "high" },
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const variantPill = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Variant: High"]',
+    )!;
+    expect(variantPill.textContent).toBe("High");
+    act(() => variantPill.click());
+    expect(
+      container.querySelector('[role="menu"][aria-label="Variant"]'),
+    ).not.toBeNull();
+  });
+
+  it.each(["pi", "omp"] as const)(
+    "shows an effort icon for %s thinking levels",
+    (harness) => {
+      const model = `${harness}:gpt-5.4-mini`;
+      setHarnessModels(harness, [
+        {
+          id: model,
+          harness,
+          name: "GPT-5.4 mini",
+          nativeId: "gpt-5.4-mini",
+          settings: [
+            {
+              id: "thinking",
+              label: "Thinking",
+              kind: "select",
+              value: "xhigh",
+              options: [
+                { value: "high", label: "High" },
+                { value: "xhigh", label: "Extra High" },
+              ],
+            },
+          ],
+        },
+      ]);
+
+      act(() =>
+        root.render(
+          createElement(ModelControlPills, {
+            harness,
+            model,
+            values: { thinking: "xhigh" },
+            onSettingsChange: vi.fn(),
+          }),
+        ),
+      );
+
+      const effortPill = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Thinking: Extra High"]',
+      )!;
+      expect(effortPill.textContent).toBe("Extra High");
+      expect(effortPill.querySelectorAll("svg")).toHaveLength(2);
+    },
+  );
+
+  it("shows a speed icon on the service-tier pill", () => {
+    setHarnessModels("codex", [
+      {
+        id: "codex:gpt-5.6-luna",
+        harness: "codex",
+        name: "GPT-5.6 Luna",
+        nativeId: "gpt-5.6-luna",
+        settings: [
+          {
+            id: "serviceTier",
+            label: "Service Tier",
+            kind: "select",
+            value: "default",
+            options: [
+              { value: "default", label: "Standard" },
+              { value: "fast", label: "Fast" },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    act(() =>
+      root.render(
+        createElement(ModelControlPills, {
+          harness: "codex",
+          model: "codex:gpt-5.6-luna",
+          values: { serviceTier: "default" },
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const serviceTierPill = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Service Tier: Standard"]',
+    )!;
+    expect(serviceTierPill.textContent).toBe("Standard");
+    expect(serviceTierPill.querySelectorAll("svg")).toHaveLength(2);
+  });
+
+  it("groups the service tier inside the effort popover", () => {
+    setHarnessModels("codex", [
+      {
+        id: "codex:gpt-5.6-sol",
+        harness: "codex",
+        name: "GPT-5.6 Sol",
+        nativeId: "gpt-5.6-sol",
+        settings: [
+          {
+            id: "reasoningEffort",
+            label: "Reasoning",
+            kind: "select",
+            value: "high",
+            options: [
+              { value: "high", label: "High" },
+              { value: "xhigh", label: "Extra High" },
+            ],
+          },
+          {
+            id: "serviceTier",
+            label: "Service Tier",
+            kind: "select",
+            value: "default",
+            options: [
+              { value: "default", label: "Standard" },
+              { value: "fast", label: "Fast" },
+            ],
+          },
+        ],
+      },
+    ]);
+    const onSettingsChange = vi.fn();
+
+    act(() =>
+      root.render(
+        createElement(ModelControlPills, {
+          harness: "codex",
+          model: "codex:gpt-5.6-sol",
+          values: { reasoningEffort: "high", serviceTier: "default" },
+          onSettingsChange,
+        }),
+      ),
+    );
+
+    expect(
+      container.querySelector('button[aria-label="Service Tier: Standard"]'),
+    ).toBeNull();
+    const effortPill = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reasoning: High"]',
+    )!;
+    act(() => effortPill.click());
+
+    const menu = container.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Reasoning and Service Tier"]',
+    )!;
+    expect(menu.querySelector('[role="separator"]')).not.toBeNull();
+    expect(
+      menu.querySelector('[role="group"][aria-label="Reasoning"]'),
+    ).not.toBeNull();
+    const serviceTierGroup = menu.querySelector<HTMLElement>(
+      '[role="group"][aria-label="Service Tier"]',
+    )!;
+    expect(serviceTierGroup.textContent).toContain("Standard");
+    expect(serviceTierGroup.textContent).toContain("Fast");
+
+    const fast = [...serviceTierGroup.querySelectorAll("button")].find(
+      (button) => button.textContent === "Fast",
+    )!;
+    act(() => fast.click());
+    expect(onSettingsChange).toHaveBeenCalledWith({
+      reasoningEffort: "high",
+      serviceTier: "fast",
+    });
+  });
+
+  it("groups fast mode inside the effort popover", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus-5",
+        harness: "claude",
+        name: "Opus 5",
+        nativeId: "claude-opus-5",
+        settings: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            kind: "select",
+            value: "high",
+            options: [
+              { value: "medium", label: "Medium" },
+              { value: "high", label: "High" },
+            ],
+          },
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "false", label: "Off" },
+              { value: "true", label: "On" },
+            ],
+          },
+        ],
+      },
+    ]);
+    const onSettingsChange = vi.fn();
+
+    act(() =>
+      root.render(
+        createElement(ModelControlPills, {
+          harness: "claude",
+          model: "claude:opus-5",
+          values: { effort: "high", fast: "false" },
+          onSettingsChange,
+        }),
+      ),
+    );
+
+    expect(
+      container.querySelector('button[aria-label="Fast: Off"]'),
+    ).toBeNull();
+    const effortPill = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Effort: High"]',
+    )!;
+    act(() => effortPill.click());
+
+    const menu = container.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Effort and Fast"]',
+    )!;
+    const fastGroup = menu.querySelector<HTMLElement>(
+      '[role="group"][aria-label="Fast"]',
+    )!;
+    expect(fastGroup.textContent).toContain("Off");
+    expect(fastGroup.textContent).toContain("On");
+
+    const on = [...fastGroup.querySelectorAll("button")].find(
+      (button) => button.textContent === "On",
+    )!;
+    act(() => on.click());
+    expect(onSettingsChange).toHaveBeenCalledWith({
+      effort: "high",
+      fast: "true",
+    });
+  });
+
+  it("opens the model list directly when settings live beside the picker", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:composer-2.5",
+        harness: "cursor",
+        name: "Composer 2.5",
+        nativeId: "composer-2.5",
+        settings: [
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "false", label: "Off" },
+              { value: "true", label: "On" },
+            ],
+          },
+        ],
+      },
+    ]);
+    const onChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:composer-2.5",
+          values: { fast: "false" },
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    )!;
+    act(() => modelTrigger.click());
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    const flyout = container.querySelector<HTMLElement>(
+      '[role="dialog"][aria-label="Models"]',
+    )!;
+    expect(flyout).not.toBeNull();
+    expect(flyout.textContent).toContain("Composer 2.5");
+
+    const selected = flyout.querySelector<HTMLButtonElement>(
+      '[role="option"][aria-selected="true"]',
+    )!;
+    act(() => selected.click());
+    expect(onChange).toHaveBeenCalledWith("cursor", "cursor:composer-2.5");
+  });
+
+  it("picks the highlighted model on Enter even when focus sits on another row", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:first",
+        harness: "cursor",
+        name: "First",
+        nativeId: "first",
+      },
+      {
+        id: "cursor:second",
+        harness: "cursor",
+        name: "Second",
+        nativeId: "second",
+      },
+    ]);
+    const onChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:first",
+          values: {},
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    )!;
+    act(() => modelTrigger.click());
+    const options = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    expect(options).toHaveLength(2);
+    // Focus stays on the first row while arrows move the highlight.
+    options[0].focus();
+    keyDown(options[0], "ArrowDown");
+    keyDown(options[0], "Enter");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("cursor", "cursor:second");
+  });
+
+  it("leaves favorite toggles to native activation on Enter", () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:first",
+        harness: "cursor",
+        name: "First",
+        nativeId: "first",
+      },
+      {
+        id: "cursor:second",
+        harness: "cursor",
+        name: "Second",
+        nativeId: "second",
+      },
+    ]);
+    const onChange = vi.fn();
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:first",
+          values: {},
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="dialog"]',
+    )!;
+    act(() => modelTrigger.click());
+    const star = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add to favorites"]',
+    )!;
+    star.focus();
+    keyDown(star, "Enter");
+    // No model pick hijacks the favorite toggle (native click owns it).
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("returns to the selected model's harness when reopened", () => {
@@ -476,7 +1023,7 @@ describe("model picker", () => {
       ),
     ).not.toBeNull();
     expect(
-      container.querySelector('[role="menu"][aria-label="Model and effort"]'),
+      container.querySelector('[role="menu"][aria-label="Model and settings"]'),
     ).toBeNull();
   });
 });

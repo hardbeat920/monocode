@@ -362,7 +362,7 @@ export function BranchPicker({
           data-branch-picker
           className="flex flex-col overflow-hidden"
         >
-          <label className="flex shrink-0 items-center gap-2 border-b border-stroke px-2 py-2.5 text-content/50">
+          <label className="flex shrink-0 items-center gap-2 border-b border-stroke px-3 py-2.5 text-content/50">
             <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
             <input
               ref={search}
@@ -375,7 +375,7 @@ export function BranchPicker({
               autoCorrect="off"
               autoCapitalize="off"
               disabled={busy}
-              className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/40 disabled:opacity-60"
+              className="min-w-0 flex-1 bg-transparent font-sans text-[13px] text-content outline-none placeholder:text-content/40 disabled:opacity-60"
               onChange={(e) => {
                 setQuery(e.target.value);
                 setActive(0);
@@ -472,7 +472,7 @@ function BranchList({
             onMouseDown={(e) => e.preventDefault()}
             onMouseEnter={() => onActive(index)}
             onClick={() => onPick(row)}
-            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left disabled:opacity-60 ${
+            className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] disabled:opacity-60 ${
               highlighted || selected
                 ? "bg-selection text-content"
                 : "text-content hover:bg-content/5"
@@ -486,11 +486,13 @@ function BranchList({
                 strokeWidth={1.75}
               />
             )}
-            <span className="min-w-0 flex-1 truncate font-mono text-[12px]">
+            <span
+              className={`min-w-0 flex-1 truncate ${selected ? "font-medium" : ""}`}
+            >
               {row.branch.name}
             </span>
             {row.branch.remote ? (
-              <span className="shrink-0 text-[10px] text-content/40">
+              <span className="shrink-0 rounded bg-content/6 px-1.5 py-0.5 text-[10px] text-content/40">
                 {row.branch.remote}
               </span>
             ) : null}

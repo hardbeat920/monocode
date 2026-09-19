@@ -47,6 +47,7 @@ export type SessionSummary = {
   updatedAt: number;
   archived?: boolean;
   pinned?: boolean;
+  draft?: boolean;
   linkedWorkItem?: LinkedWorkItem;
 };
 
@@ -450,6 +451,7 @@ function sanitizeBlock(block: Block): Block | null {
   if (block.durationMs != null) next.durationMs = block.durationMs;
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
+  if (block.role === "user" && block.draft) next.draft = true;
   if (
     block.role === "user" &&
     typeof block.orchestrationLeadId === "string" &&
@@ -704,6 +706,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
     deletions: summary.deletions ?? 0,
     archived: summary.archived || undefined,
     pinned: summary.pinned || undefined,
+    draft: summary.draft || undefined,
     linkedWorkItem,
   };
 }

@@ -13,7 +13,7 @@ export function DeleteSessionDialog({
   onClose,
 }: {
   title: string;
-  unusedWorktree?: string;
+  unusedWorktree: string;
   onClose: (choice: SessionDeleteChoice) => void;
 }) {
   const [deleteWorktree, setDeleteWorktree] = useState(false);
@@ -25,28 +25,24 @@ export function DeleteSessionDialog({
     >
       <div className="flex flex-col gap-4 p-4 text-[12px]">
         <p>“{title}” will be permanently deleted.</p>
-        {unusedWorktree ? (
-          <label className="flex items-start gap-2">
-            <input
-              type="checkbox"
-              checked={deleteWorktree}
-              onChange={(e) => setDeleteWorktree(e.target.checked)}
-              className="mt-0.5 accent-accent"
-            />
-            <span>
-              Also delete the unused worktree
-              <span className="mt-1 block break-all text-[11px] text-content/45">
-                {prettyCwd(unusedWorktree)}
-              </span>
-              <span className="mt-1 block text-[11px] text-content/45">
-                The branch is kept. If files have uncommitted changes, the
-                worktree stays.
-              </span>
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={deleteWorktree}
+            onChange={(e) => setDeleteWorktree(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
+          <span>
+            Also delete the unused worktree
+            <span className="mt-1 block break-all text-[11px] text-content/45">
+              {prettyCwd(unusedWorktree)}
             </span>
-          </label>
-        ) : (
-          <p className="text-content/50">Working copies and files are kept.</p>
-        )}
+            <span className="mt-1 block text-[11px] text-content/45">
+              The branch is kept. If files have uncommitted changes, the
+              worktree stays.
+            </span>
+          </span>
+        </label>
         <div className="flex justify-end gap-2">
           <button
             type="button"

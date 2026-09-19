@@ -158,7 +158,10 @@ export function OrchestrationSidebarAgents({
                 </span>
                 <span
                   className={`flex shrink-0 items-center gap-1 text-[11px] ${
-                    task.needsInput || task.status === "failed"
+                    task.needsInput ||
+                    task.status === "failed" ||
+                    task.status === "blocked" ||
+                    task.status === "interrupted"
                       ? "text-amber-400"
                       : working
                         ? "text-accent"
@@ -167,7 +170,10 @@ export function OrchestrationSidebarAgents({
                           : "text-content/45"
                   }`}
                 >
-                  {task.needsInput || task.status === "failed" ? (
+                  {task.needsInput ||
+                  task.status === "failed" ||
+                  task.status === "blocked" ||
+                  task.status === "interrupted" ? (
                     <CircleAlert className="size-3" strokeWidth={1.75} />
                   ) : working ? (
                     <TerminalSpinner className="inline-block w-3 select-none text-center text-[11px] leading-none text-accent" />
@@ -246,7 +252,7 @@ export function OrchestrationSidebarAgents({
               ? "Stopping interrupted work before this run can resume."
               : leadBusy
                 ? "Waiting for the lead's interrupted turn to finish before this run can resume."
-                : "Resume continues queued work. Interrupted tasks stay stopped for the lead to review."}
+                : "Resume continues interrupted workers from their retained checkouts and starts queued work. Policy-blocked tasks stay stopped for review."}
           </p>
           {resumeBlocker && (
             <p className="px-0.5 text-[11px] leading-relaxed text-amber-400">
@@ -276,7 +282,7 @@ export function OrchestrationSidebarAgents({
                     ? "Wait for the lead's interrupted turn to finish"
                     : resumeBlocker
                       ? `Stop ${resumeBlocker.title || "the other conversation"} before resuming`
-                      : "Continue queued work and review interrupted tasks"
+                      : "Continue interrupted and queued work"
               }
               onClick={() =>
                 void perform(() =>

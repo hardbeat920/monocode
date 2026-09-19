@@ -5,6 +5,7 @@ import { projectName } from "./paths";
 import { sameProjectPath } from "./recents";
 import {
   sessionDisplayTitle,
+  sessionDraftBlock,
   sessionNeedsInput,
   type Session,
 } from "./session";
@@ -110,6 +111,7 @@ export function summaryFromSession(
     model: session.model,
     runtimeMode: session.runtimeMode,
     title: session.title,
+    draft: !!sessionDraftBlock(session),
     providerSessionId: session.providerSessionId,
     worktreeCwd: session.worktreeCwd,
     worktreeRemoved: session.worktreeRemoved,
@@ -178,7 +180,14 @@ export function historyWithLiveSessions(
     if (!sameProjectPath(session.cwd, cwd)) continue;
     const live = session.busy || sessionNeedsInput(session);
     if (!shouldPersistSession(session) && !live) continue;
-    if (rows.some((row) => row.id === session.id)) continue;
+    const storedIndex = rows.findIndex((row) => row.id === session.id);
+    if (storedIndex >= 0) {
+      const draft = !!sessionDraftBlock(session);
+      if (!!rows[storedIndex].draft !== draft) {
+        rows[storedIndex] = { ...rows[storedIndex], draft: draft || undefined };
+      }
+      continue;
+    }
     const sessionHint: SessionGitHint = {
       ...hint,
       ...(session.branch ? { branch: session.branch } : {}),

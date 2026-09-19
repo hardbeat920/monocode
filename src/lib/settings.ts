@@ -128,7 +128,12 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
-  { id: "project-worktrees", section: "worktrees", label: "Project worktrees", keywords: "git branch working copy create delete manage" },
+  {
+    id: "project-worktrees",
+    section: "worktrees",
+    label: "Project worktrees",
+    keywords: "git branch working copy create delete manage",
+  },
   {
     id: "update",
     section: "general",
@@ -248,10 +253,10 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "queue steer interrupt send while running",
   },
   {
-    id: "effort-control",
+    id: "model-controls",
     section: "chat",
-    label: "Effort control",
-    keywords: "thinking reasoning model picker composer",
+    label: "Model controls",
+    keywords: "effort thinking reasoning fast service tier model picker composer",
   },
   {
     id: "composer-mascot",
@@ -429,6 +434,8 @@ const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 
 const COMPOSER_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
 
+const MODEL_CONTROLS_KEY = "monocode.modelControls";
+
 export type FollowUpBehavior = "steer" | "queue";
 
 export const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = "steer";
@@ -452,44 +459,47 @@ export function saveFollowUpBehavior(value: FollowUpBehavior) {
   }
 }
 
-export const COMPOSER_EFFORT_VISIBLE_DEFAULT = false;
+export type ModelControls = "menu" | "beside";
 
-/** Fired on `window` when the standalone composer effort control setting flips. */
-export const COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT =
-  "monocode:composer-effort-visible-change";
+export const MODEL_CONTROLS_DEFAULT: ModelControls = "menu";
 
-export function loadComposerEffortVisible(): boolean {
+/** Fired on `window` when the composer model controls setting flips. */
+export const MODEL_CONTROLS_CHANGE_EVENT = "monocode:model-controls-change";
+
+export function loadModelControls(): ModelControls {
   try {
-    const raw = localStorage.getItem(COMPOSER_EFFORT_VISIBLE_KEY);
-    if (raw == null) return COMPOSER_EFFORT_VISIBLE_DEFAULT;
-    return raw === "1" || raw === "true";
+    const raw = localStorage.getItem(MODEL_CONTROLS_KEY);
+    if (raw === "menu" || raw === "beside") return raw;
+    if (raw == null) {
+      // Migrate the previous effort-control toggle: on means beside the picker.
+      const legacy = localStorage.getItem(COMPOSER_EFFORT_VISIBLE_KEY);
+      if (legacy === "1" || legacy === "true") return "beside";
+    }
   } catch {
-    return COMPOSER_EFFORT_VISIBLE_DEFAULT;
+    // private mode / quota
   }
+  return MODEL_CONTROLS_DEFAULT;
 }
 
-export function saveComposerEffortVisible(value: boolean) {
+export function saveModelControls(value: ModelControls) {
   try {
-    localStorage.setItem(COMPOSER_EFFORT_VISIBLE_KEY, value ? "1" : "0");
+    localStorage.setItem(MODEL_CONTROLS_KEY, value);
   } catch {
     // private mode / quota
   }
   if (typeof window === "undefined") return;
   window.dispatchEvent(
-    new CustomEvent<boolean>(COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT, {
+    new CustomEvent<ModelControls>(MODEL_CONTROLS_CHANGE_EVENT, {
       detail: value,
     }),
   );
 }
 
-export function subscribeComposerEffortVisible(onStoreChange: () => void) {
+export function subscribeModelControls(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT, onStoreChange);
+  window.addEventListener(MODEL_CONTROLS_CHANGE_EVENT, onStoreChange);
   return () =>
-    window.removeEventListener(
-      COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT,
-      onStoreChange,
-    );
+    window.removeEventListener(MODEL_CONTROLS_CHANGE_EVENT, onStoreChange);
 }
 
 export const COMPOSER_RUNNER_DEFAULT = true;
@@ -731,7 +741,8 @@ export type KeybindingRow = {
 
 /**
  * Mirrors the bindings we actually handle: the native menu accelerators in
- * `src-tauri/src/menu.rs`, `tabCommand`, and the window key handler in App.
+ * `src-tauri/src/menu.rs`, `tabCommand`, the window key handler in App, and
+ * focused surface handlers such as the draft composer workspace toggle.
  */
 export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Search", keys: `${MOD}K`, when: "Always" },
@@ -742,6 +753,11 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
+  {
+    command: "Composer: Toggle Workspace",
+    keys: `${MOD}${SHIFT}G`,
+    when: "Draft session composer",
+  },
   { command: "View: Reload", keys: `${MOD}${SHIFT}R`, when: "Always" },
   { command: "View: Zoom In", keys: `${MOD}+`, when: "Always" },
   { command: "View: Zoom Out", keys: `${MOD}-`, when: "Always" },

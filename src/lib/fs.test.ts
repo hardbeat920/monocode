@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { isCheckoutBlockedByChanges, listSkills } from "./fs";
+import {
+  gitCommit,
+  gitHeadMessage,
+  isCheckoutBlockedByChanges,
+  listSkills,
+} from "./fs";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -54,5 +59,35 @@ describe("listSkills", () => {
       cwd: "/repo",
       disabledPaths: null,
     });
+  });
+});
+
+describe("gitCommit", () => {
+  it("invokes git_commit without amend by default", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    await gitCommit("/repo", "Add feature");
+    expect(invoke).toHaveBeenCalledWith("git_commit", {
+      cwd: "/repo",
+      message: "Add feature",
+      amend: false,
+    });
+  });
+
+  it("passes amend when requested", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    await gitCommit("/repo", "Fix feature", true);
+    expect(invoke).toHaveBeenCalledWith("git_commit", {
+      cwd: "/repo",
+      message: "Fix feature",
+      amend: true,
+    });
+  });
+});
+
+describe("gitHeadMessage", () => {
+  it("invokes git_head_message with cwd", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce("Subject\n\nBody");
+    await expect(gitHeadMessage("/repo")).resolves.toBe("Subject\n\nBody");
+    expect(invoke).toHaveBeenCalledWith("git_head_message", { cwd: "/repo" });
   });
 });

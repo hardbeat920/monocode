@@ -167,7 +167,6 @@ describe("working-copy context", () => {
   });
 });
 
-
 describe("sessions kept after worktree deletion", () => {
   const source = {
     ...newSession("codex", "/repo"),

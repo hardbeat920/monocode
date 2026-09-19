@@ -92,6 +92,16 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("keeps an unsent user turn marked as a draft", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ];
+    expect(sanitizeSessionForPersist(session).blocks).toEqual([
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ]);
+  });
+
   it("persists a removed worktree as an explicit unselected working-copy state", () => {
     const session = newSession("codex", "/repo");
     session.worktreeCwd = "/repo-worktrees/feature";

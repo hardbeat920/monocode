@@ -131,6 +131,8 @@ pub struct SessionSummary {
     pub archived: bool,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
+    pub draft: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub linked_work_item: Option<Value>,
 }
@@ -527,6 +529,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("linked_work_item_json", "TEXT"),
         ("provider_account_id", "TEXT"),
         ("worktree_removed", "INTEGER NOT NULL DEFAULT 0"),
+        ("is_draft", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         ensure_session_column(conn, column, decl)?;
     }
@@ -633,7 +636,25 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     if current < 17 {
-        crate::composer_draft::ensure_drafts_table(conn)?;
+        // Draft is rendered on every session card. Materialize it alongside
+        // `has_user_message` so listing never has to read transcript blobs.
+        ensure_session_column(conn, "is_draft", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute(
+            "UPDATE sessions SET is_draft =
+               CASE WHEN blocks_json LIKE '%\"role\":\"user\"%'
+                          AND blocks_json LIKE '%\"draft\":true%'
+                    THEN 1 ELSE 0 END",
+            [],
+        )?;
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS sessions_cwd_cover_idx;
+             CREATE INDEX sessions_cwd_cover_idx
+               ON sessions (cwd, has_user_message, updated_at DESC, id, harness,
+                            model, runtime_mode, title, provider_session_id,
+                            created_at, branch, archived, pinned,
+                            linked_work_item_json, worktree_cwd, worktree_removed,
+                            is_draft);",
+        )?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (17, ?1)",
             params![now_millis()],
@@ -841,6 +862,7 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
         .filter(|value| !value.is_empty());
 
     let has_user_message = has_user_block(&session.blocks);
+    let is_draft = has_draft_block(&session.blocks);
 
     let existing: Option<(i64, i64, String, i64, i64)> = conn
         .query_row(
@@ -873,8 +895,8 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
            id, cwd, harness, model, model_settings, runtime_mode, title,
            provider_session_id, blocks_json, created_at, updated_at, branch,
            context_used, context_window, worktree_cwd, has_user_message,
-           linked_work_item_json, provider_account_id, worktree_removed
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+           linked_work_item_json, provider_account_id, worktree_removed, is_draft
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
          ON CONFLICT(id) DO UPDATE SET
            cwd = excluded.cwd,
            harness = excluded.harness,
@@ -892,7 +914,8 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
            has_user_message = excluded.has_user_message,
            linked_work_item_json = excluded.linked_work_item_json,
            provider_account_id = excluded.provider_account_id,
-           worktree_removed = excluded.worktree_removed",
+           worktree_removed = excluded.worktree_removed,
+           is_draft = excluded.is_draft",
         params![
             session.id,
             session.cwd,
@@ -913,6 +936,7 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
             linked_work_item_json,
             provider_account_id,
             i64::from(session.worktree_removed),
+            i64::from(is_draft),
         ],
     )?;
 
@@ -937,6 +961,7 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
         updated_at,
         archived,
         pinned,
+        draft: is_draft,
         linked_work_item: session.linked_work_item.clone(),
     })
 }
@@ -1194,7 +1219,7 @@ fn list_by_project(conn: &Connection, cwd: &str) -> rusqlite::Result<Vec<Session
                 created_at, updated_at, branch, archived, pinned,
                 linked_work_item_json,
                 (SELECT summary FROM orchestration_sidebar WHERE lead_id = sessions.id), worktree_cwd,
-                worktree_removed
+                worktree_removed, is_draft
          FROM sessions
          WHERE cwd = ?1
            AND has_user_message = 1
@@ -1231,6 +1256,7 @@ fn list_by_project(conn: &Connection, cwd: &str) -> rusqlite::Result<Vec<Session
             deletions: 0,
             archived: archived != 0,
             pinned: pinned != 0,
+            draft: row.get::<_, i64>(16)? != 0,
             linked_work_item,
         })
     })?;
@@ -1243,7 +1269,7 @@ fn list_linked(conn: &Connection) -> rusqlite::Result<Vec<SessionSummary>> {
                 created_at, updated_at, branch, archived, pinned,
                 linked_work_item_json,
                 (SELECT summary FROM orchestration_sidebar WHERE lead_id = sessions.id), worktree_cwd,
-                worktree_removed
+                worktree_removed, is_draft
          FROM sessions
          WHERE has_user_message = 1
            AND linked_work_item_json IS NOT NULL
@@ -1274,6 +1300,7 @@ fn list_linked(conn: &Connection) -> rusqlite::Result<Vec<SessionSummary>> {
             deletions: 0,
             archived: archived != 0,
             pinned: pinned != 0,
+            draft: row.get::<_, i64>(16)? != 0,
             linked_work_item: optional_json(row.get(12)?),
         })
     })?;
@@ -1287,6 +1314,15 @@ fn has_user_block(blocks: &Value) -> bool {
         blocks
             .iter()
             .any(|block| block.get("role").and_then(Value::as_str) == Some("user"))
+    })
+}
+
+fn has_draft_block(blocks: &Value) -> bool {
+    blocks.as_array().is_some_and(|blocks| {
+        blocks.iter().any(|block| {
+            block.get("role").and_then(Value::as_str) == Some("user")
+                && block.get("draft").and_then(Value::as_bool) == Some(true)
+        })
     })
 }
 
@@ -1733,7 +1769,7 @@ mod tests {
                        ON sessions (cwd, has_user_message, updated_at DESC, id, harness,
                                     model, runtime_mode, title, provider_session_id,
                                     created_at, branch, archived, pinned, linked_work_item_json);
-                     DELETE FROM schema_migrations WHERE version >= 16;",
+                     DELETE FROM schema_migrations WHERE version IN (16, 17);",
                 )
                 .unwrap();
                 migrate(&conn).unwrap();
@@ -1743,7 +1779,7 @@ mod tests {
                     "EXPLAIN QUERY PLAN
                  SELECT id, cwd, harness, model, runtime_mode, title, provider_session_id,
                         created_at, updated_at, branch, archived, pinned,
-                        linked_work_item_json, worktree_cwd, worktree_removed,
+                        linked_work_item_json, worktree_cwd, worktree_removed, is_draft,
                         (SELECT summary FROM orchestration_sidebar WHERE lead_id = sessions.id)
                  FROM sessions
                  WHERE cwd = ?1
@@ -1778,6 +1814,23 @@ mod tests {
         ]);
         upsert_session(&conn, &quiet).unwrap();
         assert_eq!(list_by_project(&conn, "/tmp/a").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn draft_marker_round_trips_through_session_summaries() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Draft");
+        session.blocks = json!([{ "id": "b1", "role": "user", "text": "hello", "draft": true }]);
+
+        let saved = upsert_session(&conn, &session).unwrap();
+        assert!(saved.draft);
+        assert!(list_by_project(&conn, "/tmp/a").unwrap()[0].draft);
+
+        session.blocks = json!([{ "id": "b1", "role": "user", "text": "hello" }]);
+        let sent = upsert_session(&conn, &session).unwrap();
+        assert!(!sent.draft);
+        assert!(!list_by_project(&conn, "/tmp/a").unwrap()[0].draft);
     }
 
     #[test]

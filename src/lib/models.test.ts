@@ -12,6 +12,7 @@ import {
   loadLastModelSettings,
   loadRecentModelChoices,
   mergeModelSettings,
+  modelEffortSetting,
   modelPickerTabs,
   preferredModelId,
   preferredModelSettings,
@@ -172,6 +173,34 @@ describe("model settings memory", () => {
     expect(
       preferredModelSettings(opus, { effort: "xhigh", fast: "true" }),
     ).toEqual({ effort: "xhigh", fast: "true" });
+  });
+
+  it("treats OpenCode variant as the effort setting", () => {
+    const model: AgentModel = {
+      id: "opencode:some-cloud/spark-1",
+      harness: "opencode",
+      name: "Spark 1",
+      nativeId: "some-cloud/spark-1",
+      settings: [
+        {
+          id: "variant",
+          label: "Variant",
+          kind: "select",
+          value: "medium",
+          options: [
+            { value: "minimal", label: "Minimal" },
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "xhigh", label: "Extra High" },
+          ],
+        },
+      ],
+    };
+    expect(modelEffortSetting(model)?.id).toBe("variant");
+    expect(mergeModelSettings(model, { variant: "high" })).toEqual({
+      variant: "high",
+    });
   });
 });
 

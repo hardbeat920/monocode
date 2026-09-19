@@ -42,10 +42,38 @@ describe("parseUserMessageLink", () => {
         url: "https://github.com/hardbeat920/monocode/pull/226",
         host: "github.com",
         displayUrl: "github.com/hardbeat920/monocode/pull/226",
+        githubWorkItem: {
+          kind: "pr",
+          repo: "hardbeat920/monocode",
+          number: 226,
+        },
       },
       beforeText: "",
       afterText: " check this",
     });
+  });
+
+  it("recognizes GitHub issues and links to a PR subpage", () => {
+    expect(
+      parseUserMessageLink(
+        "https://github.com/acme/widgets/issues/42#issuecomment-1",
+      )?.link.githubWorkItem,
+    ).toEqual({ kind: "issue", repo: "acme/widgets", number: 42 });
+    expect(
+      parseUserMessageLink("https://www.github.com/acme/widgets/pull/73/files")
+        ?.link.githubWorkItem,
+    ).toEqual({ kind: "pr", repo: "acme/widgets", number: 73 });
+  });
+
+  it("leaves other GitHub URLs as normal web links", () => {
+    expect(
+      parseUserMessageLink("https://github.com/acme/widgets/actions")?.link
+        .githubWorkItem,
+    ).toBeUndefined();
+    expect(
+      parseUserMessageLink("https://github.com/acme/widgets/issues/0")?.link
+        .githubWorkItem,
+    ).toBeUndefined();
   });
 
   it("preserves prose around a URL and drops sentence punctuation", () => {

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  CircleDashed,
   CircleDot,
   Clock,
   Folder,
@@ -139,6 +140,7 @@ import {
 import { SessionsEmpty } from "./SessionsEmpty";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
 import { SourceControl } from "./SourceControl";
+import { GithubStarPrompt } from "./GithubStarPrompt";
 
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 560;
@@ -171,6 +173,8 @@ type Props = {
   cwd: string;
   /** Working copy for Changes / explorer git. Falls back to `cwd`. */
   gitCwd?: string;
+  /** Branch identity shown for a worktree whose folder has a temporary name. */
+  explorerRootLabel?: string;
   open: boolean;
   sessions: SessionSummary[];
   busySessionIds: Set<string>;
@@ -262,6 +266,7 @@ type Props = {
 function SidebarComponent({
   cwd,
   gitCwd,
+  explorerRootLabel,
   open,
   sessions,
   busySessionIds,
@@ -496,7 +501,10 @@ function SidebarComponent({
       return;
     }
     const available = new Set(sessionNavigationIds);
-    if (selectionAnchorRef.current && !available.has(selectionAnchorRef.current)) {
+    if (
+      selectionAnchorRef.current &&
+      !available.has(selectionAnchorRef.current)
+    ) {
       selectionAnchorRef.current = null;
     }
     setSelectedSessionIds((current) =>
@@ -1003,9 +1011,10 @@ function SidebarComponent({
           : visibleIds.slice(Math.min(start, end), Math.max(start, end) + 1);
       selectionAnchorRef.current = start < 0 ? sessionId : anchor;
       setSelectedSessionIds(
-        (current) => new Set(
-          event.ctrlKey || event.metaKey ? [...current, ...range] : range,
-        ),
+        (current) =>
+          new Set(
+            event.ctrlKey || event.metaKey ? [...current, ...range] : range,
+          ),
       );
       return;
     }
@@ -1253,6 +1262,7 @@ function SidebarComponent({
               <FileTree
                 key={gitRoot}
                 cwd={gitRoot}
+                rootLabel={explorerRootLabel}
                 onOpenFile={onOpenFile}
                 onOpenTerminal={onOpenTerminal}
                 onFileMoved={onFileMoved}
@@ -1602,6 +1612,7 @@ function SidebarComponent({
               onDismissUpdate={onDismissUpdate}
             />
             <div className="flex shrink-0 flex-col gap-px p-2">
+              <GithubStarPrompt />
               <RailAction
                 label="Settings"
                 icon={Settings}
@@ -1751,7 +1762,9 @@ function SidebarProjectPicker({
   notesActive?: boolean;
   inboxUnseen?: boolean;
 }) {
-  const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
   const inboxTrigger = useRef<HTMLElement | null>(null);
   return (
     <div
@@ -1787,8 +1800,10 @@ function SidebarProjectPicker({
             active={inboxActive}
             onClick={onOpenInbox}
             onOpenContextMenu={(x, y) => {
-              inboxTrigger.current = document.activeElement instanceof HTMLElement
-                ? document.activeElement : null;
+              inboxTrigger.current =
+                document.activeElement instanceof HTMLElement
+                  ? document.activeElement
+                  : null;
               setInboxMenu({ x, y });
             }}
           >
@@ -2176,6 +2191,7 @@ function SessionCard({
   const [orchestrationTooltipOpen, setOrchestrationTooltipOpen] =
     useState(false);
   const orchestration = session.orchestration;
+  const draft = !!session.draft;
   const orchestrationExpanded =
     !!orchestration && (isActive || isSelected || busy);
   const orchestrationDone =
@@ -2196,7 +2212,9 @@ function SessionCard({
       ? "text-accent"
       : done
         ? "text-emerald-400"
-        : "text-content/45";
+        : draft
+          ? "text-content/55"
+          : "text-content/45";
   const status = (
     <span
       className={`flex shrink-0 items-center gap-1 text-[11px] tabular-nums ${statusClass}`}
@@ -2215,6 +2233,11 @@ function SessionCard({
         <>
           <Check className="size-3" strokeWidth={2.25} />
           <span>Done</span>
+        </>
+      ) : draft ? (
+        <>
+          <CircleDashed className="size-3" strokeWidth={1.75} />
+          <span>Draft</span>
         </>
       ) : (
         <span>{time}</span>
@@ -2448,16 +2471,18 @@ function SessionCard({
           dropTarget
             ? "text-content border-transparent"
             : isSelected
-              ? "bg-accent/15 text-content border-transparent"
+              ? `bg-accent/15 text-content ${draft ? "border-content/30 border-dashed" : "border-transparent"}`
               : needsApproval
                 ? "bg-content/20 text-content border-content/30 border-dashed"
                 : isActive
-                  ? "bg-selection text-content border-transparent"
-                  : `text-content/80 hover:text-content border-transparent ${
-                      orchestrationExpanded
-                        ? "bg-content/5 hover:bg-content/10"
-                        : "hover:bg-content/5"
-                    }`
+                  ? `bg-selection text-content ${draft ? "border-content/30 border-dashed" : "border-transparent"}`
+                  : draft
+                    ? "border-content/25 border-dashed text-content/80 hover:bg-content/5 hover:text-content"
+                    : `text-content/80 hover:text-content border-transparent ${
+                        orchestrationExpanded
+                          ? "bg-content/5 hover:bg-content/10"
+                          : "hover:bg-content/5"
+                      }`
         }`}
       >
         {dropTarget ? (
@@ -2627,7 +2652,10 @@ function SessionCard({
                   </span>
                   <span
                     className={`shrink-0 text-[10px] ${
-                      task.needsInput || task.status === "failed"
+                      task.needsInput ||
+                      task.status === "failed" ||
+                      task.status === "blocked" ||
+                      task.status === "interrupted"
                         ? "text-amber-400"
                         : label === "Working"
                           ? "text-accent"

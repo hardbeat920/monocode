@@ -55,7 +55,7 @@ export function CreateBranchDialog({ busy, error, onCreate, onCancel }: Props) {
             autoCapitalize="off"
             disabled={busy}
             onChange={(event) => setName(event.target.value)}
-            className="h-9 rounded-md border border-content/10 bg-content/5 px-2.5 font-mono text-[13px] text-content outline-none placeholder:font-sans placeholder:text-content/30 focus:border-content/25 disabled:opacity-50"
+            className="h-9 rounded-md border border-content/10 bg-content/5 px-2.5 font-sans text-[13px] text-content outline-none placeholder:text-content/30 focus:border-content/25 disabled:opacity-50"
           />
         </label>
 

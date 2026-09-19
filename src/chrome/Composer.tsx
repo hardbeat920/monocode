@@ -2,6 +2,7 @@ import {
   ArrowUp,
   AiIdea,
   Check,
+  CircleDashed,
   CornerDownRight,
   FilePlus,
   ListEnd,
@@ -72,6 +73,7 @@ import type {
   MessageQueueStatus,
   QueuedMessage,
   RuntimeMode,
+  WorkspaceMode,
   ComposerTurnOptions,
 } from "../lib/session";
 import { HARNESS_TITLE, harnessSupportsAttachments } from "../lib/session";
@@ -97,6 +99,11 @@ import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
 import { BranchPicker } from "./BranchPicker";
 import { WorktreePicker } from "./WorktreePicker";
+import {
+  isWorkspaceModeShortcut,
+  WorkspaceIdentity,
+  WorkspacePicker,
+} from "./WorkspacePicker";
 import type { Worktree } from "../lib/worktrees";
 import { CwdPicker } from "./CwdPicker";
 import { FileMentionPicker } from "./FileMentionPicker";
@@ -104,18 +111,19 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { InboxMiniCard } from "./InboxMiniCard";
 import { NoteMiniCard } from "./NoteMiniCard";
 import { HandoffMiniCard } from "./HandoffMiniCard";
-import { EffortPicker, ModelPicker } from "./ModelPicker";
+import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
 import { SkillPicker } from "./SkillPicker";
-import { projectKey } from "../lib/paths";
+import { pathKey, projectKey } from "../lib/paths";
 import { consumeQuoteRequest, type QuoteRequest } from "../lib/quoteDraft";
 import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
+import { useProjectBranchesState } from "../hooks/useProjectBranches";
 import {
   COMPOSER_RUNNER_CHANGE_EVENT,
-  loadComposerEffortVisible,
   loadComposerRunner,
+  loadModelControls,
   loadNotesEnabled,
-  subscribeComposerEffortVisible,
+  subscribeModelControls,
   subscribeNotesEnabled,
 } from "../lib/settings";
 import {
@@ -179,7 +187,11 @@ type Props = {
   onCwdChange: (cwd: string) => void;
   onBranchChange?: () => void;
   onWorktreeChange?: (tree: Worktree) => Promise<void>;
-  worktreeOpensNewSession?: boolean;
+  draftWorkspace?: boolean;
+  workspaceMode?: WorkspaceMode;
+  worktreeBase?: string;
+  onWorkspaceModeChange?: (mode: WorkspaceMode, base?: string) => void;
+  onWorktreeBaseChange?: (base: string) => void;
   worktreeRemoved?: boolean;
   onManageWorktrees?: () => void;
   onNewTerminal?: () => void;
@@ -197,6 +209,8 @@ type Props = {
     attachments: Attachment[],
     options?: ComposerTurnOptions,
   ) => boolean | void;
+  canSaveDraft?: boolean;
+  onSaveDraft?: (text: string, attachments: Attachment[]) => boolean | void;
   onStop?: () => void;
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
@@ -440,7 +454,11 @@ export function Composer({
   onCwdChange,
   onBranchChange,
   onWorktreeChange,
-  worktreeOpensNewSession = false,
+  draftWorkspace = false,
+  workspaceMode,
+  worktreeBase,
+  onWorkspaceModeChange,
+  onWorktreeBaseChange,
   worktreeRemoved = false,
   onManageWorktrees,
   onNewTerminal,
@@ -454,6 +472,8 @@ export function Composer({
   onQuestionReply,
   onQuestionInteraction,
   onSubmit,
+  canSaveDraft = false,
+  onSaveDraft,
   onStop,
   onCompactContext,
   onPlaceInFolder,
@@ -476,6 +496,30 @@ export function Composer({
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  const { branches: draftBranches } = useProjectBranchesState(
+    executionCwd,
+    draftWorkspace && enabled && !busy,
+  );
+  const resolvedWorktreeBase =
+    worktreeBase && worktreeBase !== "HEAD"
+      ? worktreeBase
+      : branch || draftBranches?.current || worktreeBase || undefined;
+  useEffect(() => {
+    if (
+      draftWorkspace &&
+      workspaceMode === "worktree" &&
+      worktreeBase === "HEAD" &&
+      draftBranches?.current
+    ) {
+      onWorktreeBaseChange?.(draftBranches.current);
+    }
+  }, [
+    draftBranches?.current,
+    draftWorkspace,
+    onWorktreeBaseChange,
+    workspaceMode,
+    worktreeBase,
+  ]);
   const [hasValue, setHasValue] = useState(
     () =>
       (initialDraft ?? "").trim().length > 0 ||
@@ -488,6 +532,7 @@ export function Composer({
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
   const [orchestrationSelected, setOrchestrationSelected] = useState(false);
+  const [draftSelected, setDraftSelected] = useState(false);
   const [slash, setSlash] = useState<SlashToken | null>(null);
   const [skillActive, setSkillActive] = useState(0);
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -504,11 +549,12 @@ export function Composer({
     loadNotesEnabled,
     () => true,
   );
-  const composerEffortVisible = useSyncExternalStore(
-    subscribeComposerEffortVisible,
-    loadComposerEffortVisible,
-    () => false,
+  const modelControls = useSyncExternalStore(
+    subscribeModelControls,
+    loadModelControls,
+    () => "menu" as const,
   );
+  const controlsBeside = modelControls === "beside";
   const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
@@ -1052,6 +1098,25 @@ export function Composer({
 
   const submit = (value: string) => {
     if (worktreeRemoved) return;
+    if (draftSelected && onSaveDraft) {
+      const files = attachments;
+      if (!value.trim() && files.length === 0) return;
+      const accepted = onSaveDraft(value, files);
+      if (accepted === false || !ref.current) return;
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+      setDraft("");
+      onDraftChange?.("");
+      setAttachments([]);
+      setDraftSelected(false);
+      setPlusOpen(false);
+      setSlash(null);
+      setMention(null);
+      setCreatingSkill(false);
+      setCreateError(null);
+      syncHasValue("", []);
+      return;
+    }
     const folderCommand = consumeSessionFolderCommand(value);
     if (folderCommand.matched && onPlaceInFolder && !sessionFolderSelected) {
       openSessionFolderPicker();
@@ -1229,6 +1294,29 @@ export function Composer({
     }
   };
 
+  const onComposerKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (
+      !draftWorkspace ||
+      !onWorkspaceModeChange ||
+      !enabled ||
+      busy ||
+      isImeComposition(e.nativeEvent) ||
+      !isWorkspaceModeShortcut(e)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const next =
+      (workspaceMode ?? "current") === "current" ? "worktree" : "current";
+    if (next === "worktree" && !resolvedWorktreeBase) return;
+    onWorkspaceModeChange(
+      next,
+      next === "worktree" ? resolvedWorktreeBase : undefined,
+    );
+    ref.current?.focus();
+  };
+
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const messageFiles = messageFilesFromClipboard(e.clipboardData);
     if (messageFiles) {
@@ -1265,6 +1353,7 @@ export function Composer({
       data-composer
       className={`relative shrink-0 ${shell ? "" : "p-1.5 pt-0"}`}
       onMouseDown={onFocus}
+      onKeyDownCapture={onComposerKeyDown}
     >
       {question && onQuestionReply ? (
         <QuestionForm
@@ -1413,26 +1502,56 @@ export function Composer({
                   onClose={() => ref.current?.focus()}
                 />
               )}
-              {hideBranchPicker ? null : onWorktreeChange ? (
+              {hideBranchPicker ? null : draftWorkspace &&
+                onWorkspaceModeChange &&
+                onWorktreeBaseChange ? (
+                <>
+                  <WorkspacePicker
+                    cwd={executionCwd}
+                    mode={workspaceMode ?? "current"}
+                    base={resolvedWorktreeBase}
+                    enabled={enabled && !busy}
+                    onModeChange={onWorkspaceModeChange}
+                    onBaseChange={onWorktreeBaseChange}
+                    onOpenSettings={onManageWorktrees}
+                    onClose={() => ref.current?.focus()}
+                  />
+                  {(workspaceMode ?? "current") === "current" ? (
+                    <BranchPicker
+                      cwd={executionCwd}
+                      branch={branch}
+                      enabled={enabled && !busy}
+                      onChange={onBranchChange}
+                      onClose={() => ref.current?.focus()}
+                    />
+                  ) : null}
+                </>
+              ) : worktreeRemoved && onWorktreeChange ? (
                 <WorktreePicker
                   cwd={cwd}
                   executionCwd={executionCwd}
                   enabled={enabled && !busy}
                   onSelect={onWorktreeChange}
-                  opensNewSession={worktreeOpensNewSession}
                   worktreeRemoved={worktreeRemoved}
                   onBranchChange={onBranchChange}
                   onManage={onManageWorktrees}
                   onClose={() => ref.current?.focus()}
                 />
               ) : (
-                <BranchPicker
-                  cwd={executionCwd}
-                  branch={branch}
-                  enabled={enabled && !busy}
-                  onChange={onBranchChange}
-                  onClose={() => ref.current?.focus()}
-                />
+                <>
+                  {onWorktreeChange ? (
+                    <WorkspaceIdentity
+                      worktree={pathKey(cwd) !== pathKey(executionCwd)}
+                    />
+                  ) : null}
+                  <BranchPicker
+                    cwd={executionCwd}
+                    branch={branch}
+                    enabled={enabled && !busy}
+                    onChange={onBranchChange}
+                    onClose={() => ref.current?.focus()}
+                  />
+                </>
               )}
               <div className="ml-auto flex shrink-0 items-center">
                 <ContextMeter
@@ -1583,6 +1702,7 @@ export function Composer({
                     onClick={() => {
                       setPlanSelected((selected) => !selected);
                       setOrchestrationSelected(false);
+                      setDraftSelected(false);
                       setPlusOpen(false);
                       ref.current?.focus();
                     }}
@@ -1607,6 +1727,7 @@ export function Composer({
                       onClick={() => {
                         setOrchestrationSelected((selected) => !selected);
                         setPlanSelected(false);
+                        setDraftSelected(false);
                         setPlusOpen(false);
                         ref.current?.focus();
                       }}
@@ -1629,6 +1750,32 @@ export function Composer({
                       )}
                     </button>
                   )}
+                  {canSaveDraft && onSaveDraft ? (
+                    <button
+                      type="button"
+                      aria-pressed={draftSelected}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setDraftSelected((selected) => !selected);
+                        setPlanSelected(false);
+                        setOrchestrationSelected(false);
+                        setPlusOpen(false);
+                        ref.current?.focus();
+                      }}
+                      className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
+                    >
+                      <CircleDashed className="mt-0.5 size-4 shrink-0 text-content/60" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px]">Draft</span>
+                        <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
+                          Save this message without starting the agent
+                        </span>
+                      </span>
+                      {draftSelected ? (
+                        <Check className="mt-0.5 size-3.5 shrink-0 text-accent" />
+                      ) : null}
+                    </button>
+                  ) : null}
                 </Popover>
               ) : null}
             </div>
@@ -1665,13 +1812,29 @@ export function Composer({
                 <X className="size-3" />
               </button>
             ) : null}
+            {draftSelected ? (
+              <button
+                type="button"
+                title="Turn off Draft mode"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setDraftSelected(false);
+                  ref.current?.focus();
+                }}
+                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-dashed border-content/25 bg-content/5 px-1.5 text-[11px] text-content/70 hover:bg-content/10 hover:text-content"
+              >
+                <CircleDashed className="size-3.5" />
+                Draft
+                <X className="size-3" />
+              </button>
+            ) : null}
             <div
               className="composer-toolbar flex min-w-0 flex-1 items-center"
               onWheel={(e) => {
                 if (
                   e.target instanceof Element &&
                   e.target.closest(
-                    "[data-model-picker], [data-effort-picker], [data-access-picker], [data-model-settings]",
+                    "[data-model-picker], [data-model-control], [data-access-picker], [data-model-settings]",
                   )
                 ) {
                   return;
@@ -1686,7 +1849,7 @@ export function Composer({
                   harness={harness}
                   model={model}
                   values={modelSettings}
-                  hideEffort={composerEffortVisible}
+                  hideSettings={controlsBeside}
                   hotkeys={hotkeys && enabled}
                   onChange={onModelChange}
                   onSettingsChange={(settings) =>
@@ -1694,8 +1857,8 @@ export function Composer({
                   }
                   onClose={() => ref.current?.focus()}
                 />
-                {composerEffortVisible ? (
-                  <EffortPicker
+                {controlsBeside ? (
+                  <ModelControlPills
                     harness={harness}
                     model={model}
                     values={modelSettings}
@@ -1720,6 +1883,7 @@ export function Composer({
               <ComposerAction
                 busy={busy}
                 hasValue={hasValue && !worktreeRemoved}
+                label={draftSelected ? "Save draft" : "Send"}
                 onSend={() => submit(ref.current?.value ?? "")}
                 onStop={() => onStop?.()}
               />
@@ -1810,11 +1974,13 @@ function MentionRuns({
 export function ComposerAction({
   busy,
   hasValue,
+  label = "Send",
   onSend,
   onStop,
 }: {
   busy: boolean;
   hasValue: boolean;
+  label?: string;
   onSend: () => void;
   onStop: () => void;
 }) {
@@ -1822,8 +1988,8 @@ export function ComposerAction({
     return hasValue ? (
       <button
         type="button"
-        title="Send"
-        aria-label="Send"
+        title={label}
+        aria-label={label}
         onClick={onSend}
         className="composer-send primary-action grid size-6.5 place-items-center rounded-md"
       >
@@ -1845,8 +2011,8 @@ export function ComposerAction({
   return (
     <button
       type="button"
-      title="Send"
-      aria-label="Send"
+      title={label}
+      aria-label={label}
       disabled={!hasValue}
       onClick={onSend}
       className="composer-send primary-action grid size-6.5 place-items-center rounded-md disabled:cursor-default"

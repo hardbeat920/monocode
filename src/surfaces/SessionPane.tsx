@@ -11,8 +11,11 @@ import {
 } from "react";
 import { Composer } from "../chrome/Composer";
 import type { Worktree } from "../lib/worktrees";
-import { isBlankSession } from "../lib/projectReturn";
-import { orchestrator, sameCheckout } from "../lib/orchestration";
+import {
+  orchestrationCheckoutCwd,
+  orchestrator,
+  sameCheckout,
+} from "../lib/orchestration";
 import { DiscussionEmpty } from "../chrome/DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../chrome/LinkedWorkItemUpdateNotice";
 import { SessionReview } from "../chrome/SessionReview";
@@ -25,6 +28,7 @@ import {
 import { looksLikeProject, type RecentProject } from "../lib/recents";
 import {
   sessionDisplayTitle,
+  sessionDraftBlock,
   sessionWorkCwd,
   type Attachment,
   type Block,
@@ -34,6 +38,7 @@ import {
   type PlanBuildTarget,
   type RuntimeMode,
   type Session,
+  type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../lib/session";
 import { AgentTranscript } from "./AgentTranscript";
@@ -85,6 +90,12 @@ type Props = {
   onCwdChange: (sessionId: string, cwd: string) => void;
   onBranchChange: (sessionId: string) => void;
   onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
+  onWorkspaceModeChange: (
+    sessionId: string,
+    mode: WorkspaceMode,
+    base?: string,
+  ) => void;
+  onWorktreeBaseChange: (sessionId: string, base: string) => void;
   onManageWorktrees?: () => void;
   onModelChange: (sessionId: string, harness: HarnessId, model: string) => void;
   onModelSettingsChange: (
@@ -97,6 +108,11 @@ type Props = {
     text: string,
     attachments: Attachment[],
     options?: ComposerTurnOptions,
+  ) => boolean | void;
+  onSaveDraft: (
+    sessionId: string,
+    text: string,
+    attachments: Attachment[],
   ) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
@@ -168,10 +184,13 @@ export const SessionPane = memo(function SessionPane({
   onCwdChange,
   onBranchChange,
   onWorktreeChange,
+  onWorkspaceModeChange,
+  onWorktreeBaseChange,
   onManageWorktrees,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
+  onSaveDraft,
   onSubmit,
   onStop,
   onCompactContext,
@@ -208,10 +227,11 @@ export const SessionPane = memo(function SessionPane({
   const managed = orchestrationRuns.some(
     (run) =>
       (run.status === "active" || run.status === "paused") &&
-      sameCheckout(run.cwd, sessionWorkCwd(session)),
+      sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
   );
   const title = sessionDisplayTitle(session.title, session.harness);
   const isEmpty = session.blocks.length === 0;
+  const draftBlock = sessionDraftBlock(session);
   const backgroundRevision = useSyncExternalStore(
     subscribeProjectChatBackground,
     projectChatBackgroundRevision,
@@ -338,7 +358,8 @@ export const SessionPane = memo(function SessionPane({
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
-  const dockComposer = !isEmpty || inSplit || !!session.inboxAsk;
+  const dockComposer =
+    !draftBlock && (!isEmpty || inSplit || !!session.inboxAsk);
   const draftRef = useRef<string | undefined>(undefined);
   // Persisted draft for this session, loaded once per pane mount. The Composer
   // picks up late loads through its `initialDraft` sync effect.
@@ -414,9 +435,19 @@ export const SessionPane = memo(function SessionPane({
           ? (tree) => onWorktreeChange(session.id, tree)
           : undefined
       }
-      worktreeOpensNewSession={
-        !session.worktreeRemoved && !isBlankSession(session)
+      draftWorkspace={
+        !session.inboxAsk &&
+        !session.worktreeRemoved &&
+        !managed &&
+        ((isEmpty && !session.worktreeCwd) ||
+          (!!session.workspaceMode && !session.worktreeCwd))
       }
+      workspaceMode={session.workspaceMode}
+      worktreeBase={session.worktreeBase}
+      onWorkspaceModeChange={(mode, base) =>
+        onWorkspaceModeChange(session.id, mode, base)
+      }
+      onWorktreeBaseChange={(base) => onWorktreeBaseChange(session.id, base)}
       worktreeRemoved={session.worktreeRemoved}
       onManageWorktrees={onManageWorktrees}
       onNewTerminal={() => onNewTerminal(session.id)}
@@ -432,6 +463,16 @@ export const SessionPane = memo(function SessionPane({
         onModelSettingsChange(session.id, settings)
       }
       onRuntimeModeChange={(mode) => onRuntimeModeChange(session.id, mode)}
+      canSaveDraft={
+        isEmpty &&
+        !session.inboxAsk &&
+        !session.inboxCard &&
+        !session.noteCard &&
+        !session.handoffCard
+      }
+      onSaveDraft={(text, attachments) =>
+        onSaveDraft(session.id, text, attachments)
+      }
       onSubmit={(text, attachments, options) =>
         onSubmit(session.id, text, attachments, options)
       }
@@ -578,6 +619,17 @@ export const SessionPane = memo(function SessionPane({
                 onApproval={session.worktreeRemoved ? undefined : approve}
                 onAddToChat={addSelectionToChat}
                 onSaveNote={notesEnabled ? saveNote : undefined}
+                onSendDraft={
+                  draftBlock
+                    ? (block) =>
+                        onSubmit(
+                          session.id,
+                          block.text,
+                          block.attachments ?? [],
+                          { draftBlockId: block.id },
+                        )
+                    : undefined
+                }
                 onSaveSelectionNote={
                   notesEnabled ? saveSelectionNote : undefined
                 }
@@ -602,7 +654,9 @@ export const SessionPane = memo(function SessionPane({
                 onJumpToBottomReady={onJumpToBottomReady}
                 onRevealReady={onRevealReady}
                 latestTurnAccessory={
-                  session.inboxAsk || session.worktreeRemoved ? undefined : (
+                  session.inboxAsk ||
+                  session.worktreeRemoved ||
+                  draftBlock ? undefined : (
                     <SessionReview
                       sessionId={session.id}
                       cwd={workCwd}
