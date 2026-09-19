@@ -170,6 +170,19 @@ describe("openAddToChatSessionPane", () => {
       }),
     ).toBeNull();
   });
+
+  it("splits beside unmapped leaves whose sessions are not mounted", () => {
+    const ghostTab = tab("ghost-tab", "ghost-leaf");
+    const opened = openAddToChatSessionPane({
+      tab: ghostTab,
+      sessions: [],
+      sessionId: "new-chat",
+    });
+
+    expect(leafIds(opened!.layout)).toEqual(["ghost-leaf", "new-chat"]);
+    expect(opened?.focusedId).toBe("new-chat");
+    expect(opened?.diffFocused).toBe(false);
+  });
 });
 
 describe("workspaceTabProject", () => {
