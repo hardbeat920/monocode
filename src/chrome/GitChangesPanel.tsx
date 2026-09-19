@@ -91,6 +91,8 @@ const collapsedDirs = new Set<string>();
 const indexByCwd = new Map<string, GitDiffIndex>();
 const prByCwd = new Map<string, GitPr | null>();
 
+type AmendTarget = { branch: string | null; head: string | null };
+
 type Props = {
   cwd: string;
   enabled: boolean;
@@ -250,7 +252,7 @@ function ChangedFiles({
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [amendTarget, setAmendTarget] = useState<string | null>(null);
+  const [amendTarget, setAmendTarget] = useState<AmendTarget | null>(null);
   const amend = amendTarget !== null;
   const [menuOpen, setMenuOpen] = useState(false);
   const [stagedExpanded, setStagedExpanded] = useState(stagedOpen);
@@ -290,13 +292,15 @@ function ChangedFiles({
     canCommit && hasRemote && !diverged && (!amend || !index?.headPushed);
   const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
   const canEditMessage = (staged.length > 0 || amend) && !busy;
-  const head = index?.head ?? null;
 
   useEffect(() => {
-    if (amendTarget === null || amendTarget === head) return;
+    if (!amendTarget) return;
+    if (amendTarget.branch === index?.branch && amendTarget.head === index?.head) {
+      return;
+    }
     setAmendTarget(null);
     setMessage("");
-  }, [amendTarget, head]);
+  }, [amendTarget, index?.branch, index?.head]);
   const canOpenMenu = !!index?.branch && !busy;
 
   useEffect(() => {
@@ -428,7 +432,10 @@ function ChangedFiles({
     try {
       const headMessage = await gitHeadMessage(cwd);
       if (!message.trim()) setMessage(headMessage);
-      setAmendTarget(head);
+      setAmendTarget({
+        branch: index?.branch ?? null,
+        head: index?.head ?? null,
+      });
     } catch (error) {
       fail(error);
     }
