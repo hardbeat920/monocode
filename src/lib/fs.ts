@@ -44,6 +44,22 @@ export type FsEntry = {
   ignored: boolean;
 };
 
+export type ExternalEditor = {
+  id: string;
+  name: string;
+};
+
+export function listExternalEditors(): Promise<ExternalEditor[]> {
+  return invoke<ExternalEditor[]>("list_external_editors");
+}
+
+export function openInExternalEditor(
+  editorId: string,
+  cwd: string,
+): Promise<void> {
+  return invoke<void>("open_in_external_editor", { editorId, cwd });
+}
+
 export type ProjectFile = {
   name: string;
   path: string;
@@ -70,6 +86,7 @@ export type DiscoveredSkill = {
     | "omp"
     | "fx"
     | "grok"
+    | "hermes"
     | "monocode";
 };
 
@@ -326,19 +343,6 @@ export function isCheckoutBlockedByChanges(message: string): boolean {
   );
 }
 
-/** Drop leftover session-worktree pins. The composer now switches this folder. */
-export function restoreSessionCheckout<
-  T extends { cwd: string; branch?: string; worktreeCwd?: string; providerSessionId?: string },
->(session: T): T {
-  if (!session.branch && !session.worktreeCwd) return session;
-  return {
-    ...session,
-    branch: undefined,
-    worktreeCwd: undefined,
-    ...(session.worktreeCwd ? { providerSessionId: undefined } : {}),
-  };
-}
-
 const GIT_CHANGED = "monocode-git-changed";
 
 /** Tell git UIs (diff pane, branch picker) to reload after a local git mutation. */
@@ -373,6 +377,18 @@ export function copyPath(from: string, destParent: string): Promise<string> {
 
 export function movePath(from: string, destParent: string): Promise<string> {
   return invoke<string>("move_path", { from, destParent }).then(slash);
+}
+
+/** macOS only. Other platforms return an empty list. */
+export function clipboardFilePaths(): Promise<string[]> {
+  return invoke<string[]>("clipboard_file_paths").then((paths) =>
+    paths.map(slash),
+  );
+}
+
+/** Put the original file on the macOS clipboard, preserving its name and type. */
+export function copyFileToClipboard(path: string): Promise<void> {
+  return invoke<void>("copy_file_to_clipboard", { path });
 }
 
 export function revealPath(path: string): Promise<void> {

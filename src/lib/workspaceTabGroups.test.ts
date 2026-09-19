@@ -10,11 +10,13 @@ import {
 import { planProjectReturn } from "./projectReturn";
 import type { Session } from "./session";
 import {
+  applyDetachPaneToTab,
   applyPlaceTabOnPane,
   applyPlaceSessionOnPane,
   filterTabsForProject,
   findOpenSessionTab,
   findTabForProject,
+  openAddToChatSessionPane,
   planWorkspaceTabClose,
   replaceGroupInTabOrder,
   workspaceTabProject,
@@ -39,6 +41,28 @@ function tab(id: string, sessionId: string): WorkspaceTab {
 }
 
 describe("focusedWorkspaceTabCwd", () => {
+  it.each(["editor", "terminal"] as const)(
+    "keeps a worktree-only %s tab under its owning project",
+    (kind) => {
+      const cwd = "/repo-worktrees/feature";
+      const file = kind === "editor"
+        ? newFileTab(`${cwd}/readme.md`, cwd, false, undefined, "/repo")
+        : newTerminalFile(cwd, undefined, "/repo");
+      const pane = { id: "surface", files: [file], activeFileId: file.id };
+      const worktreeTab = {
+        ...tab("tree-tab", pane.id),
+        editorPanes: kind === "editor" ? [pane] : [],
+        terminalPanes: kind === "terminal" ? [pane] : [],
+      };
+      expect(workspaceTabCwd(worktreeTab, [])).toBe("/repo");
+      expect(focusedWorkspaceTabCwd(worktreeTab, [])).toBe("/repo");
+      expect(planProjectReturn({
+        tabs: [worktreeTab], sessions: [], memory: new Map(),
+        activeTabId: "elsewhere", projectPath: "/repo",
+      })).toMatchObject({ action: "activate", tabId: "tree-tab" });
+    },
+  );
+
   it.each(["editor", "terminal"] as const)(
     "uses the restored %s pane's project instead of the first chat's project",
     (kind) => {
@@ -110,6 +134,41 @@ describe("findOpenSessionTab", () => {
         "parked-session",
       ),
     ).toBe(ghost);
+  });
+});
+
+describe("openAddToChatSessionPane", () => {
+  it("opens and focuses a chat beside the focused file pane", () => {
+    const file = newFileTab("/workspace/readme.md", "/workspace");
+    const pane = { id: "editor", files: [file], activeFileId: file.id };
+    const fileOnly: WorkspaceTab = {
+      ...newTab(pane.id),
+      id: "file-tab",
+      editorPanes: [pane],
+      diffFocused: true,
+    };
+
+    const opened = openAddToChatSessionPane({
+      tab: fileOnly,
+      sessions: [],
+      sessionId: "new-chat",
+    });
+
+    expect(leafIds(opened!.layout)).toEqual([pane.id, "new-chat"]);
+    expect(opened?.focusedId).toBe("new-chat");
+    expect(opened?.diffFocused).toBe(false);
+    expect(opened?.editorPanes).toEqual([pane]);
+  });
+
+  it("leaves add-to-chat routing to an existing session pane", () => {
+    const chatTab = tab("chat-tab", "existing-chat");
+    expect(
+      openAddToChatSessionPane({
+        tab: chatTab,
+        sessions: [session("existing-chat", "/workspace")],
+        sessionId: "unused-chat",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -412,6 +471,83 @@ describe("applyPlaceTabOnPane", () => {
 
     expect(leafIds(next!.tabs[0]!.layout)).toEqual(["source"]);
     expect(next?.sessions.some((entry) => entry.id === blank.id)).toBe(false);
+  });
+});
+
+describe("applyDetachPaneToTab", () => {
+  it("turns one chat pane into a separate tab at the drop position", () => {
+    const source: WorkspaceTab = {
+      ...tab("source-tab", "first"),
+      layout: splitPane(newTab("first").layout, "first", "right", "second"),
+      focusedId: "second",
+    };
+    const target = tab("target-tab", "third");
+    const next = applyDetachPaneToTab({
+      tabs: [source, target],
+      paneId: "second",
+      targetTabId: target.id,
+      position: "before",
+      createTabId: () => "detached-tab",
+    });
+
+    expect(next?.activeTabId).toBe("detached-tab");
+    expect(next?.focusedId).toBe("second");
+    expect(next?.tabs.map((entry) => entry.id)).toEqual([
+      "source-tab",
+      "detached-tab",
+      "target-tab",
+    ]);
+    expect(leafIds(next!.tabs[0]!.layout)).toEqual(["first"]);
+    expect(leafIds(next!.tabs[1]!.layout)).toEqual(["second"]);
+  });
+
+  it.each(["editor", "terminal"] as const)(
+    "moves the complete %s pane metadata into the new tab",
+    (kind) => {
+      const file =
+        kind === "editor"
+          ? newFileTab("/projects/monocode/readme.md", "/projects/monocode")
+          : newTerminalFile("/projects/monocode");
+      const pane = { id: `${kind}-pane`, files: [file], activeFileId: file.id };
+      const source: WorkspaceTab = {
+        ...tab("source-tab", "chat"),
+        layout: splitPane(newTab("chat").layout, "chat", "down", pane.id),
+        editorPanes: kind === "editor" ? [pane] : [],
+        terminalPanes: kind === "terminal" ? [pane] : [],
+      };
+      const next = applyDetachPaneToTab({
+        tabs: [source, tab("target-tab", "other")],
+        paneId: pane.id,
+        targetTabId: "target-tab",
+        position: "after",
+        createTabId: () => "detached-tab",
+      });
+
+      expect(next?.tabs.map((entry) => entry.id)).toEqual([
+        "source-tab",
+        "target-tab",
+        "detached-tab",
+      ]);
+      expect(next?.tabs[0]?.editorPanes).toEqual([]);
+      expect(next?.tabs[0]?.terminalPanes).toEqual([]);
+      expect(next?.tabs[2]?.editorPanes).toEqual(
+        kind === "editor" ? [pane] : [],
+      );
+      expect(next?.tabs[2]?.terminalPanes).toEqual(
+        kind === "terminal" ? [pane] : [],
+      );
+    },
+  );
+
+  it("does not detach the only pane in a tab", () => {
+    expect(
+      applyDetachPaneToTab({
+        tabs: [tab("source-tab", "only")],
+        paneId: "only",
+        targetTabId: "source-tab",
+        position: "after",
+      }),
+    ).toBeNull();
   });
 });
 

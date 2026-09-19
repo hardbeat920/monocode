@@ -42,8 +42,10 @@ export type WorkspaceSessionStub = {
   runtimeMode: RuntimeMode;
   title: string;
   providerSessionId?: string;
+  providerAccountId?: string;
   branch?: string;
   worktreeCwd?: string;
+  worktreeRemoved?: boolean;
 };
 
 export type WorkspaceSnapshot = {
@@ -312,8 +314,12 @@ function sessionStub(session: Session): WorkspaceSessionStub | null {
     ...(session.providerSessionId
       ? { providerSessionId: session.providerSessionId }
       : {}),
+    ...(session.providerAccountId
+      ? { providerAccountId: session.providerAccountId }
+      : {}),
     ...(session.branch ? { branch: session.branch } : {}),
     ...(session.worktreeCwd ? { worktreeCwd: session.worktreeCwd } : {}),
+    ...(session.worktreeRemoved ? { worktreeRemoved: true } : {}),
   };
 }
 
@@ -333,8 +339,12 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
     ...(stub.providerSessionId
       ? { providerSessionId: stub.providerSessionId }
       : {}),
+    ...(stub.providerAccountId
+      ? { providerAccountId: stub.providerAccountId }
+      : {}),
     ...(stub.branch ? { branch: stub.branch } : {}),
     ...(stub.worktreeCwd ? { worktreeCwd: stub.worktreeCwd } : {}),
+    ...(stub.worktreeRemoved ? { worktreeRemoved: true } : {}),
   };
 }
 
@@ -358,16 +368,23 @@ function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
   return {
     id: value.id,
     cwd:
-      typeof value.cwd === "string" && value.cwd.trim() ? value.cwd.trim() : "~",
+      typeof value.cwd === "string" && value.cwd.trim()
+        ? value.cwd.trim()
+        : "~",
     harness,
     model: typeof value.model === "string" ? value.model : "",
     modelSettings,
     runtimeMode,
     title: typeof value.title === "string" ? value.title : "",
     ...(value.inboxAsk && typeof value.inboxAsk === "object"
-      ? { inboxAsk: value.inboxAsk as InboxAskContext } : {}),
+      ? { inboxAsk: value.inboxAsk as InboxAskContext }
+      : {}),
     ...(typeof value.providerSessionId === "string" && value.providerSessionId
       ? { providerSessionId: value.providerSessionId }
+      : {}),
+    ...(typeof value.providerAccountId === "string" &&
+    /^[A-Za-z0-9_-]+$/.test(value.providerAccountId)
+      ? { providerAccountId: value.providerAccountId }
       : {}),
     ...(typeof value.branch === "string" && value.branch.trim()
       ? { branch: value.branch.trim() }
@@ -375,6 +392,7 @@ function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
     ...(typeof value.worktreeCwd === "string" && value.worktreeCwd.trim()
       ? { worktreeCwd: value.worktreeCwd.trim() }
       : {}),
+    ...(value.worktreeRemoved === true ? { worktreeRemoved: true } : {}),
   };
 }
 
@@ -530,6 +548,9 @@ function sanitizeFile(raw: unknown): FilePaneTab | null {
     id: value.id,
     path: value.path,
     cwd: value.cwd,
+    ...(typeof value.projectCwd === "string" && value.projectCwd
+      ? { projectCwd: value.projectCwd }
+      : {}),
     ...(plan ? { plan } : {}),
     ...(releaseNotes ? { releaseNotes } : {}),
     ...(commit ? { commit } : {}),

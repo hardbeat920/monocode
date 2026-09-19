@@ -1,13 +1,17 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
   Check,
   ChevronDown,
   ImagePlus,
   Loader,
+  Pencil,
+  Plus,
   RefreshCw,
   RotateCcw,
   Search,
+  Trash2,
   X,
 } from "../chrome/icons";
 import {
@@ -20,6 +24,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
@@ -29,6 +34,7 @@ import {
   ColorSwatchRow,
 } from "../chrome/ColorPickerPopover";
 import { Popover } from "../chrome/Popover";
+import { SecondaryButton } from "../chrome/SecondaryButton";
 import { InboxProviderMark } from "../chrome/InboxProviderMark";
 import { RemoveProjectDialog } from "../chrome/RemoveProjectDialog";
 import { WindowControls } from "../chrome/WindowControls";
@@ -127,6 +133,7 @@ import {
   subscribeHarnessAvailability,
 } from "../lib/harness/availability";
 import { refreshHarnessCatalogs } from "../lib/harness/registry";
+import { loginHarness } from "../lib/harness/auth";
 import {
   defaultModelId,
   getModelSnapshot,
@@ -147,6 +154,7 @@ import {
   looksLikeProject,
   subscribeArchivedProjects,
   type ArchivedProject,
+  type RecentProject,
 } from "../lib/recents";
 import {
   HARNESSES,
@@ -154,6 +162,18 @@ import {
   sessionDisplayTitle,
   type HarnessId,
 } from "../lib/session";
+import {
+  newProviderAccount,
+  providerAccounts,
+  PROVIDER_ACCOUNT_PROVIDERS,
+  removeProviderAccount,
+  renameProviderAccount,
+  saveProviderAccount,
+  subscribeProviderAccounts,
+  type ProviderAccount,
+  type ProviderAccountProvider,
+} from "../lib/providerAccounts";
+import { removeProviderAccountCredentials } from "../lib/providerAccountCredentials";
 import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
@@ -185,26 +205,29 @@ import {
   filterKeybindings,
   KEYBINDINGS,
   loadClaudeHooks,
-  loadComposerEffortVisible,
+  loadCloseToTray,
   loadComposerRunner,
   loadDiffViewer,
   loadFollowUpBehavior,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
+  loadModelControls,
   loadNotesEnabled,
   saveClaudeHooks,
-  saveComposerEffortVisible,
+  saveCloseToTray,
   saveComposerRunner,
   saveDiffViewer,
   saveFollowUpBehavior,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
+  saveModelControls,
   saveNotesEnabled,
   searchSettings,
   settingsSectionDescription,
   settingsSectionLabel,
   type DiffViewer,
   type FollowUpBehavior,
+  type ModelControls,
   type SettingsSearchResult,
   type SettingsSectionId,
 } from "../lib/settings";
@@ -226,6 +249,10 @@ import {
 } from "../lib/updater";
 
 import { SkillsPage } from "./SkillsPage";
+import { ProjectNotificationSettings } from "./ProjectNotificationSettings";
+import { WorktreesPage } from "./WorktreesPage";
+import { removeWorktree, type RemoveWorktree } from "../lib/worktrees";
+import type { Session } from "../lib/session";
 
 /**
  * The `data-setting-id` Settings should reveal when it opens: one of the ids in
@@ -242,8 +269,19 @@ type Props = {
   section: SettingsSectionId;
   /** Card to scroll to; the General page is too long to land at the top. */
   anchor?: SettingsAnchor | null;
+  /** Project to focus when opening notification settings from a quick action. */
+  notificationProjectPath?: string | null;
+  /** Changes for each quick action, including repeated requests for one project. */
+  notificationSettingsRequest?: number;
+  recents?: RecentProject[];
   cwd: string;
   sessions: SessionSummary[];
+  liveSessions?: Session[];
+  onRemoveWorktree?: RemoveWorktree;
+  onCheckWorktreeRemoval?: RemoveWorktree;
+  onDeleteWorktreeSessions?: (
+    sessionIds: readonly string[],
+  ) => Promise<boolean>;
   besideRail?: boolean;
   onClose: () => void;
   /** Lets search jump to a setting that lives on another page. */
@@ -259,8 +297,15 @@ type Props = {
 export function SettingsView({
   section,
   anchor = null,
+  notificationProjectPath = null,
+  notificationSettingsRequest = 0,
+  recents,
   cwd,
   sessions,
+  liveSessions,
+  onRemoveWorktree = removeWorktree,
+  onCheckWorktreeRemoval,
+  onDeleteWorktreeSessions,
   besideRail = false,
   onClose,
   onSelectSection,
@@ -277,18 +322,21 @@ export function SettingsView({
   onCloseRef.current = onClose;
   const appearance = useAppearanceSettings();
 
-  useEffect(() => setRevealed(anchor), [anchor]);
+  useEffect(() => setRevealed(anchor), [anchor, notificationSettingsRequest]);
 
   // Section is a dependency so a search result on another page scrolls once
   // that page has mounted the row.
   useEffect(() => {
     if (!revealed) return;
-    document
-      .getElementById(settingDomId(revealed))
-      ?.scrollIntoView?.({ block: "center" });
+    // A project quick action lets the project card focus itself after discovery.
+    if (!(revealed === "project-notifications" && notificationProjectPath)) {
+      document
+        .getElementById(settingDomId(revealed))
+        ?.scrollIntoView?.({ block: "center" });
+    }
     const timer = window.setTimeout(() => setRevealed(null), 1800);
     return () => window.clearTimeout(timer);
-  }, [revealed, section]);
+  }, [revealed, section, notificationProjectPath, notificationSettingsRequest]);
 
   const onReveal = useCallback(
     (next: SettingsSectionId, settingId: string | null) => {
@@ -318,7 +366,7 @@ export function SettingsView({
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
       <div
-        className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
+        className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
         data-tauri-drag-region="deep"
       >
         {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
@@ -365,9 +413,9 @@ export function SettingsView({
         <RevealedSetting.Provider value={revealed}>
           <div
             ref={lockOverscroll}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-none"
+            className="@container/settings min-h-0 flex-1 overflow-y-auto overscroll-none"
           >
-            <div className="mx-auto w-full max-w-5xl px-8 py-8 pb-16">
+            <div className="mx-auto w-full max-w-5xl px-5 py-6 pb-16 @min-[560px]/settings:px-8 @min-[560px]/settings:py-8">
               <PageHeader
                 title={settingsSectionLabel(section)}
                 description={settingsSectionDescription(section)}
@@ -381,7 +429,24 @@ export function SettingsView({
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
               {section === "providers" ? <ProvidersPage /> : null}
-              {section === "inbox" ? <InboxPage /> : null}
+              {section === "worktrees" ? (
+                <WorktreesPage
+                  cwd={cwd}
+                  recents={recents}
+                  liveSessions={liveSessions}
+                  onRemove={onRemoveWorktree}
+                  onCheckRemove={onCheckWorktreeRemoval}
+                  onDeleteSessions={onDeleteWorktreeSessions}
+                />
+              ) : null}
+              {section === "inbox" ? (
+                <InboxPage
+                  cwd={cwd}
+                  recents={recents}
+                  notificationProjectPath={notificationProjectPath}
+                  notificationSettingsRequest={notificationSettingsRequest}
+                />
+              ) : null}
               {section === "archive" ? (
                 <ArchivePage
                   cwd={cwd}
@@ -506,7 +571,7 @@ function SettingsSearch({
                 onClick={() => go(result)}
                 className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] ${
                   index === active
-                    ? "bg-content/10 text-content"
+                    ? "bg-selection text-content"
                     : "text-content hover:bg-content/5"
                 }`}
               >
@@ -538,6 +603,7 @@ function GeneralPage({
   const [liveAgentsEnabled, setLiveAgentsEnabled] = useState(
     loadLiveAgentsEnabled,
   );
+  const [closeToTray, setCloseToTray] = useState(loadCloseToTray);
 
   // The user may flip the switch in System Settings and come back: re-read
   // the OS state whenever the window regains focus while the toggle is on.
@@ -573,6 +639,11 @@ function GeneralPage({
     setLiveAgentsEnabled(next);
   };
 
+  const onCloseToTray = (next: boolean) => {
+    saveCloseToTray(next);
+    setCloseToTray(next);
+  };
+
   return (
     <>
       <Group
@@ -582,7 +653,7 @@ function GeneralPage({
         <Row
           id="sounds"
           label="Sounds"
-          description="Short cues when a turn finishes, a new inbox item appears on the project rail, or an update is available. Switches and Copy on a finished turn also play."
+          description="Short cues for project activity, finished turns, and available updates. Choose project notification categories in Inbox settings. Switches and Copy on a finished turn also play."
         >
           <Toggle
             label="Sounds"
@@ -633,6 +704,19 @@ function GeneralPage({
             onChange={onLiveAgentsEnabled}
           />
         </Row>
+        {IS_WIN && (
+          <Row
+            id="close-to-tray"
+            label="Close to tray"
+            description="Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window."
+          >
+            <Toggle
+              label="Close to tray"
+              on={closeToTray}
+              onChange={onCloseToTray}
+            />
+          </Row>
+        )}
       </Group>
 
       <Group title="About">
@@ -649,9 +733,8 @@ function ChatPage() {
     useState(loadTranscriptAnchor);
   const [followUpBehavior, setFollowUpBehavior] =
     useState<FollowUpBehavior>(loadFollowUpBehavior);
-  const [composerEffortVisible, setComposerEffortVisible] = useState(
-    loadComposerEffortVisible,
-  );
+  const [modelControls, setModelControls] =
+    useState<ModelControls>(loadModelControls);
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
@@ -683,9 +766,9 @@ function ChatPage() {
     setFollowUpBehavior(next);
   };
 
-  const onComposerEffortVisible = (next: boolean) => {
-    saveComposerEffortVisible(next);
-    setComposerEffortVisible(next);
+  const onModelControls = (next: ModelControls) => {
+    saveModelControls(next);
+    setModelControls(next);
   };
 
   const onDiffViewer = (next: DiffViewer) => {
@@ -757,14 +840,18 @@ function ChatPage() {
           />
         </Row>
         <Row
-          id="effort-control"
-          label="Effort control"
-          description="Show the current effort as a separate control beside the model picker for quicker changes. When off, effort stays inside the model menu."
+          id="model-controls"
+          label="Model controls"
+          description="Show model options beside the picker instead of inside the model menu."
         >
-          <Toggle
-            label="Show effort beside model picker"
-            on={composerEffortVisible}
-            onChange={onComposerEffortVisible}
+          <Segmented
+            label="Model controls"
+            value={modelControls}
+            options={[
+              { value: "menu", label: "Menu" },
+              { value: "beside", label: "Beside" },
+            ]}
+            onChange={onModelControls}
           />
         </Row>
       </Group>
@@ -821,9 +908,32 @@ function ChatPage() {
   );
 }
 
-function InboxPage() {
+function InboxPage({
+  cwd,
+  recents,
+  notificationProjectPath,
+  notificationSettingsRequest,
+}: {
+  cwd: string;
+  recents?: RecentProject[];
+  notificationProjectPath?: string | null;
+  notificationSettingsRequest?: number;
+}) {
+  const revealed = useContext(RevealedSetting);
   return (
     <>
+      <div
+        id={settingDomId("project-notifications")}
+        data-setting-id="project-notifications"
+      >
+        <ProjectNotificationSettings
+          cwd={cwd}
+          recents={recents}
+          notificationProjectPath={notificationProjectPath}
+          notificationSettingsRequest={notificationSettingsRequest}
+          highlighted={revealed === "project-notifications"}
+        />
+      </div>
       <Group
         id="github"
         title={
@@ -999,7 +1109,7 @@ function GitlabSettings() {
         description="Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it."
       >
         {connected ? (
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             <span className="max-w-56 truncate text-[12px] text-content/50">
               {url}
             </span>
@@ -1011,8 +1121,8 @@ function GitlabSettings() {
             </SecondaryButton>
           </div>
         ) : (
-          <div className="flex min-w-0 items-center gap-2">
-            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
               <input
                 type="url"
                 value={url}
@@ -1024,7 +1134,7 @@ function GitlabSettings() {
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
               />
             </label>
-            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
               <input
                 type="password"
                 value={token}
@@ -1154,8 +1264,8 @@ function LinearSettings() {
             Disconnect
           </SecondaryButton>
         ) : (
-          <div className="flex items-center gap-2">
-            <label className="flex h-7 w-52 shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
               <input
                 type="password"
                 value={token}
@@ -1847,7 +1957,7 @@ function KeybindingsPage() {
         </div>
       }
     >
-      <div className="flex items-center border-b border-content/10 bg-content/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-content/40">
+      <div className="flex items-center border-b border-stroke bg-content/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-content/40">
         <span className="min-w-0 flex-1">Command</span>
         <span className="w-40 shrink-0">Keybinding</span>
         <span className="w-28 shrink-0">When</span>
@@ -1913,6 +2023,8 @@ function ProvidersPage() {
 
   return (
     <>
+      <ProviderAccountsSettings />
+
       <Group
         title="Agent CLIs"
         description="A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
@@ -1948,6 +2060,300 @@ function ProvidersPage() {
         </Row>
       </Group>
     </>
+  );
+}
+
+type AccountEditor = {
+  provider: ProviderAccountProvider;
+  accountId?: string;
+  label: string;
+};
+
+function ProviderAccountsSettings() {
+  const [, setVersion] = useState(0);
+  const [editor, setEditor] = useState<AccountEditor | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(
+    () => subscribeProviderAccounts(() => setVersion((value) => value + 1)),
+    [],
+  );
+
+  const startAdd = (provider: ProviderAccountProvider) => {
+    setError(null);
+    setEditor({ provider, label: "" });
+  };
+
+  const startRename = (account: ProviderAccount) => {
+    setError(null);
+    setEditor({
+      provider: account.provider,
+      accountId: account.id,
+      label: account.label,
+    });
+  };
+
+  const submitEditor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editor || !editor.label.trim() || working) return;
+    const key = editor.accountId
+      ? `rename:${editor.provider}:${editor.accountId}`
+      : `add:${editor.provider}`;
+    setWorking(key);
+    setError(null);
+    try {
+      if (editor.accountId) {
+        renameProviderAccount(editor.provider, editor.accountId, editor.label);
+      } else {
+        const account = newProviderAccount(editor.provider, editor.label);
+        await loginHarness(editor.provider, account.id);
+        saveProviderAccount(account);
+      }
+      setEditor(null);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not save this account",
+      );
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const removeAccount = async (account: ProviderAccount) => {
+    if (account.isDefault || working) return;
+    const confirmed = await ask(
+      `Remove “${account.label}”? Its stored credentials will be deleted and any running turns for this account will stop. Existing conversations stay in history, but cannot continue until you switch accounts.`,
+      {
+        title: `Remove ${HARNESS_TITLE[account.provider]} account`,
+        kind: "warning",
+        okLabel: "Remove account",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!confirmed) return;
+    const key = `remove:${account.provider}:${account.id}`;
+    setWorking(key);
+    setError(null);
+    try {
+      await removeProviderAccountCredentials(account.provider, account.id);
+      removeProviderAccount(account.provider, account.id);
+      if (
+        editor?.provider === account.provider &&
+        editor.accountId === account.id
+      ) {
+        setEditor(null);
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not remove this account",
+      );
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  return (
+    <Group
+      id="provider-accounts"
+      title="Accounts"
+      description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
+    >
+      {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
+        const accounts = providerAccounts(provider);
+        const adding = editor?.provider === provider && !editor.accountId;
+        return (
+          <div
+            key={provider}
+            className="border-b border-content/5 last:border-b-0"
+          >
+            <div className="flex items-center gap-4 px-4 py-3.5">
+              <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.05] ring-1 ring-inset ring-content/[0.06]">
+                  <HarnessIcon harness={provider} className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium text-content">
+                    {HARNESS_TITLE[provider]}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-content/40">
+                    {accounts.length}{" "}
+                    {accounts.length === 1 ? "account" : "accounts"}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={Boolean(working)}
+                onClick={() => startAdd(provider)}
+                className="flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] text-content/70 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+              >
+                <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
+                Add account
+              </button>
+            </div>
+            <div className="border-t border-content/5 bg-content/[0.015] pl-10">
+              {accounts.map((account) => {
+                const editing =
+                  editor?.provider === provider &&
+                  editor.accountId === account.id;
+                const removing = working === `remove:${provider}:${account.id}`;
+                return editing ? (
+                  <ProviderAccountEditor
+                    key={account.id}
+                    editor={editor}
+                    working={Boolean(working)}
+                    onLabel={(label) =>
+                      setEditor((current) =>
+                        current ? { ...current, label } : current,
+                      )
+                    }
+                    onCancel={() => setEditor(null)}
+                    onSubmit={submitEditor}
+                  />
+                ) : (
+                  <div
+                    key={account.id}
+                    className="flex h-12 items-center gap-3 border-b border-content/5 px-4 py-2 last:border-b-0"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12px] text-content/85">
+                        {account.label}
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-content/35">
+                        {account.isDefault
+                          ? "Provider CLI profile"
+                          : "Isolated profile"}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {account.isDefault ? (
+                        <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
+                          Default
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={Boolean(working)}
+                        aria-label={`Rename ${account.label}`}
+                        title="Rename account"
+                        onClick={() => startRename(account)}
+                        className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96] disabled:opacity-35"
+                      >
+                        <Pencil className="size-3.5" strokeWidth={1.75} />
+                      </button>
+                      {!account.isDefault ? (
+                        <button
+                          type="button"
+                          disabled={Boolean(working)}
+                          aria-label={`Remove ${account.label}`}
+                          title="Remove account"
+                          onClick={() => void removeAccount(account)}
+                          className="grid size-7 place-items-center rounded-md text-content/35 transition-transform duration-150 hover:bg-red-400/10 hover:text-red-400 active:scale-[0.96] disabled:opacity-35"
+                        >
+                          {removing ? (
+                            <Loader className="size-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3.5" strokeWidth={1.75} />
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+              {adding && editor ? (
+                <ProviderAccountEditor
+                  editor={editor}
+                  working={Boolean(working)}
+                  onLabel={(label) =>
+                    setEditor((current) =>
+                      current ? { ...current, label } : current,
+                    )
+                  }
+                  onCancel={() => setEditor(null)}
+                  onSubmit={submitEditor}
+                />
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+      {error ? (
+        <p
+          className="border-t border-content/5 px-4 py-2.5 text-[11px] leading-4 text-red-400"
+          role="alert"
+        >
+          {error}
+        </p>
+      ) : null}
+    </Group>
+  );
+}
+
+function ProviderAccountEditor({
+  editor,
+  working,
+  onLabel,
+  onCancel,
+  onSubmit,
+}: {
+  editor: AccountEditor;
+  working: boolean;
+  onLabel: (label: string) => void;
+  onCancel: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const adding = !editor.accountId;
+  return (
+    <form
+      className="flex h-12 items-center border-b border-content/5 px-4 py-2 last:border-b-0"
+      onSubmit={onSubmit}
+    >
+      <div
+        data-provider-account-editor-field
+        className="flex items-center pr-1 h-8 min-w-0 flex-1 overflow-hidden rounded-md border border-content/10 bg-content/[0.04] focus-within:border-accent/45"
+      >
+        <label className="h-full min-w-0 flex-1">
+          <span className="sr-only">Account name</span>
+          <input
+            autoFocus
+            type="text"
+            maxLength={48}
+            value={editor.label}
+            disabled={working}
+            placeholder="Work or Personal"
+            aria-label={`${adding ? "New" : "Rename"} ${HARNESS_TITLE[editor.provider]} account`}
+            onChange={(event) => onLabel(event.target.value)}
+            className="h-full w-full bg-transparent px-2.5 text-[12px] text-content outline-none placeholder:text-content/25 disabled:opacity-50"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={working}
+          onClick={onCancel}
+          className="flex h-6 shrink-0 items-center rounded-[4.5px] bg-content/[0.05] px-2.5 text-[11px] text-content/45 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:opacity-40"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={working || !editor.label.trim()}
+          className="ml-1 flex h-6 shrink-0 items-center gap-1.5 rounded-[4.5px] bg-content px-2.5 text-[11px] font-medium text-background-base transition-transform duration-150 hover:bg-content/85 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+        >
+          {working ? <Loader className="size-3 animate-spin" /> : null}
+          {adding
+            ? working
+              ? "Waiting for browser…"
+              : "Sign in and add"
+            : "Save"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -2300,7 +2706,7 @@ function Row({
     <div
       id={id ? settingDomId(id) : undefined}
       data-setting-id={id}
-      className={`flex items-start gap-6 border-b border-content/5 px-4 py-3.5 transition-colors last:border-b-0 ${
+      className={`settings-row flex items-start gap-6 border-b border-content/5 px-4 py-3.5 transition-colors last:border-b-0 ${
         flash ? "bg-accent/10" : ""
       }`}
     >
@@ -2312,7 +2718,7 @@ function Row({
           </p>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+      <div className="settings-row-control flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-center justify-end gap-2">
         {children}
       </div>
     </div>
@@ -2334,7 +2740,7 @@ function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className="inline-grid shrink-0 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
+      className="inline-grid max-w-full shrink-0 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
       style={{
         gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
       }}
@@ -2346,9 +2752,9 @@ function Segmented<T extends string>({
           role="radio"
           aria-checked={value === option.value}
           onClick={() => onChange(option.value)}
-          className={`min-w-0 whitespace-nowrap rounded-[5px] px-2.5 py-1 ${
+          className={`min-w-0 rounded-[5px] px-2.5 py-1 ${
             value === option.value
-              ? "bg-content/10 text-content"
+              ? "bg-selection text-content"
               : "text-content/50 hover:text-content"
           }`}
         >
@@ -2380,7 +2786,7 @@ function Slider({
 }) {
   return (
     <div
-      className={`flex w-56 items-center gap-3 ${disabled ? "opacity-40" : ""}`}
+      className={`flex w-56 max-w-full items-center gap-3 ${disabled ? "opacity-40" : ""}`}
     >
       <input
         type="range"
@@ -2658,7 +3064,7 @@ function Select({
                 onClick={() => pick(option.value)}
                 className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] ${
                   highlighted || isSelected
-                    ? "bg-content/10 text-content"
+                    ? "bg-selection text-content"
                     : "text-content hover:bg-content/5"
                 }`}
               >
@@ -2672,32 +3078,5 @@ function Select({
         </Popover>
       ) : null}
     </div>
-  );
-}
-
-function SecondaryButton({
-  onClick,
-  disabled = false,
-  danger = false,
-  children,
-}: {
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] ${
-        danger
-          ? "text-red-400 hover:border-red-400/40 hover:bg-red-400/10"
-          : "text-content/70 hover:bg-content/10 hover:text-content"
-      } disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent`}
-    >
-      {children}
-    </button>
   );
 }

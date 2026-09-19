@@ -122,7 +122,7 @@ export function OrchestrationSidebarAgents({
               key={task.sessionId}
               data-orchestration-agent={task.sessionId}
               // Expanding lights the whole row, header and detail together.
-              className={`rounded-md ${open ? "bg-content/10" : ""}`}
+              className={`rounded-md ${open ? "bg-selection" : ""}`}
             >
               <button
                 type="button"
@@ -240,7 +240,7 @@ export function OrchestrationSidebarAgents({
       {/* Stopping a run belongs to the composer, which stops the lead and its
           agents together. Resume has no other home, so it stays. */}
       {run?.status === "paused" && (
-        <div className="mt-1.5 space-y-1.5 border-t border-content/10 pt-1.5">
+        <div className="mt-1.5 space-y-1.5 border-t border-stroke pt-1.5">
           <p className="px-0.5 text-[11px] leading-relaxed text-content/45">
             {stopping
               ? "Stopping interrupted work before this run can resume."

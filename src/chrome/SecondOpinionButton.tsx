@@ -429,7 +429,7 @@ export function SecondOpinionButton({
                       !available && probed
                         ? "text-content/30"
                         : highlighted
-                          ? "bg-content/10 text-content"
+                          ? "bg-selection text-content"
                           : "text-content hover:bg-content/5"
                     }`}
                   >
@@ -500,7 +500,7 @@ export function SecondOpinionButton({
                     }}
                     className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-none ${
                       highlighted
-                        ? "bg-content/10 text-content"
+                        ? "bg-selection text-content"
                         : "text-content hover:bg-content/5"
                     }`}
                   >
@@ -552,7 +552,7 @@ export function SecondOpinionButton({
                     onMouseEnter={() => setEffortActive(index)}
                     onClick={() => pick(activeModel, option.value)}
                     className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
-                      highlighted ? "bg-content/10" : "hover:bg-content/5"
+                      highlighted ? "bg-selection" : "hover:bg-content/5"
                     }`}
                   >
                     <span className="min-w-0 flex-1 truncate">

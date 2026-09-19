@@ -965,10 +965,19 @@ pub async fn git_github_repo(cwd: String) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Open issues or pull requests for the current GitHub remote, via `gh`.
+/// The GitHub remote of this working copy and, when it is a fork, its parent.
+#[tauri::command]
+pub async fn git_github_repositories(cwd: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || git_github_repositories_for(&expand_home(&cwd)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Open issues or pull requests for one GitHub repository, via `gh`.
 #[tauri::command]
 pub async fn git_github_work_items(
     cwd: String,
+    repo: String,
     kind: String,
     assigned_to_me: bool,
     state: String,
@@ -978,6 +987,7 @@ pub async fn git_github_work_items(
     tauri::async_runtime::spawn_blocking(move || {
         git_github_work_items_for(
             &expand_home(&cwd),
+            &repo,
             &kind,
             assigned_to_me,
             &state,
@@ -1020,11 +1030,12 @@ pub struct GitHubWorkItemDetails {
 #[tauri::command]
 pub async fn git_github_work_item_details(
     cwd: String,
+    repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_details_for(&expand_home(&cwd), &kind, number)
+        git_github_work_item_details_for(&expand_home(&cwd), &repo, &kind, number)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1073,11 +1084,12 @@ pub struct GitHubWorkItemThread {
 #[tauri::command]
 pub async fn git_github_work_item_thread(
     cwd: String,
+    repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemThread, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_thread_for(&expand_home(&cwd), &kind, number)
+        git_github_work_item_thread_for(&expand_home(&cwd), &repo, &kind, number)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1087,13 +1099,36 @@ pub async fn git_github_work_item_thread(
 #[tauri::command]
 pub async fn git_github_work_item_comment(
     cwd: String,
+    repo: String,
     kind: String,
     number: i64,
     body: String,
     in_reply_to: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_comment_for(&expand_home(&cwd), &kind, number, &body, &in_reply_to)
+        git_github_work_item_comment_for(
+            &expand_home(&cwd),
+            &repo,
+            &kind,
+            number,
+            &body,
+            &in_reply_to,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Merge or change the lifecycle state of a GitHub pull request via `gh`.
+#[tauri::command]
+pub async fn git_github_pr_action(
+    cwd: String,
+    repo: String,
+    number: i64,
+    action: String,
+) -> Result<GitHubWorkItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_pr_action_for(&expand_home(&cwd), &repo, number, &action)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1124,12 +1159,13 @@ const MAX_PR_DIFF_BYTES: usize = 2 * 1024 * 1024;
 #[tauri::command]
 pub async fn git_github_pr_diff(
     cwd: String,
+    repo: String,
     number: i64,
     full_context: Option<bool>,
 ) -> Result<GitHubPrDiff, String> {
     let full_context = full_context.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_pr_diff_for(&expand_home(&cwd), number, full_context)
+        git_github_pr_diff_for(&expand_home(&cwd), &repo, number, full_context)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2054,8 +2090,46 @@ fn git_github_repo_for(root: &Path) -> Result<String, String> {
     Ok(slug.to_string())
 }
 
+fn git_github_repositories_for(root: &Path) -> Result<Vec<String>, String> {
+    let json = gh_checked(root, &["repo", "view", "--json", "nameWithOwner,parent"])?;
+    parse_github_repositories(&json)
+}
+
+fn parse_github_repositories(json: &str) -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    struct Owner {
+        login: String,
+    }
+    #[derive(Deserialize)]
+    struct Parent {
+        name: String,
+        owner: Owner,
+    }
+    #[derive(Deserialize)]
+    struct View {
+        #[serde(rename = "nameWithOwner")]
+        name_with_owner: String,
+        #[serde(default)]
+        parent: Option<Parent>,
+    }
+
+    let view: View = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let (owner, name) = split_github_repo(&view.name_with_owner)?;
+    let mut repos = vec![format!("{owner}/{name}")];
+    if let Some(parent) = view.parent {
+        let parent = format!("{}/{}", parent.owner.login, parent.name);
+        let (owner, name) = split_github_repo(&parent)?;
+        let parent = format!("{owner}/{name}");
+        if !repos[0].eq_ignore_ascii_case(&parent) {
+            repos.push(parent);
+        }
+    }
+    Ok(repos)
+}
+
 fn git_github_work_items_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     assigned_to_me: bool,
     state: &str,
@@ -2066,6 +2140,8 @@ fn git_github_work_items_for(
     if kind != "issue" && kind != "pr" {
         return Err("Unknown GitHub task kind".into());
     }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let state = if state.trim().eq_ignore_ascii_case("all") {
         "all"
     } else {
@@ -2084,6 +2160,8 @@ fn git_github_work_items_for(
         state.into(),
         "--limit".into(),
         limit,
+        "--repo".into(),
+        repo.clone(),
         "--json".into(),
         fields.into(),
     ];
@@ -2098,7 +2176,6 @@ fn git_github_work_items_for(
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let json = gh_checked(root, &refs)?;
-    let repo = git_github_repo_for(root).unwrap_or_default();
     parse_github_work_items(&json, kind, &repo)
 }
 
@@ -2130,8 +2207,43 @@ fn git_github_work_item_for(
     parse_github_work_item(&json, kind, &repo)
 }
 
+fn github_pr_action_args(repo: &str, number: i64, action: &str) -> Result<Vec<String>, String> {
+    if number <= 0 {
+        return Err("GitHub pull request number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
+    let number = number.to_string();
+    let args = match action.trim() {
+        "merge" => vec!["pr", "merge", &number, "--repo", &repo, "--merge"],
+        "squash" => vec!["pr", "merge", &number, "--repo", &repo, "--squash"],
+        "rebase" => vec!["pr", "merge", &number, "--repo", &repo, "--rebase"],
+        "draft" => vec!["pr", "ready", &number, "--repo", &repo, "--undo"],
+        "ready" => vec!["pr", "ready", &number, "--repo", &repo],
+        "close" => vec!["pr", "close", &number, "--repo", &repo],
+        "reopen" => vec!["pr", "reopen", &number, "--repo", &repo],
+        _ => return Err("Unknown GitHub pull request action".into()),
+    };
+    Ok(args.into_iter().map(str::to_string).collect())
+}
+
+fn git_github_pr_action_for(
+    root: &Path,
+    repo: &str,
+    number: i64,
+    action: &str,
+) -> Result<GitHubWorkItem, String> {
+    let args = github_pr_action_args(repo, number, action)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    // Successful mutation commands do not always write to stdout. Their exit
+    // status confirms the action ran; the follow-up view fetches the new state.
+    gh_run(root, &refs, true)?;
+    git_github_work_item_for(root, repo, "pr", number)
+}
+
 fn git_github_work_item_details_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     number: i64,
 ) -> Result<GitHubWorkItemDetails, String> {
@@ -2139,13 +2251,21 @@ fn git_github_work_item_details_for(
     if kind != "issue" && kind != "pr" {
         return Err("Unknown GitHub task kind".into());
     }
+    if number <= 0 {
+        return Err("Invalid GitHub item number".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
         "body,author,baseRefName,headRefName,reviewDecision"
     } else {
         "body,author"
     };
-    let json = gh_checked(root, &[kind, "view", &number, "--json", fields])?;
+    let json = gh_checked(
+        root,
+        &[kind, "view", &number, "--repo", &repo, "--json", fields],
+    )?;
     parse_github_work_item_details(&json)
 }
 
@@ -2286,6 +2406,7 @@ mutation InboxReviewReply($threadId: ID!, $body: String!) {
 
 fn git_github_work_item_thread_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     number: i64,
 ) -> Result<GitHubWorkItemThread, String> {
@@ -2296,8 +2417,7 @@ fn git_github_work_item_thread_for(
     if number <= 0 {
         return Err("Invalid GitHub item number".into());
     }
-    let repo = git_github_repo_for(root)?;
-    let (owner, name) = split_github_repo(&repo)?;
+    let (owner, name) = split_github_repo(repo)?;
     let query = if kind == "pr" {
         GITHUB_PR_THREAD_QUERY
     } else {
@@ -2345,19 +2465,33 @@ fn github_comment_input<'a>(
 
 fn git_github_work_item_comment_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     number: i64,
     body: &str,
     in_reply_to: &str,
 ) -> Result<String, String> {
     let (kind, body) = github_comment_input(kind, number, body)?;
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let reply = in_reply_to.trim();
     if !reply.is_empty() {
         return git_github_review_reply_for(root, reply, body);
     }
     let number = number.to_string();
     with_temp_markdown(body, |path| {
-        let output = gh_checked(root, &[kind, "comment", &number, "--body-file", path])?;
+        let output = gh_checked(
+            root,
+            &[
+                kind,
+                "comment",
+                &number,
+                "--repo",
+                &repo,
+                "--body-file",
+                path,
+            ],
+        )?;
         github_url_from_output(&output, "GitHub did not return a comment URL")
     })
 }
@@ -2853,25 +2987,35 @@ const PR_FULL_CONTEXT_LINES: &str = "999999";
 
 fn git_github_pr_diff_for(
     root: &Path,
+    repo: &str,
     number: i64,
     full_context: bool,
 ) -> Result<GitHubPrDiff, String> {
     if number <= 0 {
         return Err("Invalid pull request number".into());
     }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if full_context {
         "files,additions,deletions,baseRefOid,headRefOid"
     } else {
         "files,additions,deletions"
     };
-    let json = gh_run(root, &["pr", "view", &number, "--json", fields], false)?;
+    let json = gh_run(
+        root,
+        &["pr", "view", &number, "--repo", &repo, "--json", fields],
+        false,
+    )?;
     let mut diff = parse_github_pr_diff_meta(&json)?;
     let (patch, truncated) = if full_context {
         let (base, head) = parse_github_pr_oids(&json)?;
         git_diff_full_context(root, &base, &head)?
     } else {
-        (gh_run(root, &["pr", "diff", &number], true)?, false)
+        (
+            gh_run(root, &["pr", "diff", &number, "--repo", &repo], true)?,
+            false,
+        )
     };
     if truncated || patch.len() > MAX_PR_DIFF_BYTES {
         diff.truncated = true;
@@ -3226,6 +3370,7 @@ fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, Strin
     cmd.current_dir(root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
@@ -4544,6 +4689,13 @@ pub async fn delete_path(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+fn dir_contains(dir: &Path, dest_parent: &Path) -> bool {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dest_parent =
+        std::fs::canonicalize(dest_parent).unwrap_or_else(|_| dest_parent.to_path_buf());
+    dest_parent.starts_with(&dir)
+}
+
 fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     let from = expand_home(from);
     if !from.exists() {
@@ -4553,7 +4705,7 @@ fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dest_parent.starts_with(&from) {
+    if from.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = unique_name_in(
@@ -4581,7 +4733,7 @@ fn move_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dest_parent.starts_with(&from) {
+    if from.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = file_label(&from, from.to_str().unwrap_or("item"));
@@ -4973,6 +5125,24 @@ mod tests {
         assert!(Path::new(&copied).join("a.rs").exists());
 
         let err = copy_path_sync(&src_s, &src_s).unwrap_err();
+        assert!(err.contains("itself"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_rejects_paste_into_self_through_a_symlink_alias() {
+        let dir = tmp("folder-alias");
+        let src = dir.0.join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.rs"), "fn a() {}\n").unwrap();
+        let alias = dir.0.join("alias");
+        std::os::unix::fs::symlink(&src, &alias).unwrap();
+        let src_s = src.to_string_lossy().into_owned();
+        let alias_s = alias.to_string_lossy().into_owned();
+
+        let err = copy_path_sync(&src_s, &alias_s).unwrap_err();
+        assert!(err.contains("itself"));
+        let err = move_path_sync(&src_s, &alias_s).unwrap_err();
         assert!(err.contains("itself"));
     }
 
@@ -5920,6 +6090,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_github_repositories_includes_a_forks_parent() {
+        let json = r#"{
+            "nameWithOwner": "EricRasputin/monocode-eric",
+            "parent": {
+                "name": "monocode",
+                "owner": { "login": "hardbeat920" }
+            }
+        }"#;
+        assert_eq!(
+            parse_github_repositories(json).unwrap(),
+            vec!["EricRasputin/monocode-eric", "hardbeat920/monocode"]
+        );
+    }
+
+    #[test]
+    fn parse_github_repositories_keeps_a_normal_repo_single() {
+        let json = r#"{
+            "nameWithOwner": "hardbeat920/monocode",
+            "parent": null
+        }"#;
+        assert_eq!(
+            parse_github_repositories(json).unwrap(),
+            vec!["hardbeat920/monocode"]
+        );
+    }
+
+    #[test]
     fn parse_github_work_items_maps_issue_fields() {
         let json = r#"[{
             "number": 5138,
@@ -6041,6 +6238,25 @@ mod tests {
         );
         assert!(split_github_repo("monocode").is_err());
         assert!(split_github_repo("acme/web extra").is_err());
+    }
+
+    #[test]
+    fn github_pr_actions_map_to_non_interactive_gh_commands() {
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "squash").unwrap(),
+            ["pr", "merge", "42", "--repo", "acme/web", "--squash"]
+        );
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "draft").unwrap(),
+            ["pr", "ready", "42", "--repo", "acme/web", "--undo"]
+        );
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "reopen").unwrap(),
+            ["pr", "reopen", "42", "--repo", "acme/web"]
+        );
+        assert!(github_pr_action_args("acme/web", 42, "delete").is_err());
+        assert!(github_pr_action_args("acme/web", 0, "merge").is_err());
+        assert!(github_pr_action_args("invalid", 42, "merge").is_err());
     }
 
     #[test]

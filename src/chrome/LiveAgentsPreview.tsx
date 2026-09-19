@@ -178,7 +178,7 @@ function LiveAgentCard({
       data-live-agent-card={agent.id}
       onClick={() => onSelect?.(agent.id)}
       className={`relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
-        selected ? "bg-content/10" : "hover:bg-content/8"
+        selected ? "bg-selection" : "hover:bg-content/8"
       }`}
     >
       <span className="flex min-w-0 items-center gap-2">

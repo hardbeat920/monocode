@@ -58,6 +58,8 @@ export type FilePaneTab = {
   id: string;
   path: string;
   cwd: string;
+  /** Owning project when cwd points at one of its linked worktrees. */
+  projectCwd?: string;
   plan?: PlanTabSource;
   releaseNotes?: ReleaseNotesTabSource;
   review?: boolean;
@@ -135,11 +137,13 @@ export function newFileTab(
   cwd: string,
   review = false,
   changeKind?: GitFileDiffKind,
+  projectCwd?: string,
 ): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path,
     cwd,
+    ...(projectCwd && projectCwd !== cwd ? { projectCwd } : {}),
     ...(review ? { review: true } : {}),
     ...(changeKind ? { changeKind } : {}),
   };
@@ -149,11 +153,13 @@ export function newChangesTab(
   cwd: string,
   focusPath?: string,
   focusKind?: GitFileDiffKind,
+  projectCwd?: string,
 ): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path: focusPath || cwd,
     cwd,
+    ...(projectCwd && projectCwd !== cwd ? { projectCwd } : {}),
     review: true,
     changes: true,
     ...(focusKind ? { changeKind: focusKind } : {}),
@@ -164,21 +170,28 @@ export function newSessionChangesTab(
   cwd: string,
   sessionId: string,
   focusPath?: string,
+  projectCwd?: string,
 ): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path: focusPath || cwd,
     cwd,
+    ...(projectCwd && projectCwd !== cwd ? { projectCwd } : {}),
     review: true,
     sessionChanges: { sessionId },
   };
 }
 
-export function newCommitTab(cwd: string, commit: CommitTabSource): FilePaneTab {
+export function newCommitTab(
+  cwd: string,
+  commit: CommitTabSource,
+  projectCwd?: string,
+): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path: `commit:${commit.sha}`,
     cwd,
+    ...(projectCwd && projectCwd !== cwd ? { projectCwd } : {}),
     commit,
   };
 }
@@ -226,11 +239,16 @@ export function newAgentTab(
   return { id: crypto.randomUUID(), path: title, cwd, agent };
 }
 
-export function newTerminalFile(cwd: string, title?: string): FilePaneTab {
+export function newTerminalFile(
+  cwd: string,
+  title?: string,
+  projectCwd?: string,
+): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path: title ?? defaultTerminalTitle(cwd),
     cwd,
+    ...(projectCwd && projectCwd !== cwd ? { projectCwd } : {}),
     terminal: true,
   };
 }
@@ -447,10 +465,16 @@ export function newEditorPane(file: FilePaneTab): EditorPane {
   };
 }
 
+export type OpenEditorTabOptions = {
+  /** Which side of the focused non-editor pane receives a new editor pane. */
+  split?: "left" | "right";
+};
+
 /** Focus an existing editor tab, or open it in the focused editor pane / a new split. */
 export function openEditorTab(
   tab: WorkspaceTab,
   file: FilePaneTab,
+  options: OpenEditorTabOptions = {},
 ): WorkspaceTab {
   if (file.terminal) return openTerminalTab(tab, file);
   tab = isolateTerminalPanes(tab);
@@ -497,26 +521,34 @@ export function openEditorTab(
   const editorPane = newEditorPane(file);
   return {
     ...tab,
-    layout: splitPane(tab.layout, tab.focusedId, "right", editorPane.id),
+    layout: splitPaneRelative(
+      tab.layout,
+      tab.focusedId,
+      "right",
+      editorPane.id,
+      options.split === "left",
+    ),
     focusedId: editorPane.id,
     diffFocused: false,
     editorPanes: [editorPane],
   };
 }
 
-/** Focus the single working-tree Changes tab, creating it if needed. */
+/** Focus this working copy's Changes tab, creating it if needed. */
 export function openChangesTab(
   tab: WorkspaceTab,
   cwd: string,
   focusPath?: string,
   focusKind?: GitFileDiffKind,
+  projectCwd?: string,
 ): WorkspaceTab {
   tab = isolateTerminalPanes(tab);
-  const next = newChangesTab(cwd, focusPath, focusKind);
+  const next = newChangesTab(cwd, focusPath, focusKind, projectCwd);
+  const matches = (file: FilePaneTab) => editorTabKey(file) === editorTabKey(next);
   const existingPane = tab.editorPanes.find((pane) =>
-    pane.files.some(isChangesTab),
+    pane.files.some(matches),
   );
-  const existingFile = existingPane?.files.find(isChangesTab);
+  const existingFile = existingPane?.files.find(matches);
 
   if (existingPane && existingFile) {
     const updated = focusPath
@@ -534,7 +566,7 @@ export function openChangesTab(
         pane.id === existingPane.id
           ? {
               ...pane,
-              files: dropPerFileReviewTabs(pane.files).map((file) =>
+              files: dropPerFileReviewTabs(pane.files, cwd).map((file) =>
                 file.id === updated.id ? updated : file,
               ),
               activeFileId: updated.id,
@@ -548,12 +580,12 @@ export function openChangesTab(
   return {
     ...opened,
     editorPanes: opened.editorPanes.map((pane) =>
-      pane.files.some(isChangesTab)
+      pane.files.some(matches)
         ? {
             ...pane,
-            files: dropPerFileReviewTabs(pane.files),
+            files: dropPerFileReviewTabs(pane.files, cwd),
             activeFileId:
-              pane.files.find(isChangesTab)?.id ?? pane.activeFileId,
+              pane.files.find(matches)?.id ?? pane.activeFileId,
           }
         : pane,
     ),
@@ -566,8 +598,9 @@ export function openSessionChangesTab(
   cwd: string,
   sessionId: string,
   focusPath?: string,
+  projectCwd?: string,
 ): WorkspaceTab {
-  const next = newSessionChangesTab(cwd, sessionId, focusPath);
+  const next = newSessionChangesTab(cwd, sessionId, focusPath, projectCwd);
   const key = editorTabKey(next);
   const existingPane = tab.editorPanes.find((pane) =>
     pane.files.some((file) => editorTabKey(file) === key),
@@ -601,13 +634,15 @@ export function openCommitTab(
   tab: WorkspaceTab,
   cwd: string,
   commit: CommitTabSource,
+  projectCwd?: string,
 ): WorkspaceTab {
-  return openEditorTab(tab, newCommitTab(cwd, commit));
+  return openEditorTab(tab, newCommitTab(cwd, commit, projectCwd));
 }
 
-function dropPerFileReviewTabs(files: FilePaneTab[]): FilePaneTab[] {
+function dropPerFileReviewTabs(files: FilePaneTab[], cwd: string): FilePaneTab[] {
   return files.filter(
     (file) =>
+      file.cwd !== cwd ||
       !isReviewTab(file) || isChangesTab(file) || isSessionChangesTab(file),
   );
 }
@@ -681,13 +716,25 @@ export function splitPane(
   dir: SplitDir,
   newSessionId: string,
 ): LayoutNode {
+  return splitPaneRelative(node, focusedId, dir, newSessionId, false);
+}
+
+function splitPaneRelative(
+  node: LayoutNode,
+  focusedId: string,
+  dir: SplitDir,
+  newSessionId: string,
+  before: boolean,
+): LayoutNode {
   if (node.type === "leaf") {
     if (node.id !== focusedId) return node;
     return {
       type: "split",
       id: crypto.randomUUID(),
       dir,
-      children: [node, leaf(newSessionId)],
+      children: before
+        ? [leaf(newSessionId), node]
+        : [node, leaf(newSessionId)],
       sizes: [0.5, 0.5],
     };
   }
@@ -698,10 +745,11 @@ export function splitPane(
 
   if (direct >= 0) {
     if (node.dir === dir) {
+      const insertAt = before ? direct : direct + 1;
       const children = [
-        ...node.children.slice(0, direct + 1),
+        ...node.children.slice(0, insertAt),
         leaf(newSessionId),
-        ...node.children.slice(direct + 1),
+        ...node.children.slice(insertAt),
       ];
       return { ...node, children, sizes: equalSizes(children.length) };
     }
@@ -713,7 +761,9 @@ export function splitPane(
               type: "split",
               id: crypto.randomUUID(),
               dir,
-              children: [child, leaf(newSessionId)],
+              children: before
+                ? [leaf(newSessionId), child]
+                : [child, leaf(newSessionId)],
               sizes: [0.5, 0.5],
             }
           : child,
@@ -724,7 +774,7 @@ export function splitPane(
   return {
     ...node,
     children: node.children.map((child) =>
-      splitPane(child, focusedId, dir, newSessionId),
+      splitPaneRelative(child, focusedId, dir, newSessionId, before),
     ),
   };
 }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../lib/session";
 import { formatReminderTime } from "../lib/sessionReminders";
 import { Sidebar } from "./Sidebar";
+import { loadSessionFolders } from "../lib/sessionFolders";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../hooks/useProjectDiffStats", () => ({
@@ -130,6 +131,241 @@ afterEach(() => {
   localStorage.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("sidebar session multiselection", () => {
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "resets the %s anchor after acting on another session's context menu",
+    (modifier) => {
+      props.sessions = [1, 2, 3, 4].map((n) => ({
+        ...props.sessions[0],
+        id: `session-${n}`,
+        updatedAt: 100 - n,
+      }));
+      props.onPinSession = vi.fn();
+      act(() => render());
+      act(() => container.querySelector('[data-session-card="session-3"]')!
+        .dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          [modifier]: true,
+        })));
+      act(() => container.querySelector('[data-session-card="session-2"]')!
+        .dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+        })));
+      const pin = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((item) => item.textContent === "Pin")!;
+      act(() => pin.click());
+      expect(props.onPinSession).toHaveBeenCalledWith("session-2", true);
+      expect(container.querySelectorAll('[data-session-selected="true"]'))
+        .toHaveLength(0);
+
+      act(() => container.querySelector('[data-session-card="session-4"]')!
+        .dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          shiftKey: true,
+        })));
+      expect(Array.from(
+        container.querySelectorAll('[data-session-selected="true"]'),
+        (el) => el.getAttribute("data-session-card"),
+      )).toEqual(["session-1", "session-2", "session-3", "session-4"]);
+      expect(props.onSelectSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("starts a range at the active session when pagination hides the anchor", () => {
+    props.sessions = Array.from({ length: 80 }, (_, index) => ({
+      ...props.sessions[0],
+      id: `session-${index + 1}`,
+      updatedAt: 100 - index,
+    }));
+    props.activeSessionId = "session-80";
+    act(() => render());
+    act(() => container.querySelector<HTMLElement>(
+      '[data-session-card="session-40"]',
+    )!.click());
+
+    // Switching panes does not discard the last plain-click anchor.
+    props.activeSessionId = "session-1";
+    act(() => render());
+    const search = container.querySelector<HTMLInputElement>(
+      'input[placeholder="Search conversations..."]',
+    )!;
+    // All sessions still match, but the list returns to its first page.
+    typeTitle(search, "Original conversation");
+    expect(container.querySelector('[data-session-card="session-40"]')).toBeNull();
+    expect(container.querySelectorAll("[data-session-card]")).toHaveLength(32);
+
+    act(() => container.querySelector('[data-session-card="session-3"]')!
+      .dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        shiftKey: true,
+      })));
+    expect(Array.from(
+      container.querySelectorAll('[data-session-selected="true"]'),
+      (el) => el.getAttribute("data-session-card"),
+    )).toEqual(["session-1", "session-2", "session-3"]);
+    expect(props.onSelectSession).toHaveBeenCalledTimes(1);
+    expect(props.onSelectSession).toHaveBeenCalledWith("session-40");
+  });
+
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "starts the next range at the active session after %s clears the last selection",
+    (modifier) => {
+      props.sessions = [1, 2, 3, 4].map((n) => ({
+        ...props.sessions[0],
+        id: `session-${n}`,
+        updatedAt: 100 - n,
+      }));
+      act(() => render());
+      const thirdCard = container.querySelector<HTMLElement>(
+        '[data-session-card="session-3"]',
+      )!;
+      for (let click = 0; click < 2; click++) {
+        act(() => thirdCard.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          [modifier]: true,
+        })));
+        expect(container.querySelectorAll('[data-session-selected="true"]'))
+          .toHaveLength(click === 0 ? 1 : 0);
+      }
+      act(() => container.querySelector('[data-session-card="session-4"]')!
+        .dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          shiftKey: true,
+        })));
+      expect(Array.from(
+        container.querySelectorAll('[data-session-selected="true"]'),
+        (el) => el.getAttribute("data-session-card"),
+      )).toEqual(["session-1", "session-2", "session-3", "session-4"]);
+      expect(props.onSelectSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears the previous session focus when Ctrl-clicking another session", () => {
+    props.sessions = [1, 2].map((n) => ({
+      ...props.sessions[0],
+      id: `session-${n}`,
+      updatedAt: 100 - n,
+    }));
+    props.onDeleteSession = vi.fn();
+    act(() => render());
+    const firstTitle = card().querySelector<HTMLElement>("[data-session-select]")!;
+    const secondTitle = container.querySelector<HTMLElement>(
+      '[data-session-select="session-2"]',
+    )!;
+    act(() => firstTitle.focus());
+    act(() => {
+      secondTitle.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        ctrlKey: true,
+      }));
+      secondTitle.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        ctrlKey: true,
+      }));
+    });
+    expect(card().getAttribute("data-session-selected")).toBeNull();
+    expect(secondTitle.closest("[data-session-card]")!.getAttribute(
+      "data-session-selected",
+    )).toBe("true");
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+    pressKey(document.activeElement as HTMLElement, "Delete");
+    expect(props.onDeleteSession).not.toHaveBeenCalled();
+    pressKey(document.activeElement as HTMLElement, "F2");
+    expect(renameInput()).toBeNull();
+    expect(document.activeElement).not.toBe(firstTitle);
+    expect(document.activeElement).not.toBe(secondTitle);
+  });
+
+  it("keeps Shift-click selection free of title focus while preserving keyboard focus", () => {
+    act(() => render());
+    const title = card().querySelector<HTMLElement>("[data-session-select]")!;
+    act(() => title.focus());
+    expect(document.activeElement).toBe(title);
+    const mouseDown = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      shiftKey: true,
+      button: 0,
+    });
+    act(() => title.dispatchEvent(mouseDown));
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(document.activeElement).not.toBe(title);
+    act(() => title.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      shiftKey: true,
+    })));
+    expect(card().getAttribute("data-session-selected")).toBe("true");
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+    act(() => title.focus());
+    expect(document.activeElement).toBe(title);
+    pressKey(title, "Enter");
+    expect(props.onSelectSession).toHaveBeenCalledWith("session-1");
+  });
+
+  it("selects the visible range from a plain click with Shift-click", () => {
+    props.sessions = [1, 2, 3, 4].map((n) => ({
+      ...props.sessions[0],
+      id: `session-${n}`,
+      updatedAt: 100 - n,
+    }));
+    act(() => render());
+    act(() => card().click());
+    act(() =>
+      container
+        .querySelector('[data-session-card="session-3"]')!
+        .dispatchEvent(
+          new MouseEvent("click", { bubbles: true, shiftKey: true }),
+        ),
+    );
+    expect(
+      Array.from(
+        container.querySelectorAll('[data-session-selected="true"]'),
+        (el) => el.getAttribute("data-session-card"),
+      ),
+    ).toEqual(["session-1", "session-2", "session-3"]);
+    expect(props.onSelectSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a folder containing the Ctrl-clicked sessions without opening them", () => {
+    props.sessions = [1, 2, 3].map((n) => ({
+      ...props.sessions[0],
+      id: `session-${n}`,
+      updatedAt: 100 - n,
+    }));
+    act(() => render());
+    for (const id of ["session-1", "session-3"]) {
+      act(() =>
+        container
+          .querySelector(`[data-session-card="${id}"]`)!
+          .dispatchEvent(
+            new MouseEvent("click", { bubbles: true, ctrlKey: true }),
+          ),
+      );
+    }
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+    expect(
+      container.querySelectorAll('[data-session-selected="true"]'),
+    ).toHaveLength(2);
+    act(() =>
+      card().dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    const newFolder = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "New folder")!;
+    act(() => newFolder.click());
+    expect(loadSessionFolders(props.cwd)[0].sessionIds).toEqual([
+      "session-1",
+      "session-3",
+    ]);
+  });
 });
 
 describe("sidebar session rename", () => {
@@ -431,7 +667,7 @@ describe("sidebar orchestration card", () => {
       expect(container.querySelectorAll("[data-session-card]")).toHaveLength(2);
       expect(card().dataset.orchestrationCard).toBe("true");
       // The lead card carries the sidebar's ordinary active treatment.
-      expect(card().className).toContain("bg-content/10");
+      expect(card().className).toContain("bg-selection");
       // The lead names its own model, like every agent row beneath it.
       expect(card().textContent).toContain("Claude Sonnet 5");
       expect(card().textContent).not.toContain("Orchestrator");
@@ -646,6 +882,30 @@ describe("sidebar orchestration card", () => {
 });
 
 describe("sidebar linked work item updates", () => {
+  it("opens a linked item beside the session that owns it", () => {
+    props.busySessionIds = new Set();
+    props.onOpenInboxItem = vi.fn();
+    const linkedWorkItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+    };
+    props.sessions = [{ ...props.sessions[0], linkedWorkItem }];
+    act(() => render());
+
+    const pullRequest = card().querySelector<HTMLButtonElement>(
+      '[aria-label="Open PR #42"]',
+    )!;
+    expect(pullRequest.title).toContain("beside this session");
+    act(() => pullRequest.click());
+    expect(props.onOpenInboxItem).toHaveBeenCalledExactlyOnceWith(
+      linkedWorkItem,
+      "session-1",
+    );
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+  });
+
   it("uses the footer for the linked issue or PR instead of a second harness icon", () => {
     props.busySessionIds = new Set();
     props.onArchiveSession = vi.fn();
@@ -802,6 +1062,37 @@ describe("sidebar session reminders", () => {
   });
 });
 
+describe("collapsed rail Inbox actions", () => {
+  it.each(["mouse", "ContextMenu", "Shift+F10"])("opens the shared Inbox menu via %s", async (input) => {
+    props.projectRailOpen = false;
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    props.onOpenInbox = vi.fn();
+    props.onOpenNotificationSettings = vi.fn();
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    await act(async () => render());
+    const inbox = container.querySelector<HTMLButtonElement>('button[aria-label="Inbox"]')!;
+    expect(inbox).not.toBeNull();
+    await act(async () => {
+      inbox.dispatchEvent(input === "mouse"
+        ? new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 150, clientY: 60 })
+        : new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: input === "Shift+F10" ? "F10" : input, shiftKey: input === "Shift+F10" }));
+    });
+    const menu = document.querySelector('[role="menu"][aria-label="Inbox actions"]');
+    expect(menu).not.toBeNull();
+    expect(menu!.textContent).toContain("Mark all as read");
+    expect(menu!.textContent).toContain("Mute all projects");
+    expect(menu!.textContent).toContain("Resume muted projects");
+    expect(menu!.textContent).toContain("2 projects");
+    const settings = [...menu!.querySelectorAll("button")].find((button) => button.textContent?.startsWith("Notification settings"))!;
+    act(() => settings.click());
+    expect(props.onOpenNotificationSettings).toHaveBeenCalledExactlyOnceWith();
+    expect(props.onOpenInbox).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(inbox);
+    expect(document.querySelector('[role="menu"][aria-label="Inbox actions"]')).toBeNull();
+  });
+});
+
 describe("sidebar working agents", () => {
   it("shows the original working widget when the project rail is collapsed", () => {
     props.projectRailOpen = false;
@@ -853,4 +1144,25 @@ describe("sidebar working agents", () => {
     act(() => render());
     expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
   });
+});
+
+
+it("labels preserved sessions as having no branch selected", () => {
+  props.sessions = [
+    {
+      ...props.sessions[0],
+      branch: "old-feature",
+      repo: "project",
+      worktreeRemoved: true,
+    },
+  ];
+  act(render);
+  expect(card().textContent).toContain("No branch selected");
+  expect(card().textContent).not.toContain("old-feature");
+  props.sessions = [
+    { ...props.sessions[0], branch: "main", worktreeRemoved: undefined },
+  ];
+  act(render);
+  expect(card().textContent).not.toContain("No branch selected");
+  expect(card().textContent).toContain("project/main");
 });

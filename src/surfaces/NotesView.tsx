@@ -11,9 +11,9 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useMarkdownMode } from "../chrome/MarkdownModeToggle";
-import { CwdPicker } from "../chrome/CwdPicker";
 import { ProjectLogoIcon } from "../chrome/ProjectLogoIcon";
 import { ProjectMascot } from "../chrome/ProjectMascot";
+import { SearchableProjectPicker } from "../chrome/SearchableProjectPicker";
 import { OverlayNav } from "../chrome/TitleBar";
 import { WindowControls } from "../chrome/WindowControls";
 import { useDragResize } from "../hooks/useDragResize";
@@ -229,9 +229,9 @@ export function NotesView({
   const list = (
     <div
       ref={resize.setPaneRef}
-      className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-content/10"
+      className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
     >
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-content/10 px-2">
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
         <div className="relative flex h-7 min-w-0 flex-1 items-center">
           <Search className="pointer-events-none absolute left-2 size-3 shrink-0 opacity-50" />
           <input
@@ -317,7 +317,7 @@ export function NotesView({
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
       <div
-        className="flex h-10 shrink-0 select-none items-center border-b border-content/10"
+        className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
         data-tauri-drag-region="deep"
       >
         {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
@@ -339,10 +339,6 @@ export function NotesView({
           note={selected}
           recents={recents}
           activeCwd={cwd}
-          logos={logos}
-          mascots={groupMascots}
-          colors={groupColors}
-          customColors={groupCustomColors}
           onSaved={onSaved}
           onDelete={onDelete}
           onAddToChat={onAddToChat}
@@ -444,7 +440,7 @@ function NoteCard({
       onClick={onSelect}
       className={`flex w-full flex-col rounded-md border px-2.5 py-2 text-left ${
         active
-          ? "border-transparent bg-content/10 text-content"
+          ? "border-transparent bg-selection text-content"
           : "border-transparent text-content/80 hover:bg-content/5 hover:text-content"
       }`}
     >
@@ -501,10 +497,6 @@ function NoteDetail({
   note,
   recents,
   activeCwd,
-  logos,
-  mascots,
-  colors,
-  customColors,
   onSaved,
   onDelete,
   onAddToChat,
@@ -515,7 +507,7 @@ function NoteDetail({
   onSaved: (note: Note) => void;
   onDelete: (id: string) => void | Promise<void>;
   onAddToChat: (note: Note) => void;
-} & ProjectMarks) {
+}) {
   if (!note) {
     return (
       <div className="flex h-full min-w-0 flex-1 flex-col items-center justify-center px-6 text-center">
@@ -530,10 +522,6 @@ function NoteDetail({
       note={note}
       recents={recents}
       activeCwd={activeCwd}
-      logos={logos}
-      mascots={mascots}
-      colors={colors}
-      customColors={customColors}
       onSaved={onSaved}
       onDelete={onDelete}
       onAddToChat={onAddToChat}
@@ -545,10 +533,6 @@ function NoteEditor({
   note,
   recents,
   activeCwd,
-  logos,
-  mascots,
-  colors,
-  customColors,
   onSaved,
   onDelete,
   onAddToChat,
@@ -559,7 +543,7 @@ function NoteEditor({
   onSaved: (note: Note) => void;
   onDelete: (id: string) => void | Promise<void>;
   onAddToChat: (note: Note) => void;
-} & ProjectMarks) {
+}) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const blank = !note.body.trim() && note.title === "Untitled";
   const [mode, setMode] = useMarkdownMode(note.id);
@@ -589,7 +573,6 @@ function NoteEditor({
   bodyRef.current = body;
   noteRef.current = note;
   onSavedRef.current = onSaved;
-  const project = noteSourceProject(sourceCwd);
   const time = formatRelativeTime(new Date(note.updatedAt).toISOString());
 
   useEffect(() => {
@@ -808,42 +791,19 @@ function NoteEditor({
             {note.slug ? (
               <span className="min-w-0 truncate">{note.slug}</span>
             ) : null}
-            <CwdPicker
+            <SearchableProjectPicker
               cwd={sourceCwd ?? "~"}
               recents={recents}
               mode="move"
-              activeCwd={activeCwd}
-              renderProjectLabel={(path) => (
-                <NoteProjectMark
-                  cwd={path}
-                  logos={logos}
-                  mascots={mascots}
-                  colors={colors}
-                  customColors={customColors}
-                />
-              )}
-              placement="below"
-              chevron
-              buttonClassName="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-content/60 hover:text-content"
-              onCwdChange={(path) => {
+              railCwd={activeCwd}
+              buttonClassName="px-1.5"
+              onSelectProject={(path) => {
                 const change = { path };
                 projectChangeRef.current = change;
                 setProjectChange(change);
                 void saveNow();
               }}
-            >
-              {project && sourceCwd ? (
-                <NoteProjectMark
-                  cwd={sourceCwd}
-                  logos={logos}
-                  mascots={mascots}
-                  colors={colors}
-                  customColors={customColors}
-                />
-              ) : (
-                <span>Choose project</span>
-              )}
-            </CwdPicker>
+            />
           </div>
           <input
             value={title}
@@ -916,7 +876,7 @@ function NoteEditor({
         <div
           role="tablist"
           aria-label="Note sections"
-          className="flex h-9 items-stretch gap-4 border-b border-content/10"
+          className="flex h-9 items-stretch gap-4 border-b border-stroke"
         >
           <NoteDetailTab
             label="Preview"

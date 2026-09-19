@@ -103,6 +103,27 @@ describe("session persistence concurrency", () => {
     expect(commands).toEqual(["session_upsert", "session_delete"]);
   });
 
+  it("drains queued saves before detaching a removed worktree", async () => {
+    const firstWrite = deferred<unknown>();
+    mocks.invoke
+      .mockReturnValueOnce(firstWrite.promise)
+      .mockResolvedValue(undefined);
+    const { flushSessionWrites, upsertSession } = await loadStore();
+    const active = upsertSession(session("s1"));
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+    const queued = upsertSession({ ...session("s1"), title: "latest" });
+    let flushed = false;
+    const flushing = flushSessionWrites().then(() => {
+      flushed = true;
+    });
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+    firstWrite.resolve(undefined);
+    await Promise.all([active, queued, flushing]);
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(flushed).toBe(true);
+  });
+
   it("archives only after the final active-turn snapshot is durable", async () => {
     const firstWrite = deferred<unknown>();
     const commands: string[] = [];

@@ -226,7 +226,7 @@ function AssignmentModel({
           data-assignment-model-target
           className="flex flex-col overflow-hidden"
         >
-          <label className="flex shrink-0 items-center gap-2 border-b border-content/10 px-3 py-2.5 text-content/50">
+          <label className="flex shrink-0 items-center gap-2 border-b border-stroke px-3 py-2.5 text-content/50">
             <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
             <input
               ref={search}
@@ -276,7 +276,7 @@ function AssignmentModel({
                   openEffortOrPick(choice);
                 }}
                 className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${
-                  index === active ? "bg-content/10" : ""
+                  index === active ? "bg-selection" : ""
                 }`}
               >
                 <HarnessIcon
@@ -347,7 +347,7 @@ function AssignmentModel({
                   pick(activeChoice, settingsFor(activeChoice, option.value))
                 }
                 className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
-                  highlighted ? "bg-content/10" : "hover:bg-content/5"
+                  highlighted ? "bg-selection" : "hover:bg-content/5"
                 }`}
               >
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
@@ -588,7 +588,7 @@ export function OrchestrationPreview({
         </p>
       )}
       {!!proposal.tasks.length && (
-        <ul className="border-t border-content/10 py-1">
+        <ul className="border-t border-stroke py-1">
           {visible.map((task) => {
             const index = proposal.tasks.indexOf(task);
             const open = expanded.includes(task.id);
@@ -710,7 +710,7 @@ export function OrchestrationPreview({
           type="button"
           aria-expanded={showAll}
           onClick={() => setShowAll(!showAll)}
-          className="flex h-8 w-full items-center gap-1.5 border-t border-content/10 px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
+          className="flex h-8 w-full items-center gap-1.5 border-t border-stroke px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
         >
           {showAll ? (
             <ChevronDown className="size-3.5" />
@@ -728,7 +728,7 @@ export function OrchestrationPreview({
         </p>
       )}
       {!planning && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-content/10 px-3 py-2 text-[11px] text-content/45">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stroke px-3 py-2 text-[11px] text-content/45">
           <div className="flex items-center gap-1.5">
             {editable ? (
               <>
@@ -755,7 +755,7 @@ export function OrchestrationPreview({
                       }
                       className={`grid size-5 place-items-center rounded-[5px] text-[11px] leading-none tabular-nums ${
                         proposal.settings.maxWorkers === number
-                          ? "bg-content/15 font-medium text-content"
+                          ? "bg-selection-hover font-medium text-content"
                           : "text-content/45 hover:bg-content/8 hover:text-content"
                       }`}
                     >

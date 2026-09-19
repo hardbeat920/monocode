@@ -92,6 +92,17 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("persists a removed worktree as an explicit unselected working-copy state", () => {
+    const session = newSession("codex", "/repo");
+    session.worktreeCwd = "/repo-worktrees/feature";
+    session.worktreeRemoved = true;
+    session.blocks = [{ id: "u", role: "user", text: "Build feature" }];
+    expect(sanitizeSessionForPersist(session)).toMatchObject({
+      worktreeCwd: "/repo-worktrees/feature",
+      worktreeRemoved: true,
+    });
+  });
+
   it("preserves an internal worker's lead, hidden turns, and token metrics", () => {
     const session = {
       ...newSession("claude", "/repo"),
@@ -268,6 +279,42 @@ describe("sanitizeSessionForPersist", () => {
       role: "system",
       text: "Still visible",
     });
+  });
+
+  it("keeps a notice flag on system blocks and drops anything else", () => {
+    const session = newSession("pi", "/tmp/project");
+    session.blocks = [
+      {
+        id: "e1",
+        role: "system",
+        text: "Provider connection lost",
+        notice: "error",
+      },
+      {
+        id: "i1",
+        role: "system",
+        text: "Turn interrupted when MonoCode quit.",
+        notice: "interrupt",
+      },
+      {
+        id: "b1",
+        role: "system",
+        text: "Mystery",
+        notice: "mystery" as Block["notice"],
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        text: "hi",
+        notice: "error" as Block["notice"],
+      },
+    ];
+
+    const persisted = sanitizeSessionForPersist(session).blocks;
+    expect(persisted[0]?.notice).toBe("error");
+    expect(persisted[1]?.notice).toBe("interrupt");
+    expect(persisted[2]?.notice).toBeUndefined();
+    expect(persisted[3]?.notice).toBeUndefined();
   });
 
   it("keeps a second-opinion card on the user turn", () => {

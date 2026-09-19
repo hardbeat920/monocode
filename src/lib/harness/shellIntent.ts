@@ -30,8 +30,9 @@ export function inferShellIntent(command: string): ShellIntent | undefined {
     const stages = splitTopLevel(chain, pipeSep);
     let pipeIntent: ShellIntent | undefined;
     for (const stage of stages) {
-      const argv = tokenize(stage);
-      if (!argv || argv.length === 0) return undefined;
+      const tokens = tokenize(stage);
+      if (!tokens || tokens.length === 0) return undefined;
+      const argv = tokens.map(({ value }) => value);
       const classified = classifyArgv(argv);
       if (classified === "opaque") return undefined;
       if (classified === "noise") continue;
@@ -54,31 +55,81 @@ export function inferShellIntent(command: string): ShellIntent | undefined {
 
 /**
  * Codex may expose a command through the argv used to launch the user's shell,
- * for example `/bin/zsh -lc "cat package.json"`. The launcher is transport
+ * for example `/bin/zsh -lc "cat package.json"` or
+ * `pwsh.exe -Command "Get-Content package.json"`. The launcher is transport
  * noise for this visual-only classifier; inspect the script it was given.
  */
 export function unwrapShellCommand(command: string): string {
   let current = command.trim();
   for (let depth = 0; depth < 2; depth += 1) {
-    const argv = tokenize(current);
-    if (!argv || argv.length < 3 || !SHELL_LAUNCHERS.has(binName(argv[0]))) {
-      break;
-    }
-    const scriptIndex = argv.findIndex(
-      (arg, index) => index > 0 && isCommandFlag(arg),
+    const tokens = tokenize(current);
+    if (!tokens || tokens.length < 3) break;
+    const executableToken = tokens[0];
+    const rawExecutable = current.slice(
+      executableToken.start,
+      executableToken.end,
     );
-    const script = scriptIndex >= 0 ? argv[scriptIndex + 1]?.trim() : undefined;
+    const executableQuote = current[executableToken.start];
+    const executable =
+      (executableQuote === '"' || executableQuote === "'") &&
+      rawExecutable[0] === rawExecutable[rawExecutable.length - 1]
+        ? rawExecutable.slice(1, -1)
+        : rawExecutable;
+    const wrapper = SHELL_WRAPPERS.find(({ executables }) =>
+      executables.has(binName(executable)),
+    );
+    if (!wrapper) break;
+    let flagIndex = -1;
+    for (let index = 1; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (
+        "optionBoundary" in wrapper &&
+        wrapper.optionBoundary.test(token.value)
+      ) {
+        break;
+      }
+      if (wrapper.commandFlag.test(token.value)) {
+        flagIndex = index;
+        break;
+      }
+    }
+    if (flagIndex < 0) break;
+    const commandToken = tokens[flagIndex + 1];
+    if (!commandToken) break;
+    const remainder = current.slice(commandToken.start).trim();
+    const commandQuote = current[commandToken.start];
+    const commandIsSoleQuotedToken =
+      (commandQuote === '"' || commandQuote === "'") &&
+      current[commandToken.end - 1] === commandQuote &&
+      tokens.length === flagIndex + 2;
+    const script =
+      wrapper.consumeRemainder && !commandIsSoleQuotedToken
+        ? remainder
+        : commandToken.value.trim();
     if (!script || script === current) break;
     current = script;
   }
   return current;
 }
 
-const SHELL_LAUNCHERS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
-
-function isCommandFlag(arg: string): boolean {
-  return arg === "--command" || /^-[A-Za-z]*c[A-Za-z]*$/.test(arg);
-}
+const SHELL_WRAPPERS = [
+  {
+    executables: new Set(["sh", "bash", "zsh", "dash", "ksh"]),
+    commandFlag: /^(?:--command|-[a-z]*c[a-z]*)$/i,
+    consumeRemainder: false,
+  },
+  {
+    executables: new Set(["powershell", "powershell.exe", "pwsh", "pwsh.exe"]),
+    commandFlag: /^-(?:command|c)$/i,
+    optionBoundary: /^-(?:file|f)$/i,
+    consumeRemainder: true,
+  },
+  {
+    executables: new Set(["cmd", "cmd.exe"]),
+    commandFlag: /^\/c$/i,
+    consumeRemainder: true,
+  },
+] as const;
 
 export function formatShellIntent(
   intent: ShellIntent,
@@ -555,8 +606,14 @@ function splitTopLevel(
   return parts;
 }
 
-function tokenize(stage: string): string[] | null {
-  const tokens: string[] = [];
+type ShellToken = {
+  value: string;
+  start: number;
+  end: number;
+};
+
+function tokenize(stage: string): ShellToken[] | null {
+  const tokens: ShellToken[] = [];
   let i = 0;
   while (i < stage.length) {
     // Treat redirects (`2>&1`) as separators so `&` cannot stall the scan.
@@ -597,7 +654,13 @@ function tokenize(stage: string): string[] | null {
       token += c;
       i += 1;
     }
-    if (token) tokens.push(token);
+    if (token) {
+      tokens.push({
+        value: token,
+        start,
+        end: i,
+      });
+    }
     if (i <= start) i += 1;
   }
   return tokens;

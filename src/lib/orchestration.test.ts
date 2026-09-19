@@ -12,6 +12,7 @@ import {
 } from "./orchestration";
 import { newSession } from "./session";
 import type { OrchestrationProposal } from "./orchestrationPlan";
+import { previewFromToolPart } from "./harness/opencodeProtocol";
 
 function setup() {
   const saved = new Map<string, OrchestrationRun>();
@@ -27,6 +28,7 @@ function setup() {
     scopes: vi.fn(async (_cwd: string, files: string[]) =>
       files.map((file) => (file === "." ? "/repo" : `/repo/${file}`)),
     ),
+    resolvePath: vi.fn(async (path: string) => path),
   };
   const manager = new Orchestrator(store);
   const lead = { ...newSession("claude", "/repo"), id: "lead", busy: true };
@@ -44,6 +46,7 @@ function setup() {
         id: task.sessionId,
         busy: false,
       });
+      return `/private/var/folders/test/T/monocode-worker-${task.sessionId}`;
     }),
     submit: vi.fn((id, _text, done) => {
       const session = sessions.find((session) => session.id === id)!;
@@ -506,12 +509,212 @@ describe("local orchestration", () => {
       title: "Edit",
       preview: { kind: "write", path: "src/a/../b/file.ts" },
     });
-    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("cancelled"));
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
     expect(f.manager.run("lead")!.status).toBe("paused");
     expect(f.manager.run("lead")!.error).toContain("outside its assignment");
   });
+  it("allows OpenCode scratch writes only in that worker's private directory", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await f.delegate(["commands.py"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    const [worker, other] = f.tasks();
+    const write = (path: string) => ({
+      type: "tool.updated" as const,
+      callId: path,
+      title: "Write",
+      status: "running",
+      preview: previewFromToolPart({
+        id: path,
+        type: "tool",
+        tool: "write",
+        state: {
+          status: "running",
+          input: { filePath: path, content: "test" },
+        },
+      }),
+    });
+    expect(vi.mocked(f.host.submit).mock.calls[0][1]).toContain(
+      worker.scratchDir,
+    );
+    // macOS reports both /var and /private/var for the same file.
+    f.store.resolvePath.mockImplementation(async (path) =>
+      path.replace(/^\/var\//, "/private/var/"),
+    );
+    f.manager.observe(
+      worker.sessionId,
+      write(`${worker.scratchDir!.replace("/private", "")}/helper.py`),
+    );
+    f.manager.observe(worker.sessionId, write("brief.py"));
+    await vi.waitFor(() =>
+      expect(f.store.resolvePath).toHaveBeenCalledTimes(2),
+    );
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.tasks().every((task) => task.status === "running")).toBe(true);
+    f.manager.observe(worker.sessionId, write(`${other.scratchDir}/helper.py`));
+    await vi.waitFor(() =>
+      expect(f.tasks().every((task) => task.status === "failed")).toBe(true),
+    );
+    expect(f.manager.run("lead")!.error).toContain("outside its assignment");
+  });
+
+  it("keeps a paused run inspectable and preserves unfinished work across Resume", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await f.delegate(["commands.py"]);
+    const dependencies = f.tasks().map((task) => task.id);
+    await f.delegate(["."], { dependsOn: dependencies, title: "Validation" });
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    f.manager.observe(f.tasks()[0].sessionId, {
+      type: "tool.started",
+      callId: "outside",
+      title: "Write",
+      preview: { kind: "write", path: "/outside.py" },
+    });
+    await vi.waitFor(() =>
+      expect(f.tasks().map((task) => task.status)).toEqual([
+        "failed",
+        "failed",
+        "queued",
+      ]),
+    );
+    const reason = f.manager.run("lead")!.error;
+    expect(f.tasks()[0].error).toBe(reason);
+    expect(await f.call("list")).toMatchObject({
+      run: { status: "paused", error: reason },
+    });
+    expect(await f.call("get", { taskId: dependencies[0] })).toMatchObject({
+      runStatus: "paused",
+      error: reason,
+    });
+    // A paused wait returns immediately despite queued validation.
+    expect(await f.call("wait", { timeoutSeconds: 25 })).toMatchObject({
+      status: "paused",
+      recovery: expect.stringContaining(
+        "Do not retry mutations or keep polling",
+      ),
+    });
+    await expect(
+      f.call("message", { taskId: dependencies[0], text: "Continue" }),
+    ).rejects.toThrow("click Resume");
+    await expect(f.call("finish")).rejects.toThrow(reason);
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(f.host.submit).mock.calls[2]).toEqual([
+      "lead",
+      expect.stringContaining(reason!),
+      expect.any(Function),
+    ]);
+    expect(f.manager.run("lead")!.lastPauseReason).toBe(reason);
+    expect(f.tasks().map((task) => task.status)).toEqual([
+      "failed",
+      "failed",
+      "queued",
+    ]);
+    await expect(f.call("finish")).rejects.toThrow(
+      "Review all remaining tasks",
+    );
+    await f.call("message", {
+      taskId: dependencies[0],
+      text: "Inspect saved edits and finish",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    expect(f.tasks()[2].status).toBe("queued");
+    await f.manager.stopRun("lead");
+  });
+
+  it("does not allow scratch symlinks to escape into another assignment", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const task = f.tasks()[0];
+    f.store.resolvePath.mockResolvedValueOnce("/repo/commands.py");
+    f.manager.observe(task.sessionId, {
+      type: "tool.started",
+      callId: "link",
+      title: "Write",
+      preview: { kind: "write", path: `${task.scratchDir}/link/commands.py` },
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
+    expect(f.manager.run("lead")!.status).toBe("paused");
+  });
+
+  it("waits for scope verification before publishing a completed result", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const task = f.tasks()[0];
+    let resolve!: (path: string) => void;
+    f.store.resolvePath.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    f.manager.observe(task.sessionId, {
+      type: "tool.updated",
+      callId: "late",
+      title: "Write",
+      status: "completed",
+      preview: { kind: "write", path: "/outside.py" },
+    });
+    f.completions.get(task.sessionId)!({ status: "completed", text: "Done" });
+    expect(f.tasks()[0].status).toBe("running");
+    resolve("/outside.py");
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
+    await expect(f.call("review", { taskId: task.id })).rejects.toThrow(
+      "paused",
+    );
+  });
+
+  it("ignores failed write reports and discards late checks from cancelled attempts", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const task = f.tasks()[0];
+    const event = {
+      type: "tool.updated" as const,
+      callId: "outside",
+      title: "Write",
+      status: "failed",
+      preview: { kind: "write" as const, path: "/outside.py" },
+    };
+    f.manager.observe(task.sessionId, event);
+    expect(f.store.resolvePath).not.toHaveBeenCalled();
+    let resolve!: (path: string) => void;
+    f.store.resolvePath.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    f.manager.observe(task.sessionId, { ...event, status: "running" });
+    f.completions.get(task.sessionId)!({
+      status: "completed",
+      text: "Old result awaiting its write check",
+    });
+    await f.call("cancel", { taskId: task.id });
+    await f.call("message", {
+      taskId: task.id,
+      text: "Try again within scope",
+    });
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    resolve("/outside.py");
+    await new Promise((done) => setTimeout(done, 0));
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.tasks()[0].status).toBe("running");
+    await f.manager.stopRun("lead");
+  });
+
   it("accepts Windows drive paths inside an extended canonical scope", async () => {
     const f = setup();
+    f.lead.cwd = "D:/Projects/repo-a";
     f.store.scopes.mockResolvedValueOnce(["//?/d:/projects/repo-a"]);
     await f.start();
     f.store.scopes.mockResolvedValueOnce(["//?/d:/projects/repo-a/src/a"]);
@@ -617,6 +820,7 @@ describe("local orchestration", () => {
     const f = setup();
     await f.start();
     await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
     await vi.waitFor(() =>
       expect(f.saved.get("lead")?.tasks[0].status).toBe("running"),
@@ -722,10 +926,14 @@ describe("local orchestration", () => {
     expect(shellPath("C:/Program Files/MonoCode/monocode.exe")).toBe(
       '"C:/Program Files/MonoCode/monocode.exe"',
     );
-    expect(shellPath("C:\\Tools\\monocode.exe")).toBe("C:\\Tools\\monocode.exe");
+    expect(shellPath("C:\\Tools\\monocode.exe")).toBe(
+      "C:\\Tools\\monocode.exe",
+    );
     // A backslash escapes in a POSIX shell, so bare would rewrite the path.
     expect(shellPath("/Users/a\\b/MonoCode")).toBe("'/Users/a\\b/MonoCode'");
-    expect(shellPath("/Users/it's/MonoCode")).toBe("'/Users/it'\\''s/MonoCode'");
+    expect(shellPath("/Users/it's/MonoCode")).toBe(
+      "'/Users/it'\\''s/MonoCode'",
+    );
   });
   it("treats an action named after an Object member as unknown", async () => {
     const f = setup();
@@ -775,11 +983,64 @@ describe("local orchestration", () => {
       requestId: 7,
       decision: "deny",
     });
-    expect(f.host.respondApproval).toHaveBeenCalledWith(
-      worker.id,
-      7,
-      "deny",
-    );
+    expect(f.host.respondApproval).toHaveBeenCalledWith(worker.id, 7, "deny");
+  });
+  it("returns from wait immediately when a worker already needs input", async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const worker = f.sessions.find(
+      (session) => session.id === f.tasks()[0].sessionId,
+    )!;
+    worker.blocks = [
+      {
+        id: "ask",
+        role: "approval",
+        text: "Run the check",
+        approval: { requestId: 7 },
+      },
+    ];
+
+    const waiting = f.call("wait", { timeoutSeconds: 20 }) as Promise<{
+      tasks: Array<{ needsInput?: { kind: string; requestId: number } }>;
+    }>;
+    expect(vi.getTimerCount()).toBe(0);
+    expect((await waiting).tasks[0].needsInput).toMatchObject({
+      kind: "approval",
+      requestId: 7,
+    });
+  });
+  it("wakes an active wait as soon as a worker needs input", async () => {
+    vi.useFakeTimers();
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const worker = f.sessions.find(
+      (session) => session.id === f.tasks()[0].sessionId,
+    )!;
+
+    const waiting = f.call("wait", { timeoutSeconds: 20 }) as Promise<{
+      tasks: Array<{ needsInput?: { kind: string; requestId: number } }>;
+    }>;
+    expect(vi.getTimerCount()).toBe(1);
+    worker.blocks = [
+      {
+        id: "ask",
+        role: "approval",
+        text: "Run the check",
+        approval: { requestId: 8 },
+      },
+    ];
+    f.manager.sync();
+
+    expect((await waiting).tasks[0].needsInput).toMatchObject({
+      kind: "approval",
+      requestId: 8,
+    });
+    expect(vi.getTimerCount()).toBe(0);
   });
   it("validates the lead's answer against the agent's own question", async () => {
     const f = setup();
@@ -809,7 +1070,11 @@ describe("local orchestration", () => {
     await expect(
       f.call("answer", { taskId, requestId: 9, answers: { nope: ["unit"] } }),
     ).rejects.toThrow("Unknown question");
-    await f.call("answer", { taskId, requestId: 9, answers: { check: ["unit"] } });
+    await f.call("answer", {
+      taskId,
+      requestId: 9,
+      answers: { check: ["unit"] },
+    });
     expect(f.host.answerQuestion).toHaveBeenCalledWith(worker.id, 9, {
       kind: "answered",
       answers: { check: ["unit"] },
@@ -831,11 +1096,13 @@ describe("local orchestration", () => {
       text: "",
       error: "Provider crashed",
     });
-    await vi.waitFor(() => expect(f.manager.run("lead")!.status).toBe("paused"));
     await vi.waitFor(() =>
-      expect(
-        f.tasks().find((task) => task.title === "Types")!.status,
-      ).toBe("cancelled"),
+      expect(f.manager.run("lead")!.status).toBe("paused"),
+    );
+    await vi.waitFor(() =>
+      expect(f.tasks().find((task) => task.title === "Types")!.status).toBe(
+        "failed",
+      ),
     );
     expect(f.host.stop).toHaveBeenCalledWith(running.sessionId);
     // Queued work is untouched, so resuming picks it up intact.
@@ -847,6 +1114,7 @@ describe("local orchestration", () => {
     const f = setup();
     await f.start();
     await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
     const task = f.tasks()[0];
     await f.call("steer", { taskId: task.id, text: "Use the existing helper" });

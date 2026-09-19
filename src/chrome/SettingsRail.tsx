@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Bot,
   Inbox,
+  FolderTree,
   Keyboard,
   MessageSquare,
   Palette,
@@ -24,6 +25,7 @@ const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   providers: Bot,
   skills: Sparkles,
   inbox: Inbox,
+  worktrees: FolderTree,
   archive: Archive,
 };
 
@@ -42,11 +44,11 @@ export function SettingsNav({ section, onSelect, onClose }: Props) {
       <div
         ref={lockOverscroll}
         aria-label="Settings"
-        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-none px-2 pb-2"
+        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-none px-2 py-3"
       >
         {settingsSectionsByGroup().map((group) => (
           <div key={group.id} className="flex flex-col gap-px">
-            <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-content/35">
+            <div className="px-2 pb-1 text-xs font-semibold text-content/35">
               {group.label}
             </div>
             {group.sections.map((item) => (
@@ -86,7 +88,7 @@ function NavRow({
       aria-current={active ? "true" : undefined}
       className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${
         active
-          ? "bg-content/10 text-content"
+          ? "bg-selection text-content"
           : "text-content/50 hover:bg-content/5 hover:text-content"
       }`}
     >

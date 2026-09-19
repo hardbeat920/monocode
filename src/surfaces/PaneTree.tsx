@@ -8,7 +8,13 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { setGrabbing, suppressTextSelection } from "../lib/drag";
-import { paneDropFromPoint, useExternalPaneDrop } from "../lib/paneDrop";
+import {
+  paneDropFromPoint,
+  setExternalTitleTabDrop,
+  titleTabDropFromPoint,
+  useExternalPaneDrop,
+  type TitleTabDropPosition,
+} from "../lib/paneDrop";
 import type { ApprovalDecision, UserQuestionReply } from "../lib/harness";
 import type { EditorNavigationTarget } from "../lib/search";
 import {
@@ -32,11 +38,13 @@ import {
   type PlanBuildTarget,
   type RuntimeMode,
   type Session,
+  type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../lib/session";
 import { FilePane } from "./FilePane";
 import { SessionPane } from "./SessionPane";
 import type { SessionFolderTarget } from "../lib/sessionFolders";
+import type { Worktree } from "../lib/worktrees";
 
 type Shared = {
   visible: boolean;
@@ -47,6 +55,7 @@ type Shared = {
   focusedId: string;
   addToChatSessionId?: string;
   composerFocused: boolean;
+  composerFocusToken?: number;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (paneId: string) => void;
@@ -60,6 +69,14 @@ type Shared = {
   onRatio: (splitId: string, index: number, ratio: number) => void;
   onCwdChange: (sessionId: string, cwd: string) => void;
   onBranchChange: (sessionId: string) => void;
+  onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
+  onWorkspaceModeChange: (
+    sessionId: string,
+    mode: WorkspaceMode,
+    base?: string,
+  ) => void;
+  onWorktreeBaseChange: (sessionId: string, base: string) => void;
+  onManageWorktrees?: () => void;
   onModelChange: (sessionId: string, harness: HarnessId, model: string) => void;
   onModelSettingsChange: (
     sessionId: string,
@@ -91,7 +108,7 @@ type Shared = {
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
-  onOpenLinkedWorkItem?: (item: LinkedWorkItem) => void;
+  onOpenLinkedWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => Promise<boolean>;
   onDeleteSession?: (sessionId: string) => Promise<boolean>;
   onApproval: (
@@ -125,6 +142,11 @@ type Shared = {
   ) => void;
   onHandoff?: (sessionId: string, target: ModelTarget, turn: Block[]) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
+  onDetachPane: (
+    paneId: string,
+    targetTabId: string,
+    position: TitleTabDropPosition,
+  ) => void;
   onNewTerminal: (sessionId: string) => void;
   onTerminalMetaChange?: (fileId: string, patch: TerminalMetaPatch) => void;
 };
@@ -149,6 +171,7 @@ function PaneTreeComponent({
   focusedId,
   addToChatSessionId,
   composerFocused,
+  composerFocusToken,
   recents,
   hideProjectPicker,
   onFocus,
@@ -162,6 +185,10 @@ function PaneTreeComponent({
   onRatio,
   onCwdChange,
   onBranchChange,
+  onWorktreeChange,
+  onWorkspaceModeChange,
+  onWorktreeBaseChange,
+  onManageWorktrees,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
@@ -193,6 +220,7 @@ function PaneTreeComponent({
   onSecondOpinion,
   onHandoff,
   onMovePane,
+  onDetachPane,
   onNewTerminal,
   onTerminalMetaChange,
 }: Props) {
@@ -205,6 +233,8 @@ function PaneTreeComponent({
   const drop = paneDrag ?? externalDrop;
   const onMovePaneRef = useRef(onMovePane);
   onMovePaneRef.current = onMovePane;
+  const onDetachPaneRef = useRef(onDetachPane);
+  onDetachPaneRef.current = onDetachPane;
   const onFocusRef = useRef(onFocus);
   onFocusRef.current = onFocus;
 
@@ -261,6 +291,12 @@ function PaneTreeComponent({
           onFocusRef.current(fromId);
           setPaneDrag({ fromId, overId: null, edge: "left" });
         }
+        const titleTab = titleTabDropFromPoint(ev.clientX, ev.clientY);
+        setExternalTitleTabDrop(titleTab ? { fromId, ...titleTab } : null);
+        if (titleTab) {
+          setPaneDrag({ fromId, overId: null, edge: "left" });
+          return;
+        }
         const over = paneDropFromPoint(ev.clientX, ev.clientY);
         if (!over || over.id === fromId) {
           setPaneDrag({
@@ -288,12 +324,22 @@ function PaneTreeComponent({
         restoreSelection();
         setGrabbing(false);
         setPaneDrag(null);
+        setExternalTitleTabDrop(null);
         try {
           handle.releasePointerCapture(pointerId);
         } catch {
           /* already released */
         }
         if (!active || !commit) return;
+        const titleTab = titleTabDropFromPoint(lastX, lastY);
+        if (titleTab) {
+          onDetachPaneRef.current(
+            fromId,
+            titleTab.targetTabId,
+            titleTab.position,
+          );
+          return;
+        }
         const over = paneDropFromPoint(lastX, lastY);
         if (over && over.id !== fromId) {
           onMovePaneRef.current(fromId, over.id, over.edge);
@@ -375,12 +421,17 @@ function PaneTreeComponent({
                 addToChatTarget={addToChatSessionId === session.id}
                 inSplit={inSplit}
                 composerFocused={composerFocused}
+                composerFocusToken={composerFocusToken}
                 recents={recents}
                 hideProjectPicker={hideProjectPicker}
                 onFocus={onFocus}
                 onClose={onClose}
                 onCwdChange={onCwdChange}
                 onBranchChange={onBranchChange}
+                onWorktreeChange={onWorktreeChange}
+                onWorkspaceModeChange={onWorkspaceModeChange}
+                onWorktreeBaseChange={onWorktreeBaseChange}
+                onManageWorktrees={onManageWorktrees}
                 onModelChange={onModelChange}
                 onModelSettingsChange={onModelSettingsChange}
                 onRuntimeModeChange={onRuntimeModeChange}
@@ -496,9 +547,7 @@ function Sash({
       aria-valuemax={100}
       aria-valuenow={Math.round(boundary * 100)}
       className={
-        row
-          ? "absolute z-10 w-px bg-content/10"
-          : "absolute z-10 h-px bg-content/10"
+        row ? "absolute z-10 w-px bg-stroke" : "absolute z-10 h-px bg-stroke"
       }
       style={
         row

@@ -14,7 +14,15 @@ import {
 } from "./models";
 
 export type HarnessId =
-  "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi" | "omp" | "fx";
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "grok"
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "fx"
+  | "hermes";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
@@ -25,6 +33,7 @@ export const HARNESSES: HarnessId[] = [
   "pi",
   "omp",
   "fx",
+  "hermes",
 ];
 
 export type BlockRole =
@@ -166,6 +175,8 @@ export type AgentRunMeta = {
 export type AttachmentKind = "image" | "audio" | "file";
 
 export type Attachment = {
+  /** Live transcript only; deliberately excluded from persisted attachments. */
+  copyFromPath?: boolean;
   id: string;
   name: string;
   mimeType: string;
@@ -252,6 +263,11 @@ export type Block = {
   noteCard?: NoteCardMeta;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
   interjection?: InterjectionMeta;
+  /**
+   * A system row the reader must not miss — an error or an interruption —
+   * rather than turn chrome like a status ping. Never folds into the trail.
+   */
+  notice?: "error" | "interrupt";
 };
 
 export type RuntimeMode =
@@ -288,6 +304,8 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
   "full-access": "Allow commands and edits without prompts.",
 };
 
+export type WorkspaceMode = "current" | "worktree";
+
 export type Session = {
   /** Internal worker: displayed in its lead's panel rather than a workspace tab. */
   orchestrationLeadId?: string;
@@ -312,6 +330,8 @@ export type Session = {
   editingQueuedMessageId?: string;
   /** Provider-side conversation id (Cursor ACP session id). */
   providerSessionId?: string;
+  /** Named local credential profile used by Claude or Codex. */
+  providerAccountId?: string;
   /** Context-window level reported by the harness. Absent until it reports. */
   context?: ContextUsage;
   /**
@@ -319,13 +339,18 @@ export type Session = {
    * Handoff runs on the next send, not on picker change.
    */
   pendingSwitch?: PendingHarnessSwitch;
-  /**
-   * Last composer-pinned branch. Unused after session worktrees were removed;
-   * kept so older session records still load.
-   */
+  /** Last known branch in the session's working copy. */
   branch?: string;
-  /** Extra git worktree from the old session-branch feature. Unused. */
+  /** Selected working copy; cwd remains the project identity. */
   worktreeCwd?: string;
+  /** Blank-composer choice; consumed when the first turn starts. */
+  workspaceMode?: WorkspaceMode;
+  /** Base ref for a worktree that will be created on first send. */
+  worktreeBase?: string;
+  /** Internal guard while the first turn creates its selected worktree. */
+  worktreePreparing?: boolean;
+  /** Select a working copy before continuing after the previous one was deleted. */
+  worktreeRemoved?: boolean;
   /** One-shot composer text when opening a session from Inbox. */
   composerSeed?: string;
   /** Inbox issue/PR chip shown above the composer. In-memory, one-shot. */
@@ -350,6 +375,7 @@ export type PendingHarnessSwitch = {
   fromModel: string;
   fromSettings: Record<string, string>;
   fromProviderSessionId?: string;
+  fromProviderAccountId?: string;
 };
 
 export const HARNESS_LABEL: Record<HarnessId, string> = {
@@ -361,6 +387,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   pi: "pi",
   omp: "omp",
   fx: "fx",
+  hermes: "hermes",
 };
 
 export const HARNESS_TITLE: Record<HarnessId, string> = {
@@ -372,6 +399,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   pi: "Pi",
   omp: "omp",
   fx: "fx",
+  hermes: "Hermes Agent",
 };
 
 /** fx ACP rejects attachment prompt blocks. */
@@ -454,7 +482,10 @@ export function hasPendingApproval(blocks: Block[]): boolean {
 }
 
 export function sessionNeedsInput(session: Session): boolean {
-  return hasPendingApproval(session.blocks) || session.pendingQuestion != null;
+  return (
+    !session.worktreeRemoved &&
+    (hasPendingApproval(session.blocks) || session.pendingQuestion != null)
+  );
 }
 
 /** Title without the harness prefix stored for the tab strip. */

@@ -11,6 +11,7 @@ import {
   mapUsageWindow,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseOpencodeGoUsage,
   parseResetTimestamp,
   RATE_LIMIT_MIN_REFETCH_MS,
   rateLimitWindowTooltip,
@@ -170,6 +171,57 @@ describe("parseCodexRateLimits", () => {
     expect(limits.weekly?.windowMinutes).toBe(10_080);
   });
 
+  it("maps banked reset credits and their expiry", () => {
+    const limits = parseCodexRateLimits({
+      rateLimits: {
+        primary: { usedPercent: 52, windowDurationMins: 300 },
+      },
+      rateLimitResetCredits: {
+        availableCount: 2,
+        credits: [
+          {
+            id: "reset-1",
+            resetType: "codexRateLimits",
+            status: "available",
+            grantedAt: 1_788_768_000,
+            expiresAt: 1_791_360_000,
+            title: "Referral reward",
+            description: "One Codex rate-limit reset",
+          },
+        ],
+      },
+    });
+
+    expect(limits.resetCredits).toEqual({
+      availableCount: 2,
+      credits: [
+        {
+          id: "reset-1",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: 1_788_768_000_000,
+          expiresAt: 1_791_360_000_000,
+          title: "Referral reward",
+          description: "One Codex rate-limit reset",
+        },
+      ],
+    });
+  });
+
+  it("keeps an aggregate banked reset count without detail rows", () => {
+    const limits = parseCodexRateLimits({
+      rateLimits: {
+        primary: { usedPercent: 12, windowDurationMins: 300 },
+      },
+      rate_limit_reset_credits: {
+        available_count: "3",
+        credits: null,
+      },
+    });
+
+    expect(limits.resetCredits).toEqual({ availableCount: 3, credits: null });
+  });
+
   it("falls back to primary=session when durations are unknown", () => {
     const limits = parseCodexRateLimits({
       primary: { usedPercent: 10, resetsAt: 100 },
@@ -177,6 +229,45 @@ describe("parseCodexRateLimits", () => {
     });
     expect(limits.session?.usedPercent).toBe(10);
     expect(limits.weekly?.usedPercent).toBe(20);
+  });
+});
+
+describe("parseOpencodeGoUsage", () => {
+  it("maps rolling/weekly/monthly windows with reset times", () => {
+    const limits = parseOpencodeGoUsage({
+      usage: {
+        rolling: {
+          status: "ok",
+          percent: 42,
+          resetsAt: "2026-09-16T16:27:38.287Z",
+        },
+        weekly: { status: "ok", percent: 30, resetsAt: "2026-09-23T00:00:00Z" },
+        monthly: { status: "ok", percent: 12, resetsAt: "2026-10-16T00:00:00Z" },
+      },
+    });
+    expect(limits.provider).toBe("opencode");
+    expect(limits.session?.usedPercent).toBe(42);
+    expect(limits.session?.windowMinutes).toBe(300);
+    expect(limits.weekly?.usedPercent).toBe(30);
+    expect(limits.weekly?.windowMinutes).toBe(10_080);
+    expect(limits.monthly?.usedPercent).toBe(12);
+    expect(limits.monthly?.windowMinutes).toBe(43_200);
+    expect(limits.session?.resetsAt).toBe(
+      Date.parse("2026-09-16T16:27:38.287Z"),
+    );
+  });
+
+  it("drops non-ok windows instead of claiming usage", () => {
+    const limits = parseOpencodeGoUsage({
+      usage: {
+        rolling: { status: "ok", percent: 5, resetsAt: null },
+        weekly: { status: "expired", percent: 50, resetsAt: null },
+        monthly: { percent: 50, resetsAt: null },
+      },
+    });
+    expect(limits.session?.usedPercent).toBe(5);
+    expect(limits.weekly).toBeNull();
+    expect(limits.monthly).toBeNull();
   });
 });
 
@@ -266,9 +357,9 @@ describe("shouldFetchRateLimits", () => {
       error: "Codex CLI not found",
     };
     expect(isRateLimitSnapshotStale(disconnected, now)).toBe(false);
-    expect(
-      shouldFetchProvider(disconnected, { visible: true, now }),
-    ).toBe(false);
+    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
+      false,
+    );
     expect(
       shouldFetchRateLimits({
         visible: true,
@@ -286,9 +377,9 @@ describe("shouldFetchRateLimits", () => {
       updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
       error: "Claude not signed in",
     };
-    expect(
-      shouldFetchProvider(disconnected, { visible: true, now }),
-    ).toBe(false);
+    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
+      false,
+    );
     expect(
       shouldFetchRateLimits({
         visible: true,

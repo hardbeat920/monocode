@@ -10,7 +10,7 @@ use std::time::Duration;
 #[cfg(not(windows))]
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::dirs_home;
@@ -22,6 +22,15 @@ const STDERR_EVENT: &str = "harness-stderr";
 const EXIT_EVENT: &str = "harness-exit";
 const SSE_EVENT: &str = "harness-sse";
 const SSE_END_EVENT: &str = "harness-sse-end";
+
+const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessAccount {
+    provider: String,
+    id: String,
+}
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -66,8 +75,10 @@ pub struct CursorBinary {
 }
 
 struct LiveChild {
+    cwd: PathBuf,
     stdin: Mutex<ChildStdin>,
     pid: u32,
+    account: Option<HarnessAccount>,
 }
 
 struct LiveSse {
@@ -87,6 +98,13 @@ pub struct HarnessHost {
 }
 
 impl HarnessHost {
+    pub(crate) fn has_working_dir(&self, path: &Path) -> bool {
+        self.lock_inner()
+            .children
+            .values()
+            .any(|child| crate::worktrees::contains_working_dir(path, &child.cwd))
+    }
+
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HarnessInner {
@@ -157,6 +175,37 @@ impl HarnessHost {
             return None;
         }
         inner.children.remove(session_id)
+    }
+
+    fn kill_account(&self, provider: &str, account_id: &str) {
+        let children: Vec<(String, Arc<LiveChild>)> = {
+            let mut inner = self.lock_inner();
+            let session_ids: Vec<String> = inner
+                .children
+                .iter()
+                .filter_map(|(session_id, live)| {
+                    let account = live.account.as_ref()?;
+                    (account.provider == provider && account.id == account_id)
+                        .then(|| session_id.clone())
+                })
+                .collect();
+            session_ids
+                .into_iter()
+                .filter_map(|session_id| {
+                    *inner.epochs.entry(session_id.clone()).or_insert(0) += 1;
+                    inner
+                        .children
+                        .remove(&session_id)
+                        .map(|child| (session_id, child))
+                })
+                .collect()
+        };
+        for (session_id, _) in &children {
+            self.stop_sse(session_id);
+        }
+        let pids: Vec<u32> = children.iter().map(|(_, child)| child.pid).collect();
+        drop(children);
+        terminate_all(&pids);
     }
 
     pub(crate) fn kill_all(&self) {
@@ -306,6 +355,19 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Nous Research Hermes Agent (`hermes`).
+#[tauri::command(async)]
+pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
+    resolve_hermes()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Hermes Agent CLI not found. Install it from https://hermes-agent.nousresearch.com, run `hermes model`, then retry."
+                .into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -326,13 +388,15 @@ pub fn harness_spawn(
     command: String,
     args: Vec<String>,
     cwd: String,
+    account: Option<HarnessAccount>,
 ) -> Result<u32, String> {
+    let workdir = expand_home(&cwd);
+    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
     if let Some(prev) = prev {
         terminate(prev.pid);
     }
 
-    let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
         return Err(format!(
             "Working directory does not exist: {}",
@@ -347,6 +411,7 @@ pub fn harness_spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
+    apply_provider_account(&app, &mut cmd, account.as_ref())?;
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
@@ -368,8 +433,10 @@ pub fn harness_spawn(
         .ok_or_else(|| "Failed to open harness stderr".to_string())?;
 
     let live = Arc::new(LiveChild {
+        cwd: workdir.clone(),
         stdin: Mutex::new(stdin),
         pid,
+        account,
     });
     if let Some(rejected) = host.install_spawn(session_id.clone(), epoch, kill_all, live) {
         // A kill, or a newer spawn, won the race while this one was forking.
@@ -434,6 +501,123 @@ pub fn harness_spawn(
     });
 
     Ok(pid)
+}
+
+pub(crate) fn provider_account_dir(
+    app: &AppHandle,
+    provider: &str,
+    account_id: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(account_id) = account_id.filter(|id| *id != DEFAULT_PROVIDER_ACCOUNT_ID) else {
+        return Ok(None);
+    };
+    let dir = provider_account_path(app, provider, account_id)?;
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        format!(
+            "Could not create the {provider} account directory {}: {error}",
+            dir.display()
+        )
+    })?;
+    Ok(Some(dir))
+}
+
+fn provider_account_path(
+    app: &AppHandle,
+    provider: &str,
+    account_id: &str,
+) -> Result<PathBuf, String> {
+    if provider != "claude" && provider != "codex" {
+        return Err("Provider account profiles are not supported for this provider".into());
+    }
+    if account_id == DEFAULT_PROVIDER_ACCOUNT_ID {
+        return Err("The default provider account cannot be removed".into());
+    }
+    if account_id.is_empty()
+        || account_id.len() > 80
+        || !account_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Invalid provider account id".into());
+    }
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("provider-accounts")
+        .join(provider)
+        .join(account_id))
+}
+
+#[tauri::command(async)]
+pub fn provider_account_remove(
+    app: AppHandle,
+    host: State<'_, HarnessHost>,
+    provider: String,
+    account_id: String,
+) -> Result<(), String> {
+    let dir = provider_account_path(&app, &provider, &account_id)?;
+    host.kill_account(&provider, &account_id);
+
+    #[cfg(target_os = "macos")]
+    if provider == "claude" {
+        crate::rate_limits::delete_claude_keychain_credentials(&dir)?;
+    }
+
+    let metadata = match std::fs::symlink_metadata(&dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Could not inspect the {provider} account directory {}: {error}",
+                dir.display()
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        std::fs::remove_file(&dir)
+    } else {
+        std::fs::remove_dir_all(&dir)
+    }
+    .map_err(|error| {
+        format!(
+            "Could not remove the {provider} account directory {}: {error}",
+            dir.display()
+        )
+    })
+}
+
+fn apply_provider_account(
+    app: &AppHandle,
+    cmd: &mut Command,
+    account: Option<&HarnessAccount>,
+) -> Result<(), String> {
+    let Some(account) = account else {
+        return Ok(());
+    };
+    let Some(dir) = provider_account_dir(app, &account.provider, Some(&account.id))? else {
+        return Ok(());
+    };
+    match account.provider.as_str() {
+        "claude" => {
+            // Claude scopes both its ordinary config and its macOS Keychain
+            // credential to these exact strings. Setting both keeps profiles
+            // isolated on every supported platform.
+            cmd.env("CLAUDE_CONFIG_DIR", &dir)
+                .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", &dir)
+                .env_remove("ANTHROPIC_API_KEY")
+                .env_remove("ANTHROPIC_AUTH_TOKEN")
+                .env_remove("CLAUDE_CODE_OAUTH_TOKEN");
+        }
+        "codex" => {
+            cmd.env("CODEX_HOME", &dir)
+                .env_remove("OPENAI_API_KEY")
+                .env_remove("CODEX_API_KEY")
+                .env_remove("CODEX_ACCESS_TOKEN");
+        }
+        _ => unreachable!("provider_account_dir validates the provider"),
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -998,6 +1182,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "grok"
             | "omp"
             | "fx"
+            | "hermes"
             | "pi"
             | "worker-server"
             | "app-server"
@@ -1413,6 +1598,38 @@ fn resolve_grok() -> Option<PathBuf> {
     }
 
     first_binary_matching(candidates, is_grok_agent)
+}
+
+fn resolve_hermes() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        // Official per-user installer, then its underlying virtualenv in case
+        // the launcher symlink has not been added to PATH yet.
+        candidates.push(home.join(".local/bin/hermes"));
+        candidates.push(home.join(".hermes/hermes-agent/venv/bin/hermes"));
+        candidates.push(home.join(".hermes/hermes-agent/.venv/bin/hermes"));
+        candidates.push(home.join(".npm-global/bin/hermes"));
+        candidates.push(home.join(".cargo/bin/hermes"));
+        candidates.push(home.join("n/bin/hermes"));
+    }
+    #[cfg(windows)]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        // Native Windows installer launchers, then the underlying virtualenv.
+        candidates.push(local_app_data.join("hermes/bin/hermes"));
+        candidates.push(local_app_data.join("hermes/hermes-agent/venv/Scripts/hermes"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/hermes"));
+    candidates.push(PathBuf::from("/usr/local/bin/hermes"));
+    candidates.push(PathBuf::from("/usr/bin/hermes"));
+    candidates.push(PathBuf::from("/snap/bin/hermes"));
+    if let Some(from_shell) = which_via_login_shell("hermes") {
+        candidates.push(from_shell);
+    }
+
+    first_binary(candidates)
 }
 
 fn is_pi_coding_agent(path: &Path) -> bool {
@@ -2038,8 +2255,10 @@ mod tests {
         let stdin = child.stdin.take().expect("test child stdin");
         (
             Arc::new(LiveChild {
+                cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
                 pid,
+                account: None,
             }),
             child,
         )
@@ -2167,8 +2386,10 @@ mod tests {
         let stdin = child.stdin.take().expect("grouped child stdin");
         (
             Arc::new(LiveChild {
+                cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
                 pid,
+                account: None,
             }),
             child,
         )
@@ -2626,6 +2847,7 @@ mod reap_logic_tests {
             "/opt/homebrew/bin/node /Users/n/.local/share/cursor-agent/versions/x/index.js worker-server"
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
+        assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(

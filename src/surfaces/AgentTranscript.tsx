@@ -42,12 +42,17 @@ import { Popover } from "../chrome/Popover";
 import { ProjectMascot } from "../chrome/ProjectMascot";
 import type { ApprovalDecision } from "../lib/harness";
 import {
+  isHarnessAuthError,
+  supportsHarnessLogin,
+} from "../lib/harness/authSupport";
+import {
   isEditTool,
   isReadTool,
   isSearchTool,
   stubFilePreview,
 } from "../lib/harness/preview";
-import { copyText } from "../lib/clipboard";
+import { copyMessage } from "../lib/clipboard";
+import type { Attachment } from "../lib/session";
 import { visibleUserPrompt } from "../lib/orchestration";
 import { playCue } from "../lib/sounds";
 import { legacyTaskListFromText } from "../lib/taskList";
@@ -61,6 +66,7 @@ import {
   type AgentStep,
   type Block,
   type HarnessId,
+  type InterjectionMeta,
   type ModelTarget,
   type PlanBuildTarget,
   type ToolPreview,
@@ -88,6 +94,7 @@ import {
   groupTurns,
   initialThinkingIndex,
   isIncompleteTool,
+  isSubagentBlock,
   isThinkingBlock,
   lastActivityIndex,
   isProseBlock,
@@ -123,8 +130,8 @@ type Props = {
   pendingQuestion?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
-  onSaveNote?: (text: string) => void;
-  onSaveSelectionNote?: (text: string) => void;
+  onSaveNote?: (text: string) => void | Promise<void>;
+  onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -144,7 +151,7 @@ type Props = {
 };
 
 function AgentTranscriptComponent({
-  blocks,
+  blocks: sourceBlocks,
   busy,
   cwd,
   harness,
@@ -168,6 +175,20 @@ function AgentTranscriptComponent({
   visible = true,
   managed = false,
 }: Props) {
+  const blocks = useMemo(() => {
+    if (!harness || !supportsHarnessLogin(harness)) return sourceBlocks;
+    const visibleBlocks = sourceBlocks.filter(
+      (block) =>
+        !(
+          block.role === "system" &&
+          block.notice === "error" &&
+          isHarnessAuthError(block.text)
+        ),
+    );
+    return visibleBlocks.length === sourceBlocks.length
+      ? sourceBlocks
+      : visibleBlocks;
+  }, [harness, sourceBlocks]);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const scroller = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -399,6 +420,7 @@ function AgentTranscriptComponent({
           // of the live work and append them after all of the lead's output.
           const items = groupTurnItems(
             turn.filter((block) => !block.orchestration),
+            { settled },
           );
           // Earlier activity groups have already been followed by prose or
           // more work. Only the last one can still be the live group.
@@ -441,7 +463,13 @@ function AgentTranscriptComponent({
             <LiveFoldTitle
               startedAt={startedAt}
               paused={waitingForApproval}
-              waitingLabel={pendingQuestion ? "Waiting for answers" : undefined}
+              waitingLabel={
+                managed && waitingForApproval
+                  ? "Waiting for orchestrator"
+                  : pendingQuestion
+                    ? "Waiting for answers"
+                    : undefined
+              }
               modelName={turnModelName}
             />
           ) : durationMs != null ? (
@@ -507,6 +535,7 @@ function AgentTranscriptComponent({
                     (itemIndex === foldLineAt && showFoldLine))
                 }
                 onApproval={onApproval}
+                onSaveNote={onSaveNote}
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
@@ -572,6 +601,14 @@ function AgentTranscriptComponent({
                             className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
                               offset === foldWork.length - 1
                                 ? "zen-fold-tail"
+                                : ""
+                            }${
+                              // Prose the trail holds is the agent talking
+                              // while it works; the marker lets it read as
+                              // process, not result.
+                              entry.type === "block" &&
+                              isProseBlock(entry.block)
+                                ? " zen-fold-prose"
                                 : ""
                             }`}
                           >
@@ -721,7 +758,7 @@ function TurnDuration({
   harness?: HarnessId;
   completedAt?: number;
   copyText?: string;
-  onSaveNote?: (text: string) => void;
+  onSaveNote?: (text: string) => void | Promise<void>;
   fromHarness?: HarnessId;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
@@ -887,41 +924,68 @@ function formatClockTime(epochMs: number): string {
   });
 }
 
-function CopyTurnButton({ text }: { text: string }) {
+function CopyTurnButton({
+  text,
+  attachments,
+  label = "Copy response",
+}: {
+  text: string;
+  attachments?: Attachment[];
+  label?: string;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
     setCopied(false);
+    setError(null);
     return () => {
       if (timer.current != null) window.clearTimeout(timer.current);
     };
-  }, [text]);
+  }, [text, attachments]);
 
   return (
-    <button
-      type="button"
-      title={copied ? "Copied" : "Copy response"}
-      aria-label={copied ? "Copied" : "Copy response"}
-      className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
-      onClick={() => {
-        playCue("copy");
-        void copyText(text).then(
-          () => {
-            setCopied(true);
-            if (timer.current != null) window.clearTimeout(timer.current);
-            timer.current = window.setTimeout(() => setCopied(false), 2000);
-          },
-          () => {},
-        );
-      }}
-    >
-      {copied ? (
-        <Check className="size-3.5" strokeWidth={1.75} />
-      ) : (
-        <Copy className="size-3.5" strokeWidth={1.75} />
+    <>
+      <button
+        type="button"
+        disabled={pending}
+        title={copied ? "Copied" : label}
+        aria-label={copied ? "Copied" : label}
+        className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
+        onClick={(event) => {
+          event.stopPropagation();
+          setError(null);
+          setCopied(false);
+          setPending(true);
+          playCue("copy");
+          void copyMessage(text, attachments).then(
+            () => {
+              setPending(false);
+              setCopied(true);
+              if (timer.current != null) window.clearTimeout(timer.current);
+              timer.current = window.setTimeout(() => setCopied(false), 2000);
+            },
+            (error: unknown) => {
+              setPending(false);
+              setError(error instanceof Error ? error.message : String(error));
+            },
+          );
+        }}
+      >
+        {copied ? (
+          <Check className="size-3.5" strokeWidth={1.75} />
+        ) : (
+          <Copy className="size-3.5" strokeWidth={1.75} />
+        )}
+      </button>
+      {error && (
+        <span role="alert" className="max-w-xs text-xs text-content/70">
+          Copy failed. {error}
+        </span>
       )}
-    </button>
+    </>
   );
 }
 
@@ -930,38 +994,58 @@ function SaveNoteButton({
   onSave,
 }: {
   text: string;
-  onSave: (text: string) => void;
+  onSave: (text: string) => void | Promise<void>;
 }) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
     setSaved(false);
+    setError(null);
     return () => {
       if (timer.current != null) window.clearTimeout(timer.current);
     };
   }, [text]);
 
   return (
-    <button
-      type="button"
-      title={saved ? "Saved to Notes" : "Save as note"}
-      aria-label={saved ? "Saved to Notes" : "Save as note"}
-      className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
-      onClick={() => {
-        playCue("copy");
-        onSave(text);
-        setSaved(true);
-        if (timer.current != null) window.clearTimeout(timer.current);
-        timer.current = window.setTimeout(() => setSaved(false), 2000);
-      }}
-    >
-      {saved ? (
-        <Check className="size-3.5" strokeWidth={1.75} />
-      ) : (
-        <FilePlusCorner className="size-3.5" strokeWidth={1.75} />
+    <>
+      <button
+        type="button"
+        disabled={pending}
+        title={saved ? "Saved to Notes" : "Save as note"}
+        aria-label={saved ? "Saved to Notes" : "Save as note"}
+        className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
+        onClick={async () => {
+          setError(null);
+          setSaved(false);
+          setPending(true);
+          try {
+            await onSave(text);
+            playCue("copy");
+            setSaved(true);
+            if (timer.current != null) window.clearTimeout(timer.current);
+            timer.current = window.setTimeout(() => setSaved(false), 2000);
+          } catch (error) {
+            setError(error instanceof Error ? error.message : String(error));
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        {saved ? (
+          <Check className="size-3.5" strokeWidth={1.75} />
+        ) : (
+          <FilePlusCorner className="size-3.5" strokeWidth={1.75} />
+        )}
+      </button>
+      {error && (
+        <span role="alert" className="max-w-xs text-xs text-content/70">
+          Could not save note. {error}
+        </span>
       )}
-    </button>
+    </>
   );
 }
 
@@ -972,6 +1056,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   underLine = false,
   cwd,
   onApproval,
+  onSaveNote,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -988,6 +1073,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   underLine?: boolean;
   cwd?: string;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
+  onSaveNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -1003,6 +1089,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
         block={block}
         layout={layout}
         stickyIndex={stickyIndex}
+        cwd={cwd}
+        onSaveNote={onSaveNote}
       />
     );
   }
@@ -1114,10 +1202,14 @@ function UserMessageBlock({
   block,
   layout,
   stickyIndex,
+  cwd,
+  onSaveNote,
 }: {
   block: Block;
   layout: TranscriptLayout;
   stickyIndex: number;
+  cwd?: string;
+  onSaveNote?: (text: string) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -1182,58 +1274,96 @@ function UserMessageBlock({
   return (
     <div
       data-prompt-anchor={block.id}
-      className={
-        chat ? "flex justify-end pt-1.5 pr-4 pb-4 pl-14" : "p-1.5 pb-3"
-      }
+      className={`user-message-row ${
+        chat ? "flex flex-col items-end pt-1.5 pr-4 pb-5 pl-14" : "p-1.5 pb-4"
+      }`}
     >
       <div
-        className={`user-message-bubble min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
-          chat
-            ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
-            : "rounded-lg border border-content/10"
-        }`}
-        style={{ zIndex: stickyIndex }}
-        onClick={overflows ? toggle : undefined}
+        className={`user-message-hover-zone min-w-0 ${chat ? "flex w-fit max-w-full flex-col items-end" : "w-full"}`}
       >
-        {block.attachments?.length ? (
-          <div
-            className={`flex flex-wrap gap-1.5 ${text || card || note ? "mb-2" : ""}`}
-          >
-            {block.attachments.map((file) => (
-              <AttachmentChip key={file.id} attachment={file} />
-            ))}
+        <div
+          className={`user-message-bubble min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
+            chat
+              ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
+              : "rounded-lg border border-content/10"
+          }`}
+          style={{ zIndex: stickyIndex }}
+        >
+          {block.attachments?.length ? (
+            <div
+              className={`flex flex-wrap gap-1.5 ${text || card || note ? "mb-2" : ""}`}
+            >
+              {block.attachments.map((file) => (
+                <AttachmentChip key={file.id} attachment={file} />
+              ))}
+            </div>
+          ) : null}
+          {note ? (
+            <div className={text || card ? "mb-2" : ""}>
+              <NoteMiniCard card={note} embedded />
+            </div>
+          ) : null}
+          {card ? (
+            <div className={text ? "mb-1.5" : undefined}>
+              <SecondOpinionCard card={card} />
+            </div>
+          ) : null}
+          {messageLink ? (
+            <div
+              ref={(element) => {
+                textRef.current = element;
+              }}
+              className="user-message-with-link min-w-0 whitespace-pre-wrap break-words font-sans text-sm"
+              data-selectable-agent-response={block.id}
+            >
+              {messageLink.beforeText}
+              <UserLinkPreview link={messageLink.link} cwd={cwd} compact />
+              {messageLink.afterText}
+            </div>
+          ) : displayText ? (
+            <pre
+              data-selectable-agent-response={block.id}
+              ref={(element) => {
+                textRef.current = element;
+              }}
+              className={`min-w-0 whitespace-pre-wrap break-words font-sans text-sm ${expanded ? "" : "line-clamp-4"}`}
+            >
+              {displayText}
+            </pre>
+          ) : null}
+          {overflows ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              className="mt-1 rounded px-1 py-0.5 text-xs text-content/60 hover:bg-content/8 hover:text-content"
+              onClick={toggle}
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          ) : null}
+        </div>
+        {text || block.attachments?.length || block.startedAt != null ? (
+          <div className="user-message-actions flex items-center gap-1 px-3 pt-1">
+            {text || block.attachments?.length ? (
+              <CopyTurnButton
+                text={text}
+                attachments={block.attachments}
+                label="Copy message"
+              />
+            ) : null}
+            {text && onSaveNote ? (
+              <SaveNoteButton text={text} onSave={onSaveNote} />
+            ) : null}
+            {block.startedAt != null ? (
+              <time
+                dateTime={new Date(block.startedAt).toISOString()}
+                title={new Date(block.startedAt).toLocaleString()}
+                className="ml-1 font-sans text-xs text-content/40"
+              >
+                {formatClockTime(block.startedAt)}
+              </time>
+            ) : null}
           </div>
-        ) : null}
-        {note ? (
-          <div className={text || card ? "mb-2" : ""}>
-            <NoteMiniCard card={note} embedded />
-          </div>
-        ) : null}
-        {card ? (
-          <div className={text ? "mb-1.5" : undefined}>
-            <SecondOpinionCard card={card} />
-          </div>
-        ) : null}
-        {messageLink ? (
-          <div
-            ref={(element) => {
-              textRef.current = element;
-            }}
-            className="user-message-with-link min-w-0 whitespace-pre-wrap break-words font-sans text-sm"
-          >
-            {messageLink.beforeText}
-            <UserLinkPreview link={messageLink.link} />
-            {messageLink.afterText}
-          </div>
-        ) : displayText ? (
-          <pre
-            ref={(element) => {
-              textRef.current = element;
-            }}
-            className={`min-w-0 whitespace-pre-wrap break-words font-sans text-sm ${expanded ? "" : "line-clamp-4"}`}
-          >
-            {displayText}
-          </pre>
         ) : null}
       </div>
     </div>
@@ -1693,33 +1823,54 @@ function SubagentStack({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
-  // A run that died opens itself, so the provider's reason is not buried
-  // behind a face that looks like every other finished one. A click takes the
-  // row over from there and it stays where the reader puts it.
-  const [override, setOverride] = useState<Record<string, boolean>>({});
-  const isOpen = (block: Block) =>
-    override[block.id] ?? toolCallState(block) === "rejected";
-
   return (
     <div className="flex min-w-0 flex-col px-4">
       {blocks.map((block) => (
-        <SubagentPanel
+        <SubagentRow
           key={block.id}
           block={block}
           cwd={cwd}
           live={live}
-          open={isOpen(block)}
-          onToggle={() =>
-            setOverride((current) => ({
-              ...current,
-              [block.id]: !isOpen(block),
-            }))
-          }
           onOpenFile={onOpenFile}
           onOpenDiff={onOpenDiff}
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * One delegated run's row, stateful about being opened. A run that died opens
+ * itself, so the provider's reason is not buried behind a face that looks like
+ * every other finished one. A click takes the row over from there and it stays
+ * where the reader puts it. The same row serves inside a settled turn's trail,
+ * where the run sits as one step of the work it was spawned from.
+ */
+function SubagentRow({
+  block,
+  cwd,
+  live = false,
+  onOpenFile,
+  onOpenDiff,
+}: {
+  block: Block;
+  cwd?: string;
+  live?: boolean;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+}) {
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? toolCallState(block) === "rejected";
+  return (
+    <SubagentPanel
+      block={block}
+      cwd={cwd}
+      live={live}
+      open={open}
+      onToggle={() => setOverride(!open)}
+      onOpenFile={onOpenFile}
+      onOpenDiff={onOpenDiff}
+    />
   );
 }
 
@@ -1999,6 +2150,12 @@ function ActivityRow({
       />
     );
   }
+  if (block.interjection) {
+    return <ActivityInterjectionRow block={block} />;
+  }
+  if (block.role === "system") {
+    return <ActivityStatusRow block={block} />;
+  }
   if (isProseBlock(block)) {
     return (
       <ActivityNoteRow
@@ -2007,6 +2164,20 @@ function ActivityRow({
         bare
         expandable
         onOpenFile={onOpenFile}
+      />
+    );
+  }
+  // Only a settled turn routes a delegated run here; live turns pin the row
+  // outside the trail. Either way it is the same row, so it still opens onto
+  // the agent's own work.
+  if (isSubagentBlock(block)) {
+    return (
+      <SubagentRow
+        block={block}
+        cwd={cwd}
+        live={live}
+        onOpenFile={onOpenFile}
+        onOpenDiff={onOpenDiff}
       />
     );
   }
@@ -2020,6 +2191,82 @@ function ActivityRow({
       onOpenFile={onOpenFile}
       onOpenDiff={onOpenDiff}
     />
+  );
+}
+
+/** A status row folded into the trail: one muted line, nothing to open. */
+function ActivityStatusRow({ block }: { block: Block }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 py-1">
+      <span
+        title={block.text}
+        className="min-w-0 flex-1 truncate font-sans text-sm text-content/50"
+      >
+        {block.text.trim()}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * An interjection inside the work trail: one compact line naming where it came
+ * from and what it said. It opens on a click, so folding the work never costs
+ * you a note you wanted to read.
+ */
+function ActivityInterjectionRow({ block }: { block: Block }) {
+  const [open, setOpen] = useState(false);
+  const meta = block.interjection;
+  if (!meta) return null;
+  const chrome = interjectionChrome(meta);
+  const summary = proseSummary(block.text);
+  const label = (
+    <span className="min-w-0 flex-1 truncate font-sans text-sm">
+      <span className="text-content/55">{chrome.label}</span>
+      {chrome.severityText ? (
+        <span className={`text-[11px] ${chrome.severityClass}`}>
+          {" "}
+          {chrome.severityText}
+        </span>
+      ) : null}
+      {summary ? (
+        <span className="text-content/50 transition-colors duration-200 group-hover:text-content/75">
+          {" · "}
+          {summary}
+        </span>
+      ) : null}
+    </span>
+  );
+
+  if (!block.text.trim()) {
+    return (
+      <div
+        aria-label={`${chrome.label} note`}
+        className="flex min-w-0 items-center gap-1.5 py-1"
+      >
+        {label}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={
+          open ? `Hide the ${chrome.label} note` : `${chrome.label}: ${summary}`
+        }
+        onClick={() => setOpen((value) => !value)}
+        className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
+      >
+        {label}
+      </button>
+      {open ? (
+        <div className="min-w-0 pb-2">
+          <pre className={INTERJECTION_BODY}>{block.text}</pre>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -2648,20 +2895,20 @@ function ApprovalControls({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const approval = block.approval;
-  if (!approval || approval.decided) return null;
+  if (!approval || approval.decided || !onApproval) return null;
   return (
     <div className="mt-1.5 flex gap-2">
       <button
         type="button"
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
-        onClick={() => onApproval?.(approval.requestId, "allow")}
+        onClick={() => onApproval(approval.requestId, "allow")}
       >
         Allow
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
-        onClick={() => onApproval?.(approval.requestId, "deny")}
+        onClick={() => onApproval(approval.requestId, "deny")}
       >
         Deny
       </button>
@@ -2706,6 +2953,39 @@ function HandoffDivider({ block }: { block: Block }) {
   );
 }
 
+/** The label and severity chrome an interjection wears, wherever it sits. */
+function interjectionChrome(meta: InterjectionMeta): {
+  label: string;
+  severityText?: string;
+  severityClass: string;
+} {
+  const label =
+    meta.customType === "advisor"
+      ? "Advisor"
+      : meta.customType === "custom"
+        ? "Notice"
+        : meta.customType;
+  const severityText =
+    meta.severity === "blocker"
+      ? "Blocker"
+      : meta.severity === "concern"
+        ? "Concern"
+        : meta.severity === "nit"
+          ? "Nit"
+          : undefined;
+  const severityClass =
+    meta.severity === "blocker"
+      ? "text-red-400"
+      : meta.severity === "concern"
+        ? "text-amber-400"
+        : "text-content/55";
+  return { label, severityText, severityClass };
+}
+
+/** The advisory body under an interjection, wherever the note is surfaced. */
+const INTERJECTION_BODY =
+  "min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70";
+
 /** A mid-turn interjection, e.g. OMP advisor notes: a labeled boundary with
  * a collapsible advisory body below it. */
 function InterjectionDivider({ block }: { block: Block }) {
@@ -2732,26 +3012,7 @@ function InterjectionDivider({ block }: { block: Block }) {
 
   const meta = block.interjection;
   if (!meta) return null;
-  const label =
-    meta.customType === "advisor"
-      ? "Advisor"
-      : meta.customType === "custom"
-        ? "Notice"
-        : meta.customType;
-  const severityText =
-    meta.severity === "blocker"
-      ? "Blocker"
-      : meta.severity === "concern"
-        ? "Concern"
-        : meta.severity === "nit"
-          ? "Nit"
-          : undefined;
-  const severityClass =
-    meta.severity === "blocker"
-      ? "text-red-400"
-      : meta.severity === "concern"
-        ? "text-amber-400"
-        : "text-content/55";
+  const { label, severityText, severityClass } = interjectionChrome(meta);
   return (
     <div className="px-4 py-4">
       <div className="flex items-center gap-3">
@@ -2774,7 +3035,7 @@ function InterjectionDivider({ block }: { block: Block }) {
         <div className="mt-2 px-2">
           <pre
             ref={textRef}
-            className={`min-w-0 whitespace-pre-wrap break-words font-sans text-[12.5px] leading-5 text-content/70 ${expanded ? "" : "line-clamp-2"}`}
+            className={`${INTERJECTION_BODY} ${expanded ? "" : "line-clamp-2"}`}
           >
             {block.text}
           </pre>

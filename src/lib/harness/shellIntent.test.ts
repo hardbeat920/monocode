@@ -183,10 +183,60 @@ describe("formatShellIntent", () => {
 });
 
 describe("unwrapShellCommand", () => {
-  it("removes the shell transport wrapper without changing ordinary commands", () => {
+  it("unwraps POSIX shells without including trailing shell arguments", () => {
     expect(unwrapShellCommand(`/bin/zsh -lc "npm test -- --run app.test.ts"`)).toBe(
       "npm test -- --run app.test.ts",
     );
+    expect(unwrapShellCommand(`/bin/zsh -lc "rg -n \\"foo\\" src" ignored`)).toBe(
+      'rg -n "foo" src',
+    );
+  });
+
+  it("unwraps PowerShell command remainders", () => {
+    expect(
+      unwrapShellCommand(
+        `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoLogo -NoProfile -Command 'rg -n foo src'`,
+      ),
+    ).toBe("rg -n foo src");
+    expect(
+      unwrapShellCommand(
+        "powershell.exe -ExecutionPolicy Bypass -Command Get-Content package.json",
+      ),
+    ).toBe("Get-Content package.json");
+    expect(unwrapShellCommand("pwsh -c Get-Content package.json")).toBe(
+      "Get-Content package.json",
+    );
+    expect(
+      unwrapShellCommand(`pwsh "-Command" "Get-Content package.json"`),
+    ).toBe("Get-Content package.json");
+    expect(unwrapShellCommand(`pwsh -Command "Get-Content".ps1`)).toBe(
+      `"Get-Content".ps1`,
+    );
+    expect(
+      unwrapShellCommand(`pwsh -Command 'Get-Date' '-Format' 'yyyy-MM-dd'`),
+    ).toBe(`'Get-Date' '-Format' 'yyyy-MM-dd'`);
+  });
+
+  it("unwraps cmd command remainders", () => {
+    expect(unwrapShellCommand(`cmd.exe /d /s /c "npm test"`)).toBe("npm test");
+  });
+
+  it("stops scanning PowerShell launcher options at -File", () => {
+    expect(unwrapShellCommand(`pwsh -File script.ps1 -Mode -Command build`)).toBe(
+      `pwsh -File script.ps1 -Mode -Command build`,
+    );
+    expect(unwrapShellCommand(`pwsh -f script.ps1 -Mode -c build`)).toBe(
+      `pwsh -f script.ps1 -Mode -c build`,
+    );
+    expect(
+      unwrapShellCommand(`pwsh "-File" script.ps1 "-Command" build`),
+    ).toBe(`pwsh "-File" script.ps1 "-Command" build`);
+  });
+
+  it("leaves ordinary and incomplete commands unchanged", () => {
     expect(unwrapShellCommand("git status --short")).toBe("git status --short");
+    expect(unwrapShellCommand(`pwsh -Command 'npm test`)).toBe(
+      `pwsh -Command 'npm test`,
+    );
   });
 });

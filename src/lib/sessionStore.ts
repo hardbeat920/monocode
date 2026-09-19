@@ -38,6 +38,8 @@ export type SessionSummary = {
   title: string;
   providerSessionId?: string;
   branch?: string;
+  worktreeCwd?: string;
+  worktreeRemoved?: boolean;
   repo?: string;
   additions?: number;
   deletions?: number;
@@ -58,11 +60,13 @@ type SessionRecord = {
   runtimeMode: string;
   title: string;
   providerSessionId?: string | null;
+  providerAccountId?: string | null;
   blocks: Block[];
   contextUsed?: number | null;
   contextWindow?: number | null;
   branch?: string | null;
   worktreeCwd?: string | null;
+  worktreeRemoved?: boolean;
   linkedWorkItem?: LinkedWorkItem | null;
   createdAt: number;
   updatedAt: number;
@@ -77,11 +81,13 @@ type SessionUpsertPayload = {
   runtimeMode: string;
   title: string;
   providerSessionId?: string;
+  providerAccountId?: string;
   blocks: Block[];
   contextUsed?: number;
   contextWindow?: number;
   branch?: string;
   worktreeCwd?: string;
+  worktreeRemoved?: boolean;
   linkedWorkItem?: LinkedWorkItem;
 };
 
@@ -114,12 +120,16 @@ function persistableMeta(
     ...(session.providerSessionId && isPersistableId(session.providerSessionId)
       ? { providerSessionId: session.providerSessionId }
       : {}),
+    ...(session.providerAccountId && isPersistableId(session.providerAccountId)
+      ? { providerAccountId: session.providerAccountId }
+      : {}),
     ...(session.context ? { contextUsed: session.context.used } : {}),
     ...(session.context?.window
       ? { contextWindow: session.context.window }
       : {}),
     ...(session.branch ? { branch: session.branch } : {}),
     ...(session.worktreeCwd ? { worktreeCwd: session.worktreeCwd } : {}),
+    ...(session.worktreeRemoved ? { worktreeRemoved: true } : {}),
     ...(linkedWorkItem ? { linkedWorkItem } : {}),
   };
 }
@@ -360,6 +370,11 @@ export async function setSessionPinned(
   await invoke<void>("session_set_pinned", { sessionId, pinned });
 }
 
+/** Drain pending saves before a worktree removal changes stored session context. */
+export async function flushSessionWrites(): Promise<void> {
+  await Promise.all([...sessionWriteQueues.values()]);
+}
+
 /**
  * `session_set_in_flight` runs off the main thread, so two replaces could
  * otherwise land in either order and restore a stale busy snapshot.
@@ -480,6 +495,9 @@ function sanitizeBlock(block: Block): Block | null {
   if (block.role === "system") {
     const interjection = sanitizeInterjection(block.interjection);
     if (interjection) next.interjection = interjection;
+    if (block.notice === "error" || block.notice === "interrupt") {
+      next.notice = block.notice;
+    }
   }
   return next;
 }
@@ -710,15 +728,21 @@ function recordToSession(record: SessionRecord): Session {
     title: record.title,
     blocks,
     busy: false,
-    orchestrationLeadId: record.orchestrationLeadId ?? blocks.find(
-      (block) =>
-        block.orchestrationLeadId && block.orchestrationLeadId !== record.id,
-    )?.orchestrationLeadId,
+    orchestrationLeadId:
+      record.orchestrationLeadId ??
+      blocks.find(
+        (block) =>
+          block.orchestrationLeadId && block.orchestrationLeadId !== record.id,
+      )?.orchestrationLeadId,
     ...(record.providerSessionId
       ? { providerSessionId: record.providerSessionId }
       : {}),
+    ...(record.providerAccountId
+      ? { providerAccountId: record.providerAccountId }
+      : {}),
     ...(record.branch ? { branch: record.branch } : {}),
     ...(record.worktreeCwd ? { worktreeCwd: record.worktreeCwd } : {}),
+    ...(record.worktreeRemoved ? { worktreeRemoved: true } : {}),
     ...(linkedWorkItem ? { linkedWorkItem } : {}),
     ...(contextFromRecord(record) ?? {}),
   };

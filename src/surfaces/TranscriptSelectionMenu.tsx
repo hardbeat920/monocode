@@ -1,12 +1,12 @@
 import { FilePlusCorner, MessageSquarePlus } from "../chrome/icons";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Popover } from "../chrome/Popover";
 import { type TranscriptSelection } from "../lib/transcriptSelection";
 
 type Props = {
   selection: TranscriptSelection | null;
   onAddToChat?: (text: string) => void;
-  onAddToNotes?: (text: string) => void;
+  onAddToNotes?: (text: string) => void | Promise<void>;
   onDismiss: () => void;
 };
 
@@ -87,22 +87,44 @@ function SelectionAction({
 }: {
   label: string;
   children: ReactNode;
-  onSelect: () => void;
+  onSelect: () => void | Promise<void>;
   onDismiss: () => void;
 }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   return (
-    <button
-      type="button"
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => {
-        onSelect();
-        window.getSelection()?.removeAllRanges();
-        onDismiss();
-      }}
-      className="flex h-8 w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 font-sans text-[13px] leading-none text-content outline-none ring-accent/40 hover:bg-content/5 focus-visible:ring-2"
-    >
-      {children}
-      {label}
-    </button>
+    <>
+      <button
+        type="button"
+        disabled={pending}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={async () => {
+          setPending(true);
+          setError(null);
+          try {
+            const result = onSelect();
+            if (result) await result;
+            window.getSelection()?.removeAllRanges();
+            onDismiss();
+          } catch (error) {
+            setError(error instanceof Error ? error.message : String(error));
+          } finally {
+            setPending(false);
+          }
+        }}
+        className="flex h-8 w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 font-sans text-[13px] leading-none text-content outline-none ring-accent/40 hover:bg-content/5 focus-visible:ring-2"
+      >
+        {children}
+        {label}
+      </button>
+      {error && (
+        <span
+          role="alert"
+          className="max-w-xs px-2.5 py-1 text-xs text-content/70"
+        >
+          Could not save note. {error}
+        </span>
+      )}
+    </>
   );
 }

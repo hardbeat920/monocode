@@ -37,6 +37,11 @@ import {
   revokeAttachment,
 } from "../lib/attachments";
 import { resizeComposer } from "../lib/composerResize";
+import { messageFilesFromClipboard } from "../lib/clipboard";
+import {
+  EXPLORER_FILE_POINTER_DRAG_EVENT,
+  type ExplorerFilePointerDragDetail,
+} from "../lib/drag";
 import type { ContextUsage } from "../lib/contextUsage";
 import {
   loadProjectFiles,
@@ -67,6 +72,7 @@ import type {
   MessageQueueStatus,
   QueuedMessage,
   RuntimeMode,
+  WorkspaceMode,
   ComposerTurnOptions,
 } from "../lib/session";
 import { HARNESS_TITLE, harnessSupportsAttachments } from "../lib/session";
@@ -91,24 +97,32 @@ import { ComposerRunner } from "./ComposerRunner";
 import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
 import { BranchPicker } from "./BranchPicker";
+import { WorktreePicker } from "./WorktreePicker";
+import {
+  isWorkspaceModeShortcut,
+  WorkspaceIdentity,
+  WorkspacePicker,
+} from "./WorkspacePicker";
+import type { Worktree } from "../lib/worktrees";
 import { CwdPicker } from "./CwdPicker";
 import { FileMentionPicker } from "./FileMentionPicker";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { InboxMiniCard } from "./InboxMiniCard";
 import { NoteMiniCard } from "./NoteMiniCard";
 import { HandoffMiniCard } from "./HandoffMiniCard";
-import { EffortPicker, ModelPicker } from "./ModelPicker";
+import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
 import { SkillPicker } from "./SkillPicker";
-import { projectKey } from "../lib/paths";
+import { pathKey, projectKey } from "../lib/paths";
 import { consumeQuoteRequest, type QuoteRequest } from "../lib/quoteDraft";
 import { useTabGroupLogos } from "../hooks/useTabGroupLogos";
+import { useProjectBranchesState } from "../hooks/useProjectBranches";
 import {
   COMPOSER_RUNNER_CHANGE_EVENT,
-  loadComposerEffortVisible,
   loadComposerRunner,
+  loadModelControls,
   loadNotesEnabled,
-  subscribeComposerEffortVisible,
+  subscribeModelControls,
   subscribeNotesEnabled,
 } from "../lib/settings";
 import {
@@ -141,6 +155,8 @@ import { SessionFolderPicker } from "./SessionFolderPicker";
 type Props = {
   enabled?: boolean;
   focused: boolean;
+  /** Bump to force a refocus even when `focused` was already true (e.g. window regains OS focus). */
+  focusToken?: number;
   shell?: boolean;
   harness: HarnessId;
   model: string;
@@ -169,6 +185,14 @@ type Props = {
   onFocus: () => void;
   onCwdChange: (cwd: string) => void;
   onBranchChange?: () => void;
+  onWorktreeChange?: (tree: Worktree) => Promise<void>;
+  draftWorkspace?: boolean;
+  workspaceMode?: WorkspaceMode;
+  worktreeBase?: string;
+  onWorkspaceModeChange?: (mode: WorkspaceMode, base?: string) => void;
+  onWorktreeBaseChange?: (base: string) => void;
+  worktreeRemoved?: boolean;
+  onManageWorktrees?: () => void;
   onNewTerminal?: () => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange?: (settings: Record<string, string>) => void;
@@ -219,8 +243,8 @@ function ToolButton({
       onClick={onClick}
       className={`grid size-6.5 shrink-0 place-items-center rounded-md ${
         active
-          ? "bg-content/20 text-content"
-          : "bg-content/10 text-content/50 hover:bg-content/15 hover:text-content"
+          ? "bg-selection-emphasis text-content"
+          : "bg-selection text-content/50 hover:bg-selection-hover hover:text-content"
       } disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content/50`}
     >
       {children}
@@ -283,7 +307,7 @@ function MessageQueue({
         data-message-queue-card
       >
         {paused ? (
-          <div className="flex h-7 items-center gap-2 border-b border-content/10 text-[12px]">
+          <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
             <Pause className="size-3.5" />
             <span className="min-w-0 flex-1 truncate">
               Queue paused because you interrupted
@@ -307,7 +331,7 @@ function MessageQueue({
             <div
               key={message.id}
               className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-content/10" : ""
+                index > 0 ? "border-t border-stroke" : ""
               }`}
             >
               <ListEnd className="size-3.5 shrink-0" />
@@ -397,6 +421,7 @@ function MessageQueue({
 export function Composer({
   enabled = true,
   focused,
+  focusToken,
   hotkeys = false,
   shell = false,
   harness,
@@ -425,6 +450,14 @@ export function Composer({
   onFocus,
   onCwdChange,
   onBranchChange,
+  onWorktreeChange,
+  draftWorkspace = false,
+  workspaceMode,
+  worktreeBase,
+  onWorkspaceModeChange,
+  onWorktreeBaseChange,
+  worktreeRemoved = false,
+  onManageWorktrees,
   onNewTerminal,
   onModelChange,
   onModelSettingsChange,
@@ -454,9 +487,34 @@ export function Composer({
   const highlightRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
   const consumedQuoteId = useRef<number | null>(null);
+  const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  const { branches: draftBranches } = useProjectBranchesState(
+    executionCwd,
+    draftWorkspace && enabled && !busy,
+  );
+  const resolvedWorktreeBase =
+    worktreeBase && worktreeBase !== "HEAD"
+      ? worktreeBase
+      : branch || draftBranches?.current || worktreeBase || undefined;
+  useEffect(() => {
+    if (
+      draftWorkspace &&
+      workspaceMode === "worktree" &&
+      worktreeBase === "HEAD" &&
+      draftBranches?.current
+    ) {
+      onWorktreeBaseChange?.(draftBranches.current);
+    }
+  }, [
+    draftBranches?.current,
+    draftWorkspace,
+    onWorktreeBaseChange,
+    workspaceMode,
+    worktreeBase,
+  ]);
   const [hasValue, setHasValue] = useState(
     () =>
       (initialDraft ?? "").trim().length > 0 ||
@@ -478,18 +536,19 @@ export function Composer({
   const [createError, setCreateError] = useState<string | null>(null);
   const [createBusy, setCreateBusy] = useState(false);
   const [files, setFiles] = useState<ProjectFile[]>(
-    () => peekProjectFiles(cwd) ?? [],
+    () => peekProjectFiles(executionCwd) ?? [],
   );
   const notesEnabled = useSyncExternalStore(
     subscribeNotesEnabled,
     loadNotesEnabled,
     () => true,
   );
-  const composerEffortVisible = useSyncExternalStore(
-    subscribeComposerEffortVisible,
-    loadComposerEffortVisible,
-    () => false,
+  const modelControls = useSyncExternalStore(
+    subscribeModelControls,
+    loadModelControls,
+    () => "menu" as const,
   );
+  const controlsBeside = modelControls === "beside";
   const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
@@ -558,15 +617,19 @@ export function Composer({
   mentionIndexRef.current = mentionIndex;
   const rankedFiles = useMemo(() => {
     if (!mentionOpen) return [];
-    const fileHits = looksLikeProject(cwd)
-      ? rankMentionFiles(files, mention?.query ?? "", recentOpenedFiles(cwd))
+    const fileHits = looksLikeProject(executionCwd)
+      ? rankMentionFiles(
+          files,
+          mention?.query ?? "",
+          recentOpenedFiles(executionCwd),
+        )
       : [];
     const noteHits = notesEnabled
       ? rankNoteFiles(notes, mention?.query ?? "")
       : [];
     const seen = new Set(noteHits.map((file) => file.path));
     return [...noteHits, ...fileHits.filter((file) => !seen.has(file.path))];
-  }, [cwd, files, mention?.query, mentionOpen, notes, notesEnabled]);
+  }, [executionCwd, files, mention?.query, mentionOpen, notes, notesEnabled]);
 
   const syncHasValue = useCallback(
     (text: string, files: Attachment[]) => {
@@ -663,20 +726,20 @@ export function Composer({
     const apply = (next: ProjectFile[]) => {
       if (!cancelled) setFiles(next);
     };
-    const cached = peekProjectFiles(cwd);
-    if (cached) apply(cached);
-    void loadProjectFiles(cwd, mentionOpen)
+    const cached = peekProjectFiles(executionCwd);
+    apply(cached ?? []);
+    void loadProjectFiles(executionCwd, mentionOpen)
       .then(apply)
       .catch(() => undefined);
     const unsub = subscribeProjectFiles(() => {
-      const next = peekProjectFiles(cwd);
+      const next = peekProjectFiles(executionCwd);
       if (next) apply(next);
     });
     return () => {
       cancelled = true;
       unsub();
     };
-  }, [cwd, mentionOpen]);
+  }, [executionCwd, mentionOpen]);
 
   useEffect(() => {
     if (!mentionOpen || !notesEnabled) return;
@@ -703,6 +766,11 @@ export function Composer({
     const el = ref.current;
     if (!el || !initialDraft) return;
     if (el.value !== initialDraft) el.value = initialDraft;
+    if (!positionedInitialDraft.current) {
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+      positionedInitialDraft.current = true;
+    }
     resizeComposer(el);
   }, [initialDraft]);
 
@@ -868,14 +936,35 @@ export function Composer({
 
   useEffect(() => {
     if (!focused) return;
+
+    const composer = ref.current?.closest("[data-composer]");
+    const activeComposer = document.activeElement?.closest("[data-composer]");
+    const activeComposerHidden = activeComposer?.closest(
+      '[aria-hidden="true"], [inert]',
+    );
+    // Inactive workspace tabs stay mounted, so focus can still be sitting in
+    // their composer when a new session becomes active. Only preserve focus
+    // for another composer that is still visible (for example, a split pane).
+    if (activeComposer && activeComposer !== composer && !activeComposerHidden)
+      return;
+
+    if (
+      composer?.querySelector(
+        "[data-skill-picker], [data-session-folder-picker], [data-mention-picker], [data-composer-plus], [data-question-form]",
+      )
+    )
+      return;
+    // Model/access/branch/settings/file pickers render through a portal into
+    // document.body (see Popover.tsx), so they never appear under this
+    // composer's own DOM subtree — check the whole document for those.
     if (
       document.querySelector(
-        "[data-model-picker], [data-access-picker], [data-model-settings], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-session-folder-picker], [data-mention-picker], [data-composer-plus]",
+        "[data-model-picker], [data-access-picker], [data-model-settings], [data-file-picker], [data-branch-picker]",
       )
     )
       return;
     ref.current?.focus();
-  }, [focused]);
+  }, [focused, question, busy, focusToken]);
 
   useEffect(() => {
     if (!enabled) {
@@ -936,10 +1025,31 @@ export function Composer({
       void attachmentsFromFiles(files).then(addAttachments);
     };
 
+    const onExplorerFilePointerDrag = (event: Event) => {
+      const detail = (event as CustomEvent<ExplorerFilePointerDragDetail>)
+        .detail;
+      if (!detail || detail.type === "end") {
+        setFileDrag(false);
+        return;
+      }
+      const over = overTarget(detail.x, detail.y);
+      if (detail.type === "move") {
+        setFileDrag(over && attachmentsSupported);
+        return;
+      }
+      setFileDrag(false);
+      if (!over || !attachmentsSupported) return;
+      void attachmentsFromPaths([detail.path]).then(addAttachments);
+    };
+
     const root = dropRoot();
     root?.addEventListener("dragover", onDragOver);
     root?.addEventListener("dragleave", onDragLeave);
     root?.addEventListener("drop", onDrop);
+    window.addEventListener(
+      EXPLORER_FILE_POINTER_DRAG_EVENT,
+      onExplorerFilePointerDrag,
+    );
 
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -972,11 +1082,16 @@ export function Composer({
       root?.removeEventListener("dragover", onDragOver);
       root?.removeEventListener("dragleave", onDragLeave);
       root?.removeEventListener("drop", onDrop);
+      window.removeEventListener(
+        EXPLORER_FILE_POINTER_DRAG_EVENT,
+        onExplorerFilePointerDrag,
+      );
       unlisten?.();
     };
   }, [addAttachments, attachmentsSupported, enabled]);
 
   const submit = (value: string) => {
+    if (worktreeRemoved) return;
     const folderCommand = consumeSessionFolderCommand(value);
     if (folderCommand.matched && onPlaceInFolder && !sessionFolderSelected) {
       openSessionFolderPicker();
@@ -1154,7 +1269,45 @@ export function Composer({
     }
   };
 
+  const onComposerKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (
+      !draftWorkspace ||
+      !onWorkspaceModeChange ||
+      !enabled ||
+      busy ||
+      isImeComposition(e.nativeEvent) ||
+      !isWorkspaceModeShortcut(e)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const next =
+      (workspaceMode ?? "current") === "current" ? "worktree" : "current";
+    if (next === "worktree" && !resolvedWorktreeBase) return;
+    onWorkspaceModeChange(
+      next,
+      next === "worktree" ? resolvedWorktreeBase : undefined,
+    );
+    ref.current?.focus();
+  };
+
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const messageFiles = messageFilesFromClipboard(e.clipboardData);
+    if (messageFiles) {
+      e.preventDefault();
+      const el = e.currentTarget;
+      el.setRangeText(
+        e.clipboardData.getData("text/plain"),
+        el.selectionStart,
+        el.selectionEnd,
+        "end",
+      );
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      if (attachmentsSupported)
+        void attachmentsFromFiles(messageFiles).then(addAttachments);
+      return;
+    }
     const files = filesFromClipboard(e.clipboardData);
     if (files.length === 0) return;
     e.preventDefault();
@@ -1175,6 +1328,7 @@ export function Composer({
       data-composer
       className={`relative shrink-0 ${shell ? "" : "p-1.5 pt-0"}`}
       onMouseDown={onFocus}
+      onKeyDownCapture={onComposerKeyDown}
     >
       {question && onQuestionReply ? (
         <QuestionForm
@@ -1229,7 +1383,7 @@ export function Composer({
               query={slash?.query ?? ""}
               active={skillActive}
               creating={creatingSkill}
-              cwd={cwd}
+              cwd={executionCwd}
               error={createError}
               busy={createBusy}
               onActive={setSkillActive}
@@ -1248,7 +1402,7 @@ export function Composer({
               onCreate={(name, scope) => {
                 setCreateBusy(true);
                 setCreateError(null);
-                void createBlankSkill({ cwd, name, scope })
+                void createBlankSkill({ cwd: executionCwd, name, scope })
                   .then((path) => {
                     const el = ref.current;
                     const token = slashRef.current;
@@ -1286,7 +1440,10 @@ export function Composer({
               files={rankedFiles}
               query={mention?.query ?? ""}
               active={mentionActive}
-              loading={looksLikeProject(cwd) && peekProjectFiles(cwd) == null}
+              loading={
+                looksLikeProject(executionCwd) &&
+                peekProjectFiles(executionCwd) == null
+              }
               includeNotes={notesEnabled}
               onActive={setMentionActive}
               onPick={pickMention}
@@ -1316,23 +1473,69 @@ export function Composer({
                   projectLogoPath={projectLogoPath}
                   enabled={enabled}
                   onCwdChange={onCwdChange}
-                  onNewTerminal={onNewTerminal}
+                  onNewTerminal={worktreeRemoved ? undefined : onNewTerminal}
                   onClose={() => ref.current?.focus()}
                 />
               )}
-              {hideBranchPicker ? null : (
-                <BranchPicker
+              {hideBranchPicker ? null : draftWorkspace &&
+                onWorkspaceModeChange &&
+                onWorktreeBaseChange ? (
+                <>
+                  <WorkspacePicker
+                    cwd={executionCwd}
+                    mode={workspaceMode ?? "current"}
+                    base={resolvedWorktreeBase}
+                    enabled={enabled && !busy}
+                    onModeChange={onWorkspaceModeChange}
+                    onBaseChange={onWorktreeBaseChange}
+                    onOpenSettings={onManageWorktrees}
+                    onClose={() => ref.current?.focus()}
+                  />
+                  {(workspaceMode ?? "current") === "current" ? (
+                    <BranchPicker
+                      cwd={executionCwd}
+                      branch={branch}
+                      enabled={enabled && !busy}
+                      onChange={onBranchChange}
+                      onClose={() => ref.current?.focus()}
+                    />
+                  ) : null}
+                </>
+              ) : worktreeRemoved && onWorktreeChange ? (
+                <WorktreePicker
                   cwd={cwd}
-                  branch={branch}
+                  executionCwd={executionCwd}
                   enabled={enabled && !busy}
-                  onChange={onBranchChange}
+                  onSelect={onWorktreeChange}
+                  worktreeRemoved={worktreeRemoved}
+                  onBranchChange={onBranchChange}
+                  onManage={onManageWorktrees}
                   onClose={() => ref.current?.focus()}
                 />
+              ) : (
+                <>
+                  {onWorktreeChange ? (
+                    <WorkspaceIdentity
+                      worktree={pathKey(cwd) !== pathKey(executionCwd)}
+                    />
+                  ) : null}
+                  <BranchPicker
+                    cwd={executionCwd}
+                    branch={branch}
+                    enabled={enabled && !busy}
+                    onChange={onBranchChange}
+                    onClose={() => ref.current?.focus()}
+                  />
+                </>
               )}
               <div className="ml-auto flex shrink-0 items-center">
                 <ContextMeter
                   usage={context}
-                  onCompact={compactSupported ? onCompactContext : undefined}
+                  onCompact={
+                    compactSupported && !worktreeRemoved
+                      ? onCompactContext
+                      : undefined
+                  }
                   compactDisabled={busy}
                 />
               </div>
@@ -1387,15 +1590,17 @@ export function Composer({
               spellCheck={false}
               defaultValue={initialDraft}
               placeholder={
-                inboxCard
-                  ? "Add a note, or send to start…"
-                  : noteCard
-                    ? "Add a message, or send…"
-                    : handoffCard
-                      ? "Add context, or send to continue…"
-                      : shell
-                        ? "Ask, build, / for commands, @ for references... "
-                        : "Ask, build, / for commands, @ for references... "
+                worktreeRemoved
+                  ? "Select a branch or worktree to continue…"
+                  : inboxCard
+                    ? "Add a note, or send to start…"
+                    : noteCard
+                      ? "Add a message, or send…"
+                      : handoffCard
+                        ? "Add context, or send to continue…"
+                        : shell
+                          ? "Ask, build, / for commands, @ for references... "
+                          : "Ask, build, / for commands, @ for references... "
               }
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap break-words bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"
@@ -1531,7 +1736,7 @@ export function Composer({
                   setOrchestrationSelected(false);
                   ref.current?.focus();
                 }}
-                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-fuchsia-400/10 px-1.5 text-[11px] text-fuchsia-200/80 hover:bg-fuchsia-400/15"
+                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-fuchsia-500/15 px-1.5 text-[11px] font-medium text-fuchsia-700 hover:bg-fuchsia-500/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200/90 dark:hover:bg-fuchsia-400/15"
               >
                 <Share className="size-3.5" />
                 Orchestrator
@@ -1560,7 +1765,7 @@ export function Composer({
                 if (
                   e.target instanceof Element &&
                   e.target.closest(
-                    "[data-model-picker], [data-effort-picker], [data-access-picker], [data-model-settings]",
+                    "[data-model-picker], [data-model-control], [data-access-picker], [data-model-settings]",
                   )
                 ) {
                   return;
@@ -1575,7 +1780,7 @@ export function Composer({
                   harness={harness}
                   model={model}
                   values={modelSettings}
-                  hideEffort={composerEffortVisible}
+                  hideSettings={controlsBeside}
                   hotkeys={hotkeys && enabled}
                   onChange={onModelChange}
                   onSettingsChange={(settings) =>
@@ -1583,8 +1788,8 @@ export function Composer({
                   }
                   onClose={() => ref.current?.focus()}
                 />
-                {composerEffortVisible ? (
-                  <EffortPicker
+                {controlsBeside ? (
+                  <ModelControlPills
                     harness={harness}
                     model={model}
                     values={modelSettings}
@@ -1608,7 +1813,7 @@ export function Composer({
             <div className="flex shrink-0 items-center gap-1">
               <ComposerAction
                 busy={busy}
-                hasValue={hasValue}
+                hasValue={hasValue && !worktreeRemoved}
                 onSend={() => submit(ref.current?.value ?? "")}
                 onStop={() => onStop?.()}
               />
@@ -1714,7 +1919,7 @@ export function ComposerAction({
         title="Send"
         aria-label="Send"
         onClick={onSend}
-        className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
+        className="composer-send primary-action grid size-6.5 place-items-center rounded-md"
       >
         <ArrowUp className="size-3.5" strokeWidth={2.25} />
       </button>
@@ -1738,7 +1943,7 @@ export function ComposerAction({
       aria-label="Send"
       disabled={!hasValue}
       onClick={onSend}
-      className="composer-send grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90 disabled:cursor-default disabled:bg-white/30 disabled:text-black/40 disabled:hover:bg-white/30"
+      className="composer-send primary-action grid size-6.5 place-items-center rounded-md disabled:cursor-default"
     >
       <ArrowUp className="size-3.5" strokeWidth={2.25} />
     </button>

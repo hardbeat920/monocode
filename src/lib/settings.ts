@@ -1,4 +1,4 @@
-import { ALT, IS_MAC, MOD, SHIFT } from "./platform";
+import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "./platform";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -10,6 +10,7 @@ export type SettingsSectionId =
   | "providers"
   | "skills"
   | "inbox"
+  | "worktrees"
   | "archive";
 
 /** Rail buckets. Sections list in order under their group label. */
@@ -68,8 +69,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "agents",
     label: "Providers",
     description:
-      "Agent CLIs MonoCode can drive, and the model new sessions start with.",
-    keywords: "model harness claude codex gemini cli default hooks",
+      "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with.",
+    keywords:
+      "account sign in login model harness claude codex gemini cli default hooks",
   },
   {
     id: "skills",
@@ -83,7 +85,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: "inbox",
     group: "workspace",
     label: "Inbox",
-    description: "Connect and manage the services that appear in your Inbox.",
+    description:
+      "Manage Inbox services and notification preferences for each project.",
     keywords: "github gitlab linear connect token integration",
   },
   {
@@ -92,6 +95,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "Archive",
     description: "Projects and conversations you have archived.",
     keywords: "archived restore delete hidden",
+  },
+  {
+    id: "worktrees",
+    group: "workspace",
+    label: "Worktrees",
+    description: "Manage additional worktrees for each project.",
+    keywords: "git branch worktree working copy project create delete",
   },
 ];
 
@@ -118,6 +128,12 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
+  {
+    id: "project-worktrees",
+    section: "worktrees",
+    label: "Project worktrees",
+    keywords: "git branch working copy create delete manage",
+  },
   {
     id: "update",
     section: "general",
@@ -148,6 +164,16 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     label: "Working agents",
     keywords: "live running sessions rail card",
   },
+  ...(IS_WIN
+    ? [
+        {
+          id: "close-to-tray",
+          section: "general" as const,
+          label: "Close to tray",
+          keywords: "minimize background quit exit window taskbar windows",
+        },
+      ]
+    : []),
   {
     id: "theme",
     section: "appearance",
@@ -233,10 +259,10 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "queue steer interrupt send while running",
   },
   {
-    id: "effort-control",
+    id: "model-controls",
     section: "chat",
-    label: "Effort control",
-    keywords: "thinking reasoning model picker composer",
+    label: "Model controls",
+    keywords: "effort thinking reasoning fast service tier model picker composer",
   },
   {
     id: "composer-mascot",
@@ -257,10 +283,22 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "pacman snake arcade grid fun",
   },
   {
+    id: "provider-accounts",
+    section: "providers",
+    label: "Provider accounts",
+    keywords: "account sign in login rename remove delete credentials profile",
+  },
+  {
     id: "claude-hooks",
     section: "providers",
     label: "Claude Code hooks",
     keywords: "pretooluse settings.json block command notification",
+  },
+  {
+    id: "project-notifications",
+    section: "inbox",
+    label: "Project notifications",
+    keywords: "mute resume sounds banners reminders categories",
   },
   {
     id: "github",
@@ -402,6 +440,8 @@ const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 
 const COMPOSER_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
 
+const MODEL_CONTROLS_KEY = "monocode.modelControls";
+
 export type FollowUpBehavior = "steer" | "queue";
 
 export const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = "steer";
@@ -425,44 +465,47 @@ export function saveFollowUpBehavior(value: FollowUpBehavior) {
   }
 }
 
-export const COMPOSER_EFFORT_VISIBLE_DEFAULT = false;
+export type ModelControls = "menu" | "beside";
 
-/** Fired on `window` when the standalone composer effort control setting flips. */
-export const COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT =
-  "monocode:composer-effort-visible-change";
+export const MODEL_CONTROLS_DEFAULT: ModelControls = "menu";
 
-export function loadComposerEffortVisible(): boolean {
+/** Fired on `window` when the composer model controls setting flips. */
+export const MODEL_CONTROLS_CHANGE_EVENT = "monocode:model-controls-change";
+
+export function loadModelControls(): ModelControls {
   try {
-    const raw = localStorage.getItem(COMPOSER_EFFORT_VISIBLE_KEY);
-    if (raw == null) return COMPOSER_EFFORT_VISIBLE_DEFAULT;
-    return raw === "1" || raw === "true";
+    const raw = localStorage.getItem(MODEL_CONTROLS_KEY);
+    if (raw === "menu" || raw === "beside") return raw;
+    if (raw == null) {
+      // Migrate the previous effort-control toggle: on means beside the picker.
+      const legacy = localStorage.getItem(COMPOSER_EFFORT_VISIBLE_KEY);
+      if (legacy === "1" || legacy === "true") return "beside";
+    }
   } catch {
-    return COMPOSER_EFFORT_VISIBLE_DEFAULT;
+    // private mode / quota
   }
+  return MODEL_CONTROLS_DEFAULT;
 }
 
-export function saveComposerEffortVisible(value: boolean) {
+export function saveModelControls(value: ModelControls) {
   try {
-    localStorage.setItem(COMPOSER_EFFORT_VISIBLE_KEY, value ? "1" : "0");
+    localStorage.setItem(MODEL_CONTROLS_KEY, value);
   } catch {
     // private mode / quota
   }
   if (typeof window === "undefined") return;
   window.dispatchEvent(
-    new CustomEvent<boolean>(COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT, {
+    new CustomEvent<ModelControls>(MODEL_CONTROLS_CHANGE_EVENT, {
       detail: value,
     }),
   );
 }
 
-export function subscribeComposerEffortVisible(onStoreChange: () => void) {
+export function subscribeModelControls(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT, onStoreChange);
+  window.addEventListener(MODEL_CONTROLS_CHANGE_EVENT, onStoreChange);
   return () =>
-    window.removeEventListener(
-      COMPOSER_EFFORT_VISIBLE_CHANGE_EVENT,
-      onStoreChange,
-    );
+    window.removeEventListener(MODEL_CONTROLS_CHANGE_EVENT, onStoreChange);
 }
 
 export const COMPOSER_RUNNER_DEFAULT = true;
@@ -565,6 +608,30 @@ export function subscribeLiveAgentsEnabled(onStoreChange: () => void) {
   window.addEventListener(LIVE_AGENTS_ENABLED_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(LIVE_AGENTS_ENABLED_CHANGE_EVENT, onStoreChange);
+}
+
+const CLOSE_TO_TRAY_KEY = "monocode.closeToTray";
+
+export const CLOSE_TO_TRAY_DEFAULT = true;
+
+export function loadCloseToTray(): boolean {
+  // Close to tray is Windows-only: nowhere else installs a tray icon.
+  if (!IS_WIN) return false;
+  try {
+    const raw = localStorage.getItem(CLOSE_TO_TRAY_KEY);
+    if (raw == null) return CLOSE_TO_TRAY_DEFAULT;
+    return raw === "1" || raw === "true";
+  } catch {
+    return CLOSE_TO_TRAY_DEFAULT;
+  }
+}
+
+export function saveCloseToTray(value: boolean) {
+  try {
+    localStorage.setItem(CLOSE_TO_TRAY_KEY, value ? "1" : "0");
+  } catch {
+    // private mode / quota
+  }
 }
 
 const GRID_ARCADE_ENABLED_KEY = "monocode.gridArcadeEnabled";
@@ -680,16 +747,24 @@ export type KeybindingRow = {
 
 /**
  * Mirrors the bindings we actually handle: the native menu accelerators in
- * `src-tauri/src/menu.rs`, `tabCommand`, and the window key handler in App.
+ * `src-tauri/src/menu.rs`, `tabCommand`, the window key handler in App, and
+ * focused surface handlers such as the draft composer workspace toggle.
  */
 export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Search", keys: `${MOD}K`, when: "Always" },
   { command: "App: Go to File", keys: `${MOD}P`, when: "Always" },
+  { command: "App: Command Palette", keys: `${MOD}${SHIFT}P`, when: "Always" },
   { command: "App: Find in Files", keys: `${MOD}${SHIFT}F`, when: "Always" },
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
+  {
+    command: "Composer: Toggle Workspace",
+    keys: `${MOD}${SHIFT}G`,
+    when: "Draft session composer",
+  },
+  { command: "View: Reload", keys: `${MOD}${SHIFT}R`, when: "Always" },
   { command: "View: Zoom In", keys: `${MOD}+`, when: "Always" },
   { command: "View: Zoom Out", keys: `${MOD}-`, when: "Always" },
   { command: "View: Reset Zoom", keys: `${MOD}0`, when: "Always" },

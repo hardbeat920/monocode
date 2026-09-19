@@ -175,6 +175,12 @@ export const MODELS: AgentModel[] = [
     name: "GLM 5.2 Fast",
     nativeId: "zai/glm-5.2-fast",
   },
+  {
+    id: "hermes:default",
+    harness: "hermes",
+    name: "Configured model",
+    nativeId: "",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -186,6 +192,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   pi: "pi:default",
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
+  hermes: "hermes:default",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -213,6 +220,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "pi",
   "omp",
   "fx",
+  "hermes",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];
@@ -371,7 +379,19 @@ export function mergeModelSettings(
   return next;
 }
 
-const EFFORT_SETTING_IDS = new Set(["effort", "reasoning", "reasoningEffort"]);
+const EFFORT_SETTING_IDS = new Set([
+  "effort",
+  "reasoning",
+  "reasoningEffort",
+  // OpenCode exposes reasoning levels as `variant`; treat it as effort so the
+  // standalone effort control and dedup behave like Codex/Cursor/Grok.
+  "variant",
+]);
+
+/** True for the select setting ids that control reasoning effort. */
+export function isEffortSettingId(id: string): boolean {
+  return EFFORT_SETTING_IDS.has(id);
+}
 
 /** The select setting that controls reasoning effort for this model, if any. */
 export function modelEffortSetting(

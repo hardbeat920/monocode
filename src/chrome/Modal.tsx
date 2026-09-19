@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { LAYER } from "../lib/layers";
+import { GlassBackdrop } from "./GlassBackdrop";
 
 export type ModalSize = "sm" | "md";
 
@@ -21,6 +22,8 @@ type Props = {
   title: string;
   description?: string;
   size?: ModalSize;
+  /** Keeps the accessible title while letting focused content own the visual hierarchy. */
+  minimalHeader?: boolean;
   /** Extra classes on the panel (fixed height, etc). */
   className?: string;
   children: ReactNode;
@@ -31,6 +34,7 @@ export function ModalPanel({
   title,
   description,
   size = "md",
+  minimalHeader = false,
   className,
   children,
 }: Props) {
@@ -41,12 +45,18 @@ export function ModalPanel({
   const descriptionId = description ? `${uid}-desc` : undefined;
 
   useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
+    if (!minimalHeader) closeRef.current?.focus();
+  }, [minimalHeader]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        (event.target instanceof Element &&
+          event.target.closest("[data-dialog-popover]"))
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       onClose();
@@ -65,40 +75,51 @@ export function ModalPanel({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         onMouseDown={(event) => event.stopPropagation()}
-        className={`modal-panel flex flex-col overflow-hidden rounded-2xl border border-content/10 bg-background-base/55 shadow-2xl backdrop-blur-xl ${className ?? ""}`}
+        className={`relative isolate flex flex-col overflow-hidden rounded-2xl border border-content/7 shadow-2xl ${className ?? ""}`}
       >
-        <header className="flex shrink-0 items-start gap-2 px-4 pt-3">
-          <div className="min-w-0 flex-1 pt-0.5">
-            <h2
-              id={titleId}
-              className="text-2xl font-semibold leading-tight text-content"
-            >
-              {title}
-            </h2>
-            {description ? (
-              <p
-                id={descriptionId}
-                className="mt-0.5 truncate text-[12px] leading-snug text-content/50"
-              >
-                {description}
-              </p>
-            ) : null}
-          </div>
-          <button
-            ref={closeRef}
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        <GlassBackdrop className="bg-background-base/55" />
+        <div className="modal-panel relative z-[1] flex min-h-0 flex-1 flex-col">
+          <header
+            className={
+              minimalHeader
+                ? "absolute top-3 right-3 z-[2]"
+                : "flex shrink-0 items-start gap-2 px-4 pt-3"
+            }
           >
-            <X className="size-3.5" strokeWidth={1.75} />
-          </button>
-        </header>
-        <div
-          ref={lockOverscroll}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-none"
-        >
-          {children}
+            <div
+              className={minimalHeader ? "sr-only" : "min-w-0 flex-1 pt-0.5"}
+            >
+              <h2
+                id={titleId}
+                className="text-xl font-medium leading-tight text-content"
+              >
+                {title}
+              </h2>
+              {description ? (
+                <p
+                  id={descriptionId}
+                  className="mt-0.5 truncate text-[12px] leading-snug text-content/50"
+                >
+                  {description}
+                </p>
+              ) : null}
+            </div>
+            <button
+              ref={closeRef}
+              type="button"
+              aria-label="Close"
+              onClick={onClose}
+              className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <X className="size-3.5" strokeWidth={1.75} />
+            </button>
+          </header>
+          <div
+            ref={lockOverscroll}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-none"
+          >
+            {children}
+          </div>
         </div>
       </div>
     </div>

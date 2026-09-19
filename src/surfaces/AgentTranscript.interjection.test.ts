@@ -40,6 +40,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// The labeled divider is the live rendering — the note lands while the turn
+// is still going. A settled turn folds it into the work trail as one compact
+// line instead, which the last test covers.
 function render(text: string, severity: "blocker" | "concern" = "concern") {
   const blocks: Block[] = [{
     id: "advisor",
@@ -47,7 +50,7 @@ function render(text: string, severity: "blocker" | "concern" = "concern") {
     text,
     interjection: { customType: "advisor", severity },
   }];
-  act(() => root.render(createElement(AgentTranscript, { blocks, busy: false })));
+  act(() => root.render(createElement(AgentTranscript, { blocks, busy: true })));
 }
 
 const note = "Check the fallback.\n```ts\nconst result = read();\nif (!result) throw new Error('missing');\n```";
@@ -85,5 +88,30 @@ describe("AgentTranscript interjection preview", () => {
     bodyHeight = 40;
     act(() => resize());
     expect(container.querySelector("button")).toBeNull();
+  });
+
+  it("settles into the work trail as one compact line that opens to the full note", () => {
+    const blocks: Block[] = [{
+      id: "advisor",
+      role: "system",
+      text: note,
+      interjection: { customType: "advisor", severity: "concern" },
+    }];
+    act(() =>
+      root.render(createElement(AgentTranscript, { blocks, busy: false })),
+    );
+    // No divider, no clamped body: one line in the trail, named and
+    // severity-marked, that opens on a click.
+    expect(container.querySelector('[role="separator"]')).toBeNull();
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded="false"]',
+    )!;
+    expect(button).not.toBeNull();
+    expect(button.textContent).toContain("Advisor");
+    expect(button.textContent).toContain("Concern");
+    expect(button.textContent).toContain("Check the fallback.");
+    act(() => button.click());
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("pre")?.textContent).toBe(note);
   });
 });

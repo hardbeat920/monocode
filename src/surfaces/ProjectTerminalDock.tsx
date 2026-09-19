@@ -174,9 +174,7 @@ export function ProjectTerminalDock({
   return (
     <section
       data-project-terminal-dock=""
-      className={`relative flex h-full min-h-0 min-w-0 flex-col ${
-        focused ? "bg-content/3" : "bg-content/2"
-      } ${
+      className={`relative flex h-full min-h-0 min-w-0 flex-col bg-transparent ${
         dock.side === "top"
           ? "border-b"
           : dock.side === "bottom"
@@ -184,7 +182,7 @@ export function ProjectTerminalDock({
             : dock.side === "left"
               ? "border-r"
               : "border-l"
-      } border-content/10`}
+      } border-stroke`}
       onMouseDown={onFocus}
     >
       <div
@@ -213,7 +211,7 @@ export function ProjectTerminalDock({
         onCloseOtherFiles={onCloseOtherTerminals}
         onReorder={onReorderTerminals}
         trailing={
-          <div className="flex shrink-0 items-center gap-0.5 border-l border-content/10 px-1">
+          <div className="flex shrink-0 items-center gap-0.5 pr-1.5">
             <IconButton
               label={`New Terminal (${MOD}\`)`}
               onClick={onAddTerminal}

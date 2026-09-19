@@ -11,6 +11,8 @@ export const LAYER = {
   submenu: 81,
   /** Modal dialogs and the command palette. */
   dialog: 90,
+  /** Menus opened from controls inside a modal dialog. */
+  dialogPopover: 91,
   /** Toasts, which outrank whatever they interrupt. */
   toast: 100,
 } as const;
