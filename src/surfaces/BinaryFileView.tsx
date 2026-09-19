@@ -1,11 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Folder, Minus, Plus, RotateCcw } from "../chrome/icons";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AlertCircle,
+  Check,
+  Copy,
+  Folder,
+  Minus,
+  Plus,
+  RotateCcw,
+} from "../chrome/icons";
+import { ExplorerMenu } from "../chrome/ExplorerMenu";
 import { FileTypeIcon } from "../chrome/FileTypeIcon";
 import { copyText } from "../lib/clipboard";
 import { formatFileSize, sniffImageMime } from "../lib/filePreview";
 import { watchFile } from "../lib/fileWatch";
-import { basename, readBinaryFile, revealPath } from "../lib/fs";
+import {
+  basename,
+  copyFileToClipboard,
+  readBinaryFile,
+  revealPath,
+} from "../lib/fs";
 import { displayPath } from "../lib/paths";
+import { IS_MAC } from "../lib/platform";
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 16;
@@ -115,20 +130,55 @@ export function BinaryFileView({ path, cwd }: Props) {
     );
   }
 
-  return <ImageView url={state.url} size={state.size} mime={state.mime} />;
+  return (
+    <ImageView
+      path={path}
+      url={state.url}
+      size={state.size}
+      mime={state.mime}
+    />
+  );
 }
 
 function ImageView({
+  path,
   url,
   size,
   mime,
 }: {
+  path: string;
   url: string;
   size: number;
   mime: string;
 }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [zoom, setZoom] = useState<number | "fit">("fit");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copiedTimer.current != null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
+
+  const copyOriginal = useCallback(() => {
+    setMenu(null);
+    void copyFileToClipboard(path).then(
+      () => {
+        setCopied(true);
+        if (copiedTimer.current != null) {
+          window.clearTimeout(copiedTimer.current);
+        }
+        copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+      },
+      (error: unknown) => {
+        console.error("Failed to copy image file:", error);
+      },
+    );
+  }, [path]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -154,6 +204,15 @@ function ImageView({
             })
           }
           onClick={() => setZoom((value) => (value === "fit" ? 1 : "fit"))}
+          onContextMenu={
+            IS_MAC
+              ? (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setMenu({ x: event.clientX, y: event.clientY });
+                }
+              : undefined
+          }
           className={
             zoom === "fit"
               ? "max-h-full max-w-full object-contain"
@@ -166,13 +225,25 @@ function ImageView({
           }
         />
       </div>
-      <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-content/10 px-3 text-[11px] text-content/50">
+      <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-stroke px-3 text-[11px] text-content/50">
         <span className="tabular-nums">
           {natural ? `${natural.w} × ${natural.h}` : "—"}
         </span>
         <span className="tabular-nums">{formatFileSize(size)}</span>
         <span className="uppercase">{mime.replace(/^image\//, "")}</span>
         <span className="flex-1" />
+        {IS_MAC ? (
+          <ZoomButton
+            label={copied ? "Copied" : "Copy original file"}
+            onClick={copyOriginal}
+          >
+            {copied ? (
+              <Check className="size-3" strokeWidth={2} />
+            ) : (
+              <Copy className="size-3" strokeWidth={1.75} />
+            )}
+          </ZoomButton>
+        ) : null}
         <ZoomButton
           label="Zoom out"
           onClick={() =>
@@ -198,6 +269,24 @@ function ImageView({
           <Plus className="size-3" strokeWidth={1.75} />
         </ZoomButton>
       </footer>
+      {menu ? (
+        <ExplorerMenu
+          x={menu.x}
+          y={menu.y}
+          items={[
+            {
+              kind: "item",
+              id: "copy-original",
+              label: "Copy Original File",
+            },
+          ]}
+          ariaLabel="Image actions"
+          onPick={(id) => {
+            if (id === "copy-original") copyOriginal();
+          }}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -24,6 +24,7 @@ const TEXT_MODEL = "claude-haiku-4-5";
 
 type LiveText = {
   cwd: string;
+  providerAccountId?: string;
   collecting: boolean;
   output: string;
   closed: boolean;
@@ -62,6 +63,7 @@ export function warmupClaudeText(cwd: string): Promise<void> {
 
 export async function runClaudeTextPrompt(input: {
   cwd: string;
+  providerAccountId?: string;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
@@ -75,10 +77,11 @@ export async function runClaudeTextPrompt(input: {
 
 async function promptOnLive(input: {
   cwd: string;
+  providerAccountId?: string;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd);
+  const session = await ensureLive(input.cwd, input.providerAccountId);
   session.output = "";
   session.collecting = true;
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -118,16 +121,30 @@ async function promptOnLive(input: {
   }
 }
 
-async function ensureLive(cwd: string): Promise<LiveText> {
-  if (live && !live.closed && live.cwd === cwd) return live;
+async function ensureLive(
+  cwd: string,
+  providerAccountId?: string,
+): Promise<LiveText> {
+  if (
+    live &&
+    !live.closed &&
+    live.cwd === cwd &&
+    live.providerAccountId === providerAccountId
+  ) {
+    return live;
+  }
   await dropLive();
-  return startLive(cwd);
+  return startLive(cwd, providerAccountId);
 }
 
-async function startLive(cwd: string): Promise<LiveText> {
+async function startLive(
+  cwd: string,
+  providerAccountId?: string,
+): Promise<LiveText> {
   const { path } = await resolveClaudeBinary();
   const session: LiveText = {
     cwd,
+    providerAccountId,
     collecting: false,
     output: "",
     closed: false,
@@ -160,6 +177,7 @@ async function startLive(cwd: string): Promise<LiveText> {
         model: pickTextModel(),
       }),
       cwd,
+      { provider: "claude", id: providerAccountId ?? "default" },
     );
     live = session;
     await waitForReady(session, INIT_TIMEOUT_MS);

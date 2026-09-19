@@ -45,14 +45,14 @@ function paneProjects(
     for (const pane of tab.editorPanes) {
       const active = pane.files.find((file) => file.id === pane.activeFileId);
       if (active && active.cwd !== "~") {
-        result.set(pane.id, pathKey(active.cwd));
+        result.set(pane.id, pathKey(active.projectCwd ?? active.cwd));
       }
     }
 
     for (const pane of tab.terminalPanes ?? []) {
       const active = pane.files.find((file) => file.id === pane.activeFileId);
       if (active && active.cwd !== "~") {
-        result.set(pane.id, pathKey(active.cwd));
+        result.set(pane.id, pathKey(active.projectCwd ?? active.cwd));
       }
     }
   }

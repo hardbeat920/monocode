@@ -9,12 +9,9 @@ import {
 } from "./sessionHistory";
 import { newSession } from "./session";
 import type { SessionSummary } from "./sessionStore";
+import type { OrchestrationRun } from "./orchestration";
 
-function summary(
-  id: string,
-  cwd: string,
-  updatedAt = 1,
-): SessionSummary {
+function summary(id: string, cwd: string, updatedAt = 1): SessionSummary {
   return {
     id,
     cwd,
@@ -30,6 +27,93 @@ function summary(
 }
 
 describe("historyWithLiveSessions", () => {
+  const run: OrchestrationRun = {
+    version: 1,
+    leadId: "lead",
+    cwd: "/tmp/project-a",
+    status: "active",
+    allowedHarnesses: ["codex"],
+    maxWorkers: 2,
+    cli: "monocode",
+    continuations: 0,
+    requests: {},
+    tasks: ["worker-a", "worker-b"].map((id) => ({
+      id,
+      sessionId: id,
+      title: id,
+      harness: "codex",
+      model: "codex:test",
+      prompt: "Task",
+      files: [id],
+      scopes: [id],
+      dependsOn: [],
+      status: "running",
+      accepted: false,
+      result: "",
+      delivered: false,
+    })),
+  };
+
+  it("groups live and already-saved workers under their lead before adoption effects run", () => {
+    const sessions = ["lead", "worker-a", "worker-b"].map((id) => ({
+      ...newSession("codex", run.cwd),
+      id,
+      blocks: [{ id: "u", role: "user" as const, text: "Build" }],
+      busy: id !== "lead",
+    }));
+    const rows = historyWithLiveSessions(
+      [
+        summary("lead", run.cwd),
+        summary("worker-a", run.cwd),
+        summary("unrelated", run.cwd),
+      ],
+      sessions,
+      run.cwd,
+      undefined,
+      [run],
+    );
+    expect(rows.map((row) => row.id).sort()).toEqual(["lead", "unrelated"]);
+    expect(rows.find((row) => row.id === "lead")?.orchestration).toMatchObject({
+      live: true,
+      status: "active",
+      tasks: [{ sessionId: "worker-a" }, { sessionId: "worker-b" }],
+    });
+  });
+
+  it("keeps ownership after restart, cache merges, and replacement runs", () => {
+    const history: SessionSummary[] = [
+      {
+        ...summary("lead", run.cwd),
+        orchestration: { status: "paused", tasks: run.tasks },
+      },
+      summary("worker-a", run.cwd),
+      { ...summary("older-worker", run.cwd), orchestrationLeadId: "lead" },
+    ];
+    const merged = mergeHistorySummary(history, summary("lead", run.cwd, 2));
+    const rows = historyWithLiveSessions(merged, [], run.cwd);
+    expect(rows.map((row) => row.id)).toEqual(["lead"]);
+    expect(rows[0].orchestration?.tasks).toHaveLength(2);
+    const replacement = historyWithLiveSessions(
+      merged,
+      [],
+      run.cwd,
+      undefined,
+      [{ ...run, tasks: [] }],
+    );
+    expect(replacement.map((row) => row.id)).toEqual(["lead"]);
+    expect(replacement[0].orchestration?.tasks).toEqual([]);
+  });
+
+  it("does not inject an internal worker without a loaded run", () => {
+    const worker = {
+      ...newSession("codex", run.cwd),
+      id: "worker",
+      orchestrationLeadId: "lead",
+      busy: true,
+    };
+    expect(historyWithLiveSessions([], [worker], run.cwd)).toEqual([]);
+  });
+
   it("drops persisted sessions from other projects", () => {
     const history = [
       summary("a1", "/tmp/project-a"),
@@ -56,6 +140,26 @@ describe("historyWithLiveSessions", () => {
     const rows = historyWithLiveSessions([], [session], "/tmp/project-a");
     expect(rows.map((row) => row.id)).toEqual([session.id]);
     expect(rows[0]?.repo).toBe("project-a");
+  });
+
+  it("marks saved drafts and clears stale draft status when they are sent", () => {
+    const session = newSession("cursor", "/tmp/project-a");
+    session.id = "draft-session";
+    session.blocks = [
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ];
+
+    const draftRows = historyWithLiveSessions([], [session], "/tmp/project-a");
+    expect(draftRows[0]?.draft).toBe(true);
+
+    session.blocks = [{ id: "sent", role: "user", text: "Explore this" }];
+    session.busy = true;
+    const sentRows = historyWithLiveSessions(
+      [{ ...draftRows[0], draft: true }],
+      [session],
+      "/tmp/project-a",
+    );
+    expect(sentRows[0]?.draft).toBeUndefined();
   });
 
   it("stamps composer git onto a live session that is not persisted yet", () => {
@@ -105,12 +209,10 @@ describe("historyWithLiveSessions", () => {
     session.busy = true;
     session.branch = "feat/picker";
 
-    const rows = historyWithLiveSessions(
-      [],
-      [session],
-      "/tmp/agent-terminal",
-      { repo: "monocode", branch: "main" },
-    );
+    const rows = historyWithLiveSessions([], [session], "/tmp/agent-terminal", {
+      repo: "monocode",
+      branch: "main",
+    });
     expect(rows[0]).toMatchObject({
       id: session.id,
       repo: "monocode",
@@ -162,12 +264,18 @@ describe("filterSessionsByQuery", () => {
 
   it("matches conversation titles", () => {
     const rows = [
-      { ...summary("a1", "/tmp/project-a"), title: "cursor · Fix sidebar search" },
-      { ...summary("a2", "/tmp/project-a"), title: "cursor · Archive sessions" },
+      {
+        ...summary("a1", "/tmp/project-a"),
+        title: "cursor · Fix sidebar search",
+      },
+      {
+        ...summary("a2", "/tmp/project-a"),
+        title: "cursor · Archive sessions",
+      },
     ];
-    expect(filterSessionsByQuery(rows, "sidebar").map((row) => row.id)).toEqual([
-      "a1",
-    ]);
+    expect(filterSessionsByQuery(rows, "sidebar").map((row) => row.id)).toEqual(
+      ["a1"],
+    );
   });
 
   it("matches model and branch labels", () => {
@@ -252,9 +360,7 @@ describe("pinned sessions", () => {
   });
 
   it("preserves pin when an incoming summary omits it", () => {
-    const current = [
-      { ...summary("pin", "/tmp/project-a", 5), pinned: true },
-    ];
+    const current = [{ ...summary("pin", "/tmp/project-a", 5), pinned: true }];
     const next = mergeHistorySummary(
       current,
       summary("pin", "/tmp/project-a", 9),

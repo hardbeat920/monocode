@@ -9,6 +9,7 @@ import {
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
+import { GlassBackdrop } from "./GlassBackdrop";
 import { LAYER } from "../lib/layers";
 import {
   placePopover,
@@ -40,6 +41,8 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
   width?: number;
   minHeight?: number;
   maxHeight?: number;
+  /** Defaults to true. Disable for intrinsic-height surfaces like context menus. */
+  constrainHeight?: boolean;
   /** Defaults to `LAYER.popover`; a flyout off an open popover wants higher. */
   layer?: number;
   /** Drops the glass frame and keeps only placement and the content animation. */
@@ -56,8 +59,6 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
 
 const FRAME =
   "isolate overflow-hidden rounded-xl border border-content/10 shadow-xl";
-const BACKDROP =
-  "popover-backdrop pointer-events-none absolute inset-0 z-0 backdrop-blur-xl [backface-visibility:hidden] [transform:translateZ(0)]";
 
 /** Which corner the open animation grows from, so it reads as anchored. */
 function origin(side: PopoverSide, align: PopoverAlign): string {
@@ -135,6 +136,7 @@ export function Popover({
   width,
   minHeight,
   maxHeight,
+  constrainHeight = true,
   layer = LAYER.popover,
   bare = false,
   className,
@@ -226,14 +228,16 @@ export function Popover({
         top: position.top,
         bottom: position.bottom,
         width: position.width,
-        maxHeight: position.maxHeight,
+        ...(constrainHeight ? { maxHeight: position.maxHeight } : {}),
       }
     : {
         position: "fixed",
         left: 0,
         top: 0,
         width,
-        maxHeight: maxHeight ?? "calc(100vh - 16px)",
+        ...(constrainHeight
+          ? { maxHeight: maxHeight ?? "calc(100vh - 16px)" }
+          : {}),
         visibility: "hidden",
       };
 
@@ -241,11 +245,13 @@ export function Popover({
   // stale backdrop when the same composited element is transformed and then
   // invalidated by a child hover. Only this unblurred content layer moves.
   const frameInset = bare ? 0 : 2;
-  const contentMaxHeight = position
-    ? Math.max(0, position.maxHeight - frameInset)
-    : maxHeight != null
-      ? Math.max(0, maxHeight - frameInset)
-      : `calc(100vh - ${16 + frameInset}px)`;
+  const contentMaxHeight = constrainHeight
+    ? position
+      ? Math.max(0, position.maxHeight - frameInset)
+      : maxHeight != null
+        ? Math.max(0, maxHeight - frameInset)
+        : `calc(100vh - ${16 + frameInset}px)`
+    : undefined;
 
   return createPortal(
     <div
@@ -254,7 +260,7 @@ export function Popover({
       style={{ ...placed, zIndex: layer }}
       className={bare ? undefined : FRAME}
     >
-      {bare ? null : <div aria-hidden="true" className={BACKDROP} />}
+      {bare ? null : <GlassBackdrop />}
       <div
         {...rest}
         ref={(el) => {
@@ -264,7 +270,7 @@ export function Popover({
         }}
         data-popover-side={position?.side ?? side}
         style={{
-          maxHeight: contentMaxHeight,
+          ...(contentMaxHeight != null ? { maxHeight: contentMaxHeight } : {}),
           transformOrigin: origin(position?.side ?? side, align),
           ...style,
         }}

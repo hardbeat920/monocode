@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::ErrorKind;
-use std::io::Write;
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -21,6 +20,312 @@ pub struct DirEntry {
     path: String,
     is_dir: bool,
     ignored: bool,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OmpInterjectionAnchor {
+    id: String,
+    after_assistant_text: String,
+    after_occurrence: usize,
+    after_assistant_text_concat: String,
+    after_concat_occurrence: usize,
+    /// A directly following text-only answer can have been coalesced into the
+    /// parent block by old builds. Require both full texts before splitting it.
+    following_assistant_text: Option<String>,
+    following_assistant_text_concat: Option<String>,
+    text: String,
+    custom_type: String,
+    severity: Option<String>,
+}
+
+/// One active-path assistant message in file order. Both join forms of its
+/// text parts are alternatives for the same message, never two messages.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct OmpAssistantText {
+    text: String,
+    concat: String,
+}
+
+/// Recover displayed OMP custom messages that older MonoCode builds omitted
+/// from their persisted transcript. The provider id is already stored with the
+/// session; matching the original JSONL keeps the repair deterministic instead
+/// of guessing from neighbouring reasoning text.
+#[tauri::command(async)]
+pub fn omp_session_interjections(
+    provider_session_id: String,
+) -> Result<Vec<OmpInterjectionAnchor>, String> {
+    let Some(path) = omp_session_path(&provider_session_id)? else {
+        return Ok(Vec::new());
+    };
+    parse_omp_interjections(&path)
+}
+
+#[tauri::command(async)]
+pub fn omp_active_assistant_texts(
+    provider_session_id: String,
+) -> Result<Vec<OmpAssistantText>, String> {
+    let Some(path) = omp_session_path(&provider_session_id)? else {
+        return Ok(Vec::new());
+    };
+    active_omp_assistant_texts(&path)
+}
+
+fn omp_session_path(provider_session_id: &str) -> Result<Option<PathBuf>, String> {
+    if provider_session_id.is_empty()
+        || !provider_session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Invalid OMP provider session id".into());
+    }
+    let root = dirs_home()
+        .map(PathBuf::from)
+        .ok_or("Home directory is unavailable")?
+        .join(".omp/agent/sessions");
+    Ok(find_omp_session_file(&root, provider_session_id))
+}
+
+fn find_omp_session_file(root: &Path, provider_session_id: &str) -> Option<PathBuf> {
+    let suffix = format!("_{provider_session_id}.jsonl");
+    let projects = std::fs::read_dir(root).ok()?;
+    for project in projects.flatten() {
+        let path = project.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(&suffix))
+        {
+            return Some(path);
+        }
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let candidate = entry.path();
+            if candidate.is_file()
+                && candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(&suffix))
+            {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn omp_message_text(value: &serde_json::Value, separator: &str) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_owned();
+    }
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|part| {
+            (part.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+                .then(|| part.get("text").and_then(serde_json::Value::as_str))
+                .flatten()
+        })
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+fn read_omp_entries(path: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let file = std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut entries = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else { continue };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        entries.push(value);
+    }
+    Ok(entries)
+}
+
+fn omp_active_ids(entries: &[serde_json::Value]) -> HashSet<&str> {
+    let nodes: HashMap<_, _> = entries
+        .iter()
+        .filter_map(|value| value["id"].as_str().map(|id| (id, value)))
+        .collect();
+    let mut active = HashSet::new();
+    let mut cursor = entries.last().and_then(|value| value["id"].as_str());
+    while let Some(id) = cursor {
+        if !active.insert(id) {
+            break;
+        }
+        cursor = nodes.get(id).and_then(|value| value["parentId"].as_str());
+    }
+    active
+}
+
+// Return the ordered sequence, not per-text counts: a status split may only
+// be merged with the message at its own source position.
+fn active_omp_assistant_texts(path: &Path) -> Result<Vec<OmpAssistantText>, String> {
+    let entries = read_omp_entries(path)?;
+    let active = omp_active_ids(&entries);
+    Ok(entries
+        .iter()
+        .filter(|value| {
+            value["type"] == "message"
+                && value["message"]["role"] == "assistant"
+                && value["id"].as_str().is_some_and(|id| active.contains(id))
+        })
+        .map(|value| {
+            let content = &value["message"]["content"];
+            OmpAssistantText {
+                text: omp_message_text(content, "\n"),
+                concat: omp_message_text(content, ""),
+            }
+        })
+        .filter(|message| !message.text.trim().is_empty())
+        .collect())
+}
+
+fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, String> {
+    let entries = read_omp_entries(path)?;
+    let nodes: HashMap<_, _> = entries
+        .iter()
+        .filter_map(|value| value["id"].as_str().map(|id| (id, value)))
+        .collect();
+    let active = omp_active_ids(&entries);
+    let mut assistants: HashMap<&str, (String, usize, String, usize)> = HashMap::new();
+    let mut occurrences: HashMap<String, usize> = HashMap::new();
+    let mut concat_occurrences: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<OmpInterjectionAnchor> = Vec::new();
+    // Metadata and compaction participate in ancestry, not anchor text.
+    // Keep file order for occurrences and notes, but exclude abandoned branches.
+    for value in &entries {
+        if !value["id"].as_str().is_some_and(|id| active.contains(id)) {
+            continue;
+        }
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("message")
+                if value
+                    .pointer("/message/role")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("assistant") =>
+            {
+                let Some(id) = value.get("id").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let text = omp_message_text(&value["message"]["content"], "\n");
+                let concat_text = omp_message_text(&value["message"]["content"], "");
+                if text.trim().is_empty() {
+                    continue;
+                }
+                if let Some(anchor) = out.last_mut() {
+                    let text_only = value["message"]["content"]
+                        .as_array()
+                        .is_some_and(|parts| parts.iter().all(|part| part["type"] == "text"));
+                    if text_only
+                        && value.get("parentId").and_then(serde_json::Value::as_str)
+                            == Some(anchor.id.as_str())
+                    {
+                        anchor.following_assistant_text = Some(text.clone());
+                        anchor.following_assistant_text_concat = Some(concat_text.clone());
+                    }
+                }
+                let occurrence = occurrences.entry(text.clone()).or_default();
+                *occurrence += 1;
+                let concat_occurrence = concat_occurrences.entry(concat_text.clone()).or_default();
+                *concat_occurrence += 1;
+                assistants.insert(id, (text, *occurrence, concat_text, *concat_occurrence));
+            }
+            Some("custom_message")
+                if value.get("display").and_then(serde_json::Value::as_bool) == Some(true) =>
+            {
+                let Some(id) = value.get("id").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let Some(parent_id) = value.get("parentId").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let mut ancestor = Some(parent_id);
+                let mut seen = HashSet::new();
+                let mut assistant = None;
+                while let Some(id) = ancestor {
+                    if !active.contains(id) || !seen.insert(id) {
+                        break;
+                    }
+                    if let Some(found) = assistants.get(id) {
+                        assistant = Some(found);
+                        break;
+                    }
+                    let Some(parent) = nodes.get(id) else { break };
+                    if matches!(
+                        parent
+                            .pointer("/message/role")
+                            .and_then(serde_json::Value::as_str),
+                        Some("user" | "assistant")
+                    ) {
+                        break;
+                    }
+                    ancestor = parent["parentId"].as_str();
+                }
+                let Some((after_assistant_text, after_occurrence, concat_text, concat_occurrence)) =
+                    assistant
+                else {
+                    continue;
+                };
+                let custom_type = value
+                    .get("customType")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("custom")
+                    .to_owned();
+                let mut severity = None;
+                let mut note_bodies = Vec::new();
+                if custom_type == "advisor" {
+                    for note in value
+                        .pointer("/details/notes")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(body) = note.get("note").and_then(serde_json::Value::as_str) {
+                            note_bodies.push(body);
+                        }
+                        let next = note.get("severity").and_then(serde_json::Value::as_str);
+                        if next == Some("blocker")
+                            || (next == Some("concern") && severity.as_deref() != Some("blocker"))
+                            || (next == Some("nit") && severity.is_none())
+                        {
+                            severity = next.map(str::to_owned);
+                        }
+                    }
+                }
+                let text = if note_bodies.is_empty() {
+                    omp_message_text(&value["content"], "\n")
+                } else {
+                    note_bodies.join("\n\n")
+                };
+                // Tool results, metadata and note chains seal the same preceding
+                // assistant prose. Notes resolving there stack in source order.
+                out.push(OmpInterjectionAnchor {
+                    id: id.to_owned(),
+                    after_assistant_text: after_assistant_text.clone(),
+                    after_occurrence: *after_occurrence,
+                    after_assistant_text_concat: concat_text.clone(),
+                    after_concat_occurrence: *concat_occurrence,
+                    following_assistant_text: None,
+                    following_assistant_text_concat: None,
+                    text,
+                    custom_type,
+                    severity,
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// Immediate children of `path` (project tree). Folders first, then files.
@@ -215,6 +520,7 @@ pub struct GitChangedFile {
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffIndex {
     pub branch: Option<String>,
+    pub head: Option<String>,
     pub files: Vec<GitChangedFile>,
     pub additions: i64,
     pub deletions: i64,
@@ -224,6 +530,7 @@ pub struct GitDiffIndex {
     pub ahead: i64,
     pub behind: i64,
     pub ahead_of_default: i64,
+    pub head_pushed: bool,
 }
 
 /// Changed files in the opened folder, with per-file line counts and status.
@@ -416,10 +723,25 @@ pub async fn git_staged_context(cwd: String) -> Result<GitStagedContext, String>
         .map_err(|e| e.to_string())?
 }
 
-/// Create a commit from the current index.
+/// Create a commit from the current index, or rewrite HEAD with it when `amend` is set.
 #[tauri::command]
-pub async fn git_commit(cwd: String, message: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || git_commit_for(&expand_home(&cwd), &message))
+pub async fn git_commit(cwd: String, message: String, amend: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        if amend {
+            git_commit_amend_for(&root, &message)
+        } else {
+            git_commit_for(&root, &message)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Full message (subject and body) of the commit at HEAD.
+#[tauri::command]
+pub async fn git_head_message(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git_head_message_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -539,6 +861,7 @@ pub struct GitHubWorkItem {
     pub title: String,
     pub url: String,
     pub state: String,
+    pub created_at: String,
     pub updated_at: String,
     pub labels: Vec<GitHubLabel>,
     pub assignees: Vec<GitHubAssignee>,
@@ -553,6 +876,16 @@ pub struct GitHubStatus {
     pub installed: bool,
     pub authenticated: bool,
 }
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GitHubStarStatus {
+    Starred,
+    NotStarred,
+    Unavailable,
+}
+
+const MONOCODE_STAR_ENDPOINT: &str = "/user/starred/hardbeat920/monocode";
 
 /// Whether the GitHub CLI is installed and has an active authenticated account.
 #[tauri::command]
@@ -589,6 +922,46 @@ fn git_github_status_for() -> GitHubStatus {
     }
 }
 
+/// Whether the active GitHub CLI account has starred the MonoCode repository.
+#[tauri::command]
+pub async fn github_monocode_star_status() -> Result<GitHubStarStatus, String> {
+    tauri::async_runtime::spawn_blocking(github_monocode_star_status_for)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn github_monocode_star_status_for() -> GitHubStarStatus {
+    let result = gh_run(
+        Path::new("."),
+        &["api", "--silent", MONOCODE_STAR_ENDPOINT],
+        true,
+    );
+    github_star_status_from_result(result)
+}
+
+fn github_star_status_from_result(result: Result<String, String>) -> GitHubStarStatus {
+    match result {
+        Ok(_) => GitHubStarStatus::Starred,
+        Err(error) if error.contains("HTTP 404") => GitHubStarStatus::NotStarred,
+        Err(_) => GitHubStarStatus::Unavailable,
+    }
+}
+
+/// Star the MonoCode repository for the active GitHub CLI account.
+#[tauri::command]
+pub async fn github_star_monocode() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        gh_run(
+            Path::new("."),
+            &["api", "--silent", "--method", "PUT", MONOCODE_STAR_ENDPOINT],
+            true,
+        )
+        .map(|_| ())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// `owner/repo` for the GitHub remote of this working copy, via `gh`.
 #[tauri::command]
 pub async fn git_github_repo(cwd: String) -> Result<String, String> {
@@ -597,10 +970,19 @@ pub async fn git_github_repo(cwd: String) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Open issues or pull requests for the current GitHub remote, via `gh`.
+/// The GitHub remote of this working copy and, when it is a fork, its parent.
+#[tauri::command]
+pub async fn git_github_repositories(cwd: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || git_github_repositories_for(&expand_home(&cwd)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Open issues or pull requests for one GitHub repository, via `gh`.
 #[tauri::command]
 pub async fn git_github_work_items(
     cwd: String,
+    repo: String,
     kind: String,
     assigned_to_me: bool,
     state: String,
@@ -610,6 +992,7 @@ pub async fn git_github_work_items(
     tauri::async_runtime::spawn_blocking(move || {
         git_github_work_items_for(
             &expand_home(&cwd),
+            &repo,
             &kind,
             assigned_to_me,
             &state,
@@ -652,11 +1035,12 @@ pub struct GitHubWorkItemDetails {
 #[tauri::command]
 pub async fn git_github_work_item_details(
     cwd: String,
+    repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_details_for(&expand_home(&cwd), &kind, number)
+        git_github_work_item_details_for(&expand_home(&cwd), &repo, &kind, number)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -682,8 +1066,19 @@ pub struct GitHubWorkItemComment {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct GitHubWorkItemCommit {
+    pub oid: String,
+    pub message_headline: String,
+    pub author: String,
+    pub committed_date: String,
+    pub url: String,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct GitHubWorkItemThread {
     pub comments: Vec<GitHubWorkItemComment>,
+    pub commits: Vec<GitHubWorkItemCommit>,
     pub truncated: bool,
     pub review_decision: String,
     pub base_ref_name: String,
@@ -694,11 +1089,12 @@ pub struct GitHubWorkItemThread {
 #[tauri::command]
 pub async fn git_github_work_item_thread(
     cwd: String,
+    repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemThread, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_thread_for(&expand_home(&cwd), &kind, number)
+        git_github_work_item_thread_for(&expand_home(&cwd), &repo, &kind, number)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -708,13 +1104,36 @@ pub async fn git_github_work_item_thread(
 #[tauri::command]
 pub async fn git_github_work_item_comment(
     cwd: String,
+    repo: String,
     kind: String,
     number: i64,
     body: String,
     in_reply_to: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_comment_for(&expand_home(&cwd), &kind, number, &body, &in_reply_to)
+        git_github_work_item_comment_for(
+            &expand_home(&cwd),
+            &repo,
+            &kind,
+            number,
+            &body,
+            &in_reply_to,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Merge or change the lifecycle state of a GitHub pull request via `gh`.
+#[tauri::command]
+pub async fn git_github_pr_action(
+    cwd: String,
+    repo: String,
+    number: i64,
+    action: String,
+) -> Result<GitHubWorkItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_pr_action_for(&expand_home(&cwd), &repo, number, &action)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -741,11 +1160,20 @@ pub struct GitHubPrDiff {
 const MAX_PR_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
 /// Unified diff and file stats for a pull request, via `gh`.
+/// When `full_context` is true, prefer a large-context `git diff` between the PR OIDs.
 #[tauri::command]
-pub async fn git_github_pr_diff(cwd: String, number: i64) -> Result<GitHubPrDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || git_github_pr_diff_for(&expand_home(&cwd), number))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn git_github_pr_diff(
+    cwd: String,
+    repo: String,
+    number: i64,
+    full_context: Option<bool>,
+) -> Result<GitHubPrDiff, String> {
+    let full_context = full_context.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_pr_diff_for(&expand_home(&cwd), &repo, number, full_context)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -955,6 +1383,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
     };
     GitDiffIndex {
         branch: git_branch(root),
+        head: git_stdout(root, &["rev-parse", "HEAD"]),
         files: out,
         additions,
         deletions,
@@ -964,6 +1393,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
         ahead: sync.ahead,
         behind: sync.behind,
         ahead_of_default: sync.ahead_of_default,
+        head_pushed: sync.head_pushed,
     }
 }
 
@@ -1572,11 +2002,26 @@ fn git_staged_context_for(root: &Path) -> Result<GitStagedContext, String> {
 }
 
 fn git_commit_for(root: &Path, message: &str) -> Result<(), String> {
+    git_commit_args(root, message, &[])
+}
+
+fn git_commit_amend_for(root: &Path, message: &str) -> Result<(), String> {
+    git_commit_args(root, message, &["--amend"])
+}
+
+fn git_commit_args(root: &Path, message: &str, extra: &[&str]) -> Result<(), String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("Commit message cannot be empty".into());
     }
-    git_checked(root, &["commit", "--cleanup=strip", "-m", message])
+    let mut args = vec!["commit"];
+    args.extend_from_slice(extra);
+    args.extend(["--cleanup=strip", "-m", message]);
+    git_checked(root, &args)
+}
+
+fn git_head_message_for(root: &Path) -> Result<String, String> {
+    git_stdout(root, &["log", "-1", "--pretty=%B"]).ok_or_else(|| "No commits yet".to_string())
 }
 
 fn git_push_for(root: &Path) -> Result<(), String> {
@@ -1667,8 +2112,46 @@ fn git_github_repo_for(root: &Path) -> Result<String, String> {
     Ok(slug.to_string())
 }
 
+fn git_github_repositories_for(root: &Path) -> Result<Vec<String>, String> {
+    let json = gh_checked(root, &["repo", "view", "--json", "nameWithOwner,parent"])?;
+    parse_github_repositories(&json)
+}
+
+fn parse_github_repositories(json: &str) -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    struct Owner {
+        login: String,
+    }
+    #[derive(Deserialize)]
+    struct Parent {
+        name: String,
+        owner: Owner,
+    }
+    #[derive(Deserialize)]
+    struct View {
+        #[serde(rename = "nameWithOwner")]
+        name_with_owner: String,
+        #[serde(default)]
+        parent: Option<Parent>,
+    }
+
+    let view: View = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let (owner, name) = split_github_repo(&view.name_with_owner)?;
+    let mut repos = vec![format!("{owner}/{name}")];
+    if let Some(parent) = view.parent {
+        let parent = format!("{}/{}", parent.owner.login, parent.name);
+        let (owner, name) = split_github_repo(&parent)?;
+        let parent = format!("{owner}/{name}");
+        if !repos[0].eq_ignore_ascii_case(&parent) {
+            repos.push(parent);
+        }
+    }
+    Ok(repos)
+}
+
 fn git_github_work_items_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     assigned_to_me: bool,
     state: &str,
@@ -1679,6 +2162,8 @@ fn git_github_work_items_for(
     if kind != "issue" && kind != "pr" {
         return Err("Unknown GitHub task kind".into());
     }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let state = if state.trim().eq_ignore_ascii_case("all") {
         "all"
     } else {
@@ -1686,9 +2171,9 @@ fn git_github_work_items_for(
     };
     let limit = limit.clamp(1, 100).to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
     } else {
-        "number,title,url,state,updatedAt,labels,assignees"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees"
     };
     let mut args = vec![
         kind.to_string(),
@@ -1697,6 +2182,8 @@ fn git_github_work_items_for(
         state.into(),
         "--limit".into(),
         limit,
+        "--repo".into(),
+        repo.clone(),
         "--json".into(),
         fields.into(),
     ];
@@ -1711,7 +2198,6 @@ fn git_github_work_items_for(
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let json = gh_checked(root, &refs)?;
-    let repo = git_github_repo_for(root).unwrap_or_default();
     parse_github_work_items(&json, kind, &repo)
 }
 
@@ -1732,9 +2218,9 @@ fn git_github_work_item_for(
     let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
     } else {
-        "number,title,url,state,updatedAt,labels,assignees"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees"
     };
     let json = gh_checked(
         root,
@@ -1743,8 +2229,43 @@ fn git_github_work_item_for(
     parse_github_work_item(&json, kind, &repo)
 }
 
+fn github_pr_action_args(repo: &str, number: i64, action: &str) -> Result<Vec<String>, String> {
+    if number <= 0 {
+        return Err("GitHub pull request number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
+    let number = number.to_string();
+    let args = match action.trim() {
+        "merge" => vec!["pr", "merge", &number, "--repo", &repo, "--merge"],
+        "squash" => vec!["pr", "merge", &number, "--repo", &repo, "--squash"],
+        "rebase" => vec!["pr", "merge", &number, "--repo", &repo, "--rebase"],
+        "draft" => vec!["pr", "ready", &number, "--repo", &repo, "--undo"],
+        "ready" => vec!["pr", "ready", &number, "--repo", &repo],
+        "close" => vec!["pr", "close", &number, "--repo", &repo],
+        "reopen" => vec!["pr", "reopen", &number, "--repo", &repo],
+        _ => return Err("Unknown GitHub pull request action".into()),
+    };
+    Ok(args.into_iter().map(str::to_string).collect())
+}
+
+fn git_github_pr_action_for(
+    root: &Path,
+    repo: &str,
+    number: i64,
+    action: &str,
+) -> Result<GitHubWorkItem, String> {
+    let args = github_pr_action_args(repo, number, action)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    // Successful mutation commands do not always write to stdout. Their exit
+    // status confirms the action ran; the follow-up view fetches the new state.
+    gh_run(root, &refs, true)?;
+    git_github_work_item_for(root, repo, "pr", number)
+}
+
 fn git_github_work_item_details_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     number: i64,
 ) -> Result<GitHubWorkItemDetails, String> {
@@ -1752,13 +2273,21 @@ fn git_github_work_item_details_for(
     if kind != "issue" && kind != "pr" {
         return Err("Unknown GitHub task kind".into());
     }
+    if number <= 0 {
+        return Err("Invalid GitHub item number".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
         "body,author,baseRefName,headRefName,reviewDecision"
     } else {
         "body,author"
     };
-    let json = gh_checked(root, &[kind, "view", &number, "--json", fields])?;
+    let json = gh_checked(
+        root,
+        &[kind, "view", &number, "--repo", &repo, "--json", fields],
+    )?;
     parse_github_work_item_details(&json)
 }
 
@@ -1822,6 +2351,21 @@ query InboxPullRequestThread($owner: String!, $name: String!, $number: Int!) {
       reviewDecision
       baseRefName
       headRefName
+      commits(last: 40) {
+        totalCount
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            committedDate
+            url
+            author {
+              name
+              user { login }
+            }
+          }
+        }
+      }
       comments(last: 40) {
         totalCount
         nodes {
@@ -1884,6 +2428,7 @@ mutation InboxReviewReply($threadId: ID!, $body: String!) {
 
 fn git_github_work_item_thread_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     number: i64,
 ) -> Result<GitHubWorkItemThread, String> {
@@ -1894,8 +2439,7 @@ fn git_github_work_item_thread_for(
     if number <= 0 {
         return Err("Invalid GitHub item number".into());
     }
-    let repo = git_github_repo_for(root)?;
-    let (owner, name) = split_github_repo(&repo)?;
+    let (owner, name) = split_github_repo(repo)?;
     let query = if kind == "pr" {
         GITHUB_PR_THREAD_QUERY
     } else {
@@ -1943,19 +2487,33 @@ fn github_comment_input<'a>(
 
 fn git_github_work_item_comment_for(
     root: &Path,
+    repo: &str,
     kind: &str,
     number: i64,
     body: &str,
     in_reply_to: &str,
 ) -> Result<String, String> {
     let (kind, body) = github_comment_input(kind, number, body)?;
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let reply = in_reply_to.trim();
     if !reply.is_empty() {
         return git_github_review_reply_for(root, reply, body);
     }
     let number = number.to_string();
     with_temp_markdown(body, |path| {
-        let output = gh_checked(root, &[kind, "comment", &number, "--body-file", path])?;
+        let output = gh_checked(
+            root,
+            &[
+                kind,
+                "comment",
+                &number,
+                "--repo",
+                &repo,
+                "--body-file",
+                path,
+            ],
+        )?;
         github_url_from_output(&output, "GitHub did not return a comment URL")
     })
 }
@@ -2109,11 +2667,41 @@ struct GithubGraphqlPullRequest {
     #[serde(default)]
     head_ref_name: String,
     #[serde(default)]
+    commits: GithubGraphqlNodes<GithubGraphqlCommitNode>,
+    #[serde(default)]
     comments: GithubGraphqlNodes<GithubGraphqlComment>,
     #[serde(default)]
     reviews: GithubGraphqlNodes<GithubGraphqlReview>,
     #[serde(default)]
     review_threads: GithubGraphqlNodes<GithubGraphqlReviewThread>,
+}
+
+#[derive(Deserialize)]
+struct GithubGraphqlCommitNode {
+    commit: GithubGraphqlCommit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GithubGraphqlCommit {
+    #[serde(default)]
+    oid: String,
+    #[serde(default)]
+    message_headline: String,
+    #[serde(default)]
+    committed_date: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    author: Option<GithubGraphqlCommitAuthor>,
+}
+
+#[derive(Deserialize)]
+struct GithubGraphqlCommitAuthor {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    user: Option<GithubGraphqlActor>,
 }
 
 #[derive(Deserialize)]
@@ -2204,6 +2792,7 @@ fn parse_github_work_item_thread(json: &str, kind: &str) -> Result<GitHubWorkIte
     };
 
     let mut comments = Vec::new();
+    let mut commits = Vec::new();
     let mut truncated = false;
     let mut review_decision = String::new();
     let mut base_ref_name = String::new();
@@ -2216,6 +2805,30 @@ fn parse_github_work_item_thread(json: &str, kind: &str) -> Result<GitHubWorkIte
         review_decision = pull.review_decision.unwrap_or_default();
         base_ref_name = pull.base_ref_name;
         head_ref_name = pull.head_ref_name;
+        truncated |= github_nodes_truncated(&pull.commits);
+        commits.extend(pull.commits.nodes.into_iter().filter_map(|node| {
+            let commit = node.commit;
+            if commit.oid.trim().is_empty() || commit.committed_date.trim().is_empty() {
+                return None;
+            }
+            let author = commit
+                .author
+                .map(|author| {
+                    author
+                        .user
+                        .map(|user| user.login)
+                        .filter(|login| !login.trim().is_empty())
+                        .unwrap_or(author.name)
+                })
+                .unwrap_or_default();
+            Some(GitHubWorkItemCommit {
+                oid: commit.oid,
+                message_headline: commit.message_headline,
+                author,
+                committed_date: commit.committed_date,
+                url: commit.url,
+            })
+        }));
         truncated |= github_nodes_truncated(&pull.comments);
         comments.extend(
             pull.comments
@@ -2258,6 +2871,7 @@ fn parse_github_work_item_thread(json: &str, kind: &str) -> Result<GitHubWorkIte
     });
     Ok(GitHubWorkItemThread {
         comments,
+        commits,
         truncated,
         review_decision,
         base_ref_name,
@@ -2391,19 +3005,41 @@ fn github_avatar_url(login: &str) -> String {
     format!("https://avatars.githubusercontent.com/{encoded}?s=64")
 }
 
-fn git_github_pr_diff_for(root: &Path, number: i64) -> Result<GitHubPrDiff, String> {
+const PR_FULL_CONTEXT_LINES: &str = "999999";
+
+fn git_github_pr_diff_for(
+    root: &Path,
+    repo: &str,
+    number: i64,
+    full_context: bool,
+) -> Result<GitHubPrDiff, String> {
     if number <= 0 {
         return Err("Invalid pull request number".into());
     }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
     let number = number.to_string();
+    let fields = if full_context {
+        "files,additions,deletions,baseRefOid,headRefOid"
+    } else {
+        "files,additions,deletions"
+    };
     let json = gh_run(
         root,
-        &["pr", "view", &number, "--json", "files,additions,deletions"],
+        &["pr", "view", &number, "--repo", &repo, "--json", fields],
         false,
     )?;
     let mut diff = parse_github_pr_diff_meta(&json)?;
-    let patch = gh_run(root, &["pr", "diff", &number], true)?;
-    if patch.len() > MAX_PR_DIFF_BYTES {
+    let (patch, truncated) = if full_context {
+        let (base, head) = parse_github_pr_oids(&json)?;
+        git_diff_full_context(root, &base, &head)?
+    } else {
+        (
+            gh_run(root, &["pr", "diff", &number, "--repo", &repo], true)?,
+            false,
+        )
+    };
+    if truncated || patch.len() > MAX_PR_DIFF_BYTES {
         diff.truncated = true;
     } else {
         diff.patch = patch;
@@ -2413,6 +3049,152 @@ fn git_github_pr_diff_for(root: &Path, number: i64) -> Result<GitHubPrDiff, Stri
         diff.deletions = diff.files.iter().map(|file| file.deletions).sum();
     }
     Ok(diff)
+}
+
+fn parse_github_pr_oids(json: &str) -> Result<(String, String), String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Row {
+        base_ref_oid: String,
+        head_ref_oid: String,
+    }
+    let row: Row = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let base = row.base_ref_oid.trim();
+    let head = row.head_ref_oid.trim();
+    if base.is_empty() || head.is_empty() {
+        return Err("Pull request is missing base or head commit".into());
+    }
+    Ok((base.to_string(), head.to_string()))
+}
+
+fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<(String, bool), String> {
+    ensure_git_commit(root, base)?;
+    ensure_git_commit(root, head)?;
+    ensure_merge_base(root, base, head)?;
+    let context = format!("-U{PR_FULL_CONTEXT_LINES}");
+    let three_dot = format!("{base}...{head}");
+    let (bytes, truncated) = git_output_capped(
+        root,
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--default-prefix",
+            &context,
+            &three_dot,
+        ],
+        MAX_PR_DIFF_BYTES,
+    )
+    .ok_or_else(|| format!("git diff failed for {base}...{head}"))?;
+    if truncated {
+        return Ok((String::new(), true));
+    }
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), false))
+}
+
+fn ensure_merge_base(root: &Path, base: &str, head: &str) -> Result<(), String> {
+    if merge_base_exists(root, base, head) {
+        return Ok(());
+    }
+    if let Some(remote) = github_fetch_remote(root) {
+        for deepen in ["50", "200", "800"] {
+            let _ = git_output(root, &["fetch", "--no-tags", "--deepen", deepen, &remote]);
+            if merge_base_exists(root, base, head) {
+                return Ok(());
+            }
+        }
+    }
+    Err(format!(
+        "Cannot find a merge base for {base} and {head}. Fetch more history and try again."
+    ))
+}
+
+fn merge_base_exists(root: &Path, base: &str, head: &str) -> bool {
+    git_output(root, &["merge-base", base, head]).is_some()
+}
+
+fn ensure_git_commit(root: &Path, oid: &str) -> Result<(), String> {
+    let spec = format!("{oid}^{{commit}}");
+    if git_output(root, &["cat-file", "-e", &spec]).is_some() {
+        return Ok(());
+    }
+    if let Some(remote) = github_fetch_remote(root) {
+        let _ = git_output(root, &["fetch", "--no-tags", "--depth", "1", &remote, oid]);
+    }
+    if git_output(root, &["cat-file", "-e", &spec]).is_some() {
+        return Ok(());
+    }
+    Err(format!(
+        "Missing git commit {oid}. Fetch the pull request refs and try again."
+    ))
+}
+
+fn github_fetch_remote(root: &Path) -> Option<String> {
+    if let Some(name) = gh_resolved_remote(root) {
+        return Some(name);
+    }
+    if let Some(url) = gh_repo_view_url(root) {
+        if let Some(name) = remote_matching_github_url(root, &url) {
+            return Some(name);
+        }
+    }
+    git_remote_name(root)
+}
+
+fn gh_resolved_remote(root: &Path) -> Option<String> {
+    let listed = git_stdout(
+        root,
+        &["config", "--get-regexp", r"remote\..*\.gh-resolved"],
+    )?;
+    for line in listed.lines() {
+        let key = line.split_whitespace().next()?;
+        let name = key.strip_prefix("remote.")?.strip_suffix(".gh-resolved")?;
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn gh_repo_view_url(root: &Path) -> Option<String> {
+    let text = gh_stdout(root, &["repo", "view", "--json", "url"])?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("url")?
+        .as_str()
+        .map(str::to_owned)
+        .filter(|url| !url.trim().is_empty())
+}
+
+fn remote_matching_github_url(root: &Path, url: &str) -> Option<String> {
+    let remotes = git_stdout(root, &["remote", "-v"])?;
+    let wanted = normalize_github_remote_url(url);
+    for line in remotes.lines() {
+        let mut parts = line.split_whitespace();
+        let name = parts.next()?;
+        let remote_url = parts.next()?;
+        if normalize_github_remote_url(remote_url) == wanted {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn normalize_github_remote_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    if let Some((_, rest)) = trimmed.split_once("github.com:") {
+        return format!(
+            "github.com/{}",
+            rest.trim_start_matches('/').to_ascii_lowercase()
+        );
+    }
+    if let Some((_, rest)) = trimmed.split_once("github.com/") {
+        return format!(
+            "github.com/{}",
+            rest.trim_start_matches('/').to_ascii_lowercase()
+        );
+    }
+    trimmed.to_ascii_lowercase()
 }
 
 fn parse_github_pr_diff_meta(json: &str) -> Result<GitHubPrDiff, String> {
@@ -2474,6 +3256,8 @@ fn parse_github_work_items(
         url: String,
         state: String,
         #[serde(default)]
+        created_at: String,
+        #[serde(default)]
         updated_at: String,
         #[serde(default)]
         labels: Vec<RowLabel>,
@@ -2491,6 +3275,7 @@ fn parse_github_work_items(
             title: row.title,
             url: row.url,
             state: row.state.to_lowercase(),
+            created_at: row.created_at,
             updated_at: row.updated_at,
             labels: row
                 .labels
@@ -2607,9 +3392,11 @@ fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, Strin
     cmd.current_dir(root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
+    crate::hide_window_console(&mut cmd);
     let output = cmd.output().map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             "GitHub CLI (`gh`) is not installed.".to_string()
@@ -2706,14 +3493,57 @@ fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .ok()?;
-    if output.status.success() {
-        return Some(output.stdout);
-    }
-    // `git diff` exits 1 when the files differ.
-    if output.status.code() == Some(1) && args.first().copied() == Some("diff") {
+    if git_status_ok(&output.status, args) {
         return Some(output.stdout);
     }
     None
+}
+
+fn git_output_capped(root: &Path, args: &[&str], max_bytes: usize) -> Option<(Vec<u8>, bool)> {
+    let mut child = git_cmd()
+        .arg("--no-pager")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = match stdout.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        };
+        let remaining = max_bytes.saturating_sub(buf.len());
+        if n > remaining {
+            buf.extend_from_slice(&chunk[..remaining]);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Some((buf, true));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let status = child.wait().ok()?;
+    if git_status_ok(&status, args) {
+        Some((buf, false))
+    } else {
+        None
+    }
+}
+
+fn git_status_ok(status: &std::process::ExitStatus, args: &[&str]) -> bool {
+    status.success() || (status.code() == Some(1) && args.first().copied() == Some("diff"))
 }
 
 fn git_branch(root: &Path) -> Option<String> {
@@ -2932,6 +3762,7 @@ struct GitSync {
     ahead: i64,
     behind: i64,
     ahead_of_default: i64,
+    head_pushed: bool,
 }
 
 fn git_sync_for(root: &Path) -> GitSync {
@@ -2954,6 +3785,17 @@ fn git_sync_for(root: &Path) -> GitSync {
     } else {
         ahead
     };
+    let head_pushed = git_stdout(
+        root,
+        &[
+            "for-each-ref",
+            "--count=1",
+            "--contains",
+            "HEAD",
+            "refs/remotes",
+        ],
+    )
+    .is_some();
     GitSync {
         remote,
         upstream,
@@ -2961,6 +3803,7 @@ fn git_sync_for(root: &Path) -> GitSync {
         ahead,
         behind,
         ahead_of_default,
+        head_pushed,
     }
 }
 
@@ -3879,6 +4722,13 @@ pub async fn delete_path(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+fn dir_contains(dir: &Path, dest_parent: &Path) -> bool {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dest_parent =
+        std::fs::canonicalize(dest_parent).unwrap_or_else(|_| dest_parent.to_path_buf());
+    dest_parent.starts_with(&dir)
+}
+
 fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     let from = expand_home(from);
     if !from.exists() {
@@ -3888,7 +4738,7 @@ fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dest_parent.starts_with(&from) {
+    if from.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = unique_name_in(
@@ -3916,7 +4766,7 @@ fn move_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dest_parent.starts_with(&from) {
+    if from.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = file_label(&from, from.to_str().unwrap_or("item"));
@@ -3990,6 +4840,184 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn assistant_text(text: &str, concat: &str) -> OmpAssistantText {
+        OmpAssistantText {
+            text: text.into(),
+            concat: concat.into(),
+        }
+    }
+
+    #[test]
+    fn github_star_status_distinguishes_a_missing_star_from_an_unavailable_check() {
+        assert_eq!(
+            github_star_status_from_result(Ok(String::new())),
+            GitHubStarStatus::Starred
+        );
+        assert_eq!(
+            github_star_status_from_result(Err("gh: Not Found (HTTP 404)".into())),
+            GitHubStarStatus::NotStarred
+        );
+        assert_eq!(
+            github_star_status_from_result(Err("GitHub CLI is not installed".into())),
+            GitHubStarStatus::Unavailable
+        );
+    }
+
+    #[test]
+    fn omp_active_assistant_texts_keep_active_message_order_with_both_forms() {
+        let dir = tmp("omp-active-texts");
+        let path = dir.0.join("session.jsonl");
+        let records = [
+            serde_json::json!({"type":"message","id":"u","message":{"role":"user","content":"User only"}}),
+            serde_json::json!({"type":"message","id":"abandoned","parentId":"u","message":{"role":"assistant","content":"Off branch"}}),
+            serde_json::json!({"type":"message","id":"a","parentId":"u","message":{"role":"assistant","content":[{"type":"text","text":"First."},{"type":"thinking","thinking":"Hidden"},{"type":"text","text":"Second."}]}}),
+            serde_json::json!({"type":"message","id":"tool","parentId":"a","message":{"role":"assistant","content":[{"type":"toolCall","name":"read"}]}}),
+            serde_json::json!({"type":"message","id":"b","parentId":"tool","message":{"role":"assistant","content":"Plain"}}),
+            serde_json::json!({"type":"custom_message","id":"note","parentId":"b","content":"Note only"}),
+        ];
+        let jsonl = records.iter().map(|v| format!("{v}\n")).collect::<String>();
+        std::fs::write(&path, jsonl).unwrap();
+        assert_eq!(
+            active_omp_assistant_texts(&path).unwrap(),
+            [
+                assistant_text("First.\nSecond.", "First.Second."),
+                assistant_text("Plain", "Plain"),
+            ]
+        );
+    }
+
+    #[test]
+    fn omp_active_assistant_texts_repeat_equal_messages_in_file_order() {
+        let dir = tmp("omp-active-texts-repeats");
+        let path = dir.0.join("session.jsonl");
+        let records = [
+            serde_json::json!({"type":"message","id":"a","message":{"role":"assistant","content":"First."}}),
+            serde_json::json!({"type":"message","id":"off","parentId":"a","message":{"role":"assistant","content":"First.Second."}}),
+            serde_json::json!({"type":"message","id":"b","parentId":"a","message":{"role":"assistant","content":[{"type":"text","text":"Second."}]}}),
+            serde_json::json!({"type":"message","id":"c","parentId":"b","message":{"role":"assistant","content":"First.Second."}}),
+            serde_json::json!({"type":"message","id":"d","parentId":"c","message":{"role":"assistant","content":"First.Second."}}),
+        ];
+        std::fs::write(
+            &path,
+            records.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        assert_eq!(
+            active_omp_assistant_texts(&path).unwrap(),
+            [
+                assistant_text("First.", "First."),
+                assistant_text("Second.", "Second."),
+                assistant_text("First.Second.", "First.Second."),
+                assistant_text("First.Second.", "First.Second."),
+            ]
+        );
+    }
+
+    #[test]
+    fn omp_interjections_require_displayed_assistant_anchors() {
+        let dir = tmp("omp-interjections");
+        let path = dir.0.join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"message\",\"id\":\"u\",\"message\":{\"role\":\"user\",\"content\":\"Go\"}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"orphan\",\"parentId\":\"u\",\"display\":true}\n",
+                "{\"type\":\"message\",\"id\":\"a1\",\"parentId\":\"orphan\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Answer\"}]}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"hidden\",\"parentId\":\"a1\",\"display\":false}\n",
+                "invalid partial line\n",
+                "{\"type\":\"message\",\"id\":\"a2\",\"parentId\":\"hidden\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Answer\"}]}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"review\",\"parentId\":\"a2\",\"display\":true,\"customType\":\"advisor\",\"details\":{\"notes\":[{\"note\":\"First\",\"severity\":\"nit\"},{\"note\":\"Second\",\"severity\":\"blocker\"}]}}\n",
+                "{\"type\":\"message\",\"id\":\"a3\",\"parentId\":\"review\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Checked\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let anchors = parse_omp_interjections(&path).unwrap();
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].after_assistant_text, "Answer");
+        assert_eq!(anchors[0].after_occurrence, 2);
+        assert_eq!(
+            anchors[0].following_assistant_text.as_deref(),
+            Some("Checked")
+        );
+        assert_eq!(anchors[0].text, "First\n\nSecond");
+        assert_eq!(anchors[0].severity.as_deref(), Some("blocker"));
+    }
+
+    #[test]
+    fn omp_interjections_do_not_coalesce_across_reasoning() {
+        let dir = tmp("omp-interjections-reasoning");
+        let path = dir.0.join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"message\",\"id\":\"a\",\"message\":{\"role\":\"assistant\",\"content\":\"Answer\"}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"review\",\"parentId\":\"a\",\"display\":true,\"content\":\"Check\"}\n",
+                "{\"type\":\"message\",\"id\":\"b\",\"parentId\":\"review\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Wait\"},{\"type\":\"text\",\"text\":\"Checked\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let anchors = parse_omp_interjections(&path).unwrap();
+        assert_eq!(anchors[0].following_assistant_text, None);
+        assert_eq!(anchors[0].text, "Check");
+    }
+    #[test]
+    fn omp_interjections_follow_active_ancestry_and_keep_text_forms() {
+        let dir = tmp("omp-interjections-ancestry");
+        let path = dir.0.join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"message\",\"id\":\"a\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"One\"},{\"type\":\"text\",\"text\":\"Two\"}]}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"abandoned\",\"parentId\":\"a\",\"display\":true,\"content\":\"Wrong branch\"}\n",
+                "{\"type\":\"message\",\"id\":\"t\",\"parentId\":\"a\",\"message\":{\"role\":\"toolResult\",\"content\":\"Done\"}}\n",
+                "{\"type\":\"custom_message\",\"id\":\"first\",\"parentId\":\"t\",\"display\":true,\"content\":\"First\"}\n",
+                "{\"type\":\"custom_message\",\"id\":\"second\",\"parentId\":\"first\",\"display\":true,\"content\":\"Second\"}\n",
+                "{\"type\":\"compaction\",\"id\":\"meta\",\"parentId\":\"second\"}\n",
+                "{\"type\":\"custom_message\",\"id\":\"third\",\"parentId\":\"meta\",\"display\":true,\"content\":\"Third\"}\n",
+                "{\"type\":\"message\",\"id\":\"b\",\"parentId\":\"third\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Three\"},{\"type\":\"text\",\"text\":\"Four\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let anchors = parse_omp_interjections(&path).unwrap();
+        assert_eq!(
+            anchors.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+        for anchor in &anchors {
+            assert_eq!(anchor.after_assistant_text, "One\nTwo");
+            assert_eq!(anchor.after_assistant_text_concat, "OneTwo");
+            assert_eq!(anchor.after_occurrence, 1);
+            assert_eq!(anchor.after_concat_occurrence, 1);
+        }
+        assert_eq!(anchors[0].following_assistant_text, None);
+        assert_eq!(anchors[1].following_assistant_text, None);
+        assert_eq!(
+            anchors[2].following_assistant_text.as_deref(),
+            Some("Three\nFour")
+        );
+        assert_eq!(
+            anchors[2].following_assistant_text_concat.as_deref(),
+            Some("ThreeFour")
+        );
+    }
+
+    #[test]
+    fn omp_interjections_do_not_cross_users_or_empty_assistant_messages() {
+        let dir = tmp("omp-interjections-barriers");
+        let path = dir.0.join("session.jsonl");
+        for role in ["user", "assistant"] {
+            let records = [
+                serde_json::json!({"type":"message","id":"a","message":{"role":"assistant","content":"Earlier"}}),
+                serde_json::json!({"type":"message","id":"barrier","parentId":"a","message":{"role":role,"content":[]}}),
+                serde_json::json!({"type":"message","id":"tool","parentId":"barrier","message":{"role":"toolResult","content":"Done"}}),
+                serde_json::json!({"type":"custom_message","id":"note","parentId":"tool","display":true,"content":"Note"}),
+            ];
+            let jsonl = records.map(|record| record.to_string()).join("\n");
+            std::fs::write(&path, jsonl).unwrap();
+            assert!(parse_omp_interjections(&path).unwrap().is_empty());
+        }
+    }
 
     #[test]
     fn stat_files_returns_mtime_for_existing_files_only() {
@@ -4146,6 +5174,24 @@ mod tests {
         assert!(Path::new(&copied).join("a.rs").exists());
 
         let err = copy_path_sync(&src_s, &src_s).unwrap_err();
+        assert!(err.contains("itself"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_rejects_paste_into_self_through_a_symlink_alias() {
+        let dir = tmp("folder-alias");
+        let src = dir.0.join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.rs"), "fn a() {}\n").unwrap();
+        let alias = dir.0.join("alias");
+        std::os::unix::fs::symlink(&src, &alias).unwrap();
+        let src_s = src.to_string_lossy().into_owned();
+        let alias_s = alias.to_string_lossy().into_owned();
+
+        let err = copy_path_sync(&src_s, &alias_s).unwrap_err();
+        assert!(err.contains("itself"));
+        let err = move_path_sync(&src_s, &alias_s).unwrap_err();
         assert!(err.contains("itself"));
     }
 
@@ -4842,7 +5888,9 @@ mod tests {
         std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&dir.0, "a.txt").unwrap();
         git_commit_for(&dir.0, "update a").unwrap();
-        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        let index = git_diff_index_for(&dir.0);
+        assert!(index.files.is_empty());
+        assert_eq!(index.head, git_stdout(&dir.0, &["rev-parse", "HEAD"]));
         assert_eq!(
             git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
             Some("update a")
@@ -4853,6 +5901,71 @@ mod tests {
     fn git_commit_rejects_empty_message() {
         let dir = tmp("git-commit-empty");
         assert!(git_commit_for(&dir.0, "   ").is_err());
+    }
+
+    #[test]
+    fn git_commit_amend_rewrites_head_with_staged_changes() {
+        let dir = tmp("git-commit-amend");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+        git_commit_amend_for(&dir.0, "amended").unwrap();
+        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        assert_eq!(
+            git_stdout(&dir.0, &["rev-list", "--count", "HEAD"]).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
+            Some("amended")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["show", "HEAD:a.txt"]).as_deref(),
+            Some("beta")
+        );
+    }
+
+    #[test]
+    fn git_commit_amend_rewords_without_staged_changes() {
+        let dir = tmp("git-commit-reword");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        git_commit_amend_for(&dir.0, "reworded").unwrap();
+        assert_eq!(
+            git_stdout(&dir.0, &["rev-list", "--count", "HEAD"]).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
+            Some("reworded")
+        );
+    }
+
+    #[test]
+    fn git_head_message_returns_subject_and_body() {
+        let dir = tmp("git-head-message");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+        git_commit_for(&dir.0, "Subject line\n\nBody text").unwrap();
+        assert_eq!(
+            git_head_message_for(&dir.0).unwrap(),
+            "Subject line\n\nBody text"
+        );
+    }
+
+    #[test]
+    fn git_head_message_fails_without_commits() {
+        let dir = tmp("git-head-message-empty");
+        if !init_git(&dir.0, "main", None) {
+            return;
+        }
+        assert!(git_head_message_for(&dir.0).is_err());
     }
 
     #[test]
@@ -4952,6 +6065,41 @@ mod tests {
     }
 
     #[test]
+    fn git_sync_marks_head_pushed_without_upstream() {
+        let repo = tmp("git-pushed-repo");
+        let origin = tmp("git-pushed-origin");
+        if !init_git_commit(&repo.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        if Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&origin.0)
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let origin_url = origin.0.to_string_lossy().into_owned();
+        if !git(&repo.0, &["remote", "add", "origin", &origin_url])
+            || !git(&repo.0, &["push", "-u", "origin", "main"])
+            || !git(&repo.0, &["checkout", "-b", "feature"])
+        {
+            return;
+        }
+        std::fs::write(repo.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&repo.0, "a.txt").unwrap();
+        git_commit_for(&repo.0, "feature work").unwrap();
+        assert!(!git_diff_index_for(&repo.0).head_pushed);
+        if !git(&repo.0, &["push", "origin", "feature"]) {
+            return;
+        }
+        let index = git_diff_index_for(&repo.0);
+        assert_eq!(index.upstream, None);
+        assert!(index.head_pushed);
+    }
+
+    #[test]
     fn git_sync_pulls_then_pushes() {
         let origin = tmp("git-sync-origin");
         let a = tmp("git-sync-a");
@@ -5031,12 +6179,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_github_repositories_includes_a_forks_parent() {
+        let json = r#"{
+            "nameWithOwner": "EricRasputin/monocode-eric",
+            "parent": {
+                "name": "monocode",
+                "owner": { "login": "hardbeat920" }
+            }
+        }"#;
+        assert_eq!(
+            parse_github_repositories(json).unwrap(),
+            vec!["EricRasputin/monocode-eric", "hardbeat920/monocode"]
+        );
+    }
+
+    #[test]
+    fn parse_github_repositories_keeps_a_normal_repo_single() {
+        let json = r#"{
+            "nameWithOwner": "hardbeat920/monocode",
+            "parent": null
+        }"#;
+        assert_eq!(
+            parse_github_repositories(json).unwrap(),
+            vec!["hardbeat920/monocode"]
+        );
+    }
+
+    #[test]
     fn parse_github_work_items_maps_issue_fields() {
         let json = r#"[{
             "number": 5138,
             "title": "Promo codes fail to apply",
             "url": "https://github.com/acme/web/issues/5138",
             "state": "OPEN",
+            "createdAt": "2026-08-20T09:00:00Z",
             "updatedAt": "2026-08-27T08:00:00Z",
             "labels": [{"name": "bug", "color": "d73a4a"}],
             "assignees": [{"login": "maya"}]
@@ -5054,6 +6230,9 @@ mod tests {
             "https://avatars.githubusercontent.com/maya?s=64"
         );
         assert!(!items[0].draft);
+        let payload = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(payload["createdAt"], "2026-08-20T09:00:00Z");
+        assert_eq!(payload["updatedAt"], "2026-08-27T08:00:00Z");
     }
 
     #[test]
@@ -5070,6 +6249,26 @@ mod tests {
         assert!(items[0].draft);
         assert!(items[0].labels.is_empty());
         assert_eq!(items[0].repo, "acme/web");
+    }
+
+    #[test]
+    fn github_work_item_creation_time_reaches_frontend() {
+        for (kind, resource) in [("pr", "pull"), ("issue", "issues")] {
+            let json = r#"{
+            "number": 12,
+            "title": "Checkout",
+            "url": "https://github.com/acme/web/pull/12",
+            "state": "OPEN",
+            "createdAt": "2026-09-01T08:00:00Z",
+            "updatedAt": "2026-09-11T08:00:00Z"
+        }"#;
+            let json = json.replace("/pull/", &format!("/{resource}/"));
+            let item = parse_github_work_item(&json, kind, "acme/web").unwrap();
+            let payload = serde_json::to_value(item).unwrap();
+            assert_eq!(payload["kind"], kind);
+            assert_eq!(payload["createdAt"], "2026-09-01T08:00:00Z");
+            assert_eq!(payload["updatedAt"], "2026-09-11T08:00:00Z");
+        }
     }
 
     #[test]
@@ -5131,6 +6330,25 @@ mod tests {
     }
 
     #[test]
+    fn github_pr_actions_map_to_non_interactive_gh_commands() {
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "squash").unwrap(),
+            ["pr", "merge", "42", "--repo", "acme/web", "--squash"]
+        );
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "draft").unwrap(),
+            ["pr", "ready", "42", "--repo", "acme/web", "--undo"]
+        );
+        assert_eq!(
+            github_pr_action_args("acme/web", 42, "reopen").unwrap(),
+            ["pr", "reopen", "42", "--repo", "acme/web"]
+        );
+        assert!(github_pr_action_args("acme/web", 42, "delete").is_err());
+        assert!(github_pr_action_args("acme/web", 0, "merge").is_err());
+        assert!(github_pr_action_args("invalid", 42, "merge").is_err());
+    }
+
+    #[test]
     fn parse_github_work_item_thread_merges_conversation() {
         let json = r#"{
             "data": {
@@ -5139,6 +6357,23 @@ mod tests {
                         "reviewDecision": "APPROVED",
                         "baseRefName": "main",
                         "headRefName": "agent-terminal",
+                        "commits": {
+                            "totalCount": 2,
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "oid": "abcdef123456",
+                                        "messageHeadline": "Show linked activity",
+                                        "committedDate": "2026-08-31T11:45:00Z",
+                                        "url": "https://github.com/acme/web/commit/abcdef123456",
+                                        "author": {
+                                            "name": "Maya Smith",
+                                            "user": {"login": "maya"}
+                                        }
+                                    }
+                                }
+                            ]
+                        },
                         "comments": {
                             "totalCount": 50,
                             "nodes": [
@@ -5222,6 +6457,10 @@ mod tests {
         assert_eq!(thread.review_decision, "APPROVED");
         assert_eq!(thread.base_ref_name, "main");
         assert_eq!(thread.head_ref_name, "agent-terminal");
+        assert_eq!(thread.commits.len(), 1);
+        assert_eq!(thread.commits[0].oid, "abcdef123456");
+        assert_eq!(thread.commits[0].message_headline, "Show linked activity");
+        assert_eq!(thread.commits[0].author, "maya");
         assert_eq!(
             thread
                 .comments
@@ -5363,6 +6602,199 @@ mod tests {
         assert_eq!(diff.files[0].additions, 4);
         assert_eq!(diff.patch, "");
         assert!(!diff.truncated);
+    }
+
+    #[test]
+    fn parse_github_pr_oids_reads_base_and_head() {
+        let json = r#"{
+            "baseRefOid": "aaa111",
+            "headRefOid": "bbb222",
+            "files": []
+        }"#;
+        assert_eq!(
+            parse_github_pr_oids(json).unwrap(),
+            ("aaa111".into(), "bbb222".into())
+        );
+    }
+
+    #[test]
+    fn git_diff_full_context_includes_distant_lines() {
+        let dir = tmp("git-full-context");
+        let original = (1..=40)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        if !init_git_commit(&dir.0, &[("big.txt", &original)]) {
+            return;
+        }
+        let base = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let updated = original.replace("line-30", "LINE-30");
+        std::fs::write(dir.0.join("big.txt"), &updated).unwrap();
+        if !git(&dir.0, &["add", "."]) || !git(&dir.0, &["commit", "-m", "edit"]) {
+            return;
+        }
+        let head = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let (patch, truncated) = git_diff_full_context(&dir.0, &base, &head).unwrap();
+        assert!(!truncated);
+        assert!(
+            patch.contains("line-1"),
+            "expected distant context in patch:\n{patch}"
+        );
+        assert!(patch.contains("LINE-30"), "expected changed line:\n{patch}");
+        let default = git_run(&dir.0, &["diff", &base, &head]).unwrap_or_default();
+        assert!(
+            !default.contains("line-1"),
+            "default context should omit distant lines"
+        );
+    }
+
+    #[test]
+    fn git_diff_full_context_uses_canonical_plain_output() {
+        let dir = tmp("git-full-context-canonical");
+        if !init_git_commit(&dir.0, &[("file.txt", "alpha\n")]) {
+            return;
+        }
+        let base = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        std::fs::write(dir.0.join("file.txt"), "beta\n").unwrap();
+        if !git(&dir.0, &["add", "."]) || !git(&dir.0, &["commit", "-m", "edit"]) {
+            return;
+        }
+        let head = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let helper = dir.0.join("ext-diff.sh");
+        std::fs::write(&helper, "#!/bin/sh\necho EXTERNAL\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&helper, permissions).unwrap();
+        }
+        if !git(&dir.0, &["config", "color.ui", "always"])
+            || !git(&dir.0, &["config", "color.diff", "always"])
+            || !git(&dir.0, &["config", "diff.noprefix", "true"])
+            || !git(
+                &dir.0,
+                &["config", "diff.external", &helper.to_string_lossy()],
+            )
+        {
+            return;
+        }
+        let raw = git_run(&dir.0, &["diff", &format!("{base}...{head}")]).unwrap_or_default();
+        assert!(
+            raw.contains("EXTERNAL") || !raw.contains("diff --git a/file.txt b/file.txt"),
+            "hostile git settings should change a default diff:\n{raw}"
+        );
+        let (patch, truncated) = git_diff_full_context(&dir.0, &base, &head).unwrap();
+        assert!(!truncated);
+        assert!(
+            patch.contains("diff --git a/file.txt b/file.txt"),
+            "expected canonical prefixes:\n{patch}"
+        );
+        assert!(
+            !patch.contains('\u{1b}') && !patch.contains("EXTERNAL"),
+            "expected plain git diff output:\n{patch}"
+        );
+    }
+
+    #[test]
+    fn git_diff_full_context_errors_without_a_merge_base() {
+        let dir = tmp("git-full-context-unrelated");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        let base = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        if !git(&dir.0, &["checkout", "--orphan", "other"]) {
+            return;
+        }
+        let _ = std::fs::remove_file(dir.0.join("a.txt"));
+        std::fs::write(dir.0.join("b.txt"), "beta\n").unwrap();
+        if !git(&dir.0, &["add", "."]) || !git(&dir.0, &["commit", "-m", "other"]) {
+            return;
+        }
+        let head = git_run(&dir.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        assert!(git_run(&dir.0, &["merge-base", &base, &head]).is_none());
+        let two_dot = git_run(&dir.0, &["diff", &base, &head]).unwrap_or_default();
+        assert!(
+            two_dot.contains("alpha") || two_dot.contains("beta"),
+            "two-dot should invent a comparison:\n{two_dot}"
+        );
+        let err = git_diff_full_context(&dir.0, &base, &head).unwrap_err();
+        assert!(
+            err.to_lowercase().contains("merge base"),
+            "expected merge-base error, got {err}"
+        );
+    }
+
+    #[test]
+    fn ensure_git_commit_fetches_from_gh_resolved_remote() {
+        let remote = tmp("git-full-context-upstream");
+        if !init_git_commit(&remote.0, &[("note.txt", "hello\n")]) {
+            return;
+        }
+        let oid = git_run(&remote.0, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let decoy = tmp("git-full-context-origin");
+        if !init_git_commit(&decoy.0, &[("other.txt", "decoy\n")]) {
+            return;
+        }
+        let local = tmp("git-full-context-local");
+        if !init_git_commit(&local.0, &[("local.txt", "local\n")]) {
+            return;
+        }
+        let upstream_url = remote.0.to_string_lossy().into_owned();
+        let origin_url = decoy.0.to_string_lossy().into_owned();
+        if !git(&local.0, &["remote", "add", "origin", &origin_url])
+            || !git(&local.0, &["remote", "add", "upstream", &upstream_url])
+            || !git(&local.0, &["config", "remote.upstream.gh-resolved", "base"])
+        {
+            return;
+        }
+        assert_eq!(github_fetch_remote(&local.0).as_deref(), Some("upstream"));
+        let spec = format!("{oid}^{{commit}}");
+        assert!(git_output(&local.0, &["cat-file", "-e", &spec]).is_none());
+        ensure_git_commit(&local.0, &oid).unwrap();
+        assert!(git_output(&local.0, &["cat-file", "-e", &spec]).is_some());
+    }
+
+    #[test]
+    fn git_output_capped_stops_before_buffering_the_rest() {
+        let dir = tmp("git-output-capped");
+        let big = "x".repeat(80_000);
+        if !init_git_commit(&dir.0, &[("big.txt", &format!("{big}\n"))]) {
+            return;
+        }
+        std::fs::write(dir.0.join("big.txt"), format!("y{big}\n")).unwrap();
+        if !git(&dir.0, &["add", "."]) || !git(&dir.0, &["commit", "-m", "edit"]) {
+            return;
+        }
+        let (bytes, truncated) =
+            git_output_capped(&dir.0, &["diff", "HEAD~1", "HEAD"], 1024).unwrap();
+        assert!(truncated);
+        assert!(bytes.len() <= 1024);
+        let (head, truncated) = git_output_capped(&dir.0, &["rev-parse", "HEAD"], 1024).unwrap();
+        assert!(!truncated);
+        assert!(!head.is_empty());
     }
 
     #[test]

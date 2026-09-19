@@ -1,6 +1,6 @@
 import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContext,
   isValidElement,
@@ -229,8 +229,11 @@ function MarkdownLink({
           onOpenFile(file.path, file.navigation);
           return;
         }
-        if (!href || !/^https?:\/\//i.test(href)) {
-          event.preventDefault();
+        event.preventDefault();
+        if (href && /^https?:\/\//i.test(href)) {
+          void openUrl(href).catch((error) => {
+            console.error("Failed to open web link:", error);
+          });
         }
       }}
       onContextMenu={(event) => {
@@ -551,20 +554,26 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   streaming,
   cwd,
   onOpenFile,
+  header,
 }: {
   text: string;
   streaming?: boolean;
   cwd?: string;
   onOpenFile?: OpenFileFn;
+  header?: ReactNode;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
 
   return (
     <div
       ref={lockOverscroll}
+      tabIndex={0}
+      role="region"
+      aria-label="Markdown preview"
       className="markdown-preview h-full overflow-y-auto overscroll-none [overflow-anchor:none]"
     >
       <div className="px-6 py-8">
+        {header}
         <AgentMarkdown
           text={text}
           streaming={streaming}
@@ -586,6 +595,9 @@ export const MarkdownSource = memo(function MarkdownSource({
   return (
     <div
       ref={lockOverscroll}
+      tabIndex={0}
+      role="region"
+      aria-label="Markdown source"
       className="markdown-preview h-full overflow-y-auto overscroll-none [overflow-anchor:none]"
     >
       <pre className="min-h-full min-w-0 whitespace-pre-wrap wrap-break-word px-4 py-3 font-mono text-[13px] leading-5 text-content/85">

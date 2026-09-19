@@ -194,7 +194,7 @@ export function UnifiedDiffView({
       }
     >
       <div
-        className={`flex h-8 shrink-0 items-center gap-3 border-b border-content/10 px-3 text-[12px]`}
+        className={`flex h-8 shrink-0 items-center gap-3 border-b border-stroke px-3 text-[12px]`}
       >
         <span className="text-content/70">{fileLabel}</span>
         <DiffCounts additions={additions} deletions={deletions} />
@@ -369,7 +369,7 @@ const FileSection = memo(function FileSection({
           fileLayout === "stacked" ? "sticky top-0 z-30 backdrop-blur-xl" : ""
         } flex items-center gap-2 bg-content/2 px-3 py-1.5 ${
           fileLayout === "stacked" || expanded
-            ? "border-b border-content/10"
+            ? "border-b border-stroke"
             : ""
         }`}
       >

@@ -1,3 +1,21 @@
+export const EXPLORER_FILE_POINTER_DRAG_EVENT =
+  "monocode:explorer-file-pointer-drag";
+
+export type ExplorerFilePointerDragDetail =
+  | { type: "move" | "drop"; path: string; x: number; y: number }
+  | { type: "end"; path: string };
+
+export function emitExplorerFilePointerDrag(
+  detail: ExplorerFilePointerDragDetail,
+) {
+  window.dispatchEvent(
+    new CustomEvent<ExplorerFilePointerDragDetail>(
+      EXPLORER_FILE_POINTER_DRAG_EVENT,
+      { detail },
+    ),
+  );
+}
+
 export function setGrabbing(on: boolean) {
   document.body.style.cursor = on ? "grabbing" : "";
 }

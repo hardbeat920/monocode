@@ -11,6 +11,7 @@ import {
   extractToolPreview,
 } from "./preview";
 import { fxToolInfo, fxToolVerb } from "./fxTool";
+import { acpAgentInfo } from "./acpSubagents";
 
 export type FxModeId = "ask" | "code";
 
@@ -251,6 +252,7 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         status,
         detail: cap(fx.detail ?? "") || toolDetail(update, tool),
         preview,
+        ...acpAgentInfo(update, tool, toolKind, title),
       },
     ];
   }
@@ -260,8 +262,7 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
     return event ? [event] : [];
   }
 
-  const usage = usageFromUpdate(update);
-  return usage ? [usage] : [];
+  return usageFromUpdate(update);
 }
 
 export function modelsFromFxOutput(stdout: string): AgentModel[] {
@@ -516,13 +517,13 @@ function displayName(nativeId: string): string {
     .replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
-function usageFromUpdate(update: Record<string, unknown>): HarnessEvent | null {
+function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
   const usage =
     asRecord(update.usage) ??
     asRecord(update.tokenUsage) ??
     asRecord(update.token_usage) ??
     (hasUsageFields(update) ? update : null);
-  if (!usage) return null;
+  if (!usage) return [];
   const used =
     numberField(usage, "used") ??
     numberField(usage, "usedTokens") ??
@@ -535,8 +536,45 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent | null {
     numberField(usage, "context_window") ??
     numberField(usage, "maxTokens") ??
     numberField(usage, "max_tokens");
-  if (used == null && window == null) return null;
-  return { type: "context", used: used ?? undefined, window: window ?? undefined };
+  const events: HarnessEvent[] = [];
+  if (used != null || window != null) {
+    events.push({
+      type: "context",
+      ...(used != null ? { used } : {}),
+      ...(window != null ? { window } : {}),
+    });
+  }
+  const inputTokens =
+    numberField(usage, "inputTokens") ?? numberField(usage, "input_tokens");
+  const outputTokens =
+    numberField(usage, "outputTokens") ?? numberField(usage, "output_tokens");
+  const cacheReadTokens =
+    numberField(usage, "cacheReadTokens") ??
+    numberField(usage, "cache_read_input_tokens");
+  const cacheWriteTokens =
+    numberField(usage, "cacheWriteTokens") ??
+    numberField(usage, "cache_creation_input_tokens");
+  const cacheReported = cacheReadTokens != null || cacheWriteTokens != null;
+  if (
+    inputTokens != null ||
+    outputTokens != null ||
+    cacheReadTokens != null ||
+    cacheWriteTokens != null
+  ) {
+    const cacheableInput =
+      (inputTokens ?? 0) + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
+    events.push({
+      type: "turn.metrics",
+      ...(inputTokens != null ? { inputTokens } : {}),
+      ...(outputTokens != null ? { outputTokens } : {}),
+      ...(cacheReadTokens != null ? { cacheReadTokens } : {}),
+      ...(cacheWriteTokens != null ? { cacheWriteTokens } : {}),
+      ...(cacheReported && cacheableInput > 0
+        ? { cacheHitPercent: ((cacheReadTokens ?? 0) / cacheableInput) * 100 }
+        : {}),
+    });
+  }
+  return events;
 }
 
 function hasUsageFields(rec: Record<string, unknown>): boolean {

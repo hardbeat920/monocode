@@ -360,6 +360,29 @@ describe("applyInboxFilters", () => {
       ).map((row) => row.number),
     ).toEqual([9]);
   });
+
+  it("ignores local project exclusions in GitLab's attention view", () => {
+    const gitlab = item({
+      number: 9,
+      provider: "gitlab",
+      repo: "acme/web",
+      projectPath: "/tmp/web",
+      updatedAt: "2026-08-27T10:00:00Z",
+    });
+    expect(
+      applyInboxFilters(
+        [gitlab],
+        {
+          ...DEFAULT_INBOX_FILTERS,
+          assignedToMe: true,
+          hiddenProjects: ["/tmp/web"],
+        },
+        "",
+        Date.now(),
+        "gitlab",
+      ),
+    ).toEqual([gitlab]);
+  });
 });
 
 describe("hasActiveInboxFilters", () => {

@@ -3,7 +3,7 @@ export function isOscColorQuery(data: string): boolean {
   return data === "?" || data.startsWith("?");
 }
 
-/** Reply so CLIs know this is a dark terminal (`#rrggbb`). */
+/** Reply to a terminal color query using a resolved `#rrggbb` value. */
 export function oscColorReply(code: 10 | 11 | 12, hex: string): string {
   const value = hex.replace(/^#/, "");
   if (value.length !== 6) return "";

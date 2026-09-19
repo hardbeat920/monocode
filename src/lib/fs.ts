@@ -1,6 +1,41 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { slash } from "./paths";
+import type { InterjectionMeta } from "./session";
+
+export type OmpInterjectionAnchor = InterjectionMeta & {
+  id: string;
+  afterAssistantText: string;
+  /** One-based occurrence among assistant messages with exactly this text. */
+  afterOccurrence: number;
+  /** Direct-concat live representation, with its own exact-text occurrence. */
+  afterAssistantTextConcat?: string;
+  afterConcatOccurrence?: number;
+  text: string;
+  /** Full text of a directly following text-only answer, if present. */
+  followingAssistantText?: string | null;
+  followingAssistantTextConcat?: string | null;
+};
+
+export function ompSessionInterjections(
+  providerSessionId: string,
+): Promise<OmpInterjectionAnchor[]> {
+  return invoke<OmpInterjectionAnchor[]>("omp_session_interjections", {
+    providerSessionId,
+  });
+}
+
+/** One active-path assistant message in source order. Its newline and concat
+ * representations are alternative forms of the same message, not two messages.
+ */
+export interface OmpAssistantText {
+  text: string;
+  concat: string;
+}
+
+export function ompActiveAssistantTexts(providerSessionId: string): Promise<OmpAssistantText[]> {
+  return invoke<OmpAssistantText[]>("omp_active_assistant_texts", { providerSessionId });
+}
 
 export type FsEntry = {
   name: string;
@@ -8,6 +43,22 @@ export type FsEntry = {
   isDir: boolean;
   ignored: boolean;
 };
+
+export type ExternalEditor = {
+  id: string;
+  name: string;
+};
+
+export function listExternalEditors(): Promise<ExternalEditor[]> {
+  return invoke<ExternalEditor[]>("list_external_editors");
+}
+
+export function openInExternalEditor(
+  editorId: string,
+  cwd: string,
+): Promise<void> {
+  return invoke<void>("open_in_external_editor", { editorId, cwd });
+}
 
 export type ProjectFile = {
   name: string;
@@ -35,6 +86,7 @@ export type DiscoveredSkill = {
     | "omp"
     | "fx"
     | "grok"
+    | "hermes"
     | "monocode";
 };
 
@@ -74,6 +126,7 @@ export type GitChangedFile = {
 
 export type GitDiffIndex = {
   branch: string | null;
+  head: string | null;
   files: GitChangedFile[];
   additions: number;
   deletions: number;
@@ -83,6 +136,7 @@ export type GitDiffIndex = {
   ahead: number;
   behind: number;
   aheadOfDefault: number;
+  headPushed: boolean;
 };
 
 export function gitDiffIndex(cwd: string): Promise<GitDiffIndex> {
@@ -190,8 +244,16 @@ export function gitUnstageAll(cwd: string): Promise<void> {
   return invoke<void>("git_unstage_all", { cwd });
 }
 
-export function gitCommit(cwd: string, message: string): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message });
+export function gitCommit(
+  cwd: string,
+  message: string,
+  amend = false,
+): Promise<void> {
+  return invoke<void>("git_commit", { cwd, message, amend });
+}
+
+export function gitHeadMessage(cwd: string): Promise<string> {
+  return invoke<string>("git_head_message", { cwd });
 }
 
 export type GitStagedContext = {
@@ -291,19 +353,6 @@ export function isCheckoutBlockedByChanges(message: string): boolean {
   );
 }
 
-/** Drop leftover session-worktree pins. The composer now switches this folder. */
-export function restoreSessionCheckout<
-  T extends { cwd: string; branch?: string; worktreeCwd?: string; providerSessionId?: string },
->(session: T): T {
-  if (!session.branch && !session.worktreeCwd) return session;
-  return {
-    ...session,
-    branch: undefined,
-    worktreeCwd: undefined,
-    ...(session.worktreeCwd ? { providerSessionId: undefined } : {}),
-  };
-}
-
 const GIT_CHANGED = "monocode-git-changed";
 
 /** Tell git UIs (diff pane, branch picker) to reload after a local git mutation. */
@@ -338,6 +387,18 @@ export function copyPath(from: string, destParent: string): Promise<string> {
 
 export function movePath(from: string, destParent: string): Promise<string> {
   return invoke<string>("move_path", { from, destParent }).then(slash);
+}
+
+/** macOS only. Other platforms return an empty list. */
+export function clipboardFilePaths(): Promise<string[]> {
+  return invoke<string[]>("clipboard_file_paths").then((paths) =>
+    paths.map(slash),
+  );
+}
+
+/** Put the original file on the macOS clipboard, preserving its name and type. */
+export function copyFileToClipboard(path: string): Promise<void> {
+  return invoke<void>("copy_file_to_clipboard", { path });
 }
 
 export function revealPath(path: string): Promise<void> {

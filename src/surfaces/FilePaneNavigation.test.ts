@@ -66,6 +66,7 @@ describe("file pane source navigation", () => {
       onFocus: () => {},
       onSelectFile: () => {},
       onCloseFile: () => {},
+      onCloseOtherFiles: () => {},
       onDirtyChange: () => {},
       onErrorCountChange: () => {},
       onReorderFiles: () => {},

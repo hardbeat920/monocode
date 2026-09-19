@@ -31,7 +31,7 @@ type Props = {
   source: InboxSource;
   filters: InboxFilters;
   onChange: (filters: InboxFilters) => void;
-  /** Shared with Settings → Linear Teams; narrows the fetch, not just the list. */
+  /** Shared with Settings → Inbox → Linear; narrows the fetch, not just the list. */
   onLinearTeamsChange: (ids: string[]) => void;
   onClose: () => void;
 };
@@ -135,7 +135,7 @@ export function InboxFiltersMenu({
       className="overflow-y-auto overscroll-none p-1"
     >
       <FilterItem
-        label="Assigned to me"
+        label={source === "gitlab" ? "Needs attention" : "Assigned to me"}
         checked={filters.assignedToMe}
         onClick={toggleAssigned}
       />
@@ -223,7 +223,9 @@ export function InboxFiltersMenu({
         </>
       ) : null}
 
-      {source !== "linear" && projects.length > 0 ? (
+      {source !== "linear" &&
+      !(source === "gitlab" && filters.assignedToMe) &&
+      projects.length > 0 ? (
         <>
           <SectionLabel>Projects</SectionLabel>
           {projects.map((project) => (

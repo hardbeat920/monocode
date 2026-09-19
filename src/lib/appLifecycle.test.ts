@@ -4,7 +4,14 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { forgetHarnessSession, killAllChildren } from "./harness";
 import { newSession } from "./session";
 import { newTab } from "./layout";
-import { closeBusyWindow, setQuitWorkspace } from "./appLifecycle";
+import {
+  askQuitConfirmation,
+  closeBusyWindow,
+  commitQuit,
+  confirmReload,
+  reportQuitPoll,
+  setQuitWorkspace,
+} from "./appLifecycle";
 import {
   collectWorkspaceSnapshot,
   hydrateWorkspaceSnapshot,
@@ -183,6 +190,7 @@ describe("project choices through lifecycle saves", () => {
 
   it("preserves resumed choices when quitting before App registers live getters", async () => {
     const state = workspace();
+    state.sessions[0].worktreeCwd = "/alpha-worktrees/feature";
     vi.mocked(loadWorkspaceSnapshot).mockResolvedValue(
       collectWorkspaceSnapshot(
         state.tabs,
@@ -195,6 +203,12 @@ describe("project choices through lifecycle saves", () => {
     const { handleQuitRequested } = await import("./appLifecycle");
     await handleQuitRequested();
     expect([...(lastSavedMemory() ?? [])]).toEqual([...state.memory]);
+    const args = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "workspace_set_snapshot").at(-1)?.[1];
+    const saved = args && typeof args === "object" && "snapshot" in args
+      ? parseWorkspaceSnapshot(args.snapshot) : null;
+    expect(saved?.sessions.find((session) => session.id === "a1")?.worktreeCwd)
+      .toBe("/alpha-worktrees/feature");
   });
 });
 
@@ -250,5 +264,146 @@ describe("closing a busy window", () => {
     } finally {
       release();
     }
+  });
+});
+
+describe("coordinated quit", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(ask).mockResolvedValue(true);
+  });
+
+  function busyWorkspace() {
+    const session = newSession("cursor", "C:/test");
+    session.busy = true;
+    session.blocks = [{ id: "user", role: "user", text: "test" }];
+    const tab = newTab(session.id);
+    return setQuitWorkspace(
+      () => [session],
+      () => [tab],
+      () => tab.id,
+      () => session.cwd,
+      () => [],
+      () => new Map(),
+      vi.fn(),
+    );
+  }
+
+  function invokedWith(command: string) {
+    return vi
+      .mocked(invoke)
+      .mock.calls.find(([name]) => name === command)?.[1];
+  }
+
+  it("reports this window's live turns to the coordinator", async () => {
+    const release = busyWorkspace();
+    try {
+      await reportQuitPoll(7);
+      expect(invokedWith("quit_poll_reply")).toEqual({ id: 7, inFlight: 1 });
+    } finally {
+      release();
+    }
+  });
+
+  it("counts a running Inbox Ask, which cannot be resumed", async () => {
+    const session = newSession("cursor", "C:/test");
+    session.busy = true;
+    session.inboxAsk = true;
+    const tab = newTab(session.id);
+    const release = setQuitWorkspace(
+      () => [session],
+      () => [tab],
+      () => tab.id,
+      () => session.cwd,
+      () => [],
+      () => new Map(),
+      vi.fn(),
+    );
+    try {
+      await reportQuitPoll(1);
+      expect(invokedWith("quit_poll_reply")).toEqual({ id: 1, inFlight: 1 });
+    } finally {
+      release();
+    }
+  });
+
+  it("reports nothing from a window with no workspace yet", async () => {
+    await reportQuitPoll(2);
+    expect(invokedWith("quit_poll_reply")).toEqual({ id: 2, inFlight: 0 });
+  });
+
+  it("passes a declined dialog back as a refusal", async () => {
+    vi.mocked(ask).mockResolvedValue(false);
+    await askQuitConfirmation(3, 2);
+    expect(invokedWith("quit_decision")).toEqual({ id: 3, confirmed: false });
+  });
+
+  it("asks once using the count from every window", async () => {
+    await askQuitConfirmation(4, 5);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ask).mock.calls[0]?.[0]).toContain("5");
+    expect(invokedWith("quit_decision")).toEqual({ id: 4, confirmed: true });
+  });
+
+  it("tells the coordinator when a required quit write fails", async () => {
+    const release = busyWorkspace();
+    vi.mocked(invoke).mockImplementation((command) =>
+      command === "workspace_set_snapshot"
+        ? Promise.reject(new Error("disk full"))
+        : Promise.resolve(undefined),
+    );
+    try {
+      await commitQuit(6);
+      expect(invokedWith("quit_ready")).toEqual({ id: 6, persisted: false });
+    } finally {
+      vi.mocked(invoke).mockResolvedValue(undefined);
+      release();
+    }
+  });
+
+  // The whole point of the handshake: no window exits on its own.
+  it("persists and reports ready without exiting the app", async () => {
+    const release = busyWorkspace();
+    try {
+      await commitQuit(9);
+      expect(invokedWith("workspace_set_snapshot")).toBeDefined();
+      expect(invokedWith("quit_ready")).toEqual({ id: 9, persisted: true });
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(([command]) => command === "confirm_quit"),
+      ).toBe(false);
+    } finally {
+      release();
+    }
+  });
+});
+
+describe("confirming reload", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(ask).mockResolvedValue(true);
+  });
+
+  it("reloads without prompting when files are clean", async () => {
+    await expect(confirmReload(false)).resolves.toBe(true);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("allows reload after unsaved changes are confirmed", async () => {
+    await expect(confirmReload(true)).resolves.toBe(true);
+    expect(ask).toHaveBeenCalledWith(
+      "Reload MonoCode and discard unsaved changes?",
+      {
+        title: "MonoCode",
+        kind: "warning",
+        okLabel: "Reload",
+      },
+    );
+  });
+
+  it("cancels reload when unsaved changes are kept", async () => {
+    vi.mocked(ask).mockResolvedValue(false);
+    await expect(confirmReload(true)).resolves.toBe(false);
   });
 });

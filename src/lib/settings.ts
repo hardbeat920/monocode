@@ -1,4 +1,4 @@
-import { ALT, IS_MAC, MOD, SHIFT } from "./platform";
+import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "./platform";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -6,55 +6,390 @@ export type SettingsSectionId =
   | "general"
   | "appearance"
   | "keybindings"
+  | "chat"
   | "providers"
-  | "inbox"
   | "skills"
+  | "inbox"
+  | "worktrees"
   | "archive";
 
-export const SETTINGS_SECTIONS: {
+/** Rail buckets. Sections list in order under their group label. */
+export type SettingsGroupId = "app" | "agents" | "workspace";
+
+export const SETTINGS_GROUPS: { id: SettingsGroupId; label: string }[] = [
+  { id: "app", label: "App" },
+  { id: "agents", label: "Agents" },
+  { id: "workspace", label: "Workspace" },
+];
+
+export type SettingsSection = {
   id: SettingsSectionId;
+  group: SettingsGroupId;
   label: string;
   description: string;
-}[] = [
+  /** Extra words search matches the section on, beyond its label. */
+  keywords?: string;
+};
+
+export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: "general",
+    group: "app",
     label: "General",
-    description: "App-wide behavior and the build you are running.",
+    description:
+      "The build you are running, how MonoCode reaches you, and the panels it shows.",
+    keywords: "version update sounds notifications notes rail",
   },
   {
     id: "appearance",
+    group: "app",
     label: "Appearance",
-    description: "Theme, translucency, and the tint applied to the chrome.",
+    description:
+      "Theme, tint, translucency, and the image behind your conversations.",
+    keywords: "theme dark light color accent glass blur zoom scale wallpaper",
   },
   {
     id: "keybindings",
+    group: "app",
     label: "Keybindings",
     description:
       "Every shortcut the workspace handles, from the app menu and the key handler.",
+    keywords: "shortcut hotkey keyboard binding",
+  },
+  {
+    id: "chat",
+    group: "agents",
+    label: "Chat",
+    description:
+      "How transcripts read, what the composer does with a follow-up, and how diffs open.",
+    keywords: "transcript composer prompt message diff review layout",
   },
   {
     id: "providers",
+    group: "agents",
     label: "Providers",
     description:
-      "Agent CLIs MonoCode can drive, and the model new sessions start with.",
-  },
-  {
-    id: "inbox",
-    label: "Inbox",
-    description: "Connect and manage the services that appear in your Inbox.",
+      "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with.",
+    keywords:
+      "account sign in login model harness claude codex gemini cli default hooks",
   },
   {
     id: "skills",
+    group: "agents",
     label: "Skills",
     description:
       "Discover and manage file skills from project, personal, and harness folders.",
+    keywords: "skill instructions prompt",
+  },
+  {
+    id: "inbox",
+    group: "workspace",
+    label: "Inbox",
+    description:
+      "Manage Inbox services and notification preferences for each project.",
+    keywords: "github gitlab linear connect token integration",
   },
   {
     id: "archive",
+    group: "workspace",
     label: "Archive",
     description: "Projects and conversations you have archived.",
+    keywords: "archived restore delete hidden",
+  },
+  {
+    id: "worktrees",
+    group: "workspace",
+    label: "Worktrees",
+    description: "Manage additional worktrees for each project.",
+    keywords: "git branch worktree working copy project create delete",
   },
 ];
+
+export function settingsSectionsByGroup(): {
+  id: SettingsGroupId;
+  label: string;
+  sections: SettingsSection[];
+}[] {
+  return SETTINGS_GROUPS.map((group) => ({
+    ...group,
+    sections: SETTINGS_SECTIONS.filter((section) => section.group === group.id),
+  })).filter((group) => group.sections.length > 0);
+}
+
+/**
+ * One searchable control. `id` is the row's `data-setting-id` in SettingsView,
+ * which is also what Settings scrolls to when it opens on an anchor.
+ */
+export type SettingsEntry = {
+  id: string;
+  section: SettingsSectionId;
+  label: string;
+  keywords?: string;
+};
+
+export const SETTINGS_INDEX: SettingsEntry[] = [
+  {
+    id: "project-worktrees",
+    section: "worktrees",
+    label: "Project worktrees",
+    keywords: "git branch working copy create delete manage",
+  },
+  {
+    id: "update",
+    section: "general",
+    label: "Version",
+    keywords: "update upgrade release what's new build changelog",
+  },
+  {
+    id: "sounds",
+    section: "general",
+    label: "Sounds",
+    keywords: "audio cue chime mute volume",
+  },
+  {
+    id: "notifications",
+    section: "general",
+    label: "Notifications",
+    keywords: "notify alert toast permission reminder background",
+  },
+  {
+    id: "notes",
+    section: "general",
+    label: "Notes",
+    keywords: "notebook markdown rail scratchpad",
+  },
+  {
+    id: "working-agents",
+    section: "general",
+    label: "Working agents",
+    keywords: "live running sessions rail card",
+  },
+  ...(IS_WIN
+    ? [
+        {
+          id: "close-to-tray",
+          section: "general" as const,
+          label: "Close to tray",
+          keywords: "minimize background quit exit window taskbar windows",
+        },
+      ]
+    : []),
+  {
+    id: "theme",
+    section: "appearance",
+    label: "Theme",
+    keywords: "dark light system appearance mode",
+  },
+  {
+    id: "accent-color",
+    section: "appearance",
+    label: "Accent color",
+    keywords: "highlight bubble send button tint",
+  },
+  {
+    id: "hue",
+    section: "appearance",
+    label: "Hue",
+    keywords: "tint color chrome",
+  },
+  {
+    id: "saturation",
+    section: "appearance",
+    label: "Saturation",
+    keywords: "tint color neutral grey gray",
+  },
+  {
+    id: "dark-lightness",
+    section: "appearance",
+    label: "Dark-mode lightness",
+    keywords: "black brightness contrast background",
+  },
+  {
+    id: "sidebar-opacity",
+    section: "appearance",
+    label: "Sidebar opacity",
+    keywords: "glass translucent transparency vibrancy",
+  },
+  {
+    id: "blur",
+    section: "appearance",
+    label: "Blur radius",
+    keywords: "glass translucent vibrancy backdrop",
+  },
+  {
+    id: "main-pane-glass",
+    section: "appearance",
+    label: "Main pane glass",
+    keywords: "translucent transparency body window",
+  },
+  {
+    id: "interface-scale",
+    section: "appearance",
+    label: "Interface scale",
+    keywords: "zoom font size bigger smaller ui",
+  },
+  {
+    id: "chat-background",
+    section: "appearance",
+    label: "Chat background",
+    keywords: "wallpaper image picture opacity backdrop",
+  },
+  {
+    id: "transcript-layout",
+    section: "chat",
+    label: "Transcript layout",
+    keywords: "full width chat bubble message",
+  },
+  {
+    id: "anchor-prompts",
+    section: "chat",
+    label: "Anchor prompts to top",
+    keywords: "scroll position sticky message",
+  },
+  {
+    id: "follow-up",
+    section: "chat",
+    label: "Follow-up behavior",
+    keywords: "queue steer interrupt send while running",
+  },
+  {
+    id: "model-controls",
+    section: "chat",
+    label: "Model controls",
+    keywords: "effort thinking reasoning fast service tier model picker composer",
+  },
+  {
+    id: "composer-mascot",
+    section: "chat",
+    label: "Composer mascot",
+    keywords: "runner animation coin fun",
+  },
+  {
+    id: "diff-view",
+    section: "chat",
+    label: "Diff view",
+    keywords: "unified editor review changes working tree",
+  },
+  {
+    id: "empty-session-games",
+    section: "chat",
+    label: "Empty session games",
+    keywords: "pacman snake arcade grid fun",
+  },
+  {
+    id: "provider-accounts",
+    section: "providers",
+    label: "Provider accounts",
+    keywords: "account sign in login rename remove delete credentials profile",
+  },
+  {
+    id: "claude-hooks",
+    section: "providers",
+    label: "Claude Code hooks",
+    keywords: "pretooluse settings.json block command notification",
+  },
+  {
+    id: "project-notifications",
+    section: "inbox",
+    label: "Project notifications",
+    keywords: "mute resume sounds banners reminders categories",
+  },
+  {
+    id: "github",
+    section: "inbox",
+    label: "GitHub",
+    keywords: "gh cli connect pull request sign in",
+  },
+  {
+    id: "gitlab",
+    section: "inbox",
+    label: "GitLab",
+    keywords: "token self-managed merge request connect",
+  },
+  {
+    id: "linear",
+    section: "inbox",
+    label: "Linear",
+    keywords: "api key issues teams connect",
+  },
+  {
+    id: "show-archived",
+    section: "archive",
+    label: "Show archived in the sidebar",
+    keywords: "hidden conversations list",
+  },
+];
+
+export type SettingsSearchResult = {
+  section: SettingsSectionId;
+  sectionLabel: string;
+  /** Row to scroll to, or `null` when the whole section matched. */
+  settingId: string | null;
+  label: string;
+};
+
+/** Ranks a label/keyword pair against a lowercased needle; `null` means no match. */
+function matchScore(
+  needle: string,
+  label: string,
+  keywords?: string,
+): number | null {
+  const lower = label.toLowerCase();
+  if (lower.startsWith(needle)) return 0;
+  if (lower.includes(needle)) return 1;
+  if (keywords?.toLowerCase().includes(needle)) return 2;
+  return null;
+}
+
+/** Individual settings first, then whole sections, so a row wins its own name. */
+export function searchSettings(
+  query: string,
+  limit = 8,
+): SettingsSearchResult[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const scored: { score: number; result: SettingsSearchResult }[] = [];
+
+  for (const entry of SETTINGS_INDEX) {
+    const score = matchScore(needle, entry.label, entry.keywords);
+    if (score == null) continue;
+    scored.push({
+      score,
+      result: {
+        section: entry.section,
+        sectionLabel: settingsSectionLabel(entry.section),
+        settingId: entry.id,
+        label: entry.label,
+      },
+    });
+  }
+
+  for (const section of SETTINGS_SECTIONS) {
+    const score = matchScore(
+      needle,
+      section.label,
+      `${section.description} ${section.keywords ?? ""}`,
+    );
+    if (score == null) continue;
+    scored.push({
+      score: score + 0.5,
+      result: {
+        section: section.id,
+        sectionLabel: section.label,
+        settingId: null,
+        label: section.label,
+      },
+    });
+  }
+
+  return scored
+    .sort(
+      (a, b) =>
+        a.score - b.score || a.result.label.localeCompare(b.result.label),
+    )
+    .slice(0, limit)
+    .map((item) => item.result);
+}
 
 export const SETTINGS_SECTION_DEFAULT: SettingsSectionId = "general";
 
@@ -97,6 +432,10 @@ const COMPOSER_RUNNER_KEY = "monocode.composerRunner";
 
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 
+const COMPOSER_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
+
+const MODEL_CONTROLS_KEY = "monocode.modelControls";
+
 export type FollowUpBehavior = "steer" | "queue";
 
 export const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = "steer";
@@ -118,6 +457,49 @@ export function saveFollowUpBehavior(value: FollowUpBehavior) {
   } catch {
     // private mode / quota
   }
+}
+
+export type ModelControls = "menu" | "beside";
+
+export const MODEL_CONTROLS_DEFAULT: ModelControls = "menu";
+
+/** Fired on `window` when the composer model controls setting flips. */
+export const MODEL_CONTROLS_CHANGE_EVENT = "monocode:model-controls-change";
+
+export function loadModelControls(): ModelControls {
+  try {
+    const raw = localStorage.getItem(MODEL_CONTROLS_KEY);
+    if (raw === "menu" || raw === "beside") return raw;
+    if (raw == null) {
+      // Migrate the previous effort-control toggle: on means beside the picker.
+      const legacy = localStorage.getItem(COMPOSER_EFFORT_VISIBLE_KEY);
+      if (legacy === "1" || legacy === "true") return "beside";
+    }
+  } catch {
+    // private mode / quota
+  }
+  return MODEL_CONTROLS_DEFAULT;
+}
+
+export function saveModelControls(value: ModelControls) {
+  try {
+    localStorage.setItem(MODEL_CONTROLS_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<ModelControls>(MODEL_CONTROLS_CHANGE_EVENT, {
+      detail: value,
+    }),
+  );
+}
+
+export function subscribeModelControls(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(MODEL_CONTROLS_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(MODEL_CONTROLS_CHANGE_EVENT, onStoreChange);
 }
 
 export const COMPOSER_RUNNER_DEFAULT = true;
@@ -220,6 +602,30 @@ export function subscribeLiveAgentsEnabled(onStoreChange: () => void) {
   window.addEventListener(LIVE_AGENTS_ENABLED_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(LIVE_AGENTS_ENABLED_CHANGE_EVENT, onStoreChange);
+}
+
+const CLOSE_TO_TRAY_KEY = "monocode.closeToTray";
+
+export const CLOSE_TO_TRAY_DEFAULT = true;
+
+export function loadCloseToTray(): boolean {
+  // Close to tray is Windows-only: nowhere else installs a tray icon.
+  if (!IS_WIN) return false;
+  try {
+    const raw = localStorage.getItem(CLOSE_TO_TRAY_KEY);
+    if (raw == null) return CLOSE_TO_TRAY_DEFAULT;
+    return raw === "1" || raw === "true";
+  } catch {
+    return CLOSE_TO_TRAY_DEFAULT;
+  }
+}
+
+export function saveCloseToTray(value: boolean) {
+  try {
+    localStorage.setItem(CLOSE_TO_TRAY_KEY, value ? "1" : "0");
+  } catch {
+    // private mode / quota
+  }
 }
 
 const GRID_ARCADE_ENABLED_KEY = "monocode.gridArcadeEnabled";
@@ -335,21 +741,30 @@ export type KeybindingRow = {
 
 /**
  * Mirrors the bindings we actually handle: the native menu accelerators in
- * `src-tauri/src/menu.rs`, `tabCommand`, and the window key handler in App.
+ * `src-tauri/src/menu.rs`, `tabCommand`, the window key handler in App, and
+ * focused surface handlers such as the draft composer workspace toggle.
  */
 export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Search", keys: `${MOD}K`, when: "Always" },
   { command: "App: Go to File", keys: `${MOD}P`, when: "Always" },
+  { command: "App: Command Palette", keys: `${MOD}${SHIFT}P`, when: "Always" },
   { command: "App: Find in Files", keys: `${MOD}${SHIFT}F`, when: "Always" },
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
+  {
+    command: "Composer: Toggle Workspace",
+    keys: `${MOD}${SHIFT}G`,
+    when: "Draft session composer",
+  },
+  { command: "View: Reload", keys: `${MOD}${SHIFT}R`, when: "Always" },
   { command: "View: Zoom In", keys: `${MOD}+`, when: "Always" },
   { command: "View: Zoom Out", keys: `${MOD}-`, when: "Always" },
   { command: "View: Reset Zoom", keys: `${MOD}0`, when: "Always" },
   { command: "Tab: New", keys: `${MOD}T`, when: "Always" },
   { command: "Tab: Close Others", keys: `${MOD}${ALT}T`, when: "Always" },
+  { command: "Tab: Close All", keys: `${MOD}${SHIFT}W`, when: "Always" },
   { command: "Tab: Next", keys: `${MOD}${SHIFT}]`, when: "Always" },
   { command: "Tab: Previous", keys: `${MOD}${SHIFT}[`, when: "Always" },
   { command: "Tab: Cycle Next", keys: `${CTRL}Tab`, when: "Always" },

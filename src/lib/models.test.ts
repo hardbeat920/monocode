@@ -12,10 +12,12 @@ import {
   loadLastModelSettings,
   loadRecentModelChoices,
   mergeModelSettings,
+  modelEffortSetting,
   modelPickerTabs,
   preferredModelId,
   preferredModelSettings,
   resetHarnessModelOverlays,
+  resolveModel,
   saveDefaultModel,
   saveLastModelChoice,
   saveLastModelSettings,
@@ -172,6 +174,34 @@ describe("model settings memory", () => {
       preferredModelSettings(opus, { effort: "xhigh", fast: "true" }),
     ).toEqual({ effort: "xhigh", fast: "true" });
   });
+
+  it("treats OpenCode variant as the effort setting", () => {
+    const model: AgentModel = {
+      id: "opencode:some-cloud/spark-1",
+      harness: "opencode",
+      name: "Spark 1",
+      nativeId: "some-cloud/spark-1",
+      settings: [
+        {
+          id: "variant",
+          label: "Variant",
+          kind: "select",
+          value: "medium",
+          options: [
+            { value: "minimal", label: "Minimal" },
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "xhigh", label: "Extra High" },
+          ],
+        },
+      ],
+    };
+    expect(modelEffortSetting(model)?.id).toBe("variant");
+    expect(mergeModelSettings(model, { variant: "high" })).toEqual({
+      variant: "high",
+    });
+  });
 });
 
 describe("provider defaults", () => {
@@ -324,5 +354,29 @@ describe("live catalog overlays", () => {
     ]);
     expect(hasLiveCatalog("pi")).toBe(true);
     expect(hasLiveCatalog("omp")).toBe(false);
+  });
+
+  it("keeps a Claude alias on the same model family across relaunch", () => {
+    const live = [
+      {
+        id: "claude:sonnet",
+        harness: "claude" as const,
+        name: "Sonnet 5",
+        nativeId: "sonnet",
+      },
+      {
+        id: "claude:opus",
+        harness: "claude" as const,
+        name: "Opus 5",
+        nativeId: "opus",
+      },
+    ];
+
+    setHarnessModels("claude", live);
+    expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus");
+
+    // A relaunch starts with the built-in catalog until discovery completes.
+    resetHarnessModelOverlays();
+    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5");
   });
 });

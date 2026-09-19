@@ -41,6 +41,37 @@ afterEach(() => {
 });
 
 describe("session persistence concurrency", () => {
+  it("drains worker writes before deleting a lead and strips ownership from later snapshots", async () => {
+    const firstWrite = deferred<unknown>();
+    const commands: string[] = [];
+    mocks.invoke.mockImplementation((command: string) => {
+      commands.push(command);
+      return command === "session_upsert" && commands.length === 1
+        ? firstWrite.promise
+        : Promise.resolve();
+    });
+    const { deleteSession, upsertSession } = await loadStore();
+    const worker = { ...session("worker"), orchestrationLeadId: "lead" };
+    const writing = upsertSession(worker);
+    await vi.waitFor(() => expect(commands).toEqual(["session_upsert"]));
+    const queued = upsertSession(worker);
+    const deleting = deleteSession("lead");
+    expect(commands).toEqual(["session_upsert"]);
+    firstWrite.resolve(undefined);
+    await Promise.all([writing, queued, deleting]);
+    expect(commands).toEqual([
+      "session_upsert",
+      "session_upsert",
+      "session_delete",
+    ]);
+    await upsertSession(worker);
+    for (const [, args] of mocks.invoke.mock.calls
+      .slice(1)
+      .filter(([command]) => command === "session_upsert")) {
+      expect(args.session.blocks[0].orchestrationLeadId).toBeUndefined();
+    }
+  });
+
   it("serializes deletion after an active write and drops a queued late upsert", async () => {
     const firstWrite = deferred<unknown>();
     const commands: string[] = [];
@@ -70,6 +101,27 @@ describe("session persistence concurrency", () => {
     await Promise.all([writing, lateWrite, deleting]);
 
     expect(commands).toEqual(["session_upsert", "session_delete"]);
+  });
+
+  it("drains queued saves before detaching a removed worktree", async () => {
+    const firstWrite = deferred<unknown>();
+    mocks.invoke
+      .mockReturnValueOnce(firstWrite.promise)
+      .mockResolvedValue(undefined);
+    const { flushSessionWrites, upsertSession } = await loadStore();
+    const active = upsertSession(session("s1"));
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+    const queued = upsertSession({ ...session("s1"), title: "latest" });
+    let flushed = false;
+    const flushing = flushSessionWrites().then(() => {
+      flushed = true;
+    });
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+    firstWrite.resolve(undefined);
+    await Promise.all([active, queued, flushing]);
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(flushed).toBe(true);
   });
 
   it("archives only after the final active-turn snapshot is durable", async () => {

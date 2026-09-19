@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { modelsForClaudeVersion, modelsFromClaudeListModels } from "./claudeCatalog";
+import {
+  modelsForClaudeVersion,
+  modelsFromClaudeListModels,
+} from "./claudeCatalog";
 import {
   applyClaudePromptEffortPrefix,
   askUserQuestionAllowInput,
@@ -33,21 +36,36 @@ import {
   toolStartFromEvent,
   toolTitle,
   turnStatusFromResult,
+  turnMetricsFromResult,
 } from "./claudeProtocol";
 
 describe("runtimeModeToPermission", () => {
   it("maps runtime modes onto Claude permission flags", () => {
-    expect(runtimeModeToPermission("supervised")).toBeUndefined();
+    expect(runtimeModeToPermission("supervised")).toBe("default");
     expect(runtimeModeToPermission("auto-accept-edits")).toBe("acceptEdits");
     expect(runtimeModeToPermission("auto")).toBe("auto");
     expect(runtimeModeToPermission("full-access")).toBe("bypassPermissions");
+  });
+
+  it("sends supervised as a flag so settings cannot lower it", () => {
+    const args = buildClaudeSpawnArgs({
+      permissionMode: runtimeModeToPermission("supervised"),
+      sessionId: "sess-supervised",
+    });
+    expect(args).toEqual(
+      expect.arrayContaining(["--permission-mode", "default"]),
+    );
   });
 });
 
 describe("normalizeClaudeCliEffort", () => {
   it("drops ultrathink and maps ultracode to xhigh", () => {
-    expect(normalizeClaudeCliEffort("ultrathink", "claude-sonnet-5")).toBeUndefined();
-    expect(normalizeClaudeCliEffort("ultracode", "claude-opus-5")).toBe("xhigh");
+    expect(
+      normalizeClaudeCliEffort("ultrathink", "claude-sonnet-5"),
+    ).toBeUndefined();
+    expect(normalizeClaudeCliEffort("ultracode", "claude-opus-5")).toBe(
+      "xhigh",
+    );
   });
 
   it("maps xhigh to max on older models", () => {
@@ -63,17 +81,21 @@ describe("normalizeClaudeCliEffort", () => {
 
 describe("applyClaudePromptEffortPrefix", () => {
   it("prefixes ultrathink on the prompt", () => {
-    expect(applyClaudePromptEffortPrefix("Investigate the edge cases", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate the edge cases",
-    );
+    expect(
+      applyClaudePromptEffortPrefix("Investigate the edge cases", "ultrathink"),
+    ).toBe("Ultrathink:\nInvestigate the edge cases");
     expect(applyClaudePromptEffortPrefix("hello", "high")).toBe("hello");
   });
 });
 
 describe("resolveClaudeApiModelId", () => {
   it("appends [1m] for the 1M context window", () => {
-    expect(resolveClaudeApiModelId("claude-opus-5", "1m")).toBe("claude-opus-5[1m]");
-    expect(resolveClaudeApiModelId("claude-sonnet-5", "200k")).toBe("claude-sonnet-5");
+    expect(resolveClaudeApiModelId("claude-opus-5", "1m")).toBe(
+      "claude-opus-5[1m]",
+    );
+    expect(resolveClaudeApiModelId("claude-sonnet-5", "200k")).toBe(
+      "claude-sonnet-5",
+    );
   });
 });
 
@@ -93,7 +115,12 @@ describe("buildClaudeSpawnArgs", () => {
     expect(args).toContain("--include-partial-messages");
     expect(args).toContain("--setting-sources=user,project,local");
     expect(args).toEqual(
-      expect.arrayContaining(["--model", "claude-sonnet-5", "--effort", "high"]),
+      expect.arrayContaining([
+        "--model",
+        "claude-sonnet-5",
+        "--effort",
+        "high",
+      ]),
     );
     expect(args).toEqual(
       expect.arrayContaining(["--permission-mode", "acceptEdits"]),
@@ -253,15 +280,34 @@ describe("turnStatusFromResult", () => {
 
 describe("modelsForClaudeVersion", () => {
   it("hides Opus 5 until 2.1.219", () => {
-    const old = modelsForClaudeVersion("2.1.100").map((model) => model.nativeId);
+    const old = modelsForClaudeVersion("2.1.100").map(
+      (model) => model.nativeId,
+    );
     expect(old).not.toContain("claude-opus-5");
     expect(old).not.toContain("claude-opus-4-8");
     expect(old).toContain("claude-sonnet-4-6");
 
-    const next = modelsForClaudeVersion("2.1.233").map((model) => model.nativeId);
+    const next = modelsForClaudeVersion("2.1.233").map(
+      (model) => model.nativeId,
+    );
     expect(next).toContain("claude-opus-5");
     expect(next).toContain("claude-fable-5");
     expect(next).toContain("claude-sonnet-5");
+  });
+
+  it("hides Sonnet 5 until 2.1.197, and rejects a missing version", () => {
+    const beforeMinimum = modelsForClaudeVersion("2.1.196").map(
+      (model) => model.nativeId,
+    );
+    expect(beforeMinimum).not.toContain("claude-sonnet-5");
+
+    const atMinimum = modelsForClaudeVersion("2.1.197").map(
+      (model) => model.nativeId,
+    );
+    expect(atMinimum).toContain("claude-sonnet-5");
+
+    const missing = modelsForClaudeVersion(null).map((model) => model.nativeId);
+    expect(missing).not.toContain("claude-sonnet-5");
   });
 });
 
@@ -367,7 +413,11 @@ describe("list_models catalog", () => {
     ]);
 
     const sonnet = models[0];
-    expect(sonnet?.settings?.find((setting) => setting.id === "effort")?.options.map((option) => option.value)).toEqual([
+    expect(
+      sonnet?.settings
+        ?.find((setting) => setting.id === "effort")
+        ?.options.map((option) => option.value),
+    ).toEqual([
       "low",
       "medium",
       "high",
@@ -376,10 +426,14 @@ describe("list_models catalog", () => {
       "ultracode",
       "ultrathink",
     ]);
-    expect(sonnet?.settings?.some((setting) => setting.id === "fast")).toBe(false);
+    expect(sonnet?.settings?.some((setting) => setting.id === "fast")).toBe(
+      false,
+    );
 
     const fable = models[1];
-    expect(fable?.settings?.find((setting) => setting.id === "context")).toMatchObject({
+    expect(
+      fable?.settings?.find((setting) => setting.id === "context"),
+    ).toMatchObject({
       value: "1m",
     });
 
@@ -417,7 +471,9 @@ describe("list_models catalog", () => {
       error: "nope",
     });
     expect(isClaudeInitMessage({ type: "system", subtype: "init" })).toBe(true);
-    expect(isClaudeInitMessage({ type: "assistant", subtype: "init" })).toBe(false);
+    expect(isClaudeInitMessage({ type: "assistant", subtype: "init" })).toBe(
+      false,
+    );
   });
 });
 
@@ -555,7 +611,9 @@ describe("contextUsedFromAssistant", () => {
   });
 
   it("ignores a message with no usage", () => {
-    expect(contextUsedFromAssistant({ type: "assistant", message: {} })).toBeUndefined();
+    expect(
+      contextUsedFromAssistant({ type: "assistant", message: {} }),
+    ).toBeUndefined();
   });
 });
 
@@ -584,8 +642,16 @@ describe("contextFromResult", () => {
         cache_read_input_tokens: 90_000,
         output_tokens: 500,
         iterations: [
-          { input_tokens: 5, cache_read_input_tokens: 20_000, output_tokens: 200 },
-          { input_tokens: 5, cache_read_input_tokens: 70_000, output_tokens: 300 },
+          {
+            input_tokens: 5,
+            cache_read_input_tokens: 20_000,
+            output_tokens: 200,
+          },
+          {
+            input_tokens: 5,
+            cache_read_input_tokens: 70_000,
+            output_tokens: 300,
+          },
         ],
       },
       modelUsage: { "claude-opus-5": { contextWindow: 200000 } },
@@ -595,6 +661,27 @@ describe("contextFromResult", () => {
 
   it("has nothing to report for a turn that never called the API", () => {
     expect(contextFromResult({ type: "result", usage: {} })).toBeUndefined();
+  });
+});
+
+describe("turnMetricsFromResult", () => {
+  it("normalizes aggregate input, output, and cache usage", () => {
+    expect(
+      turnMetricsFromResult({
+        usage: {
+          input_tokens: 2,
+          cache_creation_input_tokens: 12_941,
+          cache_read_input_tokens: 16_652,
+          output_tokens: 13,
+        },
+      }),
+    ).toEqual({
+      inputTokens: 2,
+      cacheWriteTokens: 12_941,
+      cacheReadTokens: 16_652,
+      outputTokens: 13,
+      cacheHitPercent: (16_652 / (2 + 12_941 + 16_652)) * 100,
+    });
   });
 });
 

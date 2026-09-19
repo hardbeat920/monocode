@@ -34,7 +34,9 @@ export type EditorNavigationTarget = EditorNavigation & {
   token: number;
 };
 
-export type OpenFileHints = {
+export type FileOpenOptions = {
+  /** The caller obtained this concrete path from the filesystem or file index. */
+  exact?: boolean;
   /** Exact file paths already surfaced by tools in the current transcript. */
   candidatePaths?: readonly string[];
 };
@@ -42,7 +44,7 @@ export type OpenFileHints = {
 export type OpenFileFn = (
   path: string,
   navigation?: EditorNavigation,
-  hints?: OpenFileHints,
+  options?: FileOpenOptions,
 ) => void;
 
 export function normalizeEditorPath(path: string): string {

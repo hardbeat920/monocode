@@ -21,6 +21,21 @@ describe("runtimeModeToCodexConfig", () => {
     });
   });
 
+  it("opens loopback for a lead, since every sandbox denies network by default", () => {
+    // Without this an orchestration lead cannot reach its own control CLI.
+    for (const mode of ["supervised", "auto-accept-edits", "auto"] as const)
+      expect(
+        runtimeModeToCodexConfig(mode, true).sandboxPolicy,
+      ).toMatchObject({ networkAccess: true });
+    // Ordinary sessions keep the default, and full access needs no flag.
+    expect(runtimeModeToCodexConfig("auto").sandboxPolicy).not.toHaveProperty(
+      "networkAccess",
+    );
+    expect(runtimeModeToCodexConfig("full-access", true).sandboxPolicy).toEqual({
+      type: "dangerFullAccess",
+    });
+  });
+
   it("maps auto-accept-edits to workspace-write with user reviewer", () => {
     expect(runtimeModeToCodexConfig("auto-accept-edits")).toMatchObject({
       approvalPolicy: "on-request",
@@ -36,6 +51,45 @@ describe("runtimeModeToCodexConfig", () => {
       approvalsReviewer: "auto_review",
       sandboxPolicy: { type: "workspaceWrite" },
     });
+  });
+
+  it("opens the sandbox network only for a lead, which needs the control socket", () => {
+    // Both sandboxed policies default networkAccess to false, which denies
+    // loopback too, so the control CLI cannot reach MonoCode without this.
+    for (const mode of ["supervised", "auto-accept-edits", "auto"] as const) {
+      expect(runtimeModeToCodexConfig(mode).sandboxPolicy).not.toHaveProperty(
+        "networkAccess",
+      );
+      expect(runtimeModeToCodexConfig(mode, true).sandboxPolicy).toMatchObject({
+        networkAccess: true,
+      });
+    }
+    // full-access already permits it, and its policy takes no such field.
+    expect(runtimeModeToCodexConfig("full-access", true).sandboxPolicy).toEqual({
+      type: "dangerFullAccess",
+    });
+  });
+
+  it("carries the lead's network grant onto the turn, including a plan turn", () => {
+    expect(
+      buildTurnStartParams({
+        threadId: "t",
+        runtimeMode: "auto",
+        controlsAgents: true,
+      }).sandboxPolicy,
+    ).toMatchObject({ type: "workspaceWrite", networkAccess: true });
+    expect(
+      buildTurnStartParams({
+        threadId: "t",
+        runtimeMode: "auto",
+        controlsAgents: true,
+        intent: "plan",
+      }).sandboxPolicy,
+    ).toMatchObject({ type: "readOnly", networkAccess: true });
+    expect(
+      buildTurnStartParams({ threadId: "t", runtimeMode: "auto" })
+        .sandboxPolicy,
+    ).not.toHaveProperty("networkAccess");
   });
 
   it("allows explicit escalation requests in full-access", () => {
@@ -69,7 +123,16 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
       threadId: "thr_1",
       runtimeMode: "auto-accept-edits",
       prompt: "hello",
-      attachments: [{ type: "image", url: "data:image/png;base64,abc" }],
+      attachments: [
+        {
+          id: "img",
+          name: "shot.png",
+          kind: "image",
+          mimeType: "image/png",
+          size: 3,
+          data: "abc",
+        },
+      ],
       model: "gpt-5.4",
       effort: "high",
       serviceTier: "fast",
@@ -277,6 +340,59 @@ describe("mapCodexNotification", () => {
     });
   });
 
+  it("uses Codex command actions for readable command rows", () => {
+    const mapped = mapCodexNotification("item/started", {
+      item: {
+        id: "cmd_read",
+        type: "commandExecution",
+        command: `/bin/zsh -lc "nl -ba src/lib/orchestration.ts | sed -n '1,260p'"`,
+        cwd: "/Users/me/project",
+        status: "inProgress",
+        commandActions: [
+          {
+            type: "read",
+            command: "nl -ba src/lib/orchestration.ts",
+            name: "orchestration.ts",
+            path: "/Users/me/project/src/lib/orchestration.ts",
+          },
+          { type: "unknown", command: "sed -n '1,260p'" },
+        ],
+      },
+    });
+
+    expect(mapped.events[0]).toMatchObject({
+      type: "tool.started",
+      callId: "cmd_read",
+      title: "Read src/lib/orchestration.ts",
+      kind: "execute",
+      preview: {
+        kind: "shell",
+        path: "/Users/me/project/src/lib/orchestration.ts",
+        fileName: "orchestration.ts",
+      },
+    });
+  });
+
+  it("falls back to unwrapping Codex shell launchers", () => {
+    const mapped = mapCodexNotification("item/started", {
+      item: {
+        id: "cmd_find",
+        type: "commandExecution",
+        command: `/bin/zsh -lc "rg -n 'submissionError|hydrate' src/lib"`,
+        status: "inProgress",
+      },
+    });
+
+    expect(mapped.events[0]).toMatchObject({
+      title: "Find submissionError|hydrate",
+      preview: {
+        kind: "shell",
+        path: "src/lib",
+        query: "submissionError|hydrate",
+      },
+    });
+  });
+
   it("maps file change items", () => {
     const mapped = mapCodexNotification("item/started", {
       item: {
@@ -340,6 +456,22 @@ describe("mapCodexNotification", () => {
     });
   });
 
+  it("retains the explicitly selected spawn model", () => {
+    const { events } = mapCodexNotification("item/completed", {
+      item: {
+        id: "spawn",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        model: "gpt-5.6-sol",
+        status: "completed",
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "agent",
+      agentModel: "gpt-5.6-sol",
+    });
+  });
+
   it("maps current collab-agent failures with their provider detail", () => {
     const started = mapCodexNotification("item/started", {
       item: {
@@ -351,11 +483,13 @@ describe("mapCodexNotification", () => {
         agentsStates: {},
       },
     });
+    // Waiting is bookkeeping against rows that already exist, not a third
+    // subagent of its own.
     expect(started.events[0]).toMatchObject({
       type: "tool.started",
       callId: "collab_1",
       title: "Wait for 2 subagents",
-      kind: "agent",
+      kind: "other",
       status: "in_progress",
     });
 
@@ -375,7 +509,7 @@ describe("mapCodexNotification", () => {
     expect(failed.events[0]).toMatchObject({
       type: "tool.updated",
       callId: "collab_1",
-      kind: "agent",
+      kind: "other",
       status: "failed",
       detail: "worker disconnected",
     });
@@ -528,6 +662,37 @@ describe("approvals", () => {
     });
   });
 
+  it("keeps readable Codex actions on command approvals", () => {
+    const mapped = mapApprovalRequest(
+      "item/commandExecution/requestApproval",
+      {
+        itemId: "cmd_read",
+        command: `/bin/zsh -lc "cat src/App.tsx"`,
+        cwd: "/Users/me/project",
+        reason: "Inspect the app",
+        commandActions: [
+          {
+            type: "read",
+            command: "cat src/App.tsx",
+            name: "App.tsx",
+            path: "/Users/me/project/src/App.tsx",
+          },
+        ],
+      },
+      8,
+    );
+
+    expect(mapped?.event).toMatchObject({
+      title: "Read src/App.tsx",
+      kind: "execute",
+      preview: {
+        kind: "shell",
+        path: "/Users/me/project/src/App.tsx",
+        fileName: "App.tsx",
+      },
+    });
+  });
+
   it("maps file-change approval requests", () => {
     const mapped = mapApprovalRequest(
       "item/fileChange/requestApproval",
@@ -606,6 +771,13 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
     });
     expect(mapped.events).toEqual([
       { type: "context", used: 42_000, window: 272_000 },
+      {
+        type: "turn.metrics",
+        inputTokens: 40_000,
+        cacheReadTokens: 30_000,
+        outputTokens: 2_000,
+        cacheHitPercent: 75,
+      },
     ]);
   });
 

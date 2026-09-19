@@ -20,6 +20,7 @@ export class OpenCodeHttpError extends Error {
 
 export type OpenCodeSession = {
   id: string;
+  parentID?: string;
   directory?: string;
   title?: string;
 };
@@ -27,6 +28,11 @@ export type OpenCodeSession = {
 export type OpenCodePromptPart =
   | { type: "text"; text: string }
   | { type: "file"; mime: string; filename: string; url: string };
+
+export type OpenCodeMessage = {
+  info?: Record<string, unknown>;
+  parts?: unknown[];
+};
 
 export class OpenCodeClient {
   constructor(
@@ -36,6 +42,13 @@ export class OpenCodeClient {
 
   async getSession(sessionID: string): Promise<OpenCodeSession> {
     return this.request<OpenCodeSession>("GET", `/session/${enc(sessionID)}`);
+  }
+
+  async getMessages(sessionID: string): Promise<OpenCodeMessage[]> {
+    return this.request<OpenCodeMessage[]>(
+      "GET",
+      `/session/${enc(sessionID)}/message`,
+    );
   }
 
   async createSession(input: {
@@ -81,6 +94,12 @@ export class OpenCodeClient {
     await this.request<unknown>("POST", `/session/${enc(sessionID)}/abort`, {
       body: {},
     }).catch(() => undefined);
+  }
+
+  async revertSession(sessionID: string, messageID: string): Promise<void> {
+    await this.request<unknown>("POST", `/session/${enc(sessionID)}/revert`, {
+      body: { messageID },
+    });
   }
 
   async summarizeSession(

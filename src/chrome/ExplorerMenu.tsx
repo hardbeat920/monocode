@@ -15,6 +15,7 @@ type MenuAction = {
   kind: "item";
   id: string;
   label: string;
+  description?: string;
   shortcut?: string;
   disabled?: boolean;
   danger?: boolean;
@@ -24,15 +25,20 @@ type MenuAction = {
 export type ExplorerMenuItem =
   { kind: "sep" } | (MenuAction & { submenu?: MenuAction[] });
 
-type Props = {
-  x: number;
-  y: number;
+type Props = (
+  | { x: number; y: number; anchor?: never }
+  | { anchor: HTMLElement; x?: never; y?: never }
+) & {
+  ownerId?: string;
+  onBack?: () => void;
   items: ExplorerMenuItem[];
   ariaLabel?: string;
   header?: ReactNode;
   width?: number;
   onPick: (id: string) => void;
   onClose: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 };
 
 const MENU_WIDTH = 228;
@@ -54,12 +60,17 @@ function itemIndexAt(
 export function ExplorerMenu({
   x,
   y,
+  anchor,
+  ownerId,
+  onBack,
   items,
   ariaLabel = "File actions",
   header,
   width = MENU_WIDTH,
   onPick,
   onClose,
+  onMouseEnter,
+  onMouseLeave,
 }: Props) {
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -113,6 +124,12 @@ export function ExplorerMenu({
   };
 
   const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "ArrowLeft" && !submenuItems && onBack) {
+      e.preventDefault();
+      e.stopPropagation();
+      onBack();
+      return;
+    }
     if (submenuItems) {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -214,7 +231,7 @@ export function ExplorerMenu({
             onPick(item.id);
           }
         }}
-        className={`flex h-7 w-full items-center gap-3 rounded-lg px-2 text-left text-[13px] leading-none ${
+        className={`flex ${item.description ? "py-1.5" : "h-7"} w-full items-center gap-3 rounded-lg px-2 text-left text-[13px] leading-none ${
           item.disabled
             ? "text-content/30"
             : item.danger
@@ -222,11 +239,18 @@ export function ExplorerMenu({
                 ? "bg-red-500/20 text-red-300"
                 : "text-red-300/90 hover:bg-red-500/15"
               : highlighted
-                ? "bg-content/10 text-content"
+                ? "bg-selection text-content"
                 : "text-content hover:bg-content/5"
         }`}
       >
-        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{item.label}</span>
+          {item.description ? (
+            <span className="mt-1 block text-[11px] leading-snug text-content/50">
+              {item.description}
+            </span>
+          ) : null}
+        </span>
         {hasSubmenu ? (
           <ChevronRight
             className="size-3.5 shrink-0 text-content/50"
@@ -247,8 +271,11 @@ export function ExplorerMenu({
     <>
       <Popover
         ref={menuRef}
-        anchor={{ x, y }}
-        gap={0}
+        anchor={anchor ?? { x: x ?? 0, y: y ?? 0 }}
+        side={anchor ? "right" : undefined}
+        gap={anchor ? 4 : 0}
+        layer={anchor ? LAYER.submenu : undefined}
+        data-menu-owner={ownerId}
         width={width}
         autoFocus
         onDismiss={(reason) => {
@@ -263,8 +290,14 @@ export function ExplorerMenu({
         aria-activedescendant={`${menuId}-${active}`}
         onKeyDown={onMenuKey}
         onContextMenu={(e) => e.preventDefault()}
-        onMouseEnter={cancelClose}
-        onMouseLeave={submenu ? scheduleClose : undefined}
+        onMouseEnter={() => {
+          cancelClose();
+          onMouseEnter?.();
+        }}
+        onMouseLeave={() => {
+          if (submenu) scheduleClose();
+          onMouseLeave?.();
+        }}
         className="overflow-y-auto overscroll-none p-1"
       >
         {header ? (
@@ -303,10 +336,17 @@ export function ExplorerMenu({
             submenuActive >= 0 ? `${menuId}-sub-${submenuActive}` : undefined
           }
           data-explorer-menu={menuId}
+          data-menu-owner={ownerId}
           onKeyDown={onMenuKey}
           onContextMenu={(e) => e.preventDefault()}
-          onMouseEnter={cancelClose}
-          onMouseLeave={scheduleClose}
+          onMouseEnter={() => {
+            cancelClose();
+            onMouseEnter?.();
+          }}
+          onMouseLeave={() => {
+            scheduleClose();
+            onMouseLeave?.();
+          }}
           className="overflow-y-auto overscroll-none p-1"
         >
           {submenuItems.map((item, index) => renderItem(item, index, true))}

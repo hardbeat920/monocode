@@ -7,6 +7,7 @@ import {
   buildPiSteer,
   contextFromSessionStats,
   contextFromUsage,
+  turnMetricsFromUsage,
   extensionUiResponse,
   extensionUiTitle,
   isAgentSettled,
@@ -479,6 +480,20 @@ describe("tools and models", () => {
         contextUsage: { tokens: 60, contextWindow: 200000, percent: 30 },
       }),
     ).toEqual({ used: 60, window: 200000 });
+  });
+
+  it("normalizes cache usage from assistant frames", () => {
+    expect(
+      turnMetricsFromUsage({
+        usage: { input: 100, output: 20, cacheRead: 300, cacheWrite: 50 },
+      }),
+    ).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 50,
+      cacheHitPercent: (300 / 450) * 100,
+    });
   });
 });
 

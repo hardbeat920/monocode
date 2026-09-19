@@ -141,6 +141,7 @@ pub(crate) fn list_skills_from(
         (".omp/skills", "omp"),
         (".fx/skills", "fx"),
         (".grok/skills", "grok"),
+        (".hermes/skills", "hermes"),
     ] {
         add_root(project.join(dir), "project", source);
         if let Some(home) = home {
@@ -720,6 +721,30 @@ mod tests {
         assert_eq!(project_skill.scope, "project");
         let user_skill = skills.iter().find(|s| s.name == "grok-global").unwrap();
         assert_eq!(user_skill.source, "grok");
+        assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_hermes_project_and_user_skills() {
+        let project = tmp("proj-hermes");
+        let home = tmp("home-hermes");
+        write_skill(
+            &project.0.join(".hermes/skills"),
+            "hermes-review",
+            "---\nname: hermes-review\ndescription: Hermes project skill\n---\n",
+        );
+        write_skill(
+            &home.0.join(".hermes/skills"),
+            "hermes-global",
+            "---\nname: hermes-global\ndescription: Hermes user skill\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let project_skill = skills.iter().find(|s| s.name == "hermes-review").unwrap();
+        assert_eq!(project_skill.source, "hermes");
+        assert_eq!(project_skill.scope, "project");
+        let user_skill = skills.iter().find(|s| s.name == "hermes-global").unwrap();
+        assert_eq!(user_skill.source, "hermes");
         assert_eq!(user_skill.scope, "user");
     }
 

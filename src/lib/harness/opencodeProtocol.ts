@@ -1,4 +1,14 @@
-import type { Attachment, RuntimeMode, ToolPreview } from "../session";
+import type {
+  Attachment,
+  RuntimeMode,
+  ToolPreview,
+  TurnMetrics,
+} from "../session";
+import {
+  attachmentPath,
+  attachmentPathText,
+  isVisionImage,
+} from "../attachments";
 import { isTaskListToolName } from "../taskList";
 import { extractToolPreview } from "./preview";
 import type { HarnessEvent } from "./types";
@@ -154,9 +164,20 @@ export function toFileUrl(path: string): string {
   return `file://${abs.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-export function toOpenCodeFileParts(
+export type OpenCodePromptPart =
+  | { type: "text"; text: string }
+  | { type: "file"; mime: string; filename: string; url: string };
+
+/**
+ * OpenCode forwards native file parts to the selected model provider. Keep
+ * those parts to formats its provider adapters consistently support; local
+ * files of every other type remain available to the agent through their path.
+ */
+export function toOpenCodePromptParts(
+  text: string,
   attachments: Attachment[] | undefined,
-): Array<{ type: "file"; mime: string; filename: string; url: string }> {
+): OpenCodePromptPart[] {
+  const textParts = text.trim() ? [text.trim()] : [];
   const parts: Array<{
     type: "file";
     mime: string;
@@ -164,12 +185,15 @@ export function toOpenCodeFileParts(
     url: string;
   }> = [];
   for (const attachment of attachments ?? []) {
-    const url = attachment.path
-      ? toFileUrl(attachment.path)
-      : attachment.data
+    const mime = attachment.mimeType.trim().toLowerCase();
+    if (!mime.startsWith("text/") && !isVisionImage(mime)) {
+      textParts.push(attachmentPathText(attachment));
+      continue;
+    }
+    const url =
+      !attachment.path && attachment.data
         ? `data:${attachment.mimeType};base64,${attachment.data}`
-        : null;
-    if (!url) continue;
+        : toFileUrl(attachmentPath(attachment));
     parts.push({
       type: "file",
       mime: attachment.mimeType,
@@ -177,7 +201,12 @@ export function toOpenCodeFileParts(
       url,
     });
   }
-  return parts;
+  return [
+    ...(textParts.length > 0
+      ? [{ type: "text" as const, text: textParts.join("\n\n") }]
+      : []),
+    ...parts,
+  ];
 }
 
 export function mergeOpenCodeAssistantText(
@@ -229,14 +258,56 @@ export function inferDefaultVariant(
   if (providerID === "anthropic" || providerID.startsWith("google")) {
     return variants.includes("high") ? "high" : undefined;
   }
-  if (providerID === "openai" || providerID === "opencode") {
-    return variants.includes("medium")
-      ? "medium"
-      : variants.includes("high")
-        ? "high"
-        : undefined;
-  }
+  // Variants are reasoning levels on every provider (e.g. minimal/low/medium
+  // /high/xhigh), so prefer medium, then high, regardless of provider.
+  if (variants.includes("medium")) return "medium";
+  if (variants.includes("high")) return "high";
   return undefined;
+}
+
+const VARIANT_LABELS: Record<string, string> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  "extra-high": "Extra High",
+  max: "Max",
+  ultra: "Ultra",
+};
+
+const VARIANT_ORDER = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "extra-high",
+  "max",
+  "ultra",
+];
+
+/** Human label for an OpenCode variant value, matching Codex/Cursor effort labels. */
+export function openCodeVariantLabel(value: string): string {
+  return (
+    VARIANT_LABELS[value] ??
+    VARIANT_LABELS[value.toLowerCase()] ??
+    titleCaseSlug(value)
+  );
+}
+
+/** Sort variant values from lowest to highest effort; unknown values sort last. */
+export function sortOpenCodeVariants(values: string[]): string[] {
+  const rank = (value: string): number => {
+    const index = VARIANT_ORDER.indexOf(value.toLowerCase());
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  return [...values].sort((left, right) => {
+    const delta = rank(left) - rank(right);
+    return delta !== 0 ? delta : left.localeCompare(right);
+  });
 }
 
 export function inferDefaultAgent(agents: Array<{ name: string }>): string | undefined {
@@ -367,13 +438,70 @@ export function contextUsedFromMessageInfo(
   return used > 0 ? used : undefined;
 }
 
+export function turnMetricsFromMessageInfo(
+  info: Record<string, unknown> | null,
+): TurnMetrics | undefined {
+  const tokens = asRecord(info?.tokens);
+  if (!tokens) return undefined;
+  const cache = asRecord(tokens.cache);
+  const num = (rec: Record<string, unknown> | null, key: string): number => {
+    const value = rec?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  };
+  const inputTokens = num(tokens, "input");
+  const outputTokens = num(tokens, "output") + num(tokens, "reasoning");
+  const cacheReadTokens = num(cache, "read");
+  const cacheWriteTokens = num(cache, "write");
+  const cacheReported = cache !== null;
+  const cacheableInput = inputTokens + cacheReadTokens + cacheWriteTokens;
+  if (!inputTokens && !outputTokens && !cacheableInput) return undefined;
+  return {
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTokens ? { outputTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(cacheReported && cacheableInput
+      ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
+      : {}),
+  };
+}
+
+/**
+ * The session a `task` tool spawned, when OpenCode names it on the call. A
+ * subagent runs as its own session, so this is what ties the child's stream
+ * back to the row that started it.
+ */
+export function openCodeChildSessionId(
+  part: OpenCodePart,
+): string | undefined {
+  const state = part.state ?? {};
+  const metadata = asRecord(state.metadata);
+  const input = asRecord(state.input);
+  for (const source of [metadata, state, input]) {
+    const id =
+      stringField(source, "sessionID") ??
+      stringField(source, "sessionId") ??
+      stringField(source, "session_id") ??
+      stringField(source, "childSessionID") ??
+      stringField(source, "subSessionID");
+    if (id) return id;
+  }
+  return undefined;
+}
+
 export function eventSessionId(event: Record<string, unknown>): string | undefined {
   const properties = asRecord(event.properties);
   if (!properties) return undefined;
   const sessionID = stringField(properties, "sessionID");
   if (sessionID) return sessionID;
   const info = asRecord(properties.info);
-  return stringField(info, "id");
+  return (
+    stringField(info, "sessionID") ??
+    stringField(asRecord(properties.part), "sessionID") ??
+    (typeof event.type === "string" && event.type.startsWith("session.")
+      ? stringField(info, "id")
+      : undefined)
+  );
 }
 
 export function textDeltaEvent(

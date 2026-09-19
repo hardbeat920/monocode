@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "../lib/session";
+import { INTERRUPT_MESSAGE } from "../lib/inFlight";
 import {
   activityPhaseTitle,
   activityStillRunning,
@@ -15,10 +16,16 @@ import {
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  isSubagentBlock,
+  subagentBrief,
   subagentFailureSummary,
+  subagentName,
   transcriptFilePaths,
   toolCallLabel,
   turnCopyText,
+  subagentModelName,
+  workKind,
+  workSummaryLine,
 } from "./transcriptActivity";
 
 function shell(
@@ -85,6 +92,19 @@ function note(id: string, text: string): Block {
 
 function thought(id: string, text = "Weighing the options."): Block {
   return { id, role: "reasoning", text };
+}
+
+function status(id: string, text = "Advisor reviewed this turn"): Block {
+  return { id, role: "system", text };
+}
+
+function irc(id: string, text = "new message in #general"): Block {
+  return {
+    id,
+    role: "system",
+    text,
+    interjection: { customType: "irc:incoming" },
+  };
 }
 
 describe("transcriptFilePaths", () => {
@@ -342,6 +362,26 @@ describe("turnCopyText", () => {
 });
 
 describe("groupTurns", () => {
+  it("folds an orchestration turn the app wrote into the turn above", () => {
+    const turns = groupTurns([
+      { id: "u1", role: "user", text: "Review the changes" },
+      { id: "a1", role: "assistant", text: "Delegating." },
+      {
+        id: "u2",
+        role: "user",
+        text: "Worker results are ready.",
+        internal: true,
+      },
+      { id: "a2", role: "assistant", text: "All three look right." },
+      { id: "u3", role: "user", text: "Ship it" },
+      { id: "a3", role: "assistant", text: "Done." },
+    ]);
+    // One thread: the app's turn neither splits it nor shows up in it.
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["u1", "a1", "a2"],
+      ["u3", "a3"],
+    ]);
+  });
   it("keeps a handoff divider on its own row between providers", () => {
     const turns = groupTurns([
       { id: "u1", role: "user", text: "go" },
@@ -585,6 +625,30 @@ describe("activityPhaseTitle", () => {
     ).toBe("Ran 3 commands · Searched the project · Edited 2 files");
   });
 
+  it("summarises readable historical Codex shell rows by their inferred work", () => {
+    const storedCodexTool = (id: string, text: string): Block => ({
+      id,
+      role: "tool",
+      text,
+      tool: { kind: "execute", title: text, status: "completed" },
+    });
+
+    expect(
+      title([
+        storedCodexTool(
+          "r1",
+          `/bin/zsh -lc "sed -n '1,120p' src/lib/paths.ts
+sed -n '330,430p' src/lib/harness/codexProtocol.test.ts"`,
+        ),
+        storedCodexTool(
+          "r2",
+          `/bin/zsh -lc "nl -ba src/lib/harness/apply.ts | sed -n '520,620p'"`,
+        ),
+        storedCodexTool("run", "/bin/zsh -lc 'npm test'"),
+      ]),
+    ).toBe("Read 2 files · Ran a command");
+  });
+
   it("puts only the call in flight in the present tense", () => {
     expect(
       title([edit("e1", "a.ts"), edit("e2", "b.ts"), shell("c1")], true),
@@ -648,6 +712,348 @@ describe("running subagents", () => {
   });
 });
 
+describe("the subagent stack", () => {
+  const agent = (
+    id: string,
+    name = "Correctness review",
+    status = "in_progress",
+  ): Block => ({
+    id,
+    role: "tool",
+    text: name,
+    tool: { kind: "agent", title: name, status },
+  });
+
+  it("gives delegated runs their own item instead of folding them into work", () => {
+    const items = groupTurnItems([
+      { id: "note", role: "assistant", text: "I will run two reviews." },
+      agent("a1", "Correctness review"),
+      agent("a2", "Quality review"),
+      shell("s1"),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "subagents",
+      "activity",
+    ]);
+    const stack = items[1];
+    expect(stack.type === "subagents" && stack.blocks).toHaveLength(2);
+  });
+
+  it("starts a fresh stack when the agent narrates between spawns", () => {
+    const items = groupTurnItems([
+      agent("a1", "Correctness review"),
+      { id: "note", role: "assistant", text: "Adding one more." },
+      agent("a2", "Quality review"),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "subagents",
+      "block",
+      "subagents",
+    ]);
+  });
+
+  it("folds across a stack, so the turn's status line stays at the top", () => {
+    const items = groupTurnItems([
+      { id: "lead", role: "assistant", text: "Running two reviews." },
+      agent("a1"),
+      shell("s1"),
+      { id: "answer", role: "assistant", text: "Both agree." },
+    ]);
+    const fold = foldableWork(items);
+
+    expect(fold).toBeDefined();
+    // The stack does not cut the fold short: it starts at the turn's first
+    // work, which is where the "working for" line sits.
+    expect(fold!.start).toBe(0);
+    expect(items.slice(fold!.start, fold!.end + 1).map((i) => i.type)).toEqual([
+      "block",
+      "subagents",
+      "activity",
+    ]);
+    // The stack keeps its own rows, so it is not part of what the fold
+    // collapses or summarises.
+    expect(foldedBlocks(items, fold!).map((block) => block.id)).toEqual([
+      "lead",
+      "s1",
+    ]);
+  });
+
+  it("shortens a run named with its whole brief, keeping the brief intact", () => {
+    const briefed = agent(
+      "a1",
+      "Independently review the current repository's recent changes for correctness and regressions. Inspect the uncommitted diff.",
+    );
+
+    expect(subagentName(briefed)).toBe(
+      "Independently review the current repository's recent\u2026",
+    );
+    expect(subagentName(briefed).length).toBeLessThanOrEqual(57);
+    expect(subagentBrief(briefed)).toContain("Inspect the uncommitted diff.");
+  });
+
+  it("names a run from its description, without the tool's own prefix", () => {
+    expect(subagentName(agent("a1", "Task: Correctness review"))).toBe(
+      "Correctness review",
+    );
+    expect(
+      subagentName({
+        ...agent("a1", "Explore"),
+        agentRun: { name: "Quality review", steps: [] },
+      }),
+    ).toBe("Quality review");
+    expect(isSubagentBlock(agent("a1"))).toBe(true);
+    expect(isSubagentBlock(shell("s1"))).toBe(false);
+  });
+});
+
+describe("the settled work trail", () => {
+  const agent = (id: string, name = "Correctness review"): Block => ({
+    id,
+    role: "tool",
+    text: name,
+    tool: { kind: "agent", title: name, status: "completed" },
+  });
+
+  it("keeps a status row inside the surrounding work, live or settled", () => {
+    for (const options of [undefined, { settled: false }, { settled: true }]) {
+      const items = groupTurnItems(
+        [shell("a"), status("st"), shell("b")],
+        options,
+      );
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        type: "activity",
+        blocks: [{ id: "a" }, { id: "st" }, { id: "b" }],
+      });
+    }
+  });
+
+  it("keeps an interjection on its own row while live, folds it in once settled", () => {
+    const turn = [shell("a"), irc("i1"), shell("b")];
+    expect(groupTurnItems(turn).map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "activity",
+    ]);
+    const items = groupTurnItems(turn, { settled: true });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "activity",
+      blocks: [{ id: "a" }, { id: "i1" }, { id: "b" }],
+    });
+  });
+
+  it("pins a delegated run while live, folds it into the trail once settled", () => {
+    const turn = [shell("a"), agent("ag"), shell("b")];
+    expect(groupTurnItems(turn).map((item) => item.type)).toEqual([
+      "activity",
+      "subagents",
+      "activity",
+    ]);
+    const items = groupTurnItems(turn, { settled: true });
+    expect(items).toHaveLength(1);
+    if (items[0]?.type !== "activity") throw new Error("expected activity");
+    expect(items[0].blocks.map((block) => block.id)).toEqual([
+      "a",
+      "ag",
+      "b",
+    ]);
+    expect(workSummaryLine(items[0].blocks)).toBe(
+      "Ran 2 commands · Ran a subagent",
+    );
+  });
+
+  it("keeps a failed run on its own row once settled, outside the fold", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        agent("ag", "Correctness review"),
+        {
+          id: "dead",
+          role: "tool",
+          text: "Quality review",
+          tool: { kind: "agent", title: "Quality review", status: "failed" },
+        },
+        shell("t2"),
+        { id: "done", role: "assistant", text: "It could not finish." },
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "subagents",
+      "activity",
+      "block",
+    ]);
+    // The fold spans the failed run's row, which the transcript parks under
+    // the fold line rather than collapsing into it — so the reason it died
+    // stays one click away, exactly as it was while live.
+    const fold = foldableWork(items)!;
+    expect(fold).toEqual({ start: 1, end: 3 });
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "ag",
+      "t2",
+    ]);
+  });
+
+  it("spans the whole trail once settled, status rows and notes included", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        status("st"),
+        shell("t2"),
+        irc("i1"),
+        irc("i2"),
+        shell("t3"),
+        { id: "done", role: "assistant", text: "All set." },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items);
+    expect(fold).toEqual({ start: 1, end: 1 });
+    const folded = foldedBlocks(items, fold!);
+    expect(folded.map((block) => block.id)).toEqual([
+      "t1",
+      "st",
+      "t2",
+      "i1",
+      "i2",
+      "t3",
+    ]);
+    const summary = workSummaryLine(folded);
+    expect(summary).toBe("Ran 3 commands · 2 notes");
+    expect(summary).not.toContain("Advisor reviewed");
+  });
+
+  it("leaves notes that arrive after the answer as their own trail under it", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        { id: "done", role: "assistant", text: "All set." },
+        irc("i1"),
+        irc("i2"),
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+      "activity",
+    ]);
+    // The fold covers the work the answer answered for; the answer itself and
+    // the notes after it stay out.
+    expect(foldableWork(items)).toEqual({ start: 1, end: 1 });
+    const trailing = items[3];
+    if (trailing?.type !== "activity") throw new Error("expected activity");
+    const phases = buildActivityPhases(trailing.blocks);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].kind).toBe("note");
+    expect(activityPhaseTitle(phases[0])).toBe("2 notes");
+    expect(workKind(trailing.blocks)).toBe("note");
+  });
+
+  it("lets the settled fold reach across an interjection that stops it live", () => {
+    const turn = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      note("mid", "Halfway there."),
+      irc("i1"),
+      shell("t2"),
+      note("done", "All set."),
+    ];
+    // Live: the interjection stands alone and bounds the fold.
+    expect(foldableWork(groupTurnItems(turn))).toEqual({ start: 4, end: 4 });
+    // Settled: it joins the trail and the fold spans the turn's work.
+    const items = groupTurnItems(turn, { settled: true });
+    const fold = foldableWork(items)!;
+    expect(fold).toEqual({ start: 1, end: 3 });
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "mid",
+      "i1",
+      "t2",
+    ]);
+  });
+
+  it("never counts a status row as running work", () => {
+    expect(activityStillRunning([status("st")])).toBe(false);
+    expect(
+      activityStillRunning([
+        shell("done"),
+        status("st"),
+        status("st2", "Working on it"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("keeps an error outside the trail after a completed call, live or settled", () => {
+    const turn: Block[] = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      {
+        id: "e1",
+        role: "system",
+        text: "Provider connection lost",
+        notice: "error",
+      },
+      { id: "done", role: "assistant", text: "It failed." },
+    ];
+    for (const options of [undefined, { settled: false }, { settled: true }]) {
+      const items = groupTurnItems(turn, options);
+      expect(items.map((item) => item.type)).toEqual([
+        "block",
+        "activity",
+        "block",
+        "block",
+      ]);
+      expect(items[2]).toMatchObject({ type: "block", block: { id: "e1" } });
+      // And on the bare sequence — user, done call, error — all the same.
+      expect(
+        groupTurnItems(turn.slice(0, 3), options).map((item) => item.type),
+      ).toEqual(["block", "activity", "block"]);
+    }
+    // And the fold the answer puts away stops short of the error's row.
+    const items = groupTurnItems(turn, { settled: true });
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual(["t1"]);
+  });
+
+  it("keeps a persisted interrupt outside the trail even without the tag", () => {
+    const items = groupTurnItems(
+      [
+        shell("a"),
+        { id: "int", role: "system", text: INTERRUPT_MESSAGE },
+        shell("b"),
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "activity",
+    ]);
+  });
+
+  it("labels a group that only reported status", () => {
+    const statuses = [status("s1"), status("s2", "Working on it")];
+    expect(workSummaryLine(statuses)).toBe("Status update");
+    const phases = buildActivityPhases(statuses);
+    expect(activityPhaseTitle(phases[0])).toBe("Status update");
+    expect(workKind(statuses)).toBe("note");
+    // A thought among the statuses still reads as thinking, not a status line.
+    expect(workSummaryLine([status("s1"), thought("r1")])).toBe("Thought");
+  });
+});
+
 describe("foldableWork", () => {
   const items = (blocks: Block[]) => groupTurnItems(blocks);
 
@@ -702,6 +1108,27 @@ describe("foldableWork", () => {
       { id: "done", role: "assistant", text: "Built it." },
     ]);
     expect(foldableWork(turn)).toEqual({ start: 3, end: 3 });
+  });
+
+  it("uses an interjection as a hard boundary between answered work phases", () => {
+    const turn = items([
+      shell("before"),
+      note("answer", "The complete answer."),
+      {
+        id: "advisor",
+        role: "system",
+        text: "Check the fallback.",
+        interjection: { customType: "advisor", severity: "nit" },
+      },
+      shell("after"),
+      note("ack", "Checked."),
+    ]);
+    const fold = foldableWork(turn)!;
+
+    expect(fold).toEqual({ start: 3, end: 3 });
+    expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
+      "after",
+    ]);
   });
 
   it("leaves an approval attached to earlier work outside the fold", () => {
@@ -796,6 +1223,20 @@ describe("toolCallLabel", () => {
     ).toBe("Skill /code-review");
   });
 
+  it("hides Codex's shell launcher on commands that stay commands", () => {
+    expect(
+      toolCallLabel({
+        id: "wrapped",
+        role: "tool",
+        text: `/bin/zsh -lc "npm test -- --run src/lib/app.test.ts"`,
+        tool: {
+          kind: "execute",
+          title: `/bin/zsh -lc "npm test -- --run src/lib/app.test.ts"`,
+        },
+      }),
+    ).toBe("npm test -- --run src/lib/app.test.ts");
+  });
+
   it("renders file-reading bash as a Read/Find label", () => {
     expect(
       toolCallLabel({
@@ -881,5 +1322,20 @@ describe("proseSummary", () => {
     expect(
       proseSummary("```ts\nconst a = 1;\n```\n\n- Ran [checks](x.md)"),
     ).toBe("Ran checks");
+  });
+});
+
+describe("subagent model labels", () => {
+  it("keeps unknown model IDs and leaves unspecified models blank", () => {
+    const row = (model?: string): Block => ({
+      id: "agent",
+      role: "tool",
+      text: "Review",
+      agentRun: { name: "Review", model, steps: [] },
+    });
+    expect(subagentModelName(row("claude-haiku-4-5"))).toBe("Haiku 4.5");
+    expect(subagentModelName(row("custom-model-v2"))).toBe("custom-model-v2");
+    for (const model of [undefined, "", "auto", "inherit", "default"])
+      expect(subagentModelName(row(model))).toBeUndefined();
   });
 });

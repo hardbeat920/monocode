@@ -120,7 +120,11 @@ export function ProjectSearch({
   const fileCount = groups.length;
 
   const openMatch = (match: ProjectSearchMatch) => {
-    onOpenFile(match.path, { line: match.line, column: match.column });
+    onOpenFile(
+      match.path,
+      { line: match.line, column: match.column },
+      { exact: true },
+    );
   };
 
   const onQueryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -143,7 +147,7 @@ export function ProjectSearch({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-content/10 px-1.5 py-1">
+      <div className="flex shrink-0 items-center gap-1 border-b border-stroke px-1.5 py-1">
         <button
           type="button"
           onClick={onClose}
@@ -157,7 +161,7 @@ export function ProjectSearch({
           Search in files
         </span>
       </div>
-      <div className="shrink-0 space-y-2 border-b border-content/10 p-2">
+      <div className="shrink-0 space-y-2 border-b border-stroke p-2">
         <div className="flex items-center gap-1 rounded-md border border-content/10 bg-content/5 px-2 pr-1">
           <input
             ref={inputRef}
@@ -231,7 +235,7 @@ export function ProjectSearch({
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
         {groups.map((group) => (
-          <section key={group.path} className="border-b border-content/8">
+          <section key={group.path} className="border-b border-stroke">
             <div className="flex items-center gap-1.5 px-2 py-1.5">
               <FileTypeIcon name={group.name} isDir={false} size={16} />
               <span className="min-w-0 flex-1 truncate text-[12px] text-content">
@@ -297,7 +301,7 @@ function Toggle({
       onClick={onClick}
       className={`grid size-6 place-items-center rounded-sm ${
         active
-          ? "bg-content/15 text-content"
+          ? "bg-selection-hover text-content"
           : "text-content/40 hover:bg-content/10 hover:text-content/70"
       }`}
     >

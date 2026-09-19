@@ -3,12 +3,14 @@ import {
   collectInboxResults,
   composeInboxMessage,
   dedupeInboxItems,
+  detailsCacheKey,
   filterInboxItems,
   formatGithubQuery,
   formatRelativeTime,
   githubAvatarUrl,
   githubReviewDecisionLabel,
   githubReviewStateLabel,
+  gitlabAttentionLabel,
   groupProjectsByRepo,
   inboxComposerCard,
   inboxItemKey,
@@ -16,6 +18,7 @@ import {
   inboxPersonAvatarUrl,
   inboxProjectsForRail,
   inboxStartDraft,
+  prDiffCacheKey,
   sortInboxItems,
   uniqueInboxProjects,
   type InboxItem,
@@ -147,6 +150,17 @@ describe("githubReviewStateLabel", () => {
   });
 });
 
+describe("gitlabAttentionLabel", () => {
+  it("labels the GitLab actions that put work in the attention view", () => {
+    expect(gitlabAttentionLabel("assigned")).toBe("Assigned to you");
+    expect(gitlabAttentionLabel("mentioned")).toBe("Mentioned you");
+    expect(gitlabAttentionLabel("review_requested")).toBe("Review requested");
+    expect(gitlabAttentionLabel("marked")).toBe("Added to your to-dos");
+    expect(gitlabAttentionLabel("unknown_action")).toBe("Unknown action");
+    expect(gitlabAttentionLabel("")).toBe("");
+  });
+});
+
 describe("sortInboxItems", () => {
   it("orders by newest update, mixing issues and pull requests", () => {
     const sorted = sortInboxItems([
@@ -228,6 +242,22 @@ describe("dedupeInboxItems", () => {
       "github:hardbeat920/monocode:issue:10",
     );
   });
+
+  it("keeps same-number items from a fork and its parent separate", () => {
+    const rows = [
+      item({
+        number: 10,
+        updatedAt: "2026-08-27T10:00:00Z",
+        repo: "contributor/web",
+      }),
+      item({
+        number: 10,
+        updatedAt: "2026-08-27T10:00:00Z",
+        repo: "acme/web",
+      }),
+    ];
+    expect(dedupeInboxItems(rows)).toHaveLength(2);
+  });
 });
 
 describe("groupProjectsByRepo", () => {
@@ -239,6 +269,32 @@ describe("groupProjectsByRepo", () => {
         { path: "/tmp/docs", repo: "acme/docs" },
       ]).map((project) => project.path),
     ).toEqual(["/tmp/monocode", "/tmp/docs"]);
+  });
+
+  it("fetches a shared upstream once while preserving its preferred checkout", () => {
+    expect(
+      groupProjectsByRepo([
+        { path: "/tmp/fork-a", repo: "maya/web" },
+        { path: "/tmp/fork-a", repo: "acme/web" },
+        { path: "/tmp/fork-b", repo: "lin/web" },
+        { path: "/tmp/fork-b", repo: "ACME/web" },
+      ]),
+    ).toEqual([
+      { path: "/tmp/fork-a", repo: "maya/web" },
+      { path: "/tmp/fork-a", repo: "acme/web" },
+      { path: "/tmp/fork-b", repo: "lin/web" },
+    ]);
+  });
+});
+
+describe("GitHub repository cache keys", () => {
+  it("separates same-number items from different repositories", () => {
+    expect(detailsCacheKey("maya/web", "issue", 10)).not.toBe(
+      detailsCacheKey("acme/web", "issue", 10),
+    );
+    expect(prDiffCacheKey("maya/web", 10)).not.toBe(
+      prDiffCacheKey("acme/web", 10),
+    );
   });
 });
 

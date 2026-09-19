@@ -71,7 +71,7 @@ export function SkillPicker({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={onStartCreate}
-            className="flex w-full items-center gap-2 border-t border-content/10 px-2.5 py-2 text-left text-[12px] text-content/70 hover:bg-content/10 hover:text-content"
+            className="flex w-full items-center gap-2 border-t border-stroke px-2.5 py-2 text-left text-[12px] text-content/70 hover:bg-content/10 hover:text-content"
           >
             <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
             New skill
@@ -155,15 +155,11 @@ function SkillList({
             onMouseEnter={() => onRowEnter(index)}
             onClick={() => onPick(skill)}
             className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left ${
-              highlighted ? "bg-skill/15 text-content" : "text-content"
+              highlighted ? "bg-content/10 text-content" : "text-content"
             }`}
           >
             <span className="flex min-w-0 items-baseline gap-2">
-              <span
-                className={`truncate text-[13px] ${
-                  highlighted ? "font-medium text-skill" : ""
-                }`}
-              >
+              <span className="truncate text-[13px]">
                 /{skill.invocation}
               </span>
               <span className="shrink-0 text-[10px] uppercase tracking-wide text-content/40">
@@ -227,7 +223,15 @@ export function CreateSkillForm({
   };
 
   return (
-    <form onSubmit={submit} className="px-2.5 py-2">
+    <form
+      onSubmit={submit}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault();
+        onCancel();
+      }}
+      className="px-2.5 py-2"
+    >
       <p className="mb-2 text-[11px] text-content/50">
         Writes a starter SKILL.md you can edit.
       </p>
@@ -239,11 +243,6 @@ export function CreateSkillForm({
         aria-label="Skill name"
         disabled={busy}
         onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key !== "Escape") return;
-          e.preventDefault();
-          onCancel();
-        }}
         className={`mb-2 w-full rounded-md bg-content/10 px-2 py-1.5 text-[13px] text-content outline-none placeholder:text-content/40 ${monospace ? "font-mono" : "font-sans"}`}
       />
       <div className="mb-2 flex gap-1">
@@ -313,7 +312,9 @@ function ScopeButton({
       disabled={disabled}
       onClick={onClick}
       className={`flex min-w-0 flex-1 flex-col rounded-md px-2 py-1.5 text-left ${
-        selected ? "bg-content/20 text-content" : "bg-content/10 text-content/70"
+        selected
+          ? "bg-selection-emphasis text-content"
+          : "bg-selection text-content/70"
       } disabled:opacity-40`}
     >
       <span className="text-[12px]">{label}</span>

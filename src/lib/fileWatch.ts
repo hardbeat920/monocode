@@ -7,16 +7,18 @@ type Listener = () => void;
 
 const listeners = new Map<string, Set<Listener>>();
 const mtimes = new Map<string, number | null | undefined>();
+const unobserved = new Set<string>();
 let inFlight = false;
 let queued: string[] | "all" | null = null;
 
-/** Watch a currently open file. First poll seeds mtime and does not notify. */
+/** Watch a currently open file and reconcile it after the first mtime sample. */
 export function watchFile(path: string, onChange: Listener): () => void {
   let set = listeners.get(path);
   if (!set) {
     set = new Set();
     listeners.set(path, set);
     mtimes.set(path, undefined);
+    unobserved.add(path);
   }
   set.add(onChange);
   if (typeof document === "undefined" || !document.hidden) {
@@ -27,6 +29,7 @@ export function watchFile(path: string, onChange: Listener): () => void {
     if (set.size > 0) return;
     listeners.delete(path);
     mtimes.delete(path);
+    unobserved.delete(path);
   };
 }
 
@@ -47,6 +50,9 @@ export function invalidateWatchedFiles(paths?: string[]) {
   const watched = watchedPaths(paths);
   for (const path of watched) {
     mtimes.set(path, undefined);
+    // The direct notification below already reconciles the editor. The poll
+    // only needs to establish its new baseline, not notify a second time.
+    unobserved.delete(path);
     listeners.get(path)?.forEach((listener) => listener());
   }
   if (
@@ -77,6 +83,7 @@ export async function syncWatchedMtime(path: string): Promise<void> {
     const [stat] = await statFiles([path]);
     if (stat && listeners.has(path)) {
       mtimes.set(path, stat.mtimeMs);
+      unobserved.delete(path);
     }
   } catch {
     /* next nudge will retry */
@@ -95,7 +102,9 @@ async function poll(paths: string[] | "all") {
   }
 
   const list =
-    paths === "all" ? [...listeners.keys()] : paths.filter((path) => listeners.has(path));
+    paths === "all"
+      ? [...listeners.keys()]
+      : paths.filter((path) => listeners.has(path));
   if (list.length === 0) return;
 
   inFlight = true;
@@ -106,9 +115,16 @@ async function poll(paths: string[] | "all") {
       for (const stat of stats) {
         if (!listeners.has(stat.path)) continue;
         const previous = mtimes.get(stat.path);
+        const firstObservation = unobserved.delete(stat.path);
         mtimes.set(stat.path, stat.mtimeMs);
-        // First observation is the baseline so opening a tab does not re-read.
-        if (previous === undefined || previous === stat.mtimeMs) continue;
+        // The file may have changed after its initial read but before the
+        // watcher established this baseline. Reconcile on the first sample so
+        // that race cannot leave an open editor permanently stale.
+        if (
+          !firstObservation &&
+          (previous === undefined || previous === stat.mtimeMs)
+        )
+          continue;
         listeners.get(stat.path)?.forEach((listener) => listener());
       }
     }

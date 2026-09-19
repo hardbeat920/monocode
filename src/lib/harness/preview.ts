@@ -4,6 +4,7 @@ import {
   formatShellIntent,
   inferShellIntent,
   rewriteReadableTitle,
+  unwrapShellCommand,
 } from "./shellIntent";
 
 export const MAX_PREVIEW_LINES = 6;
@@ -259,7 +260,7 @@ export function isSkillTool(kind?: string, title?: string): boolean {
   return /^skill\b/i.test(title?.trim() ?? "");
 }
 
-/** Claude Code's Agent tool (named Task before v2.1.63), plus Codex subagents. */
+/** Delegation tool names shared by the provider adapters. */
 export function isAgentToolName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return (
@@ -284,11 +285,14 @@ export function agentToolTitle(
 ): string {
   const description = coerceString(input.description)?.trim();
   if (description) return description;
+  const task = coerceString(input.task)?.trim();
+  if (task) return task;
   const type =
     coerceString(input.subagent_type) ??
     coerceString(input.subagentType) ??
     coerceString(input.agent_type) ??
-    coerceString(input.agentType);
+    coerceString(input.agentType) ??
+    coerceString(input.agent);
   if (type) {
     const label = formatAgentType(type);
     return /subagent/i.test(label) ? label : `${label} subagent`;
@@ -370,7 +374,7 @@ export function composeToolTitle(opts: {
   const path = opts.path?.trim();
   const query = opts.query?.trim();
   const previewKind = opts.previewKind;
-  const command = firstLine(opts.command);
+  const command = opts.command?.trim();
   const skill = formatSkillName(opts.skill);
 
   if (isAgentTool(kind, title)) {
@@ -401,7 +405,7 @@ export function composeToolTitle(opts: {
   if (previewKind === "shell" || isExecuteTool(kind, title)) {
     const rewritten = rewriteReadableTitle(title, path, query);
     if (rewritten) return rewritten;
-    const script = command || stripExecutePrefix(title);
+    const script = unwrapShellCommand(command || stripExecutePrefix(title));
     const inferred = inferShellIntent(script);
     if (inferred) {
       const inferredPath =
@@ -412,8 +416,8 @@ export function composeToolTitle(opts: {
       const readable = formatShellIntent(inferred, inferredPath, query);
       if (readable) return readable;
     }
-    if (command) return command;
-    const rest = stripExecutePrefix(title);
+    if (command) return firstLine(script);
+    const rest = firstLine(script);
     if (rest && !isWeakToolTitle(rest)) return rest;
     if (title && !isWeakToolTitle(title)) return title;
     return "Shell";

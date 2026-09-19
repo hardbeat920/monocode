@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
+const writeChild = vi.fn(async (_id: string, line: string) => {
+  sent.push(line);
+});
 
 vi.mock("./child", () => ({
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
@@ -11,9 +14,7 @@ vi.mock("./child", () => ({
   watchChild: (_id: string, line: (l: string) => void) => {
     onLine = line;
   },
-  writeChild: async (_id: string, line: string) => {
-    sent.push(line);
-  },
+  writeChild,
 }));
 
 const {
@@ -59,16 +60,27 @@ async function startTurn(
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     resume?: boolean;
+    providerAccountId?: string;
+    resumeProviderAccountId?: string;
+    expectResume?: boolean;
     beforeThreadReply?: () => Promise<void>;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
-  if (options.resume) bindCodexSession(sessionId, "thr_1", "/repo");
+  if (options.resume) {
+    bindCodexSession(
+      sessionId,
+      "thr_1",
+      "/repo",
+      options.resumeProviderAccountId,
+    );
+  }
   const turn = sendCodexTurn({
     sessionId,
     cwd: "/repo",
     model: "codex:gpt-5.4",
     modelSettings: {},
+    providerAccountId: options.providerAccountId,
     runtimeMode: options.runtimeMode ?? "supervised",
     intent: options.intent,
     text: "summarize the changelog",
@@ -81,7 +93,8 @@ async function startTurn(
     "initialize",
   );
   reply(parse().find((m) => m.method === "initialize")!.id as number, {});
-  const threadMethod = options.resume ? "thread/resume" : "thread/start";
+  const threadMethod =
+    (options.expectResume ?? options.resume) ? "thread/resume" : "thread/start";
   await waitFor(
     () => parse().some((m) => m.method === threadMethod),
     threadMethod,
@@ -106,6 +119,7 @@ describe("codex live turn sequence", () => {
   beforeEach(() => {
     sent.length = 0;
     onLine = undefined;
+    writeChild.mockClear();
   });
 
   afterEach(async () => {
@@ -151,6 +165,37 @@ describe("codex live turn sequence", () => {
     ]);
   });
 
+  it("resumes a legacy thread when the missing account resolves to default", async () => {
+    const { turn } = await startTurn("codex-live", {
+      resume: true,
+      providerAccountId: "default",
+    });
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      true,
+    );
+    expect(parse().some((message) => message.method === "thread/start")).toBe(
+      false,
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("does not resume a legacy default thread under a named account", async () => {
+    const { turn } = await startTurn("codex-live", {
+      resume: true,
+      providerAccountId: "account-work",
+      expectResume: false,
+    });
+    expect(parse().some((message) => message.method === "thread/start")).toBe(
+      true,
+    );
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      false,
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
   it("still surfaces a terminal failure after transport retries", async () => {
     vi.spyOn(console, "debug").mockImplementation(() => {});
     const { events, turn } = await startTurn("codex-live");
@@ -158,7 +203,8 @@ describe("codex live turn sequence", () => {
       error: { message: "Reconnecting... 5/5" },
       willRetry: true,
     });
-    const message = "Response stream disconnected after too many failed attempts";
+    const message =
+      "Response stream disconnected after too many failed attempts";
     notify("error", { error: { message }, willRetry: false });
     expect(events).toContainEqual({ type: "session.error", message });
     notify("turn/completed", {
@@ -325,6 +371,227 @@ describe("codex live turn sequence", () => {
     });
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it.each(["allow", "deny"] as const)(
+    "keeps a child approval answerable after a sibling completes: %s",
+    async (decision) => {
+      const { events, turn } = await startTurn("codex-live");
+      const settled = vi.fn();
+      void turn.then(settled);
+      onLine!(
+        JSON.stringify({
+          id: "child_approval",
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thr_child",
+            turnId: "turn_child",
+            itemId: "child_read",
+            command: "cat ~/.gitconfig",
+          },
+        }),
+      );
+      const approval = events.find(
+        (event) => event.type === "approval.requested",
+      )!;
+      expect(approval).toMatchObject({ callId: "child_read" });
+      const before = [...events];
+      notify("turn/started", {
+        threadId: "thr_sibling",
+        turn: { id: "turn_sibling" },
+      });
+      notify("item/agentMessage/delta", {
+        threadId: "thr_sibling",
+        delta: "Child-only text",
+      });
+      notify("turn/completed", {
+        threadId: "thr_sibling",
+        turn: { id: "turn_sibling", status: "completed" },
+      });
+      notify("error", {
+        threadId: "thr_sibling",
+        error: { message: "Child failed" },
+        willRetry: false,
+      });
+      await Promise.resolve();
+      expect(events).toEqual(before);
+      expect(settled).not.toHaveBeenCalled();
+      respondCodexApproval("codex-live", approval.requestId, decision);
+      await waitFor(
+        () => parse().some((message) => message.id === "child_approval"),
+        "child decision",
+      );
+      expect(
+        parse().find((message) => message.id === "child_approval")?.result,
+      ).toEqual({
+        decision: decision === "allow" ? "accept" : "decline",
+      });
+      notify("turn/completed", {
+        threadId: "thr_1",
+        turn: { id: "turn_1", status: "completed" },
+      });
+      await turn;
+    },
+  );
+
+  it("clears a server-resolved child approval using its owning thread", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: "child_approval",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thr_child",
+          itemId: "child_read",
+          command: "cat ~/.gitconfig",
+        },
+      }),
+    );
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    notify("serverRequest/resolved", {
+      threadId: "thr_1",
+      requestId: "child_approval",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.some((event) => event.type === "approval.resolved")).toBe(
+      false,
+    );
+    notify("serverRequest/resolved", {
+      threadId: "thr_child",
+      requestId: "child_approval",
+    });
+    await waitFor(
+      () => events.some((event) => event.type === "approval.resolved"),
+      "child cleanup",
+    );
+    expect(events).toContainEqual({
+      type: "approval.resolved",
+      requestId: approval.requestId,
+      decision: "cancelled",
+    });
+    expect(parse().some((message) => message.id === "child_approval")).toBe(
+      false,
+    );
+    notify("turn/completed", {
+      threadId: "thr_1",
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+  });
+
+  it.each(["allow", "deny"] as const)(
+    "answers a child's filesystem permission request: %s",
+    async (decision) => {
+      const { events, turn } = await startTurn("codex-live");
+      const permissions = { fileSystem: { read: ["/home/user/.gitconfig"] } };
+      onLine!(
+        JSON.stringify({
+          id: "child_permissions",
+          method: "item/permissions/requestApproval",
+          params: {
+            threadId: "thr_child",
+            turnId: "turn_child",
+            itemId: "child_read",
+            permissions,
+          },
+        }),
+      );
+      const approval = events.find(
+        (event) => event.type === "approval.requested",
+      )!;
+      respondCodexApproval("codex-live", approval.requestId, decision);
+      await waitFor(
+        () => parse().some((message) => message.id === "child_permissions"),
+        "filesystem permission response",
+      );
+      expect(
+        parse().find((message) => message.id === "child_permissions")?.result,
+      ).toEqual(
+        decision === "allow"
+          ? { scope: "turn", permissions }
+          : { permissions: {} },
+      );
+      notify("turn/completed", {
+        threadId: "thr_1",
+        turn: { id: "turn_1", status: "completed" },
+      });
+      await turn;
+    },
+  );
+
+  it("advances the question queue when the server resolves a child's request", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    for (const id of ["child_a", "child_b"]) {
+      onLine!(
+        JSON.stringify({
+          id,
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: id,
+            questions: [{ id: "q", question: id, isOther: true, options: [] }],
+          },
+        }),
+      );
+    }
+    notify("serverRequest/resolved", {
+      threadId: "child_a",
+      requestId: "child_a",
+    });
+    await waitFor(
+      () =>
+        events.filter((event) => event.type === "question.asked").length === 2,
+      "second child question",
+    );
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/repo"),
+    );
+    expect(session.pendingQuestion?.questions[0].prompt).toBe("child_b");
+    expect(parse().some((message) => message.id === "child_a")).toBe(false);
+    respondCodexQuestion("codex-live", session.pendingQuestion!.requestId, {
+      kind: "skipped",
+    });
+    await waitFor(
+      () => parse().some((message) => message.id === "child_b"),
+      "second child response",
+    );
+    notify("turn/completed", {
+      threadId: "thr_1",
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+  });
+
+  it("fails the active turn if a child permission reply cannot be delivered", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    onLine!(
+      JSON.stringify({
+        id: "child_approval",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thr_child",
+          itemId: "child_read",
+          command: "cat ~/.gitconfig",
+        },
+      }),
+    );
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    let outcome: unknown;
+    void turn.catch((error) => {
+      outcome = error;
+    });
+    writeChild.mockRejectedValueOnce(new Error("Broken pipe"));
+    respondCodexApproval("codex-live", approval.requestId, "allow");
+    await waitFor(() => outcome instanceof Error, "failed permission delivery");
+    expect(outcome).toMatchObject({ message: "Broken pipe" });
+    expect(events).toContainEqual({
+      type: "session.error",
+      message: "Broken pipe",
+    });
   });
 
   it.each([undefined, "plan"] as const)(
@@ -573,7 +840,7 @@ describe("codex live turn sequence", () => {
     { decision: "allow", boolean: true },
     { decision: "deny", boolean: true },
   ] as const)(
-    "shows MCP confirmation in Full Access and sends $decision, boolean=$boolean",
+    "shows other MCP confirmation in Full Access and sends $decision, boolean=$boolean",
     async ({ decision, boolean }) => {
       const { events, turn } = await startTurn("codex-live", {
         runtimeMode: "full-access",
@@ -614,6 +881,37 @@ describe("codex live turn sequence", () => {
       await turn;
     },
   );
+
+  it("auto-approves computer-use app access in Full Access", async () => {
+    const { events, turn } = await startTurn("codex-live", {
+      runtimeMode: "full-access",
+    });
+    onLine!(
+      JSON.stringify({
+        id: 91,
+        method: "mcpServer/elicitation/request",
+        params: {
+          serverName: "cua_repl",
+          mode: "form",
+          message: 'Allow Computer Use to use "QuickTime Player"?',
+          requestedSchema: {
+            type: "object",
+            properties: {},
+            required: [],
+          },
+        },
+      }),
+    );
+    await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
+    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+      action: "accept",
+      content: {},
+      _meta: null,
+    });
+    expect(events.some((e) => e.type === "approval.requested")).toBe(false);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
 
   it.each([false, true, undefined])(
     "honors isBlocking=%s without relying on deprecated autoResolutionMs",
@@ -1051,5 +1349,292 @@ describe("codex live turn sequence", () => {
     });
     await compact;
     expect(settled).toBe(true);
+  });
+});
+
+describe("codex subagents", () => {
+  beforeEach(() => {
+    sent.length = 0;
+    onLine = undefined;
+    writeChild.mockClear();
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await stopCodexSession("s1");
+    __codexTestReset();
+  });
+
+  it("mirrors a child thread's work onto the row that spawned it", async () => {
+    const { events, turn } = await startTurn("s1");
+    notify("item/started", {
+      threadId: "thr_1",
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "inProgress",
+        prompt: "Correctness review\n\nLook for regressions in the diff.",
+        agentsStates: { thr_child: { status: "running" } },
+      },
+    });
+    notify("item/started", {
+      threadId: "thr_child",
+      item: {
+        id: "child_cmd",
+        type: "commandExecution",
+        command: "npm test",
+        status: "inProgress",
+      },
+    });
+    notify("item/completed", {
+      threadId: "thr_child",
+      item: {
+        id: "child_msg",
+        type: "agentMessage",
+        text: "No regressions found.",
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    // The spawn is named from its brief, not from the tool that made it.
+    expect(
+      events.some(
+        (event) =>
+          event.type === "tool.started" &&
+          event.kind === "agent" &&
+          event.title === "Correctness review",
+      ),
+    ).toBe(true);
+
+    const steps = events.filter((event) => event.type === "agent.step");
+    expect(steps.every((step) => step.callId === "collab_1")).toBe(true);
+    expect(steps.map((step) => [step.kind, step.text])).toEqual([
+      ["tool", "npm test"],
+      ["message", "No regressions found."],
+    ]);
+  });
+
+  it("banks a child's opening moves until its row is known", async () => {
+    const { events, turn } = await startTurn("s1");
+    notify("thread/started", {
+      thread: { id: "thr_child", model: "gpt-5.6-sol" },
+    });
+    // Codex streams the child's first calls before the spawn item reports
+    // which thread it created.
+    notify("item/started", {
+      threadId: "thr_child",
+      item: {
+        id: "child_cmd",
+        type: "commandExecution",
+        command: "git diff",
+        status: "inProgress",
+      },
+    });
+    expect(events.some((event) => event.type === "agent.step")).toBe(false);
+
+    notify("item/completed", {
+      threadId: "thr_1",
+      item: {
+        id: "sa_1",
+        type: "subAgentActivity",
+        kind: "started",
+        agentPath: "/root/explore-auth",
+        agentThreadId: "thr_child",
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    const run = events
+      .reduce(applyHarnessEvent, newSession("codex", "/repo"))
+      .blocks.find((block) => block.tool?.callId === "sa_1")?.agentRun;
+    expect(run).toMatchObject({
+      name: "Explore Auth subagent",
+      model: "gpt-5.6-sol",
+    });
+    expect(run?.steps).toHaveLength(1);
+    const steps = events.filter((event) => event.type === "agent.step");
+    expect(steps.map((step) => [step.callId, step.kind, step.text])).toEqual([
+      ["sa_1", "tool", "git diff"],
+    ]);
+  });
+
+  it("shows one row per spawned agent, however Codex describes it", async () => {
+    const { events, turn } = await startTurn("s1");
+    notify("item/started", {
+      threadId: "thr_1",
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "inProgress",
+        prompt: "Correctness review",
+        agentsStates: { thr_child: { status: "running" } },
+      },
+    });
+    // The same agent, described again by the older item type.
+    notify("item/completed", {
+      threadId: "thr_1",
+      item: {
+        id: "sa_1",
+        type: "subAgentActivity",
+        kind: "started",
+        agentPath: "/root/explore-auth",
+        agentThreadId: "thr_child",
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    const rows = events.filter(
+      (event) =>
+        (event.type === "tool.started" || event.type === "tool.updated") &&
+        event.kind === "agent",
+    );
+    // One row, however many times its state is reported.
+    expect([...new Set(rows.map((row) => row.callId))]).toEqual(["collab_1"]);
+  });
+
+  it("still gives a failed duplicate its own row", async () => {
+    const { events, turn } = await startTurn("s1");
+    notify("item/started", {
+      threadId: "thr_1",
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "inProgress",
+        prompt: "Correctness review",
+        agentsStates: { thr_child: { status: "running" } },
+      },
+    });
+    notify("item/completed", {
+      threadId: "thr_1",
+      item: {
+        id: "sa_1",
+        type: "subAgentActivity",
+        kind: "interrupted",
+        agentThreadId: "thr_child",
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    expect(
+      events.some(
+        (event) =>
+          event.type === "tool.updated" &&
+          event.callId === "sa_1" &&
+          event.status === "failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a spawned agent running until its own state says otherwise", async () => {
+    const { events, turn } = await startTurn("s1");
+    const spawn = {
+      id: "collab_1",
+      type: "collabAgentToolCall",
+      tool: "spawnAgent",
+      prompt: "Correctness review",
+      agentsStates: { thr_child: { status: "running" } },
+    };
+    notify("item/started", { threadId: "thr_1", item: spawn });
+    // The spawn call itself returns almost immediately. The agent it started
+    // has not finished, so the row must not settle here.
+    notify("item/completed", {
+      threadId: "thr_1",
+      item: { ...spawn, status: "completed" },
+    });
+    const beforeWait = events.filter(
+      (event) => event.type === "tool.updated" && event.callId === "collab_1",
+    );
+    expect(beforeWait.every((event) => event.status === "in_progress")).toBe(
+      true,
+    );
+
+    // Waiting on the agent is where Codex reports what became of it.
+    notify("item/completed", {
+      threadId: "thr_1",
+      item: {
+        id: "collab_2",
+        type: "collabAgentToolCall",
+        tool: "wait",
+        status: "completed",
+        receiverThreadIds: ["thr_child"],
+        agentsStates: { thr_child: { status: "completed", message: "ok" } },
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    const last = events
+      .filter(
+        (event) =>
+          (event.type === "tool.started" || event.type === "tool.updated") &&
+          event.callId === "collab_1",
+      )
+      .at(-1);
+    expect(last).toMatchObject({ kind: "agent", status: "completed" });
+  });
+
+  it("never leaves an agent row running once the turn is over", async () => {
+    const { events, turn } = await startTurn("s1");
+    notify("item/started", {
+      threadId: "thr_1",
+      item: {
+        id: "collab_1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        prompt: "Correctness review",
+        agentsStates: { thr_child: { status: "running" } },
+      },
+    });
+    // Codex never reports a closing state for this child.
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    const last = events
+      .filter(
+        (event) =>
+          (event.type === "tool.started" || event.type === "tool.updated") &&
+          event.callId === "collab_1",
+      )
+      .at(-1);
+    expect(last).toMatchObject({
+      kind: "agent",
+      title: "Correctness review",
+      status: "completed",
+    });
+  });
+
+  it("keeps a child thread out of the parent's own transcript", async () => {
+    const { events, turn } = await startTurn("s1");
+    notify("item/completed", {
+      threadId: "thr_1",
+      item: {
+        id: "sa_1",
+        type: "subAgentActivity",
+        kind: "started",
+        agentPath: "/root/explore-auth",
+        agentThreadId: "thr_child",
+      },
+    });
+    notify("item/completed", {
+      threadId: "thr_child",
+      item: { id: "child_msg", type: "agentMessage", text: "Child talking." },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message.delta" &&
+          event.text.includes("Child talking."),
+      ),
+    ).toBe(false);
   });
 });

@@ -38,6 +38,7 @@ struct PtyExit {
 }
 
 struct LivePty {
+    cwd: std::path::PathBuf,
     writer: Mutex<Box<dyn Write + Send>>,
     #[cfg(unix)]
     master_fd: i32,
@@ -51,6 +52,14 @@ pub struct PtyHost {
 }
 
 impl PtyHost {
+    pub(crate) fn has_working_dir(&self, path: &std::path::Path) -> bool {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|live| crate::worktrees::contains_working_dir(path, &live.cwd))
+    }
+
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
@@ -124,6 +133,8 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    let workdir = working_dir(&cwd);
+    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     if let Some(prev) = host.remove(&id) {
         terminate(prev.pid);
         #[cfg(unix)]
@@ -132,12 +143,12 @@ pub fn pty_spawn(
 
     #[cfg(unix)]
     {
-        spawn_unix(app, host, id, cwd, cols.max(2), rows.max(2))
+        spawn_unix(app, host, id, workdir, cols.max(2), rows.max(2))
     }
 
     #[cfg(windows)]
     {
-        spawn_windows(app, host, id, cwd, cols.max(2), rows.max(2))
+        spawn_windows(app, host, id, workdir, cols.max(2), rows.max(2))
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -235,7 +246,7 @@ fn spawn_unix(
     app: AppHandle,
     host: State<PtyHost>,
     id: String,
-    cwd: String,
+    workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
@@ -244,7 +255,6 @@ fn spawn_unix(
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
-    let workdir = working_dir(&cwd);
     let (shell, args) = default_shell();
     let (master, slave) = open_pty(cols, rows)?;
 
@@ -293,6 +303,7 @@ fn spawn_unix(
     let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
 
     let live = Arc::new(LivePty {
+        cwd: workdir.clone(),
         writer: Mutex::new(Box::new(writer)),
         master_fd: master,
         pid,
@@ -364,13 +375,12 @@ fn spawn_windows(
     app: AppHandle,
     host: State<PtyHost>,
     id: String,
-    cwd: String,
+    workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-    let workdir = working_dir(&cwd);
     let (shell, args) = default_shell();
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -409,6 +419,7 @@ fn spawn_windows(
         .map_err(|err| format!("Failed to write to terminal: {err}"))?;
 
     let live = Arc::new(LivePty {
+        cwd: workdir.clone(),
         writer: Mutex::new(Box::new(writer)),
         master: Mutex::new(pair.master),
         pid,
@@ -809,6 +820,7 @@ mod tests {
         host.insert(
             "term".into(),
             Arc::new(LivePty {
+                cwd: std::path::PathBuf::from("/test"),
                 writer: Mutex::new(Box::new(std::io::sink())),
                 master_fd: -1,
                 pid: 42,

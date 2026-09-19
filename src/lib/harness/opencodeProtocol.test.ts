@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   flattenOpenCodeModels,
+  openCodeProviderName,
   parseAgentListCliOutput,
   parseModelsCliOutput,
 } from "./opencodeCatalog";
@@ -8,18 +9,58 @@ import {
   buildOpenCodePermissionRules,
   compareSemver,
   contextUsedFromMessageInfo,
+  turnMetricsFromMessageInfo,
   detailFromToolPart,
+  eventSessionId,
   inferDefaultAgent,
   inferDefaultVariant,
   isOpenCodeDefaultTitle,
   isOpenCodeNotFound,
   mergeOpenCodeAssistantText,
+  openCodeVariantLabel,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
+  sortOpenCodeVariants,
   toOpenCodePermissionReply,
   toolKindFromName,
 } from "./opencodeProtocol";
+
+describe("eventSessionId", () => {
+  it.each([
+    {
+      type: "permission.asked",
+      properties: { id: "permission_1", sessionID: "session_1" },
+    },
+    {
+      type: "session.created",
+      properties: { info: { id: "session_1", parentID: "session_parent" } },
+    },
+    {
+      type: "message.updated",
+      properties: { info: { id: "message_1", sessionID: "session_1" } },
+    },
+    {
+      type: "message.part.updated",
+      properties: { part: { id: "part_1", sessionID: "session_1" } },
+    },
+    {
+      type: "message.part.delta",
+      properties: { sessionID: "session_1", partID: "part_1" },
+    },
+  ])("extracts the owning session for $type", (event) => {
+    expect(eventSessionId(event)).toBe("session_1");
+  });
+
+  it("does not mistake message IDs for session IDs", () => {
+    expect(
+      eventSessionId({
+        type: "message.updated",
+        properties: { info: { id: "message_1" } },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("parseOpenCodeModelSlug", () => {
   it("splits provider/model", () => {
@@ -124,12 +165,16 @@ describe("OpenCode CLI inventory parsers", () => {
       "anthropic/claude-sonnet-4-6",
       "opencode/glm-5",
     ]);
-    expect(models[1].settings?.some((setting) => setting.id === "variant")).toBe(
-      true,
-    );
-    expect(models[0].settings?.find((setting) => setting.id === "agent")?.value).toBe(
-      "build",
-    );
+    expect(models.map((model) => model.provider)).toEqual([
+      { id: "anthropic", name: "Anthropic" },
+      { id: "opencode", name: "OpenCode" },
+    ]);
+    expect(
+      models[1].settings?.some((setting) => setting.id === "variant"),
+    ).toBe(true);
+    expect(
+      models[0].settings?.find((setting) => setting.id === "agent")?.value,
+    ).toBe("build");
   });
 
   it("parses agent list headers", () => {
@@ -140,6 +185,39 @@ describe("OpenCode CLI inventory parsers", () => {
       { name: "build", mode: "primary", hidden: false },
       { name: "compaction", mode: "primary", hidden: true },
     ]);
+  });
+
+  it("sorts variant options and labels xhigh as Extra High", () => {
+    const parsed = parseModelsCliOutput(
+      [
+        "some-cloud/spark-1",
+        '{"id":"spark-1","name":"Spark 1","variants":{"high":{},"minimal":{},"xhigh":{},"low":{},"medium":{}}}',
+        "",
+      ].join("\n"),
+    );
+    const [model] = flattenOpenCodeModels(parsed, []);
+    const variant = model?.settings?.find((setting) => setting.id === "variant");
+    expect(variant?.options.map((option) => option.value)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(variant?.options.map((option) => option.label)).toEqual([
+      "Minimal",
+      "Low",
+      "Medium",
+      "High",
+      "Extra High",
+    ]);
+    expect(variant?.value).toBe("medium");
+  });
+
+  it("uses familiar provider names and readable custom-provider fallbacks", () => {
+    expect(openCodeProviderName("opencode-go")).toBe("OpenCode Go");
+    expect(openCodeProviderName("openai")).toBe("OpenAI");
+    expect(openCodeProviderName("acme-cloud")).toBe("Acme Cloud");
   });
 });
 
@@ -180,9 +258,34 @@ describe("OpenCode helpers", () => {
     expect(inferDefaultVariant("openai", ["low", "medium", "high"])).toBe(
       "medium",
     );
-    expect(
-      inferDefaultAgent([{ name: "plan" }, { name: "build" }]),
-    ).toBe("build");
+    expect(inferDefaultAgent([{ name: "plan" }, { name: "build" }])).toBe(
+      "build",
+    );
+  });
+
+  it("prefers medium/high variants on any provider", () => {
+    expect(inferDefaultVariant("some-cloud", ["low", "medium", "high"])).toBe(
+      "medium",
+    );
+    expect(inferDefaultVariant("some-cloud", ["low", "high"])).toBe("high");
+    expect(inferDefaultVariant("some-cloud", ["low", "xhigh"])).toBeUndefined();
+  });
+
+  it("labels variants like Codex/Cursor effort levels", () => {
+    expect(openCodeVariantLabel("xhigh")).toBe("Extra High");
+    expect(openCodeVariantLabel("extra-high")).toBe("Extra High");
+    expect(openCodeVariantLabel("minimal")).toBe("Minimal");
+    expect(openCodeVariantLabel("high")).toBe("High");
+  });
+
+  it("sorts variants from lowest to highest effort", () => {
+    expect(sortOpenCodeVariants(["high", "minimal", "xhigh", "low", "medium"])).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
   });
 });
 
@@ -211,9 +314,33 @@ describe("contextUsedFromMessageInfo", () => {
   it("treats an all-zero reading as nothing to report", () => {
     expect(
       contextUsedFromMessageInfo({
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
       }),
     ).toBeUndefined();
+  });
+
+  it("normalizes cache usage for a turn tooltip", () => {
+    expect(
+      turnMetricsFromMessageInfo({
+        tokens: {
+          input: 1_200,
+          output: 800,
+          reasoning: 200,
+          cache: { read: 40_000, write: 5_000 },
+        },
+      }),
+    ).toEqual({
+      inputTokens: 1_200,
+      outputTokens: 1_000,
+      cacheReadTokens: 40_000,
+      cacheWriteTokens: 5_000,
+      cacheHitPercent: (40_000 / 46_200) * 100,
+    });
   });
 });
 

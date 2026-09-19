@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSER_RUNNER_DEFAULT,
+  searchSettings,
+  SETTINGS_INDEX,
+  settingsSectionsByGroup,
+  MODEL_CONTROLS_DEFAULT,
   DIFF_VIEWER_DEFAULT,
   FOLLOW_UP_BEHAVIOR_DEFAULT,
   GRID_ARCADE_ENABLED_DEFAULT,
   KEYBINDINGS,
   LIVE_AGENTS_ENABLED_DEFAULT,
   loadComposerRunner,
+  loadModelControls,
   loadDiffViewer,
   loadFollowUpBehavior,
   loadGridArcadeEnabled,
@@ -14,14 +19,18 @@ import {
   loadNotesEnabled,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
+  saveModelControls,
   saveDiffViewer,
   saveFollowUpBehavior,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
 } from "./settings";
+import { MOD, SHIFT } from "./platform";
 
 const KEY = "monocode.composerRunner";
+const MODEL_CONTROLS_KEY = "monocode.modelControls";
+const LEGACY_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
 const NOTES_KEY = "monocode.notesEnabled";
 const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
@@ -94,6 +103,40 @@ describe("composer runner setting", () => {
   });
 });
 
+describe("model controls setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(MODEL_CONTROLS_KEY);
+    localStorage.removeItem(LEGACY_EFFORT_VISIBLE_KEY);
+  });
+
+  it("keeps options in the model menu by default", () => {
+    expect(MODEL_CONTROLS_DEFAULT).toBe("menu");
+    expect(loadModelControls()).toBe("menu");
+  });
+
+  it("persists the beside-picker preference", () => {
+    saveModelControls("beside");
+    expect(localStorage.getItem(MODEL_CONTROLS_KEY)).toBe("beside");
+    expect(loadModelControls()).toBe("beside");
+    saveModelControls("menu");
+    expect(loadModelControls()).toBe("menu");
+  });
+
+  it("ignores unknown stored values", () => {
+    localStorage.setItem(MODEL_CONTROLS_KEY, "everywhere");
+    expect(loadModelControls()).toBe("menu");
+  });
+
+  it("migrates the previous effort-control toggle", () => {
+    localStorage.setItem(LEGACY_EFFORT_VISIBLE_KEY, "1");
+    expect(loadModelControls()).toBe("beside");
+    localStorage.setItem(LEGACY_EFFORT_VISIBLE_KEY, "0");
+    localStorage.removeItem(MODEL_CONTROLS_KEY);
+    expect(loadModelControls()).toBe("menu");
+  });
+});
+
 describe("notes enabled setting", () => {
   beforeEach(mockLocalStorage);
   afterEach(() => {
@@ -155,9 +198,36 @@ describe("grid arcade enabled setting", () => {
 });
 
 describe("workspace navigation keybindings", () => {
+  it("documents the command palette and reload shortcuts", () => {
+    expect(
+      KEYBINDINGS.filter((row) =>
+        ["App: Command Palette", "View: Reload"].includes(row.command),
+      ),
+    ).toEqual([
+      {
+        command: "App: Command Palette",
+        keys: `${MOD}${SHIFT}P`,
+        when: "Always",
+      },
+      {
+        command: "View: Reload",
+        keys: `${MOD}${SHIFT}R`,
+        when: "Always",
+      },
+    ]);
+  });
+  it("documents the draft workspace toggle", () => {
+    expect(
+      KEYBINDINGS.find((row) => row.command === "Composer: Toggle Workspace"),
+    ).toEqual({
+      command: "Composer: Toggle Workspace",
+      keys: `${MOD}${SHIFT}G`,
+      when: "Draft session composer",
+    });
+  });
   it("documents session and project cycling in the shortcut list", () => {
-    const rows = KEYBINDINGS.filter(
-      (row) => /^(Session|Project): (Previous|Next)$/.test(row.command),
+    const rows = KEYBINDINGS.filter((row) =>
+      /^(Session|Project): (Previous|Next)$/.test(row.command),
     );
     expect(rows.map((row) => row.command)).toEqual([
       "Session: Previous",
@@ -195,5 +265,77 @@ describe("diff viewer setting", () => {
   it("ignores unknown stored values", () => {
     localStorage.setItem(DIFF_VIEWER_KEY, "split");
     expect(loadDiffViewer()).toBe("editor");
+  });
+});
+
+describe("settings navigation", () => {
+  it("lists every section under exactly one rail group", () => {
+    const groups = settingsSectionsByGroup();
+    expect(groups.map((group) => group.label)).toEqual([
+      "App",
+      "Agents",
+      "Workspace",
+    ]);
+    expect(groups.flatMap((group) => group.sections.map((s) => s.id))).toEqual([
+      "general",
+      "appearance",
+      "keybindings",
+      "chat",
+      "providers",
+      "skills",
+      "inbox",
+      "archive",
+      "worktrees",
+    ]);
+  });
+
+  it("points every indexed setting at a real section", () => {
+    const sections = new Set(
+      settingsSectionsByGroup().flatMap((group) =>
+        group.sections.map((section) => section.id),
+      ),
+    );
+    for (const entry of SETTINGS_INDEX) {
+      expect(sections.has(entry.section), entry.id).toBe(true);
+    }
+  });
+});
+
+describe("settings search", () => {
+  it("returns nothing for an empty query", () => {
+    expect(searchSettings("   ")).toEqual([]);
+  });
+
+  it("ranks label matches over keyword matches, and pages last", () => {
+    expect(searchSettings("glass").map((result) => result.label)).toEqual([
+      "Main pane glass",
+      "Blur radius",
+      "Sidebar opacity",
+      "Appearance",
+    ]);
+  });
+
+  it("finds a setting by a word that is not in its label", () => {
+    expect(searchSettings("steer")[0]).toMatchObject({
+      section: "chat",
+      sectionLabel: "Chat",
+      settingId: "follow-up",
+      label: "Follow-up behavior",
+    });
+  });
+
+  it("returns a whole page with no setting id", () => {
+    expect(searchSettings("skills")).toEqual([
+      {
+        section: "skills",
+        sectionLabel: "Skills",
+        settingId: null,
+        label: "Skills",
+      },
+    ]);
+  });
+
+  it("caps the result list", () => {
+    expect(searchSettings("e", 4)).toHaveLength(4);
   });
 });

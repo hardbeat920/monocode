@@ -9,6 +9,7 @@ import {
   type SessionReminder,
 } from "../lib/sessionReminders";
 import { useSessionReminders } from "./useSessionReminders";
+import { updateNotificationPreferences } from "../lib/notificationPreferences";
 
 const { invoke, listen, message } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -49,6 +50,22 @@ function Harness() {
   return null;
 }
 
+it("applies a path-based project mute without discovery", async () => {
+  updateNotificationPreferences(["local:/another-project"], {
+    mutedUntil: null,
+  });
+  await mount();
+  expect(api.due).toEqual([]);
+  const configuration = invoke.mock.calls
+    .filter(([command]) => command === "reminder_configure")
+    .at(-1)![1];
+  expect(configuration.preferences.projectRules[reminder.sessionId]).toEqual({
+    enabled: false,
+    after: 0,
+  });
+  expect(api.reminders).toEqual([reminder]);
+});
+
 async function mount() {
   await act(async () =>
     root.render(createElement(StrictMode, null, createElement(Harness))),
@@ -63,6 +80,7 @@ async function emit(event: string) {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.clear();
   stored = [{ ...reminder }];
   pending = null;
   listeners = new Map();
@@ -120,11 +138,119 @@ afterEach(() => {
 });
 
 describe("saved session reminders", () => {
+  it("keeps reminders actionable even when a project path no longer exists", async () => {
+    const unavailable = {
+      ...reminder,
+      sessionId: "unavailable-session",
+      cwd: "/deleted-worktree",
+    };
+    stored = [reminder, unavailable];
+
+    await mount();
+
+    expect(api.reminders).toEqual([reminder, unavailable]);
+    expect(api.due).toEqual([reminder, unavailable]);
+    expect(api.error).toBeNull();
+    const configuration = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(configuration.preferences.projectRules).toEqual({
+      "saved-session": { enabled: true, after: 0 },
+      "unavailable-session": { enabled: true, after: 0 },
+    });
+
+    await act(async () => api.cancel([unavailable.sessionId]));
+    expect(api.reminders).toEqual([reminder]);
+    expect(api.error).toBeNull();
+  });
+
+  it("serializes native configuration so a slower old update cannot overwrite a newer mute", async () => {
+    const original = invoke.getMockImplementation()!;
+    let release: () => void = () => {};
+    const configurations: Array<{
+      projectRules: Record<string, { enabled: boolean }>;
+    }> = [];
+    invoke.mockImplementation(
+      (command: string, args: Record<string, any> = {}) => {
+        if (command !== "reminder_configure") return original(command, args);
+        configurations.push(args.preferences);
+        if (configurations.length === 1)
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        return Promise.resolve();
+      },
+    );
+    await mount();
+    await act(async () =>
+      updateNotificationPreferences(["local:/another-project"], {
+        mutedUntil: null,
+      }),
+    );
+    expect(configurations).toHaveLength(1);
+    await act(async () => release());
+    expect(configurations).toHaveLength(2);
+    expect(configurations[1].projectRules[reminder.sessionId].enabled).toBe(
+      false,
+    );
+  });
+
+  it("applies reminder category changes immediately without replaying an old due reminder on resume", async () => {
+    await mount();
+    expect(api.due).toEqual([reminder]);
+    await act(async () =>
+      updateNotificationPreferences(["local:/another-project"], {
+        disabled: ["reminders"],
+      }),
+    );
+    expect(api.due).toEqual([]);
+    const disabled = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(disabled.preferences.projectRules[reminder.sessionId].enabled).toBe(
+      false,
+    );
+    await act(async () =>
+      updateNotificationPreferences(["local:/another-project"], {
+        disabled: [],
+      }),
+    );
+    expect(api.due).toEqual([]);
+    const resumed = invoke.mock.calls
+      .filter(([command]) => command === "reminder_configure")
+      .at(-1)?.[1];
+    expect(resumed.preferences.projectRules[reminder.sessionId].enabled).toBe(
+      true,
+    );
+    expect(
+      resumed.preferences.projectRules[reminder.sessionId].after,
+    ).toBeGreaterThan(reminder.dueAt);
+  });
+
+  it("suppresses a muted project's reminders in both native delivery and in-app notices while retaining sidebar data", async () => {
+    updateNotificationPreferences(["local:/another-project"], {
+      mutedUntil: null,
+    });
+    await mount();
+    expect(api.reminders).toEqual([reminder]);
+    expect(api.due).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("reminder_configure", {
+      preferences: expect.objectContaining({
+        projectRules: {
+          "saved-session": { enabled: false, after: expect.any(Number) },
+        },
+      }),
+    });
+  });
+
   it("shows missed reminders on startup even with desktop notifications off", async () => {
     await mount();
     expect(api.due).toEqual([reminder]);
     expect(invoke).toHaveBeenCalledWith("reminder_configure", {
-      preferences: { notificationsEnabled: false, sound: false },
+      preferences: expect.objectContaining({
+        notificationsEnabled: false,
+        sound: false,
+      }),
     });
     expect(listeners.get(REMINDERS_CHANGED)?.size).toBe(1);
     expect(onOpen).not.toHaveBeenCalled();
@@ -163,6 +289,27 @@ describe("saved session reminders", () => {
       expectedDueAt: reminder.dueAt,
     });
     expect(api.due).toEqual([]);
+  });
+
+  it("dismisses the current due reminder when its session continues", async () => {
+    await mount();
+    await act(async () => api.dismissDue(reminder.sessionId));
+    expect(invoke).toHaveBeenCalledWith("reminder_clear", {
+      sessionIds: [reminder.sessionId],
+      expectedDueAt: reminder.dueAt,
+    });
+    expect(api.due).toEqual([]);
+  });
+
+  it("keeps a future reminder when its session continues early", async () => {
+    stored = [{ ...reminder, dueAt: Date.now() + 60_000 }];
+    await mount();
+    invoke.mockClear();
+    await act(async () => api.dismissDue(reminder.sessionId));
+    expect(
+      invoke.mock.calls.some(([command]) => command === "reminder_clear"),
+    ).toBe(false);
+    expect(api.reminders).toEqual(stored);
   });
 
   it("handles a notification click queued before the window mounted", async () => {

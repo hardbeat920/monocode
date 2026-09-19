@@ -1,4 +1,6 @@
 import type {
+  AgentRunMeta,
+  AgentStep,
   Attachment,
   Block,
   Session,
@@ -41,6 +43,7 @@ export function applyHarnessEvent(
         status: event.status,
         preview: event.preview,
         streaming: true,
+        agentModel: event.agentModel,
       });
     case "tool.updated":
       return upsertTool(session, {
@@ -51,7 +54,10 @@ export function applyHarnessEvent(
         detail: event.detail,
         preview: event.preview,
         streaming: event.status !== "completed" && event.status !== "failed",
+        agentModel: event.agentModel,
       });
+    case "agent.step":
+      return recordAgentStep(session, event);
     case "approval.requested":
       return attachApproval(session, event);
     case "approval.resolved": {
@@ -99,6 +105,8 @@ export function applyHarnessEvent(
           window: event.window,
         }),
       };
+    case "turn.metrics":
+      return mergeTurnMetrics(session, event);
     case "tasks.updated":
       return upsertTaskList(session, event);
     case "plan":
@@ -108,6 +116,7 @@ export function applyHarnessEvent(
         id: crypto.randomUUID(),
         role: "system",
         text: event.message,
+        notice: "error",
       });
     case "session.providerBound":
       return { ...session, providerSessionId: event.providerSessionId };
@@ -116,14 +125,64 @@ export function applyHarnessEvent(
         ...session,
         ...(event.model ? { model: event.model } : {}),
         ...(event.modelSettings
-          ? { modelSettings: { ...session.modelSettings, ...event.modelSettings } }
+          ? {
+              modelSettings: {
+                ...session.modelSettings,
+                ...event.modelSettings,
+              },
+            }
           : {}),
       };
     case "status":
       return appendStatus(session, event.text);
+    case "interjection":
+      // A visible boundary the user must not miss, so unlike status it never
+      // deduplicates and never reads as turn lifecycle.
+      return appendBlock(session, {
+        id: crypto.randomUUID(),
+        role: "system",
+        text: event.text,
+        interjection: {
+          customType: event.customType,
+          ...(event.severity ? { severity: event.severity } : {}),
+        },
+      });
     default:
       return session;
   }
+}
+
+function mergeTurnMetrics(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "turn.metrics" }>,
+): Session {
+  let userIndex = -1;
+  for (let index = session.blocks.length - 1; index >= 0; index -= 1) {
+    if (session.blocks[index].role === "user") {
+      userIndex = index;
+      break;
+    }
+  }
+  if (userIndex < 0) return session;
+
+  const current = session.blocks[userIndex];
+  const metrics = {
+    ...(current.turnMetrics ?? {}),
+    ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
+    ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
+    ...(event.cacheReadTokens != null
+      ? { cacheReadTokens: event.cacheReadTokens }
+      : {}),
+    ...(event.cacheWriteTokens != null
+      ? { cacheWriteTokens: event.cacheWriteTokens }
+      : {}),
+    ...(event.cacheHitPercent != null
+      ? { cacheHitPercent: event.cacheHitPercent }
+      : {}),
+  };
+  const blocks = session.blocks.slice();
+  blocks[userIndex] = { ...current, turnMetrics: metrics };
+  return { ...session, blocks };
 }
 
 function upsertPlan(
@@ -296,12 +355,14 @@ function lastMatchingBlock(
 type UserTurnExtra = {
   secondOpinion?: Block["secondOpinion"];
   noteCard?: Block["noteCard"];
+  internal?: boolean;
 };
 
 function userTurnFields(extra?: UserTurnExtra) {
   return {
     ...(extra?.secondOpinion ? { secondOpinion: extra.secondOpinion } : {}),
     ...(extra?.noteCard ? { noteCard: extra.noteCard } : {}),
+    ...(extra?.internal ? { internal: true } : {}),
   };
 }
 
@@ -322,6 +383,7 @@ export function appendUser(
   attachments: Attachment[] = [],
   extra?: UserTurnExtra,
 ): Session {
+  session = settlePendingApprovals(session);
   return appendBlock(
     { ...session, busy: true },
     {
@@ -361,12 +423,47 @@ export function appendSteerUser(
 }
 
 export function stopStreaming(session: Session): Session {
+  const settled = settlePendingApprovals(session);
   return {
-    ...session,
+    ...settled,
     busy: false,
     pendingQuestion: undefined,
-    blocks: stampTurnDuration(session.blocks.map(stopBlockProgress)),
+    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress)),
   };
+}
+
+/**
+ * Approval request ids are live only for the turn that produced them. Once
+ * that turn has stopped (or a later turn is about to start), leaving one
+ * undecided makes its old Allow/Deny controls and notification actionable
+ * even though the harness can no longer receive the response.
+ */
+function settlePendingApprovals(session: Session): Session {
+  let changed = false;
+  const blocks = session.blocks.flatMap((block) => {
+    if (!block.approval || block.approval.decided) return [block];
+    changed = true;
+    if (block.role === "approval") return [];
+    const status = block.tool?.status?.toLowerCase() ?? "";
+    const toolFinished =
+      status === "completed" ||
+      status === "success" ||
+      status === "failed" ||
+      status === "error" ||
+      status === "cancelled" ||
+      status === "canceled";
+    return [
+      {
+        ...block,
+        streaming: false,
+        ...(block.tool && !toolFinished
+          ? { tool: { ...block.tool, status: "cancelled" } }
+          : {}),
+        approval: { ...block.approval, decided: "cancelled" as const },
+      },
+    ];
+  });
+  return changed ? { ...session, blocks } : session;
 }
 
 /**
@@ -463,6 +560,16 @@ export function promoteLastAssistantToPlan(
 
 function stopBlockProgress(block: Block): Block {
   let stopped = block.streaming ? { ...block, streaming: false } : block;
+  if (stopped.orchestration?.status === "planning") {
+    stopped = {
+      ...stopped,
+      orchestration: {
+        ...stopped.orchestration,
+        status: "invalid",
+        error: "Planning was interrupted. Generate the assignments again.",
+      },
+    };
+  }
   if (stopped.role === "plan" && stopped.plan?.status === "streaming") {
     stopped = {
       ...stopped,
@@ -525,10 +632,13 @@ function appendStatus(session: Session, text: string): Session {
 }
 
 function appendBlock(session: Session, block: Block): Session {
-  return { ...session, blocks: [...sealLastStream(session.blocks), block] };
+  return {
+    ...session,
+    blocks: [...(block.role === "system" && !block.interjection ? session.blocks : sealLastStream(session.blocks)), block],
+  };
 }
 
-/** Append to the latest block only when it is the same role; never splice into an earlier one. */
+/** Only ordinary status rows leave an open prose stream intact. */
 function patchStreaming(
   session: Session,
   role: "assistant" | "reasoning",
@@ -536,12 +646,14 @@ function patchStreaming(
   streaming: boolean,
 ): Session {
   if (!text && role === "reasoning") return session;
-  const last = session.blocks[session.blocks.length - 1];
-  if (last?.role === role) {
+  let index = session.blocks.length - 1;
+  while (index >= 0 && session.blocks[index].role === "system" && !session.blocks[index].interjection) index--;
+  const last = session.blocks[index];
+  if (last?.role === role && (index === session.blocks.length - 1 || last.streaming)) {
     const nextText = joinStreamText(last.text, text);
     if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
-    blocks[blocks.length - 1] = {
+    blocks[index] = {
       ...last,
       text: nextText,
       streaming,
@@ -655,6 +767,7 @@ function upsertTool(
     detail?: string;
     preview?: ToolPreview;
     streaming: boolean;
+    agentModel?: string;
   },
 ): Session {
   const index = findToolIndex(session, patch);
@@ -672,6 +785,9 @@ function upsertTool(
       role: "tool",
       text: label,
       streaming: patch.streaming,
+      ...(patch.agentModel
+        ? { agentRun: { name: label, model: patch.agentModel, steps: [] } }
+        : {}),
       tool: {
         callId: patch.callId,
         title: label,
@@ -698,6 +814,7 @@ function upsertTool(
   );
   const kind = patch.kind ?? prev.tool?.kind;
   const status = patch.status ?? prev.tool?.status;
+  const agentName = prev.agentRun?.steps.length ? prev.agentRun.name : label;
   if (
     prev.text === label &&
     prev.streaming === patch.streaming &&
@@ -705,6 +822,8 @@ function upsertTool(
     prev.tool?.kind === kind &&
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
+    (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
+    (!prev.agentRun || prev.agentRun.name === agentName) &&
     samePreview(prev.tool?.preview, preview)
   ) {
     return session;
@@ -714,6 +833,16 @@ function upsertTool(
     ...prev,
     text: label,
     streaming: patch.streaming,
+    ...(patch.agentModel || prev.agentRun
+      ? {
+          agentRun: {
+            steps: prev.agentRun?.steps ?? [],
+            ...prev.agentRun,
+            name: agentName,
+            ...(patch.agentModel ? { model: patch.agentModel } : {}),
+          },
+        }
+      : {}),
     tool: {
       callId: patch.callId,
       title: label,
@@ -771,6 +900,107 @@ function fillPreview(
   return undefined;
 }
 
+/**
+ * How much of a subagent's trail the parent keeps. A delegated run can be
+ * thousands of calls long; the transcript only ever shows a window of it, and
+ * an unbounded array would grow the saved session without bound.
+ */
+const MAX_AGENT_STEPS = 300;
+
+const MAX_AGENT_STEP_CHARS = 2_000;
+
+/**
+ * Mirrors one subagent action onto its parent Agent tool block. Steps merge by
+ * provider id, so a call that starts pending and later completes stays one row
+ * instead of appearing twice.
+ */
+function recordAgentStep(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "agent.step" }>,
+): Session {
+  const index = session.blocks.findIndex(
+    (block) => block.tool?.callId === event.callId,
+  );
+  if (index < 0) return session;
+  const prev = session.blocks[index];
+  const text = capAgentStepText(event.text);
+  // A tool step earns a row on its label alone; prose with nothing in it does
+  // not.
+  if (!text && event.kind !== "tool") return session;
+
+  const run = prev.agentRun;
+  const step: AgentStep = {
+    id: event.stepId,
+    kind: event.kind,
+    text,
+    ...(event.toolKind ? { toolKind: event.toolKind } : {}),
+    ...(event.status ? { status: event.status } : {}),
+    ...(event.preview ? { preview: event.preview } : {}),
+  };
+
+  const at = run?.steps.findIndex((entry) => entry.id === event.stepId) ?? -1;
+  let steps: AgentStep[];
+  if (run && at >= 0) {
+    const existing = run.steps[at];
+    steps = run.steps.slice();
+    steps[at] = {
+      ...existing,
+      ...step,
+      // A completion carries the result, not the request: keep the label the
+      // call announced itself with rather than letting the result rename it.
+      text: text || existing.text,
+      preview: mergeToolPreview(event.preview, existing.preview),
+    };
+  } else {
+    steps = [...(run?.steps ?? []), step];
+    if (steps.length > MAX_AGENT_STEPS) {
+      steps = steps.slice(steps.length - MAX_AGENT_STEPS);
+    }
+  }
+
+  const next: AgentRunMeta = {
+    ...(run?.model ? { model: run.model } : {}),
+    name:
+      event.agentName ||
+      run?.name ||
+      prev.tool?.title ||
+      prev.text ||
+      "Subagent",
+    ...((event.agentType ?? run?.agentType)
+      ? { agentType: event.agentType ?? run?.agentType }
+      : {}),
+    steps,
+  };
+  if (run && sameAgentRun(run, next)) return session;
+  const blocks = session.blocks.slice();
+  blocks[index] = { ...prev, agentRun: next };
+  return { ...session, blocks };
+}
+
+function sameAgentRun(a: AgentRunMeta, b: AgentRunMeta): boolean {
+  if (a.name !== b.name || a.agentType !== b.agentType || a.model !== b.model)
+    return false;
+  if (a.steps.length !== b.steps.length) return false;
+  return a.steps.every((step, index) => sameAgentStep(step, b.steps[index]));
+}
+
+function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
+  return (
+    a.id === b.id &&
+    a.kind === b.kind &&
+    a.text === b.text &&
+    a.toolKind === b.toolKind &&
+    a.status === b.status &&
+    samePreview(a.preview, b.preview)
+  );
+}
+
+function capAgentStepText(value: string): string {
+  const text = value.trim();
+  if (text.length <= MAX_AGENT_STEP_CHARS) return text;
+  return `${text.slice(0, MAX_AGENT_STEP_CHARS)}\u2026`;
+}
+
 function findToolIndex(
   session: Session,
   patch: { callId: string; title?: string },
@@ -792,7 +1022,9 @@ function findToolIndex(
 }
 
 function sealLastStream(blocks: Block[]): Block[] {
-  const last = blocks[blocks.length - 1];
+  let index = blocks.length - 1;
+  while (index >= 0 && blocks[index].role === "system" && !blocks[index].interjection) index--;
+  const last = blocks[index];
   if (
     !last?.streaming ||
     (last.role !== "assistant" && last.role !== "reasoning")
@@ -800,7 +1032,7 @@ function sealLastStream(blocks: Block[]): Block[] {
     return blocks.slice();
   }
   const next = blocks.slice();
-  next[next.length - 1] = { ...last, streaming: false };
+  next[index] = { ...last, streaming: false };
   return next;
 }
 

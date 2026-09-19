@@ -8,7 +8,7 @@ export type OutlineAnchor = OutlineBand & { id: string };
 export const NEAR_END_PX = 16;
 
 export function promptBlocks(blocks: Block[]): Block[] {
-  return blocks.filter((block) => block.role === "user");
+  return blocks.filter((block) => block.role === "user" && !block.internal);
 }
 
 /**

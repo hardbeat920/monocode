@@ -1,4 +1,4 @@
-import { Search } from "./icons";
+import { RefreshCw, Search } from "./icons";
 import {
   useEffect,
   useMemo,
@@ -16,16 +16,35 @@ import {
   type RankedFile,
 } from "../lib/fileIndex";
 import { LAYER } from "../lib/layers";
+import { fuzzyMatch, type FuzzyHit } from "../lib/fuzzy";
 import { looksLikeProject } from "../lib/recents";
+import type { OpenFileFn } from "../lib/search";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { MatchText } from "./MatchText";
+import { MOD, SHIFT } from "../lib/platform";
+type Action = {
+  id: string;
+  label: string;
+  hint?: string;
+};
+
+type RankedAction = Action & FuzzyHit;
+export function reloadActionHint(mod = MOD, shift = SHIFT) {
+  return `${mod}${shift}R`;
+}
+
+const ACTIONS: Action[] = [
+  { id: "reload", label: "Reload MonoCode", hint: reloadActionHint() },
+];
 
 type Props = {
   open: boolean;
   cwd: string;
   openPaths?: string[];
-  onOpenFile: (path: string) => void;
+  initialQuery?: string;
+  onOpenFile: OpenFileFn;
+  onRunAction: (id: string) => void;
   onClose: () => void;
 };
 
@@ -33,13 +52,15 @@ export function FilePicker({
   open,
   cwd,
   openPaths = [],
+  initialQuery = "",
   onOpenFile,
+  onRunAction,
   onClose,
 }: Props) {
   const search = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [active, setActive] = useState(0);
   const [files, setFiles] = useState(() => peekProjectFiles(cwd) ?? []);
   const [loading, setLoading] = useState(() => peekProjectFiles(cwd) == null);
@@ -55,15 +76,32 @@ export function FilePicker({
     }
     return out;
   }, [cwd, openPaths, open]);
+  const paletteMode = query.trim().startsWith(">");
+  const actionQuery = paletteMode ? query.trim().slice(1).trim() : "";
 
   const results = useMemo(
-    () => rankProjectFiles(files, query, recents),
-    [files, query, recents],
+    () => (paletteMode ? [] : rankProjectFiles(files, query, recents)),
+    [files, paletteMode, query, recents],
   );
+  const actionResults = useMemo((): RankedAction[] => {
+    if (!paletteMode) return [];
+    if (!actionQuery) {
+      return ACTIONS.map((action) => ({
+        ...action,
+        score: 0,
+        positions: [],
+      }));
+    }
+    return ACTIONS.flatMap((action) => {
+      const hit = fuzzyMatch(actionQuery, action.label);
+      return hit ? [{ ...action, ...hit }] : [];
+    }).sort((a, b) => b.score - a.score);
+  }, [actionQuery, paletteMode]);
+  const optionCount = paletteMode ? actionResults.length : results.length;
 
   useEffect(() => {
     if (!open) return;
-    setQuery("");
+    setQuery(initialQuery);
     setActive(0);
     setError(null);
     const cached = peekProjectFiles(cwd);
@@ -93,13 +131,13 @@ export function FilePicker({
     return () => {
       cancelled = true;
     };
-  }, [open, cwd]);
+  }, [open, cwd, initialQuery]);
 
   useEffect(() => {
     setActive((index) =>
-      results.length === 0 ? 0 : Math.min(index, results.length - 1),
+      optionCount === 0 ? 0 : Math.min(index, optionCount - 1),
     );
-  }, [results.length]);
+  }, [optionCount]);
 
   useEffect(() => {
     if (!open) return;
@@ -121,27 +159,36 @@ export function FilePicker({
   if (!open) return null;
 
   const pick = (file: RankedFile) => {
-    onOpenFile(file.path);
+    onOpenFile(file.path, undefined, { exact: true });
+    onClose();
+  };
+  const runAction = (action: RankedAction) => {
+    onRunAction(action.id);
     onClose();
   };
 
   const onSearchKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (results.length === 0) return;
-      setActive((index) => (index + 1) % results.length);
+      if (optionCount === 0) return;
+      setActive((index) => (index + 1) % optionCount);
       return;
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (results.length === 0) return;
-      setActive((index) => (index - 1 + results.length) % results.length);
+      if (optionCount === 0) return;
+      setActive((index) => (index - 1 + optionCount) % optionCount);
       return;
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      const file = results[active];
-      if (file) pick(file);
+      if (paletteMode) {
+        const action = actionResults[active];
+        if (action) runAction(action);
+      } else {
+        const file = results[active];
+        if (file) pick(file);
+      }
       return;
     }
     if (e.key === "Tab") e.preventDefault();
@@ -154,6 +201,8 @@ export function FilePicker({
     error,
     fileCount: files.length,
     matchCount: results.length,
+    paletteMode,
+    actionCount: actionResults.length,
   });
 
   return createPortal(
@@ -161,20 +210,20 @@ export function FilePicker({
       <div className="absolute inset-0" onMouseDown={onClose} />
       <div
         role="dialog"
-        aria-label="Go to File"
+        aria-label={paletteMode ? "Command Palette" : "Go to File"}
         data-file-picker
         onMouseDown={(e) => e.stopPropagation()}
         className="absolute left-1/2 top-[12%] flex w-[min(560px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-content/10 bg-content/5 backdrop-blur-xl"
       >
         <div className="pb-1.5">
-          <label className="flex items-center gap-2 border-b border-content/10 px-2 py-2.5 text-content/50">
+          <label className="flex items-center gap-2 border-b border-stroke px-2 py-2.5 text-content/50">
             <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
             <input
               ref={search}
               type="text"
               value={query}
-              placeholder="Go to File"
-              aria-label="Go to File"
+              placeholder="Go to File (type > for commands)"
+              aria-label={paletteMode ? "Command Palette" : "Go to File"}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
@@ -190,6 +239,14 @@ export function FilePicker({
         </div>
         {empty ? (
           <p className="px-3 pb-3 pt-1 text-[12px] text-content/50">{empty}</p>
+        ) : paletteMode ? (
+          <ActionList
+            actions={actionResults}
+            active={active}
+            query={actionQuery}
+            onActive={setActive}
+            onRun={runAction}
+          />
         ) : (
           <FileList
             files={results}
@@ -212,6 +269,8 @@ function emptyLabel({
   error,
   fileCount,
   matchCount,
+  paletteMode,
+  actionCount,
 }: {
   cwd: string;
   query: string;
@@ -219,7 +278,10 @@ function emptyLabel({
   error: string | null;
   fileCount: number;
   matchCount: number;
+  paletteMode: boolean;
+  actionCount: number;
 }): string | null {
+  if (paletteMode) return actionCount === 0 ? "No matching commands" : null;
   if (error && fileCount === 0) return error;
   if (!looksLikeProject(cwd)) return "Open a project to search files";
   if (loading && fileCount === 0) return "Indexing files…";
@@ -230,6 +292,71 @@ function emptyLabel({
   return null;
 }
 
+function ActionList({
+  actions,
+  active,
+  query,
+  onActive,
+  onRun,
+}: {
+  actions: RankedAction[];
+  active: number;
+  query: string;
+  onActive: (index: number) => void;
+  onRun: (action: RankedAction) => void;
+}) {
+  const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  const activeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  return (
+    <div
+      ref={lockOverscroll}
+      role="listbox"
+      aria-label="Commands"
+      className="max-h-[min(380px,50vh)] overflow-y-auto overscroll-none px-1.5 pb-1.5"
+    >
+      {actions.map((action, index) => {
+        const highlighted = index === active;
+        return (
+          <button
+            key={action.id}
+            ref={highlighted ? activeRef : undefined}
+            type="button"
+            role="option"
+            aria-selected={highlighted}
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseEnter={() => onActive(index)}
+            onClick={() => onRun(action)}
+            className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm leading-none ${
+              highlighted ? "bg-selection text-content" : "text-content"
+            }`}
+          >
+            <RefreshCw
+              className="size-4 shrink-0 text-content/50"
+              strokeWidth={1.75}
+            />
+            <span className="min-w-0 flex-1 truncate">
+              <MatchText
+                text={action.label}
+                positions={action.positions}
+                active={Boolean(query)}
+              />
+            </span>
+            {action.hint ? (
+              <kbd className="ml-auto shrink-0 rounded border border-content/10 bg-content/5 px-1.5 py-0.5 font-mono text-[10px] text-content/50">
+                {action.hint}
+              </kbd>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 function FileList({
   files,
   active,
@@ -298,7 +425,7 @@ function FileList({
             onMouseEnter={() => onRowEnter(index)}
             onClick={() => onPick(file)}
             className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm leading-none ${
-              highlighted ? "bg-content/10 text-content" : "text-content"
+              highlighted ? "bg-selection text-content" : "text-content"
             }`}
           >
             <span className="shrink-0">

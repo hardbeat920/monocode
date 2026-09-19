@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   acknowledgeQuoteRequest,
   appendSelectionQuote,
+  composerSeedForAddToChat,
   consumeQuoteRequest,
   isMarkdownBlockquotePosition,
   type QuoteRequest,
@@ -28,6 +29,13 @@ describe("appendSelectionQuote", () => {
 
   it("ignores whitespace-only selections", () => {
     expect(appendSelectionQuote("draft", "  \n ")).toBe("draft");
+  });
+});
+
+describe("composerSeedForAddToChat", () => {
+  it("preserves the requested insertion mode for a new composer", () => {
+    expect(composerSeedForAddToChat("selected")).toBe("> selected\n\n");
+    expect(composerSeedForAddToChat("Comment", "plain")).toBe("Comment\n\n");
   });
 });
 

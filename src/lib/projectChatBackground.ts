@@ -2,7 +2,8 @@ import {
   CHAT_BACKGROUND_OPACITY_MAX,
   CHAT_BACKGROUND_OPACITY_MIN,
   CHAT_BACKGROUND_SCOPE_DEFAULT,
-  loadChatBackgroundOpacity,
+  loadChatBackgroundEmptyOpacity,
+  loadChatBackgroundSessionOpacity,
   loadChatBackgroundScope,
   type ChatBackgroundScope,
 } from "./appearance";
@@ -18,7 +19,17 @@ export type ProjectChatBackground = {
   scope: ChatBackgroundScope;
 };
 
-type StoredProjectChatBackground = Partial<ProjectChatBackground>;
+export type ProjectChatBackgroundSettings = {
+  path: string;
+  emptyOpacity: number;
+  sessionOpacity: number;
+  scope: ChatBackgroundScope;
+};
+
+type StoredProjectChatBackground = Partial<ProjectChatBackground> & {
+  emptyOpacity?: number;
+  sessionOpacity?: number;
+};
 
 let revision = Date.now();
 
@@ -54,20 +65,70 @@ function validScope(value: unknown): value is ChatBackgroundScope {
   return value === "empty" || value === "all";
 }
 
-export function loadProjectChatBackground(
+function storedOpacity(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampOpacity(value)
+    : fallback;
+}
+
+export function loadProjectChatBackgroundSettings(
   project: string,
-): ProjectChatBackground | null {
+): ProjectChatBackgroundSettings | null {
   const stored = read()[project];
   const path = typeof stored?.path === "string" ? stored.path.trim() : "";
   if (!path) return null;
-  const opacity =
-    typeof stored.opacity === "number" && Number.isFinite(stored.opacity)
-      ? clampOpacity(stored.opacity)
-      : loadChatBackgroundOpacity();
+  const legacyOpacity = storedOpacity(
+    stored.opacity,
+    loadChatBackgroundEmptyOpacity(),
+  );
+  const hasStoredOpacity =
+    typeof stored.opacity === "number" && Number.isFinite(stored.opacity);
+  const hasStoredEmptyOpacity =
+    typeof stored.emptyOpacity === "number" &&
+    Number.isFinite(stored.emptyOpacity);
   return {
     path,
-    opacity,
+    emptyOpacity: storedOpacity(stored.emptyOpacity, legacyOpacity),
+    sessionOpacity: storedOpacity(
+      stored.sessionOpacity,
+      hasStoredEmptyOpacity
+        ? storedOpacity(stored.emptyOpacity, legacyOpacity)
+        : hasStoredOpacity
+          ? legacyOpacity
+          : loadChatBackgroundSessionOpacity(),
+    ),
     scope: validScope(stored.scope) ? stored.scope : loadChatBackgroundScope(),
+  };
+}
+
+export function saveProjectChatBackgroundSettings(
+  project: string,
+  value: ProjectChatBackgroundSettings,
+) {
+  const path = value.path.trim();
+  if (!project || !path) return;
+  const next = read();
+  next[project] = {
+    path,
+    emptyOpacity: clampOpacity(value.emptyOpacity),
+    sessionOpacity: clampOpacity(value.sessionOpacity),
+    scope: validScope(value.scope)
+      ? value.scope
+      : CHAT_BACKGROUND_SCOPE_DEFAULT,
+  };
+  write(next);
+  notifyProjectChatBackgroundChanged();
+}
+
+export function loadProjectChatBackground(
+  project: string,
+): ProjectChatBackground | null {
+  const settings = loadProjectChatBackgroundSettings(project);
+  if (!settings) return null;
+  return {
+    path: settings.path,
+    opacity: settings.emptyOpacity,
+    scope: settings.scope,
   };
 }
 

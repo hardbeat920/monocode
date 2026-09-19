@@ -25,6 +25,131 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("hides provider authentication errors handled by the sign-in modal", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        harness: "grok",
+        blocks: [
+          {
+            id: "auth-error",
+            role: "system",
+            notice: "error",
+            text: "Authentication required\n\nGrok Build is not signed in.",
+          },
+        ],
+      }),
+    );
+
+    expect(markup).not.toContain("Authentication required");
+    expect(markup).not.toContain("Sign in to Grok Build");
+    expect(markup).not.toContain("<button");
+  });
+
+  it("reveals an orchestration result after the finished turn and before its action row", () => {
+    const card: Block = {
+      id: "proposal",
+      role: "plan",
+      text: "Assignment plan",
+      orchestration: {
+        version: 1,
+        leadId: "lead",
+        cwd: "/repo",
+        request: "Build",
+        author: { harness: "claude", model: "claude:test", name: "Lead" },
+        settings: {
+          choices: [
+            { harness: "claude", model: "claude:test", name: "Worker" },
+          ],
+          maxWorkers: 2,
+        },
+        status: "ready",
+        title: "Proposed assignments",
+        summary: "Implement and verify",
+        tasks: [],
+      },
+    };
+    const blocks: Block[] = [
+      {
+        id: "user",
+        role: "user",
+        text: "Build",
+        startedAt: 1000,
+        durationMs: 500,
+      },
+      card, // Existing records have the card before the work.
+      tool("inspection"),
+      { id: "answer", role: "assistant", text: "The investigation is complete." },
+    ];
+    expect(render(blocks, true)).not.toContain("data-orchestration-review");
+    const finished = render(blocks);
+    expect(finished.indexOf("The investigation is complete.")).toBeLessThan(
+      finished.indexOf("data-orchestration-result"),
+    );
+    expect(finished.indexOf("data-orchestration-review")).toBeLessThan(
+      finished.indexOf('aria-label="Worked for 1s"'),
+    );
+    expect(finished.match(/data-orchestration-review/g)).toHaveLength(1);
+    card.orchestration!.status = "planning";
+    expect(render(blocks)).not.toContain("data-orchestration-review");
+  });
+  it("renders a standalone user URL as a compact link preview", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "https://www.example.com/docs" },
+    ]);
+
+    expect(markup).toContain("data-user-link-preview");
+    expect(markup).toContain("example.com/docs");
+    expect(markup).toContain("Open example.com");
+    expect(markup).toContain("user-link-preview-title");
+    expect(markup).toContain("user-message-with-link");
+    expect(markup).toContain("user-message-bubble");
+    expect(markup).not.toContain("text-ellipsis");
+  });
+
+  it("renders an unsent turn as a draft bubble with a send control", () => {
+    const markup = render([
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ]);
+
+    expect(markup).toContain('data-draft="true"');
+    expect(markup).toContain("border-dashed");
+    expect(markup).toContain('aria-label="Send draft"');
+    expect(markup).toContain(">Draft</span>");
+  });
+
+  it("keeps surrounding prose and previews its first URL", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: "Please check https://example.com/docs",
+      },
+    ]);
+
+    expect(markup).toContain("data-user-link-preview");
+    expect(markup).toContain("Please check");
+    expect(markup).toContain("Open example.com");
+    expect(markup).not.toContain("Please check https://example.com/docs");
+  });
+
+  it("renders GitHub pull requests as compact work item chips", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: "Review https://github.com/acme/widgets/pull/73 please",
+      },
+    ]);
+
+    expect(markup).toContain('data-github-work-item-chip="pr"');
+    expect(markup).toContain('data-compact="true"');
+    expect(markup).toContain("#73");
+    expect(markup).not.toContain(">acme/widgets</span>");
+    expect(markup).toContain("Review");
+    expect(markup).toContain("please");
+    expect(markup).not.toContain("user-link-preview-title");
+  });
+
   it("keeps each completed turn's recorded model label", () => {
     const blocks: Block[] = [
       {
@@ -110,8 +235,34 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup.includes('aria-label="Show the work"')).toBe(false);
   });
 
-  it("opens failed subagent work but keeps provider details collapsed", () => {
-    const markup = render([
+  it("opens a failed subagent's own row on its provider reason", () => {
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
+        {
+          id: "agent",
+          role: "tool",
+          text: "Inspect auth",
+          tool: {
+            callId: "agent-1",
+            kind: "agent",
+            status: "failed",
+            detail: "Child process disconnected",
+          },
+        },
+        { id: "answer", role: "assistant", text: "I could not finish." },
+      ],
+      // Live keeps the run pinned on its own row; settled keeps it there too —
+      // a run that died parks under the fold line, already open on the reason.
+      true,
+    );
+
+    expect(markup).toContain("Inspect auth");
+    expect(markup).toContain("failed");
+    expect(markup).toContain("Child process disconnected");
+    expect(markup).toContain("Hide Inspect auth&#x27;s work");
+
+    const settledMarkup = render([
       { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
       {
         id: "agent",
@@ -126,11 +277,182 @@ describe("AgentTranscript collapsed work", () => {
       },
       { id: "answer", role: "assistant", text: "I could not finish." },
     ]);
+    expect(settledMarkup).toContain("Child process disconnected");
+    expect(settledMarkup).toContain("Hide Inspect auth&#x27;s work");
+  });
 
-    expect(markup).toContain("Subagent failed");
-    expect(markup).not.toContain("Child process disconnected");
-    expect(markup).toContain("Show error details for Inspect auth");
-    expect(markup).toContain('aria-label="Hide the work"');
+  it("gives each running subagent its own row above the work that folds", () => {
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Review this", startedAt: 1_000 },
+        { id: "lead", role: "assistant", text: "I will run two reviews." },
+        {
+          id: "a1",
+          role: "tool",
+          text: "Correctness review",
+          tool: { callId: "agent-1", kind: "agent", status: "in_progress" },
+          agentRun: {
+            name: "Correctness review",
+            model: "claude-haiku-4-5",
+            steps: [
+              {
+                id: "s1",
+                kind: "tool",
+                text: "Read src/App.tsx",
+                status: "completed",
+              },
+            ],
+          },
+        },
+        {
+          id: "a2",
+          role: "tool",
+          text: "Quality review",
+          tool: { callId: "agent-2", kind: "agent", status: "in_progress" },
+          agentRun: {
+            name: "Quality review",
+            model: "custom-review-model",
+            steps: [],
+          },
+        },
+        tool("t1"),
+        { id: "answer", role: "assistant", text: "Both reviewers agree." },
+      ],
+      true,
+    );
+
+    // A row each, named, hopping while the run is live — no grouped header.
+    expect(markup).toContain("Correctness review");
+    expect(markup).toContain("Quality review");
+    expect(markup).toContain("Haiku 4.5");
+    expect(markup).toContain("custom-review-model");
+    expect(markup).toContain("mascot-active");
+    expect(markup).not.toContain("are working");
+    // A row counts its agent's work; it does not echo the call in flight,
+    // which put a second scrolling command line on every row.
+    expect(markup).toContain("1 step");
+    expect(markup).not.toContain("Read src/App.tsx");
+    expect(markup).not.toContain("starting up");
+    // The name carries the shimmer while the run is live, and each row opens
+    // on its own.
+    expect(markup).toContain("shimmer-text");
+    expect(markup).toContain("Show Correctness review&#x27;s work");
+    // The rows sit outside the fold, so they stay put as the work collapses.
+    expect(markup).toContain("Both reviewers agree.");
+  });
+
+  it("keeps the turn's status line at the top of the turn above a stack", () => {
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Review this", startedAt: 1_000 },
+        { id: "lead", role: "assistant", text: "I will run two reviews." },
+        tool("t0"),
+        { id: "plan", role: "assistant", text: "Splitting the review in two." },
+        {
+          id: "a1",
+          role: "tool",
+          text: "Independently review the current repository's recent changes for correctness and regressions. Inspect the uncommitted diff.",
+          tool: { callId: "agent-1", kind: "agent", status: "in_progress" },
+        },
+        tool("t1"),
+        { id: "answer", role: "assistant", text: "Both reviewers agree." },
+      ],
+      true,
+    );
+
+    // The line the work folds behind sits above everything it folds, and a
+    // stack of delegated runs no longer pushes it down the turn.
+    const statusAt = markup.indexOf("Show the work");
+    const stackAt = markup.indexOf("Independently review");
+    expect(statusAt).toBeGreaterThan(-1);
+    expect(stackAt).toBeGreaterThan(statusAt);
+    // The work around it is collapsed away, and the stack is still on screen:
+    // it is pinned outside the fold's body, not inside it.
+    expect(markup).not.toContain("hidden-detail-t1");
+    expect(markup).not.toContain("Splitting the review in two.");
+    // A row-length name is capped, and the whole brief stays on the hover.
+    expect(markup).toContain(
+      "Independently review the current repository&#x27;s recent…",
+    );
+    expect(markup).toContain("Inspect the uncommitted diff.");
+  });
+
+  it("groups an opened subagent's trail the way the main transcript does", () => {
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
+        {
+          id: "a1",
+          role: "tool",
+          // A failed run opens itself, which is the only way to see an open
+          // panel without a click.
+          text: "Correctness review",
+          tool: { callId: "agent-1", kind: "agent", status: "failed" },
+          agentRun: {
+            name: "Correctness review",
+            steps: [
+              { id: "s1", kind: "message", text: "Reading the diff first." },
+              { id: "s2", kind: "tool", text: "Read src/App.tsx" },
+              { id: "s3", kind: "tool", text: "Read src/lib/session.ts" },
+            ],
+          },
+        },
+        { id: "answer", role: "assistant", text: "It could not finish." },
+      ],
+      true,
+    );
+
+    // The run's own words title a group, with the calls they introduced under
+    // it — not one flat dump of every step it took.
+    expect(markup).toContain("Reading the diff first.");
+    expect(markup).toContain("Show the steps for Reading the diff first.");
+    // An open row holds its wash, so the panel reads as hanging off it.
+    expect(markup).toContain("hover:bg-content/8 bg-content/8");
+    // The panel opens straight onto its phases. A scroll window of its own
+    // here would nest one 17.5rem scroller inside the window each phase
+    // already keeps, and the inner one could never reach its last row.
+    expect(markup).toContain(
+      'data-open="true"><div class="flex min-w-0 flex-col pb-1">',
+    );
+    // A settled group stays folded behind its header, so opening a long run
+    // no longer dumps every call it made on screen at once.
+    expect(markup).toContain('class="zen-phase-body" data-open="false"');
+    expect(markup).not.toContain("src/lib/session.ts");
+  });
+
+  it("opens a lone subagent straight into its own transcript", () => {
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
+        {
+          id: "a1",
+          role: "tool",
+          text: "Correctness review",
+          tool: { callId: "agent-1", kind: "agent", status: "completed" },
+          agentRun: {
+            name: "Correctness review",
+            steps: [
+              {
+                id: "s1",
+                kind: "tool",
+                text: "Read src/App.tsx",
+                status: "completed",
+              },
+              { id: "s2", kind: "message", text: "Nothing to flag." },
+            ],
+          },
+        },
+        { id: "answer", role: "assistant", text: "Clean." },
+      ],
+      true,
+    );
+
+    // One agent needs no stack header: its own row is the row.
+    expect(markup).not.toContain("Show every subagent");
+    expect(markup).toContain("Correctness review");
+    expect(markup).toContain("1 step");
+    expect(markup).not.toContain("done");
+    expect(markup).toContain("Show Correctness review&#x27;s work");
   });
 
   it("places a session accessory after the latest reply and before its action row", () => {
@@ -155,5 +477,100 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup.indexOf("Changed files")).toBeLessThan(
       markup.indexOf('aria-label="Worked for 1s"'),
     );
+  });
+
+  it("renders an advisor interjection between answered work phases", () => {
+    // Live: the interjection lands on its own labeled row. Once the turn
+    // settles it folds into the work trail — covered below.
+    const markup = render(
+      [
+        tool("before"),
+        { id: "answer", role: "assistant", text: "Complete answer." },
+        {
+          id: "advisor",
+          role: "system",
+          text: "Check the fallback.",
+          interjection: { customType: "advisor", severity: "concern" },
+        },
+        tool("after"),
+        { id: "ack", role: "assistant", text: "Checked." },
+      ],
+      true,
+    );
+
+    expect(markup).toContain("Complete answer.");
+    expect(markup).toContain('aria-label="Interjection: Advisor"');
+    expect(markup).toContain("Concern");
+    expect(markup).toContain("Check the fallback.");
+    expect(markup).toContain("Checked.");
+  });
+
+  it("folds a settled turn's interjections into the work trail", () => {
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "Keep me posted" },
+      tool("t1"),
+      {
+        id: "i1",
+        role: "system",
+        text: "ping from #general",
+        interjection: { customType: "irc:incoming" },
+      },
+      {
+        id: "i2",
+        role: "system",
+        text: "another ping",
+        interjection: { customType: "irc:incoming" },
+      },
+      tool("t2"),
+      {
+        id: "i3",
+        role: "system",
+        text: "last ping",
+        interjection: { customType: "irc:incoming" },
+      },
+      {
+        id: "answer",
+        role: "assistant",
+        text: "The investigation is complete.",
+      },
+    ];
+
+    const settled = render(blocks);
+    // One fold line for the whole trail: the calls, and the notes they
+    // absorbed. The dividers themselves stay behind the fold until opened.
+    expect(settled).toContain("Ran 2 commands · 3 notes");
+    expect(settled).toContain("The investigation is complete.");
+    expect(settled).not.toContain('aria-label="Interjection:');
+    expect(settled).not.toContain("ping from #general");
+
+    // While the turn is live the same notes still land as their own rows.
+    const live = render(blocks, true);
+    expect(
+      live.match(/aria-label="Interjection: irc:incoming"/g),
+    ).toHaveLength(3);
+    expect(live).toContain("ping from #general");
+  });
+});
+
+describe("worker assignment prompts", () => {
+  it("hides the assignment envelope and keeps the task text", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        managed: true,
+        blocks: [
+          {
+            id: "u1",
+            role: "user",
+            internal: true,
+            text: "Review the current branch against main.\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Your assigned write scope is: src/App.tsx.\n</monocode_assignment>",
+          },
+          { id: "a1", role: "assistant", text: "Looking now" },
+        ],
+      }),
+    );
+    expect(markup).toContain("Review the current branch against main.");
+    expect(markup).toContain("Looking now");
+    expect(markup).not.toContain("monocode_assignment");
+    expect(markup).not.toContain("You are a worker managed by a MonoCode lead");
   });
 });

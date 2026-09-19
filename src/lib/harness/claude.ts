@@ -1,4 +1,5 @@
 import { nativeModelId } from "../models";
+import { sameProviderAccountId } from "../providerAccounts";
 import type { RuntimeMode } from "../session";
 import { loadClaudeHooks } from "../settings";
 import {
@@ -11,10 +12,14 @@ import {
 } from "./child";
 import {
   askUserQuestionAllowInput,
+  asRecord,
+  assistantMessageId,
   assistantTextBlocks,
+  assistantThinkingBlocks,
   assistantToolUses,
   contextFromResult,
   contextUsedFromAssistant,
+  turnMetricsFromResult,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
   buildControlRequest,
@@ -88,6 +93,7 @@ type PendingApproval = {
 
 type PendingQuestion = {
   requestId: string;
+  event: Extract<HarnessEvent, { type: "question.asked" }>;
   resolve: (reply: UserQuestionReply | "cancelled") => void;
 };
 
@@ -109,12 +115,14 @@ type LiveAgentTask = {
 type Live = {
   cwd: string;
   claudeSessionId: string;
+  providerAccountId?: string;
   runtimeMode: RuntimeMode;
   planning: boolean;
   settingsKey: string;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
+  visibleQuestionId: number | null;
   nextApprovalUiId: number;
   nextControlId: number;
   toolsByIndex: Map<number, InFlightTool>;
@@ -139,6 +147,7 @@ type Live = {
 type Resume = {
   sessionId: string;
   cwd: string;
+  providerAccountId?: string;
 };
 
 const INIT_TIMEOUT_MS = 8_000;
@@ -314,10 +323,11 @@ export function bindClaudeSession(
   threadId: string,
   providerSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = providerSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { sessionId, cwd });
+  resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
@@ -343,8 +353,15 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canResume = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
+  const canResume =
+    resume != null &&
+    resume.cwd === input.cwd &&
+    sameProviderAccountId(resume.providerAccountId, input.providerAccountId);
+  if (
+    resume &&
+    (resume.cwd !== input.cwd ||
+      !sameProviderAccountId(resume.providerAccountId, input.providerAccountId))
+  ) {
     resumeByThread.delete(input.sessionId);
   }
 
@@ -361,12 +378,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const live: Live = {
     cwd: input.cwd,
     claudeSessionId,
+    providerAccountId: input.providerAccountId,
     runtimeMode: input.runtimeMode,
     planning,
     settingsKey,
     onEvent: input.onEvent,
     approvals: new Map(),
     questions: new Map(),
+    visibleQuestionId: null,
     nextApprovalUiId: 1,
     nextControlId: 1,
     toolsByIndex: new Map(),
@@ -417,12 +436,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     path,
     buildClaudeSpawnArgs(launch),
     input.cwd,
+    { provider: "claude", id: input.providerAccountId ?? "default" },
   );
 
   liveByThread.set(input.sessionId, live);
   resumeByThread.set(input.sessionId, {
     sessionId: claudeSessionId,
     cwd: input.cwd,
+    providerAccountId: input.providerAccountId,
   });
 
   try {
@@ -510,7 +531,19 @@ function handleLine(sessionId: string, live: Live, line: string): void {
 
   const control = parseControlRequest(rec);
   if (control) {
-    void handleControlRequest(sessionId, live, control);
+    const turn = live.turnDone;
+    void handleControlRequest(sessionId, live, control).catch(
+      (error: unknown) => {
+        if (live.muteUpdates || live.turnDone !== turn) return;
+        const failure =
+          error instanceof Error ? error : new Error(String(error));
+        if (live.turnFailed) {
+          live.turnFailed(failure);
+        } else {
+          live.onEvent({ type: "session.error", message: failure.message });
+        }
+      },
+    );
     return;
   }
 
@@ -522,6 +555,7 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     resumeByThread.set(sessionId, {
       sessionId: sessionIdFromLine,
       cwd: live.cwd,
+      providerAccountId: live.providerAccountId,
     });
     live.onEvent({
       type: "session.providerBound",
@@ -596,7 +630,7 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
   const started = toolStartFromEvent(rec);
   if (started) {
     if (subagent) {
-      noteSubagentTool(live, rec, started.name, started.input);
+      noteSubagentTool(live, rec, started.id, started.name, started.input);
       return;
     }
     const tool: InFlightTool = {
@@ -613,6 +647,9 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
       callId: tool.id,
       title: tool.title,
       kind: toolKindFromName(tool.name),
+      ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+        ? { agentModel: stringField(tool.input, "model") }
+        : {}),
       status: isAgentToolName(tool.name) ? "in_progress" : "pending",
       preview: previewFromTool(tool.name, tool.input),
     });
@@ -635,6 +672,9 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
       callId: tool.id,
       title: tool.title,
       kind: toolKindFromName(tool.name),
+      ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+        ? { agentModel: stringField(tool.input, "model") }
+        : {}),
       status: "pending",
       detail: summarizeToolRequest(tool.name, parsed),
       preview: previewFromTool(tool.name, parsed),
@@ -646,8 +686,9 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
 
 function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   if (isSubagentMessage(rec)) {
+    noteSubagentNarration(live, rec);
     for (const use of assistantToolUses(rec)) {
-      noteSubagentTool(live, rec, use.name, use.input);
+      noteSubagentTool(live, rec, use.id, use.name, use.input);
     }
     return;
   }
@@ -677,6 +718,9 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
       callId: tool.id,
       title: tool.title,
       kind: toolKindFromName(tool.name),
+      ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+        ? { agentModel: stringField(tool.input, "model") }
+        : {}),
       status: isAgentToolName(tool.name) ? "in_progress" : "pending",
       preview: previewFromTool(tool.name, tool.input),
     });
@@ -689,7 +733,10 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
 }
 
 function handleUser(live: Live, rec: Record<string, unknown>): void {
-  if (isSubagentMessage(rec)) return;
+  if (isSubagentMessage(rec)) {
+    noteSubagentResults(live, rec);
+    return;
+  }
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
@@ -705,6 +752,17 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
       detail: result.text || undefined,
       preview: previewFromTool(tool.name, tool.input, result.text),
     });
+    // What a subagent hands back is the last thing it said, so it closes out
+    // that agent's own trail rather than sitting on the parent row as detail.
+    if (isAgentToolName(tool.name) && result.text.trim() && !result.isError) {
+      live.onEvent({
+        type: "agent.step",
+        callId: tool.id,
+        stepId: `${tool.id}:report`,
+        kind: "message",
+        text: result.text,
+      });
+    }
   }
 }
 
@@ -716,6 +774,8 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
     const context = contextFromResult(rec);
     if (context) live.onEvent({ type: "context", ...context });
   }
+  const metrics = turnMetricsFromResult(rec);
+  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {
@@ -734,7 +794,7 @@ async function handleControlRequest(
     await writeJson(
       sessionId,
       buildControlResponse(control.requestId, {}),
-    ).catch(() => undefined);
+    );
     return;
   }
 
@@ -755,7 +815,7 @@ async function handleControlRequest(
   if (toolName === "AskUserQuestion") {
     const questions = questionsFromUnknown(input);
     const uiId = live.nextApprovalUiId++;
-    live.onEvent({
+    const pending = waitQuestion(live, uiId, control.requestId, {
       type: "question.asked",
       requestId: uiId,
       title:
@@ -763,7 +823,8 @@ async function handleControlRequest(
       questions,
       callId: control.toolUseId,
     });
-    const outcome = await waitQuestion(live, uiId, control.requestId);
+    showNextQuestion(live);
+    const outcome = await pending;
     const decision =
       outcome === "cancelled"
         ? "cancelled"
@@ -771,6 +832,7 @@ async function handleControlRequest(
           ? "answered"
           : "skipped";
     live.onEvent({ type: "question.resolved", requestId: uiId, decision });
+    showNextQuestion(live);
     if (outcome === "cancelled") return;
     const response =
       outcome.kind === "answered"
@@ -785,7 +847,7 @@ async function handleControlRequest(
     await writeJson(
       sessionId,
       buildControlResponse(control.requestId, response),
-    ).catch(() => undefined);
+    );
     return;
   }
 
@@ -799,7 +861,7 @@ async function handleControlRequest(
         message:
           "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn.",
       }),
-    ).catch(() => undefined);
+    );
     return;
   }
 
@@ -814,7 +876,7 @@ async function handleControlRequest(
         control.requestId,
         toClaudePermissionResult(decision, input),
       ),
-    ).catch(() => undefined);
+    );
     return;
   }
 
@@ -825,11 +887,12 @@ async function handleControlRequest(
         control.requestId,
         toClaudePermissionResult("allow", input),
       ),
-    ).catch(() => undefined);
+    );
     return;
   }
 
   const uiId = live.nextApprovalUiId++;
+  const pending = waitApproval(live, uiId, control.requestId, input);
   live.onEvent({
     type: "approval.requested",
     requestId: uiId,
@@ -838,7 +901,7 @@ async function handleControlRequest(
     callId: control.toolUseId,
     preview: previewFromTool(toolName, input),
   });
-  const decision = await waitApproval(live, uiId, control.requestId, input);
+  const decision = await pending;
   live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
   if (decision === "cancelled") return;
   await writeJson(
@@ -847,7 +910,7 @@ async function handleControlRequest(
       control.requestId,
       toClaudePermissionResult(decision, input),
     ),
-  ).catch(() => undefined);
+  );
 }
 
 function applyKnownToolInput(
@@ -878,8 +941,10 @@ function waitApproval(
   requestId: string,
   input: Record<string, unknown>,
 ): Promise<ApprovalOutcome> {
-  return new Promise((resolve) => {
+  return new Promise<ApprovalOutcome>((resolve) => {
     live.approvals.set(uiId, { requestId, input, resolve });
+  }).finally(() => {
+    live.approvals.delete(uiId);
   });
 }
 
@@ -887,10 +952,25 @@ function waitQuestion(
   live: Live,
   uiId: number,
   requestId: string,
+  event: Extract<HarnessEvent, { type: "question.asked" }>,
 ): Promise<UserQuestionReply | "cancelled"> {
-  return new Promise((resolve) => {
-    live.questions.set(uiId, { requestId, resolve });
+  return new Promise<UserQuestionReply | "cancelled">((resolve) => {
+    live.questions.set(uiId, { requestId, event, resolve });
+  }).finally(() => {
+    live.questions.delete(uiId);
   });
+}
+
+function showNextQuestion(live: Live): void {
+  if (live.muteUpdates || live.cancelled) return;
+  if (
+    live.visibleQuestionId !== null &&
+    live.questions.has(live.visibleQuestionId)
+  )
+    return;
+  const next = live.questions.entries().next().value;
+  live.visibleQuestionId = next?.[0] ?? null;
+  if (next) live.onEvent(next[1].event);
 }
 
 function emitTaskListIfNeeded(
@@ -1004,37 +1084,141 @@ function handleToolProgress(live: Live, rec: Record<string, unknown>): void {
       ? live.toolsById.get(progress.parentToolUseId)
       : undefined);
   if (!tool || !isAgentToolName(tool.name)) return;
-  const detail = progress.subagentType
-    ? `${progress.subagentType.replace(/[_-]+/g, " ")} subagent`
-    : progress.toolName;
   live.onEvent({
     type: "tool.updated",
     callId: tool.id,
     title: tool.title,
     kind: "agent",
     status: "in_progress",
-    ...(detail ? { detail } : {}),
   });
+  // Progress names the call in flight. That is a step in the run, not the
+  // result of it, so it goes to the panel rather than onto the Agent row.
+  if (progress.toolName) {
+    live.onEvent({
+      type: "agent.step",
+      callId: tool.id,
+      stepId: progress.toolUseId,
+      kind: "tool",
+      text: progress.toolName,
+      status: "in_progress",
+      ...(progress.subagentType ? { agentType: progress.subagentType } : {}),
+    });
+  }
 }
 
+/**
+ * The Agent call a subagent message belongs to, or nothing when the message
+ * came from somewhere the parent transcript has no row for.
+ */
+function subagentParent(
+  live: Live,
+  rec: Record<string, unknown>,
+): InFlightTool | undefined {
+  const parentId = stringField(rec, "parent_tool_use_id");
+  if (!parentId) return undefined;
+  const parent = live.toolsById.get(parentId);
+  if (!parent || !isAgentToolName(parent.name)) return undefined;
+  return parent;
+}
+
+/**
+ * A call a subagent made, mirrored onto the Agent row that spawned it. The
+ * parent keeps its own "still running" status; the step is what the panel
+ * under that row reads back.
+ */
 function noteSubagentTool(
   live: Live,
   rec: Record<string, unknown>,
+  id: string,
   name: string,
   input: Record<string, unknown>,
 ): void {
-  const parentId = stringField(rec, "parent_tool_use_id");
-  if (!parentId) return;
-  const parent = live.toolsById.get(parentId);
-  if (!parent || !isAgentToolName(parent.name)) return;
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  const title = toolTitle(name, input);
+  // No detail: the Agent row's detail is the report the run hands back, and
+  // writing the call of the moment there would leave whatever the subagent
+  // happened to do last standing in as its result.
   live.onEvent({
     type: "tool.updated",
     callId: parent.id,
     title: parent.title,
     kind: "agent",
     status: "in_progress",
-    detail: toolTitle(name, input),
   });
+  if (!id) return;
+  const preview = previewFromTool(name, input);
+  live.onEvent({
+    type: "agent.step",
+    callId: parent.id,
+    stepId: id,
+    kind: "tool",
+    text: title,
+    toolKind: toolKindFromName(name),
+    status: "in_progress",
+    ...(preview ? { preview } : {}),
+  });
+}
+
+/**
+ * What a subagent said and thought on its way through the work. Its prose
+ * never joins the parent transcript — that would read as the main agent
+ * talking — but it is the most legible thing in the panel for its own row.
+ */
+function noteSubagentNarration(
+  live: Live,
+  rec: Record<string, unknown>,
+): void {
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  const model = stringField(asRecord(rec.message), "model");
+  if (model)
+    live.onEvent({
+      type: "tool.updated",
+      callId: parent.id,
+      kind: "agent",
+      agentModel: model,
+    });
+  const messageId = assistantMessageId(rec) ?? crypto.randomUUID();
+  const thinking = assistantThinkingBlocks(rec).join("").trim();
+  if (thinking) {
+    live.onEvent({
+      type: "agent.step",
+      callId: parent.id,
+      stepId: `${messageId}:thinking`,
+      kind: "reasoning",
+      text: thinking,
+    });
+  }
+  const text = assistantTextBlocks(rec).join("").trim();
+  if (text) {
+    live.onEvent({
+      type: "agent.step",
+      callId: parent.id,
+      stepId: `${messageId}:text`,
+      kind: "message",
+      text,
+    });
+  }
+}
+
+/** Settles the subagent's own tool rows once their results come back. */
+function noteSubagentResults(
+  live: Live,
+  rec: Record<string, unknown>,
+): void {
+  const parent = subagentParent(live, rec);
+  if (!parent) return;
+  for (const result of toolResultsFromUserMessage(rec)) {
+    live.onEvent({
+      type: "agent.step",
+      callId: parent.id,
+      stepId: result.toolUseId,
+      kind: "tool",
+      text: "",
+      status: result.isError ? "failed" : "completed",
+    });
+  }
 }
 
 function isBackgroundedAgentTool(live: Live, toolUseId: string): boolean {
@@ -1179,7 +1363,7 @@ function writeJson(
 }
 
 function settingsKeyFor(input: HarnessSessionInput): string {
-  return claudeSettingsKey({
+  return `${input.providerAccountId ?? "default"}:${claudeSettingsKey({
     model: nativeModelId(input.model),
     effort: input.modelSettings?.effort,
     fast: input.modelSettings?.fast,
@@ -1187,7 +1371,7 @@ function settingsKeyFor(input: HarnessSessionInput): string {
     context: input.modelSettings?.context,
     runtimeMode: input.runtimeMode,
     hooks: loadClaudeHooks(),
-  });
+  })}`;
 }
 
 function launchOptions(
