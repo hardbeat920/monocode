@@ -359,15 +359,13 @@ const FileSection = memo(function FileSection({
       ref={setSection}
       data-diff-file={file.path}
       className={`${
-        fileLayout === "cards"
-          ? "overflow-hidden rounded-md border border-content/10"
-          : ""
+        fileLayout === "cards" ? "rounded-md border border-content/10" : ""
       } ${focused ? "bg-content/[0.03]" : ""}`}
     >
       <header
-        className={`${
-          fileLayout === "stacked" ? "sticky top-0 z-30 backdrop-blur-xl" : ""
-        } flex items-center gap-2 bg-content/2 px-3 py-1.5 ${
+        className={`sticky top-0 z-30 backdrop-blur-xl flex items-center gap-2 bg-content/2 px-3 py-1.5 ${
+          fileLayout === "cards" ? (expanded ? "rounded-t-md" : "rounded-md") : ""
+        } ${
           fileLayout === "stacked" || expanded
             ? "border-b border-stroke"
             : ""
@@ -415,21 +413,27 @@ const FileSection = memo(function FileSection({
         ) : null}
       </header>
       {expanded ? (
-        <FileBody
-          file={file}
-          reveals={reveals}
-          near={near}
-          tokens={tokens}
-          scrollerRef={scrollerRef}
-          onReveal={(foldId, direction) => {
-            const block = file.blocks.find(
-              (entry) => entry.kind === "fold" && entry.id === foldId,
-            );
-            const total = block?.kind === "fold" ? block.lines.length : 0;
-            onReveal(file.id, foldId, total, direction);
-          }}
-          onStageHunk={onStageHunk}
-        />
+        <div
+          className={
+            fileLayout === "cards" ? "overflow-hidden rounded-b-md" : ""
+          }
+        >
+          <FileBody
+            file={file}
+            reveals={reveals}
+            near={near}
+            tokens={tokens}
+            scrollerRef={scrollerRef}
+            onReveal={(foldId, direction) => {
+              const block = file.blocks.find(
+                (entry) => entry.kind === "fold" && entry.id === foldId,
+              );
+              const total = block?.kind === "fold" ? block.lines.length : 0;
+              onReveal(file.id, foldId, total, direction);
+            }}
+            onStageHunk={onStageHunk}
+          />
+        </div>
       ) : null}
     </section>
   );
