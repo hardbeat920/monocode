@@ -56,28 +56,24 @@ describe("composerDraft", () => {
   it("a second pane's save does not clobber the first session's pending draft", async () => {
     saveSessionDraft("s-a", "A text");
     saveSessionDraft("s-b", "B text");
-    flushSessionDraft();
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledTimes(2);
-      expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
-        sessionId: "s-a",
-        text: "A text",
-      });
-      expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
-        sessionId: "s-b",
-        text: "B text",
-      });
+    await flushSessionDraft();
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
+      sessionId: "s-a",
+      text: "A text",
+    });
+    expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
+      sessionId: "s-b",
+      text: "B text",
     });
   });
 
   it("flushes immediately on flushSessionDraft", async () => {
     saveSessionDraft("s-2", "pending text");
-    flushSessionDraft();
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
-        sessionId: "s-2",
-        text: "pending text",
-      });
+    await flushSessionDraft();
+    expect(invoke).toHaveBeenCalledWith("composer_draft_set", {
+      sessionId: "s-2",
+      text: "pending text",
     });
   });
 
