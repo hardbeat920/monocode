@@ -1138,16 +1138,46 @@ export default function App({
       const detail = (event as CustomEvent<AddToChatRequest>).detail;
       if (!detail?.text) return;
 
-      const currentTabs = tabsRef.current;
-      const currentSessions = sessionsRef.current;
-      const tab =
+      let currentTabs = tabsRef.current;
+      let currentSessions = sessionsRef.current;
+      // Sessions mounted before this request. The fallback branch appends a
+      // new session below, and openAddToChatSessionPane must not see it:
+      // its mapped-leaf check would find the fallback tab's own pane and
+      // reject the very split this flow exists to perform.
+      const preFallbackSessions = currentSessions;
+      let tab =
         currentTabs.find((entry) => entry.id === activeTabIdRef.current) ??
         currentTabs[0];
-      if (!tab) return;
+      let createdFallbackTab = false;
+      // Issue #311: with zero workspace tabs (all closed), add-to-chat must
+      // still open a usable chat pane instead of dropping the request. Seed
+      // the replacement session from the first known session, mirroring the
+      // onCloseAllTabs pattern.
+      if (!tab) {
+        const seedSession = sessionsRef.current[0];
+        const fallbackSession = newSession(
+          seedSession?.harness ?? "claude",
+          sessionDefaults?.cwd ?? projectCwdRef.current,
+          seedSession?.model,
+          sessionDefaults?.runtimeMode,
+          seedSession?.modelSettings,
+        );
+        const fallbackTab = newTab(fallbackSession.id);
+        currentSessions = [...currentSessions, fallbackSession];
+        currentTabs = [...currentTabs, fallbackTab];
+        tab = fallbackTab;
+        createdFallbackTab = true;
+      }
       const mountedSessionIds = new Set(
         currentSessions.map((session) => session.id),
       );
-      if (leafIds(tab.layout).some((id) => mountedSessionIds.has(id))) return;
+      // The fallback tab wraps the just-seeded session, so its only leaf is
+      // "mounted" by construction; the guard below must not reject it.
+      if (
+        !createdFallbackTab &&
+        leafIds(tab.layout).some((id) => mountedSessionIds.has(id))
+      )
+        return;
 
       const cwd =
         focusedWorkspaceTabCwd(tab, currentSessions) ??
@@ -1164,16 +1194,16 @@ export default function App({
       };
       const openedTab = openAddToChatSessionPane({
         tab,
-        sessions: currentSessions,
+        sessions: preFallbackSessions,
         sessionId: session.id,
       });
       // A mounted session pane owns the normal add-to-chat path.
       if (!openedTab) return;
 
-      const nextSessions = [...currentSessions, session];
       const nextTabs = currentTabs.map((entry) =>
         entry.id === tab.id ? openedTab : entry,
       );
+      const nextSessions = [...currentSessions, session];
       sessionsRef.current = nextSessions;
       tabsRef.current = nextTabs;
       setSessions(nextSessions);
