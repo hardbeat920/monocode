@@ -68,6 +68,7 @@ export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
   github: "GitHub",
   linear: "Linear",
   gitlab: "GitLab",
+  azuredevops: "ADO",
 };
 
 export function visibleInboxSources(
@@ -77,6 +78,7 @@ export function visibleInboxSources(
   if (connections.github !== false) sources.push("github");
   if (connections.linear !== false) sources.push("linear");
   if (connections.gitlab !== false) sources.push("gitlab");
+  if (connections.azuredevops !== false) sources.push("azuredevops");
   return sources;
 }
 
@@ -87,6 +89,7 @@ export function connectableInboxSources(
   if (connections.github === false) sources.push("github");
   if (connections.linear === false) sources.push("linear");
   if (connections.gitlab === false) sources.push("gitlab");
+  if (connections.azuredevops === false) sources.push("azuredevops");
   return sources;
 }
 
@@ -106,12 +109,15 @@ const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
   github: null,
   linear: null,
   gitlab: null,
+  azuredevops: null,
 };
 
 export function loadInboxSource(): InboxSource {
   try {
     const raw = localStorage.getItem(SOURCE_KEY);
-    return raw === "linear" || raw === "gitlab" ? raw : "github";
+    return raw === "linear" || raw === "gitlab" || raw === "azuredevops"
+      ? raw
+      : "github";
   } catch {
     return "github";
   }
@@ -143,6 +149,7 @@ export function loadInboxConnections(): InboxSourceConnections {
       github: connectFlag(record.github),
       linear: connectFlag(record.linear),
       gitlab: connectFlag(record.gitlab),
+      azuredevops: connectFlag(record.azuredevops),
     };
   } catch {
     return UNKNOWN_CONNECTIONS;
@@ -353,7 +360,8 @@ export function applyInboxFilters(
 ): InboxItem[] {
   const scoped = source ? filterInboxByProvider(items, source) : [...items];
   const hiddenProjects =
-    source === "linear" || (source === "gitlab" && filters.assignedToMe)
+    source === "linear" ||
+    ((source === "gitlab" || source === "azuredevops") && filters.assignedToMe)
       ? []
       : filters.hiddenProjects;
   const hiddenKinds = source === "linear" ? [] : filters.hiddenKinds;

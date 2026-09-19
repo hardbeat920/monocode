@@ -45,7 +45,12 @@ export class InboxNotificationTracker {
         changed.push(item);
       this.revisions.set(key, Math.max(previous ?? 0, updatedAt));
     }
-    for (const provider of ["github", "gitlab", "linear"] as const) {
+    for (const provider of [
+      "github",
+      "gitlab",
+      "linear",
+      "azuredevops",
+    ] as const) {
       if (!failed.has(provider)) this.primed.add(provider);
     }
     return changed;

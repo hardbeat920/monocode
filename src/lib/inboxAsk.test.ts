@@ -46,6 +46,18 @@ describe("inbox sessions", () => {
     ).toBe("gitlab:gitlab.example.com:/acme/app/-/merge_requests/42");
   });
 
+  it("falls back to a stable key when the item has no usable link", () => {
+    const item = {
+      provider: "azuredevops",
+      kind: "pr",
+      number: 12,
+      repo: "platform/web",
+      url: "",
+    } as InboxItem;
+    expect(inboxAskKey(item)).toBe("azuredevops:platform/web:pr:12");
+    expect(() => inboxAskKey({ ...item, url: "not a url" })).not.toThrow();
+  });
+
   it("adds the remote-access instruction on follow-ups and leaves ordinary sessions alone", () => {
     expect(inboxAskPrompt(undefined, "Change the file")).toBe(
       "Change the file",
@@ -148,7 +160,9 @@ describe("inbox sessions", () => {
     expect(parsed.sessions.map((entry) => entry.id)).toEqual([project.id]);
     expect(parsed.projectReturnTargets).toEqual([]);
     expect(
-      hydrateWorkspaceSnapshot(parsed, new Map())?.projectReturnMemory?.get(project.cwd),
+      hydrateWorkspaceSnapshot(parsed, new Map())?.projectReturnMemory?.get(
+        project.cwd,
+      ),
     ).toBe(project.id);
     expect(
       parseWorkspaceSnapshot({

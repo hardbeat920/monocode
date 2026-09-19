@@ -72,7 +72,11 @@ describe("GitHub fork repositories", () => {
             : []
         ) as never;
       }
-      if (command === "linear_status" || command === "gitlab_status") {
+      if (
+        command === "linear_status" ||
+        command === "gitlab_status" ||
+        command === "azure_devops_status"
+      ) {
         return { connected: false } as never;
       }
       throw new Error(`Unexpected command: ${command}`);
@@ -106,7 +110,11 @@ describe("GitHub fork repositories", () => {
       if (command === "git_github_repositories") {
         throw new Error("not a GitHub repository");
       }
-      if (command === "linear_status" || command === "gitlab_status") {
+      if (
+        command === "linear_status" ||
+        command === "gitlab_status" ||
+        command === "azure_devops_status"
+      ) {
         return { connected: false } as never;
       }
       throw new Error(`Unexpected command: ${command}`);

@@ -84,7 +84,9 @@ export function InboxComments({
       ? "Linear"
       : provider === "gitlab"
         ? "GitLab"
-        : "GitHub";
+        : provider === "azuredevops"
+          ? "ADO"
+          : "GitHub";
 
   return (
     <section className="flex flex-col gap-3 border-t border-stroke pt-5">
@@ -287,7 +289,9 @@ function InboxComment({
                     ? "Open in Linear"
                     : provider === "gitlab"
                       ? "Open on GitLab"
-                      : "Open on GitHub"
+                      : provider === "azuredevops"
+                        ? "Open on ADO"
+                        : "Open on GitHub"
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"
