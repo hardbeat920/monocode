@@ -2,7 +2,7 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentMarkdown } from "./AgentMarkdown";
+import { AgentMarkdown, FileLinkResolverContext } from "./AgentMarkdown";
 
 const actions = vi.hoisted(() => ({
   copyText: vi.fn(async () => {}),
@@ -109,6 +109,45 @@ describe("AgentMarkdown file link context menu", () => {
 
     await pick("Copy Relative Path");
     expect(actions.copyText).toHaveBeenLastCalledWith("docs/guide.md");
+  });
+
+  it("acts on the file a shortened link resolves to", async () => {
+    const resolve = vi.fn(async () => "/repo/packages/app/docs/guide.md");
+    act(() =>
+      root.render(
+        createElement(
+          FileLinkResolverContext.Provider,
+          { value: resolve },
+          createElement(AgentMarkdown, props),
+        ),
+      ),
+    );
+
+    await pick("Open in Default App");
+    expect(resolve).toHaveBeenCalledWith("/repo/docs/guide.md");
+    expect(actions.openPath).toHaveBeenCalledWith(
+      "/repo/packages/app/docs/guide.md",
+    );
+
+    const revealLabel = /Mac/.test(navigator.platform)
+      ? "Reveal in Finder"
+      : /Win/i.test(navigator.platform)
+        ? "Reveal in File Explorer"
+        : "Open Containing Folder";
+    await pick(revealLabel);
+    expect(actions.revealPath).toHaveBeenCalledWith(
+      "/repo/packages/app/docs/guide.md",
+    );
+
+    await pick("Copy Path");
+    expect(actions.copyText).toHaveBeenLastCalledWith(
+      "/repo/packages/app/docs/guide.md",
+    );
+
+    await pick("Copy Relative Path");
+    expect(actions.copyText).toHaveBeenLastCalledWith(
+      "packages/app/docs/guide.md",
+    );
   });
 
   it("leaves external web links on the native context menu path", () => {

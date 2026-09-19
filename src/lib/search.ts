@@ -37,6 +37,8 @@ export type EditorNavigationTarget = EditorNavigation & {
 export type FileOpenOptions = {
   /** The caller obtained this concrete path from the filesystem or file index. */
   exact?: boolean;
+  /** Exact file paths already surfaced by tools in the current transcript. */
+  candidatePaths?: readonly string[];
 };
 
 export type OpenFileFn = (

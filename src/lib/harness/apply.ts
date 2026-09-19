@@ -42,6 +42,7 @@ export function applyHarnessEvent(
         kind: event.kind,
         status: event.status,
         preview: event.preview,
+        paths: event.paths,
         streaming: true,
         agentModel: event.agentModel,
       });
@@ -53,6 +54,7 @@ export function applyHarnessEvent(
         status: event.status,
         detail: event.detail,
         preview: event.preview,
+        paths: event.paths,
         streaming: event.status !== "completed" && event.status !== "failed",
         agentModel: event.agentModel,
       });
@@ -766,6 +768,7 @@ function upsertTool(
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    paths?: string[];
     streaming: boolean;
     agentModel?: string;
   },
@@ -795,6 +798,7 @@ function upsertTool(
         status: patch.status,
         ...(detail ? { detail } : {}),
         ...(preview ? { preview } : {}),
+        ...(patch.paths?.length ? { paths: patch.paths } : {}),
       },
     });
   }
@@ -814,6 +818,9 @@ function upsertTool(
   );
   const kind = patch.kind ?? prev.tool?.kind;
   const status = patch.status ?? prev.tool?.status;
+  // A patch that only reports progress carries no file list; the one the edit
+  // arrived with does, and the row keeps it for the rest of the turn.
+  const paths = patch.paths?.length ? patch.paths : prev.tool?.paths;
   const agentName = prev.agentRun?.steps.length ? prev.agentRun.name : label;
   if (
     prev.text === label &&
@@ -824,7 +831,8 @@ function upsertTool(
     prev.tool?.detail === detail &&
     (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
     (!prev.agentRun || prev.agentRun.name === agentName) &&
-    samePreview(prev.tool?.preview, preview)
+    samePreview(prev.tool?.preview, preview) &&
+    samePaths(prev.tool?.paths, paths)
   ) {
     return session;
   }
@@ -850,9 +858,16 @@ function upsertTool(
       status,
       ...(detail ? { detail } : {}),
       ...(preview ? { preview } : {}),
+      ...(paths?.length ? { paths } : {}),
     },
   };
   return { ...session, blocks };
+}
+
+function samePaths(a?: readonly string[], b?: readonly string[]): boolean {
+  if (a === b) return true;
+  if (!a || !b) return (a?.length ?? 0) === (b?.length ?? 0);
+  return a.length === b.length && a.every((path, index) => path === b[index]);
 }
 
 const MAX_TOOL_DETAIL_CHARS = 8_000;

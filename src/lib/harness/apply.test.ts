@@ -20,6 +20,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("multi-file edits", () => {
+  it("keeps every edited path on the row, including through a later patch", () => {
+    const paths = ["/repo/src/one.ts", "/repo/src/two.ts"];
+    let session = appendUser(newSession("codex", "/repo"), "edit both");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "edit",
+      title: "Edit /repo/src/one.ts",
+      kind: "edit",
+      preview: { kind: "write", path: paths[0], fileName: "one.ts" },
+      paths,
+    });
+    const started = session.blocks.find((block) => block.role === "tool");
+    expect(started?.tool?.paths).toEqual(paths);
+
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "edit",
+      status: "completed",
+    });
+    const settled = session.blocks.find((block) => block.role === "tool");
+    expect(settled?.tool?.paths).toEqual(paths);
+    expect(settled?.tool?.status).toBe("completed");
+  });
+});
+
 describe("turn duration", () => {
   it("records the selected provider and model on a user turn", () => {
     const session = appendUser(

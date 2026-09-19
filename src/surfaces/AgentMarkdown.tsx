@@ -110,6 +110,18 @@ const FileOpenContext = createContext<{
 
 const RemoteMediaContext = createContext(false);
 
+/** Turns a transcript link into the file it actually points at. */
+export type FileLinkResolver = (path: string) => Promise<string>;
+
+/**
+ * Shortened links are resolved against the transcript before they open. The
+ * link menu asks the same question, so "Reveal" and "Open in Default App" act
+ * on the file the reader would have opened, not on the text of the link.
+ */
+export const FileLinkResolverContext = createContext<
+  FileLinkResolver | undefined
+>(undefined);
+
 const REVEAL_LABEL = IS_MAC
   ? "Reveal in Finder"
   : IS_WIN
@@ -461,6 +473,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   allowRemoteMedia?: boolean;
 }) {
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
+  const resolveFileLink = useContext(FileLinkResolverContext);
   const onFileContextMenu = useCallback(
     (event: ReactMouseEvent, path: string, navigation?: EditorNavigation) => {
       event.preventDefault();
@@ -485,32 +498,31 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   const onFileMenuPick = (id: string) => {
     if (!fileMenu) return;
     const path = fileMenu.path;
+    const navigation = fileMenu.navigation;
     setFileMenu(null);
 
     if (id === "open-monocode") {
-      if (fileMenu.navigation) onOpenFile?.(path, fileMenu.navigation);
+      if (navigation) onOpenFile?.(path, navigation);
       else onOpenFile?.(path);
       return;
     }
 
-    let action: Promise<void>;
-    switch (id) {
-      case "open-default":
-        action = openPath(path);
-        break;
-      case "reveal":
-        action = revealPath(path);
-        break;
-      case "copy-path":
-        action = copyText(path);
-        break;
-      case "copy-relative-path":
-        action = copyText(displayPath(path, cwd));
-        break;
-      default:
-        return;
-    }
-    void action.catch((error) => {
+    const action = async (): Promise<void> => {
+      const target = resolveFileLink ? await resolveFileLink(path) : path;
+      switch (id) {
+        case "open-default":
+          return openPath(target);
+        case "reveal":
+          return revealPath(target);
+        case "copy-path":
+          return copyText(target);
+        case "copy-relative-path":
+          return copyText(displayPath(target, cwd));
+        default:
+          return;
+      }
+    };
+    void action().catch((error) => {
       console.error(`Failed to run file-link action ${id}:`, error);
     });
   };

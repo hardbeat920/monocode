@@ -57,8 +57,10 @@ import type { Attachment } from "../lib/session";
 import { visibleUserPrompt } from "../lib/orchestration";
 import { playCue } from "../lib/sounds";
 import { legacyTaskListFromText } from "../lib/taskList";
-import { displayPath, resolveWorkspacePath } from "../lib/paths";
+import { displayPath, pathKey, resolveWorkspacePath } from "../lib/paths";
+import { resolveFileOpenRequest } from "../lib/fileIndex";
 import { resolveModel } from "../lib/models";
+import type { OpenFileFn } from "../lib/search";
 import { harnessForTurn } from "../lib/secondOpinion";
 import { Shimmer } from "./Shimmer";
 import {
@@ -79,7 +81,7 @@ import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../lib/appearance";
-import { AgentMarkdown } from "./AgentMarkdown";
+import { AgentMarkdown, FileLinkResolverContext } from "./AgentMarkdown";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
 import { parseUserMessageLink } from "../lib/linkPreview";
 import { UserLinkPreview } from "./UserLinkPreview";
@@ -106,6 +108,7 @@ import {
   subagentModelName,
   subagentName,
   subagentReport,
+  transcriptFilePaths,
   toolCallLabel,
   toolCallState,
   turnCopyText,
@@ -134,7 +137,7 @@ type Props = {
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: OpenFileFn;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
@@ -165,7 +168,7 @@ function AgentTranscriptComponent({
   onSaveNote,
   onSendDraft,
   onSaveSelectionNote,
-  onOpenFile,
+  onOpenFile: onOpenFileProp,
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
@@ -225,6 +228,41 @@ function AgentTranscriptComponent({
   const currentModelName = harness
     ? resolveModel(harness, model).name
     : undefined;
+  // The transcript's own paths are what disambiguates a shortened link, but
+  // collecting them per render would rebuild this callback on every streamed
+  // block, and the settled activity groups memoise on its identity. A click is
+  // rare and a render is not, so the scan waits for the click.
+  const fileLinkRef = useRef({ blocks, cwd, onOpenFile: onOpenFileProp });
+  fileLinkRef.current = { blocks, cwd, onOpenFile: onOpenFileProp };
+  const handleOpenFile = useCallback<OpenFileFn>((path, navigation) => {
+    const {
+      blocks: current,
+      cwd: linkCwd,
+      onOpenFile: open,
+    } = fileLinkRef.current;
+    if (!open) return;
+    const candidatePaths = transcriptFilePaths(current);
+    const knownPath = candidatePaths.some((candidate) => {
+      const resolved = resolveWorkspacePath(candidate, linkCwd);
+      return resolved ? pathKey(resolved) === pathKey(path) : false;
+    });
+    if (candidatePaths.length === 0 || knownPath) {
+      // Callers count arguments: an undefined navigation is not the same call.
+      if (navigation) open(path, navigation);
+      else open(path);
+      return;
+    }
+    open(path, navigation, { candidatePaths });
+  }, []);
+  const onOpenFile = onOpenFileProp ? handleOpenFile : undefined;
+  // The link menu acts on files, not on link text: it asks for the same
+  // resolution a click would get, so revealing and opening agree.
+  const resolveFileLink = useCallback(async (path: string) => {
+    const { blocks: current, cwd: linkCwd } = fileLinkRef.current;
+    return resolveFileOpenRequest(linkCwd ?? "", path, {
+      candidatePaths: transcriptFilePaths(current),
+    });
+  }, []);
   const waitingForApproval = hasPendingApproval(blocks) || pendingQuestion;
   const preparingHandoff = blocks.some(
     (block) =>
@@ -396,7 +434,7 @@ function AgentTranscriptComponent({
     onRevealReady?.(revealBlock);
   }, [revealBlock, onRevealReady]);
 
-  return (
+  const transcript = (
     <div
       ref={setScroller}
       className="agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5"
@@ -690,6 +728,12 @@ function AgentTranscriptComponent({
         />
       ) : null}
     </div>
+  );
+
+  return (
+    <FileLinkResolverContext.Provider value={resolveFileLink}>
+      {transcript}
+    </FileLinkResolverContext.Provider>
   );
 }
 

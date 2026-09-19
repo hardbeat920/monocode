@@ -245,6 +245,8 @@ export type Block = {
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    /** Every file one structured edit touched, not just the previewed one. */
+    paths?: string[];
   };
   approval?: {
     requestId: number;

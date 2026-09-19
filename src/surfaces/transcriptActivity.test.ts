@@ -20,6 +20,7 @@ import {
   subagentBrief,
   subagentFailureSummary,
   subagentName,
+  transcriptFilePaths,
   toolCallLabel,
   turnCopyText,
   subagentModelName,
@@ -105,6 +106,41 @@ function irc(id: string, text = "new message in #general"): Block {
     interjection: { customType: "irc:incoming" },
   };
 }
+
+describe("transcriptFilePaths", () => {
+  it("collects every file a multi-file edit touched", () => {
+    const edited: Block = {
+      id: "multi",
+      role: "tool",
+      text: "Edit /repo/src/one.ts",
+      tool: {
+        kind: "edit",
+        status: "completed",
+        preview: {
+          kind: "write",
+          path: "/repo/src/one.ts",
+          fileName: "one.ts",
+        },
+        paths: ["/repo/src/one.ts", "/repo/src/two.ts"],
+      },
+    };
+    expect(transcriptFilePaths([edited])).toEqual([
+      "/repo/src/one.ts",
+      "/repo/src/two.ts",
+    ]);
+  });
+
+  it("returns unique structured file paths without scraping prose", () => {
+    expect(
+      transcriptFilePaths([
+        edit("edit", "/other/project/platform/backup.yaml"),
+        read("read", "/other/project/platform/backup.yaml"),
+        search("search"),
+        note("note", "/untrusted/prose/backup.yaml"),
+      ]),
+    ).toEqual(["/other/project/platform/backup.yaml"]);
+  });
+});
 
 describe("groupTurnItems", () => {
   it("keeps consecutive shell calls in one activity stack", () => {
