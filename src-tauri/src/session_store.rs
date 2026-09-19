@@ -688,6 +688,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
          ON sessions (id) WHERE inbox_ask IS NOT NULL;",
     )?;
     crate::notes::ensure_notes_table(conn)?;
+    crate::composer_draft::ensure_drafts_table(conn)?;
     crate::reminders::ensure_table(conn)?;
     ensure_orchestration_history(conn)?;
     Ok(())
@@ -1448,6 +1449,10 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
         [session_id],
     )?;
     tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+    tx.execute(
+        "DELETE FROM composer_drafts WHERE session_id = ?1",
+        [session_id],
+    )?;
     tx.commit()
 }
 

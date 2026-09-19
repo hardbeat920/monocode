@@ -68,6 +68,11 @@ import {
 } from "../lib/appearance";
 import type { SessionFolderTarget } from "../lib/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../lib/linkedSessionSeen";
+import {
+  flushSessionDraft,
+  loadSessionDraft,
+  saveSessionDraft,
+} from "../lib/composerDraft";
 
 type Props = {
   session: Session;
@@ -356,6 +361,27 @@ export const SessionPane = memo(function SessionPane({
   const dockComposer =
     !draftBlock && (!isEmpty || inSplit || !!session.inboxAsk);
   const draftRef = useRef<string | undefined>(undefined);
+  // Persisted draft for this session, loaded once per pane mount. The Composer
+  // picks up late loads through its `initialDraft` sync effect.
+  const [restoredDraft, setRestoredDraft] = useState<string | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    draftRef.current = undefined;
+    setRestoredDraft(undefined);
+    void loadSessionDraft(session.id).then((text) => {
+      if (!cancelled && text) setRestoredDraft(text);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id]);
+  useEffect(() => {
+    return () => {
+      void flushSessionDraft();
+    };
+  }, [session.id]);
   const composer = (
     <Composer
       enabled={visible}
@@ -382,12 +408,14 @@ export const SessionPane = memo(function SessionPane({
       quoteRequest={quoteRequest}
       initialDraft={
         draftRef.current ??
+        restoredDraft ??
         (session.inboxCard || session.noteCard || session.handoffCard
           ? undefined
           : session.composerSeed)
       }
       onDraftChange={(text) => {
         draftRef.current = text;
+        saveSessionDraft(session.id, text);
       }}
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}
