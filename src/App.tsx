@@ -405,6 +405,13 @@ import {
   type NoteComposerCard,
 } from "./lib/notes";
 import {
+  claimDueAutomations,
+  updateAutomationRun,
+  type Automation,
+  type AutomationRun,
+} from "./lib/automations";
+import { claimInboxAutomationRuns } from "./lib/automationEvents";
+import {
   SECOND_OPINION_TITLE,
   buildSecondOpinionCard,
   buildSecondOpinionPrompt,
@@ -424,6 +431,7 @@ import { InboxView, LinkedWorkItemPanel } from "./surfaces/InboxView";
 import type { InboxSessionPortal } from "./surfaces/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "./lib/inboxAsk";
 import { NotesView } from "./surfaces/NotesView";
+import { AutomationsView } from "./surfaces/AutomationsView";
 import {
   githubWorkItemThread,
   inboxComposerCard,
@@ -777,6 +785,7 @@ export default function App({
     useState<InboxSessionPortal | null>(null);
   const openingInboxSessions = useRef(new Map<string, Promise<string>>());
   const [notesViewOpen, setNotesViewOpen] = useState(false);
+  const [automationsViewOpen, setAutomationsViewOpen] = useState(false);
   const [inspectedWorkerId, setInspectedWorkerId] = useState<string | null>(
     null,
   );
@@ -892,6 +901,8 @@ export default function App({
   inboxViewOpenRef.current = inboxViewOpen;
   const notesViewOpenRef = useRef(notesViewOpen);
   notesViewOpenRef.current = notesViewOpen;
+  const automationsViewOpenRef = useRef(automationsViewOpen);
+  automationsViewOpenRef.current = automationsViewOpen;
   const settingsOpenRef = useRef(settingsOpen);
   settingsOpenRef.current = settingsOpen;
   const sessionNavigationIdsRef = useRef<readonly string[]>([]);
@@ -1412,6 +1423,7 @@ export default function App({
             !searchViewOpenRef.current &&
             !inboxViewOpenRef.current &&
             !notesViewOpenRef.current &&
+            !automationsViewOpenRef.current &&
             !settingsOpenRef.current
           ) {
             setComposerFocused(true);
@@ -1891,6 +1903,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     const cwd = active?.cwd ?? sessionDefaults?.cwd ?? projectCwd;
     const session = newDefaultSession(cwd, sessionDefaults?.runtimeMode);
     const tab = newTab(session.id);
@@ -1912,6 +1925,7 @@ export default function App({
       const start = (description?: string) => {
         setInboxViewOpen(false);
         setNotesViewOpen(false);
+        setAutomationsViewOpen(false);
         setSidebarTab("sessions");
         const cwd =
           item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
@@ -1967,6 +1981,7 @@ export default function App({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       setSidebarTab("sessions");
       const cwd =
         (card.sourceCwd && looksLikeProject(card.sourceCwd)
@@ -3661,6 +3676,7 @@ export default function App({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       setSettingsOpen(false);
       setFilePickerOpen(false);
       setSidebarTab("sessions");
@@ -4287,6 +4303,7 @@ export default function App({
             searchViewOpenRef.current ||
             inboxViewOpenRef.current ||
             notesViewOpenRef.current ||
+            automationsViewOpenRef.current ||
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
             whatsNewVersionRef.current,
@@ -4658,6 +4675,7 @@ export default function App({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       const normalized = normalizeProjectPath(path);
       if (!looksLikeProject(normalized)) return;
 
@@ -6031,6 +6049,174 @@ export default function App({
     ],
   );
 
+  const launchAutomation = useCallback(
+    async (
+      automation: Automation,
+      run: AutomationRun,
+      reveal = false,
+      prompt = automation.prompt,
+    ) => {
+      try {
+        let session =
+          automation.reuseSession && automation.lastSessionId
+            ? sessionsRef.current.find(
+                (entry) =>
+                  entry.id === automation.lastSessionId &&
+                  entry.harness === automation.harness &&
+                  !entry.busy &&
+                  !entry.worktreeRemoved &&
+                  (automation.workspaceMode !== "existing" ||
+                    pathKey(sessionWorkCwd(entry)) ===
+                      pathKey(automation.worktreeCwd ?? "")),
+              )
+            : undefined;
+
+        if (!session) {
+          session = {
+            ...newSession(
+              automation.harness,
+              automation.cwd,
+              automation.model,
+              automation.runtimeMode,
+              automation.modelSettings,
+            ),
+            title: formatSessionTitle(automation.harness, automation.name),
+            automationId: automation.id,
+            ...(automation.workspaceMode === "worktree"
+              ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
+              : automation.workspaceMode === "existing" &&
+                  automation.worktreeCwd
+                ? { worktreeCwd: automation.worktreeCwd }
+                : {}),
+          };
+          const nextSessions = [...sessionsRef.current, session];
+          sessionsRef.current = nextSessions;
+          setSessions(nextSessions);
+          const tab = newTab(session.id);
+          appendTab(tab, automation.cwd);
+          if (reveal) {
+            setActiveTabId(tab.id);
+            setComposerFocused(false);
+          }
+        } else {
+          if (session.automationId !== automation.id) {
+            const stamped = { ...session, automationId: automation.id };
+            session = stamped;
+            const nextSessions = sessionsRef.current.map((entry) =>
+              entry.id === stamped.id ? stamped : entry,
+            );
+            sessionsRef.current = nextSessions;
+            setSessions(nextSessions);
+          }
+          if (reveal) {
+            focusOpenSession(session.id);
+          }
+        }
+
+        if (automation.sessionFolderId && looksLikeProject(automation.cwd)) {
+          saveSessionFolders(
+            automation.cwd,
+            placeSessionInFolder(
+              loadSessionFolders(automation.cwd),
+              session.id,
+              { kind: "existing", folderId: automation.sessionFolderId },
+            ),
+          );
+        }
+
+        if (reveal) {
+          setSearchViewOpen(false);
+          setInboxViewOpen(false);
+          setNotesViewOpen(false);
+          setAutomationsViewOpen(false);
+          setSidebarTab("sessions");
+        }
+
+        await updateAutomationRun(run.id, "running", {
+          sessionId: session.id,
+        });
+        const accepted = onSubmit(session.id, prompt, [], {
+          onSettled: (outcome) => {
+            const status =
+              outcome.status === "completed"
+                ? "succeeded"
+                : outcome.status === "cancelled"
+                  ? "cancelled"
+                  : "failed";
+            void updateAutomationRun(run.id, status, {
+              sessionId: session.id,
+              ...(outcome.error ? { error: outcome.error } : {}),
+            });
+          },
+        });
+        if (!accepted) {
+          await updateAutomationRun(run.id, "failed", {
+            sessionId: session.id,
+            error: "The selected agent session could not start this run.",
+          });
+        }
+      } catch (reason: unknown) {
+        await updateAutomationRun(run.id, "failed", {
+          error: reason instanceof Error ? reason.message : String(reason),
+        }).catch(() => undefined);
+        throw reason;
+      }
+    },
+    [appendTab, focusOpenSession, onSubmit],
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    let evaluating = false;
+    const evaluate = async () => {
+      if (disposed || evaluating) return;
+      evaluating = true;
+      try {
+        const due = await claimDueAutomations();
+        for (const item of due) {
+          if (disposed) break;
+          void launchAutomation(item.automation, item.run).catch(
+            () => undefined,
+          );
+        }
+      } catch {
+        // Scheduling retries on the next tick; individual claimed runs record
+        // launch failures in launchAutomation.
+      } finally {
+        evaluating = false;
+      }
+    };
+    void evaluate();
+    const timer = window.setInterval(() => void evaluate(), 30_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void evaluate();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [launchAutomation]);
+
+  const onInboxAppeared = useCallback(
+    (items: Parameters<typeof claimInboxAutomationRuns>[0]) => {
+      void claimInboxAutomationRuns(items)
+        .then((due) => {
+          for (const item of due) {
+            void launchAutomation(
+              item.automation,
+              item.run,
+              false,
+              item.prompt,
+            ).catch(() => undefined);
+          }
+        })
+        .catch(() => undefined);
+    },
+    [launchAutomation],
+  );
+
   const onUpdatePlan = useCallback(
     (sessionId: string, blockId: string, text: string) => {
       setSessions((prev) =>
@@ -7216,6 +7402,7 @@ export default function App({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       onOpenApprovalSession(sessionId);
     },
     [onOpenApprovalSession],
@@ -7262,7 +7449,9 @@ export default function App({
     unseen: inboxUnseen,
     linkedSessionUpdateIds,
     linkedSessionUpdates,
-  } = useInboxActivity(recents, sidebarCwd, sidebarHistory);
+  } = useInboxActivity(recents, sidebarCwd, sidebarHistory, {
+    onAppeared: onInboxAppeared,
+  });
   linkedSessionUpdatesRef.current = linkedSessionUpdates;
   const inboxRelatedSessions = useMemo(() => {
     const byId = new Map<string, SessionSummary>();
@@ -7335,6 +7524,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setFilePickerInitialQuery("");
     setFilePickerResetToken((token) => token + 1);
     setFilePickerOpen(true);
@@ -7343,6 +7533,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setFilePickerInitialQuery(">");
     setFilePickerResetToken((token) => token + 1);
     setFilePickerOpen(true);
@@ -7358,6 +7549,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setSidebarTab("files");
     setFilesSearchOpen(true);
     setSearchFocusToken((token) => token + 1);
@@ -7368,6 +7560,7 @@ export default function App({
     setSettingsOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setSearchViewOpen(true);
     setSearchViewFocusToken((token) => token + 1);
   }, []);
@@ -7381,6 +7574,7 @@ export default function App({
     setSettingsOpen(false);
     setSearchViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setInboxViewOpen(true);
   }, []);
 
@@ -7392,6 +7586,7 @@ export default function App({
       setSettingsOpen(false);
       setSearchViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       setInboxViewOpen(false);
       const cwd =
         sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
@@ -7434,6 +7629,7 @@ export default function App({
     setSettingsOpen(false);
     setSearchViewOpen(false);
     setInboxViewOpen(false);
+    setAutomationsViewOpen(false);
     setNotesViewOpen(true);
   }, []);
 
@@ -7441,12 +7637,45 @@ export default function App({
     setNotesViewOpen(false);
   }, []);
 
+  const onOpenAutomations = useCallback(() => {
+    setFilePickerOpen(false);
+    setSettingsOpen(false);
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setAutomationsViewOpen(true);
+  }, []);
+
+  const onLeaveAutomations = useCallback(() => {
+    setAutomationsViewOpen(false);
+  }, []);
+
+  const onOpenAutomationSession = useCallback(
+    async (sessionId: string) => {
+      const session = await ensureOpenSession(sessionId);
+      if (!session)
+        throw new Error("This conversation is no longer available.");
+      setAutomationsViewOpen(false);
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setSettingsOpen(false);
+      setFilePickerOpen(false);
+      setSidebarTab("sessions");
+      setProjectCwd(session.cwd);
+      setRecents(rememberProject(session.cwd));
+      await onSelectHistorySession(sessionId);
+    },
+    [ensureOpenSession, onSelectHistorySession],
+  );
+
   const openSettings = useCallback(
     (section?: SettingsSectionId, anchor?: SettingsAnchor) => {
       setFilePickerOpen(false);
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       if (section) {
         setSettingsSection(section);
         saveSettingsSection(section);
@@ -7508,14 +7737,26 @@ export default function App({
       setNotesViewOpen(false);
       return;
     }
+    if (automationsViewOpen) {
+      setAutomationsViewOpen(false);
+      return;
+    }
     onVisitBack();
-  }, [onVisitBack, searchViewOpen, settingsOpen, inboxViewOpen, notesViewOpen]);
+  }, [
+    onVisitBack,
+    searchViewOpen,
+    settingsOpen,
+    inboxViewOpen,
+    notesViewOpen,
+    automationsViewOpen,
+  ]);
 
   const onRailForward = useCallback(() => {
     setSearchViewOpen(false);
     setSettingsOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     onVisitForward();
   }, [onVisitForward]);
 
@@ -7704,6 +7945,7 @@ export default function App({
             searchViewOpenRef.current ||
             inboxViewOpenRef.current ||
             notesViewOpenRef.current ||
+            automationsViewOpenRef.current ||
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
             Boolean(whatsNewVersionRef.current);
@@ -7779,6 +8021,7 @@ export default function App({
         !searchViewOpenRef.current &&
         !inboxViewOpenRef.current &&
         !notesViewOpenRef.current &&
+        !automationsViewOpenRef.current &&
         handleEditorFindKey(e)
       ) {
         e.stopPropagation();
@@ -8058,7 +8301,8 @@ export default function App({
               searchViewOpen ||
               settingsOpen ||
               inboxViewOpen ||
-              notesViewOpen
+              notesViewOpen ||
+              automationsViewOpen
             }
             canGoForward={tabVisitNav.canForward}
             onGoBack={onRailBack}
@@ -8093,10 +8337,12 @@ export default function App({
             onOpenInbox={onOpenInbox}
             onOpenInboxItem={onOpenLinkedWorkItem}
             onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+            onOpenAutomations={onOpenAutomations}
             onGoToFile={onGoToFile}
             searchActive={searchViewOpen}
             inboxActive={inboxViewOpen}
             notesActive={notesViewOpen}
+            automationsActive={automationsViewOpen}
             notesEnabled={notesEnabled}
             projectRailOpen={projectRailOpen}
             onToggleProjectRail={onToggleProjectRail}
@@ -8117,18 +8363,27 @@ export default function App({
           <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
             <div
               className={
-                searchViewOpen || settingsOpen || inboxViewOpen || notesViewOpen
+                searchViewOpen ||
+                settingsOpen ||
+                inboxViewOpen ||
+                notesViewOpen ||
+                automationsViewOpen
                   ? "hidden"
                   : "flex min-h-0 min-w-0 flex-1 flex-col"
               }
               aria-hidden={
-                searchViewOpen || settingsOpen || inboxViewOpen || notesViewOpen
+                searchViewOpen ||
+                settingsOpen ||
+                inboxViewOpen ||
+                notesViewOpen ||
+                automationsViewOpen
               }
               inert={
                 searchViewOpen ||
                 settingsOpen ||
                 inboxViewOpen ||
                 notesViewOpen ||
+                automationsViewOpen ||
                 undefined
               }
             >
@@ -8297,6 +8552,7 @@ export default function App({
                       !settingsOpen &&
                       !inboxViewOpen &&
                       !notesViewOpen &&
+                      !automationsViewOpen &&
                       activeLinkedWorkItemPanel?.sessionId === panel.sessionId
                     }
                     onClose={() => closeLinkedWorkItemPanel(panel.sessionId)}
@@ -8369,6 +8625,19 @@ export default function App({
                 onToggleSidebar={onToggleSidebar}
               />
             ) : null}
+            {automationsViewOpen ? (
+              <AutomationsView
+                besideRail={projectRailOpen}
+                cwd={projectCwd}
+                recents={recents}
+                onClose={onLeaveAutomations}
+                onToggleSidebar={onToggleSidebar}
+                onLaunch={(automation, run) =>
+                  launchAutomation(automation, run, true)
+                }
+                onOpenSession={onOpenAutomationSession}
+              />
+            ) : null}
             {settingsOpen ? (
               <SettingsView
                 section={settingsSection}
@@ -8398,6 +8667,7 @@ export default function App({
             {searchViewOpen ||
             inboxViewOpen ||
             notesViewOpen ||
+            automationsViewOpen ||
             settingsOpen ? null : (
               <UsageFooter
                 providers={usageProviders}

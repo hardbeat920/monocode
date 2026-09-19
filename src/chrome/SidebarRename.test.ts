@@ -881,6 +881,22 @@ describe("sidebar orchestration card", () => {
   });
 });
 
+describe("sidebar automation card", () => {
+  it("shows a bolt on sessions started by an automation", () => {
+    props.busySessionIds = new Set();
+    props.sessions[0].automationId = "automation-1";
+    act(() => render());
+    const icon = card().querySelector("[data-automation-icon]");
+    expect(icon).not.toBeNull();
+    expect(icon?.tagName).toBe("SPAN");
+    expect(icon?.getAttribute("aria-label")).toBe("Started by an automation");
+    expect(card().querySelector("[data-orchestration-icon]")).toBeNull();
+    expect(
+      card().querySelector("[data-session-select] [data-automation-icon]"),
+    ).toBeNull();
+  });
+});
+
 describe("sidebar linked work item updates", () => {
   it("opens a linked item beside the session that owns it", () => {
     props.busySessionIds = new Set();

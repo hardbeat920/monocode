@@ -21,6 +21,7 @@ import {
   Share,
   Settings,
   StickyNote,
+  Zap,
 } from "./icons";
 import {
   memo,
@@ -241,10 +242,12 @@ type Props = {
   onOpenInbox?: () => void;
   onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onOpenNotes?: () => void;
+  onOpenAutomations?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   notesActive?: boolean;
+  automationsActive?: boolean;
   notesEnabled?: boolean;
   onToggleProjectRail?: () => void;
   projectRailOpen?: boolean;
@@ -323,10 +326,12 @@ function SidebarComponent({
   onOpenInbox,
   onOpenInboxItem,
   onOpenNotes,
+  onOpenAutomations,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
   notesActive = false,
+  automationsActive = false,
   notesEnabled = true,
   onToggleProjectRail,
   projectRailOpen = true,
@@ -552,6 +557,7 @@ function SidebarComponent({
     !searchActive &&
     !inboxActive &&
     !notesActive &&
+    !automationsActive &&
     !settingsOpen &&
     inProject;
   const gitStatuses = useGitFileStatuses(gitRoot, open && tab === "files");
@@ -1229,9 +1235,11 @@ function SidebarComponent({
               onOpenInbox={onOpenInbox}
               onOpenNotificationSettings={onOpenNotificationSettings}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+              onOpenAutomations={onOpenAutomations}
               searchActive={searchActive}
               inboxActive={inboxActive}
               notesActive={notesActive}
+              automationsActive={automationsActive}
               inboxUnseen={inboxUnseen}
             />
           ) : null}
@@ -1709,6 +1717,8 @@ function SidebarComponent({
           notesEnabled={notesEnabled}
           onOpenNotes={onOpenNotes}
           notesActive={notesActive}
+          onOpenAutomations={onOpenAutomations}
+          automationsActive={automationsActive}
           onTogglePanel={onToggleProjectRail}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
@@ -1742,9 +1752,11 @@ function SidebarProjectPicker({
   onOpenInbox,
   onOpenNotificationSettings,
   onOpenNotes,
+  onOpenAutomations,
   searchActive = false,
   inboxActive = false,
   notesActive = false,
+  automationsActive = false,
   inboxUnseen = false,
 }: {
   cwd: string;
@@ -1757,9 +1769,11 @@ function SidebarProjectPicker({
   onOpenInbox?: () => void;
   onOpenNotificationSettings?: () => void;
   onOpenNotes?: () => void;
+  onOpenAutomations?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   notesActive?: boolean;
+  automationsActive?: boolean;
   inboxUnseen?: boolean;
 }) {
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
@@ -1821,6 +1835,15 @@ function SidebarProjectPicker({
         {onOpenNotes ? (
           <IconButton label="Notes" active={notesActive} onClick={onOpenNotes}>
             <StickyNote className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        ) : null}
+        {onOpenAutomations ? (
+          <IconButton
+            label="Automations"
+            active={automationsActive}
+            onClick={onOpenAutomations}
+          >
+            <Zap className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
       </div>
@@ -2579,6 +2602,16 @@ function SessionCard({
               </button>
             ) : null}
             {workItemBadge}
+            {session.automationId ? (
+              <span
+                data-automation-icon
+                title="Started by an automation"
+                aria-label="Started by an automation"
+                className="grid size-5 -mr-1 shrink-0 place-items-center text-amber-400"
+              >
+                <Zap className="size-3" strokeWidth={1.75} />
+              </span>
+            ) : null}
             {orchestration ? (
               <div
                 ref={orchestrationTooltipRootRef}

@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+mod automations;
 mod chat_background;
 mod checkpoint;
 mod control;
@@ -254,6 +255,14 @@ pub fn run() {
             reminders::reminder_take_open,
             reminders::reminder_register_window,
             reminders::reminder_open,
+            automations::automations_list,
+            automations::automations_upsert,
+            automations::automations_delete,
+            automations::automation_runs_list,
+            automations::automation_run_now,
+            automations::automations_claim_due,
+            automations::automations_claim_event,
+            automations::automation_run_update,
             external_editor::list_external_editors,
             external_editor::open_in_external_editor,
             fs::list_dir,

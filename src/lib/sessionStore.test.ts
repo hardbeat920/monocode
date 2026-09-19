@@ -206,6 +206,15 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("persists the automation that started a session", () => {
+    const session = newSession("codex", "/tmp/project");
+    session.blocks = [{ id: "u1", role: "user", text: "review PRs" }];
+    session.automationId = "automation-1";
+    expect(sanitizeSessionForPersist(session).automationId).toBe(
+      "automation-1",
+    );
+  });
+
   it("omits a path-like provider session id so upsert can still snapshot git", () => {
     const session = newSession("pi", "/tmp/project");
     session.providerSessionId = "/Users/me/.pi/agent/sessions/abc.jsonl";
@@ -478,6 +487,13 @@ describe("persistFingerprint", () => {
     expect(persistFingerprint({ ...session })).toBe(
       persistFingerprint(session),
     );
+  });
+
+  it("changes when an automation origin is stamped", () => {
+    const before = base();
+    expect(
+      persistFingerprint({ ...before, automationId: "automation-1" }),
+    ).not.toBe(persistFingerprint(before));
   });
 
   it("changes when a block in the middle is replaced", () => {
