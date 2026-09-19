@@ -5,6 +5,7 @@ import cursor from "../assets/providers/cursor.svg";
 import fx from "../assets/providers/fx.svg";
 import grok from "../assets/providers/grok.svg";
 import hermes from "../assets/providers/hermes.svg";
+import kimi from "../assets/providers/kimi.png";
 import omp from "../assets/providers/omp.svg";
 import opencode from "../assets/providers/opencode.svg";
 import pi from "../assets/providers/pi.svg";
@@ -20,6 +21,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   omp,
   fx,
   hermes,
+  kimi,
 };
 
 /** White marks that must follow `currentColor` so they stay visible in light mode. */

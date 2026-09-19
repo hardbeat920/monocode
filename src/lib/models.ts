@@ -181,6 +181,12 @@ export const MODELS: AgentModel[] = [
     name: "Configured model",
     nativeId: "",
   },
+  {
+    id: "kimi:kimi-code/kimi-for-coding",
+    harness: "kimi",
+    name: "K2.8 Preview",
+    nativeId: "kimi-code/kimi-for-coding",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -193,6 +199,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
   hermes: "hermes:default",
+  kimi: "kimi:kimi-code/kimi-for-coding",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -221,6 +228,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "omp",
   "fx",
   "hermes",
+  "kimi",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];

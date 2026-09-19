@@ -368,6 +368,18 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Kimi Code, not the legacy Python kimi-cli.
+#[tauri::command(async)]
+pub fn harness_resolve_kimi() -> Result<CursorBinary, String> {
+    resolve_kimi()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Kimi Code CLI not found. Install Kimi Code from https://moonshotai.github.io/kimi-code/ and run `kimi login`.".into()
+        })
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -620,25 +632,34 @@ fn apply_provider_account(
     Ok(())
 }
 
+/// A child that stops draining stdin can block `write_all` for minutes, so the
+/// write runs on the blocking pool — never on an async worker or the IPC path,
+/// where it would starve `harness_kill` and make the wedged child unrecoverable.
 #[tauri::command]
-pub fn harness_write(
-    host: State<HarnessHost>,
+pub async fn harness_write(
+    host: State<'_, HarnessHost>,
     session_id: String,
     line: String,
 ) -> Result<(), String> {
     let live = host
         .get(&session_id)
         .ok_or_else(|| "Harness process is not running".to_string())?;
-    let mut stdin = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
-    stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .and_then(|_| stdin.flush())
-        .map_err(|e| format!("Failed to write to harness: {e}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut stdin = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
+        stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush())
+            .map_err(|e| format!("Failed to write to harness: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Harness write task failed: {e}"))?
 }
 
-#[tauri::command]
-pub fn harness_kill(host: State<HarnessHost>, session_id: String) -> Result<(), String> {
+/// `async` dispatch keeps kill executable while a sibling `harness_write` is
+/// blocked on a wedged child's stdin.
+#[tauri::command(async)]
+pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
     host.stop_sse(&session_id);
     if let Some(live) = host.kill_session(&session_id) {
         terminate(live.pid);
@@ -842,6 +863,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_omp(),
         resolve_fx(),
         resolve_grok(),
+        resolve_kimi(),
     ]
     .into_iter()
     .flatten()
@@ -1183,6 +1205,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "kimi"
             | "pi"
             | "worker-server"
             | "app-server"
@@ -1630,6 +1653,66 @@ fn resolve_hermes() -> Option<PathBuf> {
     }
 
     first_binary(candidates)
+}
+
+fn resolve_kimi() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = dirs_home().map(PathBuf::from) {
+        candidates.push(home.join(".kimi-code/bin/kimi"));
+        candidates.push(home.join(".local/bin/kimi"));
+        candidates.push(home.join(".npm-global/bin/kimi"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/kimi"));
+    candidates.push(PathBuf::from("/usr/local/bin/kimi"));
+    if let Some(from_shell) = which_via_login_shell("kimi") {
+        candidates.push(from_shell);
+    }
+    first_binary_matching(candidates, is_kimi_agent)
+}
+
+fn is_kimi_agent(path: &Path) -> bool {
+    if !is_executable_file(path) || !binary_name_eq(path, "kimi") {
+        return false;
+    }
+    if path
+        .parent()
+        .and_then(Path::parent)
+        .is_some_and(|root| root.file_name().is_some_and(|name| name == ".kimi-code"))
+    {
+        return true;
+    }
+    let mut cmd = Command::new(path);
+    cmd.arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_gui_env(&mut cmd);
+    isolate_child(&mut cmd);
+    let Ok(child) = spawn_managed(&mut cmd) else {
+        return false;
+    };
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(output)) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .to_ascii_lowercase();
+            // The old Python CLI also had ACP: require the new product identity.
+            text.contains("kimi-code") && text.split_whitespace().any(|word| word == "acp")
+        }
+        _ => {
+            terminate(pid);
+            false
+        }
+    }
 }
 
 fn is_pi_coding_agent(path: &Path) -> bool {
@@ -2348,6 +2431,36 @@ mod tests {
     }
 
     #[test]
+    fn kill_completes_while_a_stdin_write_is_blocked() {
+        use std::io::Write;
+        let host = HarnessHost::new();
+        // `sleep` never drains stdin: filling the pipe wedges the writer while
+        // it holds the stdin mutex — the worst case recovery must survive.
+        let (live, mut child) = live_child();
+        host.lock_inner()
+            .children
+            .insert("wedged".to_string(), live.clone());
+        let writer = thread::spawn(move || {
+            let payload = vec![b'x'; 8 * 1024 * 1024];
+            let mut stdin = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = stdin.write_all(&payload);
+        });
+        thread::sleep(Duration::from_millis(200));
+        // Kill needs neither the stdin mutex nor the writer's thread.
+        let live = host
+            .kill_session("wedged")
+            .expect("wedged child registered");
+        terminate(live.pid);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !writer.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(writer.is_finished(), "blocked write survived the kill");
+        let _ = writer.join();
+        let _ = child.wait();
+    }
+
+    #[test]
     fn terminate_escalates_to_sigkill() {
         let mut child = spawn_group("trap '' TERM; while true; do sleep 1; done");
         let pid = child.id();
@@ -2696,6 +2809,34 @@ mod tests {
 
         assert!(!is_grok_agent(&dir.join("missing")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn kimi_resolver_rejects_legacy_cli_and_requires_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("monocode-kimi-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".kimi-code/bin")).unwrap();
+        let installed = dir.join(".kimi-code/bin/kimi");
+        std::fs::write(&installed, b"#!/bin/sh\nexit 0\n").unwrap();
+        assert!(!is_kimi_agent(&installed));
+        std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_kimi_agent(&installed));
+
+        let candidate = dir.join("kimi");
+        std::fs::write(&candidate, b"#!/bin/sh\necho 'kimi-code acp'\n").unwrap();
+        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_kimi_agent(&candidate));
+        std::fs::write(&candidate, b"#!/bin/sh\necho 'legacy Python CLI acp'\n").unwrap();
+        assert!(!is_kimi_agent(&candidate));
+        let legacy = dir.join("kimi-cli");
+        std::fs::write(&legacy, b"#!/bin/sh\necho 'kimi-code acp'\n").unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!is_kimi_agent(&legacy));
+        assert!(looks_like_harness_argv(
+            "/home/user/.kimi-code/bin/kimi acp"
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

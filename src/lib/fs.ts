@@ -87,6 +87,7 @@ export type DiscoveredSkill = {
     | "fx"
     | "grok"
     | "hermes"
+    | "kimi"
     | "monocode";
 };
 

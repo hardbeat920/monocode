@@ -138,4 +138,37 @@ describe("child bridge", () => {
     expect(onExit).toHaveBeenCalledWith(1);
     release();
   });
+
+  it("never routes a retired generation's stdout or exit to its replacement", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    const oldLines: string[] = [];
+    const oldExit = vi.fn();
+    child.watchChild("thread#0", (line) => oldLines.push(line), oldExit);
+    emit("harness-stdout", { sessionId: "thread#0", line: "gen0" });
+    expect(oldLines).toEqual(["gen0"]);
+
+    // Retire the generation, then register its replacement under a new key.
+    child.unwatchChild("thread#0");
+    const newLines: string[] = [];
+    const newExit = vi.fn();
+    child.watchChild("thread#1", (line) => newLines.push(line), newExit);
+
+    // Late output from the killed process arrives under its own key and is
+    // buffered there — it can never reach the replacement's handlers.
+    emit("harness-stdout", { sessionId: "thread#0", line: "gen0-late" });
+    emit("harness-exit", { sessionId: "thread#0", code: 1, pid: 42 });
+    expect(oldLines).toEqual(["gen0"]);
+    expect(oldExit).not.toHaveBeenCalled();
+    expect(newLines).toEqual([]);
+    expect(newExit).not.toHaveBeenCalled();
+
+    // The replacement still receives its own traffic.
+    emit("harness-stdout", { sessionId: "thread#1", line: "gen1" });
+    expect(newLines).toEqual(["gen1"]);
+    release();
+  });
 });

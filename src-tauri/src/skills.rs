@@ -151,6 +151,24 @@ pub(crate) fn list_skills_from(
     if let Some(home) = home {
         add_root(home.join(".pi/agent/skills"), "user", "pi");
         add_root(home.join(".omp/agent/skills"), "user", "omp");
+    }
+    // New-provider roots come after every pre-existing root so an
+    // identically named skill can never shadow an established provider.
+    // Current Kimi Code uses .kimi-code, not the legacy .kimi directory.
+    let kimi_project = project.join(".kimi-code/skills");
+    if kimi_project.is_dir() {
+        add_root(kimi_project, "project", "kimi");
+    }
+    let kimi_home = std::env::var_os("KIMI_CODE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| home.join(".kimi-code")));
+    if let Some(root) = kimi_home.map(|root| root.join("skills")) {
+        if root.is_dir() {
+            add_root(root, "user", "kimi");
+        }
+    }
+    if let Some(home) = home {
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(
                 &mut by_name,
@@ -746,6 +764,61 @@ mod tests {
         let user_skill = skills.iter().find(|s| s.name == "hermes-global").unwrap();
         assert_eq!(user_skill.source, "hermes");
         assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_kimi_project_and_user_skills() {
+        let project = tmp("proj-kimi");
+        let home = tmp("home-kimi");
+        write_skill(
+            &project.0.join(".kimi-code/skills"),
+            "kimi-review",
+            "---\nname: kimi-review\ndescription: Kimi project skill\n---\n",
+        );
+        // Production prefers $KIMI_CODE_HOME over ~/.kimi-code. Write the user
+        // skill into whichever root this environment resolves — but only when
+        // that root is inside the fixture, never into a real Kimi config.
+        let kimi_home = std::env::var_os("KIMI_CODE_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.0.join(".kimi-code"));
+        let in_fixture = kimi_home.starts_with(&home.0);
+        if in_fixture {
+            write_skill(
+                &kimi_home.join("skills"),
+                "kimi-user",
+                "---\nname: kimi-user\ndescription: Kimi user skill\n---\n",
+            );
+        }
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let kimi = skills.iter().find(|s| s.name == "kimi-review").unwrap();
+        assert_eq!(kimi.source, "kimi");
+        assert_eq!(kimi.scope, "project");
+        if in_fixture {
+            let user = skills.iter().find(|s| s.name == "kimi-user").unwrap();
+            assert_eq!(user.source, "kimi");
+            assert_eq!(user.scope, "user");
+        }
+    }
+
+    #[test]
+    fn kimi_skills_do_not_shadow_existing_providers() {
+        let project = tmp("proj-kimi-shadow");
+        let home = tmp("home-kimi-shadow");
+        write_skill(
+            &home.0.join(".pi/agent/skills"),
+            "shared-name",
+            "---\nname: shared-name\ndescription: Pi agent skill\n---\n",
+        );
+        write_skill(
+            &project.0.join(".kimi-code/skills"),
+            "shared-name",
+            "---\nname: shared-name\ndescription: Kimi project skill\n---\n",
+        );
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let skill = skills.iter().find(|s| s.name == "shared-name").unwrap();
+        assert_eq!(skill.description, "Pi agent skill");
+        assert_eq!(skill.source, "pi");
     }
 
     #[test]

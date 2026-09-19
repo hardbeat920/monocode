@@ -43,4 +43,43 @@ describe("JsonRpcClient", () => {
 
     await expect(client.request("initialize")).rejects.toThrow("pipe closed");
   });
+
+  it("bounds a blocked write instead of outliving the request deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      transport.onWrite = () => new Promise<void>(() => undefined);
+      const client = new JsonRpcClient("wedged", {});
+      const outcome = client.request("initialize", undefined, 60_000).then(
+        () => "resolved",
+        (e: Error) => e.message,
+      );
+      // The 15s write bound fires long before the request's own 60s deadline.
+      await vi.advanceTimersByTimeAsync(16_000);
+      await expect(outcome).resolves.toMatch(/timed out/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a slow request deadline report as unhandled while the write is pending", async () => {
+    vi.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      transport.onWrite = () => new Promise<void>(() => undefined);
+      const client = new JsonRpcClient("quiet", {});
+      const request = client.request("initialize", undefined, 5_000);
+      const settled = request.catch((e: Error) => e.message);
+      // At 5s the request's own deadline fires while the write stays blocked;
+      // the outer promise only settles once the write bound returns it at 15s.
+      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(settled).resolves.toMatch(/timed out/);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      vi.useRealTimers();
+    }
+  });
 });

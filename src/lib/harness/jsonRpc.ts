@@ -16,6 +16,10 @@ export type JsonRpcMessage = {
   error?: { code?: number; message?: string; data?: unknown };
 };
 
+// A child wedged hard enough to block stdin writes is unrecoverable; the
+// write deadline fails the request so the caller can recycle the generation.
+const WRITE_TIMEOUT_MS = 15_000;
+
 export type JsonRpcHandlers = {
   onNotification?: (method: string, params: unknown) => void;
   onRequest?: (
@@ -115,6 +119,10 @@ export class JsonRpcClient {
         },
       });
     });
+    // The deadline may settle `response` while we are still suspended in
+    // send() below; mark it handled so that window can't surface as an
+    // unhandled rejection. The promise returned to the caller still settles.
+    response.catch(() => undefined);
     try {
       await this.send({
         ...(this.includeJsonrpc ? { jsonrpc: "2.0" } : {}),
@@ -163,7 +171,24 @@ export class JsonRpcClient {
   }
 
   private async send(payload: object): Promise<void> {
-    await writeChild(this.sessionId, JSON.stringify(payload));
+    // Bound the write: a child that stops draining stdin must not let a
+    // blocked harness_write outlive the request's own deadline (or wedge a
+    // cancellation waiting on the session/cancel notify).
+    const line = JSON.stringify(payload);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        writeChild(this.sessionId, line),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("harness write timed out")),
+            WRITE_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private handle(msg: JsonRpcMessage) {
