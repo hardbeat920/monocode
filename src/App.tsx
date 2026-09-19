@@ -1140,6 +1140,11 @@ export default function App({
 
       let currentTabs = tabsRef.current;
       let currentSessions = sessionsRef.current;
+      // Sessions mounted before this request. The fallback branch appends a
+      // new session below, and openAddToChatSessionPane must not see it:
+      // its mapped-leaf check would find the fallback tab's own pane and
+      // reject the very split this flow exists to perform.
+      const preFallbackSessions = currentSessions;
       let tab =
         currentTabs.find((entry) => entry.id === activeTabIdRef.current) ??
         currentTabs[0];
@@ -1189,7 +1194,7 @@ export default function App({
       };
       const openedTab = openAddToChatSessionPane({
         tab,
-        sessions: currentSessions,
+        sessions: preFallbackSessions,
         sessionId: session.id,
       });
       // A mounted session pane owns the normal add-to-chat path.
