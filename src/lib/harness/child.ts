@@ -319,6 +319,10 @@ export function resolveHermesBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_hermes");
 }
 
+export function resolveAntigravityBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_antigravity");
+}
+
 export function freeHarnessPort(): Promise<number> {
   return invoke("harness_free_port");
 }
