@@ -3,6 +3,9 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
+  codexAuthRecoveryMessage,
+  isCodexAuthRefreshError,
+  isKnownAuthRefreshMessage,
   isRecoverableThreadResumeError,
   mapApprovalRequest,
   mapCodexNotification,
@@ -636,6 +639,70 @@ describe("mapCodexNotification", () => {
     expect(mapped.events).toContainEqual({
       type: "session.error",
       message: "Codex turn failed.",
+    });
+  });
+
+  it.each([
+    "Your access token could not be refreshed. Please log out and sign in again.",
+    "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.",
+    "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+    "Error loading configuration: Your authentication session could not be refreshed automatically.",
+  ])("maps auth refresh failures to recovery guidance: %s", (message) => {
+    expect(isCodexAuthRefreshError(message)).toBe(true);
+    const mapped = mapCodexNotification("error", {
+      error: { message },
+      willRetry: true,
+    });
+    expect(mapped.events).toHaveLength(1);
+    expect(mapped.events[0].type).toBe("session.error");
+    const text =
+      mapped.events[0].type === "session.error"
+        ? mapped.events[0].message
+        : "";
+    expect(text).toContain("codex login");
+    expect(text).toContain("codex app-server");
+  });
+
+  it("does not mistake quota errors for auth refresh failures", () => {
+    expect(isCodexAuthRefreshError("quota exceeded")).toBe(false);
+    expect(isCodexAuthRefreshError("")).toBe(false);
+  });
+
+  it("rewrites failed turns carrying auth errors", () => {
+    const message =
+      "Your access token could not be refreshed. Please log out and sign in again.";
+    const mapped = mapCodexNotification("turn/completed", {
+      turn: { id: "turn_1", status: "failed", error: { message } },
+    });
+    expect(mapped.events).toContainEqual({
+      type: "session.error",
+      message: codexAuthRecoveryMessage(message),
+    });
+  });
+
+  it("rewrites completed agent messages carrying auth errors", () => {
+    const message =
+      "Your access token could not be refreshed. Please log out and sign in again.";
+    const mapped = mapCodexNotification("item/completed", {
+      item: { id: "msg_1", type: "agentMessage", text: message },
+    });
+    expect(mapped.events).toHaveLength(1);
+    expect(mapped.events[0].type).toBe("session.error");
+  });
+
+  it("leaves normal agent text mentioning refresh alone", () => {
+    const message =
+      "I hit 'your access token could not be refreshed' in the logs, so I retried the request and it worked.";
+    expect(isKnownAuthRefreshMessage(message)).toBe(false);
+    const mapped = mapCodexNotification("item/completed", {
+      item: { id: "msg_1", type: "agentMessage", text: message },
+    });
+    expect(
+      mapped.events.some((event) => event.type === "session.error"),
+    ).toBe(false);
+    expect(mapped.events).toContainEqual({
+      type: "message.delta",
+      text: message,
     });
   });
 
