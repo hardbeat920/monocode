@@ -126,6 +126,7 @@ export type GitChangedFile = {
 
 export type GitDiffIndex = {
   branch: string | null;
+  head: string | null;
   files: GitChangedFile[];
   additions: number;
   deletions: number;

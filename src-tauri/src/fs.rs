@@ -520,6 +520,7 @@ pub struct GitChangedFile {
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffIndex {
     pub branch: Option<String>,
+    pub head: Option<String>,
     pub files: Vec<GitChangedFile>,
     pub additions: i64,
     pub deletions: i64,
@@ -1332,6 +1333,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
     };
     GitDiffIndex {
         branch: git_branch(root),
+        head: git_stdout(root, &["rev-parse", "HEAD"]),
         files: out,
         additions,
         deletions,
@@ -5820,7 +5822,9 @@ mod tests {
         std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&dir.0, "a.txt").unwrap();
         git_commit_for(&dir.0, "update a").unwrap();
-        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        let index = git_diff_index_for(&dir.0);
+        assert!(index.files.is_empty());
+        assert_eq!(index.head, git_stdout(&dir.0, &["rev-parse", "HEAD"]));
         assert_eq!(
             git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
             Some("update a")

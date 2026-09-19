@@ -250,7 +250,8 @@ function ChangedFiles({
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [amend, setAmend] = useState(false);
+  const [amendTarget, setAmendTarget] = useState<string | null>(null);
+  const amend = amendTarget !== null;
   const [menuOpen, setMenuOpen] = useState(false);
   const [stagedExpanded, setStagedExpanded] = useState(stagedOpen);
   const [changesExpanded, setChangesExpanded] = useState(changesOpen);
@@ -289,6 +290,13 @@ function ChangedFiles({
     canCommit && hasRemote && !diverged && (!amend || !index?.headPushed);
   const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
   const canEditMessage = (staged.length > 0 || amend) && !busy;
+  const head = index?.head ?? null;
+
+  useEffect(() => {
+    if (amendTarget === null || amendTarget === head) return;
+    setAmendTarget(null);
+    setMessage("");
+  }, [amendTarget, head]);
   const canOpenMenu = !!index?.branch && !busy;
 
   useEffect(() => {
@@ -414,13 +422,13 @@ function ChangedFiles({
   const toggleAmend = async () => {
     setMenuOpen(false);
     if (amend) {
-      setAmend(false);
+      setAmendTarget(null);
       return;
     }
     try {
-      const head = await gitHeadMessage(cwd);
-      if (!message.trim()) setMessage(head);
-      setAmend(true);
+      const headMessage = await gitHeadMessage(cwd);
+      if (!message.trim()) setMessage(headMessage);
+      setAmendTarget(head);
     } catch (error) {
       fail(error);
     }
@@ -452,7 +460,7 @@ function ChangedFiles({
         recordPrActivity();
       }
       setMessage("");
-      setAmend(false);
+      setAmendTarget(null);
       onMutated();
       if (createPr) {
         await openCreatedPr();
@@ -1481,6 +1489,7 @@ function sameIndex(prev: GitDiffIndex | null, next: GitDiffIndex): boolean {
   if (!prev) return false;
   if (
     prev.branch !== next.branch ||
+    prev.head !== next.head ||
     prev.additions !== next.additions ||
     prev.deletions !== next.deletions ||
     prev.files.length !== next.files.length ||
