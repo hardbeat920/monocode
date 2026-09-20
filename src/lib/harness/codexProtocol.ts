@@ -218,6 +218,70 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
   ].some((snippet) => message.includes(snippet));
 }
 
+/**
+ * Verbatim messages Codex emits for a dead refresh token. Plain agent text is
+ * only rewritten when it matches one of these exactly: a normal answer that
+ * merely mentions the phrase must stay a normal response.
+ */
+const KNOWN_AUTH_REFRESH_MESSAGES = new Set(
+  [
+    "Your access token could not be refreshed. Please log out and sign in again.",
+    "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.",
+    "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+    "Error loading configuration: Your authentication session could not be refreshed automatically.",
+  ].map(normalizeAuthMessage),
+);
+
+function normalizeAuthMessage(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Exact-match gate for plain agent text; structured errors use the broader check below. */
+export function isKnownAuthRefreshMessage(text: unknown): boolean {
+  if (typeof text !== "string") return false;
+  return KNOWN_AUTH_REFRESH_MESSAGES.has(normalizeAuthMessage(text));
+}
+
+/**
+ * Codex refresh tokens are effectively single-use: when several long-lived
+ * app-server processes share ~/.codex/auth.json, one wins the refresh and the
+ * others keep failing with a variant of "access token could not be refreshed".
+ * Retrying is pointless then; the user has to restart stale processes and sign
+ * in again. Matches the known upstream shapes (openai/codex #9634).
+ */
+export function isCodexAuthRefreshError(error: unknown): boolean {
+  const message = (
+    error instanceof Error ? error.message : String(error ?? "")
+  ).toLowerCase();
+  if (!message) return false;
+  return (
+    message.includes("access token could not be refreshed") ||
+    message.includes("authentication session could not be refreshed") ||
+    (message.includes("refresh token") &&
+      (message.includes("already used") ||
+        message.includes("already been used") ||
+        message.includes("invalid") ||
+        message.includes("expired") ||
+        message.includes("revoked"))) ||
+    (message.includes("could not be refreshed") &&
+      (message.includes("logged out") || message.includes("sign in again")))
+  );
+}
+
+/** Actionable recovery text shown instead of the raw Codex auth error. */
+export function codexAuthRecoveryMessage(original: string): string {
+  const first = original.trim().split("\n")[0] ?? original.trim();
+  return [
+    first,
+    "",
+    "One possible cause is another Codex process refreshing the shared login while this one still holds the old token. If so, signing in alone may not be enough while stale processes keep running.",
+    "1. Quit MonoCode sessions, the Codex app, and editor extensions using Codex.",
+    "2. Stop leftover Codex processes: `pkill -f \"codex app-server\"` on macOS/Linux, or end them in Task Manager on Windows.",
+    "3. Run `codex logout`, then `codex login`, then `codex login status`.",
+    "4. Start only one client first and send a small read-only prompt to verify.",
+  ].join("\n");
+}
+
 export function asRecord(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -391,10 +455,17 @@ export function mapCodexNotification(
       stringField(rec, "message") ??
       "Codex error";
     const willRetry = rec.willRetry === true;
-    if (willRetry) {
+    if (willRetry && !isCodexAuthRefreshError(message)) {
       // Codex owns retrying the request; a status event would persist a row
       // for every attempt and interrupt any streaming transcript block.
       return { events: [], diagnostic: message };
+    }
+    if (isCodexAuthRefreshError(message)) {
+      return {
+        events: [
+          { type: "session.error", message: codexAuthRecoveryMessage(message) },
+        ],
+      };
     }
     return { events: [{ type: "session.error", message }] };
   }
@@ -498,7 +569,10 @@ function mapTurnTerminal(
     { type: "reasoning.completed" },
   ];
   if (status === "failed" && error) {
-    events.push({ type: "session.error", message: error });
+    const message = isCodexAuthRefreshError(error)
+      ? codexAuthRecoveryMessage(error)
+      : error;
+    events.push({ type: "session.error", message });
   } else if (status === "failed") {
     events.push({ type: "session.error", message: "Codex turn failed." });
   }
@@ -544,6 +618,19 @@ function mapItemLifecycle(
     // must not be treated as turn completion.
     if (completed) {
       const text = streamTextDelta(item.text);
+      // Codex sometimes reports an auth refresh failure as a plain completed
+      // agent message instead of a turn error. Rewrite only verbatim known
+      // messages; anything else stays a normal answer.
+      if (text && isKnownAuthRefreshMessage(text)) {
+        return {
+          events: [
+            {
+              type: "session.error",
+              message: codexAuthRecoveryMessage(text),
+            },
+          ],
+        };
+      }
       const events: HarnessEvent[] = [];
       if (text) {
         events.push(
