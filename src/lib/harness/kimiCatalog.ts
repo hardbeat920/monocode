@@ -1,0 +1,78 @@
+import { homeDir } from "../fs";
+import { setHarnessModels } from "../models";
+import { AcpClient } from "./acp";
+import {
+  killChild,
+  resolveKimiBinary,
+  spawnChild,
+  unwatchChild,
+  watchChild,
+} from "./child";
+import { modelsFromSessionNew } from "./kimiProtocol";
+
+const PROBE_ID = "monocode-kimi-probe";
+const REQUEST_TIMEOUT_MS = 12_000;
+let inflight: Promise<void> | null = null;
+
+export function refreshKimiCatalog(): Promise<void> {
+  if (inflight) return inflight;
+  inflight = discoverModels()
+    .then((models) => {
+      if (models.length > 0) setHarnessModels("kimi", models);
+    })
+    .catch((error: unknown) => {
+      // Preserve the last live catalog (or startup seeds) when offline/logged out.
+      console.debug("[monocode] kimi catalog", error);
+    })
+    .finally(() => {
+      inflight = null;
+    });
+  return inflight;
+}
+
+async function discoverModels() {
+  const { path } = await resolveKimiBinary();
+  const cwd = await homeDir();
+  const acp = new AcpClient(PROBE_ID, {
+    onRequest: (id, method) => {
+      const response = method === "session/request_permission"
+        ? acp.respond(id, { outcome: { outcome: "cancelled" } })
+        : acp.respondError(id, { code: -32601, message: `Method not found: ${method}` });
+      void response.catch(() => undefined);
+    },
+  });
+  watchChild(
+    PROBE_ID,
+    (line) => acp.pushLine(line),
+    () => acp.close(new Error("Kimi Code probe exited")),
+  );
+  try {
+    await spawnChild(PROBE_ID, path, ["acp"], cwd);
+    await acp.request(
+      "initialize",
+      {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+          // Without this claim a compliant agent may omit configOptions from
+          // session/new, leaving the catalog with nothing to enumerate.
+          session: { configOptions: { boolean: {} } },
+        },
+        clientInfo: { name: "monocode", version: "0.1.0" },
+      },
+      REQUEST_TIMEOUT_MS,
+    );
+    // Authentication stays in the provider's Terminal UI; never start OAuth here.
+    const created = await acp.request(
+      "session/new",
+      { cwd, mcpServers: [] },
+      REQUEST_TIMEOUT_MS,
+    );
+    return modelsFromSessionNew(created);
+  } finally {
+    acp.close();
+    unwatchChild(PROBE_ID);
+    await killChild(PROBE_ID).catch(() => undefined);
+  }
+}
