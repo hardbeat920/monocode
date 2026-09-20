@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
@@ -90,6 +91,8 @@ type Props = {
   onCloseMany: (ids: string[], fallbackId: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
   onPlaceOnPane?: (tabId: string, targetId: string, edge: PaneEdge) => void;
+  onOpenBrowser?: () => void;
+  browserOpen?: boolean;
   onGoToFile?: () => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
@@ -440,22 +443,34 @@ export function IconButton({
         if (disabled) return;
         onClick?.();
       }}
-      onContextMenu={onOpenContextMenu ? (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (disabled) return;
-        event.currentTarget.focus();
-        onOpenContextMenu(event.clientX, event.clientY);
-      } : undefined}
-      onKeyDown={onOpenContextMenu ? (event) => {
-        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (disabled) return;
-        event.currentTarget.focus();
-        const rect = event.currentTarget.getBoundingClientRect();
-        onOpenContextMenu(rect.left, rect.bottom);
-      } : undefined}
+      onContextMenu={
+        onOpenContextMenu
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (disabled) return;
+              event.currentTarget.focus();
+              onOpenContextMenu(event.clientX, event.clientY);
+            }
+          : undefined
+      }
+      onKeyDown={
+        onOpenContextMenu
+          ? (event) => {
+              if (
+                event.key !== "ContextMenu" &&
+                !(event.shiftKey && event.key === "F10")
+              )
+                return;
+              event.preventDefault();
+              event.stopPropagation();
+              if (disabled) return;
+              event.currentTarget.focus();
+              const rect = event.currentTarget.getBoundingClientRect();
+              onOpenContextMenu(rect.left, rect.bottom);
+            }
+          : undefined
+      }
       className={`grid size-6.5 place-items-center rounded-md ${
         disabled
           ? "text-content/25"
@@ -583,6 +598,8 @@ function TitleBarComponent({
   onReorder,
   onPlaceOnPane,
   onGoToFile,
+  onOpenBrowser,
+  browserOpen = false,
   recents = [],
   onSelectProject,
 }: Props) {
@@ -770,40 +787,52 @@ function TitleBarComponent({
       railClosed &&
       Boolean(onOpenInbox || onOpenNotes || onOpenSettings)) ||
     (railClosed && !projectless);
-  const trailingControls = showTrailingActions || !IS_MAC ? (
-    <div className="flex h-full shrink-0 items-stretch">
-      {showTrailingActions ? (
-        <div className="flex items-center gap-0.5 px-2">
-          {projectless && railClosed && onOpenInbox ? (
-            <IconButton label="Inbox" onClick={onOpenInbox}>
-              <Inbox className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
-          ) : null}
-          {projectless && railClosed && onOpenNotes ? (
-            <IconButton label="Notes" onClick={onOpenNotes}>
-              <StickyNote className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
-          ) : null}
-          {railClosed && !projectless ? (
-            <>
-              <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
-                <Search className="size-3.5" strokeWidth={1.75} />
+  const trailingControls =
+    showTrailingActions || onOpenBrowser || !IS_MAC ? (
+      <div className="flex h-full shrink-0 items-stretch">
+        {showTrailingActions ? (
+          <div className="flex items-center gap-0.5 px-2">
+            {projectless && railClosed && onOpenInbox ? (
+              <IconButton label="Inbox" onClick={onOpenInbox}>
+                <Inbox className="size-3.5" strokeWidth={1.75} />
               </IconButton>
-              <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
-                <Plus className="size-3.5" strokeWidth={1.75} />
+            ) : null}
+            {projectless && railClosed && onOpenNotes ? (
+              <IconButton label="Notes" onClick={onOpenNotes}>
+                <StickyNote className="size-3.5" strokeWidth={1.75} />
               </IconButton>
-            </>
-          ) : null}
-          {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
-            <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
-              <Settings className="size-3.5" strokeWidth={1.75} />
+            ) : null}
+            {railClosed && !projectless ? (
+              <>
+                <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
+                  <Search className="size-3.5" strokeWidth={1.75} />
+                </IconButton>
+                <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+                  <Plus className="size-3.5" strokeWidth={1.75} />
+                </IconButton>
+              </>
+            ) : null}
+            {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
+              <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
+                <Settings className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+            ) : null}
+          </div>
+        ) : null}
+        {onOpenBrowser && (
+          <div className="flex items-center pr-2 pl-0.5">
+            <IconButton
+              label={`${browserOpen ? "Close" : "Open"} browser split (${MOD}⇧B)`}
+              active={browserOpen}
+              onClick={onOpenBrowser}
+            >
+              <AppWindow className="size-3.5" strokeWidth={1.75} />
             </IconButton>
-          ) : null}
-        </div>
-      ) : null}
-      {!IS_MAC ? <WindowControls /> : null}
-    </div>
-  ) : null;
+          </div>
+        )}
+        {!IS_MAC ? <WindowControls /> : null}
+      </div>
+    ) : null;
 
   // "deep" drags from anywhere in the subtree. The bare attribute only drags
   // on a direct hit, which left every label and spacer dead. Tauri still

@@ -40,7 +40,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::NSString;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Manager, Window, WindowEvent};
 
 /// Must match the HTML title bar (`h-10` = 40px).
 const TAB_BAR_HEIGHT: f64 = 40.0;
@@ -71,7 +71,7 @@ unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 
-pub fn install(window: &WebviewWindow) {
+pub fn install(window: &Window) {
     // Opaque for the dock bounce so the first frames are a solid field,
     // not a frosted desktop. Glass turns on after the first UI paint.
     prepare_launch(window);
@@ -95,7 +95,7 @@ pub fn install(window: &WebviewWindow) {
 
 /// Slack-style red count on the Dock icon. `count` is this window's pending
 /// approvals; the tile shows the sum across windows.
-pub fn set_window_badge(window: &WebviewWindow, count: u32) {
+pub fn set_window_badge(window: &Window, count: u32) {
     let label = window.label().to_string();
     let apply = move || paint_window_badge(&label, count);
     if MainThreadMarker::new().is_some() {
@@ -145,7 +145,7 @@ fn paint_window_badge(label: &str, count: u32) {
     }
 }
 
-pub fn set_visible(window: &WebviewWindow, visible: bool) {
+pub fn set_visible(window: &Window, visible: bool) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
@@ -156,7 +156,7 @@ pub fn set_visible(window: &WebviewWindow, visible: bool) {
     }
 }
 
-pub fn set_background_blur_radius(window: &WebviewWindow, radius: u8) {
+pub fn set_background_blur_radius(window: &Window, radius: u8) {
     let radius = radius.clamp(BLUR_MIN, BLUR_MAX);
     BLUR_RADIUS.store(radius, Ordering::Relaxed);
     if glass_enabled(window) {
@@ -168,14 +168,14 @@ fn glass_windows() -> &'static Mutex<HashSet<String>> {
     GLASS_WINDOWS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn glass_enabled(window: &WebviewWindow) -> bool {
+fn glass_enabled(window: &Window) -> bool {
     glass_windows()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
         .contains(window.label())
 }
 
-fn set_glass_enabled(window: &WebviewWindow, enabled: bool) {
+fn set_glass_enabled(window: &Window, enabled: bool) {
     let mut windows = glass_windows()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
@@ -187,7 +187,7 @@ fn set_glass_enabled(window: &WebviewWindow, enabled: bool) {
 }
 
 /// Solid field behind the dock bounce. Same colour as the HTML sheet.
-fn prepare_launch(window: &WebviewWindow) {
+fn prepare_launch(window: &Window) {
     set_launch_background(window, 23, 23, 23);
     let Some(ns_window) = ns_window(window) else {
         return;
@@ -197,7 +197,7 @@ fn prepare_launch(window: &WebviewWindow) {
     ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
 }
 
-fn set_launch_background(window: &WebviewWindow, r: u8, g: u8, b: u8) {
+fn set_launch_background(window: &Window, r: u8, g: u8, b: u8) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
@@ -212,20 +212,20 @@ fn set_launch_background(window: &WebviewWindow, r: u8, g: u8, b: u8) {
 }
 
 /// Turn on desktop blur after the first UI paint.
-pub fn enable_glass(window: &WebviewWindow) {
+pub fn enable_glass(window: &Window) {
     set_glass_enabled(window, true);
     prepare_glass(window);
     apply_blur(window, BLUR_RADIUS.load(Ordering::Relaxed));
 }
 
 /// Light mode stays opaque because pale desktop content makes translucent UI illegible.
-pub fn disable_glass(window: &WebviewWindow) {
+pub fn disable_glass(window: &Window) {
     set_glass_enabled(window, false);
     apply_blur(window, 0);
     set_launch_background(window, 247, 247, 247);
 }
 
-fn prepare_glass(window: &WebviewWindow) {
+fn prepare_glass(window: &Window) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
@@ -278,7 +278,7 @@ fn set_glass_backing(window: &NSWindow, enabled: bool) {
     content.addSubview_positioned_relativeTo(&backing, NSWindowOrderingMode::Below, None);
 }
 
-fn apply_blur(window: &WebviewWindow, radius: u8) {
+fn apply_blur(window: &Window, radius: u8) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
@@ -297,7 +297,7 @@ fn apply_blur(window: &WebviewWindow, radius: u8) {
     }
 }
 
-fn pin(window: &WebviewWindow) -> bool {
+fn pin(window: &Window) -> bool {
     let Some(ns_window) = ns_window(window) else {
         return PINNED.load(Ordering::Relaxed);
     };
@@ -310,14 +310,14 @@ fn pin(window: &WebviewWindow) -> bool {
     true
 }
 
-fn stretch_titlebar(window: &WebviewWindow) {
+fn stretch_titlebar(window: &Window) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
     unsafe { stretch_ns_window(&ns_window) }
 }
 
-pub(crate) fn ns_window(window: &WebviewWindow) -> Option<objc2::rc::Retained<NSWindow>> {
+pub(crate) fn ns_window(window: &Window) -> Option<objc2::rc::Retained<NSWindow>> {
     let Ok(handle) = window.window_handle() else {
         return None;
     };

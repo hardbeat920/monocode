@@ -45,6 +45,8 @@ import {
 } from "react";
 import { Sidebar } from "./chrome/Sidebar";
 import { ApprovalToasts } from "./chrome/ApprovalToasts";
+import { BrowserPane, useBrowserOpen } from "./chrome/BrowserPane";
+import { BrowserPrompt } from "./chrome/BrowserPrompt";
 import { WhatsNewDialog } from "./chrome/WhatsNewDialog";
 import { ProviderSignInDialog } from "./chrome/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./chrome/TitleBar";
@@ -8235,6 +8237,14 @@ export default function App({
     };
   }, [run]);
 
+  const [browserOpen, setBrowserOpen] = useBrowserOpen(() => {
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
+    setSettingsOpen(false);
+  });
+
   const dockGridRef = useRef<HTMLDivElement>(null);
   const dockDragSize = useRef<number | null>(null);
   const paintDockSize = useCallback((size: number) => {
@@ -8475,6 +8485,8 @@ export default function App({
                 />
               ) : null}
               <TitleBar
+                onOpenBrowser={() => setBrowserOpen(!browserOpen)}
+                browserOpen={browserOpen}
                 tabs={titleTabs}
                 activeId={activeTabId}
                 cwd={sidebarCwd}
@@ -8594,6 +8606,16 @@ export default function App({
                         </div>
                       ))}
                     </div>
+                    <BrowserPane
+                      open={browserOpen}
+                      visible={
+                        !searchViewOpen &&
+                        !settingsOpen &&
+                        !inboxViewOpen &&
+                        !notesViewOpen &&
+                        !automationsViewOpen
+                      }
+                    />
                   </div>
                 </div>
                 {[...linkedWorkItemPanels.values()].map((panel) => (
@@ -8776,6 +8798,7 @@ export default function App({
               }}
             />
           )}
+          <BrowserPrompt />
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={

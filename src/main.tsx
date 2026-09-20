@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App";
+import { browserRequest } from "./lib/embeddedBrowser";
 import { activateWindowAppearance, initAppearance } from "./lib/appearance";
 import { initSounds } from "./lib/sounds";
 import {
@@ -17,6 +18,9 @@ import "./index.css";
 
 initAppearance();
 initSounds();
+
+// Reloading the app document does not destroy its native browser child.
+void browserRequest({ action: "close" }).catch(() => undefined);
 
 function dismissBootSplash() {
   const splash = document.getElementById("boot-splash");
