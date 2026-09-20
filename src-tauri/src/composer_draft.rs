@@ -7,6 +7,9 @@ use tauri::State;
 /// anything beyond this is more likely an accidental paste than intent.
 const DRAFT_MAX: usize = 100_000;
 
+/// Create the `composer_drafts` table if it does not exist yet. The draft row
+/// is owned by its session: the primary key is the session id and the foreign
+/// key cascades deletes, so removing a session removes its draft.
 pub fn ensure_drafts_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS composer_drafts (
@@ -17,6 +20,8 @@ pub fn ensure_drafts_table(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// Read the persisted draft text for a session, or `None` when the session
+/// has no draft row.
 fn get_draft(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT text FROM composer_drafts WHERE session_id = ?1",
@@ -26,6 +31,9 @@ fn get_draft(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<Str
     .optional()
 }
 
+/// Insert or update the draft for a session. An empty text deletes the row
+/// instead of storing a placeholder, and longer text is truncated to
+/// [`DRAFT_MAX`] characters.
 fn set_draft(conn: &Connection, session_id: &str, text: &str) -> rusqlite::Result<()> {
     if text.is_empty() {
         conn.execute(
@@ -45,6 +53,8 @@ fn set_draft(conn: &Connection, session_id: &str, text: &str) -> rusqlite::Resul
     Ok(())
 }
 
+/// Tauri command: load the draft for one session. Invalid session ids are
+/// rejected; a missing row simply yields `None`.
 #[tauri::command(async)]
 pub fn composer_draft_get(
     store: State<'_, SessionStore>,
@@ -55,6 +65,8 @@ pub fn composer_draft_get(
     get_draft(&conn, &session_id).map_err(|e| e.to_string())
 }
 
+/// Tauri command: persist the draft for one session. An empty text clears
+/// the stored draft. Fails on an invalid session id or a storage error.
 #[tauri::command(async)]
 pub fn composer_draft_set(
     store: State<'_, SessionStore>,
@@ -70,6 +82,8 @@ pub fn composer_draft_set(
 mod tests {
     use super::*;
 
+    /// Bare in-memory connection with the minimal parent schema the draft
+    /// table needs (a `sessions` table) plus the draft table itself.
     fn test_conn() -> Connection {
         // The FK references sessions(id); create a minimal parent so the
         // draft table can be created and written against a bare connection.

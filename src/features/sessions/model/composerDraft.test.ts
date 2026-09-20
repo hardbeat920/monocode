@@ -11,7 +11,13 @@ import {
   saveSessionDraft,
 } from "./composerDraft";
 
+/**
+ * Behavior tests for the per-session composer draft store: debounced saves
+ * keyed by session, flush/retry semantics on failure, discard scoping, and
+ * draft loads that degrade to empty.
+ */
 describe("composerDraft", () => {
+  /** Default invoke mock: successful no-op writes, reset per test. */
   beforeEach(() => {
     vi.useFakeTimers();
     invoke.mockReset();

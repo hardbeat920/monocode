@@ -7674,6 +7674,9 @@ export default function App({
     setFilePickerResetToken((token) => token + 1);
     setFilePickerOpen(true);
   }, []);
+  // Confirm unsaved editor changes, push any pending composer drafts out,
+  // then reload the window. Aborts without reloading when the user cancels
+  // or a draft write cannot be persisted.
   const onReload = useCallback(() => {
     void (async () => {
       if (!(await confirmReload(dirtyFilesRef.current.size > 0))) return;

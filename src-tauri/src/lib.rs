@@ -409,6 +409,7 @@ pub fn run() {
             session_store::workspace_set_snapshot,
             session_store::workspace_get_snapshot,
             composer_draft::composer_draft_get,
+            // Persist/clear one session's composer draft (see composer_draft.rs).
             composer_draft::composer_draft_set,
             notes::notes_list,
             notes::notes_get,

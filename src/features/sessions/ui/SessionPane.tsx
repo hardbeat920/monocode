@@ -419,6 +419,8 @@ export const SessionPane = memo(function SessionPane({
           ? undefined
           : session.composerSeed)
       }
+      // Every edit is handed to the debounced draft store; the ref keeps
+      // the latest text for immediate re-use if the pane re-mounts.
       onDraftChange={(text) => {
         draftRef.current = text;
         saveSessionDraft(session.id, text);

@@ -16,6 +16,7 @@ const inFlight = new Map<string, Promise<void>>();
 // are suppressed so no write can fail against the missing row.
 const discarded = new Set<string>();
 
+/** Drop the debounce timer for one session's pending draft, if any. */
 function clearTimer(sessionId: string): void {
   const entry = pending.get(sessionId);
   if (entry) {
@@ -24,6 +25,11 @@ function clearTimer(sessionId: string): void {
   }
 }
 
+/**
+ * Chain one write behind any write already in flight for the session, so a
+ * slow earlier write can never land after a newer one. Tracks the returned
+ * promise so flushes can wait out the tail write.
+ */
 function writeDraft(sessionId: string, text: string): Promise<void> {
   const prev = inFlight.get(sessionId) ?? Promise.resolve();
   const run = prev
@@ -106,6 +112,11 @@ export function discardSessionDraft(sessionId: string): void {
   discarded.add(sessionId);
 }
 
+/**
+ * Load the persisted draft for a session from SQLite. Resolves to an empty
+ * string when no draft exists or the read fails, so a broken store never
+ * blocks opening the composer.
+ */
 export async function loadSessionDraft(sessionId: string): Promise<string> {
   try {
     return (await invoke<string | null>("composer_draft_get", { sessionId })) ?? "";

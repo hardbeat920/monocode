@@ -95,6 +95,12 @@ export function createSessionRemover(options: SessionRemovalOptions): {
 }
 
 /** Run the same lifecycle for archive and delete, reading state after each wait. */
+/**
+ * Run the two-phase removal for one session: plan the workspace change,
+ * confirm with the user, stop streaming, release harness processes, persist
+ * the deletion/archive, and commit the workspace update. Returns whether the
+ * removal went through (false when the user canceled the confirmation).
+ */
 async function removeSession(
   sessionId: string,
   scope: WorkspaceTabCloseScope,
