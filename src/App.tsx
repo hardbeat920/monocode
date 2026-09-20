@@ -8507,135 +8507,177 @@ export default function App({
                 onSelectProject={onSelectProject}
               />
 
-              <main className="relative flex min-h-0 min-w-0 flex-1">
+              <div className="flex min-h-0 min-w-0 flex-1">
                 <div
-                  ref={dockGridRef}
-                  className="grid h-full min-h-0 min-w-0 flex-1"
+                  className="flex min-h-0 min-w-0 flex-1 flex-col"
+                  data-browser-workspace
                 >
-                  {projectTerminals.map((dock) => {
-                    const show =
-                      dock.open &&
-                      sameProjectPath(dock.projectPath, projectCwd);
-                    return (
-                      <div
-                        key={dock.projectPath}
-                        className={
-                          show
-                            ? "h-full min-h-0 min-w-0 w-full overflow-hidden"
-                            : "hidden"
-                        }
-                        style={show ? { gridArea: "dock" } : undefined}
-                        aria-hidden={!show}
-                      >
-                        <ProjectTerminalDock
-                          dock={dock}
-                          focused={show && projectTerminalFocused}
-                          onFocus={focusProjectTerminal}
-                          onHide={onHideProjectTerminal}
-                          onSideChange={onProjectTerminalSide}
-                          onSizePaint={paintDockSize}
-                          onSizeCommit={commitDockSize}
-                          onAddTerminal={onNewTerminal}
-                          onSelectTerminal={onSelectProjectTerminal}
-                          onCloseTerminal={onCloseProjectTerminal}
-                          onCloseOtherTerminals={onCloseOtherProjectTerminals}
-                          onReorderTerminals={onReorderProjectTerminals}
-                          onTerminalMetaChange={onTerminalMetaChange}
-                        />
-                      </div>
-                    );
-                  })}
-                  <div
-                    className="relative flex min-h-0 min-w-0 flex-row"
-                    style={{ gridArea: "main" }}
-                  >
-                    <div className="relative min-h-0 min-w-0 flex-1">
-                      {tabs.map((tab) => (
-                        <div
-                          key={tab.id}
-                          aria-hidden={tab.id !== activeTabId}
-                          className={
-                            tab.id === activeTabId
-                              ? "absolute inset-0 flex h-full min-h-0 flex-col"
-                              : "hidden"
-                          }
-                        >
-                          <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-                            <PaneTree
-                              {...sessionPaneProps}
-                              visible={tab.id === activeTabId && !inboxViewOpen}
-                              layout={tab.layout}
-                              sessions={sessions}
-                              editorPanes={[
-                                ...tab.editorPanes,
-                                ...(tab.terminalPanes ?? []),
-                              ]}
-                              dirtyFileIds={dirtyFiles}
-                              fileErrorCounts={fileErrorCounts}
-                              focusedId={
-                                tab.id === activeTabId &&
-                                !inboxViewOpen &&
-                                !tab.diffFocused &&
-                                !projectTerminalFocused
-                                  ? tab.focusedId
-                                  : ""
+                  <main className="relative flex min-h-0 min-w-0 flex-1">
+                    <div
+                      ref={dockGridRef}
+                      className="grid h-full min-h-0 min-w-0 flex-1"
+                    >
+                      {projectTerminals.map((dock) => {
+                        const show =
+                          dock.open &&
+                          sameProjectPath(dock.projectPath, projectCwd);
+                        return (
+                          <div
+                            key={dock.projectPath}
+                            className={
+                              show
+                                ? "h-full min-h-0 min-w-0 w-full overflow-hidden"
+                                : "hidden"
+                            }
+                            style={show ? { gridArea: "dock" } : undefined}
+                            aria-hidden={!show}
+                          >
+                            <ProjectTerminalDock
+                              dock={dock}
+                              focused={show && projectTerminalFocused}
+                              onFocus={focusProjectTerminal}
+                              onHide={onHideProjectTerminal}
+                              onSideChange={onProjectTerminalSide}
+                              onSizePaint={paintDockSize}
+                              onSizeCommit={commitDockSize}
+                              onAddTerminal={onNewTerminal}
+                              onSelectTerminal={onSelectProjectTerminal}
+                              onCloseTerminal={onCloseProjectTerminal}
+                              onCloseOtherTerminals={
+                                onCloseOtherProjectTerminals
                               }
-                              addToChatSessionId={
-                                tab.id === activeTabId ? active?.id : undefined
-                              }
-                              composerFocused={
-                                composerFocused && !projectTerminalFocused
-                              }
-                              composerFocusToken={composerFocusToken}
-                              onSelectFile={onSelectFileSurface}
-                              onCloseFile={onCloseFile}
-                              onCloseOtherFiles={onCloseOtherFiles}
-                              onReorderFiles={onReorderFiles}
-                              onFileDirtyChange={onFileDirtyChange}
-                              onFileErrorCountChange={onFileErrorCountChange}
-                              onRatio={(splitId, index, ratio) =>
-                                onRatio(tab.id, splitId, index, ratio)
-                              }
-                              editorNavigation={editorNavigation}
-                              onUpdatePlan={onUpdatePlan}
-                              onMovePane={onMovePane}
-                              onDetachPane={onDetachPane}
+                              onReorderTerminals={onReorderProjectTerminals}
                               onTerminalMetaChange={onTerminalMetaChange}
                             />
                           </div>
+                        );
+                      })}
+                      <div
+                        className="relative flex min-h-0 min-w-0 flex-row"
+                        style={{ gridArea: "main" }}
+                      >
+                        <div className="relative min-h-0 min-w-0 flex-1">
+                          {tabs.map((tab) => (
+                            <div
+                              key={tab.id}
+                              aria-hidden={tab.id !== activeTabId}
+                              className={
+                                tab.id === activeTabId
+                                  ? "absolute inset-0 flex h-full min-h-0 flex-col"
+                                  : "hidden"
+                              }
+                            >
+                              <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+                                <PaneTree
+                                  {...sessionPaneProps}
+                                  visible={
+                                    tab.id === activeTabId && !inboxViewOpen
+                                  }
+                                  layout={tab.layout}
+                                  sessions={sessions}
+                                  editorPanes={[
+                                    ...tab.editorPanes,
+                                    ...(tab.terminalPanes ?? []),
+                                  ]}
+                                  dirtyFileIds={dirtyFiles}
+                                  fileErrorCounts={fileErrorCounts}
+                                  focusedId={
+                                    tab.id === activeTabId &&
+                                    !inboxViewOpen &&
+                                    !tab.diffFocused &&
+                                    !projectTerminalFocused
+                                      ? tab.focusedId
+                                      : ""
+                                  }
+                                  addToChatSessionId={
+                                    tab.id === activeTabId
+                                      ? active?.id
+                                      : undefined
+                                  }
+                                  composerFocused={
+                                    composerFocused && !projectTerminalFocused
+                                  }
+                                  composerFocusToken={composerFocusToken}
+                                  onSelectFile={onSelectFileSurface}
+                                  onCloseFile={onCloseFile}
+                                  onCloseOtherFiles={onCloseOtherFiles}
+                                  onReorderFiles={onReorderFiles}
+                                  onFileDirtyChange={onFileDirtyChange}
+                                  onFileErrorCountChange={
+                                    onFileErrorCountChange
+                                  }
+                                  onRatio={(splitId, index, ratio) =>
+                                    onRatio(tab.id, splitId, index, ratio)
+                                  }
+                                  editorNavigation={editorNavigation}
+                                  onUpdatePlan={onUpdatePlan}
+                                  onMovePane={onMovePane}
+                                  onDetachPane={onDetachPane}
+                                  onTerminalMetaChange={onTerminalMetaChange}
+                                />
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      </div>
                     </div>
-                    <BrowserPane
-                      open={browserOpen}
-                      visible={
-                        !searchViewOpen &&
-                        !settingsOpen &&
-                        !inboxViewOpen &&
-                        !notesViewOpen &&
-                        !automationsViewOpen
-                      }
-                    />
-                  </div>
-                </div>
-                {[...linkedWorkItemPanels.values()].map((panel) => (
-                  <LinkedWorkItemPanel
-                    key={panel.sessionId}
-                    target={panel.item}
-                    cwd={panel.cwd}
-                    recents={recents}
-                    visible={
-                      !searchViewOpen &&
-                      !settingsOpen &&
-                      !inboxViewOpen &&
-                      !notesViewOpen &&
-                      !automationsViewOpen &&
-                      activeLinkedWorkItemPanel?.sessionId === panel.sessionId
+                    {[...linkedWorkItemPanels.values()].map((panel) => (
+                      <LinkedWorkItemPanel
+                        key={panel.sessionId}
+                        target={panel.item}
+                        cwd={panel.cwd}
+                        recents={recents}
+                        visible={
+                          !searchViewOpen &&
+                          !settingsOpen &&
+                          !inboxViewOpen &&
+                          !notesViewOpen &&
+                          !automationsViewOpen &&
+                          activeLinkedWorkItemPanel?.sessionId ===
+                            panel.sessionId
+                        }
+                        onClose={() =>
+                          closeLinkedWorkItemPanel(panel.sessionId)
+                        }
+                      />
+                    ))}
+                  </main>
+                  <UsageFooter
+                    providers={usageProviders}
+                    session={usageSession}
+                    project={active?.cwd ?? projectCwd}
+                    onSelectAccount={onSelectProviderAccount}
+                    onManageAccounts={() =>
+                      openSettings("providers", "provider-accounts")
                     }
-                    onClose={() => closeLinkedWorkItemPanel(panel.sessionId)}
+                    terminals={runningTerminals}
+                    terminalOpen={runningTerminalOpen}
+                    onToggleTerminal={onToggleRunningTerminal}
+                    onNewTerminal={
+                      looksLikeProject(projectCwd) ? onNewTerminal : undefined
+                    }
+                    onShowTerminal={
+                      looksLikeProject(projectCwd)
+                        ? onShowProjectTerminal
+                        : undefined
+                    }
+                    projectTerminalActive={
+                      !!currentProjectDock &&
+                      currentProjectDock.pane.files.length > 0
+                    }
                   />
-                ))}
-              </main>
+                </div>
+                <BrowserPane
+                  open={browserOpen}
+                  visible={
+                    !searchViewOpen &&
+                    !settingsOpen &&
+                    !inboxViewOpen &&
+                    !notesViewOpen &&
+                    !automationsViewOpen
+                  }
+                />
+              </div>
             </div>
             {searchViewOpen ? (
               <SearchView
@@ -8741,36 +8783,6 @@ export default function App({
                 onOpenWhatsNew={onOpenWhatsNew}
               />
             ) : null}
-            {searchViewOpen ||
-            inboxViewOpen ||
-            notesViewOpen ||
-            automationsViewOpen ||
-            settingsOpen ? null : (
-              <UsageFooter
-                providers={usageProviders}
-                session={usageSession}
-                project={active?.cwd ?? projectCwd}
-                onSelectAccount={onSelectProviderAccount}
-                onManageAccounts={() =>
-                  openSettings("providers", "provider-accounts")
-                }
-                terminals={runningTerminals}
-                terminalOpen={runningTerminalOpen}
-                onToggleTerminal={onToggleRunningTerminal}
-                onNewTerminal={
-                  looksLikeProject(projectCwd) ? onNewTerminal : undefined
-                }
-                onShowTerminal={
-                  looksLikeProject(projectCwd)
-                    ? onShowProjectTerminal
-                    : undefined
-                }
-                projectTerminalActive={
-                  !!currentProjectDock &&
-                  currentProjectDock.pane.files.length > 0
-                }
-              />
-            )}
           </div>
 
           {filePickerOpen ? (
