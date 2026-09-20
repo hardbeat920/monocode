@@ -2399,7 +2399,7 @@ export function InboxDetail({
           }`}
         >
           <div
-            className={`mx-auto flex w-full max-w-5xl flex-col ${
+            className={`mx-auto flex w-full max-w-[1600px] flex-col ${
               panel ? "gap-2 px-4 pt-4" : "gap-2.5 px-8 pt-5"
             } ${isPr ? "" : panel ? "pb-4" : "pb-5"}`}
           >
@@ -2665,7 +2665,7 @@ export function InboxDetail({
           }
         >
           <div
-            className={`mx-auto flex w-full max-w-5xl flex-col ${
+            className={`mx-auto flex w-full max-w-[1600px] flex-col ${
               panel ? "gap-4 px-4 py-4" : "gap-5 px-8 py-5"
             }`}
           >
