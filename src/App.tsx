@@ -295,6 +295,7 @@ import {
   workspaceTabCwd,
   focusedWorkspaceTabCwd,
 } from "./lib/workspaceTabGroups";
+import { addChatToEmptyWorkspace } from "./lib/addChatToEmptyWorkspace";
 import {
   ADD_TO_CHAT_EVENT,
   composerSeedForAddToChat,
@@ -1140,33 +1141,34 @@ export default function App({
 
       let currentTabs = tabsRef.current;
       let currentSessions = sessionsRef.current;
-      // Sessions mounted before this request. The fallback branch appends a
-      // new session below, and openAddToChatSessionPane must not see it:
-      // its mapped-leaf check would find the fallback tab's own pane and
-      // reject the very split this flow exists to perform.
+      // Sessions mounted before this request. The zero-tab fallback appends
+      // its session below, and openAddToChatSessionPane must not see it: its
+      // mapped-leaf check would find the fallback tab's own pane and reject
+      // the very split this flow exists to perform.
       const preFallbackSessions = currentSessions;
       let tab =
         currentTabs.find((entry) => entry.id === activeTabIdRef.current) ??
         currentTabs[0];
-      let createdFallbackTab = false;
+      let createdSession: Session | undefined;
       // Issue #311: with zero workspace tabs (all closed), add-to-chat must
-      // still open a usable chat pane instead of dropping the request. Seed
-      // the replacement session from the first known session, mirroring the
-      // onCloseAllTabs pattern.
+      // still open a usable chat pane instead of dropping the request. PR
+      // #325 review: build exactly one session seeded with the quoted text
+      // and use it as the fallback tab's pane, so its harness/model/settings
+      // belong to the chat the user actually gets. The cwd falls back to the
+      // project directory, never another project's session cwd.
       if (!tab) {
-        const seedSession = sessionsRef.current[0];
-        const fallbackSession = newSession(
-          seedSession?.harness ?? "claude",
-          sessionDefaults?.cwd ?? projectCwdRef.current,
-          seedSession?.model,
-          sessionDefaults?.runtimeMode,
-          seedSession?.modelSettings,
-        );
-        const fallbackTab = newTab(fallbackSession.id);
-        currentSessions = [...currentSessions, fallbackSession];
-        currentTabs = [...currentTabs, fallbackTab];
-        tab = fallbackTab;
-        createdFallbackTab = true;
+        const fallback = addChatToEmptyWorkspace({
+          sessions: currentSessions,
+          tabs: currentTabs,
+          projectCwd: projectCwdRef.current,
+          text: detail.text,
+          mode: detail.mode,
+        });
+        if (!fallback) return;
+        currentSessions = fallback.sessions;
+        currentTabs = fallback.tabs;
+        tab = fallback.tab;
+        createdSession = fallback.session;
       }
       const mountedSessionIds = new Set(
         currentSessions.map((session) => session.id),
@@ -1174,7 +1176,7 @@ export default function App({
       // The fallback tab wraps the just-seeded session, so its only leaf is
       // "mounted" by construction; the guard below must not reject it.
       if (
-        !createdFallbackTab &&
+        !createdSession &&
         leafIds(tab.layout).some((id) => mountedSessionIds.has(id))
       )
         return;
@@ -1187,7 +1189,7 @@ export default function App({
       if (!composerSeed) return;
 
       const file = focusedFileTab(tab);
-      const session = {
+      const session = createdSession ?? {
         ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
         ...(file?.projectCwd ? { worktreeCwd: file.cwd } : {}),
         composerSeed,
@@ -1203,7 +1205,9 @@ export default function App({
       const nextTabs = currentTabs.map((entry) =>
         entry.id === tab.id ? openedTab : entry,
       );
-      const nextSessions = [...currentSessions, session];
+      const nextSessions = currentSessions.includes(session)
+        ? currentSessions
+        : [...currentSessions, session];
       sessionsRef.current = nextSessions;
       tabsRef.current = nextTabs;
       setSessions(nextSessions);

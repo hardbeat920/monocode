@@ -442,6 +442,17 @@ export function newDefaultSession(
   return newSession(choice.harness, cwd, choice.model, runtimeMode);
 }
 
+/** New conversation carrying another session's harness, model and settings. */
+export function newSessionLike(seed: Session | undefined, cwd: string): Session {
+  return newSession(
+    seed?.harness ?? "claude",
+    cwd,
+    seed?.model,
+    seed?.runtimeMode,
+    seed?.modelSettings,
+  );
+}
+
 /** First line of a prompt, truncated for the tab strip. */
 export function titleFromPrompt(
   prompt: string,
