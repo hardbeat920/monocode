@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.52] - 2026-09-20
+
+### Added
+
+- Automations can run agents on hourly, daily, weekday, or weekly schedules; launch immediately with **Run now**; or react to GitHub, GitLab, Linear, and Azure DevOps Inbox events without keeping the window in the foreground. The new Automations surface includes starter templates, reusable or isolated workspaces, run history, and slash-triggered skill selection in prompts. In #327.
+- Antigravity is available on macOS and Linux as a live ACP provider with its own vector mark, model discovery, file and image attachments, permission requests, access modes, persisted session resume, cancellation and process recovery, and discovery of skills from `~/.gemini/antigravity/skills`. In #314 by @elijah7x.
+- Azure DevOps joins the Inbox with PAT authentication for Azure Boards work items and Azure Repos pull requests, including attention filters, details, threads, comments, reviewers, and textual diffs for cloud and HTTPS on-premises organizations. Azure DevOps work-item and pull-request activity can also trigger automations. In #317 by @jonathanlamela.
+- Composer messages can be saved as persistent session drafts instead of being sent immediately. Drafts survive restarts, appear in session status, can be sent later, and can be removed without changing conversation history.
+- New sessions can choose the current checkout, an existing worktree, or a draft workspace that creates its worktree and a descriptive branch on the first turn. Draft workspaces support branch renaming and expose their checkout identity in the Explorer.
+- The Changes panel can amend the latest local commit when `HEAD` has not been pushed, and resets amend mode when the branch or commit changes. In #324 by @kartava.
+- GitHub issue and pull-request URLs render as interactive work-item chips with hover and keyboard-focus previews for metadata, state, labels, and assignees. An optional authenticated prompt can also star MonoCode through the GitHub CLI.
+- The file editor has a draggable CodeMirror scrollbar with change and diagnostic markers, plus a full-width sticky search toolbar.
+- Files can open as standalone top-bar workspace tabs through a persistent setting, and tab opening and closing can use reduced-motion-aware animations through a separate opt-in setting.
+- The project rail has a persistent compact mode that gives workspace content more room while retaining project navigation and status.
+
+### Changed
+
+- Model controls use consistent reasoning-option behavior across providers, can show model settings as beside-picker pills, open the relevant model list directly, and identify the provider behind every favorite. Effort, service-tier, and fast-mode settings are grouped consistently, with effort icons for Pi and omp thinking levels and a speed icon for service tier. In #323 by @D3nnis72.
+- Orchestrated workers use recoverable worktrees seeded from the lead checkout, apply checkpoints with conflict and symlink safeguards, support retrying stopped workers, and clean up their temporary branches.
+- Automation creation opens directly into the template picker, keeps its filters and templates in one scrolling region, and lets prompt fields grow beyond the default Composer height.
+- Worktree deletion no longer requires typing the worktree name, while commit actions, modal titles and borders, and provider-setting controls use clearer states and lighter styling.
+- Banked Codex reset details appear only when resets are actually available, and project mascots no longer use a separate unavailable-reset state.
+- The frontend source tree is organized by application composition, product feature, provider integration, platform adapter, and shared code instead of the former `chrome`, `surfaces`, and catch-all `lib` directories. In #331.
+- Session removal, resilient boolean preference storage, and repository-backed GitLab and Azure DevOps Inbox fetching now use shared lifecycle and data-access helpers.
+
+### Fixed
+
+- Removing the final session associated with a worktree asks about deletion only when an unused worktree actually exists.
+- Removing a saved draft is serialized with session persistence so reusing a session ID cannot restore the deleted draft.
+- Antigravity ignores malformed configuration updates without losing valid options, fails closed when access-mode changes are rejected, and retires stale or blocked transports so cancelled, forgotten, timed-out, or replaced sessions cannot leak output into a later turn.
+
 ## [0.1.51] - 2026-09-18
 
 ### Added
@@ -898,7 +929,10 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.49...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.52...HEAD
+[0.1.52]: https://github.com/hardbeat920/monocode/compare/v0.1.51...v0.1.52
+[0.1.51]: https://github.com/hardbeat920/monocode/compare/v0.1.50...v0.1.51
+[0.1.50]: https://github.com/hardbeat920/monocode/compare/v0.1.49...v0.1.50
 [0.1.49]: https://github.com/hardbeat920/monocode/compare/v0.1.48...v0.1.49
 [0.1.48]: https://github.com/hardbeat920/monocode/compare/v0.1.47...v0.1.48
 [0.1.47]: https://github.com/hardbeat920/monocode/compare/v0.1.46...v0.1.47

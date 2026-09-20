@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod automations;
+mod azure_devops;
 mod browser;
 mod chat_background;
 mod checkpoint;
@@ -315,6 +316,15 @@ pub fn run() {
             gitlab::gitlab_work_item_thread,
             gitlab::gitlab_work_item_comment,
             gitlab::gitlab_mr_diff,
+            azure_devops::azure_devops_status,
+            azure_devops::azure_devops_set_config,
+            azure_devops::azure_devops_repo,
+            azure_devops::azure_devops_list_work_items,
+            azure_devops::azure_devops_list_todos,
+            azure_devops::azure_devops_work_item_details,
+            azure_devops::azure_devops_work_item_thread,
+            azure_devops::azure_devops_work_item_comment,
+            azure_devops::azure_devops_mr_diff,
             linear::linear_status,
             linear::linear_set_token,
             linear::linear_list_teams,
@@ -367,6 +377,7 @@ pub fn run() {
             harness::harness_resolve_fx,
             harness::harness_resolve_grok,
             harness::harness_resolve_hermes,
+            harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,
             harness::harness_write,

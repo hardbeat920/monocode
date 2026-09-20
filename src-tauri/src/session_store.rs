@@ -1861,13 +1861,21 @@ mod tests {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();
         let mut session = sample("s1", "/tmp/a", "Draft");
-        session.blocks = json!([{ "id": "b1", "role": "user", "text": "hello", "draft": true }]);
+        session.blocks = json!([
+            { "id": "b1", "role": "user", "text": "start" },
+            { "id": "b2", "role": "assistant", "text": "done" },
+            { "id": "b3", "role": "user", "text": "hello", "draft": true }
+        ]);
 
         let saved = upsert_session(&conn, &session).unwrap();
         assert!(saved.draft);
         assert!(list_by_project(&conn, "/tmp/a").unwrap()[0].draft);
 
-        session.blocks = json!([{ "id": "b1", "role": "user", "text": "hello" }]);
+        session.blocks = json!([
+            { "id": "b1", "role": "user", "text": "start" },
+            { "id": "b2", "role": "assistant", "text": "done" },
+            { "id": "b3", "role": "user", "text": "hello" }
+        ]);
         let sent = upsert_session(&conn, &session).unwrap();
         assert!(!sent.draft);
         assert!(!list_by_project(&conn, "/tmp/a").unwrap()[0].draft);
