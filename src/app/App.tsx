@@ -293,14 +293,13 @@ import {
   applyPlaceSessionOnPane,
   filterTabsForProject,
   findOpenSessionTab,
-  openAddToChatSessionPane,
   planWorkspaceTabClose,
   workspaceTabCwd,
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
+import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
 import {
   ADD_TO_CHAT_EVENT,
-  composerSeedForAddToChat,
   type AddToChatRequest,
 } from "../features/sessions/model/quoteDraft";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
@@ -1164,47 +1163,23 @@ export default function App({
       const detail = (event as CustomEvent<AddToChatRequest>).detail;
       if (!detail?.text) return;
 
-      const currentTabs = tabsRef.current;
-      const currentSessions = sessionsRef.current;
-      const tab =
-        currentTabs.find((entry) => entry.id === activeTabIdRef.current) ??
-        currentTabs[0];
-      if (!tab) return;
-      const mountedSessionIds = new Set(
-        currentSessions.map((session) => session.id),
-      );
-      if (leafIds(tab.layout).some((id) => mountedSessionIds.has(id))) return;
-
-      const cwd =
-        focusedWorkspaceTabCwd(tab, currentSessions) ??
-        sessionDefaults?.cwd ??
-        projectCwdRef.current;
-      const composerSeed = composerSeedForAddToChat(detail.text, detail.mode);
-      if (!composerSeed) return;
-
-      const file = focusedFileTab(tab);
-      const session = {
-        ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
-        ...(file?.projectCwd ? { worktreeCwd: file.cwd } : {}),
-        composerSeed,
-      };
-      const openedTab = openAddToChatSessionPane({
-        tab,
-        sessions: currentSessions,
-        sessionId: session.id,
+      const result = applyAddToChatRequest({
+        sessions: sessionsRef.current,
+        tabs: tabsRef.current,
+        activeTabId: activeTabIdRef.current,
+        projectCwd: projectCwdRef.current,
+        fallbackCwd: sessionDefaults?.cwd,
+        defaultRuntimeMode: sessionDefaults?.runtimeMode,
+        text: detail.text,
+        mode: detail.mode,
       });
-      // A mounted session pane owns the normal add-to-chat path.
-      if (!openedTab) return;
+      if (!result) return;
 
-      const nextSessions = [...currentSessions, session];
-      const nextTabs = currentTabs.map((entry) =>
-        entry.id === tab.id ? openedTab : entry,
-      );
-      sessionsRef.current = nextSessions;
-      tabsRef.current = nextTabs;
-      setSessions(nextSessions);
-      setTabs(nextTabs);
-      setActiveTabId(tab.id);
+      sessionsRef.current = result.sessions;
+      tabsRef.current = result.tabs;
+      setSessions(result.sessions);
+      setTabs(result.tabs);
+      setActiveTabId(result.activeTabId);
       setProjectTerminalFocused(false);
       setComposerFocused(true);
     };
