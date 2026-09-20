@@ -18,20 +18,8 @@ pub fn dispatch(app: &AppHandle, id: &str) {
             let _ = crate::window::open_new_window(app);
         }
         "quit" => crate::window::request_quit(app),
-        // A focused browser window owns Back/Forward: its document has real
-        // history, so the app's tab history would be the wrong target.
-        "back_tab" | "forward_tab" if crate::window::browser_window_focused(app) => {
-            let action = if id == "back_tab" {
-                "browser_back"
-            } else {
-                "browser_forward"
-            };
-            crate::window::browser_navigate(app, action);
-        }
         "browser_reload" => {
-            if crate::window::browser_window_focused(app) {
-                crate::window::browser_navigate(app, "browser_reload");
-            } else if let Some(window) = app
+            if let Some(window) = app
                 .windows()
                 .into_values()
                 .find(|w| w.is_focused().unwrap_or(false))
@@ -46,7 +34,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project"
         | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
         | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" | "check_for_updates" | "new_browser_window" => {
+        | "open_model_picker" | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
         // Zoom, Reload, Command Palette, and Close All Tabs target one window: a broadcast would
@@ -64,7 +52,6 @@ pub fn dispatch(app: &AppHandle, id: &str) {
 /// Emit `id` to the focused window, falling back to a visible one, then any.
 fn emit_to_focused(app: &AppHandle, id: &str) {
     let mut windows: Vec<_> = app.windows().into_values().collect();
-    windows.retain(|window| !window.label().starts_with("browser-"));
     windows.sort_by(|a, b| a.label().cmp(b.label()));
     let target = windows
         .iter()
@@ -121,8 +108,6 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let open_browser = MenuItemBuilder::with_id("open_browser", "Open Browser")
         .accelerator("CmdOrCtrl+Shift+B")
         .build(app)?;
-    let new_browser_window =
-        MenuItemBuilder::with_id("new_browser_window", "New Browser Window…").build(app)?;
     let browser_reload = MenuItemBuilder::with_id("browser_reload", "Reload Page")
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
@@ -207,7 +192,6 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&new_terminal)
         .item(&new_terminal_tab)
         .item(&open_browser)
-        .item(&new_browser_window)
         .item(&browser_reload)
         .item(&split_right)
         .item(&split_down)

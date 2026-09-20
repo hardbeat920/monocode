@@ -290,11 +290,7 @@ fn drop_window(slot: &mut Option<QuitRun>, label: &str) -> Next {
 }
 
 fn app_window_labels(app: &AppHandle) -> Vec<String> {
-    // Website windows have no workspace or quit listeners to acknowledge us.
-    app.windows()
-        .into_keys()
-        .filter(|label| !label.starts_with("browser-"))
-        .collect()
+    app.windows().into_keys().collect()
 }
 
 /// Ask every app window what it has running, then decide once for all of them.
@@ -544,74 +540,6 @@ pub fn confirm_quit(app: AppHandle) {
         host.kill_all();
     }
     app.exit(0);
-}
-
-static BROWSER_COUNTER: AtomicU32 = AtomicU32::new(1);
-
-/// Open a bare native browser window at `url`.
-///
-/// The page loads as its own top-level browsing context, so it is not subject
-/// to our CSP `frame-src`, to the site's `X-Frame-Options`, or to any
-/// same-origin restriction — unlike an iframe embedded in the app UI.
-///
-/// It also gets no IPC: `Origin::matches` only pairs a remote origin with a
-/// capability that declares `remote.urls`, and `capabilities/default.json`
-/// declares none. Do not add one — that would hand every page we render the
-/// app's `dialog`, `opener` and `process` permissions.
-#[tauri::command]
-pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
-    let parsed = tauri::Url::parse(url.trim()).map_err(|err| err.to_string())?;
-    // Only network schemes. `file:`, `data:` and `javascript:` would read local
-    // files or run script with the window's privileges.
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(format!("unsupported URL scheme: {}", parsed.scheme()));
-    }
-
-    let id = BROWSER_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let title = parsed.host_str().unwrap_or("Browser").to_string();
-
-    WebviewWindowBuilder::new(
-        &app,
-        format!("browser-{id}"),
-        tauri::WebviewUrl::External(parsed),
-    )
-    .title(title)
-    .inner_size(1100.0, 800.0)
-    .min_inner_size(400.0, 300.0)
-    .resizable(true)
-    .build()
-    .map_err(|err| err.to_string())?;
-
-    Ok(())
-}
-
-/// Run a navigation command in the focused browser window.
-///
-/// The window hosts a normal top-level document, so its own `history` is real —
-/// no manual URL stack is needed the way an iframe would require.
-pub fn browser_navigate(app: &AppHandle, action: &str) {
-    let script = match action {
-        "browser_back" => "history.back()",
-        "browser_forward" => "history.forward()",
-        "browser_reload" => "location.reload()",
-        _ => return,
-    };
-    let focused = app.windows().into_values().find(|window| {
-        window.label().starts_with("browser-") && window.is_focused().unwrap_or(false)
-    });
-    if let Some(window) = focused {
-        if let Some(webview) = app.get_webview(window.label()) {
-            let _ = webview.eval(script);
-        }
-    }
-}
-
-/// Whether a browser window currently has focus, so shared accelerators can be
-/// routed to it instead of broadcast to the app UI.
-pub fn browser_window_focused(app: &AppHandle) -> bool {
-    app.windows().into_values().any(|window| {
-        window.label().starts_with("browser-") && window.is_focused().unwrap_or(false)
-    })
 }
 
 #[cfg(test)]

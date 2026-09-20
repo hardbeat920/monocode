@@ -46,7 +46,6 @@ import {
 import { Sidebar } from "./chrome/Sidebar";
 import { ApprovalToasts } from "./chrome/ApprovalToasts";
 import { BrowserPane, useBrowserOpen } from "./chrome/BrowserPane";
-import { BrowserPrompt } from "./chrome/BrowserPrompt";
 import { WhatsNewDialog } from "./chrome/WhatsNewDialog";
 import { ProviderSignInDialog } from "./chrome/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./chrome/TitleBar";
@@ -8810,7 +8809,6 @@ export default function App({
               }}
             />
           )}
-          <BrowserPrompt />
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={

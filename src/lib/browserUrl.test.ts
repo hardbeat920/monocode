@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeBrowserUrl } from "./browserWindow";
+import { normalizeBrowserUrl } from "./browserUrl";
 
 describe("normalizeBrowserUrl", () => {
   it("keeps http and https URLs", () => {
@@ -25,7 +25,9 @@ describe("normalizeBrowserUrl", () => {
   });
 
   it("assumes http for loopback and explicit ports", () => {
-    expect(normalizeBrowserUrl("localhost:5173")).toBe("http://localhost:5173/");
+    expect(normalizeBrowserUrl("localhost:5173")).toBe(
+      "http://localhost:5173/",
+    );
     expect(normalizeBrowserUrl("127.0.0.1:8080/app")).toBe(
       "http://127.0.0.1:8080/app",
     );

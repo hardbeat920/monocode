@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronRight, RefreshCw, ExternalLink } from "./icons";
+import { ArrowLeft, ChevronRight, RefreshCw } from "./icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -6,7 +6,7 @@ import {
   browserRequest,
   type BrowserRequest,
 } from "../lib/embeddedBrowser";
-import { normalizeBrowserUrl, openBrowserWindow } from "../lib/browserWindow";
+import { normalizeBrowserUrl } from "../lib/browserUrl";
 import { UI_SCALE_CHANGE_EVENT } from "../lib/uiScale";
 
 export function useBrowserOpen(onShow?: () => void) {
@@ -304,21 +304,6 @@ function BrowserPanel({ visible: paneVisible }: { visible: boolean }) {
           title="Go to address"
         >
           <ChevronRight className="size-3.5" strokeWidth={1.75} />
-        </button>
-        <button
-          type="button"
-          className={button}
-          disabled={!currentUrl}
-          aria-label="Open in window"
-          title="Open in window"
-          onClick={() => {
-            if (currentUrl)
-              void openBrowserWindow(currentUrl).catch((err) =>
-                setError(String(err)),
-              );
-          }}
-        >
-          <ExternalLink className="size-3.5" strokeWidth={1.75} />
         </button>
       </form>
       {error && (

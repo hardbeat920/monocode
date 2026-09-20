@@ -1,12 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
-
-/** Schemes a browser window may load. Anything else can reach local files. */
+/** Schemes a browser may load. Anything else can reach local files. */
 const ALLOWED = new Set(["http:", "https:"]);
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
 
 /**
- * Turn typed text into a URL the browser window will accept.
+ * Turn typed text into a URL the browser will accept.
  *
  * A bare host is assumed to be `https:`, except for loopback and anything
  * carrying an explicit port — those are dev servers and almost never have TLS.
@@ -30,16 +28,10 @@ export function normalizeBrowserUrl(raw: string): string | null {
 
   const host = text.split(/[/?#]/, 1)[0] ?? "";
   const bare = host.replace(/:\d+$/, "");
-  const scheme =
-    LOCAL_HOSTS.has(bare) || /:\d+$/.test(host) ? "http" : "https";
+  const scheme = LOCAL_HOSTS.has(bare) || /:\d+$/.test(host) ? "http" : "https";
   try {
     return new URL(`${scheme}://${text}`).toString();
   } catch {
     return null;
   }
-}
-
-/** Open `url` as a real top-level window — not an iframe inside the app. */
-export function openBrowserWindow(url: string): Promise<void> {
-  return invoke<void>("open_browser_window", { url });
 }

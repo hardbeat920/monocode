@@ -24,7 +24,7 @@ pub fn restrict_commands(
 ) -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
     move |invoke| {
         let label = invoke.message.webview_ref().label();
-        if label.starts_with("embedded-browser-") || label.starts_with("browser-") {
+        if label.starts_with("embedded-browser-") {
             invoke
                 .resolver
                 .reject("Browser pages cannot call app commands");
