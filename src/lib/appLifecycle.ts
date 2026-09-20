@@ -23,7 +23,6 @@ import {
   type ProjectTerminalDock,
 } from "./projectTerminal";
 import { sessionWorkCwd, type Session } from "./session";
-import { restoreSessionCheckout } from "./fs";
 import { sessionChildHarnesses } from "./handoff";
 import {
   getSession,
@@ -304,15 +303,6 @@ async function loadResumedWorkspaceOnce(): Promise<ResumedWorkspace | null> {
     workspace = workspaceFromResumed(sessions);
   }
 
-  if (workspace) {
-    workspace = {
-      ...workspace,
-      sessions: await Promise.all(
-        workspace.sessions.map((session) => restoreSessionCheckout(session)),
-      ),
-    };
-  }
-
   bootingResumed = workspace;
   if (workspace) {
     await Promise.all(
@@ -326,7 +316,12 @@ async function loadResumedWorkspaceOnce(): Promise<ResumedWorkspace | null> {
 
 export function bindResumedSessions(sessions: Session[]): void {
   for (const session of sessions) {
-    if (!session.providerSessionId || !isLiveHarness(session.harness)) continue;
+    if (
+      session.worktreeRemoved ||
+      !session.providerSessionId ||
+      !isLiveHarness(session.harness)
+    )
+      continue;
     bindHarnessSession(
       session.harness,
       session.id,

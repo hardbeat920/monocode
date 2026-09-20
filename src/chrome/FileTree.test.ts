@@ -124,6 +124,21 @@ afterEach(() => {
 });
 
 describe("FileTree render isolation", () => {
+  it("uses a worktree branch as the explorer root identity", async () => {
+    props = { ...props, rootLabel: "mc/update-readme-tests" };
+
+    await act(async () => render());
+
+    const rootButton = container.querySelector<HTMLButtonElement>(
+      `button[title="${cwd}"]`,
+    )!;
+    expect(rootButton.textContent).toContain("mc/update-readme-tests");
+    expect(rootButton.lastElementChild?.className).toContain("uppercase");
+    expect(
+      container.querySelector('[role="tree"]')?.getAttribute("aria-label"),
+    ).toBe("mc/update-readme-tests files");
+  });
+
   it.each([false, true])(
     "skips unchanged rows on parent updates (hidden=%s)",
     async (hidden) => {

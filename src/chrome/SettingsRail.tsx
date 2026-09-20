@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Bot,
   Inbox,
+  FolderTree,
   Keyboard,
   MessageSquare,
   Palette,
@@ -24,6 +25,7 @@ const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   providers: Bot,
   skills: Sparkles,
   inbox: Inbox,
+  worktrees: FolderTree,
   archive: Archive,
 };
 

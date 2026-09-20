@@ -5,6 +5,7 @@ import { projectName } from "./paths";
 import { sameProjectPath } from "./recents";
 import {
   sessionDisplayTitle,
+  sessionDraftBlock,
   sessionNeedsInput,
   type Session,
 } from "./session";
@@ -36,6 +37,7 @@ export function mergeHistorySummary(
     orchestration: summary.orchestration ?? previous?.orchestration,
     orchestrationLeadId:
       summary.orchestrationLeadId ?? previous?.orchestrationLeadId,
+    automationId: summary.automationId ?? previous?.automationId,
   };
   return [next, ...current.filter((entry) => entry.id !== summary.id)].sort(
     compareSessionSummaries,
@@ -110,11 +112,17 @@ export function summaryFromSession(
     model: session.model,
     runtimeMode: session.runtimeMode,
     title: session.title,
+    draft: !!sessionDraftBlock(session),
     providerSessionId: session.providerSessionId,
+    worktreeCwd: session.worktreeCwd,
+    worktreeRemoved: session.worktreeRemoved,
     ...(session.linkedWorkItem
       ? { linkedWorkItem: session.linkedWorkItem }
       : {}),
-    ...(git?.branch ? { branch: git.branch } : {}),
+    ...(session.automationId ? { automationId: session.automationId } : {}),
+    ...(!session.worktreeRemoved && (session.branch || git?.branch)
+      ? { branch: session.branch || git?.branch }
+      : {}),
     ...(git?.repo ? { repo: git.repo } : {}),
     createdAt: 0,
     updatedAt: Date.now(),
@@ -174,7 +182,20 @@ export function historyWithLiveSessions(
     if (!sameProjectPath(session.cwd, cwd)) continue;
     const live = session.busy || sessionNeedsInput(session);
     if (!shouldPersistSession(session) && !live) continue;
-    if (rows.some((row) => row.id === session.id)) continue;
+    const storedIndex = rows.findIndex((row) => row.id === session.id);
+    if (storedIndex >= 0) {
+      const stored = rows[storedIndex];
+      const draft = !!sessionDraftBlock(session);
+      const automationId = session.automationId || stored.automationId;
+      if (!!stored.draft !== draft || stored.automationId !== automationId) {
+        rows[storedIndex] = {
+          ...stored,
+          draft: draft || undefined,
+          ...(automationId ? { automationId } : {}),
+        };
+      }
+      continue;
+    }
     const sessionHint: SessionGitHint = {
       ...hint,
       ...(session.branch ? { branch: session.branch } : {}),

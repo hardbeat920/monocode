@@ -4,14 +4,14 @@ import {
   searchSettings,
   SETTINGS_INDEX,
   settingsSectionsByGroup,
-  COMPOSER_EFFORT_VISIBLE_DEFAULT,
+  MODEL_CONTROLS_DEFAULT,
   DIFF_VIEWER_DEFAULT,
   FOLLOW_UP_BEHAVIOR_DEFAULT,
   GRID_ARCADE_ENABLED_DEFAULT,
   KEYBINDINGS,
   LIVE_AGENTS_ENABLED_DEFAULT,
   loadComposerRunner,
-  loadComposerEffortVisible,
+  loadModelControls,
   loadDiffViewer,
   loadFollowUpBehavior,
   loadGridArcadeEnabled,
@@ -19,7 +19,7 @@ import {
   loadNotesEnabled,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
-  saveComposerEffortVisible,
+  saveModelControls,
   saveDiffViewer,
   saveFollowUpBehavior,
   saveGridArcadeEnabled,
@@ -29,7 +29,8 @@ import {
 import { MOD, SHIFT } from "./platform";
 
 const KEY = "monocode.composerRunner";
-const COMPOSER_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
+const MODEL_CONTROLS_KEY = "monocode.modelControls";
+const LEGACY_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
 const NOTES_KEY = "monocode.notesEnabled";
 const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
@@ -102,23 +103,37 @@ describe("composer runner setting", () => {
   });
 });
 
-describe("composer effort control setting", () => {
+describe("model controls setting", () => {
   beforeEach(mockLocalStorage);
   afterEach(() => {
-    localStorage.removeItem(COMPOSER_EFFORT_VISIBLE_KEY);
+    localStorage.removeItem(MODEL_CONTROLS_KEY);
+    localStorage.removeItem(LEGACY_EFFORT_VISIBLE_KEY);
   });
 
-  it("keeps effort in the model picker by default", () => {
-    expect(COMPOSER_EFFORT_VISIBLE_DEFAULT).toBe(false);
-    expect(loadComposerEffortVisible()).toBe(false);
+  it("keeps options in the model menu by default", () => {
+    expect(MODEL_CONTROLS_DEFAULT).toBe("menu");
+    expect(loadModelControls()).toBe("menu");
   });
 
-  it("persists the standalone effort control preference", () => {
-    saveComposerEffortVisible(true);
-    expect(localStorage.getItem(COMPOSER_EFFORT_VISIBLE_KEY)).toBe("1");
-    expect(loadComposerEffortVisible()).toBe(true);
-    saveComposerEffortVisible(false);
-    expect(loadComposerEffortVisible()).toBe(false);
+  it("persists the beside-picker preference", () => {
+    saveModelControls("beside");
+    expect(localStorage.getItem(MODEL_CONTROLS_KEY)).toBe("beside");
+    expect(loadModelControls()).toBe("beside");
+    saveModelControls("menu");
+    expect(loadModelControls()).toBe("menu");
+  });
+
+  it("ignores unknown stored values", () => {
+    localStorage.setItem(MODEL_CONTROLS_KEY, "everywhere");
+    expect(loadModelControls()).toBe("menu");
+  });
+
+  it("migrates the previous effort-control toggle", () => {
+    localStorage.setItem(LEGACY_EFFORT_VISIBLE_KEY, "1");
+    expect(loadModelControls()).toBe("beside");
+    localStorage.setItem(LEGACY_EFFORT_VISIBLE_KEY, "0");
+    localStorage.removeItem(MODEL_CONTROLS_KEY);
+    expect(loadModelControls()).toBe("menu");
   });
 });
 
@@ -201,6 +216,15 @@ describe("workspace navigation keybindings", () => {
       },
     ]);
   });
+  it("documents the draft workspace toggle", () => {
+    expect(
+      KEYBINDINGS.find((row) => row.command === "Composer: Toggle Workspace"),
+    ).toEqual({
+      command: "Composer: Toggle Workspace",
+      keys: `${MOD}${SHIFT}G`,
+      when: "Draft session composer",
+    });
+  });
   it("documents session and project cycling in the shortcut list", () => {
     const rows = KEYBINDINGS.filter((row) =>
       /^(Session|Project): (Previous|Next)$/.test(row.command),
@@ -261,6 +285,7 @@ describe("settings navigation", () => {
       "skills",
       "inbox",
       "archive",
+      "worktrees",
     ]);
   });
 

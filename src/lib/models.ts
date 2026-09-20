@@ -379,7 +379,21 @@ export function mergeModelSettings(
   return next;
 }
 
-const EFFORT_SETTING_IDS = new Set(["effort", "reasoning", "reasoningEffort"]);
+const EFFORT_SETTING_IDS = new Set([
+  "effort",
+  "reasoning",
+  "reasoningEffort",
+  // Pi and OMP expose their reasoning level as a `thinking` select.
+  "thinking",
+  // OpenCode exposes reasoning levels as `variant`; treat it as effort so the
+  // standalone effort control and dedup behave like Codex/Cursor/Grok.
+  "variant",
+]);
+
+/** True for the select setting ids that control reasoning effort. */
+export function isEffortSettingId(id: string): boolean {
+  return EFFORT_SETTING_IDS.has(id);
+}
 
 /** The select setting that controls reasoning effort for this model, if any. */
 export function modelEffortSetting(

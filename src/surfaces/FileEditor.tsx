@@ -78,6 +78,7 @@ import {
 } from "./editorGit";
 import { editorLint } from "./editorLint";
 import { editorSearch } from "./editorSearch";
+import { editorScrollbar } from "./editorScrollbar";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
 
@@ -679,6 +680,7 @@ function CodeMirrorEditor({
         editorTyping(path),
         editorAutocomplete,
         editorLint(path, (count) => onErrorCountChangeRef.current(count)),
+        editorScrollbar,
         editorSearch,
         Prec.high(
           keymap.of([

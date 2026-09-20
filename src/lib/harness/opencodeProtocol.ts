@@ -258,14 +258,56 @@ export function inferDefaultVariant(
   if (providerID === "anthropic" || providerID.startsWith("google")) {
     return variants.includes("high") ? "high" : undefined;
   }
-  if (providerID === "openai" || providerID === "opencode") {
-    return variants.includes("medium")
-      ? "medium"
-      : variants.includes("high")
-        ? "high"
-        : undefined;
-  }
+  // Variants are reasoning levels on every provider (e.g. minimal/low/medium
+  // /high/xhigh), so prefer medium, then high, regardless of provider.
+  if (variants.includes("medium")) return "medium";
+  if (variants.includes("high")) return "high";
   return undefined;
+}
+
+const VARIANT_LABELS: Record<string, string> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  "extra-high": "Extra High",
+  max: "Max",
+  ultra: "Ultra",
+};
+
+const VARIANT_ORDER = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "extra-high",
+  "max",
+  "ultra",
+];
+
+/** Human label for an OpenCode variant value, matching Codex/Cursor effort labels. */
+export function openCodeVariantLabel(value: string): string {
+  return (
+    VARIANT_LABELS[value] ??
+    VARIANT_LABELS[value.toLowerCase()] ??
+    titleCaseSlug(value)
+  );
+}
+
+/** Sort variant values from lowest to highest effort; unknown values sort last. */
+export function sortOpenCodeVariants(values: string[]): string[] {
+  const rank = (value: string): number => {
+    const index = VARIANT_ORDER.indexOf(value.toLowerCase());
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  return [...values].sort((left, right) => {
+    const delta = rank(left) - rank(right);
+    return delta !== 0 ? delta : left.localeCompare(right);
+  });
 }
 
 export function inferDefaultAgent(agents: Array<{ name: string }>): string | undefined {

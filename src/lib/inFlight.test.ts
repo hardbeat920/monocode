@@ -86,6 +86,16 @@ describe("inFlightRefs", () => {
     expect(inFlightRefs([blank], [newTab(blank.id)])).toEqual([]);
     expect(hasInFlightSessions([blank])).toBe(true);
   });
+
+  it("does not resume a session whose worktree was removed", () => {
+    const removed = chat("/tmp/a", {
+      busy: true,
+      worktreeCwd: "/tmp/a-worktrees/feature",
+      worktreeRemoved: true,
+    });
+    expect(isInFlightSession(removed)).toBe(false);
+    expect(inFlightRefs([removed], [newTab(removed.id)])).toEqual([]);
+  });
 });
 
 describe("markTurnInterrupted", () => {
@@ -240,6 +250,9 @@ describe("canAutoContinue", () => {
       }),
     ).toBe(false);
     expect(canAutoContinue({ ...interrupted, busy: true })).toBe(false);
+    expect(canAutoContinue({ ...interrupted, worktreeRemoved: true })).toBe(
+      false,
+    );
   });
 });
 

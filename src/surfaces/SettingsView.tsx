@@ -208,27 +208,28 @@ import {
   KEYBINDINGS,
   loadClaudeHooks,
   loadCloseToTray,
-  loadComposerEffortVisible,
   loadComposerRunner,
   loadDiffViewer,
   loadFollowUpBehavior,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
+  loadModelControls,
   loadNotesEnabled,
   saveClaudeHooks,
   saveCloseToTray,
-  saveComposerEffortVisible,
   saveComposerRunner,
   saveDiffViewer,
   saveFollowUpBehavior,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
+  saveModelControls,
   saveNotesEnabled,
   searchSettings,
   settingsSectionDescription,
   settingsSectionLabel,
   type DiffViewer,
   type FollowUpBehavior,
+  type ModelControls,
   type SettingsSearchResult,
   type SettingsSectionId,
 } from "../lib/settings";
@@ -251,6 +252,9 @@ import {
 
 import { SkillsPage } from "./SkillsPage";
 import { ProjectNotificationSettings } from "./ProjectNotificationSettings";
+import { WorktreesPage } from "./WorktreesPage";
+import { removeWorktree, type RemoveWorktree } from "../lib/worktrees";
+import type { Session } from "../lib/session";
 
 /**
  * The `data-setting-id` Settings should reveal when it opens: one of the ids in
@@ -274,6 +278,12 @@ type Props = {
   recents?: RecentProject[];
   cwd: string;
   sessions: SessionSummary[];
+  liveSessions?: Session[];
+  onRemoveWorktree?: RemoveWorktree;
+  onCheckWorktreeRemoval?: RemoveWorktree;
+  onDeleteWorktreeSessions?: (
+    sessionIds: readonly string[],
+  ) => Promise<boolean>;
   besideRail?: boolean;
   onClose: () => void;
   /** Lets search jump to a setting that lives on another page. */
@@ -294,6 +304,10 @@ export function SettingsView({
   recents,
   cwd,
   sessions,
+  liveSessions,
+  onRemoveWorktree = removeWorktree,
+  onCheckWorktreeRemoval,
+  onDeleteWorktreeSessions,
   besideRail = false,
   onClose,
   onSelectSection,
@@ -417,6 +431,16 @@ export function SettingsView({
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
               {section === "providers" ? <ProvidersPage /> : null}
+              {section === "worktrees" ? (
+                <WorktreesPage
+                  cwd={cwd}
+                  recents={recents}
+                  liveSessions={liveSessions}
+                  onRemove={onRemoveWorktree}
+                  onCheckRemove={onCheckWorktreeRemoval}
+                  onDeleteSessions={onDeleteWorktreeSessions}
+                />
+              ) : null}
               {section === "inbox" ? (
                 <InboxPage
                   cwd={cwd}
@@ -711,9 +735,8 @@ function ChatPage() {
     useState(loadTranscriptAnchor);
   const [followUpBehavior, setFollowUpBehavior] =
     useState<FollowUpBehavior>(loadFollowUpBehavior);
-  const [composerEffortVisible, setComposerEffortVisible] = useState(
-    loadComposerEffortVisible,
-  );
+  const [modelControls, setModelControls] =
+    useState<ModelControls>(loadModelControls);
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
@@ -745,9 +768,9 @@ function ChatPage() {
     setFollowUpBehavior(next);
   };
 
-  const onComposerEffortVisible = (next: boolean) => {
-    saveComposerEffortVisible(next);
-    setComposerEffortVisible(next);
+  const onModelControls = (next: ModelControls) => {
+    saveModelControls(next);
+    setModelControls(next);
   };
 
   const onDiffViewer = (next: DiffViewer) => {
@@ -819,14 +842,18 @@ function ChatPage() {
           />
         </Row>
         <Row
-          id="effort-control"
-          label="Effort control"
-          description="Show the current effort as a separate control beside the model picker for quicker changes. When off, effort stays inside the model menu."
+          id="model-controls"
+          label="Model controls"
+          description="Show model options beside the picker instead of inside the model menu."
         >
-          <Toggle
-            label="Show effort beside model picker"
-            on={composerEffortVisible}
-            onChange={onComposerEffortVisible}
+          <Segmented
+            label="Model controls"
+            value={modelControls}
+            options={[
+              { value: "menu", label: "Menu" },
+              { value: "beside", label: "Beside" },
+            ]}
+            onChange={onModelControls}
           />
         </Row>
       </Group>

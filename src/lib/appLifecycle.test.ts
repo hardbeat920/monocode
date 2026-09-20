@@ -190,6 +190,7 @@ describe("project choices through lifecycle saves", () => {
 
   it("preserves resumed choices when quitting before App registers live getters", async () => {
     const state = workspace();
+    state.sessions[0].worktreeCwd = "/alpha-worktrees/feature";
     vi.mocked(loadWorkspaceSnapshot).mockResolvedValue(
       collectWorkspaceSnapshot(
         state.tabs,
@@ -202,6 +203,12 @@ describe("project choices through lifecycle saves", () => {
     const { handleQuitRequested } = await import("./appLifecycle");
     await handleQuitRequested();
     expect([...(lastSavedMemory() ?? [])]).toEqual([...state.memory]);
+    const args = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "workspace_set_snapshot").at(-1)?.[1];
+    const saved = args && typeof args === "object" && "snapshot" in args
+      ? parseWorkspaceSnapshot(args.snapshot) : null;
+    expect(saved?.sessions.find((session) => session.id === "a1")?.worktreeCwd)
+      .toBe("/alpha-worktrees/feature");
   });
 });
 

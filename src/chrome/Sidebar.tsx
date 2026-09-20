@@ -1,3 +1,4 @@
+import { NO_BRANCH_LABEL } from "../lib/worktrees";
 import { OrchestrationSidebarAgents } from "./OrchestrationSidebarAgents";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -6,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  CircleDashed,
   CircleDot,
   Clock,
   Folder,
@@ -19,6 +21,7 @@ import {
   Share,
   Settings,
   StickyNote,
+  Zap,
 } from "./icons";
 import {
   memo,
@@ -138,6 +141,7 @@ import {
 import { SessionsEmpty } from "./SessionsEmpty";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
 import { SourceControl } from "./SourceControl";
+import { GithubStarPrompt } from "./GithubStarPrompt";
 
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 560;
@@ -170,6 +174,8 @@ type Props = {
   cwd: string;
   /** Working copy for Changes / explorer git. Falls back to `cwd`. */
   gitCwd?: string;
+  /** Branch identity shown for a worktree whose folder has a temporary name. */
+  explorerRootLabel?: string;
   open: boolean;
   sessions: SessionSummary[];
   busySessionIds: Set<string>;
@@ -236,10 +242,12 @@ type Props = {
   onOpenInbox?: () => void;
   onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onOpenNotes?: () => void;
+  onOpenAutomations?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   notesActive?: boolean;
+  automationsActive?: boolean;
   notesEnabled?: boolean;
   onToggleProjectRail?: () => void;
   projectRailOpen?: boolean;
@@ -261,6 +269,7 @@ type Props = {
 function SidebarComponent({
   cwd,
   gitCwd,
+  explorerRootLabel,
   open,
   sessions,
   busySessionIds,
@@ -317,10 +326,12 @@ function SidebarComponent({
   onOpenInbox,
   onOpenInboxItem,
   onOpenNotes,
+  onOpenAutomations,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
   notesActive = false,
+  automationsActive = false,
   notesEnabled = true,
   onToggleProjectRail,
   projectRailOpen = true,
@@ -495,7 +506,10 @@ function SidebarComponent({
       return;
     }
     const available = new Set(sessionNavigationIds);
-    if (selectionAnchorRef.current && !available.has(selectionAnchorRef.current)) {
+    if (
+      selectionAnchorRef.current &&
+      !available.has(selectionAnchorRef.current)
+    ) {
       selectionAnchorRef.current = null;
     }
     setSelectedSessionIds((current) =>
@@ -543,6 +557,7 @@ function SidebarComponent({
     !searchActive &&
     !inboxActive &&
     !notesActive &&
+    !automationsActive &&
     !settingsOpen &&
     inProject;
   const gitStatuses = useGitFileStatuses(gitRoot, open && tab === "files");
@@ -1002,9 +1017,10 @@ function SidebarComponent({
           : visibleIds.slice(Math.min(start, end), Math.max(start, end) + 1);
       selectionAnchorRef.current = start < 0 ? sessionId : anchor;
       setSelectedSessionIds(
-        (current) => new Set(
-          event.ctrlKey || event.metaKey ? [...current, ...range] : range,
-        ),
+        (current) =>
+          new Set(
+            event.ctrlKey || event.metaKey ? [...current, ...range] : range,
+          ),
       );
       return;
     }
@@ -1219,9 +1235,11 @@ function SidebarComponent({
               onOpenInbox={onOpenInbox}
               onOpenNotificationSettings={onOpenNotificationSettings}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+              onOpenAutomations={onOpenAutomations}
               searchActive={searchActive}
               inboxActive={inboxActive}
               notesActive={notesActive}
+              automationsActive={automationsActive}
               inboxUnseen={inboxUnseen}
             />
           ) : null}
@@ -1252,6 +1270,7 @@ function SidebarComponent({
               <FileTree
                 key={gitRoot}
                 cwd={gitRoot}
+                rootLabel={explorerRootLabel}
                 onOpenFile={onOpenFile}
                 onOpenTerminal={onOpenTerminal}
                 onFileMoved={onFileMoved}
@@ -1601,6 +1620,7 @@ function SidebarComponent({
               onDismissUpdate={onDismissUpdate}
             />
             <div className="flex shrink-0 flex-col gap-px p-2">
+              <GithubStarPrompt />
               <RailAction
                 label="Settings"
                 icon={Settings}
@@ -1697,6 +1717,8 @@ function SidebarComponent({
           notesEnabled={notesEnabled}
           onOpenNotes={onOpenNotes}
           notesActive={notesActive}
+          onOpenAutomations={onOpenAutomations}
+          automationsActive={automationsActive}
           onTogglePanel={onToggleProjectRail}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
@@ -1730,9 +1752,11 @@ function SidebarProjectPicker({
   onOpenInbox,
   onOpenNotificationSettings,
   onOpenNotes,
+  onOpenAutomations,
   searchActive = false,
   inboxActive = false,
   notesActive = false,
+  automationsActive = false,
   inboxUnseen = false,
 }: {
   cwd: string;
@@ -1745,12 +1769,16 @@ function SidebarProjectPicker({
   onOpenInbox?: () => void;
   onOpenNotificationSettings?: () => void;
   onOpenNotes?: () => void;
+  onOpenAutomations?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   notesActive?: boolean;
+  automationsActive?: boolean;
   inboxUnseen?: boolean;
 }) {
-  const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
   const inboxTrigger = useRef<HTMLElement | null>(null);
   return (
     <div
@@ -1786,8 +1814,10 @@ function SidebarProjectPicker({
             active={inboxActive}
             onClick={onOpenInbox}
             onOpenContextMenu={(x, y) => {
-              inboxTrigger.current = document.activeElement instanceof HTMLElement
-                ? document.activeElement : null;
+              inboxTrigger.current =
+                document.activeElement instanceof HTMLElement
+                  ? document.activeElement
+                  : null;
               setInboxMenu({ x, y });
             }}
           >
@@ -1805,6 +1835,15 @@ function SidebarProjectPicker({
         {onOpenNotes ? (
           <IconButton label="Notes" active={notesActive} onClick={onOpenNotes}>
             <StickyNote className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        ) : null}
+        {onOpenAutomations ? (
+          <IconButton
+            label="Automations"
+            active={automationsActive}
+            onClick={onOpenAutomations}
+          >
+            <Zap className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
       </div>
@@ -2175,13 +2214,16 @@ function SessionCard({
   const [orchestrationTooltipOpen, setOrchestrationTooltipOpen] =
     useState(false);
   const orchestration = session.orchestration;
+  const draft = !!session.draft;
   const orchestrationExpanded =
     !!orchestration && (isActive || isSelected || busy);
   const orchestrationDone =
     orchestration?.tasks.filter((task) => task.status === "completed").length ??
     0;
   const title = sessionDisplayTitle(session.title, session.harness);
-  const gitLabel = formatGitLabel(session.repo, session.branch);
+  const gitLabel = session.worktreeRemoved
+    ? NO_BRANCH_LABEL
+    : formatGitLabel(session.repo, session.branch);
   const time = formatRelative(session.updatedAt, now);
   const model =
     compact && !orchestrationExpanded
@@ -2193,7 +2235,9 @@ function SessionCard({
       ? "text-accent"
       : done
         ? "text-emerald-400"
-        : "text-content/45";
+        : draft
+          ? "text-content/55"
+          : "text-content/45";
   const status = (
     <span
       className={`flex shrink-0 items-center gap-1 text-[11px] tabular-nums ${statusClass}`}
@@ -2212,6 +2256,11 @@ function SessionCard({
         <>
           <Check className="size-3" strokeWidth={2.25} />
           <span>Done</span>
+        </>
+      ) : draft ? (
+        <>
+          <CircleDashed className="size-3" strokeWidth={1.75} />
+          <span>Draft</span>
         </>
       ) : (
         <span>{time}</span>
@@ -2445,16 +2494,18 @@ function SessionCard({
           dropTarget
             ? "text-content border-transparent"
             : isSelected
-              ? "bg-accent/15 text-content border-transparent"
+              ? `bg-accent/15 text-content ${draft ? "border-content/30 border-dashed" : "border-transparent"}`
               : needsApproval
                 ? "bg-content/20 text-content border-content/30 border-dashed"
                 : isActive
-                  ? "bg-selection text-content border-transparent"
-                  : `text-content/80 hover:text-content border-transparent ${
-                      orchestrationExpanded
-                        ? "bg-content/5 hover:bg-content/10"
-                        : "hover:bg-content/5"
-                    }`
+                  ? `bg-selection text-content ${draft ? "border-content/30 border-dashed" : "border-transparent"}`
+                  : draft
+                    ? "border-content/25 border-dashed text-content/80 hover:bg-content/5 hover:text-content"
+                    : `text-content/80 hover:text-content border-transparent ${
+                        orchestrationExpanded
+                          ? "bg-content/5 hover:bg-content/10"
+                          : "hover:bg-content/5"
+                      }`
         }`}
       >
         {dropTarget ? (
@@ -2551,6 +2602,17 @@ function SessionCard({
               </button>
             ) : null}
             {workItemBadge}
+            {session.automationId ? (
+              <span
+                data-automation-icon
+                role="img"
+                title="Started by an automation"
+                aria-label="Started by an automation"
+                className="grid size-5 -mr-1 shrink-0 place-items-center text-amber-400"
+              >
+                <Zap className="size-3" strokeWidth={1.75} />
+              </span>
+            ) : null}
             {orchestration ? (
               <div
                 ref={orchestrationTooltipRootRef}
@@ -2624,7 +2686,10 @@ function SessionCard({
                   </span>
                   <span
                     className={`shrink-0 text-[10px] ${
-                      task.needsInput || task.status === "failed"
+                      task.needsInput ||
+                      task.status === "failed" ||
+                      task.status === "blocked" ||
+                      task.status === "interrupted"
                         ? "text-amber-400"
                         : label === "Working"
                           ? "text-accent"

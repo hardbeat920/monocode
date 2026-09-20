@@ -155,7 +155,7 @@ describe("orchestration proposals", () => {
     expect(prompt).toContain("Do not ask the user to assemble a team");
     expect(prompt).toContain("disjoint files");
     expect(prompt).toContain("acceptance checks");
-    expect(prompt).toContain('exact project root is "/repo"');
+    expect(prompt).toContain('exact checkout root is "/repo"');
     expect(prompt).toContain("returned without the root prefix");
   });
   it("turns the lead's structured response into a ready card without changing the discovered catalog", () => {
@@ -167,6 +167,29 @@ describe("orchestration proposals", () => {
     expect(result.tasks).toEqual(payload.tasks);
     expect(result.settings).toEqual(draft.settings);
     expect(result.author).toEqual(draft.author);
+  });
+  it("validates discovered paths against the proposal's concrete worktree", () => {
+    const worktreeDraft = {
+      ...draft,
+      checkoutCwd: "/repo-worktrees/feature",
+    };
+    const result = completeOrchestrationProposal(
+      worktreeDraft,
+      JSON.stringify({
+        ...payload,
+        tasks: [
+          {
+            ...task,
+            files: ["/repo-worktrees/feature/src/settings"],
+          },
+        ],
+      }),
+    );
+    expect(result.status).toBe("ready");
+    expect(result.tasks[0].files).toEqual(["src/settings"]);
+    expect(orchestrationRepairPrompt(worktreeDraft)).toContain(
+      'exact checkout root is "/repo-worktrees/feature"',
+    );
   });
   it("accepts fenced JSON and rejects prose or a model outside the available catalog", () => {
     expect(
@@ -213,7 +236,7 @@ describe("orchestration proposals", () => {
       ),
     ).toHaveLength(2);
   });
-  it("rebases absolute scopes inside the project and identifies outside scopes", () => {
+  it("rebases absolute scopes inside the checkout and identifies outside scopes", () => {
     expect(
       validateProposedTasks(
         [
@@ -238,7 +261,7 @@ describe("orchestration proposals", () => {
         draft.cwd,
       ),
     ).toThrow(
-      'Assignment "ui" uses file scope "/repo-other/src" outside the selected project "/repo"',
+      'Assignment "ui" uses file scope "/repo-other/src" outside the selected checkout "/repo"',
     );
   });
   it("rebases Windows scopes case-insensitively with portable separators", () => {

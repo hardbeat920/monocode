@@ -52,6 +52,8 @@ export function orchestrationTaskLabel(
     cancelling: "Stopping",
     completed: "Done",
     failed: "Failed",
+    blocked: "Needs review",
+    interrupted: "Interrupted",
     cancelled: "Cancelled",
   }[task.status];
 }

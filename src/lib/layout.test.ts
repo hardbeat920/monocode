@@ -154,6 +154,33 @@ describe("openSessionChangesTab", () => {
 });
 
 describe("openChangesTab", () => {
+  it("keeps Changes and per-file reviews independent across worktrees", () => {
+    const main = openChangesTab(newTab("session-a"), "/repo");
+    const mainReview = newFileTab("/repo/a.ts", "/repo", true);
+    const withReview = openEditorTab(main, mainReview);
+    const worktree = openChangesTab(
+      withReview,
+      "/repo-worktrees/feature",
+      undefined,
+      undefined,
+      "/repo",
+    );
+    const files = worktree.editorPanes.flatMap((pane) => pane.files);
+    expect(files.filter(isChangesTab).map((file) => file.cwd)).toEqual([
+      "/repo",
+      "/repo-worktrees/feature",
+    ]);
+    expect(files).toContainEqual(mainReview);
+    const pane = worktree.editorPanes.find((pane) => pane.id === worktree.focusedId)!;
+    expect(pane.files.find((file) => file.id === pane.activeFileId)).toMatchObject({
+      cwd: "/repo-worktrees/feature",
+      projectCwd: "/repo",
+    });
+    const back = openChangesTab(worktree, "/repo");
+    expect(back.editorPanes.flatMap((pane) => pane.files).filter(isChangesTab)).toHaveLength(2);
+    expect(back.editorPanes[0]?.activeFileId).toBe(main.editorPanes[0]?.activeFileId);
+  });
+
   it("reuses one Changes tab and updates the focused file", () => {
     const cwd = "/repo";
     const first = openChangesTab(

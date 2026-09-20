@@ -17,9 +17,11 @@ import {
   isOpenCodeDefaultTitle,
   isOpenCodeNotFound,
   mergeOpenCodeAssistantText,
+  openCodeVariantLabel,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
+  sortOpenCodeVariants,
   toOpenCodePermissionReply,
   toolKindFromName,
 } from "./opencodeProtocol";
@@ -185,6 +187,33 @@ describe("OpenCode CLI inventory parsers", () => {
     ]);
   });
 
+  it("sorts variant options and labels xhigh as Extra High", () => {
+    const parsed = parseModelsCliOutput(
+      [
+        "some-cloud/spark-1",
+        '{"id":"spark-1","name":"Spark 1","variants":{"high":{},"minimal":{},"xhigh":{},"low":{},"medium":{}}}',
+        "",
+      ].join("\n"),
+    );
+    const [model] = flattenOpenCodeModels(parsed, []);
+    const variant = model?.settings?.find((setting) => setting.id === "variant");
+    expect(variant?.options.map((option) => option.value)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(variant?.options.map((option) => option.label)).toEqual([
+      "Minimal",
+      "Low",
+      "Medium",
+      "High",
+      "Extra High",
+    ]);
+    expect(variant?.value).toBe("medium");
+  });
+
   it("uses familiar provider names and readable custom-provider fallbacks", () => {
     expect(openCodeProviderName("opencode-go")).toBe("OpenCode Go");
     expect(openCodeProviderName("openai")).toBe("OpenAI");
@@ -232,6 +261,31 @@ describe("OpenCode helpers", () => {
     expect(inferDefaultAgent([{ name: "plan" }, { name: "build" }])).toBe(
       "build",
     );
+  });
+
+  it("prefers medium/high variants on any provider", () => {
+    expect(inferDefaultVariant("some-cloud", ["low", "medium", "high"])).toBe(
+      "medium",
+    );
+    expect(inferDefaultVariant("some-cloud", ["low", "high"])).toBe("high");
+    expect(inferDefaultVariant("some-cloud", ["low", "xhigh"])).toBeUndefined();
+  });
+
+  it("labels variants like Codex/Cursor effort levels", () => {
+    expect(openCodeVariantLabel("xhigh")).toBe("Extra High");
+    expect(openCodeVariantLabel("extra-high")).toBe("Extra High");
+    expect(openCodeVariantLabel("minimal")).toBe("Minimal");
+    expect(openCodeVariantLabel("high")).toBe("High");
+  });
+
+  it("sorts variants from lowest to highest effort", () => {
+    expect(sortOpenCodeVariants(["high", "minimal", "xhigh", "low", "medium"])).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
   });
 });
 

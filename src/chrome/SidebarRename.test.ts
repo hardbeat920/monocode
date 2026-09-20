@@ -881,6 +881,22 @@ describe("sidebar orchestration card", () => {
   });
 });
 
+describe("sidebar automation card", () => {
+  it("shows a bolt on sessions started by an automation", () => {
+    props.busySessionIds = new Set();
+    props.sessions[0].automationId = "automation-1";
+    act(() => render());
+    const icon = card().querySelector("[data-automation-icon]");
+    expect(icon).not.toBeNull();
+    expect(icon?.tagName).toBe("SPAN");
+    expect(icon?.getAttribute("aria-label")).toBe("Started by an automation");
+    expect(card().querySelector("[data-orchestration-icon]")).toBeNull();
+    expect(
+      card().querySelector("[data-session-select] [data-automation-icon]"),
+    ).toBeNull();
+  });
+});
+
 describe("sidebar linked work item updates", () => {
   it("opens a linked item beside the session that owns it", () => {
     props.busySessionIds = new Set();
@@ -1144,4 +1160,25 @@ describe("sidebar working agents", () => {
     act(() => render());
     expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
   });
+});
+
+
+it("labels preserved sessions as having no branch selected", () => {
+  props.sessions = [
+    {
+      ...props.sessions[0],
+      branch: "old-feature",
+      repo: "project",
+      worktreeRemoved: true,
+    },
+  ];
+  act(render);
+  expect(card().textContent).toContain("No branch selected");
+  expect(card().textContent).not.toContain("old-feature");
+  props.sessions = [
+    { ...props.sessions[0], branch: "main", worktreeRemoved: undefined },
+  ];
+  act(render);
+  expect(card().textContent).not.toContain("No branch selected");
+  expect(card().textContent).toContain("project/main");
 });

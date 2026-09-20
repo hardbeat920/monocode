@@ -50,7 +50,13 @@ export function ModalPanel({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        (event.target instanceof Element &&
+          event.target.closest("[data-dialog-popover]"))
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       onClose();
@@ -69,7 +75,7 @@ export function ModalPanel({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         onMouseDown={(event) => event.stopPropagation()}
-        className={`relative isolate flex flex-col overflow-hidden rounded-2xl border border-content/10 shadow-2xl ${className ?? ""}`}
+        className={`relative isolate flex flex-col overflow-hidden rounded-2xl border border-content/7 shadow-2xl ${className ?? ""}`}
       >
         <GlassBackdrop className="bg-background-base/55" />
         <div className="modal-panel relative z-[1] flex min-h-0 flex-1 flex-col">
@@ -85,7 +91,7 @@ export function ModalPanel({
             >
               <h2
                 id={titleId}
-                className="text-2xl font-semibold leading-tight text-content"
+                className="text-xl font-medium leading-tight text-content"
               >
                 {title}
               </h2>

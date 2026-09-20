@@ -23,20 +23,29 @@ it("detects a new revision even while another project's activity remains unread"
   const tracker = new InboxNotificationTracker();
   const a = item("acme/private", "2026-09-14T08:00:00Z");
   const b = item("acme/work", "2026-09-14T08:01:00Z");
-  expect(tracker.observe([a], "all")).toEqual([]);
-  expect(tracker.observe([a, b], "all")).toEqual([b]);
-  expect(tracker.observe([a, b], "all")).toEqual([]);
+  expect(tracker.observe([a], "all")).toEqual({ changed: [], appeared: [] });
+  expect(tracker.observe([a, b], "all")).toEqual({
+    changed: [b],
+    appeared: [b],
+  });
+  expect(tracker.observe([a, b], "all")).toEqual({ changed: [], appeared: [] });
   const updated = { ...b, updatedAt: "2026-09-14T08:02:00Z" };
-  expect(tracker.observe([a, updated], "all")).toEqual([updated]);
+  expect(tracker.observe([a, updated], "all")).toEqual({
+    changed: [updated],
+    appeared: [],
+  });
 });
 
 it("waits for a successful provider baseline instead of ringing for recovered history", () => {
   const tracker = new InboxNotificationTracker();
   const a = item("acme/app", "2026-09-14T08:00:00Z");
   tracker.observe([], "all", ["github"]);
-  expect(tracker.observe([a], "all")).toEqual([]);
+  expect(tracker.observe([a], "all")).toEqual({ changed: [], appeared: [] });
   const changed = { ...a, updatedAt: "2026-09-14T08:01:00Z" };
-  expect(tracker.observe([changed], "all")).toEqual([changed]);
+  expect(tracker.observe([changed], "all")).toEqual({
+    changed: [changed],
+    appeared: [],
+  });
 });
 
 it("does not announce history exposed by a changed query or repeat items after a failed or partial refresh", () => {
@@ -44,8 +53,17 @@ it("does not announce history exposed by a changed query or repeat items after a
   const a = item("acme/app", "2026-09-14T08:00:00Z");
   const history = { ...a, number: 2, updatedAt: "2026-08-01T08:00:00Z" };
   tracker.observe([a], "open");
-  expect(tracker.observe([a, history], "all")).toEqual([]);
-  expect(tracker.observe([], "all")).toEqual([]);
-  expect(tracker.observe([a, history], "all")).toEqual([]);
-  expect(tracker.observe([{ ...a, updatedAt: "invalid" }], "all")).toEqual([]);
+  expect(tracker.observe([a, history], "all")).toEqual({
+    changed: [],
+    appeared: [],
+  });
+  expect(tracker.observe([], "all")).toEqual({ changed: [], appeared: [] });
+  expect(tracker.observe([a, history], "all")).toEqual({
+    changed: [],
+    appeared: [],
+  });
+  expect(tracker.observe([{ ...a, updatedAt: "invalid" }], "all")).toEqual({
+    changed: [],
+    appeared: [],
+  });
 });

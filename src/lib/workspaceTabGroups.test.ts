@@ -42,6 +42,28 @@ function tab(id: string, sessionId: string): WorkspaceTab {
 
 describe("focusedWorkspaceTabCwd", () => {
   it.each(["editor", "terminal"] as const)(
+    "keeps a worktree-only %s tab under its owning project",
+    (kind) => {
+      const cwd = "/repo-worktrees/feature";
+      const file = kind === "editor"
+        ? newFileTab(`${cwd}/readme.md`, cwd, false, undefined, "/repo")
+        : newTerminalFile(cwd, undefined, "/repo");
+      const pane = { id: "surface", files: [file], activeFileId: file.id };
+      const worktreeTab = {
+        ...tab("tree-tab", pane.id),
+        editorPanes: kind === "editor" ? [pane] : [],
+        terminalPanes: kind === "terminal" ? [pane] : [],
+      };
+      expect(workspaceTabCwd(worktreeTab, [])).toBe("/repo");
+      expect(focusedWorkspaceTabCwd(worktreeTab, [])).toBe("/repo");
+      expect(planProjectReturn({
+        tabs: [worktreeTab], sessions: [], memory: new Map(),
+        activeTabId: "elsewhere", projectPath: "/repo",
+      })).toMatchObject({ action: "activate", tabId: "tree-tab" });
+    },
+  );
+
+  it.each(["editor", "terminal"] as const)(
     "uses the restored %s pane's project instead of the first chat's project",
     (kind) => {
       const sessions = [session("chat", "/alpha")];

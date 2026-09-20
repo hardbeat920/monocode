@@ -1,4 +1,5 @@
 import {
+  ArrowUp,
   Check,
   ChevronRight,
   CircleDashed,
@@ -51,7 +52,8 @@ import {
   isSearchTool,
   stubFilePreview,
 } from "../lib/harness/preview";
-import { copyText } from "../lib/clipboard";
+import { copyMessage } from "../lib/clipboard";
+import type { Attachment } from "../lib/session";
 import { visibleUserPrompt } from "../lib/orchestration";
 import { playCue } from "../lib/sounds";
 import { legacyTaskListFromText } from "../lib/taskList";
@@ -129,8 +131,9 @@ type Props = {
   pendingQuestion?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
-  onSaveNote?: (text: string) => void;
-  onSaveSelectionNote?: (text: string) => void;
+  onSaveNote?: (text: string) => void | Promise<void>;
+  onSendDraft?: (block: Block) => boolean | void;
+  onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -160,6 +163,7 @@ function AgentTranscriptComponent({
   onApproval,
   onAddToChat,
   onSaveNote,
+  onSendDraft,
   onSaveSelectionNote,
   onOpenFile,
   onOpenDiff,
@@ -534,6 +538,8 @@ function AgentTranscriptComponent({
                     (itemIndex === foldLineAt && showFoldLine))
                 }
                 onApproval={onApproval}
+                onSaveNote={onSaveNote}
+                onSendDraft={onSendDraft}
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
@@ -756,7 +762,7 @@ function TurnDuration({
   harness?: HarnessId;
   completedAt?: number;
   copyText?: string;
-  onSaveNote?: (text: string) => void;
+  onSaveNote?: (text: string) => void | Promise<void>;
   fromHarness?: HarnessId;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
@@ -922,41 +928,68 @@ function formatClockTime(epochMs: number): string {
   });
 }
 
-function CopyTurnButton({ text }: { text: string }) {
+function CopyTurnButton({
+  text,
+  attachments,
+  label = "Copy response",
+}: {
+  text: string;
+  attachments?: Attachment[];
+  label?: string;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
     setCopied(false);
+    setError(null);
     return () => {
       if (timer.current != null) window.clearTimeout(timer.current);
     };
-  }, [text]);
+  }, [text, attachments]);
 
   return (
-    <button
-      type="button"
-      title={copied ? "Copied" : "Copy response"}
-      aria-label={copied ? "Copied" : "Copy response"}
-      className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
-      onClick={() => {
-        playCue("copy");
-        void copyText(text).then(
-          () => {
-            setCopied(true);
-            if (timer.current != null) window.clearTimeout(timer.current);
-            timer.current = window.setTimeout(() => setCopied(false), 2000);
-          },
-          () => {},
-        );
-      }}
-    >
-      {copied ? (
-        <Check className="size-3.5" strokeWidth={1.75} />
-      ) : (
-        <Copy className="size-3.5" strokeWidth={1.75} />
+    <>
+      <button
+        type="button"
+        disabled={pending}
+        title={copied ? "Copied" : label}
+        aria-label={copied ? "Copied" : label}
+        className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
+        onClick={(event) => {
+          event.stopPropagation();
+          setError(null);
+          setCopied(false);
+          setPending(true);
+          playCue("copy");
+          void copyMessage(text, attachments).then(
+            () => {
+              setPending(false);
+              setCopied(true);
+              if (timer.current != null) window.clearTimeout(timer.current);
+              timer.current = window.setTimeout(() => setCopied(false), 2000);
+            },
+            (error: unknown) => {
+              setPending(false);
+              setError(error instanceof Error ? error.message : String(error));
+            },
+          );
+        }}
+      >
+        {copied ? (
+          <Check className="size-3.5" strokeWidth={1.75} />
+        ) : (
+          <Copy className="size-3.5" strokeWidth={1.75} />
+        )}
+      </button>
+      {error && (
+        <span role="alert" className="max-w-xs text-xs text-content/70">
+          Copy failed. {error}
+        </span>
       )}
-    </button>
+    </>
   );
 }
 
@@ -965,38 +998,58 @@ function SaveNoteButton({
   onSave,
 }: {
   text: string;
-  onSave: (text: string) => void;
+  onSave: (text: string) => void | Promise<void>;
 }) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
     setSaved(false);
+    setError(null);
     return () => {
       if (timer.current != null) window.clearTimeout(timer.current);
     };
   }, [text]);
 
   return (
-    <button
-      type="button"
-      title={saved ? "Saved to Notes" : "Save as note"}
-      aria-label={saved ? "Saved to Notes" : "Save as note"}
-      className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
-      onClick={() => {
-        playCue("copy");
-        onSave(text);
-        setSaved(true);
-        if (timer.current != null) window.clearTimeout(timer.current);
-        timer.current = window.setTimeout(() => setSaved(false), 2000);
-      }}
-    >
-      {saved ? (
-        <Check className="size-3.5" strokeWidth={1.75} />
-      ) : (
-        <FilePlusCorner className="size-3.5" strokeWidth={1.75} />
+    <>
+      <button
+        type="button"
+        disabled={pending}
+        title={saved ? "Saved to Notes" : "Save as note"}
+        aria-label={saved ? "Saved to Notes" : "Save as note"}
+        className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
+        onClick={async () => {
+          setError(null);
+          setSaved(false);
+          setPending(true);
+          try {
+            await onSave(text);
+            playCue("copy");
+            setSaved(true);
+            if (timer.current != null) window.clearTimeout(timer.current);
+            timer.current = window.setTimeout(() => setSaved(false), 2000);
+          } catch (error) {
+            setError(error instanceof Error ? error.message : String(error));
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        {saved ? (
+          <Check className="size-3.5" strokeWidth={1.75} />
+        ) : (
+          <FilePlusCorner className="size-3.5" strokeWidth={1.75} />
+        )}
+      </button>
+      {error && (
+        <span role="alert" className="max-w-xs text-xs text-content/70">
+          Could not save note. {error}
+        </span>
       )}
-    </button>
+    </>
   );
 }
 
@@ -1007,6 +1060,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   underLine = false,
   cwd,
   onApproval,
+  onSaveNote,
+  onSendDraft,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -1023,6 +1078,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   underLine?: boolean;
   cwd?: string;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
+  onSaveNote?: (text: string) => void | Promise<void>;
+  onSendDraft?: (block: Block) => boolean | void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -1038,6 +1095,9 @@ const TranscriptBlock = memo(function TranscriptBlock({
         block={block}
         layout={layout}
         stickyIndex={stickyIndex}
+        cwd={cwd}
+        onSaveNote={onSaveNote}
+        onSendDraft={onSendDraft}
       />
     );
   }
@@ -1149,10 +1209,16 @@ function UserMessageBlock({
   block,
   layout,
   stickyIndex,
+  cwd,
+  onSaveNote,
+  onSendDraft,
 }: {
   block: Block;
   layout: TranscriptLayout;
   stickyIndex: number;
+  cwd?: string;
+  onSaveNote?: (text: string) => void | Promise<void>;
+  onSendDraft?: (block: Block) => boolean | void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -1168,7 +1234,11 @@ function UserMessageBlock({
     : text;
   const chat = layout === "chat";
   const textOnly =
-    Boolean(text) && !block.attachments?.length && !card && !note;
+    Boolean(text) &&
+    !block.draft &&
+    !block.attachments?.length &&
+    !card &&
+    !note;
 
   // Only the chat layout rounds a single line; the document layout always uses
   // the square corners, so it never needs the measurement at all.
@@ -1217,58 +1287,119 @@ function UserMessageBlock({
   return (
     <div
       data-prompt-anchor={block.id}
-      className={
-        chat ? "flex justify-end pt-1.5 pr-4 pb-4 pl-14" : "p-1.5 pb-3"
-      }
+      className={`user-message-row ${
+        chat ? "flex flex-col items-end pt-1.5 pr-4 pb-5 pl-14" : "p-1.5 pb-4"
+      }`}
     >
       <div
-        className={`user-message-bubble min-w-0 bg-content/10 px-3 py-2 font-sans text-content ${
-          chat
-            ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
-            : "rounded-lg border border-content/10"
-        }`}
-        style={{ zIndex: stickyIndex }}
-        onClick={overflows ? toggle : undefined}
+        className={`user-message-hover-zone min-w-0 ${chat ? "flex w-fit max-w-full flex-col items-end" : "w-full"}`}
       >
-        {block.attachments?.length ? (
-          <div
-            className={`flex flex-wrap gap-1.5 ${text || card || note ? "mb-2" : ""}`}
-          >
-            {block.attachments.map((file) => (
-              <AttachmentChip key={file.id} attachment={file} />
-            ))}
+        <div
+          data-draft={block.draft ? "true" : undefined}
+          className={`user-message-bubble min-w-0 px-3 py-2 font-sans text-content ${
+            block.draft
+              ? "border border-dashed border-content/30 bg-content/4"
+              : "bg-content/10"
+          } ${
+            chat
+              ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
+              : "rounded-lg border border-content/10"
+          }`}
+          style={{ zIndex: stickyIndex }}
+        >
+          {block.attachments?.length ? (
+            <div
+              className={`flex flex-wrap gap-1.5 ${text || card || note ? "mb-2" : ""}`}
+            >
+              {block.attachments.map((file) => (
+                <AttachmentChip key={file.id} attachment={file} />
+              ))}
+            </div>
+          ) : null}
+          {note ? (
+            <div className={text || card ? "mb-2" : ""}>
+              <NoteMiniCard card={note} embedded />
+            </div>
+          ) : null}
+          {card ? (
+            <div className={text ? "mb-1.5" : undefined}>
+              <SecondOpinionCard card={card} />
+            </div>
+          ) : null}
+          {messageLink ? (
+            <div
+              ref={(element) => {
+                textRef.current = element;
+              }}
+              className="user-message-with-link min-w-0 whitespace-pre-wrap break-words font-sans text-sm"
+              data-selectable-agent-response={block.id}
+            >
+              {messageLink.beforeText}
+              <UserLinkPreview link={messageLink.link} cwd={cwd} compact />
+              {messageLink.afterText}
+            </div>
+          ) : displayText ? (
+            <pre
+              data-selectable-agent-response={block.id}
+              ref={(element) => {
+                textRef.current = element;
+              }}
+              className={`min-w-0 whitespace-pre-wrap break-words font-sans text-sm ${expanded ? "" : "line-clamp-4"}`}
+            >
+              {displayText}
+            </pre>
+          ) : null}
+          {overflows ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              className="mt-1 rounded px-1 py-0.5 text-xs text-content/60 hover:bg-content/8 hover:text-content"
+              onClick={toggle}
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          ) : null}
+          {block.draft ? (
+            <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
+              <span className="flex items-center gap-1.5 text-xs text-content/50">
+                <CircleDashed className="size-3.5" strokeWidth={1.75} />
+                Draft
+              </span>
+              <button
+                type="button"
+                title="Send draft"
+                aria-label="Send draft"
+                onClick={() => onSendDraft?.(block)}
+                className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
+              >
+                Send
+                <ArrowUp className="size-3.5" strokeWidth={2.25} />
+              </button>
+            </div>
+          ) : null}
+        </div>
+        {text || block.attachments?.length || block.startedAt != null ? (
+          <div className="user-message-actions flex items-center gap-1 px-3 pt-1">
+            {text || block.attachments?.length ? (
+              <CopyTurnButton
+                text={text}
+                attachments={block.attachments}
+                label="Copy message"
+              />
+            ) : null}
+            {text && onSaveNote ? (
+              <SaveNoteButton text={text} onSave={onSaveNote} />
+            ) : null}
+            {block.startedAt != null ? (
+              <time
+                dateTime={new Date(block.startedAt).toISOString()}
+                title={new Date(block.startedAt).toLocaleString()}
+                className="ml-1 font-sans text-xs text-content/40"
+              >
+                {formatClockTime(block.startedAt)}
+              </time>
+            ) : null}
           </div>
-        ) : null}
-        {note ? (
-          <div className={text || card ? "mb-2" : ""}>
-            <NoteMiniCard card={note} embedded />
-          </div>
-        ) : null}
-        {card ? (
-          <div className={text ? "mb-1.5" : undefined}>
-            <SecondOpinionCard card={card} />
-          </div>
-        ) : null}
-        {messageLink ? (
-          <div
-            ref={(element) => {
-              textRef.current = element;
-            }}
-            className="user-message-with-link min-w-0 whitespace-pre-wrap break-words font-sans text-sm"
-          >
-            {messageLink.beforeText}
-            <UserLinkPreview link={messageLink.link} />
-            {messageLink.afterText}
-          </div>
-        ) : displayText ? (
-          <pre
-            ref={(element) => {
-              textRef.current = element;
-            }}
-            className={`min-w-0 whitespace-pre-wrap break-words font-sans text-sm ${expanded ? "" : "line-clamp-4"}`}
-          >
-            {displayText}
-          </pre>
         ) : null}
       </div>
     </div>

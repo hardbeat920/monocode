@@ -18,6 +18,12 @@ describe("resizeComposer", () => {
     expect(el.style.height).toBe(`${COMPOSER_MAX_HEIGHT}px`);
   });
 
+  it("supports a taller field without changing the composer default", () => {
+    const el = field(400);
+    resizeComposer(el, Number.POSITIVE_INFINITY);
+    expect(el.style.height).toBe("400px");
+  });
+
   it("leaves the height alone when the field has no layout box", () => {
     const el = field(0, "88px");
     resizeComposer(el);

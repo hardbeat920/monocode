@@ -654,73 +654,64 @@ function BankedResets({
   onUse: (credit: RateLimitResetCredit | undefined, rowKey: string) => void;
   canUse: boolean;
 }) {
-  const summary = limits.resetCredits;
-  const count = summary?.availableCount ?? null;
-  const detailedCredits = (summary?.credits ?? []).filter(
+  const count = limits.resetCredits?.availableCount ?? 0;
+  if (count <= 0) return null;
+
+  const detailedCredits = (limits.resetCredits?.credits ?? []).filter(
     (credit) => credit.status === "available" || credit.status === "unknown",
   );
-  const unlistedCount = Math.max(0, (count ?? 0) - detailedCredits.length);
+  const unlistedCount = Math.max(0, count - detailedCredits.length);
   const rows: Array<RateLimitResetCredit | null> = [
     ...detailedCredits,
     ...Array.from({ length: unlistedCount }, () => null),
   ];
-  const hasBankedReset = count != null && count > 0;
   return (
     <section className="mt-2.5 border-t border-content/[0.08] pt-2.5">
       <div className="relative min-h-[78px] overflow-hidden rounded-lg bg-content/[0.04] px-3 py-3 pr-[84px] ring-1 ring-inset ring-content/[0.06]">
         <div className="relative z-10 min-w-0">
           <div className="flex items-center gap-1.5">
             <h3 className="text-[11px] font-medium">Banked resets</h3>
-            {count != null ? (
-              <span className="rounded-full bg-content/[0.07] px-1.5 py-px text-[9px] font-medium tabular-nums text-content/65 ring-1 ring-inset ring-content/[0.07]">
-                {count}
-              </span>
-            ) : null}
+            <span className="rounded-full bg-content/[0.07] px-1.5 py-px text-[9px] font-medium tabular-nums text-content/65 ring-1 ring-inset ring-content/[0.07]">
+              {count}
+            </span>
           </div>
           <p className="mt-0.5 text-[10px] leading-4 text-content/40">
-            {count == null
-              ? "Not reported by this account"
-              : count === 0
-                ? "No resets available"
-                : `${count} ${count === 1 ? "reset" : "resets"} available`}
+            {count} {count === 1 ? "reset" : "resets"} available
           </p>
         </div>
         <BankedResetMascot
           project={mascotProject}
           name={mascotName}
           color={mascotColor}
-          happy={hasBankedReset}
         />
       </div>
 
-      {count != null && count > 0 ? (
-        <div
-          className="mt-2 max-h-56 overflow-y-auto overscroll-contain"
-          aria-label="Available banked resets"
-        >
-          <div className="flex flex-col gap-1.5">
-            {rows.map((credit, index) => {
-              const rowKey = credit?.id ?? `unlisted-${index}`;
-              const selected = activeResetKey === rowKey;
-              return (
-                <BankedResetRow
-                  key={rowKey}
-                  credit={credit}
-                  index={index}
-                  now={now}
-                  action={selected ? action : "idle"}
-                  error={selected ? error : null}
-                  disabled={action === "using" && !selected}
-                  canUse={canUse}
-                  onConfirm={() => onConfirm(rowKey)}
-                  onCancel={onCancel}
-                  onUse={() => onUse(credit ?? undefined, rowKey)}
-                />
-              );
-            })}
-          </div>
+      <div
+        className="mt-2 max-h-56 overflow-y-auto overscroll-contain"
+        aria-label="Available banked resets"
+      >
+        <div className="flex flex-col gap-1.5">
+          {rows.map((credit, index) => {
+            const rowKey = credit?.id ?? `unlisted-${index}`;
+            const selected = activeResetKey === rowKey;
+            return (
+              <BankedResetRow
+                key={rowKey}
+                credit={credit}
+                index={index}
+                now={now}
+                action={selected ? action : "idle"}
+                error={selected ? error : null}
+                disabled={action === "using" && !selected}
+                canUse={canUse}
+                onConfirm={() => onConfirm(rowKey)}
+                onCancel={onCancel}
+                onUse={() => onUse(credit ?? undefined, rowKey)}
+              />
+            );
+          })}
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }
@@ -729,12 +720,10 @@ function BankedResetMascot({
   project,
   name,
   color,
-  happy,
 }: {
   project: string;
   name: string | null;
   color: string;
-  happy: boolean;
 }) {
   const mascot = projectMascot(project, name);
   const spritePath = `${mascot.restPath}${mascotFacePlatePath(mascot.rest)}`;
@@ -742,18 +731,14 @@ function BankedResetMascot({
   return (
     <div
       className="reset-mascot-scene"
-      data-reset-mascot-mood={happy ? "happy" : "sad"}
+      data-reset-mascot-mood="happy"
       data-mascot-name={mascot.name}
       style={{ color }}
       aria-hidden
     >
       <span className="reset-mascot-glow" />
-      {happy ? (
-        <>
-          <span className="reset-mascot-spark reset-mascot-spark-a" />
-          <span className="reset-mascot-spark reset-mascot-spark-b" />
-        </>
-      ) : null}
+      <span className="reset-mascot-spark reset-mascot-spark-a" />
+      <span className="reset-mascot-spark reset-mascot-spark-b" />
       <svg
         className="reset-mascot-sprite"
         viewBox="0 0 8 8"
@@ -770,28 +755,17 @@ function BankedResetMascot({
           >
             <rect width="8" height="8" fill="black" />
             <path d={spritePath} fill="white" />
-            {happy ? (
-              <g fill="black">
-                <rect x="2" y="3" width="1" height="1" />
-                <rect x="5" y="3" width="1" height="1" />
-                <rect x="2" y="4" width="1" height="1" />
-                <rect x="5" y="4" width="1" height="1" />
-                <rect x="3" y="5" width="2" height="1" />
-              </g>
-            ) : (
-              <g fill="black">
-                <rect x="1" y="3" width="1" height="1" />
-                <rect x="4" y="3" width="1" height="1" />
-                <rect x="3" y="4" width="2" height="1" />
-                <rect x="2" y="5" width="1" height="1" />
-                <rect x="5" y="5" width="1" height="1" />
-              </g>
-            )}
+            <g fill="black">
+              <rect x="2" y="3" width="1" height="1" />
+              <rect x="5" y="3" width="1" height="1" />
+              <rect x="2" y="4" width="1" height="1" />
+              <rect x="5" y="4" width="1" height="1" />
+              <rect x="3" y="5" width="2" height="1" />
+            </g>
           </mask>
         </defs>
         <path d={spritePath} fill="currentColor" mask={`url(#${maskId})`} />
       </svg>
-      {!happy ? <span className="reset-mascot-tear" /> : null}
     </div>
   );
 }

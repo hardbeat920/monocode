@@ -92,6 +92,27 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("keeps an unsent user turn marked as a draft", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ];
+    expect(sanitizeSessionForPersist(session).blocks).toEqual([
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ]);
+  });
+
+  it("persists a removed worktree as an explicit unselected working-copy state", () => {
+    const session = newSession("codex", "/repo");
+    session.worktreeCwd = "/repo-worktrees/feature";
+    session.worktreeRemoved = true;
+    session.blocks = [{ id: "u", role: "user", text: "Build feature" }];
+    expect(sanitizeSessionForPersist(session)).toMatchObject({
+      worktreeCwd: "/repo-worktrees/feature",
+      worktreeRemoved: true,
+    });
+  });
+
   it("preserves an internal worker's lead, hidden turns, and token metrics", () => {
     const session = {
       ...newSession("claude", "/repo"),
@@ -183,6 +204,15 @@ describe("sanitizeSessionForPersist", () => {
       number: 42,
       url: "https://github.com/openai/codex/pull/42",
     });
+  });
+
+  it("persists the automation that started a session", () => {
+    const session = newSession("codex", "/tmp/project");
+    session.blocks = [{ id: "u1", role: "user", text: "review PRs" }];
+    session.automationId = "automation-1";
+    expect(sanitizeSessionForPersist(session).automationId).toBe(
+      "automation-1",
+    );
   });
 
   it("omits a path-like provider session id so upsert can still snapshot git", () => {
@@ -457,6 +487,13 @@ describe("persistFingerprint", () => {
     expect(persistFingerprint({ ...session })).toBe(
       persistFingerprint(session),
     );
+  });
+
+  it("changes when an automation origin is stamped", () => {
+    const before = base();
+    expect(
+      persistFingerprint({ ...before, automationId: "automation-1" }),
+    ).not.toBe(persistFingerprint(before));
   });
 
   it("changes when a block in the middle is replaced", () => {

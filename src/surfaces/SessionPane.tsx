@@ -10,7 +10,12 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "../chrome/Composer";
-import { orchestrator, sameCheckout } from "../lib/orchestration";
+import type { Worktree } from "../lib/worktrees";
+import {
+  orchestrationCheckoutCwd,
+  orchestrator,
+  sameCheckout,
+} from "../lib/orchestration";
 import { DiscussionEmpty } from "../chrome/DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../chrome/LinkedWorkItemUpdateNotice";
 import { SessionReview } from "../chrome/SessionReview";
@@ -23,6 +28,7 @@ import {
 import { looksLikeProject, type RecentProject } from "../lib/recents";
 import {
   sessionDisplayTitle,
+  sessionDraftBlock,
   sessionWorkCwd,
   type Attachment,
   type Block,
@@ -32,6 +38,7 @@ import {
   type PlanBuildTarget,
   type RuntimeMode,
   type Session,
+  type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../lib/session";
 import { AgentTranscript } from "./AgentTranscript";
@@ -77,6 +84,14 @@ type Props = {
   onClose: (sessionId: string) => void;
   onCwdChange: (sessionId: string, cwd: string) => void;
   onBranchChange: (sessionId: string) => void;
+  onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
+  onWorkspaceModeChange: (
+    sessionId: string,
+    mode: WorkspaceMode,
+    base?: string,
+  ) => void;
+  onWorktreeBaseChange: (sessionId: string, base: string) => void;
+  onManageWorktrees?: () => void;
   onModelChange: (sessionId: string, harness: HarnessId, model: string) => void;
   onModelSettingsChange: (
     sessionId: string,
@@ -88,6 +103,11 @@ type Props = {
     text: string,
     attachments: Attachment[],
     options?: ComposerTurnOptions,
+  ) => boolean | void;
+  onSaveDraft: (
+    sessionId: string,
+    text: string,
+    attachments: Attachment[],
   ) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
@@ -158,9 +178,14 @@ export const SessionPane = memo(function SessionPane({
   onClose,
   onCwdChange,
   onBranchChange,
+  onWorktreeChange,
+  onWorkspaceModeChange,
+  onWorktreeBaseChange,
+  onManageWorktrees,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
+  onSaveDraft,
   onSubmit,
   onStop,
   onCompactContext,
@@ -197,10 +222,11 @@ export const SessionPane = memo(function SessionPane({
   const managed = orchestrationRuns.some(
     (run) =>
       (run.status === "active" || run.status === "paused") &&
-      sameCheckout(run.cwd, sessionWorkCwd(session)),
+      sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
   );
   const title = sessionDisplayTitle(session.title, session.harness);
   const isEmpty = session.blocks.length === 0;
+  const draftBlock = sessionDraftBlock(session);
   const backgroundRevision = useSyncExternalStore(
     subscribeProjectChatBackground,
     projectChatBackgroundRevision,
@@ -258,9 +284,9 @@ export const SessionPane = memo(function SessionPane({
   }, [visible]);
   // Restore a saved run for this lead; its agents render on the sidebar card.
   useEffect(() => {
-    if (!session.inboxAsk)
+    if (!session.inboxAsk && !session.worktreeRemoved)
       void orchestrator.hydrate(session.id).catch(console.error);
-  }, [session.id, session.inboxAsk]);
+  }, [session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;
@@ -289,9 +315,9 @@ export const SessionPane = memo(function SessionPane({
     () => true,
   );
   const saveNote = useCallback(
-    (text: string) => {
+    async (text: string) => {
       const sessionTitle = sessionDisplayTitle(session.title, session.harness);
-      void createNote({
+      await createNote({
         title:
           sessionTitle && sessionTitle !== "New session"
             ? sessionTitle
@@ -304,8 +330,8 @@ export const SessionPane = memo(function SessionPane({
     [session.cwd, session.harness, session.id, session.title],
   );
   const saveSelectionNote = useCallback(
-    (text: string) => {
-      void createNote({
+    async (text: string) => {
+      await createNote({
         title: noteTitle(text),
         body: text,
         sourceSessionId: session.id,
@@ -327,7 +353,8 @@ export const SessionPane = memo(function SessionPane({
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
-  const dockComposer = !isEmpty || inSplit || !!session.inboxAsk;
+  const dockComposer =
+    !draftBlock && (!isEmpty || inSplit || !!session.inboxAsk);
   const draftRef = useRef<string | undefined>(undefined);
   const composer = (
     <Composer
@@ -375,6 +402,26 @@ export const SessionPane = memo(function SessionPane({
       onFocus={() => onFocus(session.id)}
       onCwdChange={(cwd) => onCwdChange(session.id, cwd)}
       onBranchChange={() => onBranchChange(session.id)}
+      onWorktreeChange={
+        onWorktreeChange
+          ? (tree) => onWorktreeChange(session.id, tree)
+          : undefined
+      }
+      draftWorkspace={
+        !session.inboxAsk &&
+        !session.worktreeRemoved &&
+        !managed &&
+        ((isEmpty && !session.worktreeCwd) ||
+          (!!session.workspaceMode && !session.worktreeCwd))
+      }
+      workspaceMode={session.workspaceMode}
+      worktreeBase={session.worktreeBase}
+      onWorkspaceModeChange={(mode, base) =>
+        onWorkspaceModeChange(session.id, mode, base)
+      }
+      onWorktreeBaseChange={(base) => onWorktreeBaseChange(session.id, base)}
+      worktreeRemoved={session.worktreeRemoved}
+      onManageWorktrees={onManageWorktrees}
       onNewTerminal={() => onNewTerminal(session.id)}
       onModelChange={(harness, model) => {
         onModelChange(session.id, harness, model);
@@ -388,6 +435,16 @@ export const SessionPane = memo(function SessionPane({
         onModelSettingsChange(session.id, settings)
       }
       onRuntimeModeChange={(mode) => onRuntimeModeChange(session.id, mode)}
+      canSaveDraft={
+        isEmpty &&
+        !session.inboxAsk &&
+        !session.inboxCard &&
+        !session.noteCard &&
+        !session.handoffCard
+      }
+      onSaveDraft={(text, attachments) =>
+        onSaveDraft(session.id, text, attachments)
+      }
       onSubmit={(text, attachments, options) =>
         onSubmit(session.id, text, attachments, options)
       }
@@ -531,24 +588,37 @@ export const SessionPane = memo(function SessionPane({
                 model={session.model}
                 modelSettings={session.modelSettings}
                 pendingQuestion={!!session.pendingQuestion}
-                onApproval={approve}
+                onApproval={session.worktreeRemoved ? undefined : approve}
                 onAddToChat={addSelectionToChat}
                 onSaveNote={notesEnabled ? saveNote : undefined}
+                onSendDraft={
+                  draftBlock
+                    ? (block) =>
+                        onSubmit(
+                          session.id,
+                          block.text,
+                          block.attachments ?? [],
+                          { draftBlockId: block.id },
+                        )
+                    : undefined
+                }
                 onSaveSelectionNote={
                   notesEnabled ? saveSelectionNote : undefined
                 }
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={openPlan}
-                onBuildPlan={buildPlan}
+                onBuildPlan={session.worktreeRemoved ? undefined : buildPlan}
                 onSecondOpinion={
-                  !session.inboxAsk && onSecondOpinion
+                  !session.inboxAsk &&
+                  !session.worktreeRemoved &&
+                  onSecondOpinion
                     ? (target, turn) =>
                         onSecondOpinion(session.id, target, turn)
                     : undefined
                 }
                 onHandoff={
-                  !session.inboxAsk && onHandoff
+                  !session.inboxAsk && !session.worktreeRemoved && onHandoff
                     ? (target, turn) => onHandoff(session.id, target, turn)
                     : undefined
                 }
@@ -556,7 +626,9 @@ export const SessionPane = memo(function SessionPane({
                 onJumpToBottomReady={onJumpToBottomReady}
                 onRevealReady={onRevealReady}
                 latestTurnAccessory={
-                  session.inboxAsk ? undefined : (
+                  session.inboxAsk ||
+                  session.worktreeRemoved ||
+                  draftBlock ? undefined : (
                     <SessionReview
                       sessionId={session.id}
                       cwd={workCwd}

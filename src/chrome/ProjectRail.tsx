@@ -17,6 +17,7 @@ import {
   Search,
   Settings,
   Trash2,
+  Zap,
 } from "./icons";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useDragResize } from "../hooks/useDragResize";
@@ -105,6 +106,7 @@ import { useProjectNotificationPreferences } from "../hooks/useProjectNotificati
 import { useNotificationProjects } from "../hooks/useNotificationProjects";
 import { updateNotificationPreferences } from "../lib/notificationPreferences";
 import type { ExplorerMenuItem } from "./ExplorerMenu";
+import { GithubStarPrompt } from "./GithubStarPrompt";
 
 const REVEAL_LABEL = IS_MAC
   ? "Reveal in Finder"
@@ -225,6 +227,8 @@ type Props = {
   notesEnabled?: boolean;
   onOpenNotes?: () => void;
   notesActive?: boolean;
+  onOpenAutomations?: () => void;
+  automationsActive?: boolean;
   onTogglePanel?: () => void;
   onSelectProject: (path: string) => void;
   onOpenProject: () => void;
@@ -259,6 +263,8 @@ export function ProjectRail({
   notesEnabled = true,
   onOpenNotes,
   notesActive = false,
+  onOpenAutomations,
+  automationsActive = false,
   onTogglePanel,
   onSelectProject,
   onOpenProject,
@@ -708,6 +714,13 @@ export function ProjectRail({
                 ariaLabel="Notes"
               />
             ) : null}
+            <RailAction
+              label="Automations"
+              icon={Zap}
+              onClick={onOpenAutomations}
+              active={automationsActive}
+              ariaLabel="Automations"
+            />
           </div>
 
           <div
@@ -726,7 +739,12 @@ export function ProjectRail({
                 busy={busy}
                 sortable={pinnedSortable}
                 pinned
-                searchActive={searchActive || inboxActive || notesActive}
+                searchActive={
+                  searchActive ||
+                  inboxActive ||
+                  notesActive ||
+                  automationsActive
+                }
                 onSelect={onSelectProject}
                 onTogglePin={onTogglePin}
                 onContextMenu={onProjectContextMenu}
@@ -751,7 +769,12 @@ export function ProjectRail({
                       muteStatuses={muteStatuses}
                       cwd={cwd}
                       busy={busy}
-                      searchActive={searchActive || inboxActive || notesActive}
+                      searchActive={
+                        searchActive ||
+                        inboxActive ||
+                        notesActive ||
+                        automationsActive
+                      }
                       onSelect={onSelectProject}
                       onTogglePin={onTogglePin}
                       onContextMenu={onProjectContextMenu}
@@ -797,7 +820,9 @@ export function ProjectRail({
               busy={busy}
               sortable={projectSortable}
               pinned={false}
-              searchActive={searchActive || inboxActive || notesActive}
+              searchActive={
+                searchActive || inboxActive || notesActive || automationsActive
+              }
               onSelect={onSelectProject}
               onTogglePin={onTogglePin}
               onContextMenu={onProjectContextMenu}
@@ -824,6 +849,7 @@ export function ProjectRail({
             onDismissUpdate={onDismissUpdate}
           />
           <div className="flex shrink-0 flex-col gap-px p-2">
+            <GithubStarPrompt />
             <RailAction
               label="Settings"
               icon={Settings}

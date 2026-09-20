@@ -126,6 +126,7 @@ export type GitChangedFile = {
 
 export type GitDiffIndex = {
   branch: string | null;
+  head: string | null;
   files: GitChangedFile[];
   additions: number;
   deletions: number;
@@ -135,6 +136,7 @@ export type GitDiffIndex = {
   ahead: number;
   behind: number;
   aheadOfDefault: number;
+  headPushed: boolean;
 };
 
 export function gitDiffIndex(cwd: string): Promise<GitDiffIndex> {
@@ -242,8 +244,16 @@ export function gitUnstageAll(cwd: string): Promise<void> {
   return invoke<void>("git_unstage_all", { cwd });
 }
 
-export function gitCommit(cwd: string, message: string): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message });
+export function gitCommit(
+  cwd: string,
+  message: string,
+  amend = false,
+): Promise<void> {
+  return invoke<void>("git_commit", { cwd, message, amend });
+}
+
+export function gitHeadMessage(cwd: string): Promise<string> {
+  return invoke<string>("git_head_message", { cwd });
 }
 
 export type GitStagedContext = {
@@ -341,19 +351,6 @@ export function isCheckoutBlockedByChanges(message: string): boolean {
     text.includes("commit your changes or stash") ||
     text.includes("please move or remove them before")
   );
-}
-
-/** Drop leftover session-worktree pins. The composer now switches this folder. */
-export function restoreSessionCheckout<
-  T extends { cwd: string; branch?: string; worktreeCwd?: string; providerSessionId?: string },
->(session: T): T {
-  if (!session.branch && !session.worktreeCwd) return session;
-  return {
-    ...session,
-    branch: undefined,
-    worktreeCwd: undefined,
-    ...(session.worktreeCwd ? { providerSessionId: undefined } : {}),
-  };
 }
 
 const GIT_CHANGED = "monocode-git-changed";

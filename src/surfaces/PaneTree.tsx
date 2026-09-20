@@ -38,11 +38,13 @@ import {
   type PlanBuildTarget,
   type RuntimeMode,
   type Session,
+  type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../lib/session";
 import { FilePane } from "./FilePane";
 import { SessionPane } from "./SessionPane";
 import type { SessionFolderTarget } from "../lib/sessionFolders";
+import type { Worktree } from "../lib/worktrees";
 
 type Shared = {
   visible: boolean;
@@ -67,6 +69,14 @@ type Shared = {
   onRatio: (splitId: string, index: number, ratio: number) => void;
   onCwdChange: (sessionId: string, cwd: string) => void;
   onBranchChange: (sessionId: string) => void;
+  onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
+  onWorkspaceModeChange: (
+    sessionId: string,
+    mode: WorkspaceMode,
+    base?: string,
+  ) => void;
+  onWorktreeBaseChange: (sessionId: string, base: string) => void;
+  onManageWorktrees?: () => void;
   onModelChange: (sessionId: string, harness: HarnessId, model: string) => void;
   onModelSettingsChange: (
     sessionId: string,
@@ -78,6 +88,11 @@ type Shared = {
     text: string,
     attachments: Attachment[],
     options?: ComposerTurnOptions,
+  ) => boolean | void;
+  onSaveDraft: (
+    sessionId: string,
+    text: string,
+    attachments: Attachment[],
   ) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
@@ -175,9 +190,14 @@ function PaneTreeComponent({
   onRatio,
   onCwdChange,
   onBranchChange,
+  onWorktreeChange,
+  onWorkspaceModeChange,
+  onWorktreeBaseChange,
+  onManageWorktrees,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
+  onSaveDraft,
   onSubmit,
   onStop,
   onCompactContext,
@@ -414,9 +434,14 @@ function PaneTreeComponent({
                 onClose={onClose}
                 onCwdChange={onCwdChange}
                 onBranchChange={onBranchChange}
+                onWorktreeChange={onWorktreeChange}
+                onWorkspaceModeChange={onWorkspaceModeChange}
+                onWorktreeBaseChange={onWorktreeBaseChange}
+                onManageWorktrees={onManageWorktrees}
                 onModelChange={onModelChange}
                 onModelSettingsChange={onModelSettingsChange}
                 onRuntimeModeChange={onRuntimeModeChange}
+                onSaveDraft={onSaveDraft}
                 onSubmit={onSubmit}
                 onStop={onStop}
                 onCompactContext={onCompactContext}
@@ -529,9 +554,7 @@ function Sash({
       aria-valuemax={100}
       aria-valuenow={Math.round(boundary * 100)}
       className={
-        row
-          ? "absolute z-10 w-px bg-stroke"
-          : "absolute z-10 h-px bg-stroke"
+        row ? "absolute z-10 w-px bg-stroke" : "absolute z-10 h-px bg-stroke"
       }
       style={
         row

@@ -25,7 +25,9 @@ export type ResumedWorkspace = {
 
 /** A turn or approval that would be lost if this webview died. */
 export function isInFlightSession(session: Session): boolean {
-  return !!session.busy || sessionNeedsInput(session);
+  return (
+    !session.worktreeRemoved && (!!session.busy || sessionNeedsInput(session))
+  );
 }
 
 export function hasInFlightSessions(sessions: Session[]): boolean {
@@ -111,7 +113,12 @@ export function wasTurnInterrupted(session: Session): boolean {
  * A Continue (or any later user turn) appends after it, so this stays one-shot.
  */
 export function canAutoContinue(session: Session): boolean {
-  return !!session.providerSessionId && !session.busy && lastBlockIsInterrupt(session);
+  return (
+    !session.worktreeRemoved &&
+    !!session.providerSessionId &&
+    !session.busy &&
+    lastBlockIsInterrupt(session)
+  );
 }
 
 function lastBlockIsInterrupt(session: Session): boolean {
@@ -141,6 +148,7 @@ export function shouldWriteInFlightSnapshot(
 
 function canResumeAfterQuit(session: Session): boolean {
   return (
+    !session.worktreeRemoved &&
     session.cwd !== "~" &&
     session.blocks.some((block) => block.role === "user")
   );

@@ -37,6 +37,7 @@ type Props = {
   mode?: "switch" | "move";
   className?: string;
   buttonClassName?: string;
+  appearance?: "ghost" | "filled";
   onSelectProject: (path: string) => void;
   onOpenProject?: () => void;
 };
@@ -49,6 +50,7 @@ export function SearchableProjectPicker({
   mode = "switch",
   className,
   buttonClassName,
+  appearance = "ghost",
   onSelectProject,
   onOpenProject,
 }: Props) {
@@ -168,10 +170,12 @@ export function SearchableProjectPicker({
           event.preventDefault();
           openPicker();
         }}
-        className={`flex h-6.5 min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] leading-none hover:text-content ${
+        className={`flex h-6.5 min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] leading-none ${
           open
             ? "bg-selection text-content"
-            : "text-content/50 hover:bg-content/5"
+            : appearance === "filled"
+              ? "bg-content/10 text-content hover:bg-content/[0.14]"
+              : "text-content/50 hover:bg-content/5 hover:text-content"
         }${buttonClassName ? ` ${buttonClassName}` : ""}`}
       >
         {!inProject ? null : logoPath ? (

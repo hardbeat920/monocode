@@ -106,6 +106,17 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).not.toContain("text-ellipsis");
   });
 
+  it("renders an unsent turn as a draft bubble with a send control", () => {
+    const markup = render([
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ]);
+
+    expect(markup).toContain('data-draft="true"');
+    expect(markup).toContain("border-dashed");
+    expect(markup).toContain('aria-label="Send draft"');
+    expect(markup).toContain(">Draft</span>");
+  });
+
   it("keeps surrounding prose and previews its first URL", () => {
     const markup = render([
       {
@@ -119,6 +130,24 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("Please check");
     expect(markup).toContain("Open example.com");
     expect(markup).not.toContain("Please check https://example.com/docs");
+  });
+
+  it("renders GitHub pull requests as compact work item chips", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: "Review https://github.com/acme/widgets/pull/73 please",
+      },
+    ]);
+
+    expect(markup).toContain('data-github-work-item-chip="pr"');
+    expect(markup).toContain('data-compact="true"');
+    expect(markup).toContain("#73");
+    expect(markup).not.toContain(">acme/widgets</span>");
+    expect(markup).toContain("Review");
+    expect(markup).toContain("please");
+    expect(markup).not.toContain("user-link-preview-title");
   });
 
   it("keeps each completed turn's recorded model label", () => {

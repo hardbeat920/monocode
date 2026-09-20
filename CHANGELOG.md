@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.51] - 2026-09-18
+
+### Added
+
+- Git worktrees provide independent working copies for parallel sessions. The working-copy picker can create a worktree from a new or existing branch, open another working copy in a new session, and recover sessions whose worktree was removed. Settings → Worktrees lists branch, status, unpublished commits, and associated sessions, with guarded deletion that preserves branches and sessions by default. In #319.
+- Settings → Providers can rename and remove named Claude Code and Codex accounts. Removing an account deletes its stored credentials, stops its running turns, and retains existing conversations with a clear prompt to switch accounts before continuing.
+- The Go to File dialog now doubles as a fuzzy command palette when opened with Command/Ctrl+Shift+P or a leading `>`. Its first action reloads MonoCode, also available with Command/Ctrl+Shift+R, with confirmation before discarding unsaved files. In #296 by @MichaelOgunjimi.
+- User messages can be copied with their attachments or saved directly to Notes, and selected transcript text offers the same Notes action with success and error feedback. Message timestamps remain visible even for prompts that contain only a note, handoff, or second-opinion card. In #291 and #320 by @ognjeeen.
+- Agent question options support full keyboard navigation with Arrow keys, Home, End, number shortcuts, Enter, and Space for both single- and multi-select prompts.
+
+### Changed
+
+- Add-to-chat actions from file-only workspaces open a new session pane and seed its focused Composer with the quoted or plain text, leaving the caret ready at the end.
+
+### Fixed
+
+- Open editors reliably reload after agent edits and external file changes, including updates that race the initial file watch or preserve the previous modification time.
+- Stopping a turn or beginning the next one cancels unresolved approval requests, removes stale approval controls, and marks their unfinished tools as cancelled.
+- Conversations created before named Claude Code and Codex accounts were introduced continue under the default account instead of losing their provider session association.
+- Composer focus follows the visible active session in split layouts instead of being captured by a hidden session.
+
 ## [0.1.50] - 2026-09-17
 
 ### Added

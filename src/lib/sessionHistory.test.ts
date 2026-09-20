@@ -142,6 +142,41 @@ describe("historyWithLiveSessions", () => {
     expect(rows[0]?.repo).toBe("project-a");
   });
 
+  it("marks saved drafts and clears stale draft status when they are sent", () => {
+    const session = newSession("cursor", "/tmp/project-a");
+    session.id = "draft-session";
+    session.blocks = [
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ];
+
+    const draftRows = historyWithLiveSessions([], [session], "/tmp/project-a");
+    expect(draftRows[0]?.draft).toBe(true);
+
+    session.blocks = [{ id: "sent", role: "user", text: "Explore this" }];
+    session.busy = true;
+    const sentRows = historyWithLiveSessions(
+      [{ ...draftRows[0], draft: true }],
+      [session],
+      "/tmp/project-a",
+    );
+    expect(sentRows[0]?.draft).toBeUndefined();
+  });
+
+  it("overlays an automation origin onto an already-saved session", () => {
+    const session = newSession("cursor", "/tmp/project-a");
+    session.id = "auto-session";
+    session.blocks = [{ id: "u1", role: "user", text: "review PRs" }];
+    session.automationId = "automation-1";
+    session.busy = true;
+
+    const rows = historyWithLiveSessions(
+      [summary("auto-session", "/tmp/project-a")],
+      [session],
+      "/tmp/project-a",
+    );
+    expect(rows[0]?.automationId).toBe("automation-1");
+  });
+
   it("stamps composer git onto a live session that is not persisted yet", () => {
     const session = newSession("cursor", "/tmp/monocode");
     session.blocks = [{ id: "u1", role: "user", text: "hello" }];
@@ -337,6 +372,17 @@ describe("pinned sessions", () => {
       summary("new", "/tmp/project-a", 30),
     );
     expect(next.map((row) => row.id)).toEqual(["pin", "new"]);
+  });
+
+  it("preserves automation origin when an incoming summary omits it", () => {
+    const current = [
+      { ...summary("auto", "/tmp/project-a", 5), automationId: "automation-1" },
+    ];
+    const next = mergeHistorySummary(
+      current,
+      summary("auto", "/tmp/project-a", 9),
+    );
+    expect(next[0]?.automationId).toBe("automation-1");
   });
 
   it("preserves pin when an incoming summary omits it", () => {

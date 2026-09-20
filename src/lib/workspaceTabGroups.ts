@@ -26,7 +26,8 @@ export function workspaceTabCwd(
   }
 
   const file = focusedFileTab(tab);
-  if (file?.cwd && file.cwd !== "~") return file.cwd;
+  const cwd = file?.projectCwd ?? file?.cwd;
+  if (cwd && cwd !== "~") return cwd;
 
   return null;
 }
@@ -36,8 +37,9 @@ export function focusedWorkspaceTabCwd(
   sessions: readonly Pick<Session, "id" | "cwd">[],
 ): string | null {
   const session = sessions.find((entry) => entry.id === tab.focusedId);
+  const file = focusedFileTab(tab);
   return (
-    session?.cwd ?? focusedFileTab(tab)?.cwd ?? workspaceTabCwd(tab, sessions)
+    session?.cwd ?? file?.projectCwd ?? file?.cwd ?? workspaceTabCwd(tab, sessions)
   );
 }
 

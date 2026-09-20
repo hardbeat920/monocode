@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { orchestrator, type ControlOutcome } from "./lib/orchestration";
+import {
+  orchestrationCheckoutCwd,
+  orchestrationProjectCwd,
+  orchestrator,
+  workspaceIdentity,
+  type ControlOutcome,
+} from "./lib/orchestration";
 import { modelsFor } from "./lib/models";
 import { isHarnessAvailable } from "./lib/harness/availability";
 import {
@@ -44,6 +50,28 @@ import { ProviderSignInDialog } from "./chrome/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./chrome/TitleBar";
 import { MenuBar } from "./chrome/MenuBar";
 import { FilePicker } from "./chrome/FilePicker";
+import {
+  DeleteSessionDialog,
+  type SessionDeleteChoice,
+} from "./chrome/DeleteSessionDialog";
+import {
+  assertWorktreeFilesClosed,
+  createOrchestrationWorktree,
+  createWorktree,
+  detachSessionWorktree,
+  checkWorktreeRemoval,
+  listWorktrees,
+  namedWorktreeBranch,
+  orchestrationWorktreeBranchName,
+  removeOrchestrationBranch,
+  removeOrchestrationWorktree,
+  removeWorktree,
+  renameWorktreeBranch,
+  sessionInWorktree,
+  temporaryWorktreeBranchName,
+  worktreeSessionIds,
+  type Worktree,
+} from "./lib/worktrees";
 import { UsageFooter } from "./chrome/UsageFooter";
 import { useProjectBranches } from "./hooks/useProjectBranches";
 import { useInboxActivity } from "./hooks/useInboxUnseen";
@@ -69,7 +97,6 @@ import {
   basename,
   notifyGitChanged,
   pickFolder,
-  restoreSessionCheckout,
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "./lib/fs";
@@ -168,6 +195,7 @@ import {
   compactHarnessContext,
   forgetHarnessSession,
   generateHarnessTitle,
+  generateHarnessBranchName,
   isLiveHarness,
   latestTurnNeedsHarnessLogin,
   probeHarnessAvailability,
@@ -211,11 +239,14 @@ import { requestOutgoingHandoff } from "./lib/handoffTurn";
 import { isEditTool } from "./lib/harness/preview";
 import {
   beginSessionTurn,
+  applySessionCheckpoint,
   captureSessionCheckpoint,
+  forgetSessionCheckpoint,
   flushSessionCheckpoint,
   keepSessionChanges,
   notifyReviewChanged,
   prepareSessionCheckpoint,
+  sessionCheckpointCleanupSafe,
 } from "./lib/checkpoint";
 import { notifyDirsChanged } from "./lib/fileTree";
 import { invalidateWatchedFiles, nudgeWatchedFiles } from "./lib/fileWatch";
@@ -236,6 +267,7 @@ import {
 import {
   displayPath,
   isEqualOrInside,
+  pathKey,
   projectName,
   rebasePath,
   resolveWorkspacePath,
@@ -299,6 +331,7 @@ import {
   type SecondOpinionMeta,
   type Session,
   type TurnIntent,
+  type WorkspaceMode,
 } from "./lib/session";
 
 import {
@@ -319,6 +352,7 @@ import {
   setSessionPinned,
   shouldPersistSession,
   upsertSession,
+  flushSessionWrites,
   type SessionSummary,
 } from "./lib/sessionStore";
 import { rememberLoadedSession } from "./lib/sessionCache";
@@ -371,6 +405,14 @@ import {
   type NoteComposerCard,
 } from "./lib/notes";
 import {
+  claimDueAutomations,
+  recoverAutomationRuns,
+  updateAutomationRun,
+  type Automation,
+  type AutomationRun,
+} from "./lib/automations";
+import { claimInboxAutomationRuns } from "./lib/automationEvents";
+import {
   SECOND_OPINION_TITLE,
   buildSecondOpinionCard,
   buildSecondOpinionPrompt,
@@ -390,6 +432,7 @@ import { InboxView, LinkedWorkItemPanel } from "./surfaces/InboxView";
 import type { InboxSessionPortal } from "./surfaces/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "./lib/inboxAsk";
 import { NotesView } from "./surfaces/NotesView";
+import { AutomationsView } from "./surfaces/AutomationsView";
 import {
   githubWorkItemThread,
   inboxComposerCard,
@@ -683,6 +726,14 @@ export default function App({
   const [sessions, setSessions] = useState<Session[]>(
     () => windowTransfer?.sessions ?? resumed?.sessions ?? [seed.session],
   );
+  const [sessionDeleteDialog, setSessionDeleteDialog] = useState<{
+    title: string;
+    unusedWorktree: string;
+    resolve: (choice: SessionDeleteChoice) => void;
+  }>();
+  const switchingWorktrees = useRef(new Map<string, string>());
+  const removingWorktreePaths = useRef(new Set<string>());
+  const deleteConfirmationPending = useRef(false);
   const [tabs, setTabs] = useState<WorkspaceTab[]>(
     () => windowTransfer?.tabs ?? resumed?.tabs ?? [seed.tab],
   );
@@ -739,6 +790,7 @@ export default function App({
     useState<InboxSessionPortal | null>(null);
   const openingInboxSessions = useRef(new Map<string, Promise<string>>());
   const [notesViewOpen, setNotesViewOpen] = useState(false);
+  const [automationsViewOpen, setAutomationsViewOpen] = useState(false);
   const [inspectedWorkerId, setInspectedWorkerId] = useState<string | null>(
     null,
   );
@@ -790,8 +842,11 @@ export default function App({
   const [settingsAnchor, setSettingsAnchor] = useState<SettingsAnchor | null>(
     null,
   );
-  const [notificationProjectPath, setNotificationProjectPath] = useState<string | null>(null);
-  const [notificationSettingsRequest, setNotificationSettingsRequest] = useState(0);
+  const [notificationProjectPath, setNotificationProjectPath] = useState<
+    string | null
+  >(null);
+  const [notificationSettingsRequest, setNotificationSettingsRequest] =
+    useState(0);
   const [editorNavigation, setEditorNavigation] =
     useState<EditorNavigationTarget | null>(null);
   const editorNavigationToken = useRef(0);
@@ -851,6 +906,8 @@ export default function App({
   inboxViewOpenRef.current = inboxViewOpen;
   const notesViewOpenRef = useRef(notesViewOpen);
   notesViewOpenRef.current = notesViewOpen;
+  const automationsViewOpenRef = useRef(automationsViewOpen);
+  automationsViewOpenRef.current = automationsViewOpen;
   const settingsOpenRef = useRef(settingsOpen);
   settingsOpenRef.current = settingsOpen;
   const sessionNavigationIdsRef = useRef<readonly string[]>([]);
@@ -1115,8 +1172,10 @@ export default function App({
       const composerSeed = composerSeedForAddToChat(detail.text, detail.mode);
       if (!composerSeed) return;
 
+      const file = focusedFileTab(tab);
       const session = {
         ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+        ...(file?.projectCwd ? { worktreeCwd: file.cwd } : {}),
         composerSeed,
       };
       const openedTab = openAddToChatSessionPane({
@@ -1155,10 +1214,9 @@ export default function App({
     warmNativeSkills(activeSkillContext);
   }, [activeSkillCwd, active?.id, active?.harness]);
 
+  const activeFile = activeTab ? focusedFileTab(activeTab) : undefined;
   const sidebarCwd =
-    active?.cwd ??
-    (activeTab ? focusedFileTab(activeTab)?.cwd : undefined) ??
-    projectCwd;
+    activeFile?.projectCwd ?? activeFile?.cwd ?? active?.cwd ?? projectCwd;
   const sidebarCwdRef = useRef(sidebarCwd);
   sidebarCwdRef.current = sidebarCwd;
   const sidebarCwdKey =
@@ -1171,7 +1229,16 @@ export default function App({
     sidebarCwdKey != null &&
     !loadedProjects.has(sidebarCwdKey) &&
     !historyFailed;
-  const gitCwd = active ? sessionWorkCwd(active) : sidebarCwd;
+  const gitCwd =
+    activeFile?.cwd ?? (active ? sessionWorkCwd(active) : sidebarCwd);
+  const gitCwdBranches = useProjectBranches(
+    gitCwd,
+    Boolean(gitCwd) && gitCwd !== "~",
+  );
+  const explorerRootLabel =
+    active?.worktreeCwd && sameProjectPath(gitCwd, sessionWorkCwd(active))
+      ? active.branch || gitCwdBranches?.current || undefined
+      : undefined;
   const gitCwdRef = useRef(gitCwd);
   gitCwdRef.current = gitCwd;
   const projectBranches = useProjectBranches(
@@ -1361,6 +1428,7 @@ export default function App({
             !searchViewOpenRef.current &&
             !inboxViewOpenRef.current &&
             !notesViewOpenRef.current &&
+            !automationsViewOpenRef.current &&
             !settingsOpenRef.current
           ) {
             setComposerFocused(true);
@@ -1478,14 +1546,15 @@ export default function App({
   }, [inboxViewOpen]);
 
   useEffect(() => {
-    prefetchProjectFiles(sidebarCwd);
-  }, [sidebarCwd]);
+    prefetchProjectFiles(gitCwd);
+  }, [gitCwd]);
 
   const persistSession = useCallback((session: Session | undefined) => {
     if (
       !session ||
       !shouldPersistSession(session) ||
-      removingSessionIds.current.has(session.id)
+      removingSessionIds.current.has(session.id) ||
+      switchingWorktrees.current.has(session.id)
     )
       return;
     const fingerprint = persistFingerprint(session);
@@ -1504,7 +1573,11 @@ export default function App({
     const liveIds = new Set(sessions.map((session) => session.id));
     const visibleIds = openSessionIds(tabsRef.current);
     for (const session of sessions) {
-      if (removingSessionIds.current.has(session.id)) continue;
+      if (
+        removingSessionIds.current.has(session.id) ||
+        switchingWorktrees.current.has(session.id)
+      )
+        continue;
       if (observedSessions.current.get(session.id) === session) continue;
       observedSessions.current.set(session.id, session);
       const parked = !visibleIds.has(session.id);
@@ -1547,7 +1620,11 @@ export default function App({
       pendingPersist.current.clear();
       void Promise.all(
         dirty.map(async (session) => {
-          if (removingSessionIds.current.has(session.id)) return;
+          if (
+            removingSessionIds.current.has(session.id) ||
+            switchingWorktrees.current.has(session.id)
+          )
+            return;
           const fingerprint = persistFingerprint(session);
           if (lastPersisted.current.get(session.id) === fingerprint) return;
           const summary = await upsertSession(session).catch(() => null);
@@ -1831,6 +1908,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     const cwd = active?.cwd ?? sessionDefaults?.cwd ?? projectCwd;
     const session = newDefaultSession(cwd, sessionDefaults?.runtimeMode);
     const tab = newTab(session.id);
@@ -1852,6 +1930,7 @@ export default function App({
       const start = (description?: string) => {
         setInboxViewOpen(false);
         setNotesViewOpen(false);
+        setAutomationsViewOpen(false);
         setSidebarTab("sessions");
         const cwd =
           item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
@@ -1907,6 +1986,7 @@ export default function App({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       setSidebarTab("sessions");
       const cwd =
         (card.sourceCwd && looksLikeProject(card.sourceCwd)
@@ -2043,6 +2123,7 @@ export default function App({
         const file = newTerminalFile(
           workdir,
           existing ? nextDockTerminalTitle(existing, workdir) : undefined,
+          projectPath,
         );
         if (!existing) {
           return [...prev, createProjectTerminal(projectPath, file)];
@@ -2059,13 +2140,13 @@ export default function App({
 
   const onOpenTerminal = useCallback(
     (cwd: string, asWorkspaceTab = false, occupySessionId?: string) => {
-      const workdir = cwd || active?.cwd || projectCwd;
+      const workdir = cwd || gitCwd;
       if (openProjectTerminal(workdir)) return;
 
       if (asWorkspaceTab || !activeTab) {
-        const file = newTerminalFile(workdir);
+        const file = newTerminalFile(workdir, undefined, sidebarCwd);
         const tab = newTerminalWorkspaceTab(file);
-        appendTab(tab, workdir);
+        appendTab(tab, sidebarCwd);
         setActiveTabId(tab.id);
         setComposerFocused(false);
         return;
@@ -2087,6 +2168,7 @@ export default function App({
       const file = newTerminalFile(
         workdir,
         nextTerminalTitle(activeTab, workdir),
+        sidebarCwd,
       );
       setTabs((prev) =>
         prev.map((tab) =>
@@ -2097,12 +2179,12 @@ export default function App({
       );
       setComposerFocused(false);
     },
-    [active?.cwd, activeTab, appendTab, openProjectTerminal, projectCwd],
+    [gitCwd, activeTab, appendTab, openProjectTerminal, sidebarCwd],
   );
 
   const onNewTerminal = useCallback(() => {
-    onOpenTerminal(active?.cwd ?? projectCwd);
-  }, [active?.cwd, onOpenTerminal, projectCwd]);
+    onOpenTerminal(gitCwd);
+  }, [gitCwd, onOpenTerminal]);
 
   const onShowProjectTerminal = useCallback(() => {
     const dock = findProjectTerminal(projectTerminalsRef.current, projectCwd);
@@ -2117,14 +2199,15 @@ export default function App({
       focusProjectTerminal();
       return;
     }
-    onOpenTerminal(active?.cwd ?? projectCwd);
-  }, [active?.cwd, focusProjectTerminal, onOpenTerminal, projectCwd]);
+    onOpenTerminal(gitCwd);
+  }, [gitCwd, focusProjectTerminal, onOpenTerminal, projectCwd]);
 
   const onNewTerminalInSession = useCallback(
     (sessionId: string) => {
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
+      if (session?.worktreeRemoved) return;
       onOpenTerminal(
         session ? sessionWorkCwd(session) : projectCwd,
         false,
@@ -2138,7 +2221,7 @@ export default function App({
     if (!looksLikeProject(projectCwd)) return;
     const dock = findProjectTerminal(projectTerminalsRef.current, projectCwd);
     if (!dock) {
-      openProjectTerminal(active?.cwd ?? projectCwd);
+      openProjectTerminal(gitCwd);
       return;
     }
     const nextOpen = !dock.open;
@@ -2149,7 +2232,7 @@ export default function App({
     );
     if (nextOpen) focusProjectTerminal();
     else setProjectTerminalFocused(false);
-  }, [active?.cwd, focusProjectTerminal, openProjectTerminal, projectCwd]);
+  }, [gitCwd, focusProjectTerminal, openProjectTerminal, projectCwd]);
 
   const onHideProjectTerminal = useCallback(() => {
     setProjectTerminals((prev) =>
@@ -2317,8 +2400,8 @@ export default function App({
   );
 
   const onNewTerminalTab = useCallback(() => {
-    onOpenTerminal(active?.cwd ?? projectCwd, true);
-  }, [active?.cwd, onOpenTerminal, projectCwd]);
+    onOpenTerminal(gitCwd, true);
+  }, [gitCwd, onOpenTerminal]);
 
   const onCloseTab = useCallback(
     (id: string, opts?: { confirmedTerminalIds?: string[] }) => {
@@ -3020,6 +3103,10 @@ export default function App({
     ) => {
       void (async () => {
         const diffCwd = session?.cwd ?? gitCwdRef.current;
+        const diffProjectCwd = session
+          ? sessionsRef.current.find((entry) => entry.id === session.sessionId)
+              ?.cwd
+          : sidebarCwdRef.current;
         const resolved = path
           ? ((await resolveOpenablePath(diffCwd, path)) ?? path)
           : undefined;
@@ -3033,20 +3120,22 @@ export default function App({
                 session.cwd,
                 session.sessionId,
                 resolved,
+                diffProjectCwd,
               );
             }
             if (loadDiffViewer() === "unified") {
               return openChangesTab(
                 tab,
-                sidebarCwdRef.current,
+                diffCwd,
                 resolved,
                 changeKind,
+                diffProjectCwd,
               );
             }
             if (!resolved) return tab;
             return openEditorTab(
               tab,
-              newFileTab(resolved, sidebarCwdRef.current, true, changeKind),
+              newFileTab(resolved, diffCwd, true, changeKind, diffProjectCwd),
             );
           }),
         );
@@ -3067,7 +3156,13 @@ export default function App({
     setTabs((prev) =>
       prev.map((tab) =>
         tab.id === activeTabId
-          ? openChangesTab(tab, sidebarCwdRef.current)
+          ? openChangesTab(
+              tab,
+              gitCwdRef.current,
+              undefined,
+              undefined,
+              sidebarCwdRef.current,
+            )
           : tab,
       ),
     );
@@ -3079,11 +3174,16 @@ export default function App({
       setTabs((prev) =>
         prev.map((tab) =>
           tab.id === activeTabId
-            ? openCommitTab(tab, sidebarCwdRef.current, {
-                sha: commit.sha,
-                shortSha: commit.shortSha,
-                subject: commit.subject,
-              })
+            ? openCommitTab(
+                tab,
+                gitCwdRef.current,
+                {
+                  sha: commit.sha,
+                  shortSha: commit.shortSha,
+                  subject: commit.subject,
+                },
+                sidebarCwdRef.current,
+              )
             : tab,
         ),
       );
@@ -3266,8 +3366,7 @@ export default function App({
           ) {
             return null;
           }
-          const restored = restoreSessionCheckout(loaded);
-          return restored;
+          return loaded;
         })
         .catch(() => null);
       sessionLoads.current.set(sessionId, loading);
@@ -3300,7 +3399,11 @@ export default function App({
         (session) => session.id === sessionId,
       );
       if (appeared) return appeared;
-      if (restored.providerSessionId && isLiveHarness(restored.harness)) {
+      if (
+        !restored.worktreeRemoved &&
+        restored.providerSessionId &&
+        isLiveHarness(restored.harness)
+      ) {
         bindHarnessSession(
           restored.harness,
           restored.id,
@@ -3592,6 +3695,7 @@ export default function App({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       setSettingsOpen(false);
       setFilePickerOpen(false);
       setSidebarTab("sessions");
@@ -3765,8 +3869,7 @@ export default function App({
         };
         const saved = await upsertSession(updated).catch(() => null);
         if (saved) {
-          const cached = restoreSessionCheckout(updated);
-          rememberLoadedSession(loadedSessionCache.current, cached);
+          rememberLoadedSession(loadedSessionCache.current, updated);
           lastPersisted.current.set(sessionId, persistFingerprint(updated));
         }
       }
@@ -3775,13 +3878,164 @@ export default function App({
     [invalidateLoadedSession, persistSession, refreshHistory, sidebarCwd],
   );
 
+  const checkOpenWorktreeFiles = useCallback((path: string) => {
+    assertWorktreeFilesClosed(path, [
+      ...filesInWorkspaceTabs(tabsRef.current),
+      ...projectTerminalsRef.current.flatMap((dock) => dock.pane.files),
+    ]);
+  }, []);
+
+  const onCheckWorktreeRemoval = useCallback(
+    async (cwd: string, path: string, force: boolean) => {
+      checkOpenWorktreeFiles(path);
+      await checkWorktreeRemoval(cwd, path, force);
+      // Re-read UI state after the native check, before deleting sessions.
+      checkOpenWorktreeFiles(path);
+    },
+    [checkOpenWorktreeFiles],
+  );
+
+  const onRemoveWorktree = useCallback(
+    async (cwd: string, path: string, force: boolean, keepSessions = false) => {
+      if (removingWorktreePaths.current.has(path)) {
+        throw new Error("This worktree is already being deleted.");
+      }
+      removingWorktreePaths.current.add(path);
+      const lockedIds = new Set<string>();
+      const forgottenIds = new Set<string>();
+      try {
+        if (
+          [...switchingWorktrees.current.values()].some((target) =>
+            isEqualOrInside(target, path),
+          )
+        ) {
+          throw new Error(
+            "A session is selecting this worktree. Try deleting it again once selection finishes.",
+          );
+        }
+        await onCheckWorktreeRemoval(cwd, path, force);
+        const listed = await listWorktrees(cwd);
+        const tree = listed.worktrees.find(
+          (entry) => pathKey(entry.path) === pathKey(path),
+        );
+        if (!tree) throw new Error("This worktree is no longer available.");
+        const ids = worktreeSessionIds(tree, sessionsRef.current);
+        if (!keepSessions && ids.length) {
+          throw new Error(
+            "Move or delete the sessions using this worktree first.",
+          );
+        }
+        if (
+          ids.some(
+            (id) =>
+              removingSessionIds.current.has(id) ||
+              switchingWorktrees.current.has(id),
+          )
+        ) {
+          throw new Error(
+            "Wait for these sessions to finish changing before deleting the worktree.",
+          );
+        }
+        for (const id of ids) {
+          removingSessionIds.current.add(id);
+          lockedIds.add(id);
+          pendingPersist.current.delete(id);
+          invalidateLoadedSession(id);
+        }
+        for (const id of ids) {
+          await stopSessionForRemoval(id);
+          const session = sessionsRef.current.find((entry) => entry.id === id);
+          if (!session) continue;
+          await flushSessionCheckpoint(id);
+          forgottenIds.add(id);
+          for (const harness of sessionChildHarnesses(session)) {
+            await forgetHarnessSession(harness, id);
+          }
+          const latest = sessionsRef.current.find((entry) => entry.id === id);
+          if (!latest) continue;
+          const stopped = {
+            ...stopStreaming(latest),
+            busy: false,
+            queueStatus: "paused" as const,
+            pendingQuestion: undefined,
+          };
+          sessionsRef.current = sessionsRef.current.map((entry) =>
+            entry.id === id ? stopped : entry,
+          );
+          setSessions(sessionsRef.current);
+          if (shouldPersistSession(stopped)) await upsertSession(stopped);
+        }
+        await flushSessionWrites();
+        checkOpenWorktreeFiles(path);
+        const removed = await removeWorktree(cwd, path, force, keepSessions);
+        const affected = new Set([...ids, ...removed.sessionIds]);
+        if (isEqualOrInside(projectCwdRef.current, path)) {
+          setProjectCwd(removed.projectCwd);
+          setRecents(rememberProject(removed.projectCwd));
+        }
+        for (const id of affected) {
+          invalidateLoadedSession(id);
+          pendingPersist.current.delete(id);
+          lastPersisted.current.delete(id);
+        }
+        sessionsRef.current = sessionsRef.current.map((session) =>
+          affected.has(session.id)
+            ? detachSessionWorktree(session, removed.projectCwd, path)
+            : session,
+        );
+        setSessions(sessionsRef.current);
+        const patchSummary = (entry: SessionSummary) =>
+          affected.has(entry.id)
+            ? detachSessionWorktree(entry, removed.projectCwd, path)
+            : entry;
+        setHistory((current) => current.map(patchSummary));
+        setStoredLinkedSessions((current) => current.map(patchSummary));
+        for (const id of affected) notifyReviewChanged(id);
+      } catch (error) {
+        // Removal may fail after idle agent processes were stopped. Rebind
+        // their saved threads so the unchanged working copy can still resume.
+        const kept = sessionsRef.current.filter(
+          (session) => forgottenIds.has(session.id) && !session.worktreeRemoved,
+        );
+        bindResumedSessions(kept);
+        for (const session of kept) {
+          const pending = session.pendingSwitch;
+          if (pending?.fromProviderSessionId) {
+            bindHarnessSession(
+              pending.from,
+              session.id,
+              pending.fromProviderSessionId,
+              sessionWorkCwd(session),
+              pending.fromProviderAccountId,
+            );
+          }
+        }
+        throw error;
+      } finally {
+        removingWorktreePaths.current.delete(path);
+        for (const id of lockedIds) removingSessionIds.current.delete(id);
+      }
+    },
+    [
+      checkOpenWorktreeFiles,
+      invalidateLoadedSession,
+      onCheckWorktreeRemoval,
+      stopSessionForRemoval,
+    ],
+  );
+
   const onRemoveHistorySession = useCallback(
     async (
       sessionId: string,
       mode: "archive" | "delete",
       skipDeleteConfirm = false,
     ): Promise<boolean> => {
-      if (removingSessionIds.current.has(sessionId)) return false;
+      if (
+        removingSessionIds.current.has(sessionId) ||
+        switchingWorktrees.current.has(sessionId) ||
+        deleteConfirmationPending.current
+      )
+        return false;
       const open = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -3790,19 +4044,50 @@ export default function App({
       const label = seed
         ? sessionDisplayTitle(seed.title, seed.harness)
         : "this session";
-      if (
-        mode === "delete" &&
-        !skipDeleteConfirm &&
-        !window.confirm(`Delete “${label}”?`)
-      )
-        return false;
-
       removingSessionIds.current.add(sessionId);
+      let deleteWorktreePath: string | undefined;
+      if (mode === "delete" && !skipDeleteConfirm) {
+        deleteConfirmationPending.current = true;
+        let unusedWorktree: string | undefined;
+        if (seed?.worktreeCwd) {
+          try {
+            const { worktrees } = await listWorktrees(seed.cwd);
+            const tree = worktrees.find(
+              (entry) => pathKey(entry.path) === pathKey(seed.worktreeCwd!),
+            );
+            if (
+              tree &&
+              !tree.isMain &&
+              !tree.locked &&
+              tree.branch &&
+              worktreeSessionIds(tree, sessionsRef.current).every(
+                (id) => id === sessionId,
+              )
+            )
+              unusedWorktree = tree.path;
+          } catch {
+            // A failed lookup must never offer filesystem cleanup.
+          }
+        }
+        if (!unusedWorktree) {
+          deleteConfirmationPending.current = false;
+        } else {
+          const choice = await new Promise<SessionDeleteChoice>((resolve) => {
+            setSessionDeleteDialog({ title: label, unusedWorktree, resolve });
+          });
+          deleteConfirmationPending.current = false;
+          if (!choice.confirmed) {
+            removingSessionIds.current.delete(sessionId);
+            return false;
+          }
+          if (choice.deleteWorktree) deleteWorktreePath = unusedWorktree;
+        }
+      }
       invalidateLoadedSession(sessionId);
       pendingPersist.current.delete(sessionId);
       let savedSummary: SessionSummary | undefined;
       try {
-        return await runSessionRemoval({
+        const removed = await runSessionRemoval({
           sessionId,
           scope: tabCloseScope,
           readWorkspace: () => ({
@@ -3839,10 +4124,27 @@ export default function App({
           },
           stop: async () => {
             const run =
-              mode === "delete" ? orchestrator.forSession(sessionId) : undefined;
+              mode === "delete"
+                ? orchestrator.forSession(sessionId)
+                : undefined;
             if (run && (run.status === "active" || run.status === "paused"))
               await orchestrator.stopRun(run.leadId);
             await stopSessionForRemoval(sessionId);
+            if (mode === "delete") {
+              const latest = sessionsRef.current.find(
+                (s) => s.id === sessionId,
+              );
+              const harnesses: HarnessId[] = latest
+                ? sessionChildHarnesses(latest)
+                : [seed?.harness ?? "cursor"];
+              // Release native processes before deleting the record, so a
+              // following worktree removal cannot race fire-and-forget cleanup.
+              await Promise.all(
+                harnesses.map((harness) =>
+                  forgetHarnessSession(harness, sessionId),
+                ),
+              );
+            }
           },
           updateSession: (stopped) => {
             const next = sessionsRef.current.map((session) =>
@@ -3898,8 +4200,10 @@ export default function App({
             const harnesses: HarnessId[] = latest
               ? sessionChildHarnesses(latest)
               : [seed?.harness ?? "cursor"];
-            for (const harness of harnesses) {
-              void forgetHarnessSession(harness, sessionId);
+            if (mode === "archive") {
+              for (const harness of harnesses) {
+                void forgetHarnessSession(harness, sessionId);
+              }
             }
             lastPersisted.current.delete(sessionId);
             pendingPersist.current.delete(sessionId);
@@ -3945,6 +4249,17 @@ export default function App({
             }
           },
         });
+        if (removed && deleteWorktreePath && seed) {
+          try {
+            await onRemoveWorktree(seed.cwd, deleteWorktreePath, false);
+          } catch (error) {
+            void message(
+              `The session was deleted. Its worktree was kept.\n\n${String(error)}\n\nYou can manage it in Settings → Worktrees.`,
+              { title: "MonoCode", kind: "warning" },
+            );
+          }
+        }
+        return removed;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         void message(`Could not ${mode} this conversation.\n\n${detail}`, {
@@ -3964,6 +4279,7 @@ export default function App({
       sidebarCwd,
       stopSessionForRemoval,
       tabCloseScope,
+      onRemoveWorktree,
     ],
   );
 
@@ -4006,6 +4322,7 @@ export default function App({
             searchViewOpenRef.current ||
             inboxViewOpenRef.current ||
             notesViewOpenRef.current ||
+            automationsViewOpenRef.current ||
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
             whatsNewVersionRef.current,
@@ -4059,6 +4376,18 @@ export default function App({
       );
     },
     [onPinHistorySession],
+  );
+
+  const onDeleteWorktreeSessions = useCallback(
+    async (sessionIds: readonly string[]): Promise<boolean> => {
+      for (const sessionId of sessionIds) {
+        if (!(await onRemoveHistorySession(sessionId, "delete", true))) {
+          return false;
+        }
+      }
+      return true;
+    },
+    [onRemoveHistorySession],
   );
 
   const onDeleteHistorySession = useCallback(
@@ -4151,6 +4480,9 @@ export default function App({
                 cwd: normalized,
                 branch: undefined,
                 worktreeCwd: undefined,
+                worktreeRemoved: undefined,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
               }
             : s,
         ),
@@ -4182,16 +4514,17 @@ export default function App({
     (sessionId: string) => {
       notifyGitChanged();
       const current = sessionsRef.current.find((s) => s.id === sessionId);
-      if (!current || (!current.branch && !current.worktreeCwd)) return;
-      if (current.worktreeCwd && current.providerSessionId) {
-        void forgetHarnessSession(current.harness, sessionId);
-      }
+      if (!current) return;
+      void forgetHarnessSession(current.harness, sessionId);
       const next = {
         ...current,
         branch: undefined,
-        worktreeCwd: undefined,
-        ...(current.worktreeCwd ? { providerSessionId: undefined } : {}),
+        providerSessionId: undefined,
+        context: undefined,
       };
+      sessionsRef.current = sessionsRef.current.map((s) =>
+        s.id === sessionId ? next : s,
+      );
       setSessions((prev) => prev.map((s) => (s.id === sessionId ? next : s)));
       persistSession(next);
       notifyReviewChanged(sessionId);
@@ -4199,11 +4532,169 @@ export default function App({
     [persistSession],
   );
 
+  const onWorkspaceModeChange = useCallback(
+    (sessionId: string, mode: WorkspaceMode, base?: string) => {
+      setSessions((prev) =>
+        prev.map((session) => {
+          if (
+            session.id !== sessionId ||
+            (!isBlankSession(session) &&
+              !(session.workspaceMode && !session.worktreeCwd && !session.busy))
+          ) {
+            return session;
+          }
+          return mode === "worktree"
+            ? base || session.worktreeBase
+              ? {
+                  ...session,
+                  workspaceMode: "worktree",
+                  worktreeBase: base || session.worktreeBase,
+                }
+              : session
+            : {
+                ...session,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
+              };
+        }),
+      );
+    },
+    [],
+  );
+
+  const onWorktreeBaseChange = useCallback(
+    (sessionId: string, base: string) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId &&
+          (isBlankSession(session) ||
+            (!!session.workspaceMode &&
+              !session.worktreeCwd &&
+              !session.busy)) &&
+          session.workspaceMode === "worktree"
+            ? { ...session, worktreeBase: base }
+            : session,
+        ),
+      );
+    },
+    [],
+  );
+
+  const onWorktreeChange = useCallback(
+    async (sessionId: string, tree: Worktree) => {
+      const current = sessionsRef.current.find((s) => s.id === sessionId);
+      if (
+        !current ||
+        current.busy ||
+        removingSessionIds.current.has(sessionId) ||
+        switchingWorktrees.current.has(sessionId)
+      ) {
+        throw new Error(
+          "Wait for this session to finish before changing working copies.",
+        );
+      }
+      if (
+        !current.worktreeRemoved &&
+        pathKey(sessionWorkCwd(current)) === pathKey(tree.path)
+      )
+        return;
+      if (
+        [...removingWorktreePaths.current].some((path) =>
+          isEqualOrInside(tree.path, path),
+        )
+      ) {
+        throw new Error(
+          "This worktree is being deleted. Select another working copy.",
+        );
+      }
+      if (!current.worktreeRemoved && current.queuedMessages?.length) {
+        throw new Error(
+          "Clear queued messages before changing working copies.",
+        );
+      }
+      const run = orchestrator.forSession(sessionId);
+      if (run && ["active", "paused"].includes(run.status)) {
+        throw new Error(
+          "Stop this orchestration run before changing working copies.",
+        );
+      }
+      switchingWorktrees.current.set(sessionId, tree.path);
+      pendingPersist.current.delete(sessionId);
+      try {
+        const listed = await listWorktrees(current.cwd);
+        const target = listed.worktrees.find(
+          (entry) =>
+            pathKey(entry.path) === pathKey(tree.path) && !entry.missing,
+        );
+        if (!target) {
+          throw new Error(
+            "This worktree is no longer available. Refresh the picker.",
+          );
+        }
+        const source = sessionsRef.current.find((s) => s.id === sessionId);
+        if (
+          !source ||
+          source.busy ||
+          source.cwd !== current.cwd ||
+          sessionWorkCwd(source) !== sessionWorkCwd(current)
+        ) {
+          throw new Error(
+            "The session changed. Try selecting the working copy again.",
+          );
+        }
+        const selected = sessionInWorktree(source, target);
+        if (selected.id !== sessionId) {
+          // Leave the original conversation, checkpoints, and live provider
+          // context attached to the files they describe.
+          const tab = newTab(selected.id);
+          sessionsRef.current = [...sessionsRef.current, selected];
+          setSessions(sessionsRef.current);
+          appendTab(tab, selected.cwd);
+          setActiveTabId(tab.id);
+          setComposerFocused(true);
+          return;
+        }
+        await flushSessionCheckpoint(sessionId);
+        for (const harness of sessionChildHarnesses(source)) {
+          await forgetHarnessSession(harness, sessionId);
+        }
+        const latest = sessionsRef.current.find((s) => s.id === sessionId);
+        if (
+          !latest ||
+          (!latest.worktreeRemoved && !isBlankSession(latest)) ||
+          latest.cwd !== current.cwd ||
+          sessionWorkCwd(latest) !== sessionWorkCwd(current)
+        ) {
+          throw new Error(
+            "The session changed. Try selecting the working copy again.",
+          );
+        }
+        const next = sessionInWorktree(latest, target);
+        if (latest.worktreeRemoved)
+          await keepSessionChanges(sessionId, target.path);
+        pendingPersist.current.delete(sessionId);
+        if (shouldPersistSession(next)) await upsertSession(next);
+        invalidateLoadedSession(sessionId);
+        sessionsRef.current = sessionsRef.current.map((s) =>
+          s.id === sessionId ? next : s,
+        );
+        setSessions(sessionsRef.current);
+        notifyGitChanged();
+        notifyReviewChanged(sessionId);
+        void refreshHistory(next.cwd);
+      } finally {
+        switchingWorktrees.current.delete(sessionId);
+      }
+    },
+    [appendTab, invalidateLoadedSession, refreshHistory],
+  );
+
   const onSelectProject = useCallback(
     (path: string) => {
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       const normalized = normalizeProjectPath(path);
       if (!looksLikeProject(normalized)) return;
 
@@ -4458,15 +4949,19 @@ export default function App({
   const onOpenFile = useCallback<OpenFileFn>(
     (path, navigation, options) => {
       void (async () => {
-        const resolved = await resolveFileOpenRequest(
-          gitCwdRef.current,
-          path,
-          options,
-        );
-        rememberOpenedFile(sidebarCwdRef.current, resolved);
+        const fileCwd = gitCwdRef.current;
+        const fileProjectCwd = sidebarCwdRef.current;
+        const resolved = await resolveFileOpenRequest(fileCwd, path, options);
+        rememberOpenedFile(fileCwd, resolved);
         const tab = tabsRef.current.find((entry) => entry.id === activeTabId);
         if (!tab) return;
-        const file = newFileTab(resolved, sidebarCwdRef.current);
+        const file = newFileTab(
+          resolved,
+          fileCwd,
+          false,
+          undefined,
+          fileProjectCwd,
+        );
         setTabs((prev) =>
           prev.map((entry) => {
             if (entry.id !== tab.id) return entry;
@@ -4500,12 +4995,15 @@ export default function App({
       );
       const block = session?.blocks.find((entry) => entry.id === blockId);
       if (!tab || !session || !block) return;
-      const file = newPlanTab(
-        session.id,
-        block.id,
-        planTitle(block.text),
-        session.cwd,
-      );
+      const file = {
+        ...newPlanTab(
+          session.id,
+          block.id,
+          planTitle(block.text),
+          sessionWorkCwd(session),
+        ),
+        ...(session.worktreeCwd ? { projectCwd: session.cwd } : {}),
+      };
       setTabs((prev) =>
         prev.map((entry) =>
           entry.id === tab.id ? openEditorTab(entry, file) : entry,
@@ -4628,6 +5126,53 @@ export default function App({
     [],
   );
 
+  const onSaveDraft = useCallback(
+    (sessionId: string, text: string, attachments: Attachment[] = []) => {
+      const current = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      if (
+        !current ||
+        current.busy ||
+        current.blocks.length > 0 ||
+        current.inboxAsk ||
+        current.worktreeRemoved ||
+        (!text.trim() && attachments.length === 0)
+      ) {
+        return false;
+      }
+      const placeholderTitle = canReplaceSessionTitle(
+        current.title,
+        current.harness,
+        HARNESS_LABEL[current.harness],
+      );
+      const title = placeholderTitle
+        ? titleFromPrompt(text, current.harness, attachments)
+        : current.title;
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId && session.blocks.length === 0
+            ? {
+                ...session,
+                title,
+                blocks: [
+                  {
+                    id: crypto.randomUUID(),
+                    role: "user",
+                    text,
+                    ...(attachments.length > 0 ? { attachments } : {}),
+                    draft: true,
+                  },
+                ],
+              }
+            : session,
+        ),
+      );
+      return true;
+    },
+    [],
+  );
+
   const onSubmit = useCallback(
     (
       sessionId: string,
@@ -4644,6 +5189,7 @@ export default function App({
         buildTarget?: PlanBuildTarget;
         managed?: boolean;
         orchestrationRetry?: OrchestrationProposal;
+        draftBlockId?: string;
         onSettled?: (outcome: ControlOutcome) => void;
       },
     ) => {
@@ -4673,12 +5219,40 @@ export default function App({
           return false;
         }
       }
-      if (removingSessionIds.current.has(sessionId)) return false;
+      if (
+        removingSessionIds.current.has(sessionId) ||
+        switchingWorktrees.current.has(sessionId)
+      )
+        return false;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
-      if (!storedCurrent) return false;
-      const current = options?.buildTarget
-        ? withPlanBuildTarget(storedCurrent, options.buildTarget)
+      if (
+        !storedCurrent ||
+        storedCurrent.worktreeRemoved ||
+        [...removingWorktreePaths.current].some((path) =>
+          isEqualOrInside(sessionWorkCwd(storedCurrent), path),
+        )
+      )
+        return false;
+      const draftBlock = options?.draftBlockId
+        ? storedCurrent.blocks.find(
+            (block) =>
+              block.id === options.draftBlockId &&
+              block.role === "user" &&
+              block.draft,
+          )
+        : undefined;
+      if (options?.draftBlockId && !draftBlock) return false;
+      const draftCleared = draftBlock
+        ? {
+            ...storedCurrent,
+            blocks: storedCurrent.blocks.filter(
+              (block) => block.id !== draftBlock.id,
+            ),
+          }
         : storedCurrent;
+      const current = options?.buildTarget
+        ? withPlanBuildTarget(draftCleared, options.buildTarget)
+        : draftCleared;
       const intent = options?.intent ?? "default";
       if (intent === "orchestrate") {
         try {
@@ -4726,7 +5300,9 @@ export default function App({
       }
       if (isPreparingHandoff(current)) return false;
       saveRecentModelChoice(current.harness, current.model);
-      const workCwd = sessionWorkCwd(current);
+      const initialWorkCwd = sessionWorkCwd(current);
+      const createDraftWorktree =
+        !current.worktreeCwd && current.workspaceMode === "worktree";
       const accountProvider = supportsProviderAccounts(current.harness)
         ? current.harness
         : undefined;
@@ -4760,7 +5336,9 @@ export default function App({
 
       if (current.busy && !pendingSwitch) {
         const followUpBehavior =
-          intent === "plan" || intent === "orchestrate"
+          current.worktreePreparing ||
+          intent === "plan" ||
+          intent === "orchestrate"
             ? "queue"
             : (options?.followUpBehavior ?? loadFollowUpBehavior());
         if (followUpBehavior === "queue") {
@@ -4829,12 +5407,12 @@ export default function App({
             const prompt = await preparePrompt(harnessText, {
               harness: current.harness,
               sessionId,
-              cwd: workCwd,
+              cwd: initialWorkCwd,
             });
             await steerHarnessTurn({
               harness: current.harness,
               sessionId,
-              cwd: workCwd,
+              cwd: initialWorkCwd,
               model: current.model,
               modelSettings: current.modelSettings,
               text: inboxAskPrompt(
@@ -4867,6 +5445,7 @@ export default function App({
             version: 1,
             leadId: sessionId,
             cwd: current.cwd,
+            checkoutCwd: initialWorkCwd,
             request: harnessText,
             author: {
               harness: current.harness,
@@ -4881,11 +5460,12 @@ export default function App({
           }
         : undefined;
       const isFirstTurn = current.blocks.length === 0;
-      const placeholderTitle = canReplaceSessionTitle(
-        current.title,
-        current.harness,
-        HARNESS_LABEL[current.harness],
-      );
+      const placeholderTitle =
+        canReplaceSessionTitle(
+          current.title,
+          current.harness,
+          HARNESS_LABEL[current.harness],
+        ) || !!draftBlock;
       const titleSeed =
         isFirstTurn &&
         !current.inboxCard &&
@@ -4920,13 +5500,22 @@ export default function App({
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
-          const selected = options?.buildTarget
-            ? withPlanBuildTarget(s, options.buildTarget)
+          const draftRemoved = draftBlock
+            ? {
+                ...s,
+                blocks: s.blocks.filter((block) => block.id !== draftBlock.id),
+              }
             : s;
+          const selected = options?.buildTarget
+            ? withPlanBuildTarget(draftRemoved, options.buildTarget)
+            : draftRemoved;
           const titled = isFirstTurn ? titleSeed : selected.title;
           let next: Session = {
             ...selected,
             providerAccountId,
+            worktreePreparing: createDraftWorktree
+              ? true
+              : selected.worktreePreparing,
             inboxCard: rawCommand ? s.inboxCard : undefined,
             noteCard: rawCommand ? s.noteCard : undefined,
             handoffCard: rawCommand ? s.handoffCard : undefined,
@@ -4997,7 +5586,8 @@ export default function App({
         }),
       );
 
-      if (isFirstTurn && live && placeholderTitle) {
+      const launchTitleGeneration = (workCwd: string) => {
+        if (!isFirstTurn || !live || !placeholderTitle) return;
         const titleMessage =
           harnessText || attachments.map((file) => file.name).join(", ");
         void generateHarnessTitle(current.harness, {
@@ -5034,7 +5624,7 @@ export default function App({
             );
           })
           .catch(() => undefined);
-      }
+      };
 
       if (!live) {
         if (pendingSwitch) {
@@ -5072,6 +5662,61 @@ export default function App({
       let nativeProposalText = "";
       let completedProposal: OrchestrationProposal | undefined;
       void (async () => {
+        let workCwd = initialWorkCwd;
+        if (createDraftWorktree) {
+          const tree = await createWorktree(
+            current.cwd,
+            temporaryWorktreeBranchName(),
+            current.worktreeBase || "HEAD",
+            false,
+          );
+          workCwd = tree.path;
+          if (proposalDraft)
+            proposalDraft = { ...proposalDraft, checkoutCwd: tree.path };
+          setSessions((prev) =>
+            prev.map((session) =>
+              session.id === sessionId
+                ? {
+                    ...session,
+                    worktreeCwd: tree.path,
+                    branch: tree.branch ?? undefined,
+                    workspaceMode: undefined,
+                    worktreeBase: undefined,
+                    worktreePreparing: undefined,
+                  }
+                : session,
+            ),
+          );
+          notifyReviewChanged(sessionId);
+
+          const branchMessage =
+            harnessText || attachments.map((file) => file.name).join(", ");
+          void generateHarnessBranchName(
+            pickTextHarness(current.harness),
+            workCwd,
+            branchMessage,
+          )
+            .then(async (fragment) => {
+              const branch = fragment ? namedWorktreeBranch(fragment) : null;
+              if (!branch) return;
+              const renamed = await renameWorktreeBranch(
+                current.cwd,
+                tree.path,
+                branch,
+              );
+              setSessions((prev) =>
+                prev.map((session) =>
+                  session.id === sessionId &&
+                  pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
+                    ? { ...session, branch: renamed.branch ?? undefined }
+                    : session,
+                ),
+              );
+            })
+            .catch(() => undefined);
+        }
+        launchTitleGeneration(workCwd);
+        if (turnGen.current.get(sessionId) !== gen) return;
         if (proposalDraft && proposalId) {
           const settings = await discoverOrchestrationSettings();
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -5189,7 +5834,7 @@ export default function App({
               : orchestrationPlanningPrompt(
                   prompt,
                   proposalDraft.settings,
-                  proposalDraft.cwd,
+                  proposalDraft.checkoutCwd ?? proposalDraft.cwd,
                 )
             : intent === "plan" && !rawCommand
               ? planTurnPrompt(prompt)
@@ -5386,21 +6031,24 @@ export default function App({
             });
             flushHarnessEvents();
             setSessions((prev) =>
-              prev.map((session) =>
-                session.id === sessionId
-                  ? proposalId && proposalDraft
-                    ? withOrchestrationProposal(
-                        stopStreaming(session),
-                        proposalId,
-                        completeOrchestrationProposal(
-                          proposalDraft,
-                          "",
-                          controlOutcome.error,
-                        ),
-                      )
-                    : stopStreaming(session)
-                  : session,
-              ),
+              prev.map((session) => {
+                if (session.id !== sessionId) return session;
+                const stopped = {
+                  ...stopStreaming(session),
+                  worktreePreparing: undefined,
+                };
+                return proposalId && proposalDraft
+                  ? withOrchestrationProposal(
+                      stopped,
+                      proposalId,
+                      completeOrchestrationProposal(
+                        proposalDraft,
+                        "",
+                        controlOutcome.error,
+                      ),
+                    )
+                  : stopped;
+              }),
             );
           }
         })
@@ -5418,6 +6066,228 @@ export default function App({
       enqueueHarnessEvent,
       flushHarnessEvents,
     ],
+  );
+
+  const automationSessionReservations = useRef(new Set<string>());
+  const automationRecoveryRef = useRef<Promise<void> | null>(null);
+  const automationRecoveryCutoffRef = useRef(Date.now());
+
+  const launchAutomation = useCallback(
+    async (
+      automation: Automation,
+      run: AutomationRun,
+      reveal = false,
+      prompt = run.prompt ?? automation.prompt,
+    ) => {
+      let reservationId: string | undefined;
+      let releaseAfterSettle = false;
+      const releaseReservation = () => {
+        if (!reservationId) return;
+        automationSessionReservations.current.delete(reservationId);
+      };
+      try {
+        let session =
+          automation.reuseSession && automation.lastSessionId
+            ? sessionsRef.current.find(
+                (entry) =>
+                  entry.id === automation.lastSessionId &&
+                  entry.harness === automation.harness &&
+                  !entry.busy &&
+                  !entry.worktreeRemoved &&
+                  !automationSessionReservations.current.has(entry.id) &&
+                  (automation.workspaceMode === "current"
+                    ? entry.workspaceMode !== "worktree" &&
+                      !entry.worktreeCwd &&
+                      pathKey(entry.cwd) === pathKey(automation.cwd)
+                    : automation.workspaceMode === "existing"
+                      ? pathKey(sessionWorkCwd(entry)) ===
+                        pathKey(automation.worktreeCwd ?? "")
+                      : false),
+              )
+            : undefined;
+
+        if (!session) {
+          session = {
+            ...newSession(
+              automation.harness,
+              automation.cwd,
+              automation.model,
+              automation.runtimeMode,
+              automation.modelSettings,
+            ),
+            title: formatSessionTitle(automation.harness, automation.name),
+            automationId: automation.id,
+            ...(automation.workspaceMode === "worktree"
+              ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
+              : automation.workspaceMode === "existing" &&
+                  automation.worktreeCwd
+                ? { worktreeCwd: automation.worktreeCwd }
+                : {}),
+          };
+          const nextSessions = [...sessionsRef.current, session];
+          sessionsRef.current = nextSessions;
+          setSessions(nextSessions);
+          const tab = newTab(session.id);
+          appendTab(tab, automation.cwd);
+          if (reveal) {
+            setActiveTabId(tab.id);
+            setComposerFocused(false);
+          }
+        } else {
+          const stamped = {
+            ...session,
+            automationId: automation.id,
+            model: automation.model,
+            modelSettings: automation.modelSettings ?? {},
+            runtimeMode: automation.runtimeMode,
+          };
+          session = stamped;
+          const nextSessions = sessionsRef.current.map((entry) =>
+            entry.id === stamped.id ? stamped : entry,
+          );
+          sessionsRef.current = nextSessions;
+          setSessions(nextSessions);
+          if (reveal) {
+            focusOpenSession(session.id);
+          }
+        }
+
+        reservationId = session.id;
+        automationSessionReservations.current.add(session.id);
+
+        if (automation.sessionFolderId && looksLikeProject(automation.cwd)) {
+          saveSessionFolders(
+            automation.cwd,
+            placeSessionInFolder(
+              loadSessionFolders(automation.cwd),
+              session.id,
+              { kind: "existing", folderId: automation.sessionFolderId },
+            ),
+          );
+        }
+
+        if (reveal) {
+          setSearchViewOpen(false);
+          setInboxViewOpen(false);
+          setNotesViewOpen(false);
+          setAutomationsViewOpen(false);
+          setSidebarTab("sessions");
+        }
+
+        await updateAutomationRun(run.id, "running", {
+          sessionId: session.id,
+        });
+        const accepted = onSubmit(session.id, prompt, [], {
+          onSettled: (outcome) => {
+            const status =
+              outcome.status === "completed"
+                ? "succeeded"
+                : outcome.status === "cancelled"
+                  ? "cancelled"
+                  : "failed";
+            void updateAutomationRun(run.id, status, {
+              sessionId: session.id,
+              ...(outcome.error ? { error: outcome.error } : {}),
+            })
+              .catch(() => undefined)
+              .finally(releaseReservation);
+          },
+        });
+        if (!accepted) {
+          await updateAutomationRun(run.id, "failed", {
+            sessionId: session.id,
+            error: "The selected agent session could not start this run.",
+          });
+        } else {
+          releaseAfterSettle = true;
+        }
+      } catch (reason: unknown) {
+        await updateAutomationRun(run.id, "failed", {
+          error: reason instanceof Error ? reason.message : String(reason),
+        }).catch(() => undefined);
+        throw reason;
+      } finally {
+        if (!releaseAfterSettle) releaseReservation();
+      }
+    },
+    [appendTab, focusOpenSession, onSubmit],
+  );
+
+  const ensureAutomationRecovery = useCallback(() => {
+    if (!automationRecoveryRef.current) {
+      const recovery = (async () => {
+        const pending = await recoverAutomationRuns(
+          automationRecoveryCutoffRef.current,
+        );
+        for (const item of pending) {
+          await launchAutomation(
+            item.automation,
+            item.run,
+            false,
+            item.run.prompt ?? item.automation.prompt,
+          ).catch(() => undefined);
+        }
+      })();
+      automationRecoveryRef.current = recovery.catch((error: unknown) => {
+        automationRecoveryRef.current = null;
+        throw error;
+      });
+    }
+    return automationRecoveryRef.current;
+  }, [launchAutomation]);
+
+  useEffect(() => {
+    let disposed = false;
+    let evaluating = false;
+    const evaluate = async () => {
+      if (disposed || evaluating) return;
+      evaluating = true;
+      try {
+        await ensureAutomationRecovery();
+        const due = await claimDueAutomations();
+        for (const item of due) {
+          if (disposed) break;
+          void launchAutomation(item.automation, item.run).catch(
+            () => undefined,
+          );
+        }
+      } catch {
+        // Scheduling retries on the next tick; individual claimed runs record
+        // launch failures in launchAutomation.
+      } finally {
+        evaluating = false;
+      }
+    };
+    void evaluate();
+    const timer = window.setInterval(() => void evaluate(), 30_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void evaluate();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [ensureAutomationRecovery, launchAutomation]);
+
+  const onInboxAppeared = useCallback(
+    (items: Parameters<typeof claimInboxAutomationRuns>[0]) => {
+      void ensureAutomationRecovery()
+        .then(() => claimInboxAutomationRuns(items))
+        .then((due) => {
+          for (const item of due) {
+            void launchAutomation(
+              item.automation,
+              item.run,
+              false,
+              item.prompt,
+            ).catch(() => undefined);
+          }
+        })
+        .catch(() => undefined);
+    },
+    [ensureAutomationRecovery, launchAutomation],
   );
 
   const onUpdatePlan = useCallback(
@@ -5689,7 +6559,7 @@ export default function App({
       const source = sessionsRef.current.find(
         (session) => session.id === sourceId,
       );
-      if (!source) return;
+      if (!source || source.worktreeRemoved) return;
       const { harness, model, modelSettings } = target;
       const cwd = sessionWorkCwd(source);
       const from = harnessForTurn(source.blocks, turn, source.harness);
@@ -5702,14 +6572,16 @@ export default function App({
         files,
       });
       const session = {
-        ...newSession(harness, cwd, model, source.runtimeMode),
+        ...newSession(harness, source.cwd, model, source.runtimeMode),
+        worktreeCwd: source.worktreeCwd,
+        branch: source.branch,
         modelSettings: mergeModelSettings(
           resolveModel(harness, model),
           modelSettings,
         ),
         title: formatSessionTitle(harness, SECOND_OPINION_TITLE),
       };
-      openSessionBeside(sourceId, session, cwd);
+      openSessionBeside(sourceId, session, source.cwd);
       onSubmit(session.id, prompt, [], {
         secondOpinion: buildSecondOpinionCard({
           from,
@@ -5727,7 +6599,7 @@ export default function App({
       const source = sessionsRef.current.find(
         (session) => session.id === sourceId,
       );
-      if (!source) return;
+      if (!source || source.worktreeRemoved) return;
       const { harness, model, modelSettings } = target;
       const cwd = sessionWorkCwd(source);
       const from = harnessForTurn(source.blocks, turn, source.harness);
@@ -5736,7 +6608,9 @@ export default function App({
       const files = turnEditedFiles(sliced.blocks, cwd);
       const display = sessionDisplayTitle(source.title, source.harness);
       const session = {
-        ...newSession(harness, cwd, model, source.runtimeMode),
+        ...newSession(harness, source.cwd, model, source.runtimeMode),
+        worktreeCwd: source.worktreeCwd,
+        branch: source.branch,
         modelSettings: mergeModelSettings(
           resolveModel(harness, model),
           modelSettings,
@@ -5753,7 +6627,7 @@ export default function App({
           files,
         }),
       };
-      openSessionBeside(sourceId, session, cwd, true);
+      openSessionBeside(sourceId, session, source.cwd, true);
     },
     [openSessionBeside],
   );
@@ -5791,7 +6665,7 @@ export default function App({
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
-      if (!current || current.busy) return false;
+      if (!current || current.busy || current.worktreeRemoved) return false;
       if (!canCompactHarnessContext(current.harness)) {
         const unsupported = sessionsRef.current.map((session) =>
           session.id === sessionId
@@ -5894,9 +6768,10 @@ export default function App({
           const completed = isPreparingHandoff(stopped)
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
-          return completed.queuedMessages?.length
-            ? { ...completed, queueStatus: "paused" }
-            : completed;
+          const ready = { ...completed, worktreePreparing: undefined };
+          return ready.queuedMessages?.length
+            ? { ...ready, queueStatus: "paused" }
+            : ready;
         }),
       );
       if (session) {
@@ -5959,7 +6834,7 @@ export default function App({
   const onApproval = useCallback(
     (sessionId: string, requestId: number, decision: ApprovalDecision) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
-      if (!session) return;
+      if (!session || session.worktreeRemoved) return;
       respondHarnessApproval(session.harness, sessionId, requestId, decision);
     },
     [],
@@ -5968,7 +6843,7 @@ export default function App({
   const onQuestionReply = useCallback(
     (sessionId: string, requestId: number, reply: UserQuestionReply) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
-      if (!session) return;
+      if (!session || session.worktreeRemoved) return;
       respondHarnessQuestion(session.harness, sessionId, requestId, reply);
     },
     [],
@@ -5977,7 +6852,7 @@ export default function App({
   const onQuestionInteraction = useCallback(
     (sessionId: string, requestId: number) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
-      if (session)
+      if (session && !session.worktreeRemoved)
         keepHarnessQuestionOpen(session.harness, sessionId, requestId);
     },
     [],
@@ -6022,6 +6897,43 @@ export default function App({
           models: modelsFor(harness).map(({ id, name }) => ({ id, name })),
         })),
       createWorker: async (run, task) => {
+        const projectCwd = orchestrationProjectCwd(run);
+        const leadCheckoutCwd = orchestrationCheckoutCwd(run);
+        const lead = sessionsRef.current.find(
+          (session) => session.id === run.leadId,
+        );
+        if (!lead) throw new Error("Lead session is unavailable");
+        const workspace =
+          task.workspacePolicy === "shared"
+            ? workspaceIdentity(projectCwd, leadCheckoutCwd)
+            : task.workspace
+              ? await listWorktrees(leadCheckoutCwd).then((listed) => {
+                  const tree = listed.worktrees.find(
+                    (entry) =>
+                      pathKey(entry.path) ===
+                      pathKey(task.workspace!.checkoutCwd),
+                  );
+                  if (!tree)
+                    throw new Error(
+                      "This worker's retained worktree is missing. Its saved changes cannot be retried automatically.",
+                    );
+                  return workspaceIdentity(
+                    projectCwd,
+                    tree.path,
+                    tree.branch ?? task.workspace!.branch,
+                  );
+                })
+              : await createOrchestrationWorktree(
+                  leadCheckoutCwd,
+                  orchestrationWorktreeBranchName(task.id),
+                ).then((tree) =>
+                  workspaceIdentity(
+                    projectCwd,
+                    tree.path,
+                    tree.branch ?? undefined,
+                  ),
+                );
+        const checkoutCwd = workspace.checkoutCwd;
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
@@ -6029,31 +6941,37 @@ export default function App({
         const existing = sessionsRef.current.find(
           (session) => session.id === task.sessionId,
         );
-        const lead = sessionsRef.current.find(
-          (session) => session.id === run.leadId,
-        );
-        if (!lead) throw new Error("Lead session is unavailable");
         if (existing) {
           if (
             existing.harness !== task.harness ||
             existing.model !== task.model ||
-            existing.cwd !== run.cwd
+            !sameProjectPath(existing.cwd, projectCwd) ||
+            (!existing.worktreeRemoved &&
+              !sameProjectPath(sessionWorkCwd(existing), checkoutCwd))
           )
             throw new Error(
               "This worker's configuration changed. Restore its approved harness, model and project before retrying.",
             );
           // The lead's runtime mode governs its agents, including across a
           // change mid-run: auto stays auto, supervised asks the lead.
-          if (existing.runtimeMode !== lead.runtimeMode) {
-            const synced = { ...existing, runtimeMode: lead.runtimeMode };
-            await upsertSession(synced);
-            const next = sessionsRef.current.map((session) =>
-              session.id === synced.id ? synced : session,
-            );
-            sessionsRef.current = next;
-            setSessions(next);
-          }
-          return scratchDir;
+          const synced = {
+            ...existing,
+            cwd: projectCwd,
+            worktreeCwd: sameProjectPath(projectCwd, checkoutCwd)
+              ? undefined
+              : checkoutCwd,
+            branch: workspace.branch,
+            worktreeRemoved: false,
+            runtimeMode: lead.runtimeMode,
+            orchestrationLeadId: run.leadId,
+          };
+          await upsertSession(synced);
+          const next = sessionsRef.current.map((session) =>
+            session.id === synced.id ? synced : session,
+          );
+          sessionsRef.current = next;
+          setSessions(next);
+          return { scratchDir, workspace };
         }
         const restored = await getSession(task.sessionId);
         if (
@@ -6064,12 +6982,10 @@ export default function App({
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
         const fresh = {
-          ...newSession(
-            task.harness,
-            run.cwd,
-            task.model,
-            lead.runtimeMode,
-          ),
+          ...newSession(task.harness, projectCwd, task.model, lead.runtimeMode),
+          ...(sameProjectPath(projectCwd, checkoutCwd)
+            ? {}
+            : { worktreeCwd: checkoutCwd, branch: workspace.branch }),
           ...(task.modelSettings
             ? {
                 modelSettings: mergeModelSettings(
@@ -6083,8 +6999,14 @@ export default function App({
           ? {
               ...restored,
               busy: false,
-              cwd: run.cwd,
-              worktreeCwd: undefined,
+              cwd: projectCwd,
+              worktreeCwd: sameProjectPath(projectCwd, checkoutCwd)
+                ? undefined
+                : checkoutCwd,
+              branch: sameProjectPath(projectCwd, checkoutCwd)
+                ? undefined
+                : workspace.branch,
+              worktreeRemoved: false,
               runtimeMode: lead.runtimeMode,
             }
           : {
@@ -6098,7 +7020,7 @@ export default function App({
             worker.harness,
             worker.id,
             worker.providerSessionId,
-            worker.cwd,
+            sessionWorkCwd(worker),
             worker.providerAccountId,
           );
         await upsertSession(worker);
@@ -6106,7 +7028,149 @@ export default function App({
         sessionsRef.current = next;
         setSessions(next);
         // Workers belong to the lead's agent panel; no workspace tab is created.
-        return scratchDir;
+        return { scratchDir, workspace };
+      },
+      integrateWorker: async (run, task) => {
+        const fromCwd = task.workspace?.checkoutCwd;
+        if (!fromCwd)
+          throw new Error("This worker's isolated checkout is unavailable");
+        const session = sessionsRef.current.find(
+          (entry) => entry.id === task.sessionId,
+        );
+        if (session)
+          await Promise.all(
+            sessionChildHarnesses(session).map((harness) =>
+              stopHarnessSession(harness, task.sessionId),
+            ),
+          );
+        await invoke("harness_kill", { sessionId: task.sessionId });
+        await invoke("control_turn_finished", { sessionId: task.sessionId });
+        await flushSessionCheckpoint(task.sessionId);
+        const listed = await listWorktrees(orchestrationCheckoutCwd(run));
+        const workerTree = listed.worktrees.find((tree) =>
+          sameProjectPath(tree.path, fromCwd),
+        );
+        const leadTree = listed.worktrees.find((tree) =>
+          sameProjectPath(tree.path, orchestrationCheckoutCwd(run)),
+        );
+        if (!workerTree || !leadTree)
+          throw new Error(
+            "The worker or lead checkout is no longer registered. The worker worktree was kept.",
+          );
+        if (workerTree.head !== leadTree.head)
+          throw new Error(
+            "The worker or lead branch moved while this task was running. The worker worktree was kept for manual review.",
+          );
+        return applySessionCheckpoint(
+          task.sessionId,
+          fromCwd,
+          orchestrationCheckoutCwd(run),
+        );
+      },
+      cleanupWorker: async (run, task, onlyIfUnchanged) => {
+        const workspace = task.workspace;
+        if (!workspace || workspace.kind !== "worktree") return true;
+        const path = workspace.checkoutCwd;
+        await flushSessionCheckpoint(task.sessionId);
+        const listed = await listWorktrees(orchestrationCheckoutCwd(run));
+        const exists = listed.worktrees.some(
+          (tree) => pathKey(tree.path) === pathKey(path),
+        );
+        if (!exists && onlyIfUnchanged) return false;
+        const workerTree = listed.worktrees.find(
+          (tree) => pathKey(tree.path) === pathKey(path),
+        );
+        const leadTree = listed.worktrees.find((tree) =>
+          sameProjectPath(tree.path, orchestrationCheckoutCwd(run)),
+        );
+        if (
+          exists &&
+          (!workerTree || !leadTree || workerTree.head !== leadTree.head)
+        ) {
+          if (onlyIfUnchanged) return false;
+          throw new Error(
+            "The worker or lead branch moved before cleanup. The worker worktree was kept for manual review.",
+          );
+        }
+        if (onlyIfUnchanged) {
+          const safe = await sessionCheckpointCleanupSafe(task.sessionId, path);
+          if (!safe) return false;
+        } else if (exists) {
+          // Re-verify immediately before destructive cleanup. The operation is
+          // idempotent, so this also finishes a partially applied integration.
+          await applySessionCheckpoint(
+            task.sessionId,
+            path,
+            orchestrationCheckoutCwd(run),
+          );
+        }
+
+        if (exists) {
+          onStop(task.sessionId, true);
+          const session = sessionsRef.current.find(
+            (entry) => entry.id === task.sessionId,
+          );
+          if (session) {
+            await Promise.all(
+              sessionChildHarnesses(session).map((harness) =>
+                stopHarnessSession(harness, task.sessionId),
+              ),
+            );
+          }
+          await invoke("harness_kill", { sessionId: task.sessionId });
+          await invoke("control_turn_finished", {
+            sessionId: task.sessionId,
+          });
+          await flushSessionWrites();
+          checkOpenWorktreeFiles(path);
+          const removed = await removeOrchestrationWorktree(
+            orchestrationCheckoutCwd(run),
+            path,
+          );
+          const affected = new Set([task.sessionId, ...removed.sessionIds]);
+          sessionsRef.current = sessionsRef.current.map((session) =>
+            affected.has(session.id)
+              ? detachSessionWorktree(session, removed.projectCwd, path)
+              : session,
+          );
+          setSessions(sessionsRef.current);
+          const detachSummary = (entry: SessionSummary) =>
+            affected.has(entry.id)
+              ? detachSessionWorktree(entry, removed.projectCwd, path)
+              : entry;
+          setHistory((current) => current.map(detachSummary));
+          setStoredLinkedSessions((current) => current.map(detachSummary));
+          if (session)
+            await Promise.allSettled(
+              sessionChildHarnesses(session).map((harness) =>
+                forgetHarnessSession(harness, task.sessionId),
+              ),
+            );
+        } else {
+          const detached = sessionsRef.current.find(
+            (entry) => entry.id === task.sessionId,
+          );
+          if (detached && !detached.worktreeRemoved) {
+            const next = detachSessionWorktree(
+              detached,
+              orchestrationProjectCwd(run),
+              path,
+            );
+            sessionsRef.current = sessionsRef.current.map((entry) =>
+              entry.id === task.sessionId ? next : entry,
+            );
+            setSessions(sessionsRef.current);
+            if (shouldPersistSession(next)) await upsertSession(next);
+          }
+        }
+        if (workspace.branch)
+          await removeOrchestrationBranch(
+            orchestrationCheckoutCwd(run),
+            workspace.branch,
+          );
+        await forgetSessionCheckpoint(task.sessionId);
+        notifyReviewChanged(task.sessionId);
+        return true;
       },
       submit: (id, text, done) => {
         // Commit the new turn before the scheduler or confirmation updates
@@ -6173,7 +7237,7 @@ export default function App({
         }
       },
     });
-  }, [onSubmit, onStop]);
+  }, [checkOpenWorktreeFiles, onSubmit, onStop]);
 
   useEffect(() => {
     orchestrator.sync();
@@ -6398,7 +7462,12 @@ export default function App({
         });
       },
     }),
-    [onOpenApprovalSession, queueWorkerPanes, onSubmit, updateOrchestrationCard],
+    [
+      onOpenApprovalSession,
+      queueWorkerPanes,
+      onSubmit,
+      updateOrchestrationCard,
+    ],
   );
 
   const onSelectLiveAgent = useCallback(
@@ -6406,6 +7475,7 @@ export default function App({
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       onOpenApprovalSession(sessionId);
     },
     [onOpenApprovalSession],
@@ -6452,7 +7522,9 @@ export default function App({
     unseen: inboxUnseen,
     linkedSessionUpdateIds,
     linkedSessionUpdates,
-  } = useInboxActivity(recents, sidebarCwd, sidebarHistory);
+  } = useInboxActivity(recents, sidebarCwd, sidebarHistory, {
+    onAppeared: onInboxAppeared,
+  });
   linkedSessionUpdatesRef.current = linkedSessionUpdates;
   const inboxRelatedSessions = useMemo(() => {
     const byId = new Map<string, SessionSummary>();
@@ -6525,6 +7597,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setFilePickerInitialQuery("");
     setFilePickerResetToken((token) => token + 1);
     setFilePickerOpen(true);
@@ -6533,6 +7606,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setFilePickerInitialQuery(">");
     setFilePickerResetToken((token) => token + 1);
     setFilePickerOpen(true);
@@ -6548,6 +7622,7 @@ export default function App({
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setSidebarTab("files");
     setFilesSearchOpen(true);
     setSearchFocusToken((token) => token + 1);
@@ -6558,6 +7633,7 @@ export default function App({
     setSettingsOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setSearchViewOpen(true);
     setSearchViewFocusToken((token) => token + 1);
   }, []);
@@ -6571,6 +7647,7 @@ export default function App({
     setSettingsOpen(false);
     setSearchViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     setInboxViewOpen(true);
   }, []);
 
@@ -6582,6 +7659,7 @@ export default function App({
       setSettingsOpen(false);
       setSearchViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       setInboxViewOpen(false);
       const cwd =
         sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
@@ -6624,6 +7702,7 @@ export default function App({
     setSettingsOpen(false);
     setSearchViewOpen(false);
     setInboxViewOpen(false);
+    setAutomationsViewOpen(false);
     setNotesViewOpen(true);
   }, []);
 
@@ -6631,12 +7710,45 @@ export default function App({
     setNotesViewOpen(false);
   }, []);
 
+  const onOpenAutomations = useCallback(() => {
+    setFilePickerOpen(false);
+    setSettingsOpen(false);
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setAutomationsViewOpen(true);
+  }, []);
+
+  const onLeaveAutomations = useCallback(() => {
+    setAutomationsViewOpen(false);
+  }, []);
+
+  const onOpenAutomationSession = useCallback(
+    async (sessionId: string) => {
+      const session = await ensureOpenSession(sessionId);
+      if (!session)
+        throw new Error("This conversation is no longer available.");
+      setAutomationsViewOpen(false);
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setSettingsOpen(false);
+      setFilePickerOpen(false);
+      setSidebarTab("sessions");
+      setProjectCwd(session.cwd);
+      setRecents(rememberProject(session.cwd));
+      await onSelectHistorySession(sessionId);
+    },
+    [ensureOpenSession, onSelectHistorySession],
+  );
+
   const openSettings = useCallback(
     (section?: SettingsSectionId, anchor?: SettingsAnchor) => {
       setFilePickerOpen(false);
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
       if (section) {
         setSettingsSection(section);
         saveSettingsSection(section);
@@ -6650,11 +7762,14 @@ export default function App({
 
   const onOpenSettings = useCallback(() => openSettings(), [openSettings]);
 
-  const onOpenNotificationSettings = useCallback((path?: string) => {
-    openSettings("inbox", "project-notifications");
-    setNotificationProjectPath(path ?? null);
-    setNotificationSettingsRequest((request) => request + 1);
-  }, [openSettings]);
+  const onOpenNotificationSettings = useCallback(
+    (path?: string) => {
+      openSettings("inbox", "project-notifications");
+      setNotificationProjectPath(path ?? null);
+      setNotificationSettingsRequest((request) => request + 1);
+    },
+    [openSettings],
+  );
 
   const onOpenInboxIntegrations = useCallback(
     (source: ConnectableInboxSource) => openSettings("inbox", source),
@@ -6695,14 +7810,26 @@ export default function App({
       setNotesViewOpen(false);
       return;
     }
+    if (automationsViewOpen) {
+      setAutomationsViewOpen(false);
+      return;
+    }
     onVisitBack();
-  }, [onVisitBack, searchViewOpen, settingsOpen, inboxViewOpen, notesViewOpen]);
+  }, [
+    onVisitBack,
+    searchViewOpen,
+    settingsOpen,
+    inboxViewOpen,
+    notesViewOpen,
+    automationsViewOpen,
+  ]);
 
   const onRailForward = useCallback(() => {
     setSearchViewOpen(false);
     setSettingsOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
     onVisitForward();
   }, [onVisitForward]);
 
@@ -6891,6 +8018,7 @@ export default function App({
             searchViewOpenRef.current ||
             inboxViewOpenRef.current ||
             notesViewOpenRef.current ||
+            automationsViewOpenRef.current ||
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
             Boolean(whatsNewVersionRef.current);
@@ -6966,6 +8094,7 @@ export default function App({
         !searchViewOpenRef.current &&
         !inboxViewOpenRef.current &&
         !notesViewOpenRef.current &&
+        !automationsViewOpenRef.current &&
         handleEditorFindKey(e)
       ) {
         e.stopPropagation();
@@ -7161,9 +8290,14 @@ export default function App({
     onClose: onClosePane,
     onCwdChange,
     onBranchChange,
+    onWorktreeChange,
+    onWorkspaceModeChange,
+    onWorktreeBaseChange,
+    onManageWorktrees: () => openSettings("worktrees"),
     onModelChange,
     onModelSettingsChange,
     onRuntimeModeChange,
+    onSaveDraft,
     onSubmit,
     onStop,
     onCompactContext,
@@ -7203,6 +8337,7 @@ export default function App({
           <Sidebar
             cwd={sidebarCwd}
             gitCwd={gitCwd}
+            explorerRootLabel={explorerRootLabel}
             open
             tab={sidebarTab}
             onTabChange={setSidebarTab}
@@ -7239,7 +8374,8 @@ export default function App({
               searchViewOpen ||
               settingsOpen ||
               inboxViewOpen ||
-              notesViewOpen
+              notesViewOpen ||
+              automationsViewOpen
             }
             canGoForward={tabVisitNav.canForward}
             onGoBack={onRailBack}
@@ -7274,10 +8410,12 @@ export default function App({
             onOpenInbox={onOpenInbox}
             onOpenInboxItem={onOpenLinkedWorkItem}
             onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+            onOpenAutomations={onOpenAutomations}
             onGoToFile={onGoToFile}
             searchActive={searchViewOpen}
             inboxActive={inboxViewOpen}
             notesActive={notesViewOpen}
+            automationsActive={automationsViewOpen}
             notesEnabled={notesEnabled}
             projectRailOpen={projectRailOpen}
             onToggleProjectRail={onToggleProjectRail}
@@ -7298,18 +8436,27 @@ export default function App({
           <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
             <div
               className={
-                searchViewOpen || settingsOpen || inboxViewOpen || notesViewOpen
+                searchViewOpen ||
+                settingsOpen ||
+                inboxViewOpen ||
+                notesViewOpen ||
+                automationsViewOpen
                   ? "hidden"
                   : "flex min-h-0 min-w-0 flex-1 flex-col"
               }
               aria-hidden={
-                searchViewOpen || settingsOpen || inboxViewOpen || notesViewOpen
+                searchViewOpen ||
+                settingsOpen ||
+                inboxViewOpen ||
+                notesViewOpen ||
+                automationsViewOpen
               }
               inert={
                 searchViewOpen ||
                 settingsOpen ||
                 inboxViewOpen ||
                 notesViewOpen ||
+                automationsViewOpen ||
                 undefined
               }
             >
@@ -7394,9 +8541,7 @@ export default function App({
                           onSideChange={onProjectTerminalSide}
                           onSizePaint={paintDockSize}
                           onSizeCommit={commitDockSize}
-                          onAddTerminal={() =>
-                            onOpenTerminal(active?.cwd ?? projectCwd)
-                          }
+                          onAddTerminal={onNewTerminal}
                           onSelectTerminal={onSelectProjectTerminal}
                           onCloseTerminal={onCloseProjectTerminal}
                           onCloseOtherTerminals={onCloseOtherProjectTerminals}
@@ -7480,6 +8625,7 @@ export default function App({
                       !settingsOpen &&
                       !inboxViewOpen &&
                       !notesViewOpen &&
+                      !automationsViewOpen &&
                       activeLinkedWorkItemPanel?.sessionId === panel.sessionId
                     }
                     onClose={() => closeLinkedWorkItemPanel(panel.sessionId)}
@@ -7490,7 +8636,7 @@ export default function App({
             {searchViewOpen ? (
               <SearchView
                 open
-                cwd={sidebarCwd}
+                cwd={gitCwd}
                 recents={recents}
                 history={projectHistory}
                 sessions={sessions.filter((session) => !session.inboxAsk)}
@@ -7552,6 +8698,19 @@ export default function App({
                 onToggleSidebar={onToggleSidebar}
               />
             ) : null}
+            {automationsViewOpen ? (
+              <AutomationsView
+                besideRail={projectRailOpen}
+                cwd={projectCwd}
+                recents={recents}
+                onClose={onLeaveAutomations}
+                onToggleSidebar={onToggleSidebar}
+                onLaunch={(automation, run) =>
+                  launchAutomation(automation, run, true)
+                }
+                onOpenSession={onOpenAutomationSession}
+              />
+            ) : null}
             {settingsOpen ? (
               <SettingsView
                 section={settingsSection}
@@ -7561,6 +8720,10 @@ export default function App({
                 recents={recents}
                 cwd={sidebarCwd}
                 sessions={sidebarHistory}
+                liveSessions={sessions}
+                onRemoveWorktree={onRemoveWorktree}
+                onCheckWorktreeRemoval={onCheckWorktreeRemoval}
+                onDeleteWorktreeSessions={onDeleteWorktreeSessions}
                 besideRail
                 onClose={onCloseSettings}
                 onSelectSection={onSelectSettingsSection}
@@ -7577,6 +8740,7 @@ export default function App({
             {searchViewOpen ||
             inboxViewOpen ||
             notesViewOpen ||
+            automationsViewOpen ||
             settingsOpen ? null : (
               <UsageFooter
                 providers={usageProviders}
@@ -7620,6 +8784,16 @@ export default function App({
             />
           ) : null}
 
+          {sessionDeleteDialog && (
+            <DeleteSessionDialog
+              title={sessionDeleteDialog.title}
+              unusedWorktree={sessionDeleteDialog.unusedWorktree}
+              onClose={(choice) => {
+                sessionDeleteDialog.resolve(choice);
+                setSessionDeleteDialog(undefined);
+              }}
+            />
+          )}
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={
@@ -7805,7 +8979,7 @@ function toTitleTab(
     project: focused
       ? projectName(focused.cwd)
       : focusedFile
-        ? projectName(focusedFile.cwd)
+        ? projectName(focusedFile.projectCwd ?? focusedFile.cwd)
         : "~",
     title: focused ? conversationTitle(focused) : "",
     more,

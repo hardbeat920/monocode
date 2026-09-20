@@ -7,8 +7,8 @@ type Resizable = {
 };
 
 /** A hidden tab stays mounted with no layout box, so it reports 0 here. */
-export function resizeComposer(el: Resizable) {
+export function resizeComposer(el: Resizable, maxHeight = COMPOSER_MAX_HEIGHT) {
   if (el.scrollHeight === 0) return;
   el.style.height = "auto";
-  el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
 }

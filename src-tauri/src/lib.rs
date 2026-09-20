@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+mod automations;
 mod azure_devops;
 mod chat_background;
 mod checkpoint;
@@ -32,6 +33,8 @@ mod window;
 mod window_transfer;
 #[cfg(windows)]
 mod windows;
+mod worktree_lifecycle;
+mod worktrees;
 
 // Phase 1 seam: spawn / kill harness children per MonoCode thread.
 // Adapters own the protocol; this host only supervises processes.
@@ -253,6 +256,15 @@ pub fn run() {
             reminders::reminder_take_open,
             reminders::reminder_register_window,
             reminders::reminder_open,
+            automations::automations_list,
+            automations::automations_upsert,
+            automations::automations_delete,
+            automations::automation_runs_list,
+            automations::automation_runs_recover,
+            automations::automation_run_now,
+            automations::automations_claim_due,
+            automations::automations_claim_event,
+            automations::automation_run_update,
             external_editor::list_external_editors,
             external_editor::open_in_external_editor,
             fs::list_dir,
@@ -272,6 +284,7 @@ pub fn run() {
             fs::git_stage_all,
             fs::git_unstage_all,
             fs::git_commit,
+            fs::git_head_message,
             fs::git_staged_context,
             fs::git_push,
             fs::git_pull,
@@ -280,6 +293,8 @@ pub fn run() {
             fs::git_pr_status,
             fs::git_pr_create,
             fs::git_github_status,
+            fs::github_monocode_star_status,
+            fs::github_star_monocode,
             fs::git_github_repo,
             fs::git_github_repositories,
             fs::git_github_work_item,
@@ -320,6 +335,14 @@ pub fn run() {
             fs::git_checkout,
             fs::git_create_branch,
             fs::git_stash,
+            worktrees::git_worktrees,
+            worktrees::git_worktree_create,
+            worktrees::git_orchestration_worktree_create,
+            worktrees::git_worktree_rename_branch,
+            worktrees::git_worktree_check_remove,
+            worktrees::git_worktree_remove,
+            worktrees::git_orchestration_worktree_remove,
+            worktrees::git_orchestration_branch_remove,
             fs::create_path,
             fs::rename_path,
             fs::delete_path,
@@ -393,6 +416,9 @@ pub fn run() {
             checkpoint::session_checkpoint_prepare,
             checkpoint::session_checkpoint_capture,
             checkpoint::session_checkpoint_status,
+            checkpoint::session_checkpoint_apply,
+            checkpoint::session_checkpoint_cleanup_safe,
+            checkpoint::session_checkpoint_forget,
             checkpoint::session_checkpoint_file_diff,
             checkpoint::session_checkpoint_undo,
             checkpoint::session_checkpoint_keep,

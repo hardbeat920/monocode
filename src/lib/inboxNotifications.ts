@@ -13,6 +13,11 @@ export function inboxNotificationSubject(
   };
 }
 
+export type InboxObservation = {
+  changed: InboxItem[];
+  appeared: InboxItem[];
+};
+
 /** Tracks fetched revisions separately from the user's read/unread state. */
 export class InboxNotificationTracker {
   private revisions = new Map<string, number>();
@@ -23,11 +28,12 @@ export class InboxNotificationTracker {
     items: readonly InboxItem[],
     scope: string,
     failedProviders: readonly InboxProvider[] = [],
-  ): InboxItem[] {
+  ): InboxObservation {
     if (scope !== this.scope) this.primed.clear();
     this.scope = scope;
     const failed = new Set(failedProviders);
     const changed: InboxItem[] = [];
+    const appeared: InboxItem[] = [];
     for (const item of items) {
       if (failed.has(item.provider)) continue;
       const key = JSON.stringify([
@@ -38,11 +44,16 @@ export class InboxNotificationTracker {
       const updatedAt = Date.parse(item.updatedAt);
       if (!Number.isFinite(updatedAt)) continue;
       const previous = this.revisions.get(key);
-      if (
-        this.primed.has(item.provider) &&
-        (previous === undefined || updatedAt > previous)
-      )
+      if (this.primed.has(item.provider) && previous === undefined) {
+        appeared.push(item);
         changed.push(item);
+      } else if (
+        this.primed.has(item.provider) &&
+        previous !== undefined &&
+        updatedAt > previous
+      ) {
+        changed.push(item);
+      }
       this.revisions.set(key, Math.max(previous ?? 0, updatedAt));
     }
     for (const provider of [
@@ -53,6 +64,6 @@ export class InboxNotificationTracker {
     ] as const) {
       if (!failed.has(provider)) this.primed.add(provider);
     }
-    return changed;
+    return { changed, appeared };
   }
 }

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { HARNESSES, type HarnessId, type Session } from "./session";
+import { pathKey } from "./paths";
 import type { ApprovalDecision, HarnessEvent } from "./harness/types";
 import { pendingApprovalForSession } from "./approvalToast";
 import type { UserQuestionReply } from "./userQuestion";
@@ -9,49 +10,41 @@ import {
   type OrchestrationChoice,
   type OrchestrationProposal,
 } from "./orchestrationPlan";
+import {
+  normalizeOrchestrationRun,
+  orchestrationCheckoutCwd,
+  orchestrationWorkspace,
+  workspaceIdentity,
+  type OrchestrationDispatch,
+  type OrchestrationRun,
+  type OrchestrationTask,
+  type OrchestrationWorkspace,
+} from "./orchestrationState";
 
-export type TaskStatus =
-  "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
-export type OrchestrationTask = {
-  id: string;
-  assignmentId?: string;
-  sessionId: string;
-  title: string;
-  harness: HarnessId;
-  model: string;
-  modelSettings?: Record<string, string>;
-  prompt: string;
-  files: string[];
-  scopes: string[];
-  scratchDir?: string;
-  dependsOn: string[];
-  status: TaskStatus;
-  accepted: boolean;
-  result: string;
-  error?: string;
-  delivered: boolean;
-};
-export type OrchestrationRun = {
-  version: 1;
-  leadId: string;
-  cwd: string;
-  canonicalRoot?: string;
-  status: "active" | "paused" | "stopped" | "finished";
-  allowedHarnesses: HarnessId[];
-  allowedModels?: OrchestrationChoice[];
-  proposalId?: string;
-  maxWorkers: number;
-  cli: string;
-  tasks: OrchestrationTask[];
-  error?: string;
-  continuations: number;
-  lastPauseReason?: string;
-  requests: Record<string, { signature: string; result: unknown }>;
-};
+export {
+  orchestrationCheckoutCwd,
+  orchestrationProjectCwd,
+  orchestrationWorkspace,
+  workspaceIdentity,
+} from "./orchestrationState";
+export type {
+  DispatchStage,
+  DispatchState,
+  OrchestrationDispatch,
+  OrchestrationRun,
+  OrchestrationTask,
+  OrchestrationWorkspace,
+  TaskStatus,
+  WorkspacePolicy,
+} from "./orchestrationState";
 export type ControlOutcome = {
   status: "completed" | "failed" | "cancelled";
   text: string;
   error?: string;
+};
+export type WorkerPreparation = {
+  scratchDir?: string;
+  workspace: OrchestrationWorkspace;
 };
 export type OrchestrationHost = {
   session(id: string): Session | undefined;
@@ -60,7 +53,17 @@ export type OrchestrationHost = {
   createWorker(
     run: OrchestrationRun,
     task: OrchestrationTask,
-  ): Promise<string | void>;
+  ): Promise<WorkerPreparation>;
+  integrateWorker(
+    run: OrchestrationRun,
+    task: OrchestrationTask,
+  ): Promise<{ files: string[]; alreadyApplied: number }>;
+  /** Returns false when unreviewed changes require the worktree to be kept. */
+  cleanupWorker(
+    run: OrchestrationRun,
+    task: OrchestrationTask,
+    onlyIfUnchanged: boolean,
+  ): Promise<boolean>;
   submit(
     id: string,
     text: string,
@@ -92,9 +95,13 @@ const storage: Storage = {
     const raw = await invoke<string | null>("control_load", { leadId: id });
     if (!raw) return null;
     const run = JSON.parse(raw) as OrchestrationRun;
-    if (run.version !== 1 || run.leadId !== id || !Array.isArray(run.tasks))
+    if (
+      (run.version !== 1 && run.version !== 2) ||
+      run.leadId !== id ||
+      !Array.isArray(run.tasks)
+    )
       throw new Error("Unsupported orchestration history");
-    return run;
+    return normalizeOrchestrationRun(run);
   },
   enable: (sessionId, cwd) => invoke("control_enable", { sessionId, cwd }),
   disable: (sessionId) => invoke("control_disable", { sessionId }),
@@ -125,7 +132,7 @@ export function orchestrationPathKey(value: string): string {
     if (part === "..") parts.pop();
     else parts.push(part);
   }
-  return (`${prefix}${parts.join("/")}` || ".").toLowerCase();
+  return pathKey(`${prefix}${parts.join("/")}` || ".");
 }
 
 const scopeContains = (scope: string, path: string) =>
@@ -145,10 +152,12 @@ export function scopesOverlap(a: string[], b: string[]): boolean {
 const activeTask = (task: OrchestrationTask) =>
   task.status === "running" || task.status === "cancelling";
 export const sameCheckout = (a: string, b: string) =>
-  a.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase() ===
-  b.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+  pathKey(a.replace(/\\/g, "/")) === pathKey(b.replace(/\\/g, "/"));
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+const recoveryTurn = (reason: string) =>
+  `Continue the existing assignment from its retained worker checkout. The previous turn was stopped because the orchestration run was interrupted: ${reason}\n\nInspect the current files and prior conversation before acting. Preserve completed work, do not repeat destructive or external operations, remain inside the assigned write scope, run the remaining focused checks, and report what was already done versus what you completed now.`;
 
 const ASSIGNMENT_BLOCK =
   /(?:\r?\n[ \t]*)*<monocode_assignment\b[^>]*>[\s\S]*?<\/monocode_assignment>/gi;
@@ -162,7 +171,7 @@ export function workerTurnPrompt(
   const scratch = scratchDir
     ? ` Temporary helpers and test output may be written in your private scratch directory: ${JSON.stringify(scratchDir)}. TMPDIR, TMP and TEMP point there. Use this directory for scratch files; do not write elsewhere outside the project. Deliver final changes in your assigned project files.`
     : "";
-  return `${prompt}\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Work in this shared checkout. Your assigned write scope is: ${files.join(", ")}.${scratch} Read other files as needed, but do not edit outside your scope. If another file or shared operation is needed, report the blocker and stop so the lead can assign a new task. Do not spawn agents, create worktrees, switch branches, stage/commit changes, install dependencies or run broad formatters/generators unless this task owns '.' and explicitly requires that operation. Do not undo another agent's changes. Other workers may be editing concurrently; report focused checks, changed files, remaining issues and a concise final result.\n</monocode_assignment>`;
+  return `${prompt}\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Work only in the checkout selected for this run. The workspace, scope and Git rules in this assignment envelope override any contradictory wording in the task text above. Your assigned write scope is: ${files.join(", ")}.${scratch} Read other files as needed, but do not edit outside your scope. If another file or shared operation is needed, report the blocker and stop so the lead can expand or create a new assignment. Do not spawn agents, create worktrees, switch branches, stage, commit, push, install dependencies or run broad formatters/generators. A task owning '.' may run explicitly requested project-wide validation or generation, but Git finalization remains the lead's responsibility after integration. Other workers may be working concurrently in separate checkouts; do not rely on their work until the lead has accepted it. Report focused checks, changed files, remaining issues and a concise final result.\n</monocode_assignment>`;
 }
 
 /** Task text a person should see: the assignment envelope stays in the send. */
@@ -193,6 +202,7 @@ const FIELDS = new Map<string, string[]>([
   ["delegate", ["title", "harness", "model", "prompt", "files", "dependsOn"]],
   ["get", ["taskId"]],
   ["message", ["taskId", "text"]],
+  ["retry", ["taskId", "text", "files"]],
   ["cancel", ["taskId"]],
   ["wait", ["timeoutSeconds"]],
   ["review", ["taskId"]],
@@ -274,7 +284,7 @@ export class Orchestrator {
   private waking = new Set<string>();
   private blocked = new Map<string, string>();
   private announced = new Map<string, Set<string>>();
-  private attempts = new Map<string, symbol>();
+  /** Async write checks are isolated per dispatch, including retries. */
   private writeChecks = new Map<string, Set<Promise<void>>>();
   private inflight = new Map<
     string,
@@ -301,10 +311,14 @@ export class Orchestrator {
         run.leadId === id || run.tasks.some((task) => task.sessionId === id),
     );
   }
-  resumeBlocker(leadId: string): Session | undefined {
+  resumeBlocker(leadId: string, checkoutCwd?: string): Session | undefined {
     const lead = this.host?.session(leadId);
     if (!lead) return undefined;
-    const cwd = this.run(leadId)?.cwd ?? lead.cwd;
+    const cwd =
+      checkoutCwd ??
+      (this.run(leadId)
+        ? orchestrationCheckoutCwd(this.run(leadId)!)
+        : (lead.worktreeCwd ?? lead.cwd));
     return this.host
       ?.sessions()
       .find(
@@ -321,6 +335,7 @@ export class Orchestrator {
     for (const listener of this.listeners) listener();
   }
   private async commit(run: OrchestrationRun) {
+    run = normalizeOrchestrationRun(run);
     this.runs = [
       ...this.runs.filter((entry) => entry.leadId !== run.leadId),
       run,
@@ -352,12 +367,16 @@ export class Orchestrator {
       );
       this.emit();
       // Keep the checkout reserved until processes have stopped, even if the
-      // database is unavailable. Recovery never repeats an interrupted turn.
+      // database is unavailable. Resume sends a recovery turn into the same
+      // retained checkout instead of pretending the interrupted turn finished.
       await Promise.allSettled(
         [run.leadId, ...running.map((task) => task.sessionId)].map(
           async (id) => {
             await this.host?.stop(id);
             const latest = this.run(run.leadId)!;
+            const stoppedTask = latest.tasks.find(
+              (task) => task.sessionId === id && activeTask(task),
+            );
             this.runs = this.runs.map((entry) =>
               entry.leadId === run.leadId
                 ? {
@@ -366,13 +385,32 @@ export class Orchestrator {
                       task.sessionId === id && activeTask(task)
                         ? {
                             ...task,
-                            status: "failed",
+                            status: "interrupted",
                             accepted: false,
                             delivered: true,
+                            activeDispatchId: undefined,
+                            ...(task.activeDispatchId
+                              ? { lastDispatchId: task.activeDispatchId }
+                              : {}),
                             error:
-                              "Stopped because run history could not be saved. Review files before retrying.",
+                              "Stopped because run history could not be saved. Resume will continue from the retained worker checkout.",
+                            recoveryPrompt: recoveryTurn(
+                              "run history could not be saved",
+                            ),
                           }
                         : task,
+                    ),
+                    dispatches: (latest.dispatches ?? []).map((dispatch) =>
+                      dispatch.id === stoppedTask?.activeDispatchId
+                        ? {
+                            ...dispatch,
+                            state: "interrupted",
+                            stage: "settled",
+                            updatedAt: Date.now(),
+                            error:
+                              "Stopped because run history could not be saved.",
+                          }
+                        : dispatch,
                     ),
                   }
                 : entry,
@@ -398,12 +436,67 @@ export class Orchestrator {
         ),
       });
   }
+  private async patchDispatch(
+    leadId: string,
+    dispatchId: string,
+    patch: Partial<OrchestrationDispatch>,
+  ) {
+    const run = this.run(leadId);
+    if (run)
+      await this.commit({
+        ...run,
+        dispatches: (run.dispatches ?? []).map((dispatch) =>
+          dispatch.id === dispatchId
+            ? { ...dispatch, ...patch, updatedAt: Date.now() }
+            : dispatch,
+        ),
+      });
+  }
+  private async cleanupUnchangedWorker(
+    leadId: string,
+    taskId: string,
+  ): Promise<boolean> {
+    const run = this.run(leadId);
+    const task = run?.tasks.find((entry) => entry.id === taskId);
+    if (!run || !task || task.workspacePolicy === "shared" || !task.workspace)
+      return true;
+    try {
+      const cleaned = await this.host?.cleanupWorker(run, task, true);
+      if (!cleaned) return false;
+      const current = this.run(leadId);
+      if (!current) return false;
+      await this.commit({
+        ...current,
+        tasks: current.tasks.map((entry) =>
+          entry.id === taskId ? { ...entry, workspace: undefined } : entry,
+        ),
+        dispatches: (current.dispatches ?? []).map((dispatch) =>
+          dispatch.id === task.lastDispatchId
+            ? {
+                ...dispatch,
+                stage: "cleaned",
+                cleanupError: undefined,
+                updatedAt: Date.now(),
+              }
+            : dispatch,
+        ),
+      });
+      return true;
+    } catch (error) {
+      if (task.lastDispatchId)
+        await this.patchDispatch(leadId, task.lastDispatchId, {
+          cleanupError: messageOf(error),
+        });
+      return false;
+    }
+  }
   async hydrate(id: string) {
     if (this.loaded.has(id) || this.run(id)) return;
     this.loaded.add(id);
     try {
-      const run = await this.store.load(id);
-      if (!run || this.run(id) || this.deleted.has(id)) return;
+      const loaded = await this.store.load(id);
+      if (!loaded || this.run(id) || this.deleted.has(id)) return;
+      const run = normalizeOrchestrationRun(loaded);
       if (run.status === "active" || run.tasks.some(activeTask)) {
         await Promise.all(
           [
@@ -413,6 +506,12 @@ export class Orchestrator {
         );
         await this.store.disable(id);
       }
+      const interrupted = new Set(
+        run.tasks
+          .filter(activeTask)
+          .map((task) => task.activeDispatchId)
+          .filter((dispatchId): dispatchId is string => !!dispatchId),
+      );
       await this.commit({
         ...run,
         status: run.status === "active" ? "paused" : run.status,
@@ -420,17 +519,40 @@ export class Orchestrator {
           activeTask(task)
             ? {
                 ...task,
-                status: "failed",
+                status: "interrupted",
+                activeDispatchId: undefined,
+                ...(task.activeDispatchId
+                  ? { lastDispatchId: task.activeDispatchId }
+                  : {}),
                 accepted: false,
-                error: "Interrupted. Review the shared files before retrying.",
-                delivered: false,
+                error:
+                  "Interrupted while MonoCode was not running. Resume will continue from the retained worker checkout.",
+                recoveryPrompt: recoveryTurn(
+                  "MonoCode stopped while the worker was running",
+                ),
+                delivered: true,
               }
             : { ...task, delivered: task.accepted || task.status === "queued" },
         ),
+        dispatches: (run.dispatches ?? []).map((dispatch) =>
+          interrupted.has(dispatch.id)
+            ? {
+                ...dispatch,
+                state: "interrupted",
+                stage: "settled",
+                updatedAt: Date.now(),
+                error: "Interrupted while MonoCode was not running.",
+              }
+            : dispatch,
+        ),
         error:
           run.status === "active"
-            ? "Run interrupted. Review the files, then resume."
+            ? "Run interrupted while MonoCode was not running. Worker checkouts were retained; Resume will continue them."
             : run.error,
+        lastPauseReason:
+          run.status === "active"
+            ? "MonoCode stopped while the orchestration run was active."
+            : run.lastPauseReason,
       });
     } catch (error) {
       this.loaded.delete(id);
@@ -467,11 +589,18 @@ export class Orchestrator {
     const planned = validateProposedTasks(
       proposal.tasks,
       settings,
-      proposal.cwd,
+      proposal.checkoutCwd ?? proposal.cwd,
     );
     const lead = this.host?.session(leadId);
-    if (!lead || !sameCheckout(lead.cwd, proposal.cwd))
-      throw new Error("Return to the proposal's project before starting");
+    if (
+      !lead ||
+      !sameCheckout(lead.cwd, proposal.cwd) ||
+      !sameCheckout(
+        lead.worktreeCwd ?? lead.cwd,
+        proposal.checkoutCwd ?? proposal.cwd,
+      )
+    )
+      throw new Error("Return to the proposal's checkout before starting");
     const available = this.host!.choices();
     const allowedModels = settings.choices.filter((choice) =>
       available.some(
@@ -499,14 +628,27 @@ export class Orchestrator {
         id: ids.get(task.id)!,
         assignmentId: task.id,
         sessionId: crypto.randomUUID(),
-        scopes: await this.store.scopes(lead.cwd, task.files),
+        scopes: await this.store.scopes(
+          lead.worktreeCwd ?? lead.cwd,
+          task.files,
+        ),
         dependsOn: task.dependsOn.map((id) => ids.get(id)!),
         status: "queued",
         accepted: false,
         delivered: true,
         result: "",
+        workspacePolicy: "isolated-child",
       })),
     );
+    const currentLead = this.host?.session(leadId);
+    if (
+      !currentLead ||
+      !sameCheckout(
+        currentLead.worktreeCwd ?? currentLead.cwd,
+        proposal.checkoutCwd ?? proposal.cwd,
+      )
+    )
+      throw new Error("Return to the proposal's checkout before starting");
     await this.start(
       leadId,
       [...new Set(allowedModels.map((choice) => choice.harness))],
@@ -544,10 +686,11 @@ export class Orchestrator {
           ? "Wait for the lead's interrupted turn to finish before resuming orchestration"
           : "Wait for the lead's current turn to finish",
       );
-    if (lead.worktreeCwd)
-      throw new Error(
-        "Start orchestration in a regular project session; this session uses a worktree",
-      );
+    const workspace = workspaceIdentity(
+      lead.cwd,
+      lead.worktreeCwd ?? lead.cwd,
+      lead.branch,
+    );
     if (!Number.isInteger(maxWorkers) || maxWorkers < 1 || maxWorkers > 4)
       throw new Error("Choose 1 to 4 workers");
     const available = this.host!.choices().map((choice) => choice.harness);
@@ -568,11 +711,14 @@ export class Orchestrator {
           ? "Wait for interrupted agents to stop before resuming orchestration"
           : "Stop active workers before changing the run",
       );
-    if (previous?.status === "paused" && !sameCheckout(previous.cwd, lead.cwd))
+    if (
+      previous?.status === "paused" &&
+      !sameCheckout(orchestrationCheckoutCwd(previous), workspace.checkoutCwd)
+    )
       throw new Error(
-        "Return the lead to its original project before resuming orchestration",
+        "Return the lead to its original checkout before resuming orchestration",
       );
-    const blocker = this.resumeBlocker(leadId);
+    const blocker = this.resumeBlocker(leadId, workspace.checkoutCwd);
     if (blocker) {
       const label = blocker.title.trim() || blocker.id;
       throw new Error(
@@ -583,14 +729,39 @@ export class Orchestrator {
         }.`,
       );
     }
-    const [canonicalRoot] = await this.store.scopes(lead.cwd, ["."]);
-    const cli = await this.store.enable(leadId, lead.cwd);
+    const [canonicalRoot] = await this.store.scopes(workspace.checkoutCwd, [
+      ".",
+    ]);
+    const cli = await this.store.enable(leadId, workspace.checkoutCwd);
+    const resumedTasks =
+      previous?.status === "paused"
+        ? previous.tasks.map((task) =>
+            task.status === "interrupted"
+              ? {
+                  ...task,
+                  status: "queued" as const,
+                  error: undefined,
+                  delivered: true,
+                  accepted: false,
+                  activeDispatchId: undefined,
+                  recoveryPrompt:
+                    task.recoveryPrompt ??
+                    recoveryTurn(
+                      previous.error ??
+                        previous.lastPauseReason ??
+                        "the run was paused",
+                    ),
+                }
+              : task,
+          )
+        : [];
     try {
       await this.host!.stop(leadId); // Refresh the child environment before its next turn.
       await this.commit({
-        version: 1,
+        version: 2,
         leadId,
         cwd: lead.cwd,
+        workspace,
         canonicalRoot,
         cli,
         status: "active",
@@ -604,7 +775,9 @@ export class Orchestrator {
         maxWorkers,
         tasks:
           approved?.tasks ??
-          (previous?.status === "paused" ? previous.tasks : []),
+          (previous?.status === "paused" ? resumedTasks : []),
+        dispatches:
+          previous?.status === "paused" ? (previous.dispatches ?? []) : [],
         continuations: 0,
         requests: previous?.status === "paused" ? previous.requests : {},
         lastPauseReason:
@@ -634,7 +807,10 @@ export class Orchestrator {
       (run) =>
         (run.status === "active" || run.tasks.some(activeTask)) &&
         run.leadId !== id &&
-        sameCheckout(run.cwd, session.worktreeCwd ?? session.cwd),
+        sameCheckout(
+          orchestrationCheckoutCwd(run),
+          session.worktreeCwd ?? session.cwd,
+        ),
     );
     if (other)
       return "This checkout has an active orchestrator. Stop that run before starting independent work.";
@@ -642,7 +818,10 @@ export class Orchestrator {
       return "Resume or stop orchestration before sending the lead another turn.";
     if (
       own?.status === "active" &&
-      !sameCheckout(own.cwd, session.worktreeCwd ?? session.cwd)
+      !sameCheckout(
+        orchestrationCheckoutCwd(own),
+        session.worktreeCwd ?? session.cwd,
+      )
     )
       return "Return the lead to its original project or stop orchestration first.";
     return null;
@@ -651,7 +830,7 @@ export class Orchestrator {
     const run = this.run(id);
     if (!run || run.status !== "active") return prompt;
     const cli = `${shellPath(run.cli)} control`;
-    return `${prompt}\n\n<monocode_orchestration>\nYou are the lead of a local MonoCode run. Coordinate the user's task using ${cli}. Run \`${cli} --help\` before your first command; it documents every action, its exact JSON fields and the retry rule. Credentials are already in your environment; never print them.\nEach call prints one JSON line and exits non-zero unless "ok" is true; read the "error" text, it says what to do next. Unknown JSON fields are rejected rather than ignored, so fix the field name instead of guessing. If a call fails before reaching MonoCode, retry it with the "requestId" from that response so the work is never queued twice.\nUse list to discover allowed harness/model IDs. Delegate bounded tasks with project-relative files (directories reserve their descendants), self-contained prompts and dependsOn task IDs. Use the same checkout. You may read and plan; leave file edits to workers. Never start workers outside this CLI. Workers with overlapping files are queued. For installs, Git mutations, generators or broad formatting, assign a separate task with files ["."] and wait for other workers to finish.\nAgents never prompt the user. When one needs an approval or answers a question, list, get and wait report it as needsInput on that task, and you decide with respond or answer; it stays stopped until you do. Judge the request against the task you assigned, and put it to the user in this conversation only when the call is genuinely theirs.\nSteer a running agent with steer to correct its course without losing its work; use message only once it has stopped. Read results with get or wait; completed means a turn finished, not that the work passed review. Review the actual changes, message a worker for fixes, and use review to accept each completed task. Cancel discarded tasks. A failed task blocks finish until you retry it with message or drop it with cancel. Call finish only when required work and combined validation are complete. You receive worker results automatically when idle; use bounded wait calls while supervising. If the run is paused, list/get/wait remain readable and explain the reason. Stop polling, report that reason, and ask the user to click Resume; interrupted tasks require review and an explicit message retry after Resume. Do not expose credentials, use worktrees, switch branches or silently escalate worker permissions.\n</monocode_orchestration>`;
+    return `${prompt}\n\n<monocode_orchestration>\nYou are the lead of a local MonoCode run. Coordinate the user's task using ${cli}. Run \`${cli} --help\` before your first command; it documents every action, its exact JSON fields and the retry rule. Credentials are already in your environment; never print them.\nEach call prints one JSON line and exits non-zero unless "ok" is true; read the "error" text, it says what to do next. Unknown JSON fields are rejected rather than ignored, so fix the field name instead of guessing. If a call fails before reaching MonoCode, retry it with the "requestId" from that response so the work is never queued twice.\nUse list to discover allowed harness/model IDs. Delegate bounded tasks with project-relative files (directories reserve their descendants), self-contained prompts and dependsOn task IDs. Use the checkout selected for this run. You may read and plan; leave project file edits to workers. Never start workers outside this CLI. Workers with overlapping files are queued. For project-wide validation, generators or broad formatting, assign a separate task with files ["."] and wait for other workers to finish. Workers must never commit, push, switch branches or write outside the selected checkout. If the user requested those final operations, review and integrate every worker, call finish, then perform the explicitly authorized finalization yourself from the lead checkout.\nAgents never prompt the user. When one needs an approval or answers a question, list, get and wait report it as needsInput on that task, and you decide with respond or answer; it stays stopped until you do. Judge the request against the task you assigned, and put it to the user in this conversation only when the call is genuinely theirs.\nSteer a running agent with steer to correct its course without losing its work; use message only once it has stopped. Read results with get or wait; completed means a turn finished, not that the work passed review. Review the actual changes, message a worker for fixes, and use review to accept each completed task. A scope-blocked worker is isolated to that task: use message if it should stay within its existing scope, retry with corrected project-relative files if the assignment was too narrow, or cancel it if no longer needed. Never expand scope merely to excuse an unexpected write. Call finish only when required work and combined validation are complete. You receive worker results automatically when idle; use bounded wait calls while supervising. If the run is paused, list/get/wait remain readable and explain the reason. Stop polling, report that reason, and ask the user to click Resume; Resume automatically continues interrupted workers from their retained checkouts. Do not expose credentials, create worktrees, switch branches or silently escalate worker permissions.\n</monocode_orchestration>`;
   }
   async handle(
     leadId: string,
@@ -727,7 +906,7 @@ export class Orchestrator {
   }
   private inactiveReason(run: OrchestrationRun): string {
     return run.status === "paused"
-      ? `This run is paused. ${run.error ?? "Work was interrupted."} list, get and wait remain available for inspection. Do not retry mutations or keep polling: explain the pause and ask the user to click Resume in MonoCode. After Resume, inspect saved changes and use message to retry interrupted tasks; they will not restart automatically.`
+      ? `This run is paused. ${run.error ?? "Work was interrupted."} list, get and wait remain available for inspection. Do not retry mutations or keep polling: explain the pause and ask the user to click Resume in MonoCode. Resume will continue interrupted tasks from their retained worker checkouts; policy-blocked tasks remain stopped for an explicit retry or cancellation.`
       : `This run is ${run.status}. Inspect results with list or get; do not keep retrying commands for this run.`;
   }
   /**
@@ -888,7 +1067,10 @@ export class Orchestrator {
           throw new Error(
             `dependsOn must hold taskIds from this run; unknown or cancelled: ${listed(missing)}.`,
           );
-        const scopes = await this.store.scopes(run.cwd, files);
+        const scopes = await this.store.scopes(
+          orchestrationCheckoutCwd(run),
+          files,
+        );
         const created: OrchestrationTask = {
           id: crypto.randomUUID(),
           sessionId: crypto.randomUUID(),
@@ -903,6 +1085,7 @@ export class Orchestrator {
           accepted: false,
           result: "",
           delivered: true,
+          workspacePolicy: "isolated-child",
         };
         return record(
           {
@@ -941,9 +1124,58 @@ export class Orchestrator {
             accepted: false,
             result: "",
             error: undefined,
+            recoveryPrompt: undefined,
             delivered: true,
+            activeDispatchId: undefined,
+            acceptedDispatchId: undefined,
           },
           { taskId: target.id, status: "queued" },
+        );
+      }
+      case "retry": {
+        const target = task();
+        if (activeTask(target) || target.status === "queued")
+          throw new Error(
+            `Wait for this worker or cancel it before retrying; ${target.title} is ${target.status}.`,
+          );
+        if (
+          run.tasks.some(
+            (entry) =>
+              entry.dependsOn.includes(target.id) &&
+              entry.status !== "queued" &&
+              entry.status !== "cancelled",
+          )
+        )
+          throw new Error(
+            "A dependent task has already started; create a separate correction task after it finishes",
+          );
+        const files = strings(input.files, "files");
+        if (!files.length)
+          throw new Error(
+            "Declare at least one corrected project-relative file/directory scope, or '.' for the whole checkout",
+          );
+        const current = this.run(run.leadId)!;
+        const scopes = await this.store.scopes(
+          orchestrationCheckoutCwd(current),
+          files,
+        );
+        return changeTask(
+          target.id,
+          {
+            prompt: text(input.text, "text"),
+            files,
+            scopes,
+            writeScopes: undefined,
+            status: "queued",
+            accepted: false,
+            result: "",
+            error: undefined,
+            recoveryPrompt: undefined,
+            delivered: true,
+            activeDispatchId: undefined,
+            acceptedDispatchId: undefined,
+          },
+          { taskId: target.id, status: "queued", files },
         );
       }
       case "steer": {
@@ -1015,16 +1247,96 @@ export class Orchestrator {
         });
       }
       case "review": {
-        const target = task();
+        let target = task();
         if (target.status !== "completed")
           throw new Error(
             `Only a completed result can be accepted; ${target.title} is ${target.status}. ${
-              target.status === "failed"
-                ? "Send it another turn with message, or drop it with cancel."
+              ["failed", "blocked", "interrupted"].includes(target.status)
+                ? "Send it another turn with message, retry it with corrected scope when necessary, or drop it with cancel."
                 : "Wait for it to finish, or cancel it."
             }`,
           );
-        return changeTask(target.id, { accepted: true }, { accepted: true });
+        const dispatchId = target.lastDispatchId;
+        if (!dispatchId)
+          throw new Error("This task has no completed dispatch to review");
+        const isolated = target.workspacePolicy !== "shared";
+        if (!target.accepted) {
+          if (isolated) {
+            if (!target.workspace)
+              throw new Error(
+                "This worker's isolated checkout is unavailable. Its changes were not accepted.",
+              );
+            await this.patchDispatch(run.leadId, dispatchId, {
+              stage: "integration_started",
+              cleanupError: undefined,
+            });
+            await this.host!.integrateWorker(this.run(run.leadId)!, target);
+          }
+          const current = this.run(run.leadId)!;
+          await this.commit({
+            ...current,
+            tasks: current.tasks.map((entry) =>
+              entry.id === target.id
+                ? {
+                    ...entry,
+                    accepted: true,
+                    acceptedDispatchId: dispatchId,
+                  }
+                : entry,
+            ),
+            dispatches: (current.dispatches ?? []).map((dispatch) =>
+              dispatch.id === dispatchId
+                ? {
+                    ...dispatch,
+                    stage: isolated ? "integrated" : dispatch.stage,
+                    updatedAt: Date.now(),
+                  }
+                : dispatch,
+            ),
+          });
+          target = this.run(run.leadId)!.tasks.find(
+            (entry) => entry.id === target.id,
+          )!;
+        }
+
+        let cleaned = !isolated;
+        let cleanupError: string | undefined;
+        if (isolated) {
+          try {
+            cleaned = await this.host!.cleanupWorker(
+              this.run(run.leadId)!,
+              target,
+              false,
+            );
+          } catch (error) {
+            cleanupError = messageOf(error);
+          }
+          const current = this.run(run.leadId)!;
+          await this.commit({
+            ...current,
+            tasks: current.tasks.map((entry) =>
+              entry.id === target.id && cleaned
+                ? { ...entry, workspace: undefined }
+                : entry,
+            ),
+            dispatches: (current.dispatches ?? []).map((dispatch) =>
+              dispatch.id === dispatchId
+                ? {
+                    ...dispatch,
+                    ...(cleaned ? { stage: "cleaned" as const } : {}),
+                    cleanupError,
+                    updatedAt: Date.now(),
+                  }
+                : dispatch,
+            ),
+          });
+        }
+        return record(this.run(run.leadId)!, {
+          accepted: true,
+          integrated: isolated,
+          cleaned,
+          ...(cleanupError ? { cleanupError } : {}),
+        });
       }
       case "finish": {
         const outstanding = this.run(run.leadId)!.tasks.filter(
@@ -1034,11 +1346,66 @@ export class Orchestrator {
           throw new Error(
             `Review all remaining tasks before finishing. Outstanding: ${listed(
               outstanding.map((entry) => `${entry.title} (${entry.status})`),
-            )}. Accept a completed task with review, send a failed one another turn with message, or drop it with cancel.`,
+            )}. Accept a completed task with review, correct a failed or blocked task with message/retry, or drop it with cancel.`,
           );
+        const cleanupPending: string[] = [];
+        for (const retained of this.run(run.leadId)!.tasks.filter(
+          (entry) => entry.workspacePolicy !== "shared" && entry.workspace,
+        )) {
+          if (!retained.accepted) {
+            const cleaned = await this.cleanupUnchangedWorker(
+              run.leadId,
+              retained.id,
+            );
+            if (!cleaned) cleanupPending.push(retained.workspace!.checkoutCwd);
+            continue;
+          }
+          const dispatchId = retained.acceptedDispatchId;
+          const dispatch = this.run(run.leadId)!.dispatches?.find(
+            (entry) => entry.id === dispatchId,
+          );
+          if (dispatch?.stage === "cleaned") continue;
+          try {
+            const cleaned = await this.host!.cleanupWorker(
+              this.run(run.leadId)!,
+              retained,
+              false,
+            );
+            if (cleaned) {
+              const current = this.run(run.leadId)!;
+              await this.commit({
+                ...current,
+                tasks: current.tasks.map((entry) =>
+                  entry.id === retained.id
+                    ? { ...entry, workspace: undefined }
+                    : entry,
+                ),
+                dispatches: (current.dispatches ?? []).map((entry) =>
+                  entry.id === dispatchId
+                    ? {
+                        ...entry,
+                        stage: "cleaned",
+                        cleanupError: undefined,
+                        updatedAt: Date.now(),
+                      }
+                    : entry,
+                ),
+              });
+            } else cleanupPending.push(retained.workspace!.checkoutCwd);
+          } catch (error) {
+            cleanupPending.push(retained.workspace!.checkoutCwd);
+            if (dispatchId)
+              await this.patchDispatch(run.leadId, dispatchId, {
+                cleanupError: messageOf(error),
+              });
+          }
+        }
         const result = await record(
           { ...this.run(run.leadId)!, status: "finished" },
-          { finished: true },
+          {
+            finished: true,
+            ...(cleanupPending.length ? { cleanupPending } : {}),
+          },
         );
         await this.store.disable(run.leadId);
         return result;
@@ -1123,10 +1490,34 @@ export class Orchestrator {
             await this.stopRun(run.leadId);
             break;
           }
-          const attempt = Symbol();
-          this.attempts.set(task.sessionId, attempt);
-          this.writeChecks.set(task.sessionId, new Set());
-          await this.patchTask(run.leadId, task.id, { status: "running" });
+          const dispatchId = crypto.randomUUID();
+          const now = Date.now();
+          const dispatch: OrchestrationDispatch = {
+            id: dispatchId,
+            taskId: task.id,
+            sessionId: task.sessionId,
+            workspace: orchestrationWorkspace(run),
+            state: "starting",
+            stage: "accepted",
+            startedAt: now,
+            updatedAt: now,
+          };
+          // Persist authority before any external worker/resource operation.
+          await this.commit({
+            ...run,
+            tasks: run.tasks.map((entry) =>
+              entry.id === task.id
+                ? {
+                    ...entry,
+                    status: "running",
+                    activeDispatchId: dispatchId,
+                    acceptedDispatchId: undefined,
+                  }
+                : entry,
+            ),
+            dispatches: [...(run.dispatches ?? []), dispatch],
+          });
+          this.writeChecks.set(dispatchId, new Set());
           try {
             if (
               !this.host
@@ -1140,15 +1531,48 @@ export class Orchestrator {
               throw new Error(
                 "The assigned harness/model is no longer available. Review this task before retrying.",
               );
-            const scratchDir = await this.host.createWorker(run, task);
+            const activeRun = this.run(run.leadId)!;
+            const activeTask = activeRun.tasks.find(
+              (entry) => entry.id === task.id,
+            )!;
+            const prepared = await this.host.createWorker(
+              activeRun,
+              activeTask,
+            );
             if (
               this.run(run.leadId)?.status !== "active" ||
               this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
                 ?.status !== "running"
             )
               continue;
-            if (scratchDir)
-              await this.patchTask(run.leadId, task.id, { scratchDir });
+            const preparedRun = this.run(run.leadId)!;
+            const writeScopes = await this.store.scopes(
+              prepared.workspace.checkoutCwd,
+              task.files,
+            );
+            await this.commit({
+              ...preparedRun,
+              tasks: preparedRun.tasks.map((entry) =>
+                entry.id === task.id
+                  ? {
+                      ...entry,
+                      workspace: prepared.workspace,
+                      scratchDir: prepared.scratchDir,
+                      writeScopes,
+                    }
+                  : entry,
+              ),
+              dispatches: (preparedRun.dispatches ?? []).map((entry) =>
+                entry.id === dispatchId
+                  ? {
+                      ...entry,
+                      workspace: prepared.workspace,
+                      stage: "session_prepared",
+                      updatedAt: Date.now(),
+                    }
+                  : entry,
+              ),
+            });
             if (
               this.run(run.leadId)?.status !== "active" ||
               this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
@@ -1156,15 +1580,23 @@ export class Orchestrator {
             )
               continue;
             const prompt = workerTurnPrompt(
-              task.prompt,
+              task.recoveryPrompt ?? task.prompt,
               task.files,
-              scratchDir || undefined,
+              prepared.scratchDir,
             );
             this.host.submit(task.sessionId, prompt, (outcome) => {
-              void this.settle(run.leadId, task.id, outcome, attempt).catch(
+              void this.settle(run.leadId, task.id, outcome, dispatchId).catch(
                 console.error,
               );
             });
+            if (
+              this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
+                ?.activeDispatchId === dispatchId
+            )
+              await this.patchDispatch(run.leadId, dispatchId, {
+                state: "running",
+                stage: "turn_submitted",
+              });
           } catch (error) {
             await this.settle(
               run.leadId,
@@ -1174,7 +1606,7 @@ export class Orchestrator {
                 text: "",
                 error: messageOf(error),
               },
-              attempt,
+              dispatchId,
             );
           }
         }
@@ -1193,10 +1625,10 @@ export class Orchestrator {
     leadId: string,
     taskId: string,
     outcome: ControlOutcome,
-    attempt: symbol,
+    dispatchId: string,
   ) {
     let task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
-    if (!task || this.attempts.get(task.sessionId) !== attempt) return;
+    if (!task || task.activeDispatchId !== dispatchId) return;
     if (task?.status === "cancelling") {
       if (outcome.text)
         await this.patchTask(leadId, taskId, {
@@ -1206,50 +1638,181 @@ export class Orchestrator {
     }
     if (task.status !== "running") return;
     // A fast final response must not make an unchecked write reviewable.
-    await Promise.all(this.writeChecks.get(task.sessionId) ?? []);
+    await Promise.all(this.writeChecks.get(dispatchId) ?? []);
     task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
     if (
       !task ||
       task.status !== "running" ||
-      this.attempts.get(task.sessionId) !== attempt
+      task.activeDispatchId !== dispatchId
     )
       return;
-    this.attempts.delete(task.sessionId);
-    this.writeChecks.delete(task.sessionId);
-    await this.patchTask(leadId, taskId, {
-      status: outcome.status,
-      result: outcome.text.slice(-20_000),
-      error: outcome.error,
-      delivered: false,
-      accepted: false,
+    this.writeChecks.delete(dispatchId);
+    const run = this.run(leadId)!;
+    await this.commit({
+      ...run,
+      tasks: run.tasks.map((entry) =>
+        entry.id === taskId
+          ? {
+              ...entry,
+              status: outcome.status,
+              result: outcome.text.slice(-20_000),
+              error: outcome.error,
+              recoveryPrompt: undefined,
+              delivered: false,
+              accepted: false,
+              activeDispatchId: undefined,
+              lastDispatchId: dispatchId,
+            }
+          : entry,
+      ),
+      dispatches: (run.dispatches ?? []).map((dispatch) =>
+        dispatch.id === dispatchId
+          ? {
+              ...dispatch,
+              state: outcome.status,
+              stage: "settled",
+              updatedAt: Date.now(),
+              result: outcome.text.slice(-20_000),
+              error: outcome.error,
+            }
+          : dispatch,
+      ),
     });
+    if (outcome.status === "failed")
+      await this.cleanupUnchangedWorker(leadId, taskId);
     void this.pump();
     this.sync();
   }
-  async cancelTask(leadId: string, taskId: string, interruption?: string) {
+  async cancelTask(leadId: string, taskId: string) {
     const task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
     if (!task || task.status === "cancelled") return;
+    const dispatchId = task.activeDispatchId;
     if (activeTask(task)) {
       await this.patchTask(leadId, taskId, {
         status: "cancelling",
-        ...(interruption ? { error: interruption } : {}),
       });
       await this.host!.stop(task.sessionId);
     }
-    await this.patchTask(leadId, taskId, {
-      status: interruption ? "failed" : "cancelled",
-      ...(interruption ? { error: interruption } : {}),
-      accepted: false,
-      delivered: false,
+    const run = this.run(leadId);
+    if (!run) return;
+    await this.commit({
+      ...run,
+      tasks: run.tasks.map((entry) =>
+        entry.id === taskId
+          ? {
+              ...entry,
+              status: "cancelled",
+              accepted: false,
+              delivered: false,
+              activeDispatchId: undefined,
+              recoveryPrompt: undefined,
+              ...(dispatchId ? { lastDispatchId: dispatchId } : {}),
+            }
+          : entry,
+      ),
+      dispatches: (run.dispatches ?? []).map((dispatch) =>
+        dispatch.id === dispatchId
+          ? {
+              ...dispatch,
+              state: "cancelled",
+              stage: "settled",
+              updatedAt: Date.now(),
+            }
+          : dispatch,
+      ),
     });
-    this.attempts.delete(task.sessionId);
-    this.writeChecks.delete(task.sessionId);
+    if (dispatchId) this.writeChecks.delete(dispatchId);
+    await this.cleanupUnchangedWorker(leadId, taskId);
     void this.pump();
+  }
+  private async interruptTask(leadId: string, taskId: string, reason: string) {
+    const task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
+    if (!task || task.status !== "running") return;
+    const dispatchId = task.activeDispatchId;
+    await this.patchTask(leadId, taskId, {
+      status: "cancelling",
+      error: reason,
+    });
+    await this.host!.stop(task.sessionId);
+    const run = this.run(leadId);
+    if (!run) return;
+    await this.commit({
+      ...run,
+      tasks: run.tasks.map((entry) =>
+        entry.id === taskId
+          ? {
+              ...entry,
+              status: "interrupted",
+              accepted: false,
+              delivered: true,
+              activeDispatchId: undefined,
+              error: reason,
+              recoveryPrompt: recoveryTurn(reason),
+              ...(dispatchId ? { lastDispatchId: dispatchId } : {}),
+            }
+          : entry,
+      ),
+      dispatches: (run.dispatches ?? []).map((dispatch) =>
+        dispatch.id === dispatchId
+          ? {
+              ...dispatch,
+              state: "interrupted",
+              stage: "settled",
+              updatedAt: Date.now(),
+              error: reason,
+            }
+          : dispatch,
+      ),
+    });
+    if (dispatchId) this.writeChecks.delete(dispatchId);
+  }
+  private async blockTask(leadId: string, taskId: string, reason: string) {
+    const task = this.run(leadId)?.tasks.find((entry) => entry.id === taskId);
+    if (!task || task.status !== "running") return;
+    const dispatchId = task.activeDispatchId;
+    await this.patchTask(leadId, taskId, {
+      status: "cancelling",
+      error: reason,
+    });
+    await this.host!.stop(task.sessionId);
+    const run = this.run(leadId);
+    if (!run) return;
+    await this.commit({
+      ...run,
+      tasks: run.tasks.map((entry) =>
+        entry.id === taskId
+          ? {
+              ...entry,
+              status: "blocked",
+              accepted: false,
+              delivered: false,
+              activeDispatchId: undefined,
+              error: reason,
+              recoveryPrompt: undefined,
+              ...(dispatchId ? { lastDispatchId: dispatchId } : {}),
+            }
+          : entry,
+      ),
+      dispatches: (run.dispatches ?? []).map((dispatch) =>
+        dispatch.id === dispatchId
+          ? {
+              ...dispatch,
+              state: "blocked",
+              stage: "settled",
+              updatedAt: Date.now(),
+              error: reason,
+            }
+          : dispatch,
+      ),
+    });
+    if (dispatchId) this.writeChecks.delete(dispatchId);
+    void this.pump();
+    this.sync();
   }
   /**
    * A paused run has no supervisor, so its agents stop with it. Leaving them
-   * editing the shared checkout with nobody reviewing is how a run quietly
-   * diverges from what the user approved. Queued work is left alone: `pump`
+   * editing with nobody reviewing is how a run quietly diverges from what the
+   * user approved. Their worktrees are retained. Queued work is left alone: `pump`
    * will not dispatch while paused, so it resumes intact.
    */
   private async pause(
@@ -1265,11 +1828,12 @@ export class Orchestrator {
       error,
       lastPauseReason: error,
     });
-    await Promise.all(
-      this.run(leadId)!
-        .tasks.filter(activeTask)
-        .map((task) => this.cancelTask(leadId, task.id, error)),
-    );
+    // Serialize state transitions: parallel commits here can resurrect an
+    // already-stopped worker from an older snapshot.
+    for (const task of this.run(leadId)!.tasks.filter(
+      (entry) => entry.status === "running",
+    ))
+      await this.interruptTask(leadId, task.id, error);
   }
   async stopRun(leadId: string) {
     const run = this.run(leadId);
@@ -1290,20 +1854,49 @@ export class Orchestrator {
       status: "stopped",
       tasks: latest.tasks.map((task) =>
         activeTask(task) || task.status === "queued"
-          ? { ...task, status: "cancelled", accepted: false, delivered: true }
+          ? {
+              ...task,
+              status: "cancelled",
+              accepted: false,
+              delivered: true,
+              activeDispatchId: undefined,
+              ...(task.activeDispatchId
+                ? { lastDispatchId: task.activeDispatchId }
+                : {}),
+            }
           : task,
       ),
+      dispatches: (latest.dispatches ?? []).map((dispatch) =>
+        latest.tasks.some(
+          (task) => task.activeDispatchId === dispatch.id && activeTask(task),
+        )
+          ? {
+              ...dispatch,
+              state: "cancelled",
+              stage: "settled",
+              updatedAt: Date.now(),
+            }
+          : dispatch,
+      ),
     };
+    for (const task of latest.tasks) {
+      if (task.activeDispatchId) this.writeChecks.delete(task.activeDispatchId);
+    }
     await this.commit(stopped).catch((error: unknown) => {
       saveError = error;
     });
+    if (!saveError) {
+      for (const task of stopped.tasks.filter((entry) => !entry.accepted))
+        await this.cleanupUnchangedWorker(leadId, task.id);
+    }
+    const afterCleanup = this.run(leadId) ?? stopped;
     this.runs = this.runs.map((entry) =>
       entry.leadId === leadId
         ? {
-            ...stopped,
+            ...afterCleanup,
             error: saveError
               ? `Run stopped; could not save history: ${messageOf(saveError)}`
-              : undefined,
+              : afterCleanup.error,
           }
         : entry,
     );
@@ -1357,8 +1950,9 @@ export class Orchestrator {
             return null;
           });
           if (updated) {
-            this.runs = [...this.runs, updated];
-            this.persisted.set(run.leadId, updated);
+            const normalized = normalizeOrchestrationRun(updated);
+            this.runs = [...this.runs, normalized];
+            this.persisted.set(run.leadId, normalized);
             this.emit();
           }
         }
@@ -1431,6 +2025,7 @@ export class Orchestrator {
             await this.commit({
               ...current,
               continuations: current.continuations + 1,
+              lastPauseReason: undefined,
               tasks: current.tasks.map((task) =>
                 results.some((item) => item.id === task.id)
                   ? { ...task, delivered: true }
@@ -1459,7 +2054,7 @@ export class Orchestrator {
               .join("\n\n");
             const body = [
               current.lastPauseReason
-                ? `Previous interruption: ${current.lastPauseReason}\nInspect the saved edits before continuing. Retry interrupted tasks with message; cancel only work that is no longer required. Dependent validation remains queued until its prerequisites pass review.`
+                ? `Previous interruption: ${current.lastPauseReason}\nInterrupted workers were continued from their retained checkouts. Inspect their results normally before review. Policy-blocked tasks were not restarted; correct or explicitly re-scope those tasks before retrying them. Dependent validation remains queued until its prerequisites pass review.`
                 : "",
               results.length
                 ? `Worker results are ready. Review the work, request corrections through the CLI when needed, and finish the original task.\n\n${summary}`
@@ -1512,41 +2107,49 @@ export class Orchestrator {
       return;
     const paths =
       event.paths ?? (event.preview.path ? [event.preview.path] : []);
-    const attempt = this.attempts.get(id);
+    const dispatchId = task.activeDispatchId;
+    if (!dispatchId) return;
     const stillRunning = () =>
       this.run(run.leadId)?.status === "active" &&
-      this.attempts.get(id) === attempt &&
       this.run(run.leadId)?.tasks.some(
-        (entry) => entry.id === task.id && entry.status === "running",
+        (entry) =>
+          entry.id === task.id &&
+          entry.status === "running" &&
+          entry.activeDispatchId === dispatchId,
       );
-    const checks = this.writeChecks.get(id);
+    const checks = this.writeChecks.get(dispatchId);
     const check = (async () => {
       for (const path of paths) {
         const absolute = /^(?:[\\/]|[a-z]:[\\/])/i.test(path)
           ? path
-          : `${run.cwd}/${path}`;
+          : `${task.workspace?.checkoutCwd ?? orchestrationCheckoutCwd(run)}/${path}`;
         let resolved: string;
         try {
           resolved = await this.store.resolvePath(absolute);
         } catch (error) {
           if (stillRunning())
-            await this.pause(
+            await this.blockTask(
               run.leadId,
-              `Could not verify ${task.title}'s write to ${path}: ${messageOf(error)}. Review the files before resuming.`,
+              task.id,
+              `Could not verify ${task.title}'s reported write to ${path}: ${messageOf(error)}. Only this worker was stopped and its checkout was retained. Inspect the path, then retry it with an explicit project-relative scope or cancel it.`,
             );
           return;
         }
         if (!stillRunning()) return;
         const normalized = orchestrationPathKey(resolved);
         if (
-          [...task.scopes, ...(task.scratchDir ? [task.scratchDir] : [])].some(
-            (scope) => scopeContains(orchestrationPathKey(scope), normalized),
+          [
+            ...(task.writeScopes ?? task.scopes),
+            ...(task.scratchDir ? [task.scratchDir] : []),
+          ].some((scope) =>
+            scopeContains(orchestrationPathKey(scope), normalized),
           )
         )
           continue;
-        await this.pause(
+        await this.blockTask(
           run.leadId,
-          `${task.title} reported a write outside its assignment: ${path}. Review the shared files before resuming.`,
+          task.id,
+          `${task.title} reported a write outside its assignment: ${path}. Only this worker was stopped and its checkout was retained; other independent work continues. Inspect the reported path. Retry with corrected project-relative files only if the write is genuinely required, otherwise send a correction within the existing scope or cancel the task.`,
         );
         return;
       }

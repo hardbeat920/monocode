@@ -151,6 +151,8 @@ describe("project return snapshots", () => {
 describe("collectWorkspaceSnapshot", () => {
   it("stores tabs, stubs, and the focused tab — not transcripts", () => {
     const session = chat("s1", "/tmp/a");
+    session.worktreeCwd = "/tmp/a-worktrees/feature";
+    session.worktreeRemoved = true;
     session.blocks.push({ id: "a1", role: "assistant", text: "hi" });
     const file = newFileTab("/tmp/a/README.md", "/tmp/a");
     const tab = {
@@ -174,6 +176,8 @@ describe("collectWorkspaceSnapshot", () => {
         id: "s1",
         cwd: "/tmp/a",
         providerSessionId: "p1",
+        worktreeCwd: "/tmp/a-worktrees/feature",
+        worktreeRemoved: true,
       }),
     ]);
     expect("blocks" in snapshot.sessions[0]!).toBe(false);
@@ -264,6 +268,27 @@ describe("collectWorkspaceSnapshot", () => {
     expect(restored?.sessionChanges).toEqual({ sessionId: "session-a" });
     expect(restored?.review).toBe(true);
     expect(restored?.path).toBe("/tmp/a/src/lib.rs");
+  });
+
+  it("preserves a worktree editor's execution directory and owning project", () => {
+    const file = newFileTab(
+      "/repo-worktrees/feature/readme.md",
+      "/repo-worktrees/feature",
+      false,
+      undefined,
+      "/repo",
+    );
+    const tab = {
+      ...newTab("editor"),
+      editorPanes: [{ id: "editor", files: [file], activeFileId: file.id }],
+    };
+    const snapshot = collectWorkspaceSnapshot([tab], [], tab.id, "/repo", new Map());
+    const restored = hydrateWorkspaceSnapshot(snapshot, new Map())?.tabs[0]
+      ?.editorPanes[0]?.files[0];
+    expect(restored).toMatchObject({
+      cwd: "/repo-worktrees/feature",
+      projectCwd: "/repo",
+    });
   });
 
   it("round-trips a commit review tab", () => {

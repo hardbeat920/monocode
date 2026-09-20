@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   githubWorkItem,
   inboxListCacheKey,
@@ -132,6 +139,7 @@ export function useInboxActivity(
   recents: RecentProject[],
   cwd: string,
   sessions: readonly SessionSummary[],
+  options?: { onAppeared?: (items: InboxItem[]) => void },
 ): InboxActivity {
   const [unseen, setUnseen] = useState(false);
   const [workItems, setWorkItems] = useState<
@@ -142,7 +150,7 @@ export function useInboxActivity(
   const entriesRef = useRef<ProjectSeenEntry[]>([]);
   const notifications = useRef(new InboxNotificationTracker());
   const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
+  const onAppearedRef = useRef(options?.onAppeared);
   const fallbackFetchedAt = useRef(new Map<string, number>());
   const targetKey = linkedWorkItemTargets(sessions)
     .map((target) => target.key)
@@ -159,6 +167,14 @@ export function useInboxActivity(
       ),
     );
   }, []);
+
+  useLayoutEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useLayoutEffect(() => {
+    onAppearedRef.current = options?.onAppeared;
+  }, [options?.onAppeared]);
 
   useEffect(() => {
     const stopSeen = subscribeInboxSeen(applyUnseen);
@@ -213,11 +229,15 @@ export function useInboxActivity(
         rememberNotificationProjects(
           listed.items.map(inboxNotificationProject),
         );
-        const changed = notifications.current.observe(
+        const observed = notifications.current.observe(
           listed.items,
           inboxListCacheKey(projects, query),
           Object.keys(listed.errors) as InboxProvider[],
         );
+        const changed = observed.changed;
+        // Invoke on every successful poll so retained automation claims can be
+        // retried even when the item is no longer newly appeared.
+        onAppearedRef.current?.(observed.appeared);
         const selfAuthored = changed.filter((item) =>
           consumeInboxSelfActivity(item),
         );
@@ -318,10 +338,9 @@ export function useInboxActivity(
 
     void pull(false);
     const stopSelfActivity = subscribeInboxSelfActivity(() => void pull(true));
-    const timer = window.setInterval(() => {
-      if (document.hidden) return;
-      void pull(true);
-    }, POLL_MS);
+    // Keep polling while minimized or closed-to-tray: the webview is still
+    // alive, and GitHub/GitLab automation triggers ride this same refresh.
+    const timer = window.setInterval(() => void pull(true), POLL_MS);
     const onVis = () => {
       if (!document.hidden) void pull(true);
     };

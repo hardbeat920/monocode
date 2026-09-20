@@ -42,6 +42,7 @@ import {
   gitDiffIndex,
   gitDiscardAll,
   gitDiscardFile,
+  gitHeadMessage,
   gitPrCreate,
   gitPrStatus,
   gitPush,
@@ -89,6 +90,8 @@ let changesView: ChangesView = loadChangesView();
 const collapsedDirs = new Set<string>();
 const indexByCwd = new Map<string, GitDiffIndex>();
 const prByCwd = new Map<string, GitPr | null>();
+
+type AmendTarget = { branch: string | null; head: string | null };
 
 type Props = {
   cwd: string;
@@ -249,6 +252,8 @@ function ChangedFiles({
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [amendTarget, setAmendTarget] = useState<AmendTarget | null>(null);
+  const amend = amendTarget !== null;
   const [menuOpen, setMenuOpen] = useState(false);
   const [stagedExpanded, setStagedExpanded] = useState(stagedOpen);
   const [changesExpanded, setChangesExpanded] = useState(changesOpen);
@@ -267,7 +272,8 @@ function ChangedFiles({
     !!index.defaultBranch &&
     index.branch === index.defaultBranch;
   const canGenerate = files.length > 0 && !busy;
-  const canCommit = staged.length > 0 && message.trim().length > 0 && !busy;
+  const canCommit =
+    (staged.length > 0 || amend) && message.trim().length > 0 && !busy;
   const canCreatePr =
     hasRemote &&
     !hasOpenPr &&
@@ -282,9 +288,20 @@ function ChangedFiles({
     hasRemote &&
     Boolean(index?.upstream) &&
     ((index?.ahead ?? 0) > 0 || (index?.behind ?? 0) > 0);
-  const canCommitPush = canCommit && hasRemote && !diverged;
+  const canCommitPush =
+    canCommit && hasRemote && !diverged && (!amend || !index?.headPushed);
   const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
-  const canEditMessage = staged.length > 0 && !busy;
+  const canEditMessage = (staged.length > 0 || amend) && !busy;
+
+  useEffect(() => {
+    if (!amendTarget) return;
+    if (amendTarget.branch === index?.branch && amendTarget.head === index?.head) {
+      return;
+    }
+    setAmendTarget(null);
+    setMessage("");
+  }, [amendTarget, index?.branch, index?.head]);
+  const canOpenMenu = !!index?.branch && !busy;
 
   useEffect(() => {
     if (!enabled) return;
@@ -406,6 +423,32 @@ function ChangedFiles({
     }
   };
 
+  const toggleAmend = async () => {
+    setMenuOpen(false);
+    if (amend) {
+      setAmendTarget(null);
+      return;
+    }
+    try {
+      const headMessage = await gitHeadMessage(cwd);
+      if (!message.trim()) setMessage(headMessage);
+      setAmendTarget({
+        branch: index?.branch ?? null,
+        head: index?.head ?? null,
+      });
+    } catch (error) {
+      fail(error);
+    }
+  };
+
+  const confirmAmend = async () => {
+    if (!amend || !index?.headPushed) return true;
+    return confirmNative(
+      "Amend a commit that is already pushed? MonoCode cannot push the result. You will need a force push from the terminal.",
+      "Amend",
+    );
+  };
+
   const commit = async (push: boolean, createPr = false) => {
     if (!canCommit) return;
     if (
@@ -414,15 +457,17 @@ function ChangedFiles({
     ) {
       return;
     }
+    if (!(await confirmAmend())) return;
     setBusy(createPr ? "pr" : "commit");
     setMenuOpen(false);
     try {
-      await gitCommit(cwd, message);
+      await gitCommit(cwd, message, amend);
       if (push || createPr) {
         await gitPush(cwd);
         recordPrActivity();
       }
       setMessage("");
+      setAmendTarget(null);
       onMutated();
       if (createPr) {
         await openCreatedPr();
@@ -495,7 +540,11 @@ function ChangedFiles({
             ref={messageRef}
             rows={1}
             value={message}
-            placeholder={`Message (${MOD}↩ to commit)`}
+            placeholder={
+              amend
+                ? `Amend message (${MOD}↩ to amend)`
+                : `Message (${MOD}↩ to commit)`
+            }
             disabled={!canEditMessage}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
@@ -530,26 +579,40 @@ function ChangedFiles({
             type="button"
             disabled={!canCommit}
             onClick={() => void commit(false)}
-            className="flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-l-md bg-content text-[12px] font-medium text-background-base disabled:opacity-40"
+            className={`flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-l-md text-[12px] font-medium ${
+              canCommit
+                ? "bg-content text-background-base"
+                : "bg-content/40 text-background-base"
+            }`}
           >
             <Check className="size-3.5" strokeWidth={2} />
-            Commit
+            {amend ? "Amend Commit" : "Commit"}
           </button>
 
           <button
             type="button"
             title="Commit options"
             aria-label="Commit options"
-            disabled={!canCommit}
+            aria-expanded={menuOpen}
+            disabled={!canOpenMenu}
             onClick={() => setMenuOpen((open) => !open)}
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-r-md border-l border-background-base/10 bg-content text-background-base disabled:opacity-40"
+            className={`grid h-7 w-7 shrink-0 place-items-center rounded-r-md border-l border-background-base/10 ${
+              canCommit
+                ? "bg-content text-background-base hover:bg-content/80"
+                : "bg-content/40 text-background-base hover:bg-content"
+            } disabled:pointer-events-none aria-expanded:bg-content aria-expanded:text-background-base`}
           >
             <ChevronDown className="size-3.5" strokeWidth={2} />
           </button>
           {menuOpen ? (
-            <div className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border border-content/10 bg-background-base py-1 shadow-lg">
+            <div
+              role="menu"
+              aria-label="Commit options"
+              className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
+            >
               <button
                 type="button"
+                role="menuitem"
                 disabled={!canCommitPush}
                 onClick={() => void commit(true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
@@ -558,11 +621,27 @@ function ChangedFiles({
               </button>
               <button
                 type="button"
+                role="menuitem"
                 disabled={!canCommitPushPr}
                 onClick={() => void commit(true, true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
                 Commit, Push & Create PR
+              </button>
+              <div className="my-1 border-t border-content/10" />
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={amend}
+                onClick={() => void toggleAmend()}
+                className="flex h-7 w-full items-center justify-between gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10"
+              >
+                Amend Last Commit
+                <span className="grid size-3.5 shrink-0 place-items-center">
+                  {amend ? (
+                    <Check className="size-3.5" strokeWidth={2} />
+                  ) : null}
+                </span>
               </button>
             </div>
           ) : null}
@@ -1426,6 +1505,7 @@ function sameIndex(prev: GitDiffIndex | null, next: GitDiffIndex): boolean {
   if (!prev) return false;
   if (
     prev.branch !== next.branch ||
+    prev.head !== next.head ||
     prev.additions !== next.additions ||
     prev.deletions !== next.deletions ||
     prev.files.length !== next.files.length ||
@@ -1434,7 +1514,8 @@ function sameIndex(prev: GitDiffIndex | null, next: GitDiffIndex): boolean {
     prev.defaultBranch !== next.defaultBranch ||
     prev.ahead !== next.ahead ||
     prev.behind !== next.behind ||
-    prev.aheadOfDefault !== next.aheadOfDefault
+    prev.aheadOfDefault !== next.aheadOfDefault ||
+    prev.headPushed !== next.headPushed
   ) {
     return false;
   }
