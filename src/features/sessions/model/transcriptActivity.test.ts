@@ -1,0 +1,1327 @@
+import { describe, expect, it } from "vitest";
+import type { Block } from "./session";
+import { INTERRUPT_MESSAGE } from "./inFlight";
+import {
+  activityPhaseTitle,
+  activityStillRunning,
+  buildActivityPhases,
+  editVerb,
+  firstFoldableIndex,
+  foldableWork,
+  foldedBlocks,
+  groupTurnItems,
+  groupTurns,
+  hasRunningSubagent,
+  initialThinkingIndex,
+  lastActivityIndex,
+  nestedScrollAbsorbsWheel,
+  proseSummary,
+  isSubagentBlock,
+  subagentBrief,
+  subagentFailureSummary,
+  subagentName,
+  toolCallLabel,
+  turnCopyText,
+  subagentModelName,
+  workKind,
+  workSummaryLine,
+} from "./transcriptActivity";
+
+function shell(
+  id: string,
+  status = "completed",
+  approval?: Block["approval"],
+): Block {
+  return {
+    id,
+    role: "tool",
+    text: "bash ls",
+    tool: { kind: "shell", title: "bash ls", status },
+    ...(approval ? { approval } : {}),
+  };
+}
+
+function edit(id: string, path = "src/App.tsx"): Block {
+  const fileName = path.split("/").pop() ?? path;
+  return {
+    id,
+    role: "tool",
+    text: `Edited ${path}`,
+    tool: {
+      kind: "edit",
+      title: `Edited ${path}`,
+      status: "completed",
+      preview: { kind: "write", path, fileName },
+    },
+  };
+}
+
+function read(id: string, path = "src/App.tsx"): Block {
+  const fileName = path.split("/").pop() ?? path;
+  return {
+    id,
+    role: "tool",
+    text: `Read ${path}`,
+    tool: {
+      kind: "read",
+      title: `Read ${path}`,
+      status: "completed",
+      preview: { kind: "read", path, fileName },
+    },
+  };
+}
+
+function search(id: string, query = "color tokens"): Block {
+  return {
+    id,
+    role: "tool",
+    text: `Find ${query}`,
+    tool: {
+      kind: "search",
+      title: `Find ${query}`,
+      status: "completed",
+      preview: { kind: "search", query },
+    },
+  };
+}
+
+function note(id: string, text: string): Block {
+  return { id, role: "assistant", text };
+}
+
+function thought(id: string, text = "Weighing the options."): Block {
+  return { id, role: "reasoning", text };
+}
+
+function status(id: string, text = "Advisor reviewed this turn"): Block {
+  return { id, role: "system", text };
+}
+
+function irc(id: string, text = "new message in #general"): Block {
+  return {
+    id,
+    role: "system",
+    text,
+    interjection: { customType: "irc:incoming" },
+  };
+}
+
+describe("groupTurnItems", () => {
+  it("keeps consecutive shell calls in one activity stack", () => {
+    const items = groupTurnItems([
+      shell("a"),
+      shell("b"),
+      shell("c", "pending"),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "activity",
+      blocks: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    });
+  });
+
+  it("does not split a stack when tools are waiting for approval", () => {
+    const items = groupTurnItems([
+      shell("a"),
+      shell("b", "pending", { requestId: 1 }),
+      shell("c", "pending", { requestId: 2 }),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.type).toBe("activity");
+    if (items[0]?.type !== "activity") return;
+    expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("does not split a stack across empty assistant placeholders", () => {
+    const items = groupTurnItems([
+      shell("a"),
+      { id: "ghost", role: "assistant", text: "", streaming: true },
+      shell("b", "pending", { requestId: 1 }),
+      shell("c", "pending", { requestId: 2 }),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.type).toBe("activity");
+    if (items[0]?.type !== "activity") return;
+    expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("hides provider todo calls in favor of the shared tasks block", () => {
+    const tasks: Block = {
+      id: "tasks",
+      role: "tasks",
+      text: "[~] Implement",
+      taskList: {
+        items: [{ text: "Implement", status: "in_progress" }],
+      },
+    };
+    expect(
+      groupTurnItems([
+        {
+          id: "todo-tool",
+          role: "tool",
+          text: "Update TODOs",
+          tool: {
+            kind: "tasks",
+            title: "Update TODOs",
+            status: "completed",
+          },
+        },
+        tasks,
+      ]),
+    ).toEqual([{ type: "block", block: tasks }]);
+    expect(
+      activityStillRunning([
+        {
+          id: "todo-tool",
+          role: "tool",
+          text: "Update TODOs",
+          streaming: true,
+          tool: { kind: "tasks", status: "pending" },
+        },
+      ]),
+    ).toBe(false);
+  });
+
+  it("folds edits into the activity stack", () => {
+    const items = groupTurnItems([shell("a"), edit("b"), shell("c")]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "activity",
+      blocks: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    });
+  });
+
+  it("keeps an edit awaiting approval out of the stack", () => {
+    const pending = edit("b");
+    pending.approval = { requestId: 1 };
+    const items = groupTurnItems([shell("a"), pending]);
+    expect(items.map((item) => item.type)).toEqual(["activity", "block"]);
+  });
+
+  it("keeps all assistant prose outside reasoning and tool activity", () => {
+    const items = groupTurnItems([
+      { id: "u", role: "user", text: "cut the release" },
+      { id: "a1", role: "assistant", text: "Running the checks first." },
+      shell("a"),
+      { id: "a2", role: "assistant", text: "Checks pass. Bumping:" },
+      edit("b"),
+      { id: "a3", role: "assistant", text: "Released." },
+    ]);
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "block",
+      "activity",
+      "block",
+      "activity",
+      "block",
+    ]);
+    expect(items[1]).toMatchObject({ type: "block", block: { id: "a1" } });
+    expect(items[2]).toMatchObject({ type: "activity", blocks: [{ id: "a" }] });
+    expect(items[3]).toMatchObject({ type: "block", block: { id: "a2" } });
+    expect(items[4]).toMatchObject({ type: "activity", blocks: [{ id: "b" }] });
+    expect(items[5]).toMatchObject({ type: "block", block: { id: "a3" } });
+  });
+
+  it("keeps the trailing run of prose blocks out of the stack", () => {
+    const items = groupTurnItems([
+      shell("a"),
+      { id: "a1", role: "assistant", text: "Half" },
+      { id: "a2", role: "assistant", text: "Done", streaming: true },
+    ]);
+    expect(items.map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "block",
+    ]);
+  });
+
+  it("keeps prose standalone when the turn ends on a tool call", () => {
+    const items = groupTurnItems([
+      { id: "a1", role: "assistant", text: "Looking now." },
+      shell("a"),
+    ]);
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "a1" } },
+      { type: "activity", blocks: [{ id: "a" }] },
+    ]);
+  });
+
+  it("keeps thinking in the stack so a long think is visible", () => {
+    const items = groupTurnItems([
+      { id: "r", role: "reasoning", text: "**Checking the config**" },
+      shell("a"),
+      { id: "done", role: "assistant", text: "Done." },
+    ]);
+    expect(items.map((item) => item.type)).toEqual(["activity", "block"]);
+    if (items[0]?.type !== "activity") return;
+    expect(items[0].blocks.map((block) => block.id)).toEqual(["r", "a"]);
+  });
+
+  it("uses assistant prose as boundaries between reasoning and tool groups", () => {
+    const items = groupTurnItems([
+      note("a1", "I’ll inspect the config first."),
+      thought("r1"),
+      read("t1"),
+      note("a2", "The config is healthy. I’m checking the build next."),
+      thought("r2"),
+      shell("t2"),
+    ]);
+
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "a1" } },
+      { type: "activity", blocks: [{ id: "r1" }, { id: "t1" }] },
+      { type: "block", block: { id: "a2" } },
+      { type: "activity", blocks: [{ id: "r2" }, { id: "t2" }] },
+    ]);
+  });
+
+  it("replaces leading reasoning with the first assistant prose", () => {
+    const items = groupTurnItems([
+      { id: "u", role: "user", text: "Investigate it" },
+      thought("r1", "I should inspect the current changes."),
+      thought("r2", "I need a structured checklist."),
+      note("a1", "I’ll investigate the current changes."),
+      read("t1"),
+    ]);
+
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "u" } },
+      { type: "block", block: { id: "a1" } },
+      { type: "activity", blocks: [{ id: "t1" }] },
+    ]);
+  });
+
+  it("identifies leading reasoning while the first prose is pending", () => {
+    const thinking = groupTurnItems([
+      { id: "u", role: "user", text: "Investigate it" },
+      thought("r1"),
+      thought("r2"),
+    ]);
+    expect(initialThinkingIndex(thinking)).toBe(1);
+
+    const toolActivity = groupTurnItems([
+      { id: "u", role: "user", text: "Investigate it" },
+      thought("r1"),
+      read("t1"),
+    ]);
+    expect(initialThinkingIndex(toolActivity)).toBe(-1);
+  });
+});
+
+describe("turnCopyText", () => {
+  it("joins assistant and plan markdown from the turn", () => {
+    expect(
+      turnCopyText([
+        { id: "u", role: "user", text: "fix it" },
+        { id: "a1", role: "assistant", text: "I'll inspect the file." },
+        shell("t"),
+        { id: "r", role: "reasoning", text: "thinking" },
+        {
+          id: "tasks",
+          role: "tasks",
+          text: "[x] inspect\n[~] implement",
+          taskList: {
+            items: [
+              { text: "inspect", status: "completed" },
+              { text: "implement", status: "in_progress" },
+            ],
+          },
+        },
+        { id: "p", role: "plan", text: "## Plan\n\n- edit App.tsx" },
+        { id: "a2", role: "assistant", text: "Done.\n\n```ts\nfixed\n```" },
+        { id: "s", role: "system", text: "session error" },
+      ]),
+    ).toBe(
+      "I'll inspect the file.\n\n[x] inspect\n[~] implement\n\n## Plan\n\n- edit App.tsx\n\nDone.\n\n```ts\nfixed\n```",
+    );
+  });
+
+  it("returns empty when the turn has no readable output", () => {
+    expect(
+      turnCopyText([
+        { id: "u", role: "user", text: "go" },
+        shell("t"),
+        { id: "a", role: "assistant", text: "  " },
+      ]),
+    ).toBe("");
+  });
+});
+
+describe("groupTurns", () => {
+  it("folds an orchestration turn the app wrote into the turn above", () => {
+    const turns = groupTurns([
+      { id: "u1", role: "user", text: "Review the changes" },
+      { id: "a1", role: "assistant", text: "Delegating." },
+      {
+        id: "u2",
+        role: "user",
+        text: "Worker results are ready.",
+        internal: true,
+      },
+      { id: "a2", role: "assistant", text: "All three look right." },
+      { id: "u3", role: "user", text: "Ship it" },
+      { id: "a3", role: "assistant", text: "Done." },
+    ]);
+    // One thread: the app's turn neither splits it nor shows up in it.
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["u1", "a1", "a2"],
+      ["u3", "a3"],
+    ]);
+  });
+  it("keeps a handoff divider on its own row between providers", () => {
+    const turns = groupTurns([
+      { id: "u1", role: "user", text: "go" },
+      { id: "a1", role: "assistant", text: "working" },
+      {
+        id: "h1",
+        role: "handoff",
+        text: "Goal: go",
+        handoff: { from: "cursor", to: "claude", status: "ready" },
+      },
+      { id: "u2", role: "user", text: "continue" },
+    ]);
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["u1", "a1"],
+      ["h1"],
+      ["u2"],
+    ]);
+  });
+});
+
+describe("buildActivityPhases", () => {
+  it("does not repeatedly inspect earlier calls as a long tool run grows", () => {
+    const toolReads = (count: number) => {
+      let reads = 0;
+      const blocks = Array.from({ length: count }, (_, index) => {
+        const block = read(`r${index}`);
+        const tool = block.tool;
+        Object.defineProperty(block, "tool", {
+          get: () => {
+            reads += 1;
+            return tool;
+          },
+        });
+        return block;
+      });
+      const phases = buildActivityPhases(blocks);
+      const inspected = reads;
+      expect(phases).toHaveLength(1);
+      expect(phases[0].kind).toBe("research");
+      expect(phases[0].steps).toEqual(blocks);
+      return inspected;
+    };
+
+    // Count input accesses instead of timing the test on a particular CPU.
+    expect(toolReads(400)).toBeLessThan(toolReads(200) * 2.5);
+  });
+
+  it("resets the dominant work tally when narration starts a new group", () => {
+    const phases = buildActivityPhases([
+      edit("e1"),
+      edit("e2"),
+      edit("e3"),
+      note("n1", "Checking the result."),
+      read("r1"),
+      shell("c1"),
+    ]);
+    expect(phases.map((phase) => phase.kind)).toEqual(["edit", "run"]);
+    expect(phases[1].headline?.id).toBe("n1");
+  });
+
+  it("groups a run of calls under the line that introduced it", () => {
+    const phases = buildActivityPhases([
+      note("n1", "Now I need to find the theme provider."),
+      search("s1"),
+      read("r1", "src/globals.css"),
+      read("r2", "src/layout.tsx"),
+      note("n2", "Updating the dark mode tokens."),
+      edit("e1", "src/globals.css"),
+      edit("e2", "src/theme.ts"),
+    ]);
+    expect(phases).toHaveLength(2);
+    expect(phases[0]).toMatchObject({
+      kind: "research",
+      headline: { id: "n1" },
+    });
+    expect(phases[0].steps.map((block) => block.id)).toEqual([
+      "s1",
+      "r1",
+      "r2",
+    ]);
+    expect(phases[1]).toMatchObject({ kind: "edit", headline: { id: "n2" } });
+    expect(phases[1].steps.map((block) => block.id)).toEqual(["e1", "e2"]);
+  });
+
+  it("keeps a run of mixed work in one group", () => {
+    const phases = buildActivityPhases([
+      read("r1", "a.ts"),
+      read("r2", "b.ts"),
+      edit("e1", "a.ts"),
+      edit("e2", "b.ts"),
+      shell("c1"),
+    ]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].kind).toBe("edit");
+    expect(phases[0].steps.map((block) => block.id)).toEqual([
+      "r1",
+      "r2",
+      "e1",
+      "e2",
+      "c1",
+    ]);
+  });
+
+  it("folds a lone uninvited call into the group before it", () => {
+    const phases = buildActivityPhases([
+      edit("e1", "a.ts"),
+      read("r1", "a.ts"),
+      edit("e2", "b.ts"),
+    ]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].kind).toBe("edit");
+    expect(phases[0].steps.map((block) => block.id)).toEqual([
+      "e1",
+      "r1",
+      "e2",
+    ]);
+  });
+
+  it("keeps a group the agent announced out of that fold", () => {
+    const phases = buildActivityPhases([
+      read("r1"),
+      note("n1", "Now the edit."),
+      edit("e1"),
+    ]);
+    expect(phases).toHaveLength(2);
+    expect(phases[1]).toMatchObject({ kind: "edit", headline: { id: "n1" } });
+  });
+
+  it("keeps a second paragraph as a step rather than a group of its own", () => {
+    const phases = buildActivityPhases([
+      note("n1", "First."),
+      note("n2", "Second."),
+      read("r1"),
+    ]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0]).toMatchObject({
+      kind: "research",
+      headline: { id: "n1" },
+    });
+    expect(phases[0].steps.map((block) => block.id)).toEqual(["n2", "r1"]);
+  });
+
+  it("gives a turn that only thought a group to sit in", () => {
+    const phases = buildActivityPhases([thought("r")]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0]).toMatchObject({ kind: "think", headline: undefined });
+    expect(phases[0].steps.map((block) => block.id)).toEqual(["r"]);
+  });
+
+  it("keeps reasoning inside the group instead of titling it", () => {
+    const phases = buildActivityPhases([
+      thought("t1"),
+      search("s1"),
+      thought("t2"),
+      search("s2"),
+    ]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0]).toMatchObject({ kind: "research", headline: undefined });
+    expect(phases[0].steps.map((block) => block.id)).toEqual([
+      "t1",
+      "s1",
+      "t2",
+      "s2",
+    ]);
+  });
+
+  it("keeps a thought between two kinds of work inside the group", () => {
+    const phases = buildActivityPhases([
+      read("r1", "a.ts"),
+      read("r2", "b.ts"),
+      thought("t1", "Now to apply the change."),
+      edit("e1", "a.ts"),
+      edit("e2", "b.ts"),
+    ]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].steps.map((block) => block.id)).toEqual([
+      "r1",
+      "r2",
+      "t1",
+      "e1",
+      "e2",
+    ]);
+  });
+
+  it("lets the agent's own words title a group that opened on a thought", () => {
+    const phases = buildActivityPhases([
+      thought("t1"),
+      note("n1", "Looking for the theme provider."),
+      search("s1"),
+    ]);
+    expect(phases).toHaveLength(1);
+    expect(phases[0]).toMatchObject({
+      kind: "research",
+      headline: { id: "n1" },
+      id: "t1",
+    });
+    expect(phases[0].steps.map((block) => block.id)).toEqual(["t1", "s1"]);
+  });
+});
+
+describe("activityPhaseTitle", () => {
+  const title = (blocks: Block[], live = false) =>
+    activityPhaseTitle(buildActivityPhases(blocks)[0], live);
+
+  it("uses the agent's own line when it wrote one", () => {
+    expect(
+      title([
+        note("n1", "**Found it** — the tokens live in `globals.css`."),
+        read("r1"),
+      ]),
+    ).toBe("Found it — the tokens live in globals.css.");
+  });
+
+  it("says what the calls add up to, in the tense of the moment", () => {
+    expect(title([read("r1", "a.ts"), read("r2", "b.ts")], true)).toBe(
+      "Reading 2 files",
+    );
+    expect(title([read("r1", "a.ts"), read("r2", "b.ts")])).toBe(
+      "Read 2 files",
+    );
+    expect(title([read("r1", "src/index.css")])).toBe("Read index.css");
+    expect(title([search("s1"), search("s2")])).toBe("Searched the project");
+    expect(title([search("s1"), read("r1")])).toBe("Explored the project");
+    expect(title([edit("e1", "a.ts"), edit("e2", "b.ts")])).toBe(
+      "Edited 2 files",
+    );
+    expect(title([shell("a"), shell("b")])).toBe("Ran 2 commands");
+    expect(title([shell("a")], true)).toBe("Running a command");
+  });
+
+  it("adds up a group of mixed work, one clause per kind", () => {
+    expect(
+      title([
+        shell("c1"),
+        shell("c2"),
+        shell("c3"),
+        search("s1"),
+        edit("e1", "a.ts"),
+        edit("e2", "b.ts"),
+      ]),
+    ).toBe("Ran 3 commands · Searched the project · Edited 2 files");
+  });
+
+  it("summarises readable historical Codex shell rows by their inferred work", () => {
+    const storedCodexTool = (id: string, text: string): Block => ({
+      id,
+      role: "tool",
+      text,
+      tool: { kind: "execute", title: text, status: "completed" },
+    });
+
+    expect(
+      title([
+        storedCodexTool(
+          "r1",
+          `/bin/zsh -lc "sed -n '1,120p' src/lib/paths.ts
+sed -n '330,430p' src/lib/harness/codexProtocol.test.ts"`,
+        ),
+        storedCodexTool(
+          "r2",
+          `/bin/zsh -lc "nl -ba src/lib/harness/apply.ts | sed -n '520,620p'"`,
+        ),
+        storedCodexTool("run", "/bin/zsh -lc 'npm test'"),
+      ]),
+    ).toBe("Read 2 files · Ran a command");
+  });
+
+  it("puts only the call in flight in the present tense", () => {
+    expect(
+      title([edit("e1", "a.ts"), edit("e2", "b.ts"), shell("c1")], true),
+    ).toBe("Edited 2 files · Running a command");
+  });
+
+  it("still names the shapes of work on their own", () => {
+    expect(
+      title(
+        [
+          {
+            id: "ag",
+            role: "tool",
+            text: "Explore the auth module",
+            tool: {
+              kind: "agent",
+              title: "Explore the auth module",
+              status: "in_progress",
+            },
+          },
+        ],
+        true,
+      ),
+    ).toBe("Running a subagent");
+  });
+});
+
+describe("running subagents", () => {
+  const agent = (id: string, status = "in_progress"): Block => ({
+    id,
+    role: "tool",
+    text: "Explore the auth module",
+    tool: { kind: "agent", title: "Explore the auth module", status },
+  });
+
+  it("counts a subagent in the group it ran in", () => {
+    const phases = buildActivityPhases([read("r1"), agent("ag")]);
+    expect(phases).toHaveLength(1);
+    expect(activityPhaseTitle(phases[0], true)).toBe(
+      "Read App.tsx · Running a subagent",
+    );
+  });
+
+  it("flags a live subagent until the tool completes", () => {
+    expect(hasRunningSubagent([agent("ag")])).toBe(true);
+    expect(activityStillRunning([agent("ag")])).toBe(true);
+    expect(hasRunningSubagent([agent("ag", "completed")])).toBe(false);
+    expect(activityStillRunning([agent("ag", "completed")])).toBe(false);
+  });
+
+  it("surfaces failed subagents in activity summaries", () => {
+    expect(subagentFailureSummary([agent("one", "failed")])).toBe(
+      "Subagent failed",
+    );
+    expect(
+      subagentFailureSummary([agent("one", "failed"), agent("two", "error")]),
+    ).toBe("2 subagents failed");
+    expect(
+      activityPhaseTitle(buildActivityPhases([agent("one", "failed")])[0]),
+    ).toBe("Subagent failed");
+  });
+});
+
+describe("the subagent stack", () => {
+  const agent = (
+    id: string,
+    name = "Correctness review",
+    status = "in_progress",
+  ): Block => ({
+    id,
+    role: "tool",
+    text: name,
+    tool: { kind: "agent", title: name, status },
+  });
+
+  it("gives delegated runs their own item instead of folding them into work", () => {
+    const items = groupTurnItems([
+      { id: "note", role: "assistant", text: "I will run two reviews." },
+      agent("a1", "Correctness review"),
+      agent("a2", "Quality review"),
+      shell("s1"),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "subagents",
+      "activity",
+    ]);
+    const stack = items[1];
+    expect(stack.type === "subagents" && stack.blocks).toHaveLength(2);
+  });
+
+  it("starts a fresh stack when the agent narrates between spawns", () => {
+    const items = groupTurnItems([
+      agent("a1", "Correctness review"),
+      { id: "note", role: "assistant", text: "Adding one more." },
+      agent("a2", "Quality review"),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "subagents",
+      "block",
+      "subagents",
+    ]);
+  });
+
+  it("folds across a stack, so the turn's status line stays at the top", () => {
+    const items = groupTurnItems([
+      { id: "lead", role: "assistant", text: "Running two reviews." },
+      agent("a1"),
+      shell("s1"),
+      { id: "answer", role: "assistant", text: "Both agree." },
+    ]);
+    const fold = foldableWork(items);
+
+    expect(fold).toBeDefined();
+    // The stack does not cut the fold short: it starts at the turn's first
+    // work, which is where the "working for" line sits.
+    expect(fold!.start).toBe(0);
+    expect(items.slice(fold!.start, fold!.end + 1).map((i) => i.type)).toEqual([
+      "block",
+      "subagents",
+      "activity",
+    ]);
+    // The stack keeps its own rows, so it is not part of what the fold
+    // collapses or summarises.
+    expect(foldedBlocks(items, fold!).map((block) => block.id)).toEqual([
+      "lead",
+      "s1",
+    ]);
+  });
+
+  it("shortens a run named with its whole brief, keeping the brief intact", () => {
+    const briefed = agent(
+      "a1",
+      "Independently review the current repository's recent changes for correctness and regressions. Inspect the uncommitted diff.",
+    );
+
+    expect(subagentName(briefed)).toBe(
+      "Independently review the current repository's recent\u2026",
+    );
+    expect(subagentName(briefed).length).toBeLessThanOrEqual(57);
+    expect(subagentBrief(briefed)).toContain("Inspect the uncommitted diff.");
+  });
+
+  it("names a run from its description, without the tool's own prefix", () => {
+    expect(subagentName(agent("a1", "Task: Correctness review"))).toBe(
+      "Correctness review",
+    );
+    expect(
+      subagentName({
+        ...agent("a1", "Explore"),
+        agentRun: { name: "Quality review", steps: [] },
+      }),
+    ).toBe("Quality review");
+    expect(isSubagentBlock(agent("a1"))).toBe(true);
+    expect(isSubagentBlock(shell("s1"))).toBe(false);
+  });
+});
+
+describe("the settled work trail", () => {
+  const agent = (id: string, name = "Correctness review"): Block => ({
+    id,
+    role: "tool",
+    text: name,
+    tool: { kind: "agent", title: name, status: "completed" },
+  });
+
+  it("keeps a status row inside the surrounding work, live or settled", () => {
+    for (const options of [undefined, { settled: false }, { settled: true }]) {
+      const items = groupTurnItems(
+        [shell("a"), status("st"), shell("b")],
+        options,
+      );
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        type: "activity",
+        blocks: [{ id: "a" }, { id: "st" }, { id: "b" }],
+      });
+    }
+  });
+
+  it("keeps an interjection on its own row while live, folds it in once settled", () => {
+    const turn = [shell("a"), irc("i1"), shell("b")];
+    expect(groupTurnItems(turn).map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "activity",
+    ]);
+    const items = groupTurnItems(turn, { settled: true });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "activity",
+      blocks: [{ id: "a" }, { id: "i1" }, { id: "b" }],
+    });
+  });
+
+  it("pins a delegated run while live, folds it into the trail once settled", () => {
+    const turn = [shell("a"), agent("ag"), shell("b")];
+    expect(groupTurnItems(turn).map((item) => item.type)).toEqual([
+      "activity",
+      "subagents",
+      "activity",
+    ]);
+    const items = groupTurnItems(turn, { settled: true });
+    expect(items).toHaveLength(1);
+    if (items[0]?.type !== "activity") throw new Error("expected activity");
+    expect(items[0].blocks.map((block) => block.id)).toEqual([
+      "a",
+      "ag",
+      "b",
+    ]);
+    expect(workSummaryLine(items[0].blocks)).toBe(
+      "Ran 2 commands · Ran a subagent",
+    );
+  });
+
+  it("keeps a failed run on its own row once settled, outside the fold", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        agent("ag", "Correctness review"),
+        {
+          id: "dead",
+          role: "tool",
+          text: "Quality review",
+          tool: { kind: "agent", title: "Quality review", status: "failed" },
+        },
+        shell("t2"),
+        { id: "done", role: "assistant", text: "It could not finish." },
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "subagents",
+      "activity",
+      "block",
+    ]);
+    // The fold spans the failed run's row, which the transcript parks under
+    // the fold line rather than collapsing into it — so the reason it died
+    // stays one click away, exactly as it was while live.
+    const fold = foldableWork(items)!;
+    expect(fold).toEqual({ start: 1, end: 3 });
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "ag",
+      "t2",
+    ]);
+  });
+
+  it("spans the whole trail once settled, status rows and notes included", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        status("st"),
+        shell("t2"),
+        irc("i1"),
+        irc("i2"),
+        shell("t3"),
+        { id: "done", role: "assistant", text: "All set." },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items);
+    expect(fold).toEqual({ start: 1, end: 1 });
+    const folded = foldedBlocks(items, fold!);
+    expect(folded.map((block) => block.id)).toEqual([
+      "t1",
+      "st",
+      "t2",
+      "i1",
+      "i2",
+      "t3",
+    ]);
+    const summary = workSummaryLine(folded);
+    expect(summary).toBe("Ran 3 commands · 2 notes");
+    expect(summary).not.toContain("Advisor reviewed");
+  });
+
+  it("leaves notes that arrive after the answer as their own trail under it", () => {
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        { id: "done", role: "assistant", text: "All set." },
+        irc("i1"),
+        irc("i2"),
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+      "activity",
+    ]);
+    // The fold covers the work the answer answered for; the answer itself and
+    // the notes after it stay out.
+    expect(foldableWork(items)).toEqual({ start: 1, end: 1 });
+    const trailing = items[3];
+    if (trailing?.type !== "activity") throw new Error("expected activity");
+    const phases = buildActivityPhases(trailing.blocks);
+    expect(phases).toHaveLength(1);
+    expect(phases[0].kind).toBe("note");
+    expect(activityPhaseTitle(phases[0])).toBe("2 notes");
+    expect(workKind(trailing.blocks)).toBe("note");
+  });
+
+  it("lets the settled fold reach across an interjection that stops it live", () => {
+    const turn = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      note("mid", "Halfway there."),
+      irc("i1"),
+      shell("t2"),
+      note("done", "All set."),
+    ];
+    // Live: the interjection stands alone and bounds the fold.
+    expect(foldableWork(groupTurnItems(turn))).toEqual({ start: 4, end: 4 });
+    // Settled: it joins the trail and the fold spans the turn's work.
+    const items = groupTurnItems(turn, { settled: true });
+    const fold = foldableWork(items)!;
+    expect(fold).toEqual({ start: 1, end: 3 });
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "mid",
+      "i1",
+      "t2",
+    ]);
+  });
+
+  it("never counts a status row as running work", () => {
+    expect(activityStillRunning([status("st")])).toBe(false);
+    expect(
+      activityStillRunning([
+        shell("done"),
+        status("st"),
+        status("st2", "Working on it"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("keeps an error outside the trail after a completed call, live or settled", () => {
+    const turn: Block[] = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      {
+        id: "e1",
+        role: "system",
+        text: "Provider connection lost",
+        notice: "error",
+      },
+      { id: "done", role: "assistant", text: "It failed." },
+    ];
+    for (const options of [undefined, { settled: false }, { settled: true }]) {
+      const items = groupTurnItems(turn, options);
+      expect(items.map((item) => item.type)).toEqual([
+        "block",
+        "activity",
+        "block",
+        "block",
+      ]);
+      expect(items[2]).toMatchObject({ type: "block", block: { id: "e1" } });
+      // And on the bare sequence — user, done call, error — all the same.
+      expect(
+        groupTurnItems(turn.slice(0, 3), options).map((item) => item.type),
+      ).toEqual(["block", "activity", "block"]);
+    }
+    // And the fold the answer puts away stops short of the error's row.
+    const items = groupTurnItems(turn, { settled: true });
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual(["t1"]);
+  });
+
+  it("keeps a persisted interrupt outside the trail even without the tag", () => {
+    const items = groupTurnItems(
+      [
+        shell("a"),
+        { id: "int", role: "system", text: INTERRUPT_MESSAGE },
+        shell("b"),
+      ],
+      { settled: true },
+    );
+    expect(items.map((item) => item.type)).toEqual([
+      "activity",
+      "block",
+      "activity",
+    ]);
+  });
+
+  it("labels a group that only reported status", () => {
+    const statuses = [status("s1"), status("s2", "Working on it")];
+    expect(workSummaryLine(statuses)).toBe("Status update");
+    const phases = buildActivityPhases(statuses);
+    expect(activityPhaseTitle(phases[0])).toBe("Status update");
+    expect(workKind(statuses)).toBe("note");
+    // A thought among the statuses still reads as thinking, not a status line.
+    expect(workSummaryLine([status("s1"), thought("r1")])).toBe("Thought");
+  });
+});
+
+describe("foldableWork", () => {
+  const items = (blocks: Block[]) => groupTurnItems(blocks);
+
+  it("folds the work the agent has already answered for", () => {
+    const turn = items([
+      { id: "u", role: "user", text: "go" },
+      shell("c1"),
+      note("n1", "Checking the other half now."),
+      shell("c2"),
+      { id: "done", role: "assistant", text: "All set." },
+    ]);
+    const fold = foldableWork(turn);
+    expect(fold).toEqual({ start: 1, end: 3 });
+    expect(foldedBlocks(turn, fold!).map((block) => block.id)).toEqual([
+      "c1",
+      "n1",
+      "c2",
+    ]);
+  });
+
+  it("leaves work the agent has not answered for alone", () => {
+    expect(
+      foldableWork(items([{ id: "u", role: "user", text: "go" }, shell("c1")])),
+    ).toBeUndefined();
+    expect(
+      foldableWork(
+        items([
+          { id: "u", role: "user", text: "go" },
+          { id: "a", role: "assistant", text: "On it." },
+          shell("c1"),
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps the live group outside the fold while the agent works on", () => {
+    const turn = items([
+      { id: "u", role: "user", text: "go" },
+      shell("c1"),
+      note("n1", "That worked. Running the tests."),
+      shell("c2", "pending"),
+    ]);
+    expect(foldableWork(turn)).toEqual({ start: 1, end: 1 });
+  });
+
+  it("never folds a plan or anything under it", () => {
+    const turn = items([
+      { id: "u", role: "user", text: "go" },
+      shell("c1"),
+      { id: "p", role: "plan", text: "## Plan" },
+      shell("c2"),
+      { id: "done", role: "assistant", text: "Built it." },
+    ]);
+    expect(foldableWork(turn)).toEqual({ start: 3, end: 3 });
+  });
+
+  it("uses an interjection as a hard boundary between answered work phases", () => {
+    const turn = items([
+      shell("before"),
+      note("answer", "The complete answer."),
+      {
+        id: "advisor",
+        role: "system",
+        text: "Check the fallback.",
+        interjection: { customType: "advisor", severity: "nit" },
+      },
+      shell("after"),
+      note("ack", "Checked."),
+    ]);
+    const fold = foldableWork(turn)!;
+
+    expect(fold).toEqual({ start: 3, end: 3 });
+    expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
+      "after",
+    ]);
+  });
+
+  it("leaves an approval attached to earlier work outside the fold", () => {
+    const turn = items([
+      shell("pending", "pending", { requestId: 1 }),
+      note("n1", "I need permission to run that command."),
+    ]);
+    expect(foldableWork(turn)).toBeUndefined();
+  });
+
+  it("does not swallow an earlier approval when later work folds", () => {
+    const turn = items([
+      shell("pending", "pending", { requestId: 1 }),
+      note("n1", "Checking something else meanwhile."),
+      shell("finished"),
+      note("n2", "That check passed."),
+    ]);
+    const fold = foldableWork(turn)!;
+    expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
+      "n1",
+      "finished",
+    ]);
+  });
+
+  it("folds work normally once its approval has been resolved", () => {
+    const turn = items([
+      shell("approved", "completed", { requestId: 1, decided: "allow" }),
+      note("n1", "The command succeeded."),
+    ]);
+    expect(foldableWork(turn)).toEqual({ start: 0, end: 0 });
+  });
+
+  it("gives the fold line a place to sit before there is a fold", () => {
+    const turn = items([{ id: "u", role: "user", text: "go" }, shell("c1")]);
+    expect(foldableWork(turn)).toBeUndefined();
+    expect(firstFoldableIndex(turn)).toBe(1);
+    expect(
+      firstFoldableIndex(items([{ id: "u", role: "user", text: "go" }])),
+    ).toBe(-1);
+  });
+
+  it("has nothing to fold in a turn that only answered", () => {
+    expect(
+      foldableWork(
+        items([
+          { id: "u", role: "user", text: "go" },
+          { id: "a", role: "assistant", text: "Here you go." },
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("lastActivityIndex", () => {
+  it("points at the fold that sits under the final answer", () => {
+    const items = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      { id: "p", role: "plan", text: "## Plan" },
+      shell("b"),
+      { id: "done", role: "assistant", text: "Done." },
+    ]);
+    expect(lastActivityIndex(items)).toBe(3);
+  });
+
+  it("returns -1 for a turn that ran no tools", () => {
+    expect(
+      lastActivityIndex(
+        groupTurnItems([{ id: "a", role: "assistant", text: "Hi." }]),
+      ),
+    ).toBe(-1);
+  });
+});
+
+describe("toolCallLabel", () => {
+  it("shows the shell command, not the tool name", () => {
+    expect(
+      toolCallLabel({
+        id: "a",
+        role: "tool",
+        text: "git status -s",
+        tool: { kind: "execute", title: "git status -s" },
+      }),
+    ).toBe("git status -s");
+    expect(
+      toolCallLabel({
+        id: "b",
+        role: "tool",
+        text: "Skill /code-review",
+        tool: { kind: "skill", title: "Skill /code-review" },
+      }),
+    ).toBe("Skill /code-review");
+  });
+
+  it("hides Codex's shell launcher on commands that stay commands", () => {
+    expect(
+      toolCallLabel({
+        id: "wrapped",
+        role: "tool",
+        text: `/bin/zsh -lc "npm test -- --run src/lib/app.test.ts"`,
+        tool: {
+          kind: "execute",
+          title: `/bin/zsh -lc "npm test -- --run src/lib/app.test.ts"`,
+        },
+      }),
+    ).toBe("npm test -- --run src/lib/app.test.ts");
+  });
+
+  it("renders file-reading bash as a Read/Find label", () => {
+    expect(
+      toolCallLabel({
+        id: "c",
+        role: "tool",
+        text: "cat src/lib/appearance.ts",
+        tool: { kind: "execute", title: "cat src/lib/appearance.ts" },
+      }),
+    ).toBe("Read src/lib/appearance.ts");
+    expect(
+      toolCallLabel(
+        {
+          id: "d",
+          role: "tool",
+          text: "cat /Users/me/proj/src/lib/appearance.ts",
+          tool: {
+            kind: "execute",
+            title: "cat /Users/me/proj/src/lib/appearance.ts",
+          },
+        },
+        "/Users/me/proj",
+      ),
+    ).toBe("Read src/lib/appearance.ts");
+  });
+});
+
+describe("editVerb", () => {
+  it("canonicalises past-tense harness phrasing", () => {
+    expect(editVerb("Edited src/App.tsx")).toBe("Edit");
+    expect(editVerb("Deleted src/old.ts")).toBe("Delete");
+    expect(editVerb("Renamed src/a.ts")).toBe("Move");
+    expect(editVerb("Created src/new.ts")).toBe("Create");
+    expect(editVerb("Wrote src/new.ts")).toBe("Write");
+  });
+
+  it("falls back to Edit for unknown phrasing", () => {
+    expect(editVerb("Patching src/App.tsx")).toBe("Edit");
+    expect(editVerb("")).toBe("Edit");
+  });
+});
+
+describe("nestedScrollAbsorbsWheel", () => {
+  const overflowing = {
+    scrollTop: 40,
+    scrollHeight: 200,
+    clientHeight: 80,
+  };
+
+  it("lets the parent handle the wheel when the list does not overflow", () => {
+    expect(
+      nestedScrollAbsorbsWheel(
+        { scrollTop: 0, scrollHeight: 80, clientHeight: 80 },
+        -20,
+      ),
+    ).toBe(false);
+  });
+
+  it("consumes scrolling that still has room inside the list", () => {
+    expect(nestedScrollAbsorbsWheel(overflowing, -20)).toBe(true);
+    expect(nestedScrollAbsorbsWheel(overflowing, 20)).toBe(true);
+  });
+
+  it("releases the wheel at the edges so the transcript can take over", () => {
+    expect(
+      nestedScrollAbsorbsWheel({ ...overflowing, scrollTop: 0 }, -20),
+    ).toBe(false);
+    expect(
+      nestedScrollAbsorbsWheel({ ...overflowing, scrollTop: 120 }, 20),
+    ).toBe(false);
+  });
+});
+
+describe("proseSummary", () => {
+  it("reduces a paragraph to one plain line", () => {
+    expect(
+      proseSummary(
+        "**Full checks pass** — `cargo fmt` and 134 tests.\n\nBumping:",
+      ),
+    ).toBe("Full checks pass — cargo fmt and 134 tests.");
+  });
+
+  it("skips fenced code and list markers", () => {
+    expect(
+      proseSummary("```ts\nconst a = 1;\n```\n\n- Ran [checks](x.md)"),
+    ).toBe("Ran checks");
+  });
+});
+
+describe("subagent model labels", () => {
+  it("keeps unknown model IDs and leaves unspecified models blank", () => {
+    const row = (model?: string): Block => ({
+      id: "agent",
+      role: "tool",
+      text: "Review",
+      agentRun: { name: "Review", model, steps: [] },
+    });
+    expect(subagentModelName(row("claude-haiku-4-5"))).toBe("Haiku 4.5");
+    expect(subagentModelName(row("custom-model-v2"))).toBe("custom-model-v2");
+    for (const model of [undefined, "", "auto", "inherit", "default"])
+      expect(subagentModelName(row(model))).toBeUndefined();
+  });
+});

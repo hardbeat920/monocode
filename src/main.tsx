@@ -2,18 +2,18 @@ import React, { useLayoutEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import App from "./App";
-import { activateWindowAppearance, initAppearance } from "./lib/appearance";
-import { initSounds } from "./lib/sounds";
+import App from "./app/App";
+import { activateWindowAppearance, initAppearance } from "./features/settings/model/appearance";
+import { initSounds } from "./features/settings/model/sounds";
 import {
   abortQuit,
   askQuitConfirmation,
   commitQuit,
   loadBootWorkspace,
   reportQuitPoll,
-} from "./lib/appLifecycle";
-import { consumeInstalledUpdate } from "./lib/updateNotice";
-import "./index.css";
+} from "./app/model/appLifecycle";
+import { consumeInstalledUpdate } from "./app/model/updateNotice";
+import "./styles/index.css";
 
 initAppearance();
 initSounds();
