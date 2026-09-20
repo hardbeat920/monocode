@@ -1,13 +1,13 @@
-import { ArrowLeft, ChevronRight, RefreshCw } from "./icons";
+import { ArrowLeft, ChevronRight, RefreshCw } from "../../../shared/ui/icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   browserBounds,
   browserRequest,
   type BrowserRequest,
-} from "../lib/embeddedBrowser";
-import { normalizeBrowserUrl } from "../lib/browserUrl";
-import { UI_SCALE_CHANGE_EVENT } from "../lib/uiScale";
+} from "../model/embeddedBrowser";
+import { normalizeBrowserUrl } from "../model/browserUrl";
+import { UI_SCALE_CHANGE_EVENT } from "../../settings/model/uiScale";
 
 export function useBrowserOpen(onShow?: () => void) {
   const [open, setOpen] = useState(false);

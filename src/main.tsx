@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./app/App";
-import { browserRequest } from "./platform/embeddedBrowser";
+import { browserRequest } from "./features/sessions/model/embeddedBrowser";
 import { activateWindowAppearance, initAppearance } from "./features/settings/model/appearance";
 import { initSounds } from "./features/settings/model/sounds";
 import {

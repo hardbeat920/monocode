@@ -45,7 +45,7 @@ import {
 } from "react";
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
-import { BrowserPane, useBrowserOpen } from "./shell/BrowserPane";
+import { BrowserPane, useBrowserOpen } from "../features/sessions/ui/BrowserPane";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
