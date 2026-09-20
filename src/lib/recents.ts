@@ -1,3 +1,4 @@
+import { isRemotePath, parseRemotePath } from "./remote";
 import { pathKey, prettyCwd, slash } from "./paths";
 
 const KEY = "monocode.recentProjects";
@@ -318,6 +319,7 @@ export function projectRailItems(
 /** True if this looks like a user project, not an app bundle or system root. */
 export function looksLikeProject(path: string): boolean {
   if (!path || path === "/" || path === "~") return false;
+  if (isRemotePath(path)) return parseRemotePath(path) !== null;
   const normalized = slash(path).replace(/\/+$/, "") || "/";
   if (/^[A-Za-z]:$/.test(normalized) || normalized === "/") return false;
   // Home itself arrives expanded (`/Users/me`), so the `~` check above misses

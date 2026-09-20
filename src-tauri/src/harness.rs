@@ -390,30 +390,48 @@ pub fn harness_spawn(
     cwd: String,
     account: Option<HarnessAccount>,
 ) -> Result<u32, String> {
+    // Remote sessions wrap the agent argv in ssh. The local-only steps below
+    // (worktree reservation, cwd check, GUI env, provider-account dirs, the
+    // loopback control endpoint) all assume a local process and local paths —
+    // the remote branch skips them.
+    let remote = crate::remote::parse_remote(&cwd);
     let workdir = expand_home(&cwd);
-    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
+    let _reservation = if remote.is_some() {
+        None
+    } else {
+        Some(crate::worktree_lifecycle::reserve_spawn(&workdir)?)
+    };
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
     if let Some(prev) = prev {
         terminate(prev.pid);
     }
 
-    if !workdir.is_dir() {
-        return Err(format!(
-            "Working directory does not exist: {}",
-            workdir.display()
-        ));
-    }
+    let mut cmd = match &remote {
+        Some(remote_ref) => {
+            // `command` is the remote absolute path from remote_resolve_agent.
+            let mut argv = vec![command.clone()];
+            argv.extend(args.iter().cloned());
+            crate::remote::exec_for_remote(remote_ref, Some(&remote_ref.path), false, &argv)?
+        }
+        None => {
+            if !workdir.is_dir() {
+                return Err(format!(
+                    "Working directory does not exist: {}",
+                    workdir.display()
+                ));
+            }
+            let mut cmd = Command::new(&command);
+            cmd.args(&args).current_dir(&workdir);
+            prepare_child(&mut cmd, &command);
+            apply_provider_account(&app, &mut cmd, account.as_ref())?;
 
-    let mut cmd = Command::new(&command);
-    cmd.args(&args)
-        .current_dir(&workdir)
-        .stdin(Stdio::piped())
+            crate::control::configure_child(&app, &session_id, &mut cmd);
+            cmd
+        }
+    };
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    prepare_child(&mut cmd, &command);
-    apply_provider_account(&app, &mut cmd, account.as_ref())?;
-
-    crate::control::configure_child(&app, &session_id, &mut cmd);
 
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
@@ -823,7 +841,7 @@ const EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["agent", "list"],
 ];
 
-fn exec_args_allowed(args: &[String]) -> bool {
+pub(crate) fn exec_args_allowed(args: &[String]) -> bool {
     EXEC_ALLOWED_ARGS
         .iter()
         .any(|a| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y))
@@ -959,7 +977,7 @@ fn spawn_managed(cmd: &mut Command) -> std::io::Result<std::process::Child> {
     }
 }
 
-fn terminate(pid: u32) {
+pub(crate) fn terminate(pid: u32) {
     terminate_after(pid, KILL_ESCALATE);
 }
 

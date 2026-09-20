@@ -37,13 +37,18 @@ import {
   type ModelSetting,
 } from "../lib/models";
 import {
+  getRemoteHarnessAvailabilitySnapshot,
   harnessUnavailableHint,
   hasProbedHarnessAvailability,
   isHarnessAvailable,
+  isHarnessAvailableFor,
   probeHarnessAvailability,
+  probeRemoteHarnessAvailability,
   subscribeHarnessAvailability,
+  subscribeRemoteHarnessAvailability,
   getHarnessAvailabilitySnapshot,
 } from "../lib/harness/availability";
+import { parseRemotePath } from "../lib/remote";
 import { refreshHarnessCatalogs } from "../lib/harness/registry";
 import { HARNESSES, HARNESS_TITLE, type HarnessId } from "../lib/session";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -59,6 +64,8 @@ type Props = {
   /** Hide option rows from the menu when they render as pills beside the picker. */
   hideSettings?: boolean;
   hotkeys?: boolean;
+  /** Project cwd; remote projects offer only claude/codex on the server. */
+  cwd?: string;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
@@ -210,6 +217,7 @@ export function ModelPicker({
   values,
   hideSettings = false,
   hotkeys = false,
+  cwd,
   onChange,
   onSettingsChange,
   onClose,
@@ -224,6 +232,20 @@ export function ModelPicker({
     getHarnessAvailabilitySnapshot,
     getHarnessAvailabilitySnapshot,
   );
+  const remoteConnection = cwd ? parseRemotePath(cwd)?.connectionId : null;
+  const remoteAvailabilityVersion = useSyncExternalStore(
+    subscribeRemoteHarnessAvailability,
+    getRemoteHarnessAvailabilitySnapshot,
+    getRemoteHarnessAvailabilitySnapshot,
+  );
+  useEffect(() => {
+    if (remoteConnection) {
+      void probeRemoteHarnessAvailability(remoteConnection).catch(() => {});
+    }
+  }, [remoteConnection]);
+  const available = (id: HarnessId) =>
+    cwd ? isHarnessAvailableFor(id, cwd) : isHarnessAvailable(id);
+  void remoteAvailabilityVersion;
   const visibilityVersion = useSyncExternalStore(
     subscribePickerVisibility,
     getPickerVisibilitySnapshot,
@@ -289,14 +311,15 @@ export function ModelPicker({
   const pickerHarnesses = useMemo(() => {
     void availabilityVersion;
     void visibilityVersion;
+    void remoteAvailabilityVersion;
     return HARNESSES.filter((id) =>
       showProviderInModelPicker(
         id,
-        isHarnessAvailable(id),
+        available(id),
         hasProbedHarnessAvailability(),
       ),
     );
-  }, [availabilityVersion, visibilityVersion]);
+  }, [available, availabilityVersion, visibilityVersion, remoteAvailabilityVersion]);
   const providerKey = pickerHarnesses.join(",");
   const visibleTab = coerceModelPickerTab(tab, (id) =>
     pickerHarnesses.includes(id),
@@ -465,7 +488,7 @@ export function ModelPicker({
   };
 
   const pickModel = (item: AgentModel) => {
-    if (!isHarnessAvailable(item.harness)) return;
+    if (!available(item.harness)) return;
     onChange(item.harness, item.id);
     dismiss(true);
   };
@@ -875,7 +898,7 @@ export function ModelPicker({
           {recentMenu.models.map((item, index) => {
             const selected = item.id === current.id;
             const highlighted = index === recentActive;
-            const disabled = !isHarnessAvailable(item.harness);
+            const disabled = !available(item.harness);
             return (
               <button
                 key={item.id}

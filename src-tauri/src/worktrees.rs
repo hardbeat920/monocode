@@ -30,6 +30,9 @@ pub struct Worktrees {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+    if crate::remote::parse_remote(&root.to_string_lossy()).is_some() {
+        return Err("Worktrees are not available for remote projects.".into());
+    }
     let mut command = Command::new("git");
     crate::hide_window_console(&mut command);
     let output = command
@@ -46,7 +49,10 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     String::from_utf8(output.stdout).map_err(|_| "Git returned a non-UTF-8 path".into())
 }
 
-fn parse_worktrees(text: &str) -> Vec<Worktree> {
+fn parse_worktrees_with_path<F>(text: &str, mut map_path: F) -> Vec<Worktree>
+where
+    F: FnMut(&str) -> String,
+{
     let mut result = Vec::new();
     let mut current = Worktree::default();
     for field in text.split('\0') {
@@ -56,7 +62,7 @@ fn parse_worktrees(text: &str) -> Vec<Worktree> {
                 result.push(std::mem::take(&mut current));
             }
         } else if let Some(path) = field.strip_prefix("worktree ") {
-            current.path = path_to_js(Path::new(path));
+            current.path = map_path(path);
         } else if let Some(head) = field.strip_prefix("HEAD ") {
             current.head = head.into();
         } else if let Some(branch) = field.strip_prefix("branch refs/heads/") {
@@ -70,11 +76,107 @@ fn parse_worktrees(text: &str) -> Vec<Worktree> {
     result
 }
 
+fn parse_worktrees(text: &str) -> Vec<Worktree> {
+    parse_worktrees_with_path(text, |path| path_to_js(Path::new(path)))
+}
+
 fn list(root: &Path) -> Result<Vec<Worktree>, String> {
     Ok(parse_worktrees(&git(
         root,
         &["worktree", "list", "--porcelain", "-z"],
     )?))
+}
+
+fn remote_error(
+    remote: &crate::remote::RemoteRef,
+    output: &crate::remote::CapturedOutput,
+) -> Result<String, String> {
+    let profile = crate::connections::profile_by_id(&remote.connection_id)?;
+    Ok(crate::remote::ssh_failure(&profile, output))
+}
+
+fn remote_git(remote: &crate::remote::RemoteRef, args: &[&str]) -> Result<String, String> {
+    let output = crate::remote::git_capture(remote, args)?;
+    if !output.success {
+        return Err(remote_error(remote, &output)?);
+    }
+    Ok(output.stdout)
+}
+
+fn remote_list(root: &crate::remote::RemoteRef) -> Result<Vec<Worktree>, String> {
+    let output = remote_git(root, &["worktree", "list", "--porcelain", "-z"])?;
+    let connection_id = root.connection_id.clone();
+    Ok(parse_worktrees_with_path(&output, |path| {
+        crate::remote::remote_uri(&connection_id, path)
+    }))
+}
+
+fn remote_raw_path(path: &str) -> Result<crate::remote::RemoteRef, String> {
+    crate::remote::parse_remote(path).ok_or_else(|| "Invalid remote worktree path".into())
+}
+
+fn remote_default_root(main: &crate::remote::RemoteRef) -> String {
+    let name = main
+        .path
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or("project");
+    let parent = main
+        .path
+        .trim_end_matches('/')
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .unwrap_or("");
+    crate::remote::remote_uri(&main.connection_id, &format!("{parent}/{name}-worktrees"))
+}
+
+fn remote_session_ids(conn: &rusqlite::Connection, path: &str) -> Result<Vec<String>, String> {
+    let mut query = conn
+        .prepare("SELECT id, COALESCE(NULLIF(worktree_cwd, ''), cwd) FROM sessions WHERE worktree_removed = 0")
+        .map_err(|e| e.to_string())?;
+    let rows = query
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    let root = path.trim_end_matches('/');
+    let mut ids = Vec::new();
+    for row in rows {
+        let (id, cwd) = row.map_err(|e| e.to_string())?;
+        let cwd = cwd.trim_end_matches('/');
+        if cwd == root || cwd.starts_with(&format!("{root}/")) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+fn remote_details(trees: &mut [Worktree]) -> Result<(), String> {
+    for tree in trees {
+        let remote = remote_raw_path(&tree.path)?;
+        match remote_git(
+            &remote,
+            &["status", "--porcelain", "--untracked-files=normal"],
+        ) {
+            Ok(status) => {
+                tree.dirty = Some(!status.is_empty());
+                tree.unpushed = remote_git(
+                    &remote,
+                    &["rev-list", "--count", "HEAD", "--not", "--remotes"],
+                )
+                .ok()
+                .and_then(|count| count.trim().parse().ok());
+            }
+            Err(_) => {
+                // A prunable or missing remote worktree is still useful in
+                // the list, but its per-folder status cannot be queried.
+                tree.missing = true;
+                tree.dirty = None;
+                tree.unpushed = None;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -98,6 +200,12 @@ pub(crate) fn contains_working_dir(root: &Path, cwd: &Path) -> bool {
     } else {
         cwd.starts_with(root)
     }
+}
+
+fn contains_remote_working_dir(root: &str, cwd: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    let cwd = cwd.trim_end_matches('/');
+    cwd == root || cwd.starts_with(&format!("{root}/"))
 }
 
 fn session_ids(conn: &rusqlite::Connection, path: &Path) -> Result<Vec<String>, String> {
@@ -127,6 +235,25 @@ fn default_root(main: &Path) -> PathBuf {
 
 #[tauri::command(async)]
 pub fn git_worktrees(cwd: String, store: State<'_, SessionStore>) -> Result<Worktrees, String> {
+    if let Some(remote) = crate::remote::parse_remote(&cwd) {
+        let mut worktrees = remote_list(&remote)?;
+        let main = worktrees
+            .first()
+            .cloned()
+            .ok_or("No working copies found")?;
+        let default_root = remote_default_root(&remote_raw_path(&main.path)?);
+        {
+            let conn = store.lock_conn()?;
+            for tree in &mut worktrees {
+                tree.session_ids = remote_session_ids(&conn, &tree.path)?;
+            }
+        }
+        remote_details(&mut worktrees)?;
+        return Ok(Worktrees {
+            worktrees,
+            default_root,
+        });
+    }
     let mut worktrees = list(&expand_home(&cwd))?;
     let main = worktrees.first().ok_or("No working copies found")?;
     let default_root = path_to_js(&default_root(Path::new(&main.path)));
@@ -229,6 +356,78 @@ fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Workt
         })
 }
 
+fn create_remote(
+    root: &crate::remote::RemoteRef,
+    branch: &str,
+    base: &str,
+    existing: bool,
+) -> Result<Worktree, String> {
+    let branch = branch.trim();
+    if branch.starts_with('-') || branch.starts_with('@') || branch.is_empty() {
+        return Err("Enter a valid branch name".into());
+    }
+    remote_git(root, &["check-ref-format", "--branch", branch])?;
+    let trees = remote_list(root)?;
+    if trees
+        .iter()
+        .any(|tree| tree.branch.as_deref() == Some(branch))
+    {
+        return Err("This branch already has a working copy. Select it from the picker.".into());
+    }
+    let main = trees.first().ok_or("No working copies found")?;
+    let main_remote = remote_raw_path(&main.path)?;
+    let default_root = remote_default_root(&main_remote);
+    let slug: String = branch
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let target_uri = format!("{default_root}/{slug}");
+    let target = remote_raw_path(&target_uri)?;
+    let source = if existing {
+        format!("refs/heads/{branch}")
+    } else {
+        base.trim().to_owned()
+    };
+    let commit = remote_git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{source}^{{commit}}"),
+        ],
+    )?;
+    if existing {
+        remote_git(root, &["worktree", "add", "--", &target.path, branch])?;
+    } else {
+        remote_git(
+            root,
+            &[
+                "worktree",
+                "add",
+                "--no-track",
+                "-b",
+                branch,
+                "--",
+                &target.path,
+                commit.trim(),
+            ],
+        )?;
+    }
+    remote_list(root)?
+        .into_iter()
+        .find(|tree| tree.path == target_uri)
+        .ok_or_else(|| {
+            "Worktree created, but could not be found. Refresh the working copies.".into()
+        })
+}
+
 #[tauri::command(async)]
 pub async fn git_worktree_create(
     cwd: String,
@@ -237,7 +436,11 @@ pub async fn git_worktree_create(
     existing: bool,
 ) -> Result<Worktree, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        create(&expand_home(&cwd), &branch, &base, existing)
+        if let Some(remote) = crate::remote::parse_remote(&cwd) {
+            create_remote(&remote, &branch, &base, existing)
+        } else {
+            create(&expand_home(&cwd), &branch, &base, existing)
+        }
     })
     .await
     .map_err(|error| error.to_string())?
@@ -456,6 +659,23 @@ fn removal_target(root: &Path, path: &Path) -> Result<Worktree, String> {
     Ok(tree)
 }
 
+fn remote_removal_target(root: &crate::remote::RemoteRef, path: &str) -> Result<Worktree, String> {
+    let tree = remote_list(root)?
+        .into_iter()
+        .find(|tree| tree.path == path)
+        .ok_or("This path is not a registered worktree of this repository")?;
+    if tree.is_main {
+        return Err("The main working copy cannot be deleted".into());
+    }
+    if tree.locked {
+        return Err("This worktree is locked. Unlock it in Git before deleting it.".into());
+    }
+    if tree.branch.is_none() {
+        return Err("Create a branch for this detached worktree before deleting it.".into());
+    }
+    Ok(tree)
+}
+
 #[tauri::command(async)]
 pub fn git_worktree_check_remove(
     cwd: String,
@@ -463,6 +683,21 @@ pub fn git_worktree_check_remove(
     force: bool,
     terminals: State<'_, crate::pty::PtyHost>,
 ) -> Result<(), String> {
+    if let Some(remote) = crate::remote::parse_remote(&cwd) {
+        let tree = remote_removal_target(&remote, &path)?;
+        if !force {
+            let target = remote_raw_path(&tree.path)?;
+            if !remote_git(
+                &target,
+                &["status", "--porcelain", "--untracked-files=normal"],
+            )?
+            .is_empty()
+            {
+                return Err("This worktree has uncommitted or untracked changes.".into());
+            }
+        }
+        return Ok(());
+    }
     let path = expand_home(&path);
     check_removal(
         &expand_home(&cwd),
@@ -526,7 +761,7 @@ struct SessionBeforeRemoval {
 /// lets a failed/interrupted deletion restore their original working context.
 fn prepare_removal(
     conn: &rusqlite::Connection,
-    path: &Path,
+    path: &str,
     project_cwd: &str,
     ids: &[String],
 ) -> Result<Vec<SessionBeforeRemoval>, String> {
@@ -556,7 +791,13 @@ fn prepare_removal(
                 },
             )
             .map_err(|e| e.to_string())?;
-        session.detached_cwd = if contains_working_dir(path, &expand_home(&session.cwd)) {
+        session.detached_cwd = if crate::remote::parse_remote(path).is_some() {
+            if contains_remote_working_dir(path, &session.cwd) {
+                project_cwd.to_owned()
+            } else {
+                session.cwd.clone()
+            }
+        } else if contains_working_dir(Path::new(path), &expand_home(&session.cwd)) {
             project_cwd.to_owned()
         } else {
             session.cwd.clone()
@@ -576,7 +817,7 @@ fn prepare_removal(
     tx.execute(
         "INSERT INTO worktree_removals (path, sessions_json) VALUES (?1, ?2)",
         rusqlite::params![
-            path_to_js(path),
+            path,
             serde_json::to_string(&saved).map_err(|e| e.to_string())?
         ],
     )
@@ -645,7 +886,27 @@ pub(crate) fn reconcile_removals(conn: &rusqlite::Connection) -> Result<(), Stri
     for (path, json) in pending {
         // A surviving Git link means removal did not finish. If the link/folder
         // is gone, the already-persisted detached sessions are the final state.
-        let restore = if Path::new(&path)
+        let restore = if let Some(remote) = crate::remote::parse_remote(&path) {
+            match crate::remote::git_capture(&remote, &["rev-parse", "--git-dir"]) {
+                Ok(output) if output.success => {
+                    serde_json::from_str::<Vec<SessionBeforeRemoval>>(&json)
+                        .map_err(|e| e.to_string())?
+                }
+                // Exit 255 is ssh itself (auth, DNS, unreachable) — the
+                // remote state is unknown, not "link gone". Keep the journal
+                // row so the next startup retries the check instead of
+                // stranding sessions that a reachable server would restore.
+                Ok(output) if output.code == Some(255) => {
+                    eprintln!("Worktree recovery for {path} deferred: remote server unreachable.");
+                    continue;
+                }
+                Ok(_) => Vec::new(),
+                Err(error) => {
+                    eprintln!("Worktree recovery for {path} deferred: {error}");
+                    continue;
+                }
+            }
+        } else if Path::new(&path)
             .join(".git")
             .try_exists()
             .map_err(|e| e.to_string())?
@@ -676,7 +937,7 @@ fn remove_with_sessions(
     if !keep_sessions && !ids.is_empty() {
         return Err("Sessions still use this worktree. Move or delete those sessions first (including archived sessions).".into());
     }
-    let saved = prepare_removal(conn, Path::new(&tree.path), &main.path, &ids)?;
+    let saved = prepare_removal(conn, &tree.path, &main.path, &ids)?;
     // Use the main copy even if Settings was opened directly on the target.
     if let Err(error) = remove(Path::new(&main.path), path, force) {
         finish_removal(conn, &tree.path, &saved).map_err(|restore| {
@@ -695,6 +956,57 @@ fn remove_with_sessions(
     })
 }
 
+fn remove_remote_with_sessions(
+    store: &SessionStore,
+    root: &crate::remote::RemoteRef,
+    path: &str,
+    force: bool,
+    keep_sessions: bool,
+) -> Result<WorktreeRemoval, String> {
+    // Each ssh round trip can take seconds; take the SQLite mutex only for
+    // the database phases so the rest of the app keeps working meanwhile.
+    let tree = remote_removal_target(root, path)?;
+    let worktrees = remote_list(root)?;
+    let main = worktrees
+        .iter()
+        .find(|tree| tree.is_main)
+        .ok_or("No main working copy found")?;
+    let (ids, saved) = {
+        let conn = store.lock_conn()?;
+        let ids = remote_session_ids(&conn, path)?;
+        if !keep_sessions && !ids.is_empty() {
+            return Err("Sessions still use this worktree. Move or delete those sessions first (including archived sessions).".into());
+        }
+        let saved = prepare_removal(&conn, path, &main.path, &ids)?;
+        (ids, saved)
+    };
+    let target = remote_raw_path(&tree.path)?;
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.extend(["--", target.path.as_str()]);
+    if let Err(error) = remote_git(root, &args) {
+        let conn = store.lock_conn()?;
+        finish_removal(&conn, path, &saved).map_err(|restore| {
+            format!("{error}. Sessions remain detached until recovery on restart: {restore}")
+        })?;
+        return Err(error);
+    }
+    {
+        let conn = store.lock_conn()?;
+        if let Err(error) = finish_removal(&conn, path, &[]) {
+            eprintln!(
+                "Remote worktree removed; recovery journal cleanup will retry on restart: {error}"
+            );
+        }
+    }
+    Ok(WorktreeRemoval {
+        session_ids: ids,
+        project_cwd: main.path.clone(),
+    })
+}
+
 #[tauri::command(async)]
 pub fn git_worktree_remove(
     cwd: String,
@@ -705,6 +1017,15 @@ pub fn git_worktree_remove(
     terminals: State<'_, crate::pty::PtyHost>,
     agents: State<'_, crate::harness::HarnessHost>,
 ) -> Result<WorktreeRemoval, String> {
+    if let Some(remote) = crate::remote::parse_remote(&cwd) {
+        return remove_remote_with_sessions(
+            store.inner(),
+            &remote,
+            &path,
+            force,
+            keep_sessions.unwrap_or(false),
+        );
+    }
     let path = expand_home(&path);
     let _reservation = crate::worktree_lifecycle::reserve_removal(&path)?;
     if terminals.has_working_dir(&path) || agents.has_working_dir(&path) {
@@ -813,6 +1134,33 @@ mod tests {
         assert_eq!(trees[1].path, "/a\nquoted\"path");
         assert!(trees[1].locked && trees[1].prunable);
         assert!(!trees[1].is_main);
+    }
+
+    #[test]
+    fn maps_remote_worktree_paths_back_to_ssh_uris() {
+        let trees = parse_worktrees_with_path(
+            "worktree /workspace/code/KineAI\0HEAD abc\0branch refs/heads/main\0\0worktree /workspace/code/KineAI-worktrees/feature\0HEAD def\0branch refs/heads/feature\0\0",
+            |path| crate::remote::remote_uri("conn_demo", path),
+        );
+        assert_eq!(trees[0].path, "ssh://conn_demo/workspace/code/KineAI");
+        assert_eq!(
+            trees[1].path,
+            "ssh://conn_demo/workspace/code/KineAI-worktrees/feature"
+        );
+        assert!(trees[0].is_main);
+        assert_eq!(trees[1].branch.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn remote_default_root_sits_next_to_the_main_checkout() {
+        let root = crate::remote::RemoteRef {
+            connection_id: "conn_demo".into(),
+            path: "/workspace/code/KineAI".into(),
+        };
+        assert_eq!(
+            remote_default_root(&root),
+            "ssh://conn_demo/workspace/code/KineAI-worktrees"
+        );
     }
 
     #[test]
@@ -1101,7 +1449,7 @@ mod tests {
                     [&tree.path],
                 )
                 .unwrap();
-                prepare_removal(&conn, Path::new(&tree.path), &main, &["s1".into()]).unwrap();
+                prepare_removal(&conn, &tree.path, &main, &["s1".into()]).unwrap();
                 if git_removed {
                     remove(&root, Path::new(&tree.path), true).unwrap();
                 }

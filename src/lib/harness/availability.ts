@@ -1,5 +1,7 @@
 import type { HarnessId } from "../session";
 import { HARNESSES } from "../session";
+import { resolveRemoteAgent } from "../connections";
+import { isRemotePath, parseRemotePath } from "../remote";
 import {
   resolveClaudeBinary,
   resolveCodexBinary,
@@ -188,4 +190,86 @@ export function probeHarnessAvailability(
       inflight = null;
     });
   return inflight;
+}
+
+// ---------------------------------------------------------------------------
+// Remote availability: per connection, claude/codex only for now.
+// ---------------------------------------------------------------------------
+
+export const REMOTE_HARNESSES: HarnessId[] = ["claude", "codex"];
+
+type RemoteAvailability = Partial<Record<HarnessId, boolean>>;
+
+const remoteAvailability = new Map<string, RemoteAvailability>();
+const remoteInflight = new Map<string, Promise<void>>();
+const remoteProbedAt = new Map<string, number>();
+const remoteListeners = new Set<() => void>();
+let remoteVersion = 0;
+
+function emitRemote() {
+  remoteVersion += 1;
+  for (const listener of remoteListeners) listener();
+}
+
+export function subscribeRemoteHarnessAvailability(
+  onStoreChange: () => void,
+): () => void {
+  remoteListeners.add(onStoreChange);
+  return () => {
+    remoteListeners.delete(onStoreChange);
+  };
+}
+
+export function getRemoteHarnessAvailabilitySnapshot(): number {
+  return remoteVersion;
+}
+
+export function isRemoteHarnessAvailable(
+  connectionId: string,
+  id: HarnessId,
+): boolean {
+  return remoteAvailability.get(connectionId)?.[id] ?? false;
+}
+
+export function probeRemoteHarnessAvailability(
+  connectionId: string,
+  options?: { force?: boolean },
+): Promise<void> {
+  const existing = remoteInflight.get(connectionId);
+  if (existing) return existing;
+  const probedAt = remoteProbedAt.get(connectionId) ?? 0;
+  if (!options?.force && probedAt > 0 && Date.now() - probedAt < PROBE_TTL_MS) {
+    return Promise.resolve();
+  }
+  const probe = Promise.all(
+    REMOTE_HARNESSES.map(async (id) => {
+      try {
+        await resolveRemoteAgent(connectionId, id);
+        return [id, true] as const;
+      } catch {
+        return [id, false] as const;
+      }
+    }),
+  )
+    .then((entries) => {
+      const next: RemoteAvailability = {};
+      for (const [id, ok] of entries) next[id] = ok;
+      remoteAvailability.set(connectionId, next);
+      emitRemote();
+    })
+    .finally(() => {
+      remoteProbedAt.set(connectionId, Date.now());
+      remoteInflight.delete(connectionId);
+    });
+  remoteInflight.set(connectionId, probe);
+  return probe;
+}
+
+/** Availability for a cwd: remote projects probe per connection. */
+export function isHarnessAvailableFor(id: HarnessId, cwd: string): boolean {
+  if (!isRemotePath(cwd)) return isHarnessAvailable(id);
+  const parsed = parseRemotePath(cwd);
+  if (!parsed) return false;
+  if (!REMOTE_HARNESSES.includes(id)) return false;
+  return isRemoteHarnessAvailable(parsed.connectionId, id);
 }

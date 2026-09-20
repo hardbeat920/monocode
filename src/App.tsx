@@ -47,6 +47,7 @@ import { Sidebar } from "./chrome/Sidebar";
 import { ApprovalToasts } from "./chrome/ApprovalToasts";
 import { WhatsNewDialog } from "./chrome/WhatsNewDialog";
 import { ProviderSignInDialog } from "./chrome/ProviderSignInDialog";
+import { ConnectDialog } from "./chrome/ConnectDialog";
 import { TitleBar, type Tab as TitleTab } from "./chrome/TitleBar";
 import { MenuBar } from "./chrome/MenuBar";
 import { FilePicker } from "./chrome/FilePicker";
@@ -284,6 +285,7 @@ import {
   rememberProject,
   sameProjectPath,
 } from "./lib/recents";
+import { refreshConnections } from "./lib/remote";
 import {
   applyDetachPaneToTab,
   applyPlaceTabOnPane,
@@ -727,6 +729,7 @@ export default function App({
     unusedWorktree: string;
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
+  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const switchingWorktrees = useRef(new Map<string, string>());
   const removingWorktreePaths = useRef(new Set<string>());
   const deleteConfirmationPending = useRef(false);
@@ -915,6 +918,11 @@ export default function App({
   useEffect(() => {
     if (!notesEnabled) setNotesViewOpen(false);
   }, [notesEnabled]);
+
+  // Mirror the SSH connection profiles for sync display helpers (prettyCwd).
+  useEffect(() => {
+    void refreshConnections().catch(() => {});
+  }, []);
 
   const projectReturnRef = useRef<ProjectReturnMemory>(
     resumed?.projectReturnMemory ?? new Map(),
@@ -5918,7 +5926,9 @@ export default function App({
           const message =
             error instanceof Error
               ? error.message
-              : `${current.harness} adapter failed`;
+              : typeof error === "string"
+                ? error
+                : `${current.harness} adapter failed`;
           controlOutcome.error = message;
           if (!providerFailureSeen) {
             enqueueHarnessEvent(sessionId, {
@@ -8384,6 +8394,7 @@ export default function App({
             onSelectAgent={onSelectLiveAgent}
             onSelectProject={onSelectProject}
             onOpenProject={pickProject}
+            onConnectServer={() => setConnectDialogOpen(true)}
             onRemoveProject={onRemoveProject}
             onNew={onNew}
             openSessions={openProjectSessions}
@@ -8493,6 +8504,7 @@ export default function App({
                 onGoToFile={onGoToFile}
                 recents={recents}
                 onSelectProject={onSelectProject}
+                onConnectServer={() => setConnectDialogOpen(true)}
               />
 
               <main className="relative flex min-h-0 min-w-0 flex-1">
@@ -8798,6 +8810,15 @@ export default function App({
             <WhatsNewDialog
               version={whatsNewVersion}
               onClose={() => setWhatsNewVersion(null)}
+            />
+          ) : null}
+          {connectDialogOpen ? (
+            <ConnectDialog
+              onConnect={(uri) => {
+                setConnectDialogOpen(false);
+                onSelectProject(uri);
+              }}
+              onClose={() => setConnectDialogOpen(false)}
             />
           ) : null}
           {providerSignInRequest ? (

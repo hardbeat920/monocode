@@ -16,6 +16,7 @@ import {
   orchestrator,
   sameCheckout,
 } from "../lib/orchestration";
+import { isRemotePath } from "../lib/remote";
 import { DiscussionEmpty } from "../chrome/DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../chrome/LinkedWorkItemUpdateNotice";
 import { SessionReview } from "../chrome/SessionReview";
@@ -284,9 +285,16 @@ export const SessionPane = memo(function SessionPane({
   }, [visible]);
   // Restore a saved run for this lead; its agents render on the sidebar card.
   useEffect(() => {
-    if (!session.inboxAsk && !session.worktreeRemoved)
+    // Orchestration is local-only. Remote sessions cannot have a local
+    // control endpoint, and probing their saved run would block startup while
+    // the remote Git probe is still in flight.
+    if (
+      !session.inboxAsk &&
+      !session.worktreeRemoved &&
+      !isRemotePath(session.cwd)
+    )
       void orchestrator.hydrate(session.id).catch(console.error);
-  }, [session.id, session.inboxAsk, session.worktreeRemoved]);
+  }, [session.id, session.cwd, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;

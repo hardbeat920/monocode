@@ -106,6 +106,48 @@
       <img src="/monocode.png" alt="" />
     </div>
     <div id="root"></div>
+    <script>
+      // Boot probe: framework-independent proof of which stage stalls.
+      // vanilla JS only — it must run even if every module fails to load.
+      (function () {
+        var el = null;
+        function mark(text, color) {
+          if (!el) {
+            el = document.createElement("div");
+            el.style.cssText =
+              "position:fixed;left:8px;bottom:8px;z-index:99999;padding:4px 8px;" +
+              "border-radius:6px;background:rgba(0,0,0,.7);color:" + color +
+              ";font:10px/1.4 ui-monospace,monospace;pointer-events:none;";
+            (document.body || document.documentElement).append(el);
+          }
+          el.textContent = text;
+        }
+        window.__monoProbe = mark;
+        mark("js: dom", "#9ca3af");
+        window.addEventListener("DOMContentLoaded", function () {
+          mark("js: dom-content-loaded", "#fbbf24");
+        });
+        window.addEventListener("load", function () {
+          mark("js: window-load", "#34d399");
+          setTimeout(function () {
+            if (!document.getElementById("root") || !document.getElementById("root").childElementCount) {
+              mark("js: loaded, react never mounted (module stall?)", "#f87171");
+            } else {
+              mark("", "#34d399");
+              if (el) el.remove();
+            }
+          }, 4000);
+        });
+        setTimeout(function () {
+          // React may mount before `window.load` when a slow resource delays
+          // it; a mounted app is not a module stall.
+          if (document.getElementById("root")?.childElementCount) return;
+          mark(el && el.textContent.indexOf("dom-content") >= 0
+            ? "js: scripts evaluating… (module stall)"
+            : "js: no dom-content-loaded after 8s", "#f87171");
+        }, 8000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

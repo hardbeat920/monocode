@@ -93,6 +93,7 @@ type Props = {
   onGoToFile?: () => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
+  onConnectServer?: () => void;
 };
 
 function sessionMeta(tab: Tab): string {
@@ -585,6 +586,7 @@ function TitleBarComponent({
   onGoToFile,
   recents = [],
   onSelectProject,
+  onConnectServer,
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
   const externalTabDrop = useMemo<ReorderExternalDrop<string> | undefined>(
@@ -835,6 +837,7 @@ function TitleBarComponent({
           placement="below"
           onCwdChange={onSelectProject}
           onNewTerminal={onNewTerminal}
+          onConnectServer={onConnectServer}
           buttonClassName="flex h-full min-w-0 max-w-64 shrink items-center gap-2 px-6 text-left text-sm font-medium leading-tight"
         >
           <span className="min-w-0 truncate text-content/50">No project</span>

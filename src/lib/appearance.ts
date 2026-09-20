@@ -338,7 +338,9 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
 }
 
 function syncNativeGlass(scheme: ColorScheme) {
-  void invoke("set_window_glass_enabled", { enabled: scheme === "dark" });
+  void invoke("set_window_glass_enabled", { enabled: scheme === "dark" }).catch(
+    () => undefined,
+  );
 }
 
 /** Applies native transparency once the opaque launch cover can be removed. */
@@ -397,7 +399,9 @@ export function saveSidebarBlur(value: number) {
 
 export function applySidebarBlur(value: number) {
   const next = Math.round(clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX));
-  void invoke("set_window_background_blur", { radius: next });
+  void invoke("set_window_background_blur", { radius: next }).catch(
+    () => undefined,
+  );
   return next;
 }
 

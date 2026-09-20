@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "./icons";
+import { ChevronDown, ChevronRight, ServerIcon } from "./icons";
 import {
   useEffect,
   useMemo,
@@ -39,6 +39,8 @@ type Props = {
   children?: ReactNode;
   onCwdChange: (path: string) => void;
   onNewTerminal?: () => void;
+  /** Opens the connect-to-server dialog; only shown in "switch" mode. */
+  onConnectServer?: () => void;
   onClose?: () => void;
 };
 
@@ -54,7 +56,8 @@ const SELF = "[data-cwd-picker],[data-cwd-submenu]";
 type Row =
   | { kind: "recent"; path: string }
   | { kind: "more" }
-  | { kind: "new-terminal" };
+  | { kind: "new-terminal" }
+  | { kind: "connect-server" };
 
 export function CwdPicker({
   cwd,
@@ -71,6 +74,7 @@ export function CwdPicker({
   children,
   onCwdChange,
   onNewTerminal,
+  onConnectServer,
   onClose,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -108,8 +112,9 @@ export function CwdPicker({
     }));
     if (hasMore) out.push({ kind: "more" });
     if (onNewTerminal) out.push({ kind: "new-terminal" });
+    if (onConnectServer && mode === "switch") out.push({ kind: "connect-server" });
     return out;
-  }, [hasMore, onNewTerminal, previewRecents]);
+  }, [hasMore, onNewTerminal, onConnectServer, mode, previewRecents]);
 
   const dismiss = (restore = false) => {
     setOpen(false);
@@ -144,6 +149,10 @@ export function CwdPicker({
     dismiss(true);
     if (row.kind === "new-terminal") {
       onNewTerminal?.();
+      return;
+    }
+    if (row.kind === "connect-server") {
+      onConnectServer?.();
       return;
     }
     onCwdChange(row.path);
@@ -195,6 +204,10 @@ export function CwdPicker({
   const newTerminalIndex = onNewTerminal
     ? previewRecents.length + (hasMore ? 1 : 0)
     : -1;
+  const connectIndex =
+    onConnectServer && mode === "switch"
+      ? previewRecents.length + (hasMore ? 1 : 0) + (onNewTerminal ? 1 : 0)
+      : -1;
   const moreIndex = hasMore ? previewRecents.length : -1;
 
   return (
@@ -368,6 +381,28 @@ export function CwdPicker({
                 <span className="shrink-0 font-mono text-[11px] text-content/45">
                   {MOD}`
                 </span>
+              </button>
+            </div>
+          ) : null}
+          {onConnectServer && mode === "switch" ? (
+            <div className="shrink-0 border-t border-stroke py-1">
+              <button
+                type="button"
+                role="menuitem"
+                onMouseDown={(e) => e.stopPropagation()}
+                onMouseEnter={() => {
+                  setMoreOpen(false);
+                  setActive(connectIndex);
+                }}
+                onClick={() => pick({ kind: "connect-server" })}
+                className={`flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left ${
+                  active === connectIndex
+                    ? "bg-selection text-content"
+                    : "text-content/80 hover:bg-content/5"
+                }`}
+              >
+                <span className="text-[13px]">Open remote folder…</span>
+                <ServerIcon className="size-3.5 shrink-0 text-content/45" aria-hidden />
               </button>
             </div>
           ) : null}

@@ -10,6 +10,7 @@ export type SettingsSectionId =
   | "providers"
   | "skills"
   | "inbox"
+  | "servers"
   | "worktrees"
   | "archive";
 
@@ -90,6 +91,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     keywords: "github gitlab linear connect token integration",
   },
   {
+    id: "servers",
+    group: "workspace",
+    label: "Servers",
+    description:
+      "SSH servers and Docker containers MonoCode can develop on remotely.",
+    keywords: "ssh remote server docker container connect devbox host",
+  },
+  {
     id: "archive",
     group: "workspace",
     label: "Archive",
@@ -128,6 +137,12 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
+  {
+    id: "servers",
+    section: "servers",
+    label: "Servers",
+    keywords: "ssh remote server docker container connect devbox host add remove test",
+  },
   {
     id: "project-worktrees",
     section: "worktrees",

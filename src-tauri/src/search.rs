@@ -57,7 +57,8 @@ fn search_project_sync(options: &SearchOptions) -> Result<SearchResult, String> 
     }
 
     let root = expand_home(&options.cwd);
-    if !root.is_dir() {
+    let remote = crate::remote::parse_remote(&options.cwd);
+    if remote.is_none() && !root.is_dir() {
         return Err(format!("{}: Not a directory", root.display()));
     }
 
@@ -65,32 +66,48 @@ fn search_project_sync(options: &SearchOptions) -> Result<SearchResult, String> 
         return Ok(result);
     }
 
+    if remote.is_some() {
+        // The grep itself failed remotely (not a git repository, or the
+        // connection dropped); the local walk fallback cannot apply.
+        return Err(
+            "Search on this remote project is unavailable. It needs a git repository.".into(),
+        );
+    }
+
     scan_files(&root, options, query)
 }
 
 fn git_grep(root: &Path, options: &SearchOptions, query: &str) -> Option<SearchResult> {
-    let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
-    cmd.arg("-C").arg(root).arg("grep").arg("-z").arg("-n");
+    let specs = pathspecs(&options.include, &options.exclude);
+
+    let mut args: Vec<&str> = vec!["grep", "-z", "-n"];
     if !options.case_sensitive {
-        cmd.arg("-i");
+        args.push("-i");
     }
     if options.whole_word {
-        cmd.arg("-w");
+        args.push("-w");
     }
     if options.regex {
-        cmd.arg("-E");
+        args.push("-E");
     } else {
-        cmd.arg("-F");
+        args.push("-F");
     }
-    cmd.arg("-e").arg(query);
-
+    args.push("-e");
+    args.push(query);
     // Terminate option parsing so an include glob starting with `-` is treated
     // as a pathspec instead of a git grep flag.
-    cmd.arg("--");
-    for spec in pathspecs(&options.include, &options.exclude) {
-        cmd.arg(spec);
-    }
+    args.push("--");
+    args.extend(specs.iter().map(|spec| spec.as_str()));
+
+    let mut cmd = if let Some(remote) = crate::remote::parse_remote(&root.to_string_lossy()) {
+        // The query and pathspecs are quoted for the remote shell here.
+        crate::remote::git_command(&remote, &args).ok()?
+    } else {
+        let mut cmd = Command::new("git");
+        crate::hide_window_console(&mut cmd);
+        cmd.arg("-C").arg(root).args(&args);
+        cmd
+    };
 
     let output = cmd.output().ok()?;
     if !output.status.success() && !output.stdout.is_empty() {

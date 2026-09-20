@@ -235,6 +235,7 @@ type Props = {
   onSelectAgent?: (sessionId: string) => void;
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
+  onConnectServer?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   onNew?: () => string | void;
   onNewTerminal?: () => void;
@@ -320,6 +321,7 @@ function SidebarComponent({
   onSelectAgent,
   onSelectProject,
   onOpenProject,
+  onConnectServer,
   onRemoveProject,
   onNew,
   onSearch,
@@ -1722,6 +1724,7 @@ function SidebarComponent({
           onTogglePanel={onToggleProjectRail}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
+          onConnectServer={onConnectServer}
           onRemoveProject={onRemoveProject}
           settingsOpen={settingsOpen}
           settingsSection={settingsSection}
