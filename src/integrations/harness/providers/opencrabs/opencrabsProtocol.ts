@@ -314,9 +314,17 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent | null {
     numberField(usage, "window") ??
     numberField(usage, "contextWindow") ??
     numberField(usage, "context_window") ??
-    numberField(usage, "size");
+    acpSizeField(usage);
   if (used == null && window == null) return null;
   return { type: "context", used: used ?? undefined, window: window ?? undefined };
+}
+
+// ACP `usage.size` is an unsigned integer by spec: a negative or fractional
+// value is protocol garbage, not a window, and must not reach
+// `mergeContextUsage` (a bogus window makes the meter render nothing).
+function acpSizeField(rec: Record<string, unknown>): number | undefined {
+  const value = numberField(rec, "size");
+  return value != null && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function mergePreview(
