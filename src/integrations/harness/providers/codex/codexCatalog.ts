@@ -12,7 +12,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { asRecord, stringField } from "./codexProtocol";
 import { JsonRpcClient } from "../../core/jsonRpc";
 
@@ -50,6 +51,7 @@ export function refreshCodexCatalog(): Promise<void> {
 
 async function discoverCodexModels(): Promise<AgentModel[]> {
   const { path } = await resolveHarnessBinary("codex", resolveCodexBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("codex"));
   const cwd = await homeDir();
   const rpc = new JsonRpcClient(
     PROBE_ID,
@@ -74,7 +76,7 @@ async function discoverCodexModels(): Promise<AgentModel[]> {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["app-server"], cwd);
+    await spawnChild(PROBE_ID, path, ["app-server"], cwd, undefined, env);
     return await withTimeout(DISCOVERY_TIMEOUT_MS, async () => {
       await rpc.request(
         "initialize",

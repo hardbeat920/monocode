@@ -6,7 +6,8 @@ import {
   watchChild,
   writeChild,
 } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { PiRpc } from "./piClient";
 import { PI_FLAVOR, OMP_FLAVOR, type PiFlavor } from "./piFlavor";
 import { nativeCommandInvocation, type NativeCommand } from "../../core/nativeCommands";
@@ -47,6 +48,7 @@ async function discoverCommands(
   command: string,
 ): Promise<unknown> {
   const { path } = await resolveHarnessBinary(flavor.id, flavor.resolveBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime(flavor.id));
   const releaseBridge = await acquireHarnessBridge();
   const childId = `monocode-${flavor.id}-skills-${crypto.randomUUID()}`;
   const replyToUi = (record: Record<string, unknown>) => {
@@ -70,6 +72,8 @@ async function discoverCommands(
       path,
       buildPiSpawnArgs(flavor, { noSession: true }),
       cwd,
+      undefined,
+      env,
     );
     const response = await rpc.request({ type: command }, REQUEST_TIMEOUT_MS);
     return asRecord(response)?.data;

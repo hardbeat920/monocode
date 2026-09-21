@@ -1698,7 +1698,7 @@ function launchOptions(
 /** The dedicated CLAUDE_CONFIG_DIR field always wins over a same-named entry
  * in the generic Environment variables list, since it's the one the UI
  * documents as overriding provider-account isolation. */
-function claudeRuntimeEnv(
+export function claudeRuntimeEnv(
   runtime: HarnessRuntimeSettings,
   configDir: string,
 ): Record<string, string> | undefined {

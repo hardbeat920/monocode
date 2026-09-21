@@ -257,6 +257,7 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     expect(mock.spawn).toHaveBeenCalledWith(
       `monocode-${provider.id}-probe`, provider.path, provider.args,
       provider.id === "antigravity" ? "/fake/" : "/home/test",
+      undefined, undefined,
     );
     expect(mock.kill).toHaveBeenCalledWith(`monocode-${provider.id}-probe`);
     expect(mock.listeners.has(`monocode-${provider.id}-probe`)).toBe(false);

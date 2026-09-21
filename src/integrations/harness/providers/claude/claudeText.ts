@@ -9,6 +9,11 @@ import {
 } from "../../core/child";
 import { resolveHarnessBinary } from "../../core/runtime";
 import {
+  loadClaudeConfigDir,
+  loadHarnessRuntime,
+} from "../../../../features/settings/model/settings";
+import { claudeRuntimeEnv } from "./claude";
+import {
   assistantTextBlocks,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
@@ -143,6 +148,8 @@ async function startLive(
   providerAccountId?: string,
 ): Promise<LiveText> {
   const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
+  const runtime = loadHarnessRuntime("claude");
+  const env = claudeRuntimeEnv(runtime, loadClaudeConfigDir());
   const session: LiveText = {
     cwd,
     providerAccountId,
@@ -179,6 +186,7 @@ async function startLive(
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },
+      env,
     );
     live = session;
     await waitForReady(session, INIT_TIMEOUT_MS);

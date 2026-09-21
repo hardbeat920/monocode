@@ -6,7 +6,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
   grokAuthMethodId,
   grokTextSpawnArgs,
@@ -114,6 +115,7 @@ async function ensureLive(cwd: string): Promise<LiveText> {
 async function startLive(cwd: string): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveHarnessBinary("grok", resolveGrokBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("grok"));
   const acpRef: { session: LiveText | null } = { session: null };
   const acp = new AcpClient(TEXT_CHILD_ID, {
     onNotification: (method, params) => {
@@ -146,7 +148,7 @@ async function startLive(cwd: string): Promise<LiveText> {
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, grokTextSpawnArgs(), cwd);
+    await spawnChild(TEXT_CHILD_ID, path, grokTextSpawnArgs(), cwd, undefined, env);
     const init = await acp.request(
       "initialize",
       {

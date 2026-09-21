@@ -8,7 +8,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { modelsFromHermesSession } from "./hermesProtocol";
 
 const PROBE_ID = "monocode-hermes-probe";
@@ -34,6 +35,7 @@ export function refreshHermesCatalog(): Promise<void> {
 
 async function discoverHermesModels(): Promise<AgentModel[]> {
   const { path } = await resolveHarnessBinary("hermes", resolveHermesBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("hermes"));
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
     onRequest: (id, method) => {
@@ -59,7 +61,7 @@ async function discoverHermesModels(): Promise<AgentModel[]> {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["acp"], cwd);
+    await spawnChild(PROBE_ID, path, ["acp"], cwd, undefined, env);
     return await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {

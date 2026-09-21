@@ -15,6 +15,11 @@ import {
 } from "../../core/child";
 import { resolveHarnessBinary } from "../../core/runtime";
 import {
+  loadClaudeConfigDir,
+  loadHarnessRuntime,
+} from "../../../../features/settings/model/settings";
+import { claudeRuntimeEnv } from "./claude";
+import {
   asRecord,
   buildClaudeSpawnArgs,
   buildControlRequest,
@@ -245,6 +250,7 @@ async function discoverClaudeModels(): Promise<AgentModel[]> {
 
 async function discoverViaListModels(): Promise<AgentModel[]> {
   const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
+  const env = claudeRuntimeEnv(loadHarnessRuntime("claude"), loadClaudeConfigDir());
   const cwd = await homeDir();
   const sessionId = crypto.randomUUID();
 
@@ -294,6 +300,8 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
       path,
       buildClaudeSpawnArgs({ isolated: true, sessionId }),
       cwd,
+      undefined,
+      env,
     );
     await writeChild(
       PROBE_ID,

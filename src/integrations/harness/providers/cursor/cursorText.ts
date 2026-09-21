@@ -6,7 +6,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { mergeStream } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-text";
@@ -113,6 +114,7 @@ async function ensureLive(cwd: string): Promise<LiveText> {
 async function startLive(cwd: string): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("cursor"));
   const acpRef: { session: LiveText | null } = { session: null };
   const acp = new AcpClient(TEXT_CHILD_ID, {
     onNotification: (method, params) => {
@@ -145,7 +147,7 @@ async function startLive(cwd: string): Promise<LiveText> {
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, ["acp"], cwd);
+    await spawnChild(TEXT_CHILD_ID, path, ["acp"], cwd, undefined, env);
     await acp.request(
       "initialize",
       {
