@@ -1263,6 +1263,11 @@ export function Composer({
       : composeInboxMessage(inboxCard, command.text);
     const files = attachments;
     if (!text && files.length === 0 && !noteCard && !handoffCard) return;
+    // Clear the parent draft before onSubmit. The app can synchronously remount
+    // the composer when the first message leaves an empty session (EmptySession →
+    // docked layout). If draftRef still holds the sent text, the new instance
+    // resurrects it as initialDraft.
+    onDraftChange?.("");
     const accepted = onSubmit(text, files, {
       intent:
         planSelected || command.planning
@@ -1284,7 +1289,10 @@ export function Composer({
     // The app can reject a turn before it is recorded (for example while an
     // orchestration is paused). Keep the user's text, files and selected mode
     // intact so resolving the blocker never destroys their work.
-    if (accepted === false) return;
+    if (accepted === false) {
+      restoreDraft(text, files);
+      return;
+    }
     if (ref.current) {
       ref.current.value = "";
       ref.current.style.height = "auto";

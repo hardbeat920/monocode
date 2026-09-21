@@ -214,7 +214,7 @@ describe("AgentTranscript collapsed work", () => {
 
     expect(markup).toContain('data-editing-last-turn="true"');
     expect(markup).toContain("edit-last-turn-bubble");
-    expect(markup).toContain('aria-label="Edit and resend"');
+    expect(markup).toContain('aria-label="Cancel edit"');
     expect(markup).not.toContain("Editing this message");
   });
 
