@@ -89,7 +89,7 @@ describe.skipIf(!REAL)("antigravity real ACP endpoint", () => {
   const turn = (text: string, events: HarnessEvent[]): Promise<void> => {
     const input: SendTurnInput = {
       sessionId: "real-thread",
-      cwd: "/tmp",
+      cwd: process.platform === "win32" ? process.cwd() : "/tmp",
       model: "antigravity:gemini-3.8-flash-high",
       text,
       runtimeMode: "supervised",

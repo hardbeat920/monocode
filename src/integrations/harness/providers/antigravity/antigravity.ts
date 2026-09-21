@@ -71,7 +71,7 @@ type Resume = {
 
 // Bound startup and control requests; a prompt may legitimately run much longer.
 // The Windows ACP binary may need longer to initialize on a cold start.
-const INIT_TIMEOUT_MS = 30_000;
+const INIT_TIMEOUT_MS = 60_000;
 const SESSION_TIMEOUT_MS = 45_000;
 const CONTROL_TIMEOUT_MS = 15_000;
 const PROMPT_TIMEOUT_MS = 30 * 60_000;
@@ -81,7 +81,7 @@ const PROMPT_TIMEOUT_MS = 30 * 60_000;
 // surface a status note instead of killing the turn.
 const STALL_NOTIFY_MS = 120_000;
 
-const AUTH_HELP = "Run `agy` once in Terminal to sign in.";
+const AUTH_HELP = "Run `agy` once in Terminal to sign in. If the ACP server still requires authentication, set `auth.type` (for example, `oauth-personal`) in `~/.gemini/antigravity-acp/settings.json`.";
 
 function antigravityError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
