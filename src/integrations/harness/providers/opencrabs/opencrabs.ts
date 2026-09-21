@@ -252,6 +252,16 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
   const muteGate = { current: false };
 
   handlers.onNotification = (method, params) => {
+    // Control-plane carve-out: the commands push can land during the
+    // session/load window — before `live` exists and while transcript replay
+    // is muted. Muting exists to keep replay out of the transcript; it must
+    // not drop command discovery, or every restarted session loses the
+    // autocomplete catalog.
+    const pushedCommands = nativeCommandsFromUpdate(params);
+    if (pushedCommands) {
+      cacheNativeCommands(input.sessionId, pushedCommands);
+      return;
+    }
     if (muteGate.current) return;
     const live = liveRef.current;
     if (!live || live.muteUpdates) return;
@@ -322,7 +332,16 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
         didLoad = true;
-      } catch {
+      } catch (error) {
+        // Context loss must be visible: MonoCode renders the old transcript
+        // locally, but the fresh opencrabs session starts with no memory of
+        // it. Mark the boundary so the user knows what the agent can see.
+        const reason = error instanceof Error ? error.message : String(error);
+        emit({
+          type: "interjection",
+          customType: "custom",
+          text: `OpenCrabs session could not be resumed (${reason}) — started a fresh session. Earlier messages in this transcript are no longer in the agent's context.`,
+        });
         setup = undefined;
         acpSessionId = undefined;
         didLoad = false;
