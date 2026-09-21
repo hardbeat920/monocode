@@ -1152,28 +1152,6 @@ export function Composer({
     [onDraftChange, syncHasValue],
   );
 
-  const recallLastTurn = useCallback(() => {
-    if (!editLastTurnSupported || !lastTurnRecall) return;
-    restoreDraft(lastTurnRecall.text, lastTurnRecall.attachments);
-    setResendEdited(true);
-    onEditingLastTurnChange?.(true);
-  }, [
-    editLastTurnSupported,
-    lastTurnRecall,
-    onEditingLastTurnChange,
-    restoreDraft,
-  ]);
-
-  useEffect(() => {
-    setResendEdited(false);
-    onEditingLastTurnChange?.(false);
-  }, [sessionId, onEditingLastTurnChange]);
-
-  useEffect(() => {
-    if (editLastTurnSupported) return;
-    setResendEdited(false);
-    onEditingLastTurnChange?.(false);
-  }, [editLastTurnSupported, onEditingLastTurnChange]);
   const exitEditMode = useCallback(() => {
     if (ref.current) {
       ref.current.value = "";
@@ -1197,6 +1175,35 @@ export function Composer({
     syncHasValue("", []);
     ref.current?.focus();
   }, [onDraftChange, onEditingLastTurnChange, syncHasValue]);
+
+  const recallLastTurn = useCallback(() => {
+    if (!editLastTurnSupported || !lastTurnRecall) return;
+    if (resendEdited) {
+      exitEditMode();
+      return;
+    }
+    restoreDraft(lastTurnRecall.text, lastTurnRecall.attachments);
+    setResendEdited(true);
+    onEditingLastTurnChange?.(true);
+  }, [
+    editLastTurnSupported,
+    exitEditMode,
+    lastTurnRecall,
+    onEditingLastTurnChange,
+    resendEdited,
+    restoreDraft,
+  ]);
+
+  useEffect(() => {
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+  }, [sessionId, onEditingLastTurnChange]);
+
+  useEffect(() => {
+    if (editLastTurnSupported) return;
+    setResendEdited(false);
+    onEditingLastTurnChange?.(false);
+  }, [editLastTurnSupported, onEditingLastTurnChange]);
 
   useEffect(() => {
     if (!editLastTurnSupported || !onRecallLastTurnReady) return;

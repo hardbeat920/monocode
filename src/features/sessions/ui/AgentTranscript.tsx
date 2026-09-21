@@ -1081,6 +1081,35 @@ function SaveNoteButton({
   );
 }
 
+function EditLastTurnButton({
+  onEdit,
+  editing = false,
+}: {
+  onEdit: () => void;
+  editing?: boolean;
+}) {
+  const label = editing ? "Cancel edit" : "Edit and resend";
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={editing}
+      onClick={(event) => {
+        event.stopPropagation();
+        onEdit();
+      }}
+      className={`rounded-md p-1 transition-[background-color,color] duration-150 focus-visible:ring-1 focus-visible:ring-accent ${
+        editing
+          ? "edit-last-turn-button"
+          : "text-content/40 hover:bg-content/8 hover:text-content/70"
+      }`}
+    >
+      <Pencil className="size-3.5" strokeWidth={1.75} />
+    </button>
+  );
+}
+
 const TranscriptBlock = memo(function TranscriptBlock({
   block,
   layout,
@@ -1341,8 +1370,6 @@ function UserMessageBlock({
         <div
           data-draft={block.draft ? "true" : undefined}
           className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color,outline-color] duration-200 ${
-            onEdit && !chat ? "pr-10" : ""
-          } ${
             editing
               ? "edit-last-turn-bubble"
               : block.draft
@@ -1355,26 +1382,6 @@ function UserMessageBlock({
           }`}
           style={{ zIndex: stickyIndex }}
         >
-          {onEdit ? (
-            <button
-              type="button"
-              title="Edit and resend"
-              aria-label="Edit and resend"
-              onClick={(event) => {
-                event.stopPropagation();
-                onEdit();
-              }}
-              className={`absolute ${
-                chat ? "-left-8 top-1/2 -translate-y-1/2" : "right-1.5 top-1.5"
-              } grid size-6 place-items-center rounded-md transition-[background-color,color,opacity] duration-150 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-accent ${
-                editing
-                  ? "edit-last-turn-button opacity-100"
-                  : "text-content/35 opacity-0 hover:bg-content/10 hover:text-content/70 group-hover/usermsg:opacity-100"
-              }`}
-            >
-              <Pencil className="size-3.5" strokeWidth={1.75} />
-            </button>
-          ) : null}
           {block.attachments?.length ? (
             <div
               className={`flex flex-wrap gap-1.5 ${text || card || note ? "mb-2" : ""}`}
@@ -1458,7 +1465,10 @@ function UserMessageBlock({
             </div>
           ) : null}
         </div>
-        {text || block.attachments?.length || block.startedAt != null ? (
+        {text ||
+        block.attachments?.length ||
+        block.startedAt != null ||
+        onEdit ? (
           <div className="user-message-actions flex items-center gap-1 px-3 pt-1">
             {text || block.attachments?.length ? (
               <CopyTurnButton
@@ -1466,6 +1476,9 @@ function UserMessageBlock({
                 attachments={block.attachments}
                 label="Copy message"
               />
+            ) : null}
+            {onEdit ? (
+              <EditLastTurnButton onEdit={onEdit} editing={editing} />
             ) : null}
             {text && onSaveNote ? (
               <SaveNoteButton text={text} onSave={onSaveNote} />
