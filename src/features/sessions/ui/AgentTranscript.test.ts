@@ -368,9 +368,10 @@ describe("AgentTranscript collapsed work", () => {
     expect(statusAt).toBeGreaterThan(-1);
     expect(stackAt).toBeGreaterThan(statusAt);
     // The work around it is collapsed away, and the stack is still on screen:
-    // it is pinned outside the fold's body, not inside it.
+    // it is pinned outside the fold's body, not inside it. The prose the span
+    // crosses keeps its rows — delivered text is never fold content.
     expect(markup).not.toContain("hidden-detail-t1");
-    expect(markup).not.toContain("Splitting the review in two.");
+    expect(markup).toContain("Splitting the review in two.");
     // A row-length name is capped, and the whole brief stays on the hover.
     expect(markup).toContain(
       "Independently review the current repository&#x27;s recent…",
@@ -500,13 +501,16 @@ describe("AgentTranscript collapsed work", () => {
     );
 
     expect(markup).toContain("Complete answer.");
-    expect(markup).toContain('aria-label="Interjection: Advisor"');
+    // A routine advisor note is one slim row — label, severity, preview —
+    // with its body a click away, not a full-width divider.
+    expect(markup).toContain("data-exchange");
+    expect(markup).toContain("Advisor");
     expect(markup).toContain("Concern");
     expect(markup).toContain("Check the fallback.");
     expect(markup).toContain("Checked.");
   });
 
-  it("folds a settled turn's interjections into the work trail", () => {
+  it("keeps a settled turn's interjections on their own rows", () => {
     const blocks: Block[] = [
       { id: "user", role: "user", text: "Keep me posted" },
       tool("t1"),
@@ -536,19 +540,20 @@ describe("AgentTranscript collapsed work", () => {
       },
     ];
 
+    // The fold spans the work and the notes it flows around, but only the
+    // work collapses: consecutive notes share one exchange row, and channels
+    // with no collapse contract (IRC here) keep their bodies on screen.
     const settled = render(blocks);
-    // One fold line for the whole trail: the calls, and the notes they
-    // absorbed. The dividers themselves stay behind the fold until opened.
-    expect(settled).toContain("Ran 2 commands · 3 notes");
+    expect(settled).toContain("Ran 2 commands");
     expect(settled).toContain("The investigation is complete.");
-    expect(settled).not.toContain('aria-label="Interjection:');
-    expect(settled).not.toContain("ping from #general");
+    expect(settled.match(/data-exchange/g)).toHaveLength(2);
+    expect(settled).toContain("ping from #general");
+    expect(settled).toContain("another ping");
+    expect(settled).toContain("last ping");
 
-    // While the turn is live the same notes still land as their own rows.
+    // Live reads the same: the notes land as their own exchange rows.
     const live = render(blocks, true);
-    expect(
-      live.match(/aria-label="Interjection: irc:incoming"/g),
-    ).toHaveLength(3);
+    expect(live.match(/data-exchange/g)).toHaveLength(2);
     expect(live).toContain("ping from #general");
   });
 });

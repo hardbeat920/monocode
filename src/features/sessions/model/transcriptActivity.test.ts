@@ -6,13 +6,18 @@ import {
   activityStillRunning,
   buildActivityPhases,
   editVerb,
-  firstFoldableIndex,
+  firstWorkIndex,
   foldableWork,
+  foldContentCounts,
   foldedBlocks,
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
   initialThinkingIndex,
+  isNarrationItem,
+  isProseBlock,
+  isSettledFoldMember,
+  settledFold,
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
@@ -25,6 +30,8 @@ import {
   subagentModelName,
   workKind,
   workSummaryLine,
+  type TurnItem,
+  type WorkFold,
 } from "./transcriptActivity";
 
 function shell(
@@ -759,10 +766,9 @@ describe("the subagent stack", () => {
       "subagents",
       "activity",
     ]);
-    // The stack keeps its own rows, so it is not part of what the fold
-    // collapses or summarises.
+    // The stack keeps its own rows and the lead-in prose keeps its — neither
+    // is part of what the fold collapses or summarises.
     expect(foldedBlocks(items, fold!).map((block) => block.id)).toEqual([
-      "lead",
       "s1",
     ]);
   });
@@ -817,19 +823,17 @@ describe("the settled work trail", () => {
     }
   });
 
-  it("keeps an interjection on its own row while live, folds it in once settled", () => {
+  it("keeps an interjection on its own row, live and settled alike", () => {
     const turn = [shell("a"), irc("i1"), shell("b")];
-    expect(groupTurnItems(turn).map((item) => item.type)).toEqual([
-      "activity",
-      "block",
-      "activity",
-    ]);
+    for (const options of [undefined, { settled: true }]) {
+      expect(groupTurnItems(turn, options).map((item) => item.type)).toEqual([
+        "activity",
+        "exchange",
+        "activity",
+      ]);
+    }
     const items = groupTurnItems(turn, { settled: true });
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      type: "activity",
-      blocks: [{ id: "a" }, { id: "i1" }, { id: "b" }],
-    });
+    expect(items[1]).toMatchObject({ type: "exchange", notes: [{ id: "i1" }] });
   });
 
   it("pins a delegated run while live, folds it into the trail once settled", () => {
@@ -888,7 +892,7 @@ describe("the settled work trail", () => {
     ]);
   });
 
-  it("spans the whole trail once settled, status rows and notes included", () => {
+  it("spans the whole trail once settled, crossing notes without hiding them", () => {
     const items = groupTurnItems(
       [
         { id: "u", role: "user", text: "go" },
@@ -902,23 +906,24 @@ describe("the settled work trail", () => {
       ],
       { settled: true },
     );
-    const fold = foldableWork(items);
-    expect(fold).toEqual({ start: 1, end: 1 });
-    const folded = foldedBlocks(items, fold!);
-    expect(folded.map((block) => block.id)).toEqual([
-      "t1",
-      "st",
-      "t2",
-      "i1",
-      "i2",
-      "t3",
+    // The notes share one exchange row between the work groups they split.
+    expect(items.map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "exchange",
+      "activity",
+      "block",
     ]);
+    const fold = foldableWork(items);
+    expect(fold).toEqual({ start: 1, end: 3 });
+    const folded = foldedBlocks(items, fold!);
+    expect(folded.map((block) => block.id)).toEqual(["t1", "st", "t2", "t3"]);
     const summary = workSummaryLine(folded);
-    expect(summary).toBe("Ran 3 commands · 2 notes");
+    expect(summary).toBe("Ran 3 commands");
     expect(summary).not.toContain("Advisor reviewed");
   });
 
-  it("leaves notes that arrive after the answer as their own trail under it", () => {
+  it("leaves notes that arrive after the answer as their own rows under it", () => {
     const items = groupTurnItems(
       [
         { id: "u", role: "user", text: "go" },
@@ -933,21 +938,14 @@ describe("the settled work trail", () => {
       "block",
       "activity",
       "block",
-      "activity",
+      "exchange",
     ]);
     // The fold covers the work the answer answered for; the answer itself and
-    // the notes after it stay out.
+    // the exchange after it stay out.
     expect(foldableWork(items)).toEqual({ start: 1, end: 1 });
-    const trailing = items[3];
-    if (trailing?.type !== "activity") throw new Error("expected activity");
-    const phases = buildActivityPhases(trailing.blocks);
-    expect(phases).toHaveLength(1);
-    expect(phases[0].kind).toBe("note");
-    expect(activityPhaseTitle(phases[0])).toBe("2 notes");
-    expect(workKind(trailing.blocks)).toBe("note");
   });
 
-  it("lets the settled fold reach across an interjection that stops it live", () => {
+  it("spans past an interjection, live or settled, hiding only the work", () => {
     const turn = [
       { id: "u", role: "user", text: "go" },
       shell("t1"),
@@ -956,18 +954,17 @@ describe("the settled work trail", () => {
       shell("t2"),
       note("done", "All set."),
     ];
-    // Live: the interjection stands alone and bounds the fold.
-    expect(foldableWork(groupTurnItems(turn))).toEqual({ start: 4, end: 4 });
-    // Settled: it joins the trail and the fold spans the turn's work.
-    const items = groupTurnItems(turn, { settled: true });
-    const fold = foldableWork(items)!;
-    expect(fold).toEqual({ start: 1, end: 3 });
-    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
-      "t1",
-      "mid",
-      "i1",
-      "t2",
-    ]);
+    // The span reaches across the note and the prose it interrupted — both
+    // stay on their own rows either side of settling; only the work folds.
+    for (const options of [undefined, { settled: true }]) {
+      const items = groupTurnItems(turn, options);
+      const fold = foldableWork(items)!;
+      expect(fold).toEqual({ start: 1, end: 4 });
+      expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+        "t1",
+        "t2",
+      ]);
+    }
   });
 
   it("never counts a status row as running work", () => {
@@ -1052,10 +1049,10 @@ describe("foldableWork", () => {
       { id: "done", role: "assistant", text: "All set." },
     ]);
     const fold = foldableWork(turn);
+    // The span crosses the mid-turn note; only the work itself hides.
     expect(fold).toEqual({ start: 1, end: 3 });
     expect(foldedBlocks(turn, fold!).map((block) => block.id)).toEqual([
       "c1",
-      "n1",
       "c2",
     ]);
   });
@@ -1096,7 +1093,7 @@ describe("foldableWork", () => {
     expect(foldableWork(turn)).toEqual({ start: 3, end: 3 });
   });
 
-  it("uses an interjection as a hard boundary between answered work phases", () => {
+  it("crosses an interjection and the answer it reviewed, hiding only work", () => {
     const turn = items([
       shell("before"),
       note("answer", "The complete answer."),
@@ -1111,8 +1108,11 @@ describe("foldableWork", () => {
     ]);
     const fold = foldableWork(turn)!;
 
-    expect(fold).toEqual({ start: 3, end: 3 });
+    // The delivered answer and the note stay visible inside the span; the
+    // fold still reaches the earlier work so both runs hide together.
+    expect(fold).toEqual({ start: 0, end: 3 });
     expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
+      "before",
       "after",
     ]);
   });
@@ -1134,7 +1134,6 @@ describe("foldableWork", () => {
     ]);
     const fold = foldableWork(turn)!;
     expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
-      "n1",
       "finished",
     ]);
   });
@@ -1150,9 +1149,9 @@ describe("foldableWork", () => {
   it("gives the fold line a place to sit before there is a fold", () => {
     const turn = items([{ id: "u", role: "user", text: "go" }, shell("c1")]);
     expect(foldableWork(turn)).toBeUndefined();
-    expect(firstFoldableIndex(turn)).toBe(1);
+    expect(firstWorkIndex(turn)).toBe(1);
     expect(
-      firstFoldableIndex(items([{ id: "u", role: "user", text: "go" }])),
+      firstWorkIndex(items([{ id: "u", role: "user", text: "go" }])),
     ).toBe(-1);
   });
 
@@ -1165,6 +1164,365 @@ describe("foldableWork", () => {
         ]),
       ),
     ).toBeUndefined();
+  });
+
+  it("never reclassifies a delivered answer as process once the turn settles", () => {
+    // The shape of a real review turn: the agent delivered its report, an
+    // advisor weighed in, and follow-up work produced follow-up answers.
+    // Later work cannot retroactively fold the report it interrupted.
+    const advisor = (id: string) => ({
+      id,
+      role: "system" as const,
+      text: `advisor note ${id}`,
+      interjection: { customType: "advisor" as const, severity: "concern" as const },
+    });
+    const turn = [
+      { id: "u", role: "user", text: "go" },
+      shell("w1"),
+      shell("w2"),
+      { id: "report", role: "assistant", text: "The full report." },
+      advisor("n1"),
+      { id: "followup", role: "assistant", text: "Already covered." },
+      shell("w3"),
+      { id: "verify", role: "assistant", text: "Verified." },
+      shell("w4"),
+      advisor("n2"),
+      { id: "tail", role: "assistant", text: "Done." },
+    ];
+    for (const options of [undefined, { settled: true }]) {
+      const items = groupTurnItems(turn, options);
+      // The prose the notes provoked is reply material inside their
+      // exchanges; the report and the verified answer stay main.
+      expect(items.map((item) => item.type)).toEqual([
+        "block",
+        "activity",
+        "block",
+        "exchange",
+        "activity",
+        "block",
+        "activity",
+        "exchange",
+      ]);
+      expect(items[3]).toMatchObject({
+        type: "exchange",
+        notes: [{ id: "n1" }],
+        reply: { id: "followup" },
+      });
+      expect(items[7]).toMatchObject({
+        type: "exchange",
+        notes: [{ id: "n2" }],
+        reply: { id: "tail" },
+      });
+      const fold = foldableWork(items)!;
+      // The span covers the work groups the answers accounted for; w4 stays
+      // out because a side-channel reply is not a delivered answer.
+      expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+        "w1",
+        "w2",
+        "w3",
+      ]);
+      const visibleIds = items
+        .filter(
+          (item) => item.type === "block" && isProseBlock(item.block),
+        )
+        .map((item) => (item as { block: Block }).block.id);
+      expect(visibleIds).toEqual(["report", "verify"]);
+    }
+  });
+});
+
+describe("isNarrationItem", () => {
+  const advisor = (id: string): Block => ({
+    id,
+    role: "system",
+    text: `advisor note ${id}`,
+    interjection: { customType: "advisor", severity: "concern" },
+  });
+  const narrationIds = (turnItems: TurnItem[]) =>
+    turnItems.flatMap((item, index) =>
+      item.type === "block" && isNarrationItem(turnItems, index)
+        ? [item.block.id]
+        : [],
+    );
+
+  it("demotes prose sandwiched by two completed work groups", () => {
+    const turn = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("n1", "Step two: patching the resolver."),
+      shell("b"),
+      note("n2", "Done."),
+    ]);
+    expect(narrationIds(turn)).toEqual(["n1"]);
+  });
+
+  it("demotes a multi-paragraph narration run as a unit", () => {
+    const turn = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("n1", "Reading the config."),
+      note("n2", "It points at the old resolver."),
+      shell("b"),
+      note("n3", "Done."),
+    ]);
+    expect(narrationIds(turn)).toEqual(["n1", "n2"]);
+  });
+
+  it("keeps the answer beside an exchange at full strength", () => {
+    // The incident shape: a delivered answer, then a note, then more work.
+    // The answer's successor is the exchange, not work, so it never demotes.
+    const turn = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("answer", "Here is the whole answer."),
+      advisor("ad1"),
+      shell("b"),
+      note("tail", "Adjusted."),
+    ]);
+    expect(narrationIds(turn)).toEqual([]);
+  });
+
+  it("keeps prose beside running or approval-pending work at full strength", () => {
+    const running = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("n1", "Working on it."),
+      shell("b", "running"),
+      note("n2", "Done."),
+    ]);
+    expect(narrationIds(running)).toEqual([]);
+
+    const pending = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("n1", "Shall I proceed?"),
+      shell("b", "pending", { requestId: 1 }),
+      note("n2", "Done."),
+    ]);
+    expect(narrationIds(pending)).toEqual([]);
+  });
+
+  it("keeps prose beside failed or status-only groups at full strength", () => {
+    const failed = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("n1", "The patch failed."),
+      shell("b", "failed"),
+      note("n2", "Done."),
+    ]);
+    expect(narrationIds(failed)).toEqual([]);
+
+    const statusOnly = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      status("s1", "Preparing"),
+      note("n1", "Narration?"),
+      shell("b"),
+      note("n2", "Done."),
+    ]);
+    expect(narrationIds(statusOnly)).toEqual([]);
+  });
+
+  it("keeps terminal prose at full strength and never demotes across a notice", () => {
+    const terminal = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("n1", "Narration."),
+      shell("b"),
+      note("n2", "The final answer."),
+    ]);
+    expect(narrationIds(terminal)).toEqual(["n1"]);
+
+    const bounded = groupTurnItems([
+      { id: "u", role: "user", text: "go" },
+      shell("a"),
+      note("n1", "Notice-adjacent prose."),
+      { id: "err", role: "system", text: "Interrupted", notice: "error" },
+      shell("b"),
+      note("n2", "Done."),
+    ]);
+    expect(narrationIds(bounded)).toEqual([]);
+  });
+});
+
+describe("settledFold", () => {
+  const advisor = (id: string): Block => ({
+    id,
+    role: "system",
+    text: `advisor note ${id}`,
+    interjection: { customType: "advisor", severity: "concern" },
+  });
+  // What the settled fold hides: member items inside the span.
+  const hidden = (turnItems: TurnItem[], fold?: WorkFold) => {
+    const f = fold ?? settledFold(turnItems);
+    if (!f) return [];
+    return turnItems
+      .slice(f.start, f.end + 1)
+      .flatMap((item, index) =>
+        isSettledFoldMember(item)
+          ? [
+              item.type === "block"
+                ? item.block.id
+                : item.type === "exchange"
+                  ? `ex(${item.notes.map((n) => n.id).join(",")})`
+                  : `act(${item.blocks.map((b) => b.id).join(",")})`,
+            ]
+          : [],
+      );
+  };
+  const visibleProse = (turnItems: TurnItem[]) => {
+    const f = settledFold(turnItems);
+    return turnItems.flatMap((item, index) => {
+      if (item.type !== "block" || !isProseBlock(item.block)) return [];
+      if (f && index >= f.start && index <= f.end) return [];
+      return [item.block.id];
+    });
+  };
+
+  it("folds a trailing narration wall back to the final answer", () => {
+    const turn = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("a"),
+        note("n1", "Step one."),
+        note("n2", "Step two."),
+        note("n3", "Step three."),
+        note("ans", "Here is the answer."),
+      ],
+      { settled: true },
+    );
+    expect(hidden(turn)).toEqual(["act(a)", "n1", "n2", "n3"]);
+    expect(visibleProse(turn)).toEqual(["ans"]);
+  });
+
+  it("folds prose and routine exchanges interleaved between work", () => {
+    const turn = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("a"),
+        note("n1", "First report."),
+        advisor("ad1"),
+        note("n2", "Adjusted."),
+        shell("b"),
+        note("ans", "Final answer."),
+      ],
+      { settled: true },
+    );
+    // ad1's exchange absorbs "Adjusted." as its reply, and the whole span —
+    // report, exchange, work — folds behind the line.
+    expect(hidden(turn)).toEqual(["act(a)", "n1", "ex(ad1)", "act(b)"]);
+    expect(visibleProse(turn)).toEqual(["ans"]);
+  });
+
+  it("puts a delivered mid-turn report inside the fold — with a count", () => {
+    // The deliberate contract change: earlier messages defer to the terminal
+    // one. The fold line counts them, and one click restores source order.
+    const turn = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("w1"),
+        note("report", "The full report."),
+        advisor("ad1"),
+        shell("w2"),
+        note("tail", "Done."),
+      ],
+      { settled: true },
+    );
+    expect(hidden(turn)).toEqual(["act(w1)", "report", "ex(ad1)", "act(w2)"]);
+    expect(visibleProse(turn)).toEqual(["tail"]);
+    const counts = foldContentCounts(turn, settledFold(turn)!);
+    expect(counts.messages).toBe(1);
+    expect(counts.inputs).toBe(1);
+  });
+
+  it("keeps a blocker exchange visible inside the span", () => {
+    const turn = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("a"),
+        {
+          id: "blk",
+          role: "system",
+          text: "Stop.",
+          interjection: { customType: "advisor", severity: "blocker" },
+        },
+        shell("b"),
+        note("ans", "Final."),
+      ],
+      { settled: true },
+    );
+    const f = settledFold(turn)!;
+    const member = turn.map(
+      (item, index) =>
+        index >= f.start && index <= f.end && isSettledFoldMember(item),
+    );
+    // The blocker exchange sits inside the span but is not a member — it
+    // splits the fold into two runs and keeps its row.
+    expect(member).toEqual([false, true, false, true, false]);
+  });
+
+  it("refuses to fold a turn with anything still in flight", () => {
+    const pending = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("a"),
+        shell("b", "pending", { requestId: 1 }),
+        note("ans", "Done."),
+      ],
+      { settled: true },
+    );
+    expect(settledFold(pending)).toBeUndefined();
+  });
+
+  it("protects the fragments of a split terminal message", () => {
+    const turn = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("a"),
+        note("part1", "First half of the answer."),
+        {
+          id: "ad1",
+          role: "system",
+          text: "Noted.",
+          interjection: { customType: "advisor", splitStream: true },
+        },
+        { id: "m-continuation", role: "assistant", text: "Second half." },
+      ],
+      { settled: true },
+    );
+    const f = settledFold(turn)!;
+    // The split halves and the note between them are one message — the fold
+    // stops before it, covering only the work.
+    expect(f).toEqual({ start: 1, end: 1 });
+    expect(visibleProse(turn)).toEqual(["part1", "m-continuation"]);
+  });
+
+  it("does not fold a turn that ended without an answer", () => {
+    const turn = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("a"),
+        shell("b"),
+      ],
+      { settled: true },
+    );
+    expect(settledFold(turn)).toBeUndefined();
+  });
+
+  it("leaves work after the terminal message outside the fold", () => {
+    const turn = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("a"),
+        note("ans", "Answer."),
+        shell("b"),
+      ],
+      { settled: true },
+    );
+    // The mid-turn message is what the fold's span stops at; the work that
+    // came after it keeps its row.
+    const f = settledFold(turn)!;
+    expect(f).toEqual({ start: 1, end: 1 });
+    expect(visibleProse(turn)).toEqual(["ans"]);
   });
 });
 
