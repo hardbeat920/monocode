@@ -53,6 +53,30 @@ export function truncateBeforeLastEditableTurn(session: Session): Block[] {
   return start < 0 ? session.blocks : session.blocks.slice(0, start);
 }
 
+export type EditedResendPreparation = {
+  blocks: Block[];
+  providerTurnId?: string;
+};
+
+export function prepareEditedResend(
+  session: Session,
+): EditedResendPreparation | null {
+  if (!canEditLastTurn(session)) return null;
+  const block = lastUserTurnBlock(session.blocks);
+  if (!block) return null;
+  return {
+    blocks: truncateBeforeLastEditableTurn(session),
+    ...(block.providerTurnId ? { providerTurnId: block.providerTurnId } : {}),
+  };
+}
+
+export function replaceEditedResend(session: Session): Session {
+  return {
+    ...session,
+    blocks: truncateBeforeLastEditableTurn(session),
+  };
+}
+
 export type LastTurnRecall = {
   text: string;
   attachments: Attachment[];

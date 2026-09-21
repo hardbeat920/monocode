@@ -4,6 +4,8 @@ import {
   lastEditableTurnStartIndex,
   lastTurnRecall,
   lastUserTurnStartIndex,
+  prepareEditedResend,
+  replaceEditedResend,
   truncateBeforeLastEditableTurn,
   truncateBeforeLastUserTurn,
 } from "./editLastTurn";
@@ -105,6 +107,17 @@ describe("editLastTurn", () => {
 
     expect(lastEditableTurnStartIndex(session)).toBe(2);
     expect(truncateBeforeLastEditableTurn(session).map((block) => block.id)).toEqual([
+      "u1",
+      "a1",
+    ]);
+    expect(prepareEditedResend(session)).toMatchObject({
+      providerTurnId: "t2",
+      blocks: [
+        { id: "u1" },
+        { id: "a1" },
+      ],
+    });
+    expect(replaceEditedResend(session).blocks.map((block) => block.id)).toEqual([
       "u1",
       "a1",
     ]);

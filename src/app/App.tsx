@@ -242,9 +242,8 @@ import {
 import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
 import { isEditTool } from "../integrations/harness/core/preview";
 import {
-  canEditLastTurn,
-  lastUserTurnBlock,
-  truncateBeforeLastEditableTurn,
+  prepareEditedResend,
+  replaceEditedResend,
 } from "../features/sessions/model/editLastTurn";
 import {
   beginSessionTurn,
@@ -5388,15 +5387,13 @@ export default function App({
       let current = options?.buildTarget
         ? withPlanBuildTarget(draftCleared, options.buildTarget)
         : draftCleared;
-      const editedProviderTurnId = options?.resendEdited
-        ? lastUserTurnBlock(current.blocks)?.providerTurnId
+      const editedResend = options?.resendEdited
+        ? prepareEditedResend(current)
         : undefined;
-      if (options?.resendEdited) {
-        if (!canEditLastTurn(current)) return false;
-        current = {
-          ...current,
-          blocks: truncateBeforeLastEditableTurn(current),
-        };
+      if (options?.resendEdited && !editedResend) return false;
+      const editedProviderTurnId = editedResend?.providerTurnId;
+      if (editedResend) {
+        current = { ...current, blocks: editedResend.blocks };
       }
       const intent = options?.intent ?? "default";
       if (intent === "orchestrate") {
@@ -5717,10 +5714,7 @@ export default function App({
               handoffCard: rawCommand ? s.handoffCard : undefined,
             };
             if (options?.resendEdited) {
-              next = {
-                ...next,
-                blocks: truncateBeforeLastEditableTurn(next),
-              };
+              next = replaceEditedResend(next);
             }
             if (approvedPlan && intent === "build") {
               next = {
