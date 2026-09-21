@@ -51,8 +51,9 @@ const CONTROL_TIMEOUT_MS = 15_000;
 const PROMPT_TIMEOUT_MS = 30 * 60_000;
 
 const SERVER_HELP =
-  "The OpenCrabs ACP server mode is paired work that may not be released yet. " +
-  "Check that your opencrabs build supports `opencrabs acp`.";
+  "The ACP server mode ships in opencrabs v0.5.2 and later. " +
+  "Check `opencrabs --version`, then upgrade (or point the resolver at a " +
+  "newer binary) and retry.";
 
 import {
   cacheNativeCommands,
@@ -120,7 +121,11 @@ export async function steerOpenCrabsTurn(input: SteerTurnInput): Promise<void> {
   const blocks = await openCrabsPromptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
   await live.acp
-    .notify("_session/steer", {
+    // Plain method name, not the "_session/steer" ext-prefix: released
+    // opencrabs (v0.5.2) only registers the plain name, and JSON-RPC drops
+    // unknown notifications silently — an ext-prefixed notify is a no-op on
+    // every released binary. The parity server accepts both spellings.
+    .notify("session/steer", {
       sessionId: live.acpSessionId,
       prompt: blocks,
     })
@@ -196,7 +201,18 @@ export async function compactOpenCrabsContext(
         PROMPT_TIMEOUT_MS,
       );
     });
-  await live.turns;
+  try {
+    await live.turns;
+  } catch (error) {
+    // Same contract as a failed prompt turn: a timed-out compact leaves the
+    // child's protocol state unknowable. Keep the ACP session id, recycle
+    // the process so the next turn resumes on a fresh transport instead of
+    // a wedged one.
+    if (liveByThread.get(input.sessionId) === live) {
+      await stopOpenCrabsSession(input.sessionId);
+    }
+    throw error;
+  }
 }
 
 /** Seed ACP resume state for a restored MonoCode session. */
@@ -400,8 +416,13 @@ async function applyModelSelection(
     // The badge only hears about model switches through configChanged —
     // without it the picker and the turn can quietly disagree.
     live.onEvent({ type: "session.configChanged", model: input.model });
-  } catch {
-    // A failed set_model leaves the previous model in place; no event.
+  } catch (error) {
+    // The switch failed but the turn proceeds on the previous model — say
+    // so instead of letting the picker silently disagree with the turn.
+    live.onEvent({
+      type: "session.error",
+      message: `Model switch to ${base} failed — continuing with the previous model (${String(error)})`,
+    });
   }
 }
 

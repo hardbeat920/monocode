@@ -15,6 +15,14 @@ export type ApprovalTarget = {
   approvals: Map<number, (decision: ApprovalDecision) => void>;
 };
 
+/** The server abandons an unanswered permission after 300s and proceeds as
+ * denied (PERMISSION_TIMEOUT in its turn bridge). The dialog must not
+ * outlive that deadline — answering after the server moved on sends a
+ * response nobody waits for, and an eternally open dialog lies about the
+ * session's state. Expire just under the server deadline, resolving deny,
+ * so UI and server stay in agreement. */
+const APPROVAL_EXPIRY_MS = 290_000;
+
 export async function handlePermission(
   target: ApprovalTarget,
   id: number,
@@ -65,9 +73,19 @@ export async function handlePermission(
   });
 
   const decision = await new Promise<ApprovalDecision>((resolve) => {
-    target.approvals.set(id, resolve);
+    // Settle exactly once: user answer, cancel sweep, or expiry — whichever
+    // comes first clears the timer and the map slot, so a late timer or a
+    // late click can never double-resolve.
+    const settle = (outcome: ApprovalDecision) => {
+      clearTimeout(timer);
+      target.approvals.delete(id);
+      resolve(outcome);
+    };
+    const timer = setTimeout(() => {
+      settle("deny");
+    }, APPROVAL_EXPIRY_MS);
+    target.approvals.set(id, settle);
   });
-  target.approvals.delete(id);
   target.onEvent({ type: "approval.resolved", requestId: id, decision });
 
   await target.acp.respond(id, {
