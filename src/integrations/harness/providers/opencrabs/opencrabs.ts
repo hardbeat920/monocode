@@ -317,6 +317,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     let setup: unknown;
     let acpSessionId: string | undefined;
     let didLoad = false;
+    let resumeFailureReason: string | undefined;
 
     if (canLoad && resume) {
       muteGate.current = true;
@@ -334,14 +335,11 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
         didLoad = true;
       } catch (error) {
         // Context loss must be visible: MonoCode renders the old transcript
-        // locally, but the fresh opencrabs session starts with no memory of
-        // it. Mark the boundary so the user knows what the agent can see.
-        const reason = error instanceof Error ? error.message : String(error);
-        emit({
-          type: "interjection",
-          customType: "custom",
-          text: `OpenCrabs session could not be resumed (${reason}) — started a fresh session. Earlier messages in this transcript are no longer in the agent's context.`,
-        });
+        // locally, but a fresh opencrabs session has no memory of it. The
+        // notice is deferred until the replacement session is confirmed —
+        // saying "started a fresh session" before session/new succeeds
+        // would claim a fallback that may never exist.
+        resumeFailureReason = error instanceof Error ? error.message : String(error);
         setup = undefined;
         acpSessionId = undefined;
         didLoad = false;
@@ -359,6 +357,14 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       acpSessionId = sessionIdFromResult(setup);
     }
     if (!acpSessionId) throw new Error("opencrabs did not return a session id");
+    if (resumeFailureReason) {
+      // The fallback session exists: now the boundary notice is true.
+      emit({
+        type: "interjection",
+        customType: "custom",
+        text: `OpenCrabs session could not be resumed (${resumeFailureReason}) — started a fresh session. Earlier messages in this transcript are no longer in the agent's context.`,
+      });
+    }
 
     // Live catalog: replace the static "default" picker entry with the
     // server's configured provider/model pairs.

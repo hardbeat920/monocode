@@ -45,3 +45,28 @@ describe("eventsFromAcpUpdate usage metering", () => {
     expect(events).toEqual([]);
   });
 });
+
+describe("acpSizeField validation (CodeRabbit: spec is unsigned integer)", () => {
+  it("accepts a non-negative integer size", () => {
+    const events = eventsFromAcpUpdate({
+      update: { sessionUpdate: "usage", usage: { used: 10, size: 0 } },
+    });
+    expect(events).toEqual([{ type: "context", used: 10, window: 0 }]);
+  });
+
+  it("rejects a negative size instead of poisoning the meter window", () => {
+    const events = eventsFromAcpUpdate({
+      update: { sessionUpdate: "usage", usage: { used: 10, size: -5 } },
+    });
+    // used survives, window stays undefined — the meter keeps its previous
+    // window instead of adopting garbage.
+    expect(events).toEqual([{ type: "context", used: 10, window: undefined }]);
+  });
+
+  it("rejects a fractional size", () => {
+    const events = eventsFromAcpUpdate({
+      update: { sessionUpdate: "usage", usage: { used: 10, size: 200000.5 } },
+    });
+    expect(events).toEqual([{ type: "context", used: 10, window: undefined }]);
+  });
+});
