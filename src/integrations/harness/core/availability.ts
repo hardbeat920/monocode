@@ -41,7 +41,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
   antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
   opencrabs: {
     name: "OpenCrabs CLI",
-    install: "cargo install --git https://github.com/opencrabs/opencrabs",
+    install: "cargo install --git https://github.com/adolfousier/opencrabs",
   },
 };
 

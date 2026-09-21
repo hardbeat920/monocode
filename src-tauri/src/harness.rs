@@ -404,7 +404,7 @@ pub fn harness_resolve_opencrabs() -> Result<CursorBinary, String> {
             path: path.to_string_lossy().into_owned(),
         })
         .ok_or_else(|| {
-            "OpenCrabs CLI not found. Install OpenCrabs from https://github.com/opencrabs/opencrabs, then retry."
+            "OpenCrabs CLI not found. Install OpenCrabs from https://github.com/adolfousier/opencrabs, then retry."
                 .into()
         })
 }
