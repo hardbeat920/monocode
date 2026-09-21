@@ -3,13 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const spawned: Array<{ command: string; args: string[]; cwd: string }> = [];
 let onLine: ((line: string) => void) | undefined;
 let onClose: (() => void) | undefined;
+let killCalls = 0;
 
 vi.mock("../../core/child", () => ({
   resolveOpenCrabsBinary: async () => ({ path: "/fake/opencrabs" }),
   spawnChild: async (_id: string, command: string, args: string[], cwd: string) => {
     spawned.push({ command, args, cwd });
   },
-  killChild: async () => undefined,
+  killChild: async () => {
+    killCalls += 1;
+  },
   unwatchChild: () => undefined,
   watchChild: (
     _id: string,
@@ -52,6 +55,7 @@ describe("runOpenCrabsTextPrompt", () => {
     spawned.length = 0;
     onLine = undefined;
     onClose = undefined;
+    killCalls = 0;
   });
 
   it("spawns opencrabs run with json format and returns the content", async () => {
@@ -81,5 +85,41 @@ describe("runOpenCrabsTextPrompt", () => {
     onLine?.("everything broke");
     onClose?.();
     await expect(pending).rejects.toThrow(/everything broke/);
+  });
+
+  it("rejects with a timeout error, kills once, and keeps the queue usable", async () => {
+    vi.useFakeTimers();
+    try {
+      const timed = runOpenCrabsTextPrompt({
+        cwd: "/repo",
+        prompt: "slow",
+        timeoutMs: 1000,
+      });
+      // Let the spawn settle; the child never emits an exit event.
+      await vi.advanceTimersByTimeAsync(0);
+      onLine?.("partial output");
+
+      // Attach the rejection handler before the timer fires, so the rejection
+      // never has an unhandled window (Node PromiseRejectionHandledWarning).
+      const rejection = expect(timed).rejects.toThrow(/timed out after 1000ms/);
+      await vi.advanceTimersByTimeAsync(1000);
+      await rejection;
+      // Timeout kill only — the finally must not fire a second kill.
+      expect(killCalls).toBe(1);
+
+      // The serialized queue must not be wedged by the timed-out turn.
+      const next = runOpenCrabsTextPrompt({
+        cwd: "/repo",
+        prompt: "recover",
+        timeoutMs: 1000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawned).toHaveLength(2);
+      onLine?.('{"content": "recovered"}');
+      onClose?.();
+      await expect(next).resolves.toBe("recovered");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

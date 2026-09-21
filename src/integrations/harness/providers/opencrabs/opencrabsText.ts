@@ -60,8 +60,15 @@ async function promptOnce(input: {
     },
   );
 
+  let timedOut = false;
+  let timeoutKill: Promise<void> | undefined;
   const timer = setTimeout(() => {
-    if (!exited) void killChild(TEXT_CHILD_ID);
+    if (exited) return;
+    timedOut = true;
+    // killChild() drops the exit watcher, so resolve the exit promise first —
+    // otherwise `await exitPromise` hangs forever and blocks the turns queue.
+    notifyExit();
+    timeoutKill = killChild(TEXT_CHILD_ID).catch(() => undefined);
   }, timeoutMs);
 
   try {
@@ -75,7 +82,15 @@ async function promptOnce(input: {
   } finally {
     clearTimeout(timer);
     unwatchChild(TEXT_CHILD_ID);
-    if (!exited) await killChild(TEXT_CHILD_ID).catch(() => undefined);
+    if (timeoutKill) {
+      await timeoutKill;
+    } else if (!exited) {
+      await killChild(TEXT_CHILD_ID).catch(() => undefined);
+    }
+  }
+
+  if (timedOut) {
+    throw new Error(`OpenCrabs text generation timed out after ${timeoutMs}ms.`);
   }
 
   const text = parseRunSummary(stdout);
