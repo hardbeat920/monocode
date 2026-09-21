@@ -16,6 +16,12 @@ import {
   watchChild,
   writeChild,
 } from "../../core/child";
+import {
+  harnessRuntimeBinaryPath,
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import type { PiFlavor } from "./piFlavor";
 import { PiRpc } from "./piClient";
 import { piSubagentEvents } from "./piSubagents";
@@ -480,7 +486,9 @@ async function startLive(
 ): Promise<Live> {
   const state = stateFor(flavor);
   const { liveByThread } = state;
-  const { path } = await state.resolveBinary();
+  const runtime = loadHarnessRuntime(flavor.id);
+  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
+  const path = overrideBinaryPath || (await state.resolveBinary()).path;
   const native = nativeModelId(input.model);
   const modelRef = parsePiModelRef(native);
   const liveRef: { current: Live | null } = { current: null };
@@ -558,12 +566,17 @@ async function startLive(
   await spawnChild(
     input.sessionId,
     path,
-    buildPiSpawnArgs(flavor, {
-      resume,
-      model: modelRef ? native : undefined,
-      plan: input.intent === "plan",
-    }),
+    [
+      ...buildPiSpawnArgs(flavor, {
+        resume,
+        model: modelRef ? native : undefined,
+        plan: input.intent === "plan",
+      }),
+      ...harnessRuntimeExtraArgs(runtime),
+    ],
     input.cwd,
+    undefined,
+    harnessRuntimeEnv(runtime),
   );
 
   liveByThread.set(input.sessionId, live);

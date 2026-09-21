@@ -409,6 +409,7 @@ pub fn harness_free_port() -> Result<u16, String> {
 /// login-shell read. Callers await this before writing to the child. Kill can
 /// still race the fork, so a cancelled spawn must not reinsert the child.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn harness_spawn(
     app: AppHandle,
     host: State<'_, HarnessHost>,
@@ -417,6 +418,7 @@ pub fn harness_spawn(
     args: Vec<String>,
     cwd: String,
     account: Option<HarnessAccount>,
+    env: Option<HashMap<String, String>>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
@@ -440,6 +442,13 @@ pub fn harness_spawn(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    // A manual override always wins over the account-scoped env it may
+    // overlap with (e.g. a hand-set CLAUDE_CONFIG_DIR), so this runs last.
+    if let Some(env) = env.as_ref() {
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+    }
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 

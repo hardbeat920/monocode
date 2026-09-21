@@ -12,6 +12,12 @@ import {
   watchChild,
 } from "../../core/child";
 import {
+  harnessRuntimeBinaryPath,
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
+import {
   readStoredCursorToolCalls,
   readStoredCursorSubagentRuns,
   type StoredCursorToolCall,
@@ -263,7 +269,9 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveCursorBinary();
+  const runtime = loadHarnessRuntime("cursor");
+  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
+  const path = overrideBinaryPath || (await resolveCursorBinary()).path;
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };
@@ -298,7 +306,14 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["acp"], input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["acp", ...harnessRuntimeExtraArgs(runtime)],
+    input.cwd,
+    undefined,
+    harnessRuntimeEnv(runtime),
+  );
 
   try {
     await acp.request("initialize", {

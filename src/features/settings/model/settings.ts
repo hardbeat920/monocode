@@ -1,4 +1,5 @@
 import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
+import { HARNESSES, type HarnessId } from "../../sessions/model/session";
 import { readFlag, writeFlag } from "./storageFlags";
 
 const SECTION_KEY = "monocode.settingsSection";
@@ -330,6 +331,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "providers",
     label: "Claude Code hooks",
     keywords: "pretooluse settings.json block command notification",
+  },
+  {
+    id: "provider-runtime",
+    section: "providers",
+    label: "Runtime overrides",
+    keywords:
+      "binary path executable launch arguments flags environment variables env cli claude config dir",
   },
   {
     id: "project-notifications",
@@ -833,6 +841,123 @@ export function loadClaudeHooks(): boolean {
 
 export function saveClaudeHooks(value: boolean) {
   writeFlag(CLAUDE_HOOKS_KEY, value);
+}
+
+const HARNESS_RUNTIME_KEY = "monocode.harnessRuntime";
+
+export type HarnessRuntimeEnvVar = { key: string; value: string };
+
+/** Binary path, extra CLI flags, and env vars — the parts of "how to launch
+ * this CLI" that apply the same way to every harness. */
+export type HarnessRuntimeSettings = {
+  binaryPath: string;
+  launchArgs: string;
+  env: HarnessRuntimeEnvVar[];
+};
+
+export const HARNESS_RUNTIME_DEFAULT: HarnessRuntimeSettings = {
+  binaryPath: "",
+  launchArgs: "",
+  env: [],
+};
+
+function parseHarnessRuntimeEnv(value: unknown): HarnessRuntimeEnvVar[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === "object",
+    )
+    .map((item) => ({
+      key: typeof item.key === "string" ? item.key : "",
+      value: typeof item.value === "string" ? item.value : "",
+    }));
+}
+
+function parseHarnessRuntimeSettings(value: unknown): HarnessRuntimeSettings {
+  if (!value || typeof value !== "object") return HARNESS_RUNTIME_DEFAULT;
+  const rec = value as Record<string, unknown>;
+  return {
+    binaryPath: typeof rec.binaryPath === "string" ? rec.binaryPath : "",
+    launchArgs: typeof rec.launchArgs === "string" ? rec.launchArgs : "",
+    env: parseHarnessRuntimeEnv(rec.env),
+  };
+}
+
+function loadAllHarnessRuntime(): Partial<
+  Record<HarnessId, HarnessRuntimeSettings>
+> {
+  try {
+    const raw = localStorage.getItem(HARNESS_RUNTIME_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: Partial<Record<HarnessId, HarnessRuntimeSettings>> = {};
+    for (const [key, value] of Object.entries(
+      parsed as Record<string, unknown>,
+    )) {
+      if (HARNESSES.includes(key as HarnessId)) {
+        out[key as HarnessId] = parseHarnessRuntimeSettings(value);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function loadHarnessRuntime(harness: HarnessId): HarnessRuntimeSettings {
+  return loadAllHarnessRuntime()[harness] ?? HARNESS_RUNTIME_DEFAULT;
+}
+
+export function saveHarnessRuntime(
+  harness: HarnessId,
+  next: HarnessRuntimeSettings,
+) {
+  const all = { ...loadAllHarnessRuntime(), [harness]: next };
+  try {
+    localStorage.setItem(HARNESS_RUNTIME_KEY, JSON.stringify(all));
+  } catch {
+    // private mode / quota
+  }
+}
+
+const CLAUDE_EXTRAS_KEY = "monocode.claudeExtras";
+
+/** The Claude-specific runtime knob that doesn't generalize to other
+ * harnesses: a CLAUDE_CONFIG_DIR convenience. General binary/launch-args/env
+ * overrides live in HarnessRuntimeSettings. */
+export type ClaudeExtraSettings = {
+  configDir: string;
+};
+
+export const CLAUDE_EXTRAS_DEFAULT: ClaudeExtraSettings = {
+  configDir: "",
+};
+
+export function loadClaudeExtras(): ClaudeExtraSettings {
+  try {
+    const raw = localStorage.getItem(CLAUDE_EXTRAS_KEY);
+    if (!raw) return CLAUDE_EXTRAS_DEFAULT;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return CLAUDE_EXTRAS_DEFAULT;
+    const rec = parsed as Record<string, unknown>;
+    return {
+      configDir: typeof rec.configDir === "string" ? rec.configDir : "",
+    };
+  } catch {
+    return CLAUDE_EXTRAS_DEFAULT;
+  }
+}
+
+export function saveClaudeExtras(next: ClaudeExtraSettings) {
+  try {
+    localStorage.setItem(CLAUDE_EXTRAS_KEY, JSON.stringify(next));
+  } catch {
+    // private mode / quota
+  }
 }
 
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";

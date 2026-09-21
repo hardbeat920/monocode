@@ -11,6 +11,12 @@ import {
   watchChild,
 } from "../../core/child";
 import {
+  harnessRuntimeBinaryPath,
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
+import {
   OpenCodeClient,
   OpenCodeHttpError,
   type OpenCodeMessage,
@@ -371,7 +377,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveOpenCodeBinaryImpl();
+  const runtime = loadHarnessRuntime("opencode");
+  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
+  const path = overrideBinaryPath || (await resolveOpenCodeBinaryImpl()).path;
   await assertOpenCodeVersion(path, input.cwd);
 
   const liveRef: { current: Live | null } = { current: null };
@@ -408,8 +416,15 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   await spawnChild(
     input.sessionId,
     path,
-    ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
+    [
+      "serve",
+      `--hostname=127.0.0.1`,
+      `--port=${port}`,
+      ...harnessRuntimeExtraArgs(runtime),
+    ],
     input.cwd,
+    undefined,
+    harnessRuntimeEnv(runtime),
   );
 
   try {

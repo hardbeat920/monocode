@@ -10,6 +10,12 @@ import {
   watchChild,
 } from "../../core/child";
 import {
+  harnessRuntimeBinaryPath,
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
+import {
   AUTH_HELP,
   askQuestionResponse,
   askQuestionsFromAcp,
@@ -239,7 +245,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveGrokBinary();
+  const runtime = loadHarnessRuntime("grok");
+  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
+  const path = overrideBinaryPath || (await resolveGrokBinary()).path;
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };
@@ -291,13 +299,18 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   await spawnChild(
     input.sessionId,
     path,
-    grokSpawnArgs({
-      model: input.model,
-      effort: grokEffort(input.modelSettings),
-      fullAccess: wantFullAccess,
-      plan: wantPlanning,
-    }),
+    [
+      ...grokSpawnArgs({
+        model: input.model,
+        effort: grokEffort(input.modelSettings),
+        fullAccess: wantFullAccess,
+        plan: wantPlanning,
+      }),
+      ...harnessRuntimeExtraArgs(runtime),
+    ],
     input.cwd,
+    undefined,
+    harnessRuntimeEnv(runtime),
   );
 
   try {

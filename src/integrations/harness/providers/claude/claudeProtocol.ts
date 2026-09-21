@@ -239,6 +239,7 @@ export function buildClaudeSpawnArgs(input: {
   includePartialMessages?: boolean;
   maxTurns?: number;
   isolated?: boolean;
+  extraArgs?: string[];
 }): string[] {
   const args = [
     "--output-format",
@@ -280,6 +281,7 @@ export function buildClaudeSpawnArgs(input: {
   if (input.resume) args.push("--resume", input.resume);
   if (input.sessionId) args.push("--session-id", input.sessionId);
   if (input.maxTurns) args.push("--max-turns", String(input.maxTurns));
+  if (input.extraArgs?.length) args.push(...input.extraArgs);
   return args;
 }
 

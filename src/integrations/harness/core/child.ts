@@ -239,6 +239,7 @@ export async function spawnChild(
   args: string[],
   cwd: string,
   account?: { provider: "claude" | "codex"; id: string },
+  env?: Record<string, string>,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
@@ -248,6 +249,7 @@ export async function spawnChild(
     args,
     cwd,
     account,
+    env,
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);

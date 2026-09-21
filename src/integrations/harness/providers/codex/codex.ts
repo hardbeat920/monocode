@@ -2,6 +2,7 @@ import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { questionPromptTitle, type UserQuestionReply } from "../../../../features/sessions/model/userQuestion";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
   killChild,
   resolveCodexBinary,
@@ -9,6 +10,11 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import {
+  harnessRuntimeBinaryPath,
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+} from "../../core/runtime";
 import {
   asRecord,
   buildThreadStartParams,
@@ -401,7 +407,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveCodexBinaryImpl();
+  const runtime = loadHarnessRuntime("codex");
+  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
+  const path = overrideBinaryPath || (await resolveCodexBinaryImpl()).path;
   const liveRef: { current: Live | null } = { current: null };
 
   const rpc = new JsonRpcClient(
@@ -460,10 +468,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["app-server"], input.cwd, {
-    provider: "codex",
-    id: input.providerAccountId ?? "default",
-  });
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["app-server", ...harnessRuntimeExtraArgs(runtime)],
+    input.cwd,
+    { provider: "codex", id: input.providerAccountId ?? "default" },
+    harnessRuntimeEnv(runtime),
+  );
 
   try {
     await rpc.request("initialize", {

@@ -153,6 +153,7 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     await waitPrompt();
     expect(mock.spawn).toHaveBeenCalledWith(
       genKey, provider.path, provider.args, provider.id === "antigravity" ? "/fake/" : "/repo",
+      undefined, undefined,
     );
     expect(mock.sent.find((m) => m.method === "initialize")?.params).toMatchObject({ protocolVersion: 1 });
     expect(mock.sent.find((m) => m.method === "session/set_config_option")?.params)

@@ -156,6 +156,14 @@ describe("buildClaudeSpawnArgs", () => {
     });
     expect(args).toContain("--allow-dangerously-skip-permissions");
   });
+
+  it("appends extra launch arguments after everything else", () => {
+    const args = buildClaudeSpawnArgs({
+      sessionId: "sess-1",
+      extraArgs: ["--chrome", "--foo"],
+    });
+    expect(args.slice(-2)).toEqual(["--chrome", "--foo"]);
+  });
 });
 
 describe("buildClaudeUserMessage", () => {
