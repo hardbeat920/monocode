@@ -224,6 +224,27 @@ pub fn session_list_by_project(
 }
 
 #[tauri::command(async)]
+pub fn session_rebase_project(
+    store: State<'_, SessionStore>,
+    from_cwd: String,
+    to_cwd: String,
+) -> Result<(), String> {
+    if from_cwd.trim().is_empty() || to_cwd.trim().is_empty() {
+        return Err("project paths are required".into());
+    }
+    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    rebase_project(&conn, &from_cwd, &to_cwd).map_err(|error| error.to_string())
+}
+
+fn rebase_project(conn: &Connection, from_cwd: &str, to_cwd: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE sessions SET cwd = ?2 WHERE cwd = ?1",
+        params![from_cwd, to_cwd],
+    )?;
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn session_list_linked(store: State<'_, SessionStore>) -> Result<Vec<SessionSummary>, String> {
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     list_linked(&conn).map_err(|e| e.to_string())
@@ -2447,6 +2468,20 @@ mod tests {
         let listed = list_by_project(&conn, "/tmp/a").unwrap();
         assert_eq!(listed[0].branch.as_deref(), Some("feat/picker"));
         assert_eq!(listed[0].worktree_cwd.as_deref(), Some("/tmp/a-feat"));
+    }
+
+    #[test]
+    fn rebase_project_moves_saved_sessions_to_the_renamed_path() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("moved", "/tmp/old", "Moved")).unwrap();
+        upsert_session(&conn, &sample("other", "/tmp/other", "Other")).unwrap();
+
+        rebase_project(&conn, "/tmp/old", "/tmp/new").unwrap();
+
+        assert!(list_by_project(&conn, "/tmp/old").unwrap().is_empty());
+        assert_eq!(list_by_project(&conn, "/tmp/new").unwrap()[0].id, "moved");
+        assert_eq!(list_by_project(&conn, "/tmp/other").unwrap()[0].id, "other");
     }
 
     #[test]

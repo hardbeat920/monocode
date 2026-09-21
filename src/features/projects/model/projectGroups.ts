@@ -144,6 +144,16 @@ export function removeProjectGroupAssignment(path: string): void {
   setProjectGroupAssignment(path, null);
 }
 
+export function rebaseProjectGroupAssignment(from: string, to: string): void {
+  const next = loadProjectGroupAssignments();
+  const oldKey = pathKey(from);
+  const newKey = pathKey(to);
+  if (oldKey === newKey || !(oldKey in next)) return;
+  if (!(newKey in next)) next[newKey] = next[oldKey];
+  delete next[oldKey];
+  saveProjectGroupAssignments(next);
+}
+
 export function nextProjectGroupName(groups: ProjectGroup[]): string {
   const names = new Set(groups.map((group) => group.name.toLocaleLowerCase()));
   if (!names.has("new group")) return "New group";

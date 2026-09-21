@@ -10,6 +10,7 @@ import {
   projectRailItems,
   projectRailSections,
   rememberProject,
+  replaceProjectPath,
   savePinnedProjects,
   saveProjectRailOrder,
   syncProjectRailOrder,
@@ -156,6 +157,30 @@ describe("forgetProject", () => {
     expect(loadRecents().map((item) => item.path)).toEqual([
       "c:/users/ME/code/app",
     ]);
+  });
+});
+
+describe("replaceProjectPath", () => {
+  beforeEach(() => {
+    mockLocalStorage();
+  });
+
+  it("keeps rail order and pin state under the renamed path", () => {
+    rememberProject("/work/other");
+    rememberProject("/work/monocode");
+    saveProjectRailOrder(["/work/other", "/work/monocode"]);
+    savePinnedProjects(["/work/monocode"]);
+
+    expect(
+      replaceProjectPath("/work/monocode", "/work/monocode-personal").map(
+        (item) => item.path,
+      ),
+    ).toEqual(["/work/monocode-personal", "/work/other"]);
+    expect(loadProjectRailOrder()).toEqual([
+      "/work/other",
+      "/work/monocode-personal",
+    ]);
+    expect(loadPinnedProjects()).toEqual(["/work/monocode-personal"]);
   });
 });
 

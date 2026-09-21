@@ -44,6 +44,21 @@ export type FsEntry = {
   ignored: boolean;
 };
 
+export type ProjectLocation = {
+  path: string;
+  identity: string;
+};
+
+export function resolveProjectLocation(
+  path: string,
+  identity?: string,
+): Promise<ProjectLocation | null> {
+  return invoke<ProjectLocation | null>("resolve_project_location", {
+    path,
+    identity: identity ?? null,
+  });
+}
+
 export type ExternalEditor = {
   id: string;
   name: string;

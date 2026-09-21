@@ -1,11 +1,21 @@
 import { projectKey } from "../../../shared/lib/paths";
 import { clearProjectLogo } from "./projectLogos";
 import { clearProjectChatBackground } from "./chatBackground";
-import { clearProjectChatBackgroundSetting } from "./projectChatBackground";
+import {
+  clearProjectChatBackgroundSetting,
+  rebaseProjectChatBackgroundSetting,
+} from "./projectChatBackground";
 import { normalizeProjectPath } from "./recents";
 import { deleteSession, listSessionsByProject } from "../../sessions/data/sessionStore";
-import { clearTabGroupSettings } from "../../workspace/model/tabGroups";
-import { removeProjectGroupAssignment } from "./projectGroups";
+import {
+  clearTabGroupSettings,
+  rebaseProjectTabGroupSettings,
+} from "../../workspace/model/tabGroups";
+import {
+  rebaseProjectGroupAssignment,
+  removeProjectGroupAssignment,
+} from "./projectGroups";
+import { rebaseSessionFolderSettings } from "../../sessions/model/sessionFolders";
 
 /** Saved chats filed under this project, so the confirm prompt can count them. */
 export async function projectSessionCount(path: string): Promise<number> {
@@ -27,4 +37,14 @@ export async function removeProjectData(path: string): Promise<void> {
   clearProjectChatBackgroundSetting(key);
   clearTabGroupSettings(key);
   removeProjectGroupAssignment(normalized);
+}
+
+/** Move local project settings after the filesystem resolver finds a rename. */
+export function rebaseProjectData(from: string, to: string): void {
+  const oldKey = projectKey(normalizeProjectPath(from));
+  const newKey = projectKey(normalizeProjectPath(to));
+  rebaseProjectTabGroupSettings(from, to);
+  rebaseProjectGroupAssignment(from, to);
+  rebaseProjectChatBackgroundSetting(oldKey, newKey);
+  rebaseSessionFolderSettings(from, to);
 }

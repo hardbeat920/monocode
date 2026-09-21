@@ -272,6 +272,16 @@ export async function listSessionsByProject(
   return rows.map(normalizeSummary);
 }
 
+export function rebaseProjectSessions(
+  fromCwd: string,
+  toCwd: string,
+): Promise<void> {
+  return invoke<void>("session_rebase_project", {
+    fromCwd: normalizeProjectPath(fromCwd),
+    toCwd: normalizeProjectPath(toCwd),
+  });
+}
+
 export async function listLinkedSessions(): Promise<SessionSummary[]> {
   const rows = await invoke<SessionSummary[]>("session_list_linked");
   return rows.map(normalizeSummary);
