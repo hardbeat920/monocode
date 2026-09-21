@@ -12,6 +12,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import { asRecord, stringField } from "./codexProtocol";
 import { JsonRpcClient } from "../../core/jsonRpc";
 
@@ -48,7 +49,7 @@ export function refreshCodexCatalog(): Promise<void> {
 }
 
 async function discoverCodexModels(): Promise<AgentModel[]> {
-  const { path } = await resolveCodexBinary();
+  const { path } = await resolveHarnessBinary("codex", resolveCodexBinary);
   const cwd = await homeDir();
   const rpc = new JsonRpcClient(
     PROBE_ID,

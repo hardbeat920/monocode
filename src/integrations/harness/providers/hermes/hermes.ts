@@ -11,9 +11,9 @@ import {
   watchChild,
 } from "../../core/child";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
@@ -203,8 +203,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
 
   const runtime = loadHarnessRuntime("hermes");
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const path = overrideBinaryPath || (await resolveHermesBinary()).path;
+  const { path } = await resolveHarnessBinary("hermes", resolveHermesBinary);
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };

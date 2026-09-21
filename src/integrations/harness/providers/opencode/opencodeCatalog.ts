@@ -6,6 +6,7 @@ import {
   type ModelSettingChoice,
 } from "../../../../features/sessions/model/models";
 import { execChild, resolveOpenCodeBinary } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import {
   compareSemver,
   inferDefaultAgent,
@@ -66,7 +67,7 @@ export function refreshOpenCodeCatalog(): Promise<void> {
 }
 
 async function discoverOpenCodeModels(): Promise<AgentModel[]> {
-  const { path } = await resolveOpenCodeBinary();
+  const { path } = await resolveHarnessBinary("opencode", resolveOpenCodeBinary);
   const cwd = await homeDir();
   const versionOut = await execChild(path, ["--version"], cwd);
   const version = parseOpenCodeVersion(versionOut);

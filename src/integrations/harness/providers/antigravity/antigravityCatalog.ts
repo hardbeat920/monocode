@@ -8,6 +8,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import { antigravitySpawnCwd, modelsFromSessionNew } from "./antigravityProtocol";
 
 const PROBE_ID = "monocode-antigravity-probe";
@@ -31,7 +32,12 @@ export function refreshAntigravityCatalog(): Promise<void> {
 }
 
 async function discoverModels() {
-  const { path, args } = await resolveAntigravityBinary();
+  const resolved = await resolveHarnessBinary(
+    "antigravity",
+    resolveAntigravityBinary,
+  );
+  const { path } = resolved;
+  const args = resolved.args ?? [];
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
     onRequest: (id, method) => {

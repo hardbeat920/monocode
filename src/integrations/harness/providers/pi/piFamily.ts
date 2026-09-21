@@ -17,9 +17,9 @@ import {
   writeChild,
 } from "../../core/child";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import type { PiFlavor } from "./piFlavor";
@@ -487,8 +487,7 @@ async function startLive(
   const state = stateFor(flavor);
   const { liveByThread } = state;
   const runtime = loadHarnessRuntime(flavor.id);
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const path = overrideBinaryPath || (await state.resolveBinary()).path;
+  const { path } = await resolveHarnessBinary(flavor.id, state.resolveBinary);
   const native = nativeModelId(input.model);
   const modelRef = parsePiModelRef(native);
   const liveRef: { current: Live | null } = { current: null };

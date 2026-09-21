@@ -8,6 +8,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import { OpenCodeClient } from "./opencodeClient";
 import {
   compareSemver,
@@ -101,7 +102,7 @@ async function startLive(
   cwd: string,
   model: { providerID: string; modelID: string },
 ): Promise<LiveText> {
-  const { path } = await resolveOpenCodeBinary();
+  const { path } = await resolveHarnessBinary("opencode", resolveOpenCodeBinary);
   const versionOut = await execChild(path, ["--version"], cwd).catch(() => "");
   const version = parseOpenCodeVersion(versionOut);
   if (!version || compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {

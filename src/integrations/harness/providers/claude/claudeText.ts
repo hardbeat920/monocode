@@ -7,6 +7,7 @@ import {
   watchChild,
   writeChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import {
   assistantTextBlocks,
   buildClaudeSpawnArgs,
@@ -141,7 +142,7 @@ async function startLive(
   cwd: string,
   providerAccountId?: string,
 ): Promise<LiveText> {
-  const { path } = await resolveClaudeBinary();
+  const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
   const session: LiveText = {
     cwd,
     providerAccountId,

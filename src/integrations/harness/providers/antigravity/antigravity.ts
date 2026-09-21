@@ -10,9 +10,9 @@ import {
   watchChild,
 } from "../../core/child";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
@@ -393,12 +393,12 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
   const childKey = `${input.sessionId}#${childSeq++}`;
 
   const runtime = loadHarnessRuntime("antigravity");
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const resolved = overrideBinaryPath
-    ? { path: overrideBinaryPath, args: [] as string[] }
-    : await resolveAntigravityBinary();
+  const resolved = await resolveHarnessBinary(
+    "antigravity",
+    resolveAntigravityBinary,
+  );
   const path = resolved.path;
-  const args = [...resolved.args, ...harnessRuntimeExtraArgs(runtime)];
+  const args = [...(resolved.args ?? []), ...harnessRuntimeExtraArgs(runtime)];
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(childKey, handlers);
   const pendingSetup = { acp, childKey };

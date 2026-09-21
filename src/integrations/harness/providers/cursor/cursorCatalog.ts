@@ -14,6 +14,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 
 const PROBE_ID = "monocode-cursor-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -55,7 +56,7 @@ async function discoverCursorModels(): Promise<AgentModel[]> {
 }
 
 async function discoverViaAcp(): Promise<AgentModel[]> {
-  const { path } = await resolveCursorBinary();
+  const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
     onRequest: (id) => {
@@ -113,7 +114,7 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
 }
 
 async function discoverViaCli(): Promise<AgentModel[]> {
-  const { path } = await resolveCursorBinary();
+  const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
   const cwd = await homeDir();
   const stdout = await execChild(path, ["--list-models"], cwd);
   return modelsFromListModelsOutput(stdout);

@@ -10,9 +10,9 @@ import {
   watchChild,
 } from "../../core/child";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
@@ -216,8 +216,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
   }
 
   const runtime = loadHarnessRuntime("fx");
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const path = overrideBinaryPath || (await resolveFxBinary()).path;
+  const { path } = await resolveHarnessBinary("fx", resolveFxBinary);
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };

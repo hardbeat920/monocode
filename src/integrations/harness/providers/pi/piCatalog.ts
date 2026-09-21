@@ -6,6 +6,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import { buildPiSpawnArgs, modelsFromRpcData } from "./piProtocol";
@@ -32,7 +33,7 @@ function refreshCatalog(flavor: PiFlavor): Promise<void> {
 }
 
 async function discoverModels(flavor: PiFlavor) {
-  const { path } = await flavor.resolveBinary();
+  const { path } = await resolveHarnessBinary(flavor.id, flavor.resolveBinary);
   const cwd = await homeDir();
   const probeId = flavor.probeChildId;
   const rpc = new PiRpc(probeId, () => undefined, flavor.label);

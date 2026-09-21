@@ -1,6 +1,6 @@
 import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
 import { HARNESSES, type HarnessId } from "../../sessions/model/session";
-import { readFlag, writeFlag } from "./storageFlags";
+import { readFlag, readStringFlag, writeFlag, writeStringFlag } from "./storageFlags";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -924,40 +924,17 @@ export function saveHarnessRuntime(
   }
 }
 
-const CLAUDE_EXTRAS_KEY = "monocode.claudeExtras";
+const CLAUDE_CONFIG_DIR_KEY = "monocode.claudeConfigDir";
 
 /** The Claude-specific runtime knob that doesn't generalize to other
  * harnesses: a CLAUDE_CONFIG_DIR convenience. General binary/launch-args/env
  * overrides live in HarnessRuntimeSettings. */
-export type ClaudeExtraSettings = {
-  configDir: string;
-};
-
-export const CLAUDE_EXTRAS_DEFAULT: ClaudeExtraSettings = {
-  configDir: "",
-};
-
-export function loadClaudeExtras(): ClaudeExtraSettings {
-  try {
-    const raw = localStorage.getItem(CLAUDE_EXTRAS_KEY);
-    if (!raw) return CLAUDE_EXTRAS_DEFAULT;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return CLAUDE_EXTRAS_DEFAULT;
-    const rec = parsed as Record<string, unknown>;
-    return {
-      configDir: typeof rec.configDir === "string" ? rec.configDir : "",
-    };
-  } catch {
-    return CLAUDE_EXTRAS_DEFAULT;
-  }
+export function loadClaudeConfigDir(): string {
+  return readStringFlag(CLAUDE_CONFIG_DIR_KEY) ?? "";
 }
 
-export function saveClaudeExtras(next: ClaudeExtraSettings) {
-  try {
-    localStorage.setItem(CLAUDE_EXTRAS_KEY, JSON.stringify(next));
-  } catch {
-    // private mode / quota
-  }
+export function saveClaudeConfigDir(value: string) {
+  writeStringFlag(CLAUDE_CONFIG_DIR_KEY, value);
 }
 
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";

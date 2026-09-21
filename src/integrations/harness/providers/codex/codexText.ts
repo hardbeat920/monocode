@@ -6,6 +6,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import {
   asRecord,
   buildThreadStartParams,
@@ -179,7 +180,7 @@ async function startLive(
   providerAccountId?: string,
 ): Promise<LiveText> {
   await dropLive();
-  const { path } = await resolveCodexBinary();
+  const { path } = await resolveHarnessBinary("codex", resolveCodexBinary);
   const sessionRef: { session: LiveText | null } = { session: null };
   const rpc = new JsonRpcClient(
     TEXT_CHILD_ID,

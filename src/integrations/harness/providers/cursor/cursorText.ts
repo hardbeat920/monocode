@@ -6,6 +6,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import { mergeStream } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-text";
@@ -111,7 +112,7 @@ async function ensureLive(cwd: string): Promise<LiveText> {
 
 async function startLive(cwd: string): Promise<LiveText> {
   await dropLive();
-  const { path } = await resolveCursorBinary();
+  const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
   const acpRef: { session: LiveText | null } = { session: null };
   const acp = new AcpClient(TEXT_CHILD_ID, {
     onNotification: (method, params) => {

@@ -12,9 +12,9 @@ import {
   watchChild,
 } from "../../core/child";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
@@ -270,8 +270,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
   }
 
   const runtime = loadHarnessRuntime("cursor");
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const path = overrideBinaryPath || (await resolveCursorBinary()).path;
+  const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };

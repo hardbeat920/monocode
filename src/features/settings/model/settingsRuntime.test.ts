@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  CLAUDE_EXTRAS_DEFAULT,
   HARNESS_RUNTIME_DEFAULT,
-  loadClaudeExtras,
+  loadClaudeConfigDir,
   loadHarnessRuntime,
-  saveClaudeExtras,
+  saveClaudeConfigDir,
   saveHarnessRuntime,
 } from "./settings";
 
@@ -50,14 +49,13 @@ describe("loadHarnessRuntime / saveHarnessRuntime", () => {
   });
 });
 
-describe("loadClaudeExtras / saveClaudeExtras", () => {
+describe("loadClaudeConfigDir / saveClaudeConfigDir", () => {
   it("defaults to empty when nothing is saved", () => {
-    expect(loadClaudeExtras()).toEqual(CLAUDE_EXTRAS_DEFAULT);
+    expect(loadClaudeConfigDir()).toBe("");
   });
 
-  it("round-trips configDir", () => {
-    const next = { configDir: "/custom/claude-home" };
-    saveClaudeExtras(next);
-    expect(loadClaudeExtras()).toEqual(next);
+  it("round-trips the config dir", () => {
+    saveClaudeConfigDir("/custom/claude-home");
+    expect(loadClaudeConfigDir()).toBe("/custom/claude-home");
   });
 });

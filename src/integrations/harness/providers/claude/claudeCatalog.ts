@@ -13,6 +13,7 @@ import {
   watchChild,
   writeChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import {
   asRecord,
   buildClaudeSpawnArgs,
@@ -243,7 +244,7 @@ async function discoverClaudeModels(): Promise<AgentModel[]> {
 }
 
 async function discoverViaListModels(): Promise<AgentModel[]> {
-  const { path } = await resolveClaudeBinary();
+  const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
   const cwd = await homeDir();
   const sessionId = crypto.randomUUID();
 
@@ -309,7 +310,7 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
 }
 
 async function discoverViaVersion(): Promise<AgentModel[]> {
-  const { path } = await resolveClaudeBinary();
+  const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
   const cwd = await homeDir();
   const versionOut = await execChild(path, ["--version"], cwd);
   const version = parseClaudeVersion(versionOut);

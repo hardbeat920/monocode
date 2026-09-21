@@ -2,10 +2,9 @@ import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import {
-  loadClaudeExtras,
+  loadClaudeConfigDir,
   loadClaudeHooks,
   loadHarnessRuntime,
-  type ClaudeExtraSettings,
   type HarnessRuntimeSettings,
 } from "../../../../features/settings/model/settings";
 import {
@@ -71,9 +70,9 @@ import {
 } from "./claudeProtocol";
 import { isAgentToolName } from "../../core/preview";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import { joinStreamText, snapshotRemainder } from "../../core/streamText";
 import {
@@ -414,9 +413,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const runtime = loadHarnessRuntime("claude");
-  const extras = loadClaudeExtras();
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const path = overrideBinaryPath || (await resolveClaudeBinaryImpl()).path;
+  const configDir = loadClaudeConfigDir();
+  const { path } = await resolveHarnessBinary("claude", resolveClaudeBinaryImpl);
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =
     canResume && resume ? resume.sessionId : crypto.randomUUID();
@@ -495,7 +493,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     buildClaudeSpawnArgs(launch),
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
-    claudeRuntimeEnv(runtime, extras),
+    claudeRuntimeEnv(runtime, configDir),
   );
 
   liveByThread.set(input.sessionId, live);
@@ -1697,15 +1695,18 @@ function launchOptions(
 
 /** CLAUDE_CONFIG_DIR mirrors the isolation `apply_provider_account` sets in
  * Rust for a provider account; a manual override here always wins over it. */
+/** The dedicated CLAUDE_CONFIG_DIR field always wins over a same-named entry
+ * in the generic Environment variables list, since it's the one the UI
+ * documents as overriding provider-account isolation. */
 function claudeRuntimeEnv(
   runtime: HarnessRuntimeSettings,
-  extras: ClaudeExtraSettings,
+  configDir: string,
 ): Record<string, string> | undefined {
-  const configDir = extras.configDir.trim();
+  const trimmedConfigDir = configDir.trim();
   const env = harnessRuntimeEnv(runtime) ?? {};
-  if (configDir) {
-    env.CLAUDE_CONFIG_DIR = configDir;
-    env.CLAUDE_SECURESTORAGE_CONFIG_DIR = configDir;
+  if (trimmedConfigDir) {
+    env.CLAUDE_CONFIG_DIR = trimmedConfigDir;
+    env.CLAUDE_SECURESTORAGE_CONFIG_DIR = trimmedConfigDir;
   }
   return Object.keys(env).length > 0 ? env : undefined;
 }

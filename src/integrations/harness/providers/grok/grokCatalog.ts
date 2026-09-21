@@ -9,6 +9,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import {
   fallbackGrokModels,
   grokAuthMethodId,
@@ -59,7 +60,7 @@ async function discoverGrokModels() {
 }
 
 async function discoverViaAcp() {
-  const { path } = await resolveGrokBinary();
+  const { path } = await resolveHarnessBinary("grok", resolveGrokBinary);
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
     onRequest: (id) => {
@@ -119,7 +120,7 @@ async function discoverViaAcp() {
 }
 
 async function discoverViaCli() {
-  const { path } = await resolveGrokBinary();
+  const { path } = await resolveHarnessBinary("grok", resolveGrokBinary);
   const cwd = await homeDir();
   const stdout = await execChild(path, ["models"], cwd);
   return modelsFromGrokModelsOutput(stdout);

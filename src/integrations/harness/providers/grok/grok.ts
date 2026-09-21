@@ -10,9 +10,9 @@ import {
   watchChild,
 } from "../../core/child";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
@@ -246,8 +246,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const runtime = loadHarnessRuntime("grok");
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const path = overrideBinaryPath || (await resolveGrokBinary()).path;
+  const { path } = await resolveHarnessBinary("grok", resolveGrokBinary);
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };

@@ -6,6 +6,7 @@ import {
   watchChild,
   writeChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import { PiRpc } from "./piClient";
 import { PI_FLAVOR, OMP_FLAVOR, type PiFlavor } from "./piFlavor";
 import { nativeCommandInvocation, type NativeCommand } from "../../core/nativeCommands";
@@ -45,7 +46,7 @@ async function discoverCommands(
   cwd: string,
   command: string,
 ): Promise<unknown> {
-  const { path } = await flavor.resolveBinary();
+  const { path } = await resolveHarnessBinary(flavor.id, flavor.resolveBinary);
   const releaseBridge = await acquireHarnessBridge();
   const childId = `monocode-${flavor.id}-skills-${crypto.randomUUID()}`;
   const replyToUi = (record: Record<string, unknown>) => {

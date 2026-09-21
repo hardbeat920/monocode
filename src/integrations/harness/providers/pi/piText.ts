@@ -5,6 +5,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { resolveHarnessBinary } from "../../core/runtime";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import {
@@ -175,7 +176,7 @@ async function ensureLive(flavor: PiFlavor, cwd: string): Promise<LiveText> {
 async function startLive(flavor: PiFlavor, cwd: string): Promise<LiveText> {
   const state = stateFor(flavor);
   const childId = flavor.textChildId;
-  const { path } = await flavor.resolveBinary();
+  const { path } = await resolveHarnessBinary(flavor.id, flavor.resolveBinary);
   const liveRef: { current: LiveText | null } = { current: null };
   const rpc = new PiRpc(
     childId,

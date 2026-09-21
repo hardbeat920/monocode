@@ -11,9 +11,9 @@ import {
   watchChild,
 } from "../../core/child";
 import {
-  harnessRuntimeBinaryPath,
   harnessRuntimeEnv,
   harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
 } from "../../core/runtime";
 import {
   asRecord,
@@ -408,8 +408,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const runtime = loadHarnessRuntime("codex");
-  const overrideBinaryPath = harnessRuntimeBinaryPath(runtime);
-  const path = overrideBinaryPath || (await resolveCodexBinaryImpl()).path;
+  const { path } = await resolveHarnessBinary("codex", resolveCodexBinaryImpl);
   const liveRef: { current: Live | null } = { current: null };
 
   const rpc = new JsonRpcClient(
