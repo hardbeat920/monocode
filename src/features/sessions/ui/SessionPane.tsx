@@ -68,6 +68,11 @@ import {
 } from "../../settings/model/appearance";
 import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
+import {
+  flushSessionDraft,
+  loadSessionDraft,
+  saveSessionDraft,
+} from "../model/composerDraft";
 
 type Props = {
   session: Session;
@@ -358,6 +363,31 @@ export const SessionPane = memo(function SessionPane({
   const dockComposer =
     !draftBlock && (!isEmpty || inSplit || !!session.inboxAsk);
   const draftRef = useRef<string | undefined>(undefined);
+  // Persisted draft for this session, loaded once per pane mount. The Composer
+  // picks up late loads through its `initialDraft` sync effect.
+  const [restoredDraft, setRestoredDraft] = useState<string | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    draftRef.current = undefined;
+    setRestoredDraft(undefined);
+    void loadSessionDraft(session.id).then((text) => {
+      if (!cancelled && text) setRestoredDraft(text);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id]);
+  useEffect(() => {
+    return () => {
+      // On unmount the pane cannot know whether the session is being deleted
+      // (delete flow already discarded pending drafts) or just hidden by the
+      // tree. A flush that fails is left pending; a silent success would only
+      // come from a write that actually landed.
+      flushSessionDraft().catch(() => null);
+    };
+  }, [session.id]);
   const composer = (
     <Composer
       enabled={visible}
@@ -384,12 +414,16 @@ export const SessionPane = memo(function SessionPane({
       quoteRequest={quoteRequest}
       initialDraft={
         draftRef.current ??
+        restoredDraft ??
         (session.inboxCard || session.noteCard || session.handoffCard
           ? undefined
           : session.composerSeed)
       }
+      // Every edit is handed to the debounced draft store; the ref keeps
+      // the latest text for immediate re-use if the pane re-mounts.
       onDraftChange={(text) => {
         draftRef.current = text;
+        saveSessionDraft(session.id, text);
       }}
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}

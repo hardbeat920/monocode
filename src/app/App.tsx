@@ -31,6 +31,7 @@ import {
   type OrchestrationWorkerDetail,
 } from "../features/orchestration/ui/OrchestrationActions";
 import { flushSync } from "react-dom";
+import { flushSessionDraft } from "../features/sessions/model/composerDraft";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, message } from "@tauri-apps/plugin-dialog";
@@ -1453,28 +1454,39 @@ export default function App({
         // calls JS `window.destroy`, which Tauri denies without a permission.
         event.preventDefault();
         const toTray = loadCloseToTray();
-        if (hasInFlightSessions(sessionsRef.current)) {
-          flushHarnessEvents();
-          if (!toTray && !IS_MAC) {
-            void closeBusyWindow();
+        void (async () => {
+          // Hide/destroy end the JS context before the draft debounce timer
+          // would fire, so push any pending composer drafts out first. If a
+          // draft write fails, stay open rather than tearing down with the
+          // draft unsaved.
+          try {
+            await flushSessionDraft();
+          } catch {
             return;
           }
-          // Not `persistQuitState`: that marks the live turns interrupted.
-          void persistLiveTranscripts(sessionsRef.current);
-          void hideCurrentWindow();
-          return;
-        }
-        void persistQuitState(
-          sessionsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current,
-          projectCwdRef.current,
-          readProjectReturnMemory(),
-          "unload",
-          projectTerminalsRef.current,
-        ).finally(() => {
-          void (toTray ? hideCurrentWindow() : closeCurrentWindow());
-        });
+          if (hasInFlightSessions(sessionsRef.current)) {
+            flushHarnessEvents();
+            if (!toTray && !IS_MAC) {
+              void closeBusyWindow();
+              return;
+            }
+            // Not `persistQuitState`: that marks the live turns interrupted.
+            void persistLiveTranscripts(sessionsRef.current);
+            void hideCurrentWindow();
+            return;
+          }
+          await persistQuitState(
+            sessionsRef.current,
+            tabsRef.current,
+            activeTabIdRef.current,
+            projectCwdRef.current,
+            readProjectReturnMemory(),
+            "unload",
+            projectTerminalsRef.current,
+          ).finally(() => {
+            void (toTray ? hideCurrentWindow() : closeCurrentWindow());
+          });
+        })();
       })
       .then((fn) => {
         unlistenClose = fn;
@@ -7637,9 +7649,20 @@ export default function App({
     setFilePickerResetToken((token) => token + 1);
     setFilePickerOpen(true);
   }, []);
+  // Confirm unsaved editor changes, push any pending composer drafts out,
+  // then reload the window. Aborts without reloading when the user cancels
+  // or a draft write cannot be persisted.
   const onReload = useCallback(() => {
     void (async () => {
       if (!(await confirmReload(dirtyFilesRef.current.size > 0))) return;
+      // The reload tears down JS before the draft debounce timer fires. If a
+      // draft write fails, stay on this page rather than reloading with the
+      // draft unsaved.
+      try {
+        await flushSessionDraft();
+      } catch {
+        return;
+      }
       window.location.reload();
     })();
   }, []);

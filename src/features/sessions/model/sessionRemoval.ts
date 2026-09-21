@@ -7,6 +7,7 @@ import {
   sessionChildHarnesses,
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
+import { discardSessionDraft } from "./composerDraft";
 import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
@@ -94,6 +95,12 @@ export function createSessionRemover(options: SessionRemovalOptions): {
 }
 
 /** Run the same lifecycle for archive and delete, reading state after each wait. */
+/**
+ * Run the two-phase removal for one session: plan the workspace change,
+ * confirm with the user, stop streaming, release harness processes, persist
+ * the deletion/archive, and commit the workspace update. Returns whether the
+ * removal went through (false when the user canceled the confirmation).
+ */
 async function removeSession(
   sessionId: string,
   scope: WorkspaceTabCloseScope,
@@ -146,6 +153,10 @@ async function removeSession(
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
   if (options.mode === "delete") {
+    // The delete strips the row (and its draft, via FK cascade); discard the
+    // pending write first so no in-flight or unmount flush can fail against a
+    // session that no longer exists.
+    discardSessionDraft(sessionId);
     await orchestrator.deleteSession(sessionId, () => deleteSession(sessionId));
     options.workspace.apply({
       type: "orchestrationReleased",
