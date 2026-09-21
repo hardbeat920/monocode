@@ -87,6 +87,16 @@ fn paths_overlap(a: &str, b: &str) -> bool {
     a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
+/** Windows paths compare case-insensitively; POSIX paths must retain case. */
+fn comparison_path(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        value.to_lowercase()
+    } else {
+        value
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
@@ -217,7 +227,7 @@ pub fn control_enable(
     if !cwd.is_dir() {
         return Err("Choose a project folder first".into());
     }
-    let cwd = cwd.to_string_lossy().replace('\\', "/").to_lowercase();
+    let cwd = comparison_path(&cwd);
     let mut inner = host
         .inner
         .lock()
@@ -330,11 +340,8 @@ pub fn control_authorize_turn(
     session_id: String,
     cwd: String,
 ) -> Result<(), String> {
-    let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd))
-        .map_err(|e| e.to_string())?
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_lowercase();
+    let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
+    let cwd = comparison_path(&cwd);
     let mut inner = host
         .inner
         .lock()
@@ -479,7 +486,7 @@ fn resolve_scope(root: &Path, value: &str) -> Result<String, String> {
     for part in missing.into_iter().rev() {
         existing.push(part);
     }
-    Ok(existing.to_string_lossy().replace('\\', "/").to_lowercase())
+    Ok(comparison_path(&existing))
 }
 
 /// Resolve reported writes as well as scopes: aliases and symlinks must not
@@ -529,6 +536,16 @@ pub fn control_scopes(cwd: String, files: Vec<String>) -> Result<Vec<String>, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
+    #[test]
+    fn comparison_keys_preserve_posix_case() {
+        assert_eq!(comparison_path(Path::new("/tmp/Foo")), "/tmp/Foo");
+        assert_ne!(
+            comparison_path(Path::new("/tmp/Foo")),
+            comparison_path(Path::new("/tmp/foo"))
+        );
+    }
+
     #[test]
     fn workers_get_distinct_private_scratch_and_matching_temp_environment() {
         let first = create_worker_scratch().unwrap();
