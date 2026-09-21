@@ -244,7 +244,7 @@ import { isEditTool } from "../integrations/harness/core/preview";
 import {
   canEditLastTurn,
   lastUserTurnBlock,
-  truncateBeforeLastUserTurn,
+  truncateBeforeLastEditableTurn,
 } from "../features/sessions/model/editLastTurn";
 import {
   beginSessionTurn,
@@ -5320,6 +5320,13 @@ export default function App({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ) => {
+      let resendCommitted = false;
+      let resendRejected = false;
+      const rejectResend = () => {
+        if (!options?.resendEdited || resendCommitted || resendRejected) return;
+        resendRejected = true;
+        options.onResendRejected?.();
+      };
       if (rewindingLastTurn.current.has(sessionId)) return false;
       const controlError = orchestrator.submissionError(
         sessionId,
@@ -5388,7 +5395,7 @@ export default function App({
         if (!canEditLastTurn(current)) return false;
         current = {
           ...current,
-          blocks: truncateBeforeLastUserTurn(current.blocks),
+          blocks: truncateBeforeLastEditableTurn(current),
         };
       }
       const intent = options?.intent ?? "default";
@@ -5614,6 +5621,7 @@ export default function App({
               message,
             });
             flushHarnessEvents();
+            rejectResend();
             options?.onSettled?.({
               status: "failed",
               text: "",
@@ -5711,7 +5719,7 @@ export default function App({
             if (options?.resendEdited) {
               next = {
                 ...next,
-                blocks: truncateBeforeLastUserTurn(next.blocks),
+                blocks: truncateBeforeLastEditableTurn(next),
               };
             }
             if (approvedPlan && intent === "build") {
@@ -5830,6 +5838,7 @@ export default function App({
         if (pendingSwitch) {
           void forgetHarnessSession(pendingSwitch.from, sessionId);
         }
+        rejectResend();
         options?.onSettled?.({
           status: "failed",
           text: "",
@@ -6045,9 +6054,11 @@ export default function App({
                 },
               });
             } catch (error) {
-              options?.onResendRejected?.();
+              flushHarnessEvents();
+              rejectResend();
               throw error;
             }
+            flushHarnessEvents();
             if (turnGen.current.get(sessionId) !== gen) {
               const latest = sessionsRef.current.find(
                 (session) => session.id === sessionId,
@@ -6072,7 +6083,12 @@ export default function App({
               return;
             }
           }
-          if (options?.resendEdited) flushSync(commitSubmittedTurn);
+          if (options?.resendEdited) {
+            flushSync(() => {
+              commitSubmittedTurn();
+              resendCommitted = true;
+            });
+          }
           const prepared = await prepareAttachments(attachments);
           const prompt =
             intent === "build" && approvedPlan
@@ -6311,6 +6327,7 @@ export default function App({
           }
         })
         .finally(() => {
+          rejectResend();
           if (options?.resendEdited) {
             rewindingLastTurn.current.delete(sessionId);
           }

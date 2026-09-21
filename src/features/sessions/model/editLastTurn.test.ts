@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   canEditLastTurn,
+  lastEditableTurnStartIndex,
   lastTurnRecall,
   lastUserTurnStartIndex,
+  truncateBeforeLastEditableTurn,
   truncateBeforeLastUserTurn,
 } from "./editLastTurn";
 import { newSession, type Block } from "./session";
@@ -81,6 +83,31 @@ describe("editLastTurn", () => {
       { id: "a1", role: "assistant", text: "hi" },
     ]);
     expect(canEditLastTurn(session)).toBe(true);
+  });
+
+  it("rewinds the whole Codex turn when the last message was steered", () => {
+    const session = {
+      ...newSession("codex", "/tmp"),
+      blocks: [
+        { id: "u1", role: "user" as const, text: "first", providerTurnId: "t1" },
+        { id: "a1", role: "assistant" as const, text: "done" },
+        { id: "u2", role: "user" as const, text: "second", providerTurnId: "t2" },
+        { id: "a2", role: "assistant" as const, text: "working" },
+        {
+          id: "u3",
+          role: "user" as const,
+          text: "focus on tests",
+          providerTurnId: "t2",
+        },
+        { id: "a3", role: "assistant" as const, text: "updated" },
+      ],
+    };
+
+    expect(lastEditableTurnStartIndex(session)).toBe(2);
+    expect(truncateBeforeLastEditableTurn(session).map((block) => block.id)).toEqual([
+      "u1",
+      "a1",
+    ]);
   });
 
   it("allows edit on idle OpenCode sessions", () => {

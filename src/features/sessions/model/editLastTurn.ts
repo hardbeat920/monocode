@@ -29,6 +29,30 @@ export function truncateBeforeLastUserTurn(blocks: Block[]): Block[] {
   return start < 0 ? blocks : blocks.slice(0, start);
 }
 
+export function lastEditableTurnStartIndex(session: Session): number {
+  const latest = lastUserTurnStartIndex(session.blocks);
+  if (latest < 0) return -1;
+  const providerTurnId = session.blocks[latest].providerTurnId;
+  if (session.harness !== "codex" || !providerTurnId) return latest;
+
+  let start = latest;
+  for (let index = latest - 1; index >= 0; index -= 1) {
+    const block = session.blocks[index];
+    if (block.role === "user" && block.providerTurnId !== providerTurnId) {
+      break;
+    }
+    if (block.role === "user" && !block.internal && !block.draft) {
+      start = index;
+    }
+  }
+  return start;
+}
+
+export function truncateBeforeLastEditableTurn(session: Session): Block[] {
+  const start = lastEditableTurnStartIndex(session);
+  return start < 0 ? session.blocks : session.blocks.slice(0, start);
+}
+
 export type LastTurnRecall = {
   text: string;
   attachments: Attachment[];
