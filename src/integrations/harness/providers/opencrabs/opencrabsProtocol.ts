@@ -313,7 +313,8 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent | null {
   const window =
     numberField(usage, "window") ??
     numberField(usage, "contextWindow") ??
-    numberField(usage, "context_window");
+    numberField(usage, "context_window") ??
+    numberField(usage, "size");
   if (used == null && window == null) return null;
   return { type: "context", used: used ?? undefined, window: window ?? undefined };
 }
