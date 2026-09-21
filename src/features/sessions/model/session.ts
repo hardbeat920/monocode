@@ -26,7 +26,8 @@ export type HarnessId =
   | "fx"
   | "hermes"
   | "antigravity"
-  | "devin";
+  | "devin"
+  | "opencrabs";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
@@ -40,6 +41,7 @@ export const HARNESSES: HarnessId[] = [
   "hermes",
   "antigravity",
   "devin",
+  "opencrabs",
 ];
 
 export type BlockRole =
@@ -546,6 +548,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   hermes: "hermes",
   antigravity: "antigravity",
   devin: "devin",
+  opencrabs: "opencrabs",
 };
 
 export const HARNESS_TITLE: Record<HarnessId, string> = {
@@ -560,6 +563,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   hermes: "Hermes Agent",
   antigravity: "Antigravity",
   devin: "Devin",
+  opencrabs: "OpenCrabs",
 };
 
 /** fx ACP rejects attachment prompt blocks. */

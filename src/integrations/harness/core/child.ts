@@ -496,6 +496,10 @@ export function resolveAntigravityBinary(
   }>;
 }
 
+export function resolveOpenCrabsBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_opencrabs");
+}
+
 export function freeHarnessPort(): Promise<number> {
   return invoke("harness_free_port");
 }
