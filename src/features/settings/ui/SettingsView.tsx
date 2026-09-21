@@ -2027,7 +2027,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         <Row
           id="show-excluded-files"
           label="Show excluded files"
-          description="List files and folders matched by the project .gitignore, plus .git, in the explorer."
+          description="Show files and folders Git excludes, such as build output and dependencies, in the explorer."
         >
           <Toggle
             label="Show excluded files"
