@@ -13,6 +13,104 @@ pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_ATTACHMENT_EMBED_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLocation {
+    path: String,
+    identity: String,
+}
+
+/// Resolve a project by filesystem identity when its directory was renamed.
+///
+/// A rename preserves the directory identity. We only inspect direct siblings
+/// of the missing path, which keeps this bounded and avoids a filesystem watch
+/// or a broad disk search.
+#[tauri::command(async)]
+pub fn resolve_project_location(
+    path: String,
+    identity: Option<String>,
+) -> Result<Option<ProjectLocation>, String> {
+    resolve_project_location_sync(&path, identity.as_deref())
+}
+
+fn resolve_project_location_sync(
+    path: &str,
+    identity: Option<&str>,
+) -> Result<Option<ProjectLocation>, String> {
+    let path = expand_home(path);
+    if path.is_dir() {
+        let identity = directory_identity(&path)?;
+        return Ok(Some(ProjectLocation {
+            path: path_to_js(&path),
+            identity,
+        }));
+    }
+
+    let Some(identity) = identity.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(parent) = path.parent() else {
+        return Ok(None);
+    };
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    for entry in entries.flatten() {
+        let candidate = entry.path();
+        if !candidate.is_dir() {
+            continue;
+        }
+        let Ok(candidate_identity) = directory_identity(&candidate) else {
+            continue;
+        };
+        if candidate_identity == identity {
+            return Ok(Some(ProjectLocation {
+                path: path_to_js(&candidate),
+                identity: candidate_identity,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn directory_identity(path: &Path) -> Result<String, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    Ok(format!("unix:{}:{}", metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn directory_identity(path: &Path) -> Result<String, String> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    let succeeded = unsafe {
+        GetFileInformationByHandle(file.as_raw_handle() as _, std::ptr::addr_of_mut!(info))
+    };
+    if succeeded == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let file_index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Ok(format!(
+        "windows:{}:{file_index}",
+        info.dwVolumeSerialNumber
+    ))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntry {
@@ -582,6 +680,7 @@ pub struct GitChangedFile {
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffIndex {
     pub branch: Option<String>,
+    pub head: Option<String>,
     pub files: Vec<GitChangedFile>,
     pub additions: i64,
     pub deletions: i64,
@@ -591,6 +690,7 @@ pub struct GitDiffIndex {
     pub ahead: i64,
     pub behind: i64,
     pub ahead_of_default: i64,
+    pub head_pushed: bool,
 }
 
 /// Changed files in the opened folder, with per-file line counts and status.
@@ -783,10 +883,25 @@ pub async fn git_staged_context(cwd: String) -> Result<GitStagedContext, String>
         .map_err(|e| e.to_string())?
 }
 
-/// Create a commit from the current index.
+/// Create a commit from the current index, or rewrite HEAD with it when `amend` is set.
 #[tauri::command]
-pub async fn git_commit(cwd: String, message: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || git_commit_for(&expand_home(&cwd), &message))
+pub async fn git_commit(cwd: String, message: String, amend: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        if amend {
+            git_commit_amend_for(&root, &message)
+        } else {
+            git_commit_for(&root, &message)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Full message (subject and body) of the commit at HEAD.
+#[tauri::command]
+pub async fn git_head_message(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git_head_message_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -922,6 +1037,16 @@ pub struct GitHubStatus {
     pub authenticated: bool,
 }
 
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GitHubStarStatus {
+    Starred,
+    NotStarred,
+    Unavailable,
+}
+
+const MONOCODE_STAR_ENDPOINT: &str = "/user/starred/hardbeat920/monocode";
+
 /// Whether the GitHub CLI is installed and has an active authenticated account.
 #[tauri::command]
 pub async fn git_github_status() -> Result<GitHubStatus, String> {
@@ -955,6 +1080,46 @@ fn git_github_status_for() -> GitHubStatus {
         installed: true,
         authenticated,
     }
+}
+
+/// Whether the active GitHub CLI account has starred the MonoCode repository.
+#[tauri::command]
+pub async fn github_monocode_star_status() -> Result<GitHubStarStatus, String> {
+    tauri::async_runtime::spawn_blocking(github_monocode_star_status_for)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn github_monocode_star_status_for() -> GitHubStarStatus {
+    let result = gh_run(
+        Path::new("."),
+        &["api", "--silent", MONOCODE_STAR_ENDPOINT],
+        true,
+    );
+    github_star_status_from_result(result)
+}
+
+fn github_star_status_from_result(result: Result<String, String>) -> GitHubStarStatus {
+    match result {
+        Ok(_) => GitHubStarStatus::Starred,
+        Err(error) if error.contains("HTTP 404") => GitHubStarStatus::NotStarred,
+        Err(_) => GitHubStarStatus::Unavailable,
+    }
+}
+
+/// Star the MonoCode repository for the active GitHub CLI account.
+#[tauri::command]
+pub async fn github_star_monocode() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        gh_run(
+            Path::new("."),
+            &["api", "--silent", "--method", "PUT", MONOCODE_STAR_ENDPOINT],
+            true,
+        )
+        .map(|_| ())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// `owner/repo` for the GitHub remote of this working copy, via `gh`.
@@ -1378,6 +1543,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
     };
     GitDiffIndex {
         branch: git_branch(root),
+        head: git_stdout(root, &["rev-parse", "HEAD"]),
         files: out,
         additions,
         deletions,
@@ -1387,6 +1553,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
         ahead: sync.ahead,
         behind: sync.behind,
         ahead_of_default: sync.ahead_of_default,
+        head_pushed: sync.head_pushed,
     }
 }
 
@@ -1995,11 +2162,26 @@ fn git_staged_context_for(root: &Path) -> Result<GitStagedContext, String> {
 }
 
 fn git_commit_for(root: &Path, message: &str) -> Result<(), String> {
+    git_commit_args(root, message, &[])
+}
+
+fn git_commit_amend_for(root: &Path, message: &str) -> Result<(), String> {
+    git_commit_args(root, message, &["--amend"])
+}
+
+fn git_commit_args(root: &Path, message: &str, extra: &[&str]) -> Result<(), String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("Commit message cannot be empty".into());
     }
-    git_checked(root, &["commit", "--cleanup=strip", "-m", message])
+    let mut args = vec!["commit"];
+    args.extend_from_slice(extra);
+    args.extend(["--cleanup=strip", "-m", message]);
+    git_checked(root, &args)
+}
+
+fn git_head_message_for(root: &Path) -> Result<String, String> {
+    git_stdout(root, &["log", "-1", "--pretty=%B"]).ok_or_else(|| "No commits yet".to_string())
 }
 
 fn git_push_for(root: &Path) -> Result<(), String> {
@@ -3740,6 +3922,7 @@ struct GitSync {
     ahead: i64,
     behind: i64,
     ahead_of_default: i64,
+    head_pushed: bool,
 }
 
 fn git_sync_for(root: &Path) -> GitSync {
@@ -3762,6 +3945,17 @@ fn git_sync_for(root: &Path) -> GitSync {
     } else {
         ahead
     };
+    let head_pushed = git_stdout(
+        root,
+        &[
+            "for-each-ref",
+            "--count=1",
+            "--contains",
+            "HEAD",
+            "refs/remotes",
+        ],
+    )
+    .is_some();
     GitSync {
         remote,
         upstream,
@@ -3769,6 +3963,7 @@ fn git_sync_for(root: &Path) -> GitSync {
         ahead,
         behind,
         ahead_of_default,
+        head_pushed,
     }
 }
 
@@ -4816,6 +5011,22 @@ mod tests {
     }
 
     #[test]
+    fn github_star_status_distinguishes_a_missing_star_from_an_unavailable_check() {
+        assert_eq!(
+            github_star_status_from_result(Ok(String::new())),
+            GitHubStarStatus::Starred
+        );
+        assert_eq!(
+            github_star_status_from_result(Err("gh: Not Found (HTTP 404)".into())),
+            GitHubStarStatus::NotStarred
+        );
+        assert_eq!(
+            github_star_status_from_result(Err("GitHub CLI is not installed".into())),
+            GitHubStarStatus::Unavailable
+        );
+    }
+
+    #[test]
     fn omp_active_assistant_texts_keep_active_message_order_with_both_forms() {
         let dir = tmp("omp-active-texts");
         let path = dir.0.join("session.jsonl");
@@ -4984,6 +5195,38 @@ mod tests {
         assert!(stats[0].mtime_ms.is_some());
         assert_eq!(stats[1].path, missing);
         assert!(stats[1].mtime_ms.is_none());
+    }
+
+    #[test]
+    fn project_location_follows_a_sibling_rename() {
+        let parent = tmp("project-location-rename");
+        let original = parent.0.join("monocode");
+        let renamed = parent.0.join("monocode-personal");
+        std::fs::create_dir(&original).unwrap();
+
+        let first = resolve_project_location_sync(&path_to_js(&original), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.path, path_to_js(&original));
+
+        std::fs::rename(&original, &renamed).unwrap();
+        let resolved = resolve_project_location_sync(&path_to_js(&original), Some(&first.identity))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.path, path_to_js(&renamed));
+        assert_eq!(resolved.identity, first.identity);
+    }
+
+    #[test]
+    fn project_location_does_not_guess_without_a_saved_identity() {
+        let parent = tmp("project-location-missing");
+        let missing = parent.0.join("old-name");
+        std::fs::create_dir(parent.0.join("some-project")).unwrap();
+
+        assert_eq!(
+            resolve_project_location_sync(&path_to_js(&missing), None).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -5901,7 +6144,9 @@ mod tests {
         std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&dir.0, "a.txt").unwrap();
         git_commit_for(&dir.0, "update a").unwrap();
-        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        let index = git_diff_index_for(&dir.0);
+        assert!(index.files.is_empty());
+        assert_eq!(index.head, git_stdout(&dir.0, &["rev-parse", "HEAD"]));
         assert_eq!(
             git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
             Some("update a")
@@ -5912,6 +6157,71 @@ mod tests {
     fn git_commit_rejects_empty_message() {
         let dir = tmp("git-commit-empty");
         assert!(git_commit_for(&dir.0, "   ").is_err());
+    }
+
+    #[test]
+    fn git_commit_amend_rewrites_head_with_staged_changes() {
+        let dir = tmp("git-commit-amend");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+        git_commit_amend_for(&dir.0, "amended").unwrap();
+        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        assert_eq!(
+            git_stdout(&dir.0, &["rev-list", "--count", "HEAD"]).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
+            Some("amended")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["show", "HEAD:a.txt"]).as_deref(),
+            Some("beta")
+        );
+    }
+
+    #[test]
+    fn git_commit_amend_rewords_without_staged_changes() {
+        let dir = tmp("git-commit-reword");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        git_commit_amend_for(&dir.0, "reworded").unwrap();
+        assert_eq!(
+            git_stdout(&dir.0, &["rev-list", "--count", "HEAD"]).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            git_stdout(&dir.0, &["log", "-1", "--pretty=%s"]).as_deref(),
+            Some("reworded")
+        );
+    }
+
+    #[test]
+    fn git_head_message_returns_subject_and_body() {
+        let dir = tmp("git-head-message");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+        git_commit_for(&dir.0, "Subject line\n\nBody text").unwrap();
+        assert_eq!(
+            git_head_message_for(&dir.0).unwrap(),
+            "Subject line\n\nBody text"
+        );
+    }
+
+    #[test]
+    fn git_head_message_fails_without_commits() {
+        let dir = tmp("git-head-message-empty");
+        if !init_git(&dir.0, "main", None) {
+            return;
+        }
+        assert!(git_head_message_for(&dir.0).is_err());
     }
 
     #[test]
@@ -6008,6 +6318,41 @@ mod tests {
         assert_eq!(range.base, "main");
         assert_eq!(range.head, "feature");
         assert!(range.commit_summary.contains("feature work"));
+    }
+
+    #[test]
+    fn git_sync_marks_head_pushed_without_upstream() {
+        let repo = tmp("git-pushed-repo");
+        let origin = tmp("git-pushed-origin");
+        if !init_git_commit(&repo.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        if Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&origin.0)
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let origin_url = origin.0.to_string_lossy().into_owned();
+        if !git(&repo.0, &["remote", "add", "origin", &origin_url])
+            || !git(&repo.0, &["push", "-u", "origin", "main"])
+            || !git(&repo.0, &["checkout", "-b", "feature"])
+        {
+            return;
+        }
+        std::fs::write(repo.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&repo.0, "a.txt").unwrap();
+        git_commit_for(&repo.0, "feature work").unwrap();
+        assert!(!git_diff_index_for(&repo.0).head_pushed);
+        if !git(&repo.0, &["push", "origin", "feature"]) {
+            return;
+        }
+        let index = git_diff_index_for(&repo.0);
+        assert_eq!(index.upstream, None);
+        assert!(index.head_pushed);
     }
 
     #[test]
