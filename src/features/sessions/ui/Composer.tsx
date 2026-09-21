@@ -503,6 +503,7 @@ export function Composer({
   const borrowedAttachmentIdsRef = useRef(new Set<string>());
   const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
+  const draftRevisionRef = useRef(0);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
@@ -672,6 +673,7 @@ export function Composer({
       const next = mergeAttachments(attachmentsRef.current, incoming);
       attachmentsRef.current = next;
       setAttachments(next);
+      draftRevisionRef.current += 1;
       syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
     },
@@ -687,6 +689,7 @@ export function Composer({
       }
       const next = previous.filter((file) => file.id !== id);
       attachmentsRef.current = next;
+      draftRevisionRef.current += 1;
       setAttachments(next);
       syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
@@ -1153,6 +1156,7 @@ export function Composer({
   );
 
   const exitEditMode = useCallback(() => {
+    draftRevisionRef.current += 1;
     if (ref.current) {
       ref.current.value = "";
       ref.current.style.height = "auto";
@@ -1195,6 +1199,7 @@ export function Composer({
   ]);
 
   useEffect(() => {
+    draftRevisionRef.current += 1;
     setResendEdited(false);
     onEditingLastTurnChange?.(false);
   }, [sessionId, onEditingLastTurnChange]);
@@ -1267,6 +1272,7 @@ export function Composer({
     // the composer when the first message leaves an empty session (EmptySession →
     // docked layout). If draftRef still holds the sent text, the new instance
     // resurrects it as initialDraft.
+    const resendDraftRevision = draftRevisionRef.current;
     onDraftChange?.("");
     const accepted = onSubmit(text, files, {
       intent:
@@ -1279,6 +1285,7 @@ export function Composer({
         ? {
             resendEdited: true,
             onResendRejected: () => {
+              if (draftRevisionRef.current !== resendDraftRevision) return;
               restoreDraft(text, files);
               setResendEdited(true);
               onEditingLastTurnChange?.(true);
@@ -1796,6 +1803,7 @@ export function Composer({
               onInput={(e) => {
                 const el = e.currentTarget;
                 resizeComposer(el);
+                draftRevisionRef.current += 1;
                 setDraft(el.value);
                 if (
                   sessionFolderSelected &&
