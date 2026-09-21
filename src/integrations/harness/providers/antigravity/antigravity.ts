@@ -70,7 +70,8 @@ type Resume = {
 };
 
 // Bound startup and control requests; a prompt may legitimately run much longer.
-const INIT_TIMEOUT_MS = 12_000;
+// The Windows ACP binary may need longer to initialize on a cold start.
+const INIT_TIMEOUT_MS = 30_000;
 const SESSION_TIMEOUT_MS = 45_000;
 const CONTROL_TIMEOUT_MS = 15_000;
 const PROMPT_TIMEOUT_MS = 30 * 60_000;
@@ -130,7 +131,7 @@ const pendingSetupByThread = new Map<
 const turnsByThread = new Map<string, Promise<void>>();
 let childSeq = 0;
 
-/** Live Antigravity adapter. Spawns `agy_acp_server.par`, not `agy acp`. */
+/** Live Antigravity adapter. Spawns the official ACP server. */
 export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
   const epoch = cancelEpoch.get(input.sessionId) ?? 0;
   const cancelled = () => (cancelEpoch.get(input.sessionId) ?? 0) !== epoch;
