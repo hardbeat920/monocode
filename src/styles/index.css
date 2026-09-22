@@ -296,18 +296,26 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
   background-size: cover;
   background-repeat: no-repeat;
   opacity: 0;
+  transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
   pointer-events: none;
 }
 
-html.has-chat-background .chat-pane-background::before,
+html.has-chat-background.chat-background-effect-ready
+  .chat-pane-background::before,
 .chat-pane-background[data-project-chat-background="true"]::before {
   opacity: var(--chat-background-empty-opacity);
 }
 
-html.has-chat-background
+html.has-chat-background.chat-background-effect-ready
   .chat-pane-background[data-session-empty="false"]::before,
 .chat-pane-background[data-project-chat-background="true"][data-session-empty="false"]::before {
   opacity: var(--chat-background-session-opacity);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-background::before {
+    transition-duration: 0ms;
+  }
 }
 
 html.chat-background-empty-only

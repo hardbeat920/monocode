@@ -7,11 +7,13 @@ import {
   loadAccentColor,
   loadChatBackgroundPath,
   loadChatBackgroundScope,
+  loadNewThreadBackgroundEffect,
   loadTranscriptLayout,
   saveChatBackgroundOpacity,
   saveAccentColor,
   saveChatBackgroundPath,
   saveChatBackgroundScope,
+  saveNewThreadBackgroundEffect,
   saveTranscriptLayout,
   TRANSCRIPT_LAYOUT_DEFAULT,
   loadTranscriptAnchor,
@@ -27,6 +29,7 @@ import {
   resolveColorScheme,
   THEME_PREFERENCE_DEFAULT,
   THEME_DARK_LIGHTNESS_DEFAULT,
+  NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
 } from "./appearance";
 
 const KEY = "monocode.transcriptLayout";
@@ -37,6 +40,7 @@ const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 const CHAT_BACKGROUND_PATH_KEY = "monocode.chatBackgroundPath";
 const CHAT_BACKGROUND_OPACITY_KEY = "monocode.chatBackgroundOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
+const NEW_THREAD_BACKGROUND_EFFECT_KEY = "monocode.newThreadBackgroundEffect";
 const THEME_DARK_LIGHTNESS_KEY = "monocode.themeDarkLightness";
 
 function mockLocalStorage() {
@@ -157,6 +161,7 @@ describe("chat background setting", () => {
     localStorage.removeItem(CHAT_BACKGROUND_PATH_KEY);
     localStorage.removeItem(CHAT_BACKGROUND_OPACITY_KEY);
     localStorage.removeItem(CHAT_BACKGROUND_SCOPE_KEY);
+    localStorage.removeItem(NEW_THREAD_BACKGROUND_EFFECT_KEY);
   });
 
   it("stores and clears the app-owned background path", () => {
@@ -185,6 +190,26 @@ describe("chat background setting", () => {
     expect(loadChatBackgroundScope()).toBe("all");
     localStorage.setItem(CHAT_BACKGROUND_SCOPE_KEY, "transcript");
     expect(loadChatBackgroundScope()).toBe(CHAT_BACKGROUND_SCOPE_DEFAULT);
+  });
+
+  it("defaults, persists, and validates the new-thread background effect", () => {
+    expect(loadNewThreadBackgroundEffect()).toBe(
+      NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
+    );
+    for (const effect of [
+      "none",
+      "dither",
+      "ascii",
+      "halftone",
+      "scanlines",
+    ] as const) {
+      saveNewThreadBackgroundEffect(effect);
+      expect(loadNewThreadBackgroundEffect()).toBe(effect);
+    }
+    localStorage.setItem(NEW_THREAD_BACKGROUND_EFFECT_KEY, "blur");
+    expect(loadNewThreadBackgroundEffect()).toBe(
+      NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
+    );
   });
 });
 

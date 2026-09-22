@@ -11,7 +11,10 @@ import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "../model/settings";
-import { providerAccounts, saveProviderAccount } from "../../providers/model/providerAccounts";
+import {
+  providerAccounts,
+  saveProviderAccount,
+} from "../../providers/model/providerAccounts";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -92,6 +95,40 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("shows background effect choices above scope when artwork is available", async () => {
+    localStorage.setItem(
+      "monocode.chatBackgroundPath",
+      "/app-data/backgrounds/chat-background.png",
+    );
+    await render("appearance");
+
+    const effect = container.querySelector(
+      "#new-thread-background-effect-dither",
+    )!;
+    const effectRow = effect.closest(".settings-row")!;
+    const scopeRow = container
+      .querySelector('[aria-label="Show background on"]')!
+      .closest(".settings-row")!;
+    expect(effect).not.toBeNull();
+    expect(
+      effectRow.compareDocumentPosition(scopeRow) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false })),
+    );
+    await act(async () => (effect as HTMLButtonElement).click());
+    expect(localStorage.getItem("monocode.newThreadBackgroundEffect")).toBe(
+      "dither",
+    );
+    expect(effect.getAttribute("aria-checked")).toBe("true");
+    expect(container.textContent).toContain(
+      "Rebuilds the artwork with a dithered color palette.",
+    );
+  });
+
   it("manages named accounts independently for each supported provider", async () => {
     saveProviderAccount({
       id: "account-work",
