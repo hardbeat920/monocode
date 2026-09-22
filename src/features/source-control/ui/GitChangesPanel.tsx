@@ -13,6 +13,7 @@ import {
   ListBullet,
   Loader,
   Minus,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Undo2,
@@ -45,6 +46,7 @@ import {
   gitHeadMessage,
   gitPrCreate,
   gitPrStatus,
+  gitPull,
   gitPush,
   gitStageAll,
   gitStageFile,
@@ -119,8 +121,36 @@ export function GitChangesPanel({
   const { index, reload } = useDiffIndex(cwd, enabled);
   const files = index?.files ?? [];
   const paneRef = useRef<HTMLDivElement>(null);
+  const branchMenuRef = useRef<HTMLDivElement>(null);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [graphHeight, setGraphHeight] = useState(loadGraphPanelHeight);
   const [graphExpanded, setGraphExpanded] = useState(graphOpen);
+
+  useEffect(() => {
+    if (!branchMenuOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!branchMenuRef.current?.contains(event.target as Node)) {
+        setBranchMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointer);
+    return () => window.removeEventListener("pointerdown", onPointer);
+  }, [branchMenuOpen]);
+
+  const pull = async () => {
+    setBranchMenuOpen(false);
+    setPulling(true);
+    try {
+      await gitPull(cwd);
+      reload();
+      notifyGitChanged();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPulling(false);
+    }
+  };
 
   useLayoutEffect(() => {
     const pane = paneRef.current;
@@ -146,20 +176,57 @@ export function GitChangesPanel({
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-stroke px-3">
         <span className="text-[12px] font-medium text-content">Changes</span>
         {index?.branch ? (
-          <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-content/50">
-            <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-            <span className="min-w-0 truncate">{index.branch}</span>
-            {index.ahead > 0 ? (
-              <span className="shrink-0 tabular-nums text-content/40">
-                ↑{index.ahead}
-              </span>
+          <div
+            ref={branchMenuRef}
+            className="relative ml-auto flex min-w-0 items-center gap-1"
+          >
+            <span className="flex min-w-0 items-center gap-1 text-[11px] text-content/50">
+              <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
+              <span className="min-w-0 truncate">{index.branch}</span>
+              {index.ahead > 0 ? (
+                <span className="shrink-0 tabular-nums text-content/40">
+                  ↑{index.ahead}
+                </span>
+              ) : null}
+              {index.behind > 0 ? (
+                <span className="shrink-0 tabular-nums text-content/40">
+                  ↓{index.behind}
+                </span>
+              ) : null}
+            </span>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-label="Branch actions"
+              aria-expanded={branchMenuOpen}
+              onClick={() => setBranchMenuOpen((open) => !open)}
+              className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content aria-expanded:bg-content/10 aria-expanded:text-content"
+            >
+              <MoreHorizontal className="size-4" strokeWidth={2} />
+            </button>
+            {branchMenuOpen ? (
+              <div
+                role="menu"
+                aria-label="Branch actions"
+                className="absolute top-full right-0 z-30 mt-1 min-w-36 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={pulling}
+                  onClick={() => void pull()}
+                  className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
+                >
+                  {pulling ? (
+                    <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
+                  ) : (
+                    <RefreshCw className="size-3.5" strokeWidth={1.75} />
+                  )}
+                  {pulling ? "Pulling…" : "Pull"}
+                </button>
+              </div>
             ) : null}
-            {index.behind > 0 ? (
-              <span className="shrink-0 tabular-nums text-content/40">
-                ↓{index.behind}
-              </span>
-            ) : null}
-          </span>
+          </div>
         ) : (
           <span className="ml-auto" />
         )}
