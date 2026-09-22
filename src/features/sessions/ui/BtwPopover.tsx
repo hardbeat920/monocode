@@ -20,6 +20,7 @@ import { Shimmer } from "../../../shared/ui/Shimmer";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { ModelPicker } from "./ModelPicker";
 import { HarnessIcon as ProviderIcon } from "./HarnessIcon";
+import { preferredModelSettings, resolveModel } from "../model/models";
 import {
   HARNESS_LABEL,
   HARNESS_TITLE,
@@ -27,22 +28,27 @@ import {
   type BtwThread,
   type HarnessId,
 } from "../model/session";
-
 type Props = {
   harness: HarnessId;
   threads?: BtwThread[];
   visible?: boolean;
   cwd?: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   onSubmit: (
     threadId: string,
     messageId: string,
     text: string,
     model?: string,
+    modelSettings?: Record<string, string>,
   ) => void;
   onRetry: (threadId: string) => void;
   onDelete?: (threadId: string) => void;
-  onModelChange?: (threadId: string, model: string) => void;
+  onModelChange?: (
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+  ) => void;
 };
 
 function shortQuestion(thread: BtwThread): string {
@@ -85,6 +91,7 @@ export function BtwPopover({
   visible = true,
   cwd,
   model = "",
+  modelSettings = {},
   onSubmit,
   onRetry,
   onDelete,
@@ -93,6 +100,10 @@ export function BtwPopover({
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
   const [draftModel, setDraftModel] = useState<string | null>(null);
+  const [draftModelSettings, setDraftModelSettings] = useState<Record<
+    string,
+    string
+  > | null>(null);
   const [optimistic, setOptimistic] = useState<{
     threadId: string;
     message: BtwMessage;
@@ -112,13 +123,28 @@ export function BtwPopover({
       ? [...messages, optimisticForThread]
       : messages;
   const running = persisted?.status === "running" || !!optimisticForThread;
-  const selectedModel = persisted?.model ?? draftModel ?? model;
+  const selectedModel = draftModel ?? persisted?.model ?? model;
+  const selectedModelSettings = useMemo(() => {
+    if (draftModelSettings) return draftModelSettings;
+    if (persisted?.modelSettings) return persisted.modelSettings;
+    return preferredModelSettings(
+      resolveModel(harness, selectedModel),
+      modelSettings,
+    );
+  }, [
+    draftModelSettings,
+    harness,
+    modelSettings,
+    persisted?.modelSettings,
+    selectedModel,
+  ]);
   const open = openThreadId != null;
 
   const close = () => {
     setOpenThreadId(null);
     setDraftText("");
     setDraftModel(null);
+    setDraftModelSettings(null);
     triggerRef.current?.focus();
   };
 
@@ -151,6 +177,7 @@ export function BtwPopover({
     setOptimistic(null);
     setDraftText("");
     setDraftModel(null);
+    setDraftModelSettings(null);
     setOpenThreadId(crypto.randomUUID());
   };
 
@@ -163,6 +190,7 @@ export function BtwPopover({
     setOptimistic(null);
     setDraftText("");
     setDraftModel(null);
+    setDraftModelSettings(null);
     setOpenThreadId(id);
   };
 
@@ -177,7 +205,13 @@ export function BtwPopover({
     });
     setOpenThreadId(threadId);
     setDraftText("");
-    onSubmit(threadId, messageId, text, selectedModel || undefined);
+    onSubmit(
+      threadId,
+      messageId,
+      text,
+      selectedModel || undefined,
+      selectedModelSettings,
+    );
   };
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -188,8 +222,22 @@ export function BtwPopover({
 
   const handleModelChange = (nextHarness: HarnessId, nextModel: string) => {
     if (nextHarness !== harness) return;
+    const nextSettings = preferredModelSettings(
+      resolveModel(nextHarness, nextModel),
+      selectedModelSettings,
+    );
     setDraftModel(nextModel);
-    if (persisted && openThreadId) onModelChange?.(openThreadId, nextModel);
+    setDraftModelSettings(nextSettings);
+    if (persisted && openThreadId) {
+      onModelChange?.(openThreadId, nextModel, nextSettings);
+    }
+  };
+
+  const handleSettingsChange = (nextSettings: Record<string, string>) => {
+    setDraftModelSettings(nextSettings);
+    if (persisted && openThreadId) {
+      onModelChange?.(openThreadId, selectedModel, nextSettings);
+    }
   };
   const deleteThread = () => {
     if (!persisted || !openThreadId) return;
@@ -374,11 +422,10 @@ export function BtwPopover({
                 <ModelPicker
                   harness={harness}
                   model={selectedModel}
-                  values={{}}
-                  hideSettings
+                  values={selectedModelSettings}
                   allowedHarnesses={[harness]}
                   onChange={handleModelChange}
-                  onSettingsChange={() => undefined}
+                  onSettingsChange={handleSettingsChange}
                   onClose={() => composerRef.current?.focus()}
                 />
               ) : null}

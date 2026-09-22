@@ -174,6 +174,7 @@ type Props = {
     messageId: string,
     text: string,
     model?: string,
+    modelSettings?: Record<string, string>,
   ) => void;
   onBtwRetry?: (sessionId: string, turn: Block[], threadId: string) => void;
   onBtwDelete?: (sessionId: string, turn: Block[], threadId: string) => void;
@@ -182,6 +183,7 @@ type Props = {
     turn: Block[],
     threadId: string,
     model: string,
+    modelSettings: Record<string, string>,
   ) => void;
   onNewTerminal: (sessionId: string) => void;
 
@@ -664,7 +666,7 @@ export const SessionPane = memo(function SessionPane({
                   !session.inboxAsk &&
                   !session.worktreeRemoved &&
                   onBtwSubmit
-                    ? (threadId, messageId, text, turn, model) =>
+                    ? (threadId, messageId, text, turn, model, modelSettings) =>
                         onBtwSubmit(
                           session.id,
                           turn,
@@ -672,6 +674,7 @@ export const SessionPane = memo(function SessionPane({
                           messageId,
                           text,
                           model,
+                          modelSettings,
                         )
                     : undefined
                 }
@@ -700,8 +703,14 @@ export const SessionPane = memo(function SessionPane({
                   !session.inboxAsk &&
                   !session.worktreeRemoved &&
                   onBtwModelChange
-                    ? (threadId, model, turn) =>
-                        onBtwModelChange(session.id, turn, threadId, model)
+                    ? (threadId, model, modelSettings, turn) =>
+                        onBtwModelChange(
+                          session.id,
+                          turn,
+                          threadId,
+                          model,
+                          modelSettings,
+                        )
                     : undefined
                 }
                 onJumpToBottomChange={setShowJumpToBottom}

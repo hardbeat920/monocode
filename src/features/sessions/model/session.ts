@@ -125,10 +125,13 @@ export type BtwThread = {
   messages: BtwMessage[];
   /** Selected harness model for this side thread; absent means session default. */
   model?: string;
+  /** Provider settings selected for this side thread's model. */
+  modelSettings?: Record<string, string>;
   /** Provider-specific side-thread id when the text runner supports resume. */
   providerThreadId?: string;
   error?: string;
 };
+
 /** Compact transcript card for a second-opinion or split-pane handoff turn. */
 export type SecondOpinionMeta = {
   from: HarnessId;

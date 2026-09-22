@@ -11,7 +11,10 @@ import {
   assistantTextBlocks,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  isClaudeUltracodeEffort,
+  normalizeClaudeCliEffort,
   parseJsonLine,
+  resolveClaudeApiModelId,
   stringField,
   turnStatusFromResult,
 } from "./claudeProtocol";
@@ -22,10 +25,19 @@ const INIT_TIMEOUT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 45_000;
 const TEXT_MODEL = "claude-haiku-4-5";
 
+type TextSettings = {
+  key: string;
+  launchModel: string;
+  effort?: string;
+  promptEffort?: string;
+  settings: Record<string, boolean>;
+};
+
 type LiveText = {
   cwd: string;
   providerAccountId?: string;
   model: string;
+  settingsKey: string;
   collecting: boolean;
   output: string;
   closed: boolean;
@@ -37,6 +49,27 @@ type LiveText = {
 
 let live: LiveText | null = null;
 let turns: Promise<void> = Promise.resolve();
+
+function textSettings(
+  model: string,
+  modelSettings?: Record<string, string>,
+): TextSettings {
+  const effort = modelSettings?.effort?.trim() || undefined;
+  const context = modelSettings?.context?.trim() || undefined;
+  const thinking = modelSettings?.thinking === "true";
+  const fast = modelSettings?.fast === "true";
+  const settings: Record<string, boolean> = {};
+  if (thinking) settings.alwaysThinkingEnabled = true;
+  if (fast) settings.fastMode = true;
+  if (isClaudeUltracodeEffort(effort)) settings.ultracode = true;
+  return {
+    key: JSON.stringify({ effort, context, thinking, fast }),
+    launchModel: resolveClaudeApiModelId(model, context),
+    effort: normalizeClaudeCliEffort(effort, model),
+    promptEffort: effort,
+    settings,
+  };
+}
 
 function pickTextModel(requested?: string): string {
   const selected = requested?.trim();
@@ -70,6 +103,7 @@ export async function runClaudeTextPrompt(input: {
   cwd: string;
   providerAccountId?: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
@@ -85,13 +119,17 @@ async function promptOnLive(input: {
   cwd: string;
   providerAccountId?: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
+  const model = pickTextModel(input.model);
+  const settings = textSettings(model, input.modelSettings);
   const session = await ensureLive(
     input.cwd,
     input.providerAccountId,
-    input.model,
+    model,
+    settings,
   );
   session.output = "";
   session.collecting = true;
@@ -105,7 +143,12 @@ async function promptOnLive(input: {
 
     await writeChild(
       TEXT_CHILD_ID,
-      JSON.stringify(buildClaudeUserMessage({ text: input.prompt })),
+      JSON.stringify(
+        buildClaudeUserMessage({
+          text: input.prompt,
+          effort: settings.promptEffort,
+        }),
+      ),
     );
 
     await Promise.race([
@@ -136,31 +179,36 @@ async function ensureLive(
   cwd: string,
   providerAccountId?: string,
   requestedModel?: string,
+  requestedSettings?: TextSettings,
 ): Promise<LiveText> {
   const model = pickTextModel(requestedModel);
+  const settings = requestedSettings ?? textSettings(model);
   if (
     live &&
     !live.closed &&
     live.cwd === cwd &&
     live.providerAccountId === providerAccountId &&
-    live.model === model
+    live.model === model &&
+    live.settingsKey === settings.key
   ) {
     return live;
   }
   await dropLive();
-  return startLive(cwd, providerAccountId, model);
+  return startLive(cwd, providerAccountId, model, settings);
 }
 
 async function startLive(
   cwd: string,
   providerAccountId?: string,
   model = pickTextModel(),
+  settings = textSettings(model),
 ): Promise<LiveText> {
   const { path } = await resolveClaudeBinary();
   const session: LiveText = {
     cwd,
     providerAccountId,
     model,
+    settingsKey: settings.key,
     collecting: false,
     output: "",
     closed: false,
@@ -190,7 +238,9 @@ async function startLive(
       path,
       buildClaudeSpawnArgs({
         isolated: true,
-        model,
+        model: settings.launchModel,
+        effort: settings.effort,
+        settings: settings.settings,
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },

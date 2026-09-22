@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { newSession, type Block, type Session } from "../model/session";
+import {
+  newSession,
+  type Block,
+  type BtwThread,
+  type Session,
+} from "../model/session";
 import {
   isPersistableId,
   persistFingerprint,
@@ -166,6 +171,33 @@ describe("sanitizeSessionForPersist", () => {
       id: "claude:opus-5",
       name: "Claude Opus 5",
     });
+  });
+
+  it("persists a BTW thread's model and provider settings", () => {
+    const session = newSession("codex", "/tmp/project");
+    const thread: BtwThread = {
+      id: "btw-1",
+      sourceEndBlockId: "u1",
+      createdAt: 1,
+      updatedAt: 2,
+      status: "ready",
+      messages: [
+        { id: "m1", role: "user", text: "Why?", createdAt: 1 },
+        { id: "m2", role: "assistant", text: "Because.", createdAt: 2 },
+      ],
+      model: "codex:gpt-5.4",
+      modelSettings: {
+        reasoningEffort: "high",
+        serviceTier: "fast",
+      },
+    };
+    session.blocks = [
+      { id: "u1", role: "user", text: "Explain this", btwThreads: [thread] },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]?.btwThreads).toEqual([
+      thread,
+    ]);
   });
 
   it("persists provider metrics recorded on a user turn", () => {

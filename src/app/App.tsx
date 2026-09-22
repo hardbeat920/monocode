@@ -6845,7 +6845,7 @@ export default function App({
         cwd,
         providerAccountId: input.source.providerAccountId,
         model: model || undefined,
-        modelSettings: input.source.modelSettings,
+        modelSettings: input.thread.modelSettings ?? input.source.modelSettings,
         threadId: input.thread.providerThreadId,
         onThreadId: (providerThreadId) => {
           updateBtwThread(
@@ -6936,6 +6936,7 @@ export default function App({
       messageId: string,
       text: string,
       model?: string,
+      modelSettings?: Record<string, string>,
     ) => {
       const source = sessionsRef.current.find(
         (session) => session.id === sessionId,
@@ -6969,6 +6970,13 @@ export default function App({
         existing?.model ||
         turnModel ||
         nativeModelId(source.model).trim();
+      const selectedModelSettings =
+        modelSettings ??
+        existing?.modelSettings ??
+        preferredModelSettings(
+          resolveModel(turnHarness, selectedModel || source.model),
+          source.modelSettings,
+        );
       if (existing?.status === "running") return;
       if (existing && existing.sourceEndBlockId !== sourceEndBlockId) return;
       const now = Date.now();
@@ -6976,6 +6984,7 @@ export default function App({
         ? {
             ...existing,
             model: selectedModel || undefined,
+            modelSettings: selectedModelSettings,
             status: "running",
             updatedAt: now,
             error: undefined,
@@ -6991,6 +7000,7 @@ export default function App({
             updatedAt: now,
             status: "running",
             ...(selectedModel ? { model: selectedModel } : {}),
+            modelSettings: selectedModelSettings,
             messages: [{ id: messageId, role: "user", text, createdAt: now }],
           };
       const updated = updateBtwThread(
@@ -7012,7 +7022,13 @@ export default function App({
   );
 
   const onBtwModelChange = useCallback(
-    (sessionId: string, turn: Block[], threadId: string, model: string) => {
+    (
+      sessionId: string,
+      turn: Block[],
+      threadId: string,
+      model: string,
+      modelSettings: Record<string, string>,
+    ) => {
       const source = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -7033,7 +7049,12 @@ export default function App({
       }
       updateBtwThread(sessionId, sourceUserId, threadId, (thread) =>
         thread
-          ? { ...thread, model: nextModel, updatedAt: Date.now() }
+          ? {
+              ...thread,
+              model: nextModel,
+              modelSettings,
+              updatedAt: Date.now(),
+            }
           : undefined,
       );
     },

@@ -8,6 +8,7 @@ import {
 } from "../../core/child";
 import {
   grokAuthMethodId,
+  grokEffort,
   grokTextSpawnArgs,
   TEXT_MODEL,
 } from "./grokProtocol";
@@ -26,6 +27,7 @@ type LiveText = {
   acp: AcpClient;
   cwd: string;
   model: string;
+  settingsKey: string;
   acpSessionId: string;
   collecting: boolean;
   output: string;
@@ -60,6 +62,7 @@ export function warmupGrokText(cwd: string): Promise<void> {
 export async function runGrokTextPrompt(input: {
   cwd: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
@@ -74,10 +77,11 @@ export async function runGrokTextPrompt(input: {
 async function promptOnLive(input: {
   cwd: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd, input.model);
+  const session = await ensureLive(input.cwd, input.model, input.modelSettings);
   session.output = "";
   session.collecting = true;
   try {
@@ -105,21 +109,32 @@ async function promptOnLive(input: {
 async function ensureLive(
   cwd: string,
   requestedModel?: string,
+  modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
   const model = requestedModel?.trim() || TEXT_MODEL;
+  const settingsKey = modelSettingsKey(modelSettings);
   if (live && !live.closed) {
-    if (live.cwd === cwd && live.model === model) return live;
+    if (
+      live.cwd === cwd &&
+      live.model === model &&
+      live.settingsKey === settingsKey
+    )
+      return live;
     try {
-      await openSession(live, cwd, model);
+      await openSession(live, cwd, model, modelSettings);
       return live;
     } catch {
       await dropLive();
     }
   }
-  return startLive(cwd, model);
+  return startLive(cwd, model, modelSettings);
 }
 
-async function startLive(cwd: string, model = TEXT_MODEL): Promise<LiveText> {
+async function startLive(
+  cwd: string,
+  model = TEXT_MODEL,
+  modelSettings?: Record<string, string>,
+): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveGrokBinary();
   const acpRef: { session: LiveText | null } = { session: null };
@@ -138,6 +153,7 @@ async function startLive(cwd: string, model = TEXT_MODEL): Promise<LiveText> {
     acp,
     cwd,
     model,
+    settingsKey: modelSettingsKey(modelSettings),
     acpSessionId: "",
     collecting: false,
     output: "",
@@ -176,7 +192,7 @@ async function startLive(cwd: string, model = TEXT_MODEL): Promise<LiveText> {
         )
         .catch(() => undefined);
     }
-    await openSession(session, cwd, model);
+    await openSession(session, cwd, model, modelSettings);
     live = session;
     return session;
   } catch (error) {
@@ -192,6 +208,7 @@ async function openSession(
   session: LiveText,
   cwd: string,
   model: string,
+  modelSettings?: Record<string, string>,
 ): Promise<void> {
   const setup = await session.acp.request<{ sessionId?: string }>(
     "session/new",
@@ -211,13 +228,17 @@ async function openSession(
   await session.acp
     .request(
       "session/set_mode",
-      { sessionId: acpSessionId, modeId: "low" },
+      {
+        sessionId: acpSessionId,
+        modeId: grokEffort(modelSettings) ?? "low",
+      },
       REQUEST_TIMEOUT_MS,
     )
     .catch(() => undefined);
 
   session.cwd = cwd;
   session.model = model;
+  session.settingsKey = modelSettingsKey(modelSettings);
   session.acpSessionId = acpSessionId;
 }
 
@@ -301,4 +322,8 @@ function textFromContent(content: unknown): string {
     return content.map((item) => textFromContent(item)).join("");
   }
   return "";
+}
+
+function modelSettingsKey(settings?: Record<string, string>): string {
+  return JSON.stringify({ effort: grokEffort(settings) ?? "low" });
 }

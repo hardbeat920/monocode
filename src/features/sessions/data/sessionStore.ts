@@ -545,6 +545,20 @@ function sanitizeNestedId(value: unknown): string | undefined {
   if (!id || id.length > 256 || /[\u0000-\u001f]/.test(id)) return undefined;
   return id;
 }
+function sanitizeStringRecord(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const safeKey = sanitizeNestedId(key);
+    const safeValue = sanitizeNestedId(raw);
+    if (safeKey && safeValue) next[safeKey] = safeValue;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
 
 function sanitizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -606,6 +620,7 @@ function sanitizeBtwThreads(
     }
     const error = typeof record.error === "string" ? record.error.trim() : "";
     const model = typeof record.model === "string" ? record.model.trim() : "";
+    const modelSettings = sanitizeStringRecord(record.modelSettings);
     const providerThreadId = sanitizeNestedId(record.providerThreadId);
     const interrupted = hydrate && status === "running";
     return [
@@ -617,6 +632,7 @@ function sanitizeBtwThreads(
         status: interrupted ? "error" : status,
         messages,
         ...(model ? { model } : {}),
+        ...(modelSettings ? { modelSettings } : {}),
         ...(providerThreadId ? { providerThreadId } : {}),
         ...(interrupted
           ? {

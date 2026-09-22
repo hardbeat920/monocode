@@ -160,6 +160,7 @@ type Shared = {
     messageId: string,
     text: string,
     model?: string,
+    modelSettings?: Record<string, string>,
   ) => void;
   onBtwRetry?: (sessionId: string, turn: Block[], threadId: string) => void;
   onBtwDelete?: (sessionId: string, turn: Block[], threadId: string) => void;
@@ -168,6 +169,7 @@ type Shared = {
     turn: Block[],
     threadId: string,
     model: string,
+    modelSettings: Record<string, string>,
   ) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
   onDetachPane: (

@@ -23,6 +23,7 @@ type LiveText = {
   acp: AcpClient;
   cwd: string;
   model: string;
+  settingsKey: string;
   acpSessionId: string;
   collecting: boolean;
   output: string;
@@ -59,6 +60,7 @@ export function warmupCursorText(cwd: string): Promise<void> {
 export async function runCursorTextPrompt(input: {
   cwd: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
@@ -73,10 +75,11 @@ export async function runCursorTextPrompt(input: {
 async function promptOnLive(input: {
   cwd: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd, input.model);
+  const session = await ensureLive(input.cwd, input.model, input.modelSettings);
   session.output = "";
   session.collecting = true;
   try {
@@ -104,21 +107,32 @@ async function promptOnLive(input: {
 async function ensureLive(
   cwd: string,
   requestedModel?: string,
+  modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
   const model = requestedModel?.trim() || TEXT_MODEL;
+  const settingsKey = modelSettingsKey(modelSettings);
   if (live && !live.closed) {
-    if (live.cwd === cwd && live.model === model) return live;
+    if (
+      live.cwd === cwd &&
+      live.model === model &&
+      live.settingsKey === settingsKey
+    )
+      return live;
     try {
-      await openSession(live, cwd, model);
+      await openSession(live, cwd, model, modelSettings);
       return live;
     } catch {
       await dropLive();
     }
   }
-  return startLive(cwd, model);
+  return startLive(cwd, model, modelSettings);
 }
 
-async function startLive(cwd: string, model = TEXT_MODEL): Promise<LiveText> {
+async function startLive(
+  cwd: string,
+  model = TEXT_MODEL,
+  modelSettings?: Record<string, string>,
+): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveCursorBinary();
   const acpRef: { session: LiveText | null } = { session: null };
@@ -137,6 +151,7 @@ async function startLive(cwd: string, model = TEXT_MODEL): Promise<LiveText> {
     acp,
     cwd,
     model,
+    settingsKey: modelSettingsKey(modelSettings),
     acpSessionId: "",
     collecting: false,
     output: "",
@@ -168,7 +183,7 @@ async function startLive(cwd: string, model = TEXT_MODEL): Promise<LiveText> {
     await acp
       .request("authenticate", { methodId: "cursor_login" }, REQUEST_TIMEOUT_MS)
       .catch(() => undefined);
-    await openSession(session, cwd, model);
+    await openSession(session, cwd, model, modelSettings);
     live = session;
     return session;
   } catch (error) {
@@ -184,6 +199,7 @@ async function openSession(
   session: LiveText,
   cwd: string,
   model: string,
+  modelSettings?: Record<string, string>,
 ): Promise<void> {
   const setup = await session.acp.request<{
     sessionId?: string;
@@ -221,8 +237,25 @@ async function openSession(
         .catch(() => undefined),
     );
 
+  for (const [settingId, value] of Object.entries(modelSettings ?? {})) {
+    const configId = resolveSettingConfigId(setup.configOptions, settingId);
+    if (!configId) continue;
+    await session.acp
+      .request(
+        "session/set_config_option",
+        {
+          sessionId: acpSessionId,
+          configId,
+          value,
+        },
+        REQUEST_TIMEOUT_MS,
+      )
+      .catch(() => undefined);
+  }
+
   session.cwd = cwd;
   session.model = model;
+  session.settingsKey = modelSettingsKey(modelSettings);
   session.acpSessionId = acpSessionId;
 }
 
@@ -265,6 +298,54 @@ async function handleTextRequest(
     return;
   }
   await acp.respond(id, {}).catch(() => undefined);
+}
+function modelSettingsKey(settings?: Record<string, string>): string {
+  return JSON.stringify(settings ?? {});
+}
+
+function resolveSettingConfigId(
+  raw: unknown,
+  settingId: string,
+): string | undefined {
+  const needle = settingId.trim().toLowerCase();
+  const options = Array.isArray(raw)
+    ? raw.flatMap((item) => {
+        const rec = asRecord(item);
+        const id = String(rec?.id ?? rec?.configId ?? "").trim();
+        if (!id) return [];
+        return [
+          {
+            id,
+            category: String(rec?.category ?? "").trim(),
+          },
+        ];
+      })
+    : [];
+  const exact = options.find((option) => option.id.toLowerCase() === needle);
+  if (exact) return exact.id;
+  if (needle === "effort" || needle === "reasoning") {
+    return options.find(
+      (option) =>
+        option.id === "effort" ||
+        option.id === "reasoning" ||
+        (option.category === "thought_level" && option.id !== "thinking"),
+    )?.id;
+  }
+  if (needle === "fast" || needle === "fastmode") {
+    return options.find(
+      (option) =>
+        option.id === "fast" || option.id.toLowerCase().includes("fast"),
+    )?.id;
+  }
+  if (needle === "thinking") {
+    return options.find((option) => option.id === "thinking")?.id;
+  }
+  if (needle === "context" || needle === "contextwindow") {
+    return options.find(
+      (option) => option.id === "context" || option.id === "context_size",
+    )?.id;
+  }
+  return undefined;
 }
 
 function permissionOptionIds(params: unknown): string[] {

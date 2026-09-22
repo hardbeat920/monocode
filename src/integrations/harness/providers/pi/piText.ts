@@ -14,6 +14,7 @@ import {
   buildPiPrompt,
   buildPiSpawnArgs,
   isAgentSettled,
+  isPiThinkingLevel,
 } from "./piProtocol";
 import { mergeStream } from "../../core/streamText";
 
@@ -24,6 +25,7 @@ type LiveText = {
   rpc: PiRpc;
   cwd: string;
   model?: string;
+  settingsKey: string;
   collecting: boolean;
   output: string;
   closed: boolean;
@@ -89,6 +91,7 @@ export async function runTextPrompt(
   input: {
     cwd: string;
     model?: string;
+    modelSettings?: Record<string, string>;
     prompt: string;
     timeoutMs?: number;
   },
@@ -109,19 +112,33 @@ async function promptOnLive(
   input: {
     cwd: string;
     model?: string;
+    modelSettings?: Record<string, string>;
     prompt: string;
     timeoutMs?: number;
   },
 ): Promise<string> {
-  const session = await ensureLive(flavor, input.cwd, input.model);
+  const session = await ensureLive(
+    flavor,
+    input.cwd,
+    input.model,
+    input.modelSettings,
+  );
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
-
   try {
     await session.rpc.request({ type: "new_session" }).catch(() => undefined);
+    const thinking = input.modelSettings?.thinking;
     await session.rpc
-      .request({ type: "set_thinking_level", level: "off" })
+      .request({
+        type: "set_thinking_level",
+        level: isPiThinkingLevel(thinking) ? thinking : "off",
+      })
       .catch(() => undefined);
-
+    const fast = input.modelSettings?.fast;
+    if (flavor.id === "omp" && (fast === "true" || fast === "false")) {
+      await session.rpc
+        .request({ type: "set_fast_mode", enabled: fast === "true" })
+        .catch(() => undefined);
+    }
     session.output = "";
     session.collecting = true;
     session.turnEndPending = false;
@@ -178,26 +195,30 @@ async function ensureLive(
   flavor: PiFlavor,
   cwd: string,
   requestedModel?: string,
+  modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
   const state = stateFor(flavor);
   const model = pickTextModel(flavor, requestedModel);
+  const settingsKey = modelSettingsKey(modelSettings);
   const current = state.live;
   if (
     current &&
     !current.closed &&
     current.cwd === cwd &&
-    current.model === model
+    current.model === model &&
+    current.settingsKey === settingsKey
   ) {
     return current;
   }
   await dropLive(flavor);
-  return startLive(flavor, cwd, model);
+  return startLive(flavor, cwd, model, modelSettings);
 }
 
 async function startLive(
   flavor: PiFlavor,
   cwd: string,
   model?: string,
+  modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
   const state = stateFor(flavor);
   const childId = flavor.textChildId;
@@ -215,6 +236,7 @@ async function startLive(
     rpc,
     cwd,
     model,
+    settingsKey: modelSettingsKey(modelSettings),
     collecting: false,
     output: "",
     closed: false,
@@ -295,12 +317,19 @@ function finishTurn(session: LiveText) {
   session.turnFailed = null;
   done?.();
 }
+function modelSettingsKey(settings?: Record<string, string>): string {
+  return JSON.stringify({
+    thinking: settings?.thinking,
+    fast: settings?.fast,
+  });
+}
 
 export const stopPiTextPrompt = () => stopTextPrompt(PI_FLAVOR);
 export const warmupPiText = (cwd: string) => warmupText(PI_FLAVOR, cwd);
 export const runPiTextPrompt = (input: {
   cwd: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }) => runTextPrompt(PI_FLAVOR, input);
@@ -310,6 +339,7 @@ export const warmupOmpText = (cwd: string) => warmupText(OMP_FLAVOR, cwd);
 export const runOmpTextPrompt = (input: {
   cwd: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
 }) => runTextPrompt(OMP_FLAVOR, input);

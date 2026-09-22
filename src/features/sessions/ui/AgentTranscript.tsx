@@ -148,10 +148,16 @@ type Props = {
     text: string,
     turn: Block[],
     model?: string,
+    modelSettings?: Record<string, string>,
   ) => void;
   onBtwRetry?: (threadId: string, turn: Block[]) => void;
   onBtwDelete?: (threadId: string, turn: Block[]) => void;
-  onBtwModelChange?: (threadId: string, model: string, turn: Block[]) => void;
+  onBtwModelChange?: (
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+    turn: Block[],
+  ) => void;
   onJumpToBottomChange?: (show: boolean) => void;
 
   onJumpToBottomReady?: (jump: () => void) => void;
@@ -698,17 +704,25 @@ function AgentTranscriptComponent({
                     onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
                   model={turnModel?.id ?? model}
+                  modelSettings={modelSettings}
                   btwThreads={userBlock?.btwThreads}
                   visible={visible}
                   onBtwSubmit={
                     supportsBtwHarness(turnHarness) && onBtwSubmit
-                      ? (threadId, messageId, text, nextModel) =>
+                      ? (
+                          threadId,
+                          messageId,
+                          text,
+                          nextModel,
+                          nextModelSettings,
+                        ) =>
                           onBtwSubmit(
                             threadId,
                             messageId,
                             text,
                             turn,
                             nextModel,
+                            nextModelSettings,
                           )
                       : undefined
                   }
@@ -724,8 +738,13 @@ function AgentTranscriptComponent({
                   }
                   onBtwModelChange={
                     supportsBtwHarness(turnHarness) && onBtwModelChange
-                      ? (threadId, nextModel) =>
-                          onBtwModelChange(threadId, nextModel, turn)
+                      ? (threadId, nextModel, nextModelSettings) =>
+                          onBtwModelChange(
+                            threadId,
+                            nextModel,
+                            nextModelSettings,
+                            turn,
+                          )
                       : undefined
                   }
                 />
@@ -800,6 +819,7 @@ function TurnDuration({
   labelHidden = false,
   modelName,
   model,
+  modelSettings,
   harness,
   completedAt,
   copyText: output,
@@ -821,6 +841,7 @@ function TurnDuration({
   labelHidden?: boolean;
   modelName?: string;
   model?: string;
+  modelSettings?: Record<string, string>;
   harness?: HarnessId;
   completedAt?: number;
   copyText?: string;
@@ -836,10 +857,15 @@ function TurnDuration({
     messageId: string,
     text: string,
     model?: string,
+    modelSettings?: Record<string, string>,
   ) => void;
   onBtwRetry?: (threadId: string) => void;
   onBtwDelete?: (threadId: string) => void;
-  onBtwModelChange?: (threadId: string, model: string) => void;
+  onBtwModelChange?: (
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+  ) => void;
 }) {
   const label = formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
@@ -878,6 +904,7 @@ function TurnDuration({
           harness={harness}
           cwd={cwd}
           model={model}
+          modelSettings={modelSettings}
           threads={btwThreads}
           visible={visible}
           onSubmit={onBtwSubmit}
