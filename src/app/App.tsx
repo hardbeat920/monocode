@@ -45,6 +45,7 @@ import {
 } from "react";
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
+import { BrowserPane, useBrowserOpen } from "../features/sessions/ui/BrowserPane";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
@@ -8651,6 +8652,14 @@ export default function App({
     };
   }, [run]);
 
+  const [browserOpen, setBrowserOpen] = useBrowserOpen(() => {
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
+    setSettingsOpen(false);
+  });
+
   const dockGridRef = useRef<HTMLDivElement>(null);
   const dockDragSize = useRef<number | null>(null);
   const paintDockSize = useCallback((size: number) => {
@@ -8874,331 +8883,378 @@ export default function App({
               onDismissUpdate={() => setUpdateNotice(null)}
             />
 
-            <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="body-glass flex min-h-0 min-w-0 flex-1">
               <div
-                className={
-                  searchViewOpen ||
-                  settingsOpen ||
-                  inboxViewOpen ||
-                  notesViewOpen ||
-                  automationsViewOpen
-                    ? "hidden"
-                    : "flex min-h-0 min-w-0 flex-1 flex-col"
-                }
-                aria-hidden={
-                  searchViewOpen ||
-                  settingsOpen ||
-                  inboxViewOpen ||
-                  notesViewOpen ||
-                  automationsViewOpen
-                }
-                inert={
-                  searchViewOpen ||
-                  settingsOpen ||
-                  inboxViewOpen ||
-                  notesViewOpen ||
-                  automationsViewOpen ||
-                  undefined
-                }
+                className="flex min-h-0 min-w-0 flex-1 flex-col"
+                data-browser-workspace
               >
-                {!IS_MAC ? (
-                  <MenuBar
-                    onNew={onNew}
-                    onNewTerminal={onNewTerminal}
-                    onToggleTerminal={onToggleProjectTerminal}
-                    onGoToFile={onGoToFile}
-                    onToggleSidebar={onToggleSidebar}
-                    onShowSourceControl={onToggleChanges}
-                    onCloseCurrentTab={
-                      activeTabId ? () => onCloseTab(activeTabId) : undefined
-                    }
-                    onCloseOtherTabs={onCloseOtherTabs}
-                    onCloseAllTabs={onCloseAllTabs}
-                    onPickProject={pickProject}
-                    onFindInProject={onFindInProject}
-                    onSearch={onOpenSearch}
-                    onOpenInbox={onOpenInbox}
-                    onOpenNotes={notesEnabled ? onOpenNotes : undefined}
-                    onZoomIn={() => {
-                      const next = saveUiScale(zoomInUiScale(loadUiScale()));
-                      void applyUiScale(next);
-                    }}
-                    onZoomOut={() => {
-                      const next = saveUiScale(zoomOutUiScale(loadUiScale()));
-                      void applyUiScale(next);
-                    }}
-                    onZoomReset={() => {
-                      saveUiScale(UI_SCALE_DEFAULT);
-                      void applyUiScale(UI_SCALE_DEFAULT);
-                    }}
-                  />
-                ) : null}
-                {compactTitleBar ? null : workspaceTitleBar}
+                <div
+                  className={
+                    searchViewOpen ||
+                    settingsOpen ||
+                    inboxViewOpen ||
+                    notesViewOpen ||
+                    automationsViewOpen
+                      ? "hidden"
+                      : "flex min-h-0 min-w-0 flex-1 flex-col"
+                  }
+                  aria-hidden={
+                    searchViewOpen ||
+                    settingsOpen ||
+                    inboxViewOpen ||
+                    notesViewOpen ||
+                    automationsViewOpen
+                  }
+                  inert={
+                    searchViewOpen ||
+                    settingsOpen ||
+                    inboxViewOpen ||
+                    notesViewOpen ||
+                    automationsViewOpen ||
+                    undefined
+                  }
+                >
+                  {!IS_MAC ? (
+                    <MenuBar
+                      onNew={onNew}
+                      onNewTerminal={onNewTerminal}
+                      onToggleTerminal={onToggleProjectTerminal}
+                      onGoToFile={onGoToFile}
+                      onToggleSidebar={onToggleSidebar}
+                      onShowSourceControl={onToggleChanges}
+                      onCloseCurrentTab={
+                        activeTabId ? () => onCloseTab(activeTabId) : undefined
+                      }
+                      onCloseOtherTabs={onCloseOtherTabs}
+                      onCloseAllTabs={onCloseAllTabs}
+                      onPickProject={pickProject}
+                      onFindInProject={onFindInProject}
+                      onSearch={onOpenSearch}
+                      onOpenInbox={onOpenInbox}
+                      onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+                      onZoomIn={() => {
+                        const next = saveUiScale(zoomInUiScale(loadUiScale()));
+                        void applyUiScale(next);
+                      }}
+                      onZoomOut={() => {
+                        const next = saveUiScale(zoomOutUiScale(loadUiScale()));
+                        void applyUiScale(next);
+                      }}
+                      onZoomReset={() => {
+                        saveUiScale(UI_SCALE_DEFAULT);
+                        void applyUiScale(UI_SCALE_DEFAULT);
+                      }}
+                    />
+                  ) : null}
+                  {compactTitleBar ? null : (
+                    <TitleBar
+                      onOpenBrowser={() => setBrowserOpen(!browserOpen)}
+                      browserOpen={browserOpen}
+                      tabs={titleTabs}
+                      activeId={activeTabId}
+                      cwd={sidebarCwd}
+                      projectRailOpen={projectRailOpen}
+                      onToggleSidebar={onToggleSidebar}
+                      onSelect={activateTab}
+                      onNew={onNew}
+                      onNewTerminal={onNewTerminal}
+                      onOpenSettings={onOpenSettings}
+                      onOpenInbox={onOpenInbox}
+                      onOpenNotes={notesEnabled ? onOpenNotes : undefined}
+                      onClose={onCloseTitleTab}
+                      onCloseMany={onCloseTabs}
+                      onReorder={onReorderTabs}
+                      onPlaceOnPane={onPlaceTabOnPane}
+                      onGoToFile={onGoToFile}
+                      recents={recents}
+                      onSelectProject={onSelectProject}
+                    />
+                  )}
 
-                <main className="relative flex min-h-0 min-w-0 flex-1">
-                  <div
-                    ref={dockGridRef}
-                    className="grid h-full min-h-0 min-w-0 flex-1"
-                  >
-                    {projectTerminals.map((dock) => {
-                      const show =
-                        dock.open &&
-                        sameProjectPath(dock.projectPath, projectCwd);
-                      return (
-                        <div
-                          key={dock.projectPath}
-                          className={
-                            show
-                              ? "h-full min-h-0 min-w-0 w-full overflow-hidden"
-                              : "hidden"
-                          }
-                          style={show ? { gridArea: "dock" } : undefined}
-                          aria-hidden={!show}
-                        >
-                          <ProjectTerminalDock
-                            dock={dock}
-                            focused={show && projectTerminalFocused}
-                            onFocus={focusProjectTerminal}
-                            onHide={onHideProjectTerminal}
-                            onSideChange={onProjectTerminalSide}
-                            onSizePaint={paintDockSize}
-                            onSizeCommit={commitDockSize}
-                            onAddTerminal={onNewTerminal}
-                            onSelectTerminal={onSelectProjectTerminal}
-                            onCloseTerminal={onCloseProjectTerminal}
-                            onCloseOtherTerminals={onCloseOtherProjectTerminals}
-                            onReorderTerminals={onReorderProjectTerminals}
-                            onTerminalMetaChange={onTerminalMetaChange}
-                          />
-                        </div>
-                      );
-                    })}
+                  <main className="relative flex min-h-0 min-w-0 flex-1">
                     <div
-                      className="relative flex min-h-0 min-w-0 flex-row"
-                      style={{ gridArea: "main" }}
+                      ref={dockGridRef}
+                      className="grid h-full min-h-0 min-w-0 flex-1"
                     >
-                      <div className="relative min-h-0 min-w-0 flex-1">
-                        {tabs.map((tab) => (
+                      {projectTerminals.map((dock) => {
+                        const show =
+                          dock.open &&
+                          sameProjectPath(dock.projectPath, projectCwd);
+                        return (
                           <div
-                            key={tab.id}
-                            aria-hidden={tab.id !== activeTabId}
+                            key={dock.projectPath}
                             className={
-                              tab.id === activeTabId
-                                ? "absolute inset-0 flex h-full min-h-0 flex-col"
+                              show
+                                ? "h-full min-h-0 min-w-0 w-full overflow-hidden"
                                 : "hidden"
                             }
+                            style={show ? { gridArea: "dock" } : undefined}
+                            aria-hidden={!show}
                           >
-                            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-                              <PaneTree
-                                {...sessionPaneProps}
-                                visible={
-                                  tab.id === activeTabId && !inboxViewOpen
-                                }
-                                layout={tab.layout}
-                                sessions={sessions}
-                                editorPanes={[
-                                  ...tab.editorPanes,
-                                  ...(tab.terminalPanes ?? []),
-                                ]}
-                                dirtyFileIds={dirtyFiles}
-                                fileErrorCounts={fileErrorCounts}
-                                focusedId={
-                                  tab.id === activeTabId &&
-                                  !inboxViewOpen &&
-                                  !tab.diffFocused &&
-                                  !projectTerminalFocused
-                                    ? tab.focusedId
-                                    : ""
-                                }
-                                addToChatSessionId={
-                                  tab.id === activeTabId
-                                    ? active?.id
-                                    : undefined
-                                }
-                                composerFocused={
-                                  composerFocused && !projectTerminalFocused
-                                }
-                                composerFocusToken={composerFocusToken}
-                                onSelectFile={onSelectFileSurface}
-                                onCloseFile={onCloseFile}
-                                onCloseOtherFiles={onCloseOtherFiles}
-                                onReorderFiles={onReorderFiles}
-                                onFileDirtyChange={onFileDirtyChange}
-                                onFileErrorCountChange={onFileErrorCountChange}
-                                onRatio={(splitId, index, ratio) =>
-                                  onRatio(tab.id, splitId, index, ratio)
-                                }
-                                editorNavigation={editorNavigation}
-                                onUpdatePlan={onUpdatePlan}
-                                onMovePane={onMovePane}
-                                onDetachPane={onDetachPane}
-                                onTerminalMetaChange={onTerminalMetaChange}
-                              />
-                            </div>
+                            <ProjectTerminalDock
+                              dock={dock}
+                              focused={show && projectTerminalFocused}
+                              onFocus={focusProjectTerminal}
+                              onHide={onHideProjectTerminal}
+                              onSideChange={onProjectTerminalSide}
+                              onSizePaint={paintDockSize}
+                              onSizeCommit={commitDockSize}
+                              onAddTerminal={onNewTerminal}
+                              onSelectTerminal={onSelectProjectTerminal}
+                              onCloseTerminal={onCloseProjectTerminal}
+                              onCloseOtherTerminals={
+                                onCloseOtherProjectTerminals
+                              }
+                              onReorderTerminals={onReorderProjectTerminals}
+                              onTerminalMetaChange={onTerminalMetaChange}
+                            />
                           </div>
-                        ))}
+                        );
+                      })}
+                      <div
+                        className="relative flex min-h-0 min-w-0 flex-row"
+                        style={{ gridArea: "main" }}
+                      >
+                        <div className="relative min-h-0 min-w-0 flex-1">
+                          {tabs.map((tab) => (
+                            <div
+                              key={tab.id}
+                              aria-hidden={tab.id !== activeTabId}
+                              className={
+                                tab.id === activeTabId
+                                  ? "absolute inset-0 flex h-full min-h-0 flex-col"
+                                  : "hidden"
+                              }
+                            >
+                              <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+                                <PaneTree
+                                  {...sessionPaneProps}
+                                  visible={
+                                    tab.id === activeTabId && !inboxViewOpen
+                                  }
+                                  layout={tab.layout}
+                                  sessions={sessions}
+                                  editorPanes={[
+                                    ...tab.editorPanes,
+                                    ...(tab.terminalPanes ?? []),
+                                  ]}
+                                  dirtyFileIds={dirtyFiles}
+                                  fileErrorCounts={fileErrorCounts}
+                                  focusedId={
+                                    tab.id === activeTabId &&
+                                    !inboxViewOpen &&
+                                    !tab.diffFocused &&
+                                    !projectTerminalFocused
+                                      ? tab.focusedId
+                                      : ""
+                                  }
+                                  addToChatSessionId={
+                                    tab.id === activeTabId
+                                      ? active?.id
+                                      : undefined
+                                  }
+                                  composerFocused={
+                                    composerFocused && !projectTerminalFocused
+                                  }
+                                  composerFocusToken={composerFocusToken}
+                                  onSelectFile={onSelectFileSurface}
+                                  onCloseFile={onCloseFile}
+                                  onCloseOtherFiles={onCloseOtherFiles}
+                                  onReorderFiles={onReorderFiles}
+                                  onFileDirtyChange={onFileDirtyChange}
+                                  onFileErrorCountChange={
+                                    onFileErrorCountChange
+                                  }
+                                  onRatio={(splitId, index, ratio) =>
+                                    onRatio(tab.id, splitId, index, ratio)
+                                  }
+                                  editorNavigation={editorNavigation}
+                                  onUpdatePlan={onUpdatePlan}
+                                  onMovePane={onMovePane}
+                                  onDetachPane={onDetachPane}
+                                  onTerminalMetaChange={onTerminalMetaChange}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  {[...linkedWorkItemPanels.values()].map((panel) => (
-                    <LinkedWorkItemPanel
-                      key={panel.sessionId}
-                      target={panel.item}
-                      cwd={panel.cwd}
-                      recents={recents}
-                      visible={
-                        !searchViewOpen &&
-                        !settingsOpen &&
-                        !inboxViewOpen &&
-                        !notesViewOpen &&
-                        !automationsViewOpen &&
-                        activeLinkedWorkItemPanel?.sessionId === panel.sessionId
-                      }
-                      onClose={() => closeLinkedWorkItemPanel(panel.sessionId)}
-                    />
-                  ))}
-                </main>
+                    {[...linkedWorkItemPanels.values()].map((panel) => (
+                      <LinkedWorkItemPanel
+                        key={panel.sessionId}
+                        target={panel.item}
+                        cwd={panel.cwd}
+                        recents={recents}
+                        visible={
+                          !searchViewOpen &&
+                          !settingsOpen &&
+                          !inboxViewOpen &&
+                          !notesViewOpen &&
+                          !automationsViewOpen &&
+                          activeLinkedWorkItemPanel?.sessionId ===
+                            panel.sessionId
+                        }
+                        onClose={() =>
+                          closeLinkedWorkItemPanel(panel.sessionId)
+                        }
+                      />
+                    ))}
+                  </main>
+                </div>
+                {searchViewOpen ? (
+                  <SearchView
+                    open
+                    cwd={gitCwd}
+                    recents={recents}
+                    history={projectHistory}
+                    sessions={sessions.filter((session) => !session.inboxAsk)}
+                    focusToken={searchViewFocusToken}
+                    besideRail={projectRailOpen || compactProjectRail}
+                    compactRail={compactRailActive}
+                    onClose={onLeaveSearch}
+                    onToggleSidebar={onToggleSidebar}
+                    onOpenFile={onOpenFile}
+                    onOpenSession={onSelectHistorySession}
+                    onOpenProject={onSelectProject}
+                  />
+                ) : null}
+                <div className="hidden" aria-hidden>
+                  {sessions
+                    .filter((session) => session.inboxAsk)
+                    .map((session) => {
+                      const visible =
+                        inboxViewOpen && inboxAskPortal?.sessionId === session.id;
+                      return (
+                        <SessionSurface
+                          key={session.id}
+                          host={visible ? inboxAskPortal.host : undefined}
+                        >
+                          <SessionPane
+                            {...sessionPaneProps}
+                            session={session}
+                            visible={visible}
+                            focused={visible}
+                            inSplit={false}
+                            composerFocused={composerFocused}
+                            composerFocusToken={composerFocusToken}
+                          />
+                        </SessionSurface>
+                      );
+                    })}
+                </div>
+                {inboxViewOpen ? (
+                  <InboxView
+                    cwd={sidebarCwd}
+                    recents={recents}
+                    besideRail={projectRailOpen || compactProjectRail}
+                    compactRail={compactRailActive}
+                    onClose={onLeaveInbox}
+                    onToggleSidebar={onToggleSidebar}
+                    onStart={onStartInboxItem}
+                    onAsk={onAskInboxItem}
+                    onAskRestart={onRestartInboxAsk}
+                    onAskMount={setInboxAskPortal}
+                    sessions={inboxRelatedSessions}
+                    onOpenSession={onOpenInboxSession}
+                    onOpenIntegrations={onOpenInboxIntegrations}
+                  />
+                ) : null}
+                {notesViewOpen ? (
+                  <NotesView
+                    besideRail={projectRailOpen || compactProjectRail}
+                    compactRail={compactRailActive}
+                    cwd={projectCwd}
+                    recents={recents}
+                    onClose={onLeaveNotes}
+                    onToggleSidebar={onToggleSidebar}
+                  />
+                ) : null}
+                {automationsViewOpen ? (
+                  <AutomationsView
+                    besideRail={projectRailOpen || compactProjectRail}
+                    compactRail={compactRailActive}
+                    cwd={projectCwd}
+                    recents={recents}
+                    onClose={onLeaveAutomations}
+                    onToggleSidebar={onToggleSidebar}
+                    onLaunch={(automation, run) =>
+                      launchAutomation(automation, run, true)
+                    }
+                    onOpenSession={onOpenAutomationSession}
+                  />
+                ) : null}
+                {settingsOpen ? (
+                  <SettingsView
+                    section={settingsSection}
+                    anchor={settingsAnchor}
+                    notificationProjectPath={notificationProjectPath}
+                    notificationSettingsRequest={notificationSettingsRequest}
+                    recents={recents}
+                    cwd={sidebarCwd}
+                    sessions={sidebarHistory}
+                    liveSessions={sessions}
+                    onRemoveWorktree={onRemoveWorktree}
+                    onCheckWorktreeRemoval={onCheckWorktreeRemoval}
+                    onDeleteWorktreeSessions={onDeleteWorktreeSessions}
+                    besideRail
+                    onClose={onCloseSettings}
+                    onSelectSection={onSelectSettingsSection}
+                    onOpenSession={onOpenArchivedSession}
+                    onArchiveSession={onArchiveHistorySession}
+                    onDeleteSession={onDeleteHistorySession}
+                    onRestoreProject={onRestoreProject}
+                    onDeleteProject={(path) =>
+                      onRemoveProject(path, { purgeData: true })
+                    }
+                    onOpenWhatsNew={onOpenWhatsNew}
+                    collapsedProjectRailMode={collapsedProjectRailMode}
+                    onCollapsedProjectRailModeChange={
+                      setCollapsedProjectRailMode
+                    }
+                  />
+                ) : null}
+                {searchViewOpen ||
+                inboxViewOpen ||
+                notesViewOpen ||
+                automationsViewOpen ||
+                settingsOpen ? null : (
+                  <UsageFooter
+                    providers={usageProviders}
+                    session={usageSession}
+                    project={active?.cwd ?? projectCwd}
+                    onSelectAccount={onSelectProviderAccount}
+                    onManageAccounts={() =>
+                      openSettings("providers", "provider-accounts")
+                    }
+                    terminals={runningTerminals}
+                    terminalOpen={runningTerminalOpen}
+                    onToggleTerminal={onToggleRunningTerminal}
+                    onNewTerminal={
+                      looksLikeProject(projectCwd) ? onNewTerminal : undefined
+                    }
+                    onShowTerminal={
+                      looksLikeProject(projectCwd)
+                        ? onShowProjectTerminal
+                        : undefined
+                    }
+                    projectTerminalActive={
+                      !!currentProjectDock &&
+                      currentProjectDock.pane.files.length > 0
+                    }
+                  />
+                )}
               </div>
-              {searchViewOpen ? (
-                <SearchView
-                  open
-                  cwd={gitCwd}
-                  recents={recents}
-                  history={projectHistory}
-                  sessions={sessions.filter((session) => !session.inboxAsk)}
-                  focusToken={searchViewFocusToken}
-                  besideRail={projectRailOpen || compactProjectRail}
-                  compactRail={compactRailActive}
-                  onClose={onLeaveSearch}
-                  onToggleSidebar={onToggleSidebar}
-                  onOpenFile={onOpenFile}
-                  onOpenSession={onSelectHistorySession}
-                  onOpenProject={onSelectProject}
-                />
-              ) : null}
-              <div className="hidden" aria-hidden>
-                {sessions
-                  .filter((session) => session.inboxAsk)
-                  .map((session) => {
-                    const visible =
-                      inboxViewOpen && inboxAskPortal?.sessionId === session.id;
-                    return (
-                      <SessionSurface
-                        key={session.id}
-                        host={visible ? inboxAskPortal.host : undefined}
-                      >
-                        <SessionPane
-                          {...sessionPaneProps}
-                          session={session}
-                          visible={visible}
-                          focused={visible}
-                          inSplit={false}
-                          composerFocused={composerFocused}
-                          composerFocusToken={composerFocusToken}
-                        />
-                      </SessionSurface>
-                    );
-                  })}
-              </div>
-              {inboxViewOpen ? (
-                <InboxView
-                  cwd={sidebarCwd}
-                  recents={recents}
-                  besideRail={projectRailOpen || compactProjectRail}
-                  compactRail={compactRailActive}
-                  onClose={onLeaveInbox}
-                  onToggleSidebar={onToggleSidebar}
-                  onStart={onStartInboxItem}
-                  onAsk={onAskInboxItem}
-                  onAskRestart={onRestartInboxAsk}
-                  onAskMount={setInboxAskPortal}
-                  sessions={inboxRelatedSessions}
-                  onOpenSession={onOpenInboxSession}
-                  onOpenIntegrations={onOpenInboxIntegrations}
-                />
-              ) : null}
-              {notesViewOpen ? (
-                <NotesView
-                  besideRail={projectRailOpen || compactProjectRail}
-                  compactRail={compactRailActive}
-                  cwd={projectCwd}
-                  recents={recents}
-                  onClose={onLeaveNotes}
-                  onToggleSidebar={onToggleSidebar}
-                />
-              ) : null}
-              {automationsViewOpen ? (
-                <AutomationsView
-                  besideRail={projectRailOpen || compactProjectRail}
-                  compactRail={compactRailActive}
-                  cwd={projectCwd}
-                  recents={recents}
-                  onClose={onLeaveAutomations}
-                  onToggleSidebar={onToggleSidebar}
-                  onLaunch={(automation, run) =>
-                    launchAutomation(automation, run, true)
-                  }
-                  onOpenSession={onOpenAutomationSession}
-                />
-              ) : null}
-              {settingsOpen ? (
-                <SettingsView
-                  section={settingsSection}
-                  anchor={settingsAnchor}
-                  notificationProjectPath={notificationProjectPath}
-                  notificationSettingsRequest={notificationSettingsRequest}
-                  recents={recents}
-                  cwd={sidebarCwd}
-                  sessions={sidebarHistory}
-                  liveSessions={sessions}
-                  onRemoveWorktree={onRemoveWorktree}
-                  onCheckWorktreeRemoval={onCheckWorktreeRemoval}
-                  onDeleteWorktreeSessions={onDeleteWorktreeSessions}
-                  besideRail
-                  onClose={onCloseSettings}
-                  onSelectSection={onSelectSettingsSection}
-                  onOpenSession={onOpenArchivedSession}
-                  onArchiveSession={onArchiveHistorySession}
-                  onDeleteSession={onDeleteHistorySession}
-                  onRestoreProject={onRestoreProject}
-                  onDeleteProject={(path) =>
-                    onRemoveProject(path, { purgeData: true })
-                  }
-                  onOpenWhatsNew={onOpenWhatsNew}
-                  collapsedProjectRailMode={collapsedProjectRailMode}
-                  onCollapsedProjectRailModeChange={setCollapsedProjectRailMode}
-                />
-              ) : null}
-              {searchViewOpen ||
-              inboxViewOpen ||
-              notesViewOpen ||
-              automationsViewOpen ||
-              settingsOpen ? null : (
-                <UsageFooter
-                  providers={usageProviders}
-                  session={usageSession}
-                  project={active?.cwd ?? projectCwd}
-                  onSelectAccount={onSelectProviderAccount}
-                  onManageAccounts={() =>
-                    openSettings("providers", "provider-accounts")
-                  }
-                  terminals={runningTerminals}
-                  terminalOpen={runningTerminalOpen}
-                  onToggleTerminal={onToggleRunningTerminal}
-                  onNewTerminal={
-                    looksLikeProject(projectCwd) ? onNewTerminal : undefined
-                  }
-                  onShowTerminal={
-                    looksLikeProject(projectCwd)
-                      ? onShowProjectTerminal
-                      : undefined
-                  }
-                  projectTerminalActive={
-                    !!currentProjectDock &&
-                    currentProjectDock.pane.files.length > 0
-                  }
-                />
-              )}
+              <BrowserPane
+                open={browserOpen}
+                visible={
+                  !searchViewOpen &&
+                  !settingsOpen &&
+                  !inboxViewOpen &&
+                  !notesViewOpen &&
+                  !automationsViewOpen
+                }
+              />
             </div>
           </div>
 

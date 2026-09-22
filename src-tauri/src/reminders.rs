@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 use crate::session_store::{now_millis, validate_id, SessionStore};
 
@@ -214,7 +214,7 @@ pub fn reminder_configure(
 
 #[tauri::command]
 pub fn reminder_register_window(
-    window: WebviewWindow,
+    window: Window,
     service: State<'_, ReminderService>,
     session_ids: Vec<String>,
 ) -> Result<(), String> {
@@ -235,7 +235,7 @@ pub fn reminder_open(app: AppHandle, session_id: String, due_at: i64) -> Result<
 #[tauri::command]
 pub fn reminder_take_open(
     app: AppHandle,
-    window: WebviewWindow,
+    window: Window,
     service: State<'_, ReminderService>,
 ) -> Result<Option<OpenReminder>, String> {
     let mut pending = service
@@ -246,7 +246,7 @@ pub fn reminder_take_open(
         request
             .window_label
             .as_deref()
-            .is_none_or(|label| label == window.label() || app.get_webview_window(label).is_none())
+            .is_none_or(|label| label == window.label() || app.get_window(label).is_none())
     }) {
         return Ok(pending.take());
     }
@@ -272,10 +272,10 @@ pub(crate) fn open_from_notification(app: &AppHandle, identifier: &str) {
 fn queue_open(app: &AppHandle, session_id: String, due_at: i64) -> Result<(), String> {
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        let windows = handle.webview_windows();
+        let windows = handle.windows();
         let service = handle.state::<ReminderService>();
         let owners = service.window_sessions.lock().ok();
-        let owns_session = |window: &&WebviewWindow| {
+        let owns_session = |window: &&Window| {
             owners.as_ref().is_some_and(|owners| {
                 owners
                     .get(window.label())

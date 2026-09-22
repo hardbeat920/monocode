@@ -13,10 +13,22 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn dispatch(app: &AppHandle, id: &str) {
     match id {
+        "open_browser" => emit_to_focused(app, id),
         "new_window" => {
             let _ = crate::window::open_new_window(app);
         }
         "quit" => crate::window::request_quit(app),
+        "browser_reload" => {
+            if let Some(window) = app
+                .windows()
+                .into_values()
+                .find(|w| w.is_focused().unwrap_or(false))
+            {
+                if let Some(view) = app.get_webview(&crate::browser::label(window.label())) {
+                    let _ = view.reload();
+                }
+            }
+        }
         "new_tab" | "close_tab" | "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab"
         | "forward_tab" | "split_right" | "split_down" | "focus_left" | "focus_right"
         | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project"
@@ -39,7 +51,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
 
 /// Emit `id` to the focused window, falling back to a visible one, then any.
 fn emit_to_focused(app: &AppHandle, id: &str) {
-    let mut windows: Vec<_> = app.webview_windows().into_values().collect();
+    let mut windows: Vec<_> = app.windows().into_values().collect();
     windows.sort_by(|a, b| a.label().cmp(b.label()));
     let target = windows
         .iter()
@@ -92,6 +104,12 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .build(app)?;
     let new_terminal_tab = MenuItemBuilder::with_id("new_terminal_tab", "New Terminal Tab")
         .accelerator("CmdOrCtrl+Shift+`")
+        .build(app)?;
+    let open_browser = MenuItemBuilder::with_id("open_browser", "Open Browser")
+        .accelerator("CmdOrCtrl+Shift+B")
+        .build(app)?;
+    let browser_reload = MenuItemBuilder::with_id("browser_reload", "Reload Page")
+        .accelerator("CmdOrCtrl+R")
         .build(app)?;
     let toggle_terminal = MenuItemBuilder::with_id("toggle_terminal", "Toggle Terminal")
         .accelerator("CmdOrCtrl+J")
@@ -173,6 +191,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&new_tab)
         .item(&new_terminal)
         .item(&new_terminal_tab)
+        .item(&open_browser)
+        .item(&browser_reload)
         .item(&split_right)
         .item(&split_down)
         .item(&close_tab)

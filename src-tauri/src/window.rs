@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::window::Color;
 #[cfg(target_os = "windows")]
 use tauri::window::{Effect, EffectsBuilder};
-use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindowBuilder, Window};
 
 static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
 static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
@@ -80,7 +80,7 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), String> {
         .map_err(|err| err.to_string())?;
 
     #[cfg(target_os = "macos")]
-    crate::macos::install(&window);
+    crate::macos::install(&window.as_ref().window());
 
     #[cfg(not(target_os = "macos"))]
     {
@@ -94,7 +94,22 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), String> {
 
 /// Desktop blur goes on after the first UI paint and only in dark mode.
 #[tauri::command]
-pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool) {
+pub fn set_window_glass_enabled(window: Window, enabled: bool) {
+    // Window handles remain valid with multiple webviews; preserve the old
+    // WebviewWindow behavior of updating the app document's background too.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Some(view) = window.get_webview(window.label()) {
+        #[cfg(target_os = "macos")]
+        if enabled {
+            let _ = view.set_background_color(Some(Color(0, 0, 0, 3)));
+        }
+        #[cfg(target_os = "windows")]
+        let _ = view.set_background_color(Some(if enabled {
+            Color(0, 0, 0, 0)
+        } else {
+            Color(247, 247, 247, 255)
+        }));
+    }
     #[cfg(target_os = "macos")]
     {
         if enabled {
@@ -122,20 +137,20 @@ pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool) {
 
 /// Close with a running chat hides the webview so the harness child keeps going.
 #[tauri::command]
-pub fn hide_window(window: WebviewWindow) -> Result<(), String> {
+pub fn hide_window(window: Window) -> Result<(), String> {
     window.hide().map_err(|err| err.to_string())
 }
 
 /// Finish an idle close. `destroy` skips CloseRequested so the JS handler
 /// does not loop; `close` would fire it again.
 #[tauri::command]
-pub fn destroy_window(window: WebviewWindow) -> Result<(), String> {
+pub fn destroy_window(window: Window) -> Result<(), String> {
     window.destroy().map_err(|err| err.to_string())
 }
 
 /// Dock click / Cmd-click with no visible windows: bring hidden ones back.
 pub fn show_hidden_or_open_new(app: &AppHandle) -> Result<(), String> {
-    let mut windows: Vec<WebviewWindow> = app.webview_windows().into_values().collect();
+    let mut windows: Vec<Window> = app.windows().into_values().collect();
     if windows.is_empty() {
         return open_new_window(app);
     }
@@ -153,7 +168,7 @@ pub fn show_hidden_or_open_new(app: &AppHandle) -> Result<(), String> {
 
 /// window-state can restore a window as hidden after a quit-while-hidden.
 pub fn ensure_launch_window_visible(app: &AppHandle) {
-    let windows: Vec<WebviewWindow> = app.webview_windows().into_values().collect();
+    let windows: Vec<Window> = app.windows().into_values().collect();
     if windows.is_empty() {
         return;
     }
@@ -274,9 +289,13 @@ fn drop_window(slot: &mut Option<QuitRun>, label: &str) -> Next {
     }
 }
 
-/// Ask every window what it has running, then decide once for all of them.
+fn app_window_labels(app: &AppHandle) -> Vec<String> {
+    app.windows().into_keys().collect()
+}
+
+/// Ask every app window what it has running, then decide once for all of them.
 pub fn request_quit(app: &AppHandle) {
-    let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let labels = app_window_labels(app);
     if labels.is_empty() {
         confirm_quit(app.clone());
         return;
@@ -295,7 +314,7 @@ pub fn request_quit(app: &AppHandle) {
 
 /// One window's live turn count, counted before anything is killed.
 #[tauri::command]
-pub fn quit_poll_reply(app: AppHandle, window: WebviewWindow, id: u32, in_flight: u32) {
+pub fn quit_poll_reply(app: AppHandle, window: Window, id: u32, in_flight: u32) {
     let next = record_reply(&mut QUIT_RUN.lock().unwrap(), id, window.label(), in_flight);
     if next == Next::Confirm {
         start_confirm(&app, id);
@@ -313,7 +332,7 @@ fn resurface_prompt(app: &AppHandle) {
         }
         run.prompt.clone()
     };
-    let Some(window) = label.and_then(|label| app.get_webview_window(&label)) else {
+    let Some(window) = label.and_then(|label| app.get_window(&label)) else {
         return;
     };
     let _ = window.unminimize();
@@ -323,7 +342,7 @@ fn resurface_prompt(app: &AppHandle) {
 
 /// The answer to the one dialog the whole app gets to show.
 #[tauri::command]
-pub fn quit_decision(app: AppHandle, window: WebviewWindow, id: u32, confirmed: bool) {
+pub fn quit_decision(app: AppHandle, window: Window, id: u32, confirmed: bool) {
     {
         let guard = QUIT_RUN.lock().unwrap();
         let Some(run) = guard.as_ref() else { return };
@@ -345,7 +364,7 @@ pub fn quit_decision(app: AppHandle, window: WebviewWindow, id: u32, confirmed: 
 /// One window has persisted. The last one out turns the lights off, so a slow
 /// window cannot lose its workspace to a faster window's exit.
 #[tauri::command]
-pub fn quit_ready(app: AppHandle, window: WebviewWindow, id: u32, persisted: bool) {
+pub fn quit_ready(app: AppHandle, window: Window, id: u32, persisted: bool) {
     // A window that could not save its workspace keeps the app open, the way a
     // failed persist did before the handshake existed. The windows that did
     // save are staying too, so take them back out of quitting.
@@ -385,7 +404,7 @@ fn start_confirm(app: &AppHandle, id: u32) {
         start_commit(app, id);
         return;
     }
-    if app.webview_windows().is_empty() {
+    if app.windows().is_empty() {
         clear_run(id);
         confirm_quit(app.clone());
         return;
@@ -423,7 +442,7 @@ fn start_confirm(app: &AppHandle, id: u32) {
 }
 
 fn start_commit(app: &AppHandle, id: u32) {
-    let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let labels = app_window_labels(app);
     let empty = labels.is_empty();
     if !open_commit(&mut QUIT_RUN.lock().unwrap(), id, labels) {
         return;
@@ -444,7 +463,7 @@ fn start_commit(app: &AppHandle, id: u32) {
 /// listeners are live. A window still booting would swallow the dialog, and
 /// confirming has nothing to time out on.
 fn prompt_window(app: &AppHandle, replied: &HashSet<String>) -> Option<String> {
-    let windows = app.webview_windows();
+    let windows = app.windows();
     let mut labels: Vec<String> = windows.keys().cloned().collect();
     labels.sort();
     let answered: Vec<String> = labels
@@ -508,7 +527,7 @@ fn clear_run(id: u32) {
 pub fn confirm_quit(app: AppHandle) {
     *QUIT_RUN.lock().unwrap() = None;
     ALLOW_EXIT.store(true, Ordering::SeqCst);
-    for window in app.webview_windows().values() {
+    for window in app.windows().values() {
         let _ = window.show();
     }
     // Belt and braces. `RunEvent::Exit` reaps too, and it also runs before the

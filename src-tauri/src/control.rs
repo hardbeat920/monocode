@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 #[derive(Clone)]
 struct Grant {
@@ -218,7 +218,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
 
 #[tauri::command]
 pub fn control_enable(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     session_id: String,
     cwd: String,
@@ -265,7 +265,7 @@ pub fn control_enable(
 
 #[tauri::command]
 pub fn control_disable(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     session_id: String,
 ) -> Result<(), String> {
@@ -288,7 +288,7 @@ pub fn control_disable(
 
 #[tauri::command]
 pub fn control_attach_worker(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     lead_id: String,
     session_id: String,
@@ -335,7 +335,7 @@ fn configure_worker_scratch(cmd: &mut Command, path: &Path) {
 
 #[tauri::command]
 pub fn control_authorize_turn(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     session_id: String,
     cwd: String,
@@ -407,7 +407,7 @@ pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
 
 #[tauri::command]
 pub fn control_reply(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     id: String,
     response: Value,

@@ -2,6 +2,7 @@ use tauri::Manager;
 
 mod automations;
 mod azure_devops;
+mod browser;
 mod chat_background;
 mod checkpoint;
 mod control;
@@ -161,7 +162,7 @@ pub(crate) fn passwd_identity() -> Option<PasswdIdentity> {
 
 #[tauri::command]
 fn set_traffic_lights_visible(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] visible: bool,
 ) {
     #[cfg(target_os = "macos")]
@@ -170,7 +171,7 @@ fn set_traffic_lights_visible(
 
 #[tauri::command]
 fn set_window_background_blur(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] radius: u8,
 ) {
     #[cfg(target_os = "macos")]
@@ -179,7 +180,7 @@ fn set_window_background_blur(
 
 #[tauri::command]
 fn set_dock_badge(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] count: u32,
 ) {
     #[cfg(target_os = "macos")]
@@ -216,13 +217,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 macos::install_dock_menu(app.handle());
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     macos::install(&window);
                 }
             }
             #[cfg(not(target_os = "macos"))]
             {
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     let _ = window.set_decorations(false);
                     let _ = window.set_shadow(true);
                 }
@@ -232,7 +233,8 @@ pub fn run() {
         .on_menu_event(|app, event| {
             menu::dispatch(app, event.id().as_ref());
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(browser::restrict_commands(tauri::generate_handler![
+            browser::embedded_browser,
             control::control_enable,
             control::control_disable,
             control::control_reply,
@@ -445,7 +447,7 @@ pub fn run() {
             project_logo::save_project_logo,
             project_logo::remove_project_logo,
             project_logo::forget_logo_file,
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building MonoCode");
 
@@ -473,7 +475,7 @@ pub fn run() {
             ..
         } => {
             window::forget_quit_window(handle, &label);
-            let other_window = handle.webview_windows().keys().any(|name| name != &label);
+            let other_window = handle.windows().keys().any(|name| name != &label);
             control::window_closed(handle, &label);
             if !other_window {
                 reap_harness_children(handle);

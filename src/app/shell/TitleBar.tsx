@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
@@ -97,6 +98,8 @@ type Props = {
   onCloseMany: (ids: string[], fallbackId: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
   onPlaceOnPane?: (tabId: string, targetId: string, edge: PaneEdge) => void;
+  onOpenBrowser?: () => void;
+  browserOpen?: boolean;
   onGoToFile?: () => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
@@ -607,6 +610,8 @@ function TitleBarComponent({
   onReorder,
   onPlaceOnPane,
   onGoToFile,
+  onOpenBrowser,
+  browserOpen = false,
   recents = [],
   onSelectProject,
 }: Props) {
@@ -796,7 +801,7 @@ function TitleBarComponent({
       Boolean(onOpenInbox || onOpenNotes || onOpenSettings)) ||
     (railClosed && !projectless);
   const trailingControls =
-    showTrailingActions || !IS_MAC ? (
+    showTrailingActions || onOpenBrowser || !IS_MAC ? (
       <div className="flex h-full shrink-0 items-stretch">
         {showTrailingActions ? (
           <div className="flex items-center gap-0.5 px-2">
@@ -827,6 +832,17 @@ function TitleBarComponent({
             ) : null}
           </div>
         ) : null}
+        {onOpenBrowser && (
+          <div className="flex items-center pr-2 pl-0.5">
+            <IconButton
+              label={`${browserOpen ? "Close" : "Open"} browser split (${MOD}⇧B)`}
+              active={browserOpen}
+              onClick={onOpenBrowser}
+            >
+              <AppWindow className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          </div>
+        )}
         {!IS_MAC ? <WindowControls /> : null}
       </div>
     ) : null;
