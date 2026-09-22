@@ -44,6 +44,7 @@ import {
   type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../model/session";
+import { supportsBtwHarness } from "../model/btw";
 import { AgentTranscript } from "./AgentTranscript";
 import { EmptySession } from "./EmptySession";
 import { MOD } from "../../../platform/tauri/platform";
@@ -659,7 +660,7 @@ export const SessionPane = memo(function SessionPane({
                 }
                 onBtwSubmit={
                   !managed &&
-                  session.harness === "codex" &&
+                  supportsBtwHarness(session.harness) &&
                   !session.inboxAsk &&
                   !session.worktreeRemoved &&
                   onBtwSubmit
@@ -676,7 +677,7 @@ export const SessionPane = memo(function SessionPane({
                 }
                 onBtwRetry={
                   !managed &&
-                  session.harness === "codex" &&
+                  supportsBtwHarness(session.harness) &&
                   !session.inboxAsk &&
                   !session.worktreeRemoved &&
                   onBtwRetry
@@ -685,7 +686,7 @@ export const SessionPane = memo(function SessionPane({
                 }
                 onBtwDelete={
                   !managed &&
-                  session.harness === "codex" &&
+                  supportsBtwHarness(session.harness) &&
                   !session.inboxAsk &&
                   !session.worktreeRemoved &&
                   onBtwDelete
@@ -695,7 +696,7 @@ export const SessionPane = memo(function SessionPane({
                 }
                 onBtwModelChange={
                   !managed &&
-                  session.harness === "codex" &&
+                  supportsBtwHarness(session.harness) &&
                   !session.inboxAsk &&
                   !session.worktreeRemoved &&
                   onBtwModelChange

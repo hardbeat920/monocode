@@ -20,9 +20,16 @@ import { Shimmer } from "../../../shared/ui/Shimmer";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { ModelPicker } from "./ModelPicker";
 import { HarnessIcon as ProviderIcon } from "./HarnessIcon";
-import type { BtwThread, BtwMessage, HarnessId } from "../model/session";
+import {
+  HARNESS_LABEL,
+  HARNESS_TITLE,
+  type BtwMessage,
+  type BtwThread,
+  type HarnessId,
+} from "../model/session";
 
 type Props = {
+  harness: HarnessId;
   threads?: BtwThread[];
   visible?: boolean;
   cwd?: string;
@@ -58,9 +65,7 @@ function statusClass(status: BtwThread["status"]): string {
   return "bg-emerald-300";
 }
 
-const BTW_ALLOWED_HARNESSES = ["codex"] as const;
-
-function messageMeta(role: BtwMessage["role"]) {
+function messageMeta(role: BtwMessage["role"], harness: HarnessId) {
   return role === "user" ? (
     <div className="btw-message-meta btw-message-meta-user">
       <span>YOU</span>
@@ -68,13 +73,14 @@ function messageMeta(role: BtwMessage["role"]) {
     </div>
   ) : (
     <div className="btw-message-meta">
-      <ProviderIcon harness="codex" className="size-3.5 shrink-0" />
-      <span>CODEX</span>
+      <ProviderIcon harness={harness} className="size-3.5 shrink-0" />
+      <span>{HARNESS_LABEL[harness].toUpperCase()}</span>
     </div>
   );
 }
 
 export function BtwPopover({
+  harness,
   threads = [],
   visible = true,
   cwd,
@@ -181,7 +187,7 @@ export function BtwPopover({
   };
 
   const handleModelChange = (nextHarness: HarnessId, nextModel: string) => {
-    if (nextHarness !== "codex") return;
+    if (nextHarness !== harness) return;
     setDraftModel(nextModel);
     if (persisted && openThreadId) onModelChange?.(openThreadId, nextModel);
   };
@@ -286,7 +292,7 @@ export function BtwPopover({
                           : "btw-message btw-message-assistant max-w-[96%]"
                       }
                     >
-                      {messageMeta(message.role)}
+                      {messageMeta(message.role, harness)}
                       <AgentMarkdown
                         text={message.text}
                         cwd={cwd}
@@ -303,10 +309,10 @@ export function BtwPopover({
                     <div className="btw-message btw-message-assistant max-w-[96%]">
                       <div className="btw-message-meta">
                         <ProviderIcon
-                          harness="codex"
+                          harness={harness}
                           className="size-3.5 shrink-0"
                         />
-                        <span>CODEX</span>
+                        <span>{HARNESS_LABEL[harness].toUpperCase()}</span>
                         <span className="btw-message-rule" aria-hidden />
                         <span className="normal-case tracking-normal text-content/45">
                           thinking
@@ -332,7 +338,7 @@ export function BtwPopover({
                   </div>
                   <div className="mt-1 text-[12px] leading-4.5 text-red-100/75">
                     {persisted.error ||
-                      "Codex could not answer this side question."}
+                      `${HARNESS_TITLE[harness]} could not answer this side question.`}
                   </div>
                 </div>
                 <button
@@ -353,7 +359,9 @@ export function BtwPopover({
               value={draftText}
               rows={2}
               placeholder={
-                running ? "Codex is thinking…" : "Ask a side question…"
+                running
+                  ? `${HARNESS_TITLE[harness]} is thinking…`
+                  : "Ask a side question…"
               }
               aria-label="By-the-way question"
               disabled={running}
@@ -364,11 +372,11 @@ export function BtwPopover({
             <div className="mt-2 flex items-center justify-between gap-2">
               {selectedModel ? (
                 <ModelPicker
-                  harness="codex"
+                  harness={harness}
                   model={selectedModel}
                   values={{}}
                   hideSettings
-                  allowedHarnesses={BTW_ALLOWED_HARNESSES}
+                  allowedHarnesses={[harness]}
                   onChange={handleModelChange}
                   onSettingsChange={() => undefined}
                   onClose={() => composerRef.current?.focus()}
@@ -399,7 +407,8 @@ export function BtwPopover({
                   className="size-1.5 rounded-full bg-amber-300/80"
                   aria-hidden
                 />
-                Codex is answering separately; the main turn is unchanged.
+                {HARNESS_TITLE[harness]} is answering separately; the main turn
+                is unchanged.
               </div>
             ) : null}
           </div>

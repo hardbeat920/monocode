@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetHarnessModelOverlays, setHarnessModels } from "../../../features/sessions/model/models";
+import {
+  resetHarnessModelOverlays,
+  setHarnessModels,
+} from "../../../features/sessions/model/models";
 import type { HarnessId } from "../../../features/sessions/model/session";
 import {
   HARNESS_IDLE_PARK_MS,
   canCompactHarnessContext,
+  canRunHarnessTextPrompt,
+  runHarnessTextPrompt,
   compactHarnessContext,
   isLiveHarness,
   listHarnesses,
@@ -56,34 +61,35 @@ describe("harness registry", () => {
     ).toEqual(["claude", "codex", "cursor"]);
   });
 
-  it("advertises and dispatches compaction only when an adapter supports it", async () => {
-    const compactContext = vi.fn(async () => undefined);
-    registerHarness(stub("codex", { compactContext }));
-    registerHarness(stub("claude"));
+  it("advertises isolated text prompt support by harness", () => {
+    registerBuiltinHarnesses();
+    const ids: HarnessId[] = [
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+      "pi",
+      "omp",
+      "fx",
+      "hermes",
+      "antigravity",
+    ];
 
-    expect(canCompactHarnessContext("codex")).toBe(true);
-    expect(canCompactHarnessContext("claude")).toBe(false);
-
-    await compactHarnessContext({
-      harness: "codex",
-      sessionId: "compact-1",
-      cwd: "/tmp",
-      model: "codex:gpt-5.4",
-      runtimeMode: "supervised",
-      onEvent: () => undefined,
+    expect(
+      Object.fromEntries(ids.map((id) => [id, canRunHarnessTextPrompt(id)])),
+    ).toEqual({
+      claude: true,
+      codex: true,
+      cursor: true,
+      grok: true,
+      opencode: true,
+      pi: true,
+      omp: true,
+      fx: false,
+      hermes: false,
+      antigravity: false,
     });
-
-    expect(compactContext).toHaveBeenCalledOnce();
-    await expect(
-      compactHarnessContext({
-        harness: "claude",
-        sessionId: "compact-2",
-        cwd: "/tmp",
-        model: "claude:sonnet",
-        runtimeMode: "supervised",
-        onEvent: () => undefined,
-      }),
-    ).rejects.toThrow("does not support manual compaction");
   });
 
   it("exposes the native compaction support matrix", () => {
@@ -114,11 +120,60 @@ describe("harness registry", () => {
       antigravity: false,
     });
   });
+  it("advertises and dispatches compaction only when an adapter supports it", async () => {
+    const compactContext = vi.fn(async () => undefined);
+    registerHarness(stub("codex", { compactContext }));
+    registerHarness(stub("claude"));
+
+    expect(canCompactHarnessContext("codex")).toBe(true);
+    expect(canCompactHarnessContext("claude")).toBe(false);
+
+    await compactHarnessContext({
+      harness: "codex",
+      sessionId: "compact-1",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+
+    expect(compactContext).toHaveBeenCalledOnce();
+    await expect(
+      compactHarnessContext({
+        harness: "claude",
+        sessionId: "compact-2",
+        cwd: "/tmp",
+        model: "claude:sonnet",
+        runtimeMode: "supervised",
+        onEvent: () => undefined,
+      }),
+    ).rejects.toThrow("does not support manual compaction");
+  });
+  it("cancels an isolated text prompt through the adapter lifecycle", async () => {
+    const runTextPrompt = vi.fn(() => new Promise<string>(() => undefined));
+    const stopTextPrompt = vi.fn(async () => undefined);
+    registerHarness(stub("claude", { runTextPrompt, stopTextPrompt }));
+    const controller = new AbortController();
+    const request = runHarnessTextPrompt({
+      harness: "claude",
+      cwd: "/tmp",
+      prompt: "read-only question",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(request).rejects.toThrow("By-the-way request cancelled");
+    expect(runTextPrompt).toHaveBeenCalledOnce();
+    expect(stopTextPrompt).toHaveBeenCalledOnce();
+  });
 
   it("registers Antigravity as a live fx-tier harness", () => {
     registerBuiltinHarnesses();
     expect(isLiveHarness("antigravity")).toBe(true);
-    const adapter = listHarnesses().find((adapter) => adapter.id === "antigravity")!;
+    const adapter = listHarnesses().find(
+      (adapter) => adapter.id === "antigravity",
+    )!;
     expect(adapter.canSteer).toBe(false);
     expect(adapter.bindSession).toBeTypeOf("function");
     expect(adapter.refreshCatalog).toBeTypeOf("function");

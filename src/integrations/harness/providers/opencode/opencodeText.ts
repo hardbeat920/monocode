@@ -38,9 +38,11 @@ export async function stopOpenCodeTextPrompt(): Promise<void> {
 
 export function warmupOpenCodeText(cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
-  const run = turns.catch(() => undefined).then(async () => {
-    await ensureLive(cwd);
-  });
+  const run = turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(cwd);
+    });
   turns = run.then(
     () => undefined,
     () => undefined,
@@ -50,6 +52,7 @@ export function warmupOpenCodeText(cwd: string): Promise<void> {
 
 export async function runOpenCodeTextPrompt(input: {
   cwd: string;
+  model?: string;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
@@ -63,10 +66,11 @@ export async function runOpenCodeTextPrompt(input: {
 
 async function promptOnLive(input: {
   cwd: string;
+  model?: string;
   prompt: string;
   timeoutMs?: number;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd);
+  const session = await ensureLive(input.cwd, input.model);
   try {
     const result = await session.client.prompt({
       sessionID: session.sessionId,
@@ -90,8 +94,11 @@ async function promptOnLive(input: {
   }
 }
 
-async function ensureLive(cwd: string): Promise<LiveText> {
-  const model = pickTextModel();
+async function ensureLive(
+  cwd: string,
+  requestedModel?: string,
+): Promise<LiveText> {
+  const model = pickTextModel(requestedModel);
   if (live && live.cwd === cwd && sameModel(live.model, model)) return live;
   if (live) await dropLive();
   return startLive(cwd, model);
@@ -159,7 +166,19 @@ async function dropLive(): Promise<void> {
   await killChild(TEXT_CHILD_ID).catch(() => undefined);
 }
 
-function pickTextModel(): { providerID: string; modelID: string } {
+function pickTextModel(requested?: string): {
+  providerID: string;
+  modelID: string;
+} {
+  const selected = requested?.trim();
+  if (selected) {
+    const parsedSelected = parseOpenCodeModelSlug(selected);
+    if (parsedSelected) return parsedSelected;
+    const modelID = selected.startsWith("opencode:")
+      ? selected.slice("opencode:".length)
+      : selected;
+    if (modelID) return { providerID: "opencode", modelID };
+  }
   const models = modelsFor("opencode");
   for (const model of models) {
     const parsed = parseOpenCodeModelSlug(model.nativeId ?? model.id);

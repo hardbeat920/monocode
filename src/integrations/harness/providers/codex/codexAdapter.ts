@@ -17,7 +17,11 @@ import {
 } from "./codexGit";
 import { refreshCodexCatalog } from "./codexCatalog";
 import { generateCodexSessionTitle } from "./codexTitle";
-import { warmupCodexText } from "./codexText";
+import {
+  runCodexTextPrompt,
+  stopCodexTextPrompt,
+  warmupCodexText,
+} from "./codexText";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 
 export const codexAdapter: HarnessAdapter = {
@@ -39,6 +43,8 @@ export const codexAdapter: HarnessAdapter = {
   generatePrContent: generateCodexPrContent,
   generateBranchName: generateCodexBranchName,
   warmupText: warmupCodexText,
+  runTextPrompt: runCodexTextPrompt,
+  stopTextPrompt: stopCodexTextPrompt,
 };
 
 let registered = false;

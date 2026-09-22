@@ -1,5 +1,25 @@
 import { displayPath } from "../../../shared/lib/paths";
-import type { Attachment, Block, BtwThread } from "./session";
+import type { Attachment, Block, BtwThread, HarnessId } from "./session";
+
+/**
+ * Harnesses with an isolated text runner suitable for read-only side
+ * conversations. fx, Hermes, and Antigravity do not expose one yet.
+ */
+export const BTW_HARNESSES: readonly HarnessId[] = [
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
+  "omp",
+];
+
+export function supportsBtwHarness(
+  harness: HarnessId | undefined,
+): harness is HarnessId {
+  return harness != null && BTW_HARNESSES.includes(harness);
+}
 
 const SNAPSHOT_ROLES: Record<Block["role"], true | undefined> = {
   user: true,
@@ -160,7 +180,6 @@ export function buildBtwPrompt(input: {
     messages || "(no side question yet)",
   ].join("\n");
 }
-
 
 export function replaceBtwThread(block: Block, thread: BtwThread): Block {
   const threads = block.btwThreads ?? [];

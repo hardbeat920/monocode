@@ -1,4 +1,7 @@
-import type { HarnessId } from "../../../features/sessions/model/session";
+import type {
+  HarnessId,
+  TurnIntent,
+} from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
@@ -17,6 +20,20 @@ export type TitleInput = {
   cwd: string;
   message: string;
   providerAccountId?: string;
+};
+
+/** One-shot, isolated text generation shared by titles and side questions. */
+export type TextPromptInput = {
+  cwd: string;
+  providerAccountId?: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  threadId?: string;
+  onThreadId?: (threadId: string) => void;
+  intent?: TurnIntent;
+  prompt: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 /**
@@ -72,6 +89,10 @@ export type HarnessAdapter = {
   generateBranchName?(cwd: string, message: string): Promise<string | null>;
   /** Optional warmup for text-generation backends. */
   warmupText?(cwd: string): Promise<void>;
+  /** Run an isolated, read-only prompt without mutating the main session. */
+  runTextPrompt?(input: TextPromptInput): Promise<string>;
+  /** Stop an isolated text-generation backend. */
+  stopTextPrompt?(): Promise<void>;
 };
 
 const adapters = new Map<HarnessId, HarnessAdapter>();
@@ -331,4 +352,59 @@ export async function warmupHarnessText(
   cwd: string,
 ): Promise<void> {
   await getHarness(harness)?.warmupText?.(cwd);
+}
+
+export function canRunHarnessTextPrompt(harness: HarnessId): boolean {
+  const adapter = getHarness(harness);
+  return adapter?.live === true && adapter.runTextPrompt != null;
+}
+
+function stopTextPrompt(adapter: HarnessAdapter): Promise<void> {
+  return adapter.stopTextPrompt
+    ? adapter.stopTextPrompt().catch(() => undefined)
+    : Promise.resolve();
+}
+
+function cancelledTextPrompt(): Error {
+  return new Error("By-the-way request cancelled");
+}
+
+export async function runHarnessTextPrompt(
+  input: TextPromptInput & { harness: HarnessId },
+): Promise<string> {
+  const adapter = requireHarness(input.harness);
+  if (!adapter.live) {
+    throw new Error(`${input.harness} is not connected yet`);
+  }
+  if (!adapter.runTextPrompt) {
+    throw new Error(`${input.harness} does not support isolated text prompts`);
+  }
+
+  const signal = input.signal;
+  if (signal?.aborted) {
+    await stopTextPrompt(adapter);
+    throw cancelledTextPrompt();
+  }
+
+  const run = adapter.runTextPrompt(input);
+  if (!signal) return run;
+
+  let abortHandler: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortHandler = () => {
+      void stopTextPrompt(adapter);
+      reject(cancelledTextPrompt());
+    };
+    signal.addEventListener("abort", abortHandler, { once: true });
+    if (signal.aborted) abortHandler();
+  });
+  try {
+    return await Promise.race([run, abortPromise]);
+  } finally {
+    if (abortHandler) signal.removeEventListener("abort", abortHandler);
+  }
+}
+
+export async function stopHarnessTextPrompts(): Promise<void> {
+  await Promise.all([...adapters.values()].map(stopTextPrompt));
 }

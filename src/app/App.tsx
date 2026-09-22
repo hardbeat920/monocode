@@ -213,10 +213,12 @@ import {
   respondHarnessApproval,
   respondHarnessQuestion,
   keepHarnessQuestionOpen,
+  runHarnessTextPrompt,
   sendHarnessTurn,
   steerHarnessTurn,
   startHarnessBridge,
   stopHarnessSession,
+  stopHarnessTextPrompts,
   stopStreaming,
   pickTextHarness,
   type ApprovalDecision,
@@ -247,11 +249,8 @@ import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
 import {
   buildBtwPrompt,
   replaceBtwThread,
+  supportsBtwHarness,
 } from "../features/sessions/model/btw";
-import {
-  runCodexTextPrompt,
-  stopCodexTextPrompt,
-} from "../integrations/harness/providers/codex/codexText";
 
 import { isEditTool } from "../integrations/harness/core/preview";
 import {
@@ -978,7 +977,7 @@ export default function App({
         request.controller.abort();
       }
       btwRequestsRef.current.clear();
-      void stopCodexTextPrompt();
+      void stopHarnessTextPrompts();
     },
     [],
   );
@@ -6761,7 +6760,10 @@ export default function App({
       userBlockId: string;
       source: Session;
       thread: BtwThread;
+      harness: HarnessId;
     }) => {
+      const harness = input.harness;
+      if (!supportsBtwHarness(harness)) return;
       const cwd = sessionWorkCwd(input.source);
       const model = nativeModelId(
         input.thread.model ?? input.source.model,
@@ -6784,7 +6786,7 @@ export default function App({
         );
         return;
       }
-      if (!model) {
+      if (!model && harness === "codex") {
         updateBtwThread(
           input.sessionId,
           input.userBlockId,
@@ -6838,10 +6840,11 @@ export default function App({
         controller,
       });
 
-      void runCodexTextPrompt({
+      void runHarnessTextPrompt({
+        harness,
         cwd,
         providerAccountId: input.source.providerAccountId,
-        model,
+        model: model || undefined,
         modelSettings: input.source.modelSettings,
         threadId: input.thread.providerThreadId,
         onThreadId: (providerThreadId) => {
@@ -6866,7 +6869,11 @@ export default function App({
         .then((output) => {
           if (controller.signal.aborted) return;
           const text = output.trim();
-          if (!text) throw new Error("Codex returned an empty side answer.");
+          if (!text) {
+            throw new Error(
+              `${HARNESS_TITLE[harness]} returned an empty side answer.`,
+            );
+          }
           updateBtwThread(
             input.sessionId,
             input.userBlockId,
@@ -6896,7 +6903,7 @@ export default function App({
           const message =
             error instanceof Error
               ? error.message
-              : "Codex could not answer this side question.";
+              : `${HARNESS_TITLE[harness]} could not answer this side question.`;
           updateBtwThread(
             input.sessionId,
             input.userBlockId,
@@ -6935,13 +6942,18 @@ export default function App({
       );
       const sourceUserId = turn.find((block) => block.role === "user")?.id;
       const sourceEndBlockId = turn[turn.length - 1]?.id;
+      const turnHarness = source
+        ? harnessForTurn(source.blocks, turn, source.harness)
+        : undefined;
+      const turnModel = turn.find((block) => block.role === "user")?.turnModel
+        ?.id;
       if (
         !source ||
-        source.harness !== "codex" ||
+        !supportsBtwHarness(source.harness) ||
+        !supportsBtwHarness(turnHarness) ||
         source.worktreeRemoved ||
         !sourceUserId ||
-        !sourceEndBlockId ||
-        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+        !sourceEndBlockId
       ) {
         return;
       }
@@ -6953,7 +6965,10 @@ export default function App({
         (thread) => thread.id === threadId,
       );
       const selectedModel =
-        model?.trim() || existing?.model || nativeModelId(source.model).trim();
+        model?.trim() ||
+        existing?.model ||
+        turnModel ||
+        nativeModelId(source.model).trim();
       if (existing?.status === "running") return;
       if (existing && existing.sourceEndBlockId !== sourceEndBlockId) return;
       const now = Date.now();
@@ -6990,6 +7005,7 @@ export default function App({
         userBlockId: sourceUserId,
         source,
         thread,
+        harness: turnHarness,
       });
     },
     [runBtwRequest, updateBtwThread],
@@ -7001,14 +7017,17 @@ export default function App({
         (session) => session.id === sessionId,
       );
       const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      const turnHarness = source
+        ? harnessForTurn(source.blocks, turn, source.harness)
+        : undefined;
       const nextModel = model.trim();
       if (
         !source ||
-        source.harness !== "codex" ||
+        !supportsBtwHarness(source.harness) ||
+        !supportsBtwHarness(turnHarness) ||
         source.worktreeRemoved ||
         !sourceUserId ||
-        !nextModel ||
-        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+        !nextModel
       ) {
         return;
       }
@@ -7027,12 +7046,15 @@ export default function App({
         (session) => session.id === sessionId,
       );
       const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      const turnHarness = source
+        ? harnessForTurn(source.blocks, turn, source.harness)
+        : undefined;
       if (
         !source ||
-        source.harness !== "codex" ||
+        !supportsBtwHarness(source.harness) ||
+        !supportsBtwHarness(turnHarness) ||
         source.worktreeRemoved ||
-        !sourceUserId ||
-        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+        !sourceUserId
       ) {
         return;
       }
@@ -7050,12 +7072,15 @@ export default function App({
         (session) => session.id === sessionId,
       );
       const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      const turnHarness = source
+        ? harnessForTurn(source.blocks, turn, source.harness)
+        : undefined;
       if (
         !source ||
-        source.harness !== "codex" ||
+        !supportsBtwHarness(source.harness) ||
+        !supportsBtwHarness(turnHarness) ||
         source.worktreeRemoved ||
-        !sourceUserId ||
-        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+        !sourceUserId
       ) {
         return;
       }
@@ -7084,6 +7109,7 @@ export default function App({
         userBlockId: sourceUserId,
         source: updated,
         thread,
+        harness: turnHarness,
       });
     },
     [runBtwRequest, updateBtwThread],

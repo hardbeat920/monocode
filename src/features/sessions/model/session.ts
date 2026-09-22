@@ -123,9 +123,9 @@ export type BtwThread = {
   updatedAt: number;
   status: BtwThreadStatus;
   messages: BtwMessage[];
-  /** Codex model selected for this side thread; absent means session default. */
+  /** Selected harness model for this side thread; absent means session default. */
   model?: string;
-  /** Codex app-server thread backing this BTW thread. */
+  /** Provider-specific side-thread id when the text runner supports resume. */
   providerThreadId?: string;
   error?: string;
 };

@@ -59,6 +59,7 @@ import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
 import { displayPath, resolveWorkspacePath } from "../../../shared/lib/paths";
 import { resolveModel } from "../model/models";
+import { supportsBtwHarness } from "../model/btw";
 import { harnessForTurn } from "../model/secondOpinion";
 import { Shimmer } from "../../../shared/ui/Shimmer";
 import {
@@ -696,11 +697,11 @@ function AgentTranscriptComponent({
                   onHandoff={
                     onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
-                  model={model}
+                  model={turnModel?.id ?? model}
                   btwThreads={userBlock?.btwThreads}
                   visible={visible}
                   onBtwSubmit={
-                    turnHarness === "codex" && onBtwSubmit
+                    supportsBtwHarness(turnHarness) && onBtwSubmit
                       ? (threadId, messageId, text, nextModel) =>
                           onBtwSubmit(
                             threadId,
@@ -712,17 +713,17 @@ function AgentTranscriptComponent({
                       : undefined
                   }
                   onBtwRetry={
-                    turnHarness === "codex" && onBtwRetry
+                    supportsBtwHarness(turnHarness) && onBtwRetry
                       ? (threadId) => onBtwRetry(threadId, turn)
                       : undefined
                   }
                   onBtwDelete={
-                    turnHarness === "codex" && onBtwDelete
+                    supportsBtwHarness(turnHarness) && onBtwDelete
                       ? (threadId) => onBtwDelete(threadId, turn)
                       : undefined
                   }
                   onBtwModelChange={
-                    turnHarness === "codex" && onBtwModelChange
+                    supportsBtwHarness(turnHarness) && onBtwModelChange
                       ? (threadId, nextModel) =>
                           onBtwModelChange(threadId, nextModel, turn)
                       : undefined
@@ -872,8 +873,9 @@ function TurnDuration({
         <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
 
-      {harness === "codex" && onBtwSubmit && onBtwRetry ? (
+      {supportsBtwHarness(harness) && onBtwSubmit && onBtwRetry ? (
         <BtwPopover
+          harness={harness}
           cwd={cwd}
           model={model}
           threads={btwThreads}

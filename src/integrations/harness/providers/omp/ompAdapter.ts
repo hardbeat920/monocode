@@ -10,7 +10,11 @@ import {
 } from "./omp";
 import { refreshOmpCatalog } from "../pi/piCatalog";
 import { generateOmpSessionTitle } from "../pi/piTitle";
-import { warmupOmpText } from "../pi/piText";
+import {
+  runOmpTextPrompt,
+  stopOmpTextPrompt,
+  warmupOmpText,
+} from "../pi/piText";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 import { ompCommandProvider, respondQuestion } from "../pi/piFamily";
 import { OMP_FLAVOR } from "../pi/piFlavor";
@@ -32,6 +36,8 @@ export const ompAdapter: HarnessAdapter = {
   refreshCatalog: refreshOmpCatalog,
   generateTitle: generateOmpSessionTitle,
   warmupText: warmupOmpText,
+  runTextPrompt: runOmpTextPrompt,
+  stopTextPrompt: stopOmpTextPrompt,
 };
 
 let registered = false;
