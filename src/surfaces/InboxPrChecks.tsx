@@ -1,4 +1,10 @@
 import { CheckRepairForm, type CheckRepair } from "./CheckRepairForm";
+import {
+  CheckRepairProgress,
+  CheckRepairStatus,
+  useCheckRepairs,
+  type RepairGroup,
+} from "./CheckRepairProgress";
 import { CheckEvidence } from "./CheckEvidence";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useId, useRef, useState } from "react";
@@ -132,6 +138,8 @@ function PrCheckRow({
   refreshToken,
   onFix,
   fixAnchor,
+  repairItem,
+  revealToken,
 }: {
   check: GithubPrCheck;
   cwd: string;
@@ -141,12 +149,33 @@ function PrCheckRow({
   refreshToken: unknown;
   onFix?: (anchor: HTMLButtonElement) => void;
   fixAnchor?: HTMLButtonElement;
+  repairItem?: RepairGroup["items"][number];
+  revealToken?: number;
 }) {
+  const rowRef = useRef<HTMLLIElement>(null);
   const fixRef = useRef<HTMLButtonElement>(null);
   const fixOpen = Boolean(fixAnchor && fixAnchor === fixRef.current);
   const jobId = githubActionsJobId(check.url, repo);
   const expandable = Boolean(cwd && jobId);
   const [expanded, setExpanded] = useState(autoExpand && expandable);
+  useEffect(() => {
+    if (!revealToken) return;
+    if (expandable) setExpanded(true);
+    const row = rowRef.current;
+    if (!row) return;
+    row.focus({ preventScroll: true });
+    const scroller = row.closest<HTMLElement>("[data-inbox-detail-scroll]");
+    if (!scroller) return;
+    const bounds = scroller.getBoundingClientRect();
+    const scaleY = scroller.offsetHeight
+      ? bounds.height / scroller.offsetHeight
+      : 1;
+    // scrollIntoView also scrolls hidden ancestors, including the desktop shell.
+    // Move only the PR viewport, accounting for browser preview zoom.
+    scroller.scrollTop +=
+      (row.getBoundingClientRect().top - bounds.top) / (scaleY || 1) -
+      scroller.clientTop;
+  }, [revealToken, expandable]);
   const [details, setDetails] = useState<GithubCheckDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -219,12 +248,14 @@ function PrCheckRow({
             </span>
           ) : null}
         </span>
-        <span
-          title={subtitle}
-          className="mt-0.5 min-w-0 truncate text-[12px] leading-relaxed text-content/55 @max-[420px]/checks:text-[11px]"
-        >
-          {subtitle}
-        </span>
+        {(!repairItem || expanded) && (failureMessage || failedStep) ? (
+          <span
+            title={subtitle}
+            className="mt-0.5 min-w-0 truncate text-[12px] leading-relaxed text-content/55 @max-[420px]/checks:text-[11px]"
+          >
+            {subtitle}
+          </span>
+        ) : null}
         <span className="sr-only">
           {meta}
           {failureMessage && failedStep ? `; Failed at ${failedStep}` : ""}
@@ -235,8 +266,12 @@ function PrCheckRow({
   const className =
     "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-md text-left";
   return (
-    <li className={`min-w-0 rounded-xl ${expanded ? "bg-content/[0.02]" : ""}`}>
-      <div className="group/check flex min-w-0 items-center gap-2 rounded-xl px-2 py-3 hover:bg-content/[0.02] @max-[420px]/checks:gap-1">
+    <li
+      ref={rowRef}
+      tabIndex={-1}
+      className={`min-w-0 rounded-xl outline-none ${expanded ? "bg-content/[0.02]" : ""}`}
+    >
+      <div className="group/check flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 hover:bg-content/[0.02] @max-[420px]/checks:gap-1">
         {expandable ? (
           <button
             type="button"
@@ -264,6 +299,15 @@ function PrCheckRow({
           <div title={title} className={className}>
             {body}
           </div>
+        )}
+        {repairItem ? (
+          <CheckRepairStatus item={repairItem} />
+        ) : (
+          <span
+            className={`shrink-0 text-[11px] ${mark.className.replace("animate-spin", "")}`}
+          >
+            {status}
+          </span>
         )}
         {duration ? (
           <span className="mr-1 shrink-0 text-[10px] tabular-nums text-content/40 @max-[480px]/checks:hidden">
@@ -436,6 +480,19 @@ export function InboxPrChecks({
   repair?: CheckRepair;
 }) {
   const { checks, loading, refreshing, error, stale } = view;
+  const repairGroups = useCheckRepairs(cwd, repo, repair?.number, view);
+  const revealScope = JSON.stringify([
+    cwd,
+    repo,
+    repair?.number,
+    checks?.headOid,
+  ]);
+  const [revealed, setRevealed] = useState<{
+    name: string;
+    workflow: string;
+    scope: string;
+    token: number;
+  } | null>(null);
   const [filter, setFilter] = useState<"attention" | "all">("attention");
   const [showOthers, setShowOthers] = useState(false);
   const allFixRef = useRef<HTMLButtonElement>(null);
@@ -566,6 +623,24 @@ export function InboxPrChecks({
           </button>
         </div>
       </div>
+      {repair ? (
+        <CheckRepairProgress
+          cwd={cwd}
+          repo={repo}
+          repair={repair}
+          view={view}
+          onShowCheck={(check) => {
+            setFilter("all");
+            setSelection(null);
+            setRevealed((previous) => ({
+              name: check.name,
+              workflow: check.workflow,
+              scope: revealScope,
+              token: (previous?.token ?? 0) + 1,
+            }));
+          }}
+        />
+      ) : null}
       {stale && error ? (
         <p role="status" className="px-2 text-[12px] text-content/55">
           Saved results may be out of date.
@@ -640,6 +715,20 @@ export function InboxPrChecks({
                     <PrCheckRow
                       key={`${cwd}:${repo}:${checks?.headOid}:${check.url ?? `${index}:${check.workflow}:${check.name}`}`}
                       check={check}
+                      revealToken={
+                        revealed?.scope === revealScope &&
+                        revealed.name === check.name &&
+                        revealed.workflow === check.workflow
+                          ? revealed.token
+                          : undefined
+                      }
+                      repairItem={repairGroups
+                        .flatMap((group) => group.items)
+                        .find(
+                          (item) =>
+                            item.check.name === check.name &&
+                            item.check.workflow === check.workflow,
+                        )}
                       onFix={
                         repair &&
                         !stale &&
@@ -654,6 +743,7 @@ export function InboxPrChecks({
                       repo={repo}
                       headOid={checks?.headOid ?? ""}
                       autoExpand={
+                        repairGroups.length === 0 &&
                         check === rows.find((row) => row.state === "fail")
                       }
                       refreshToken={checks}

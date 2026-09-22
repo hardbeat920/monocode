@@ -1,4 +1,5 @@
 import type { CiRepairRequest } from "./lib/ciRepair";
+import { trackCiRepair } from "./lib/ciRepairTracking";
 import { invoke } from "@tauri-apps/api/core";
 import { orchestrator, type ControlOutcome } from "./lib/orchestration";
 import { modelsFor } from "./lib/models";
@@ -6541,10 +6542,13 @@ export default function App({
         sessionsRef.current = next;
         setSessions(next);
       }
-      if (!onSubmit(session.id, request.text, [], { ciRepair: request }))
-        throw new Error(
-          "Could not start this fix. Choose another chat and try again.",
-        );
+      const repairSessionId = session.id;
+      trackCiRepair(cwd, request, repairSessionId, (settle) =>
+        onSubmit(repairSessionId, request.text, [], {
+          ciRepair: request,
+          onSettled: (outcome) => settle(outcome.status),
+        }),
+      );
       setInboxViewOpen(false);
       setNotesViewOpen(false);
       setSearchViewOpen(false);
@@ -7393,6 +7397,10 @@ export default function App({
                   <LinkedWorkItemPanel
                     repairSessions={repairSessions}
                     onRepairChecks={onRepairChecks}
+                    onOpenSession={(sessionId) => {
+                      closeLinkedWorkItemPanel(panel.sessionId);
+                      onOpenInboxSession(sessionId);
+                    }}
                     key={panel.sessionId}
                     target={panel.item}
                     cwd={panel.cwd}

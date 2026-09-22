@@ -18,6 +18,7 @@ import {
 } from "../lib/githubPrChecks";
 
 export type CheckRepair = {
+  onOpenSession?: (sessionId: string) => void | Promise<void>;
   number: number;
   sessions: readonly { id: string; title: string }[];
   onStart: (

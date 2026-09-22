@@ -55,3 +55,27 @@ it("keeps failure evidence for the agent without passing successful steps and ti
   expect(request.prompt).not.toContain("startedAt");
   expect(request.prompt).not.toContain("2030-01-01");
 });
+
+it("identifies the PR, commit and selected checks for tracking a repair", () => {
+  const request = buildCiRepairRequest({
+    repo: "acme/web",
+    number: 42,
+    headOid: "abc123",
+    evidence: [
+      {
+        name: "tests",
+        workflow: "CI",
+        state: "fail",
+        url: null,
+        startedAt: null,
+        completedAt: null,
+      },
+    ],
+  });
+  expect(request.target).toEqual({
+    repo: "acme/web",
+    number: 42,
+    headOid: "abc123",
+    checks: [{ name: "tests", workflow: "CI", url: null }],
+  });
+});

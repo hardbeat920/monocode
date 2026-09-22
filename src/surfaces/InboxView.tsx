@@ -1089,6 +1089,7 @@ export function InboxView({
 export function LinkedWorkItemPanel({
   repairSessions,
   onRepairChecks,
+  onOpenSession,
   target,
   cwd,
   recents,
@@ -1097,6 +1098,7 @@ export function LinkedWorkItemPanel({
 }: {
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
+  onOpenSession?: (sessionId: string) => void | Promise<void>;
   target: LinkedWorkItem;
   cwd: string;
   recents: RecentProject[];
@@ -1223,6 +1225,7 @@ export function LinkedWorkItemPanel({
             mode="panel"
             repairSessions={repairSessions}
             onRepairChecks={onRepairChecks}
+            onOpenSession={onOpenSession}
             onItemChange={setItem}
           />
         ) : error ? (
@@ -2638,6 +2641,7 @@ export function InboxDetail({
                   item.projectPath
                     ? {
                         number: item.number,
+                        onOpenSession,
                         sessions: (repairSessions ?? []).filter(
                           (session) =>
                             !session.archived &&
