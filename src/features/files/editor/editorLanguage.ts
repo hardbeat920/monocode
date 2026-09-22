@@ -185,10 +185,12 @@ export async function languageForPath(path: string): Promise<Extension | null> {
     const { python } = await import("@codemirror/lang-python");
     return python();
   }
+  if (extension === ".c") {
+    const { c } = await import("@codemirror/legacy-modes/mode/clike");
+    return legacyLanguage(c);
+  }
   if (
-    [".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"].includes(
-      extension,
-    )
+    [".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"].includes(extension)
   ) {
     const { cpp } = await import("@codemirror/lang-cpp");
     return cpp();
