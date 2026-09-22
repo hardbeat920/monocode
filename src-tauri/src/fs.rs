@@ -470,13 +470,55 @@ pub(crate) fn list_dir_sync(dir: &Path) -> Result<Vec<DirEntry>, String> {
     }
 
     out.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then_with(|| {
-            a.name
-                .to_ascii_lowercase()
-                .cmp(&b.name.to_ascii_lowercase())
-        })
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| compare_natural_names(&a.name, &b.name))
     });
     Ok(out)
+}
+
+fn compare_natural_names(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
+            let a_start = i;
+            let b_start = j;
+            while i < a.len() && a[i].is_ascii_digit() {
+                i += 1;
+            }
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            let a_digits = &a[a_start..i];
+            let b_digits = &b[b_start..j];
+            let a_value = a_digits
+                .iter()
+                .position(|digit| *digit != b'0')
+                .map_or(&a_digits[a_digits.len()..], |start| &a_digits[start..]);
+            let b_value = b_digits
+                .iter()
+                .position(|digit| *digit != b'0')
+                .map_or(&b_digits[b_digits.len()..], |start| &b_digits[start..]);
+            let order = a_value
+                .len()
+                .cmp(&b_value.len())
+                .then_with(|| a_value.cmp(b_value));
+            if order != Ordering::Equal {
+                return order;
+            }
+        } else {
+            let order = a[i].to_ascii_lowercase().cmp(&b[j].to_ascii_lowercase());
+            if order != Ordering::Equal {
+                return order;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    (a.len() - i).cmp(&(b.len() - j)).then_with(|| a.cmp(b))
 }
 
 const MAX_PROJECT_FILES: usize = 20_000;
@@ -5458,6 +5500,61 @@ mod tests {
         ignored_names(&list_dir_sync(dir).unwrap())
             .iter()
             .any(|n| n == name)
+    }
+
+    #[test]
+    fn list_dir_sorts_numbered_names_naturally_with_folders_first() {
+        let dir = tmp("list-dir-natural-sort");
+        for name in [
+            "chapter-100.md",
+            "chapter-11.md",
+            "chapter-09.md",
+            "chapter-10.md",
+            "Chapter-2.md",
+        ] {
+            std::fs::write(dir.0.join(name), "").unwrap();
+        }
+        for name in ["volume-10", "volume-2"] {
+            std::fs::create_dir(dir.0.join(name)).unwrap();
+        }
+
+        let names: Vec<_> = list_dir_sync(&dir.0)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "volume-2",
+                "volume-10",
+                "Chapter-2.md",
+                "chapter-09.md",
+                "chapter-10.md",
+                "chapter-11.md",
+                "chapter-100.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn natural_name_sort_handles_multiple_and_large_numbers() {
+        let mut names = [
+            "part-2-chapter-10",
+            "part-10-chapter-1",
+            "part-2-chapter-2",
+            "part-2-chapter-999999999999999999999999999999",
+        ];
+        names.sort_by(|a, b| compare_natural_names(a, b));
+        assert_eq!(
+            names,
+            [
+                "part-2-chapter-2",
+                "part-2-chapter-10",
+                "part-2-chapter-999999999999999999999999999999",
+                "part-10-chapter-1",
+            ]
+        );
     }
 
     #[test]
