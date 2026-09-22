@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -73,7 +74,7 @@ function messageMeta(role: BtwMessage["role"]) {
   );
 }
 
-export function ByTheWayPopover({
+export function BtwPopover({
   threads = [],
   visible = true,
   cwd,
@@ -277,42 +278,49 @@ export function ByTheWayPopover({
             ) : (
               <div className="space-y-5">
                 {displayedMessages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={
-                      message.role === "user"
-                        ? "btw-message btw-message-user ml-auto max-w-[92%]"
-                        : "btw-message btw-message-assistant max-w-[96%]"
-                    }
-                  >
-                    {messageMeta(message.role)}
-                    <AgentMarkdown
-                      text={message.text}
-                      cwd={cwd}
-                      className="mt-1.5 text-[13px] leading-5"
-                    />
-                  </div>
+                  <Fragment key={message.id}>
+                    <div
+                      className={
+                        message.role === "user"
+                          ? "btw-message btw-message-user ml-auto max-w-[92%]"
+                          : "btw-message btw-message-assistant max-w-[96%]"
+                      }
+                    >
+                      {messageMeta(message.role)}
+                      <AgentMarkdown
+                        text={message.text}
+                        cwd={cwd}
+                        className="mt-1.5 text-[13px] leading-5"
+                      />
+                    </div>
+                    {message.role === "assistant" ? (
+                      <span className="btw-message-divider" aria-hidden />
+                    ) : null}
+                  </Fragment>
                 ))}
                 {running ? (
-                  <div className="btw-message btw-message-assistant max-w-[96%]">
-                    <div className="btw-message-meta">
-                      <ProviderIcon
-                        harness="codex"
-                        className="size-3.5 shrink-0"
-                      />
-                      <span>CODEX</span>
-                      <span className="btw-message-rule" aria-hidden />
-                      <span className="normal-case tracking-normal text-content/45">
-                        thinking
-                      </span>
+                  <Fragment>
+                    <div className="btw-message btw-message-assistant max-w-[96%]">
+                      <div className="btw-message-meta">
+                        <ProviderIcon
+                          harness="codex"
+                          className="size-3.5 shrink-0"
+                        />
+                        <span>CODEX</span>
+                        <span className="btw-message-rule" aria-hidden />
+                        <span className="normal-case tracking-normal text-content/45">
+                          thinking
+                        </span>
+                      </div>
+                      <Shimmer
+                        duration={1.6}
+                        className="mt-1.5 text-[13px] leading-5 text-content/55"
+                      >
+                        Working through a separate thread…
+                      </Shimmer>
                     </div>
-                    <Shimmer
-                      duration={1.6}
-                      className="mt-1.5 text-[13px] leading-5 text-content/55"
-                    >
-                      Working through a separate thread…
-                    </Shimmer>
-                  </div>
+                    <span className="btw-message-divider" aria-hidden />
+                  </Fragment>
                 ) : null}
               </div>
             )}

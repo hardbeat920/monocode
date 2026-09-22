@@ -1639,9 +1639,17 @@ html.theme-light .popover-backdrop {
 }
 
 .btw-message-assistant {
-  padding: 0 2px 14px;
-  border-bottom: 1px solid
-    color-mix(in srgb, var(--color-content) 9%, transparent);
+  overflow: clip;
+  padding: 0 2px;
+}
+
+.btw-message-divider {
+  display: block;
+  height: 1px;
+  margin-top: 14px !important;
+  background: color-mix(in srgb, var(--color-content) 9%, transparent);
+  user-select: none;
+  pointer-events: none;
 }
 
 .btw-message-meta {

@@ -36,7 +36,7 @@ import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui";
-import { ByTheWayPopover } from "./ByTheWayPopover";
+import { BtwPopover } from "./BtwPopover";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -873,7 +873,7 @@ function TurnDuration({
       </span>
 
       {harness === "codex" && onBtwSubmit && onBtwRetry ? (
-        <ByTheWayPopover
+        <BtwPopover
           cwd={cwd}
           model={model}
           threads={btwThreads}
