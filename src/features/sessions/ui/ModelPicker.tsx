@@ -58,6 +58,8 @@ type Props = {
   values: Record<string, string>;
   /** Hide option rows from the menu when they render as pills beside the picker. */
   hideSettings?: boolean;
+  /** Limit provider tabs for surfaces that only support one harness. */
+  allowedHarnesses?: readonly HarnessId[];
   hotkeys?: boolean;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
@@ -209,6 +211,7 @@ export function ModelPicker({
   model,
   values,
   hideSettings = false,
+  allowedHarnesses,
   hotkeys = false,
   onChange,
   onSettingsChange,
@@ -285,18 +288,19 @@ export function ModelPicker({
   ]
     .filter(Boolean)
     .join(" · ");
-
   const pickerHarnesses = useMemo(() => {
     void availabilityVersion;
     void visibilityVersion;
-    return HARNESSES.filter((id) =>
-      showProviderInModelPicker(
-        id,
-        isHarnessAvailable(id),
-        hasProbedHarnessAvailability(),
-      ),
+    return HARNESSES.filter(
+      (id) =>
+        (!allowedHarnesses || allowedHarnesses.includes(id)) &&
+        showProviderInModelPicker(
+          id,
+          isHarnessAvailable(id),
+          hasProbedHarnessAvailability(),
+        ),
     );
-  }, [availabilityVersion, visibilityVersion]);
+  }, [allowedHarnesses, availabilityVersion, visibilityVersion]);
   const providerKey = pickerHarnesses.join(",");
   const visibleTab = coerceModelPickerTab(tab, (id) =>
     pickerHarnesses.includes(id),

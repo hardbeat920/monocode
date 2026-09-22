@@ -105,6 +105,30 @@ export type HandoffMeta = {
   pending?: boolean;
 };
 
+/** One persisted question/answer in a completed turn's side conversation. */
+export type BtwMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: number;
+};
+
+export type BtwThreadStatus = "running" | "ready" | "error";
+
+/** Independent, read-only "by the way" conversation anchored to a turn. */
+export type BtwThread = {
+  id: string;
+  sourceEndBlockId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: BtwThreadStatus;
+  messages: BtwMessage[];
+  /** Codex model selected for this side thread; absent means session default. */
+  model?: string;
+  /** Codex app-server thread backing this BTW thread. */
+  providerThreadId?: string;
+  error?: string;
+};
 /** Compact transcript card for a second-opinion or split-pane handoff turn. */
 export type SecondOpinionMeta = {
   from: HarnessId;
@@ -267,7 +291,8 @@ export type Block = {
   internal?: boolean;
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
-  /** Note chip shown on this user turn. Body is not stored; the harness already received it. */
+  /** Independent read-only side conversations anchored to this user turn. */
+  btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
   interjection?: InterjectionMeta;
@@ -449,7 +474,10 @@ export function newDefaultSession(
 }
 
 /** New conversation carrying another session's harness, model and settings. */
-export function newSessionLike(seed: Session | undefined, cwd: string): Session {
+export function newSessionLike(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
   return newSession(
     seed?.harness ?? "claude",
     cwd,

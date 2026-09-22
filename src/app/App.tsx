@@ -92,7 +92,10 @@ import {
   zoomOutUiScale,
 } from "../features/settings/model/uiScale";
 import { runUpdateFlow } from "./model/updater";
-import { displayAttachments, prepareAttachments } from "../features/sessions/model/attachments";
+import {
+  displayAttachments,
+  prepareAttachments,
+} from "../features/sessions/model/attachments";
 import {
   basename,
   notifyGitChanged,
@@ -151,7 +154,10 @@ import {
   type SplitDir,
   type WorkspaceTab,
 } from "../features/workspace/model/layout";
-import { releaseNotesForVersion, releaseNotesTitle } from "./model/releaseNotes";
+import {
+  releaseNotesForVersion,
+  releaseNotesTitle,
+} from "./model/releaseNotes";
 import { mergeOrderedSubset, orderByIds } from "../shared/lib/reorder";
 import {
   addTerminalToDock,
@@ -238,6 +244,15 @@ import {
   wrapHandoffPrompt,
 } from "../features/sessions/model/handoff";
 import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
+import {
+  buildBtwPrompt,
+  replaceBtwThread,
+} from "../features/sessions/model/btw";
+import {
+  runCodexTextPrompt,
+  stopCodexTextPrompt,
+} from "../integrations/harness/providers/codex/codexText";
+
 import { isEditTool } from "../integrations/harness/core/preview";
 import {
   beginSessionTurn,
@@ -251,15 +266,23 @@ import {
   sessionCheckpointCleanupSafe,
 } from "../features/sessions/model/checkpoint";
 import { notifyDirsChanged } from "../features/files/model/fileTree";
-import { invalidateWatchedFiles, nudgeWatchedFiles } from "../features/files/model/fileWatch";
-import { type EditorNavigationTarget, type OpenFileFn } from "../features/search/model/search";
+import {
+  invalidateWatchedFiles,
+  nudgeWatchedFiles,
+} from "../features/files/model/fileWatch";
+import {
+  type EditorNavigationTarget,
+  type OpenFileFn,
+} from "../features/search/model/search";
 import {
   mergeModelSettings,
+  nativeModelId,
   preferredModelSettings,
   resolveModel,
   saveLastModelSettings,
   saveRecentModelChoice,
 } from "../features/sessions/model/models";
+
 import {
   buildPlanPrompt,
   isProviderFailureText,
@@ -325,6 +348,7 @@ import {
   titleFromPrompt,
   type Attachment,
   type Block,
+  type BtwThread,
   type HarnessId,
   type LinkedWorkItem,
   type ModelTarget,
@@ -393,7 +417,10 @@ import {
   type TabVisitHistory,
 } from "../features/workspace/model/tabVisitHistory";
 import { preparePrompt } from "../features/sessions/model/promptPreparation";
-import { warmNativeSkills, isNativeCommandPrompt } from "../features/skills/model/skills";
+import {
+  warmNativeSkills,
+  isNativeCommandPrompt,
+} from "../features/skills/model/skills";
 import { nativeSkillContextForSession } from "../features/sessions/model/sessionSkills";
 import {
   loadSessionFolders,
@@ -424,12 +451,16 @@ import {
   turnReport,
   turnUserRequest,
 } from "../features/sessions/model/secondOpinion";
+
 import { PaneTree } from "../features/workspace/ui/PaneTree";
 import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
 import { SearchView } from "../features/search/ui/SearchView";
-import { SettingsView, type SettingsAnchor } from "../features/settings/ui/SettingsView";
+import {
+  SettingsView,
+  type SettingsAnchor,
+} from "../features/settings/ui/SettingsView";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import { InboxView, LinkedWorkItemPanel } from "../features/inbox/ui/InboxView";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
@@ -453,8 +484,14 @@ import {
 } from "../features/inbox/model/linkedWorkItemActivity";
 import type { LinkedSessionUpdate } from "../features/inbox/model/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
-import { linearIssueDetails, peekLinearIssueDetails } from "../features/inbox/model/linear";
-import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "../features/inbox/model/gitlab";
+import {
+  linearIssueDetails,
+  peekLinearIssueDetails,
+} from "../features/inbox/model/linear";
+import {
+  gitlabWorkItemDetails,
+  peekGitlabWorkItemDetails,
+} from "../features/inbox/model/gitlab";
 import {
   azureDevOpsWorkItemDetails,
   peekAzureDevOpsWorkItemDetails,
@@ -878,6 +915,9 @@ export default function App({
    * ref: `sidebarCwd` is derived during render, so the frame that first shows
    * a new project must already know the listing has not arrived yet.
    */
+  const btwRequestsRef = useRef(
+    new Map<string, { sessionId: string; controller: AbortController }>(),
+  );
   const [loadedProjects, setLoadedProjects] = useState<ReadonlySet<string>>(
     () =>
       bootHistoryCwd
@@ -923,6 +963,25 @@ export default function App({
   filePickerOpenRef.current = filePickerOpen;
   const whatsNewVersionRef = useRef(whatsNewVersion);
   whatsNewVersionRef.current = whatsNewVersion;
+  useEffect(() => {
+    const liveSessionIds = new Set(sessions.map((session) => session.id));
+    for (const [key, request] of btwRequestsRef.current) {
+      if (liveSessionIds.has(request.sessionId)) continue;
+      request.controller.abort();
+      btwRequestsRef.current.delete(key);
+    }
+  }, [sessions]);
+
+  useEffect(
+    () => () => {
+      for (const request of btwRequestsRef.current.values()) {
+        request.controller.abort();
+      }
+      btwRequestsRef.current.clear();
+      void stopCodexTextPrompt();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!notesEnabled) setNotesViewOpen(false);
@@ -6619,6 +6678,416 @@ export default function App({
     },
     [onSubmit, openSessionBeside],
   );
+  const updateBtwThread = useCallback(
+    (
+      sessionId: string,
+      userBlockId: string,
+      threadId: string,
+      update: (thread: BtwThread | undefined) => BtwThread | undefined,
+    ): Session | undefined => {
+      const previous = sessionsRef.current;
+      let updatedSession: Session | undefined;
+      const next = previous.map((session) => {
+        if (session.id !== sessionId) return session;
+        const blockIndex = session.blocks.findIndex(
+          (block) => block.id === userBlockId && block.role === "user",
+        );
+        if (blockIndex < 0) return session;
+        const block = session.blocks[blockIndex];
+        const current = block.btwThreads?.find(
+          (thread) => thread.id === threadId,
+        );
+        const nextThread = update(current);
+        if (!nextThread) return session;
+        const nextBlock = current
+          ? replaceBtwThread(block, nextThread)
+          : {
+              ...block,
+              btwThreads: [...(block.btwThreads ?? []), nextThread],
+            };
+        const blocks = session.blocks.slice();
+        blocks[blockIndex] = nextBlock;
+        updatedSession = { ...session, blocks };
+        return updatedSession;
+      });
+      if (!updatedSession) return undefined;
+      sessionsRef.current = next;
+      setSessions(next);
+      persistSession(updatedSession);
+      return updatedSession;
+    },
+    [persistSession],
+  );
+
+  const removeBtwThread = useCallback(
+    (
+      sessionId: string,
+      userBlockId: string,
+      threadId: string,
+    ): Session | undefined => {
+      const previous = sessionsRef.current;
+      let updatedSession: Session | undefined;
+      const next = previous.map((session) => {
+        if (session.id !== sessionId) return session;
+        const blockIndex = session.blocks.findIndex(
+          (block) => block.id === userBlockId && block.role === "user",
+        );
+        if (blockIndex < 0) return session;
+        const block = session.blocks[blockIndex];
+        const threads = block.btwThreads ?? [];
+        if (!threads.some((thread) => thread.id === threadId)) return session;
+        const nextThreads = threads.filter((thread) => thread.id !== threadId);
+        const nextBlock = {
+          ...block,
+          btwThreads: nextThreads.length > 0 ? nextThreads : undefined,
+        };
+        const blocks = session.blocks.slice();
+        blocks[blockIndex] = nextBlock;
+        updatedSession = { ...session, blocks };
+        return updatedSession;
+      });
+      if (!updatedSession) return undefined;
+      sessionsRef.current = next;
+      setSessions(next);
+      persistSession(updatedSession);
+      return updatedSession;
+    },
+    [persistSession],
+  );
+
+  const runBtwRequest = useCallback(
+    (input: {
+      sessionId: string;
+      userBlockId: string;
+      source: Session;
+      thread: BtwThread;
+    }) => {
+      const cwd = sessionWorkCwd(input.source);
+      const model = nativeModelId(
+        input.thread.model ?? input.source.model,
+      ).trim();
+      if (!cwd || cwd === "~") {
+        updateBtwThread(
+          input.sessionId,
+          input.userBlockId,
+          input.thread.id,
+          (thread) =>
+            thread
+              ? {
+                  ...thread,
+                  status: "error",
+                  updatedAt: Date.now(),
+                  error:
+                    "A project working directory is required for this question.",
+                }
+              : undefined,
+        );
+        return;
+      }
+      if (!model) {
+        updateBtwThread(
+          input.sessionId,
+          input.userBlockId,
+          input.thread.id,
+          (thread) =>
+            thread
+              ? {
+                  ...thread,
+                  status: "error",
+                  updatedAt: Date.now(),
+                  error: "The selected Codex model is unavailable.",
+                }
+              : undefined,
+        );
+        return;
+      }
+
+      let prompt: string;
+      try {
+        prompt = buildBtwPrompt({
+          blocks: input.source.blocks,
+          thread: input.thread,
+          cwd,
+        });
+      } catch (error) {
+        updateBtwThread(
+          input.sessionId,
+          input.userBlockId,
+          input.thread.id,
+          (thread) =>
+            thread
+              ? {
+                  ...thread,
+                  status: "error",
+                  updatedAt: Date.now(),
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "The completed turn is no longer available.",
+                }
+              : undefined,
+        );
+        return;
+      }
+
+      const key = `${input.sessionId}:${input.thread.id}`;
+      btwRequestsRef.current.get(key)?.controller.abort();
+      const controller = new AbortController();
+      btwRequestsRef.current.set(key, {
+        sessionId: input.sessionId,
+        controller,
+      });
+
+      void runCodexTextPrompt({
+        cwd,
+        providerAccountId: input.source.providerAccountId,
+        model,
+        modelSettings: input.source.modelSettings,
+        threadId: input.thread.providerThreadId,
+        onThreadId: (providerThreadId) => {
+          updateBtwThread(
+            input.sessionId,
+            input.userBlockId,
+            input.thread.id,
+            (thread) =>
+              thread && thread.providerThreadId !== providerThreadId
+                ? {
+                    ...thread,
+                    providerThreadId,
+                    updatedAt: Date.now(),
+                  }
+                : thread,
+          );
+        },
+        intent: "plan",
+        prompt,
+        signal: controller.signal,
+      })
+        .then((output) => {
+          if (controller.signal.aborted) return;
+          const text = output.trim();
+          if (!text) throw new Error("Codex returned an empty side answer.");
+          updateBtwThread(
+            input.sessionId,
+            input.userBlockId,
+            input.thread.id,
+            (thread) =>
+              thread
+                ? {
+                    ...thread,
+                    status: "ready",
+                    updatedAt: Date.now(),
+                    messages: [
+                      ...thread.messages,
+                      {
+                        id: crypto.randomUUID(),
+                        role: "assistant",
+                        text,
+                        createdAt: Date.now(),
+                      },
+                    ],
+                    error: undefined,
+                  }
+                : undefined,
+          );
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Codex could not answer this side question.";
+          updateBtwThread(
+            input.sessionId,
+            input.userBlockId,
+            input.thread.id,
+            (thread) =>
+              thread
+                ? {
+                    ...thread,
+                    status: "error",
+                    updatedAt: Date.now(),
+                    error: message,
+                  }
+                : undefined,
+          );
+        })
+        .finally(() => {
+          if (btwRequestsRef.current.get(key)?.controller === controller) {
+            btwRequestsRef.current.delete(key);
+          }
+        });
+    },
+    [updateBtwThread],
+  );
+
+  const onBtwSubmit = useCallback(
+    (
+      sessionId: string,
+      turn: Block[],
+      threadId: string,
+      messageId: string,
+      text: string,
+      model?: string,
+    ) => {
+      const source = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      const sourceEndBlockId = turn[turn.length - 1]?.id;
+      if (
+        !source ||
+        source.harness !== "codex" ||
+        source.worktreeRemoved ||
+        !sourceUserId ||
+        !sourceEndBlockId ||
+        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+      ) {
+        return;
+      }
+      const sourceBlock = source.blocks.find(
+        (block) => block.id === sourceUserId && block.role === "user",
+      );
+      if (!sourceBlock) return;
+      const existing = sourceBlock.btwThreads?.find(
+        (thread) => thread.id === threadId,
+      );
+      const selectedModel =
+        model?.trim() || existing?.model || nativeModelId(source.model).trim();
+      if (existing?.status === "running") return;
+      if (existing && existing.sourceEndBlockId !== sourceEndBlockId) return;
+      const now = Date.now();
+      const thread: BtwThread = existing
+        ? {
+            ...existing,
+            model: selectedModel || undefined,
+            status: "running",
+            updatedAt: now,
+            error: undefined,
+            messages: [
+              ...existing.messages,
+              { id: messageId, role: "user", text, createdAt: now },
+            ],
+          }
+        : {
+            id: threadId,
+            sourceEndBlockId,
+            createdAt: now,
+            updatedAt: now,
+            status: "running",
+            ...(selectedModel ? { model: selectedModel } : {}),
+            messages: [{ id: messageId, role: "user", text, createdAt: now }],
+          };
+      const updated = updateBtwThread(
+        sessionId,
+        sourceUserId,
+        threadId,
+        () => thread,
+      );
+      if (!updated) return;
+      runBtwRequest({
+        sessionId,
+        userBlockId: sourceUserId,
+        source,
+        thread,
+      });
+    },
+    [runBtwRequest, updateBtwThread],
+  );
+
+  const onBtwModelChange = useCallback(
+    (sessionId: string, turn: Block[], threadId: string, model: string) => {
+      const source = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      const nextModel = model.trim();
+      if (
+        !source ||
+        source.harness !== "codex" ||
+        source.worktreeRemoved ||
+        !sourceUserId ||
+        !nextModel ||
+        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+      ) {
+        return;
+      }
+      updateBtwThread(sessionId, sourceUserId, threadId, (thread) =>
+        thread
+          ? { ...thread, model: nextModel, updatedAt: Date.now() }
+          : undefined,
+      );
+    },
+    [updateBtwThread],
+  );
+
+  const onBtwDelete = useCallback(
+    (sessionId: string, turn: Block[], threadId: string) => {
+      const source = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      if (
+        !source ||
+        source.harness !== "codex" ||
+        source.worktreeRemoved ||
+        !sourceUserId ||
+        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+      ) {
+        return;
+      }
+      const requestKey = `${sessionId}:${threadId}`;
+      btwRequestsRef.current.get(requestKey)?.controller.abort();
+      btwRequestsRef.current.delete(requestKey);
+      removeBtwThread(sessionId, sourceUserId, threadId);
+    },
+    [removeBtwThread],
+  );
+
+  const onBtwRetry = useCallback(
+    (sessionId: string, turn: Block[], threadId: string) => {
+      const source = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      if (
+        !source ||
+        source.harness !== "codex" ||
+        source.worktreeRemoved ||
+        !sourceUserId ||
+        harnessForTurn(source.blocks, turn, source.harness) !== "codex"
+      ) {
+        return;
+      }
+      const sourceBlock = source.blocks.find(
+        (block) => block.id === sourceUserId && block.role === "user",
+      );
+      const existing = sourceBlock?.btwThreads?.find(
+        (thread) => thread.id === threadId,
+      );
+      if (!sourceBlock || !existing || existing.status !== "error") return;
+      const thread: BtwThread = {
+        ...existing,
+        status: "running",
+        updatedAt: Date.now(),
+        error: undefined,
+      };
+      const updated = updateBtwThread(
+        sessionId,
+        sourceUserId,
+        threadId,
+        () => thread,
+      );
+      if (!updated) return;
+      runBtwRequest({
+        sessionId,
+        userBlockId: sourceUserId,
+        source: updated,
+        thread,
+      });
+    },
+    [runBtwRequest, updateBtwThread],
+  );
 
   const onHandoff = useCallback(
     (sourceId: string, target: ModelTarget, turn: Block[]) => {
@@ -8350,6 +8819,10 @@ export default function App({
     onBuildPlan,
     onSecondOpinion,
     onHandoff,
+    onBtwSubmit,
+    onBtwRetry,
+    onBtwDelete,
+    onBtwModelChange,
     onNewTerminal: onNewTerminalInSession,
   };
 

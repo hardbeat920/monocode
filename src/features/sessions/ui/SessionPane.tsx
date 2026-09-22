@@ -25,7 +25,10 @@ import {
   type ApprovalDecision,
   type UserQuestionReply,
 } from "../../../integrations/harness";
-import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
+import {
+  looksLikeProject,
+  type RecentProject,
+} from "../../projects/model/recents";
 import {
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -51,7 +54,10 @@ import {
   type QuoteRequest,
 } from "../model/quoteDraft";
 import { createNote, noteTitle } from "../../notes";
-import { loadNotesEnabled, subscribeNotesEnabled } from "../../settings/model/settings";
+import {
+  loadNotesEnabled,
+  subscribeNotesEnabled,
+} from "../../settings/model/settings";
 import { resolveModel } from "../model/models";
 import { isAstraModel } from "../model/astraWelcome";
 import { AstraWelcome } from "./AstraWelcome";
@@ -160,7 +166,24 @@ type Props = {
     turn: Block[],
   ) => void;
   onHandoff?: (sessionId: string, target: ModelTarget, turn: Block[]) => void;
+  onBtwSubmit?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    messageId: string,
+    text: string,
+    model?: string,
+  ) => void;
+  onBtwRetry?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwDelete?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwModelChange?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    model: string,
+  ) => void;
   onNewTerminal: (sessionId: string) => void;
+
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
@@ -213,6 +236,10 @@ export const SessionPane = memo(function SessionPane({
   onBuildPlan,
   onSecondOpinion,
   onHandoff,
+  onBtwSubmit,
+  onBtwRetry,
+  onBtwDelete,
+  onBtwModelChange,
   onNewTerminal,
   onPaneDragStart,
 }: Props) {
@@ -628,6 +655,52 @@ export const SessionPane = memo(function SessionPane({
                 onHandoff={
                   !session.inboxAsk && !session.worktreeRemoved && onHandoff
                     ? (target, turn) => onHandoff(session.id, target, turn)
+                    : undefined
+                }
+                onBtwSubmit={
+                  !managed &&
+                  session.harness === "codex" &&
+                  !session.inboxAsk &&
+                  !session.worktreeRemoved &&
+                  onBtwSubmit
+                    ? (threadId, messageId, text, turn, model) =>
+                        onBtwSubmit(
+                          session.id,
+                          turn,
+                          threadId,
+                          messageId,
+                          text,
+                          model,
+                        )
+                    : undefined
+                }
+                onBtwRetry={
+                  !managed &&
+                  session.harness === "codex" &&
+                  !session.inboxAsk &&
+                  !session.worktreeRemoved &&
+                  onBtwRetry
+                    ? (threadId, turn) => onBtwRetry(session.id, turn, threadId)
+                    : undefined
+                }
+                onBtwDelete={
+                  !managed &&
+                  session.harness === "codex" &&
+                  !session.inboxAsk &&
+                  !session.worktreeRemoved &&
+                  onBtwDelete
+                    ? (threadId, turn) =>
+                        onBtwDelete(session.id, turn, threadId)
+                    : undefined
+                }
+                onBtwModelChange={
+                  !managed &&
+                  session.harness === "codex" &&
+                  !session.inboxAsk &&
+                  !session.worktreeRemoved &&
+                  onBtwModelChange
+                    ? (threadId, model, turn) =>
+                        onBtwModelChange(session.id, turn, threadId, model)
                     : undefined
                 }
                 onJumpToBottomChange={setShowJumpToBottom}

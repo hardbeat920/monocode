@@ -1603,6 +1603,157 @@ html.theme-light .popover-backdrop {
   }
 }
 
+/* The btw thread borrows the chat transcript's quiet, asymmetric
+   language instead of introducing a second card system. */
+.btw-popover-surface {
+  background: color-mix(
+    in srgb,
+    var(--color-background-base) 94%,
+    var(--color-content) 6%
+  );
+}
+
+.btw-thread-chip {
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-content) 9%, transparent);
+}
+
+.btw-thread-chip:hover {
+  border-color: color-mix(in srgb, var(--color-content) 15%, transparent);
+}
+
+.btw-message {
+  min-width: 0;
+}
+
+.btw-message-user {
+  padding: 10px 12px;
+  border: 1px solid
+    color-mix(in srgb, var(--user-accent-color, #34d399) 32%, transparent);
+  border-radius: 12px;
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, #34d399) 16%,
+    transparent
+  );
+}
+
+.btw-message-assistant {
+  padding: 0 2px 14px;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--color-content) 9%, transparent);
+}
+
+.btw-message-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--color-content) 48%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.btw-message-meta-user {
+  color: color-mix(
+    in srgb,
+    var(--user-accent-color, #34d399) 82%,
+    var(--color-content)
+  );
+}
+
+.btw-message-rule {
+  min-width: 12px;
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--color-content) 9%, transparent);
+}
+
+.btw-empty-state {
+  display: flex;
+  min-height: 152px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 20px;
+  border: 1px dashed color-mix(in srgb, var(--color-content) 14%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-content) 3%, transparent);
+  text-align: center;
+}
+
+.btw-empty-state p {
+  margin: 2px 0 0;
+  color: color-mix(in srgb, var(--color-content) 72%, transparent);
+  font-size: 13px;
+}
+
+.btw-empty-state span {
+  max-width: 28ch;
+  color: color-mix(in srgb, var(--color-content) 42%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.btw-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, #f87171 24%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, #f87171 7%, transparent);
+}
+
+.btw-composer-field {
+  border: 1px solid color-mix(in srgb, var(--color-content) 12%, transparent);
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  transition:
+    border-color var(--motion-feedback-duration) var(--motion-ease-out),
+    background-color var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+.btw-composer-field:hover {
+  border-color: color-mix(in srgb, var(--color-content) 18%, transparent);
+}
+
+.btw-composer-field:focus {
+  border-color: color-mix(in srgb, var(--color-accent) 64%, transparent);
+  background: color-mix(in srgb, var(--color-content) 7%, transparent);
+}
+
+html.theme-light .btw-popover-surface {
+  background: var(--color-background-base);
+}
+
+html.theme-light .btw-message-user {
+  border-color: color-mix(
+    in srgb,
+    var(--user-accent-color, #059669) 28%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, #059669) 9%,
+    transparent
+  );
+}
+
+@media (max-width: 560px) {
+  [data-btw-popover] .btw-message-user {
+    max-width: 100%;
+  }
+
+  [data-btw-popover] .btw-message-assistant {
+    max-width: 100%;
+  }
+}
+
 /* The selected project mascot turns banked resets into a tiny status scene. */
 .reset-mascot-scene {
   position: absolute;

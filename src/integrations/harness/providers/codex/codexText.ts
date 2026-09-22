@@ -10,9 +10,12 @@ import {
   asRecord,
   buildThreadStartParams,
   buildTurnStartParams,
+  isRecoverableThreadResumeError,
   stringField,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
+import type { TurnIntent } from "../../../../features/sessions/model/session";
+
 import { mergeStream, streamTextDelta } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-codex-text";
@@ -29,6 +32,7 @@ type LiveText = {
   threadId: string;
   model: string;
   effort: string;
+  serviceTier?: string;
   collecting: boolean;
   output: string;
   closed: boolean;
@@ -39,7 +43,9 @@ type LiveText = {
 let live: LiveText | null = null;
 let turns: Promise<void> = Promise.resolve();
 
-function pickTextModel(): string {
+function pickTextModel(requested?: string): string {
+  const selected = requested?.trim();
+  if (selected) return selected;
   const models = modelsFor("codex");
   const luna = models.find((model) =>
     /5\.6-luna/i.test(`${model.nativeId ?? ""} ${model.name} ${model.id}`),
@@ -47,14 +53,31 @@ function pickTextModel(): string {
   return luna?.nativeId ?? TEXT_MODEL;
 }
 
-function pickTextEffort(modelId: string): string {
+function pickTextEffort(
+  modelId: string,
+  modelSettings?: Record<string, string>,
+): string {
+  const requested =
+    modelSettings?.reasoningEffort?.trim() || modelSettings?.effort?.trim();
   const model = modelsFor("codex").find((entry) => entry.nativeId === modelId);
-  const setting = model?.settings?.find((entry) => entry.id === "reasoningEffort");
+  const setting = model?.settings?.find(
+    (entry) => entry.id === "reasoningEffort",
+  );
   const options = setting?.options?.map((option) => option.value) ?? [];
+  if (requested && (options.length === 0 || options.includes(requested))) {
+    return requested;
+  }
   if (options.includes("low")) return "low";
   if (options.includes("none")) return "none";
   if (setting?.value && options.includes(setting.value)) return setting.value;
   return TEXT_EFFORT;
+}
+
+function pickTextServiceTier(
+  modelSettings?: Record<string, string>,
+): string | undefined {
+  const value = modelSettings?.serviceTier?.trim();
+  return value || undefined;
 }
 
 export async function stopCodexTextPrompt(): Promise<void> {
@@ -64,9 +87,11 @@ export async function stopCodexTextPrompt(): Promise<void> {
 /** Start the shared Codex app-server in the background so the first prompt is fast. */
 export function warmupCodexText(cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
-  const run = turns.catch(() => undefined).then(async () => {
-    await ensureLive(cwd);
-  });
+  const run = turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive({ cwd });
+    });
   turns = run.then(
     () => undefined,
     () => undefined,
@@ -78,9 +103,18 @@ export function warmupCodexText(cwd: string): Promise<void> {
 export async function runCodexTextPrompt(input: {
   cwd: string;
   providerAccountId?: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  threadId?: string;
+  onThreadId?: (threadId: string) => void;
+  intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
+  if (input.model !== undefined && !input.model.trim()) {
+    throw new Error("The selected Codex model is unavailable.");
+  }
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
   turns = run.then(
     () => undefined,
@@ -92,13 +126,32 @@ export async function runCodexTextPrompt(input: {
 async function promptOnLive(input: {
   cwd: string;
   providerAccountId?: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  threadId?: string;
+  onThreadId?: (threadId: string) => void;
+  intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd, input.providerAccountId);
+  const session = await ensureLive(input);
   session.output = "";
   session.collecting = true;
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  let abortHandler: (() => void) | undefined;
+  const abortPromise = input.signal
+    ? new Promise<void>((_, reject) => {
+        abortHandler = () => {
+          void session.rpc
+            .request("turn/interrupt", { threadId: session.threadId })
+            .catch(() => undefined);
+          reject(new Error("By-the-way request cancelled"));
+        };
+        input.signal!.addEventListener("abort", abortHandler, { once: true });
+        if (input.signal!.aborted) abortHandler();
+      })
+    : null;
 
   try {
     const turnPromise = new Promise<void>((resolve, reject) => {
@@ -106,7 +159,7 @@ async function promptOnLive(input: {
       session.turnFailed = reject;
     });
 
-    await session.rpc.request(
+    const turnStart = session.rpc.request(
       "turn/start",
       buildTurnStartParams({
         threadId: session.threadId,
@@ -114,9 +167,12 @@ async function promptOnLive(input: {
         prompt: input.prompt,
         model: session.model || undefined,
         effort: session.effort,
+        serviceTier: session.serviceTier,
+        intent: input.intent,
       }),
       timeoutMs,
     );
+    await Promise.race([turnStart, ...(abortPromise ? [abortPromise] : [])]);
 
     await Promise.race([
       turnPromise,
@@ -126,6 +182,7 @@ async function promptOnLive(input: {
           timeoutMs,
         );
       }),
+      ...(abortPromise ? [abortPromise] : []),
     ]);
 
     return session.output;
@@ -136,47 +193,82 @@ async function promptOnLive(input: {
     if (session.closed) await dropLive();
     throw error;
   } finally {
+    if (abortHandler && input.signal) {
+      input.signal.removeEventListener("abort", abortHandler);
+    }
     session.collecting = false;
     session.turnDone = null;
     session.turnFailed = null;
     await dropLive();
   }
 }
-
-async function ensureLive(
-  cwd: string,
-  providerAccountId?: string,
-): Promise<LiveText> {
-  const model = pickTextModel();
-  const effort = pickTextEffort(model);
+async function ensureLive(input: {
+  cwd: string;
+  providerAccountId?: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  threadId?: string;
+  onThreadId?: (threadId: string) => void;
+}): Promise<LiveText> {
+  const model = pickTextModel(input.model);
+  const effort = pickTextEffort(model, input.modelSettings);
+  const serviceTier = pickTextServiceTier(input.modelSettings);
+  const requestedThreadId = input.threadId?.trim() || undefined;
   if (live && !live.closed) {
     if (
-      live.cwd === cwd &&
+      live.cwd === input.cwd &&
       live.model === model &&
       live.effort === effort &&
-      live.providerAccountId === providerAccountId
+      live.serviceTier === serviceTier &&
+      live.providerAccountId === input.providerAccountId &&
+      (!requestedThreadId || live.threadId === requestedThreadId)
     ) {
+      input.onThreadId?.(live.threadId);
       return live;
     }
-    if (live.providerAccountId !== providerAccountId) {
+    if (live.providerAccountId !== input.providerAccountId) {
       await dropLive();
-      return startLive(cwd, providerAccountId);
+      const started = await startLive(
+        input.cwd,
+        input.providerAccountId,
+        model,
+        effort,
+        serviceTier,
+        requestedThreadId,
+      );
+      input.onThreadId?.(started.threadId);
+      return started;
     }
     try {
       live.model = model;
       live.effort = effort;
-      await openThread(live, cwd);
+      live.serviceTier = serviceTier;
+      await openThread(live, input.cwd, requestedThreadId);
+      input.onThreadId?.(live.threadId);
       return live;
     } catch {
       await dropLive();
     }
   }
-  return startLive(cwd, providerAccountId);
+  const started = await startLive(
+    input.cwd,
+    input.providerAccountId,
+    model,
+    effort,
+    serviceTier,
+    requestedThreadId,
+  );
+  input.onThreadId?.(started.threadId);
+  return started;
 }
 
 async function startLive(
   cwd: string,
   providerAccountId?: string,
+  model = pickTextModel(),
+  effort = pickTextEffort(model),
+  serviceTier?: string,
+  requestedThreadId?: string,
 ): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveCodexBinary();
@@ -194,20 +286,21 @@ async function startLive(
     { includeJsonrpc: false, label: "codex-text" },
   );
 
-  const model = pickTextModel();
   const session: LiveText = {
     rpc,
     cwd,
     providerAccountId,
     threadId: "",
     model,
-    effort: pickTextEffort(model),
+    effort,
+    serviceTier,
     collecting: false,
     output: "",
     closed: false,
     turnDone: null,
     turnFailed: null,
   };
+
   sessionRef.session = session;
 
   watchChild(
@@ -241,7 +334,7 @@ async function startLive(
       INIT_TIMEOUT_MS,
     );
     await rpc.notify("initialized", undefined);
-    await openThread(session, cwd);
+    await openThread(session, cwd, requestedThreadId);
     live = session;
     return session;
   } catch (error) {
@@ -253,22 +346,48 @@ async function startLive(
   }
 }
 
-async function openThread(session: LiveText, cwd: string): Promise<void> {
-  const opened = await session.rpc.request<{ thread?: { id?: string } }>(
-    "thread/start",
-    buildThreadStartParams({
-      cwd,
-      runtimeMode: TEXT_RUNTIME_MODE,
-      model: session.model || undefined,
-    }),
-    INIT_TIMEOUT_MS,
-  );
+async function openThread(
+  session: LiveText,
+  cwd: string,
+  requestedThreadId?: string,
+): Promise<void> {
+  let opened: { thread?: { id?: string } } | undefined;
+  if (requestedThreadId) {
+    try {
+      opened = await session.rpc.request<{ thread?: { id?: string } }>(
+        "thread/resume",
+        {
+          threadId: requestedThreadId,
+          ...buildThreadStartParams({
+            cwd,
+            runtimeMode: TEXT_RUNTIME_MODE,
+            model: session.model || undefined,
+            serviceTier: session.serviceTier,
+          }),
+        },
+        INIT_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (!isRecoverableThreadResumeError(error)) throw error;
+    }
+  }
+  if (!opened) {
+    opened = await session.rpc.request<{ thread?: { id?: string } }>(
+      "thread/start",
+      buildThreadStartParams({
+        cwd,
+        runtimeMode: TEXT_RUNTIME_MODE,
+        model: session.model || undefined,
+        serviceTier: session.serviceTier,
+      }),
+      INIT_TIMEOUT_MS,
+    );
+  }
   const threadId = opened.thread?.id?.trim();
   if (!threadId) throw new Error("Codex did not return a thread id");
   session.cwd = cwd;
   session.threadId = threadId;
 }
-
 async function dropLive(): Promise<void> {
   const current = live;
   live = null;
