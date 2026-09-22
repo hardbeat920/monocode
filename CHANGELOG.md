@@ -7,9 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Hermes turns stay busy while detached subagents are running and resume automatically with their completed transcripts instead of requiring a manual Continue. Hermes ACP usage updates also populate the context meter. In #335.
+
+## [0.1.53] - 2026-09-21
+
+### Added
+
+- The workspace picker can attach a session to an existing worktree from a submenu, instead of only creating a new worktree or staying on the current checkout.
+
+### Fixed
+
+- Add-to-chat from a file-only workspace still opens a split session pane when no session tab is already open, seeding a replacement from the first known session instead of dropping the request. In #325.
+- Renaming a project folder on disk keeps that project's sessions, settings, recents, and terminals attached instead of treating the new path as a different project.
+- Agent markdown, code blocks, and diagrams pick up their intended styles after the frontend source-tree move.
+
+## [0.1.52] - 2026-09-20
+
+### Added
+
+- Automations can run agents on hourly, daily, weekday, or weekly schedules; launch immediately with **Run now**; or react to GitHub, GitLab, Linear, and Azure DevOps Inbox events without keeping the window in the foreground. The new Automations surface includes starter templates, reusable or isolated workspaces, run history, and slash-triggered skill selection in prompts. In #327.
+- Antigravity is available on macOS and Linux as a live ACP provider with its own vector mark, model discovery, file and image attachments, permission requests, access modes, persisted session resume, cancellation and process recovery, and discovery of skills from `~/.gemini/antigravity/skills`. In #314 by @elijah7x.
+- Azure DevOps joins the Inbox with PAT authentication for Azure Boards work items and Azure Repos pull requests, including attention filters, details, threads, comments, reviewers, and textual diffs for cloud and HTTPS on-premises organizations. Azure DevOps work-item and pull-request activity can also trigger automations. In #317 by @jonathanlamela.
+- Composer messages can be saved as persistent session drafts instead of being sent immediately. Drafts survive restarts, appear in session status, can be sent later, and can be removed without changing conversation history.
+- New sessions can choose the current checkout, an existing worktree, or a draft workspace that creates its worktree and a descriptive branch on the first turn. Draft workspaces support branch renaming and expose their checkout identity in the Explorer.
+- The Changes panel can amend the latest local commit when `HEAD` has not been pushed, and resets amend mode when the branch or commit changes. In #324 by @kartava.
+- GitHub issue and pull-request URLs render as interactive work-item chips with hover and keyboard-focus previews for metadata, state, labels, and assignees. An optional authenticated prompt can also star MonoCode through the GitHub CLI.
+- The file editor has a draggable CodeMirror scrollbar with change and diagnostic markers, plus a full-width sticky search toolbar.
+- Files can open as standalone top-bar workspace tabs through a persistent setting, and tab opening and closing can use reduced-motion-aware animations through a separate opt-in setting.
+- The project rail has a persistent compact mode that gives workspace content more room while retaining project navigation and status.
+
+### Changed
+
+- Model controls use consistent reasoning-option behavior across providers, can show model settings as beside-picker pills, open the relevant model list directly, and identify the provider behind every favorite. Effort, service-tier, and fast-mode settings are grouped consistently, with effort icons for Pi and omp thinking levels and a speed icon for service tier. In #323 by @D3nnis72.
+- Orchestrated workers use recoverable worktrees seeded from the lead checkout, apply checkpoints with conflict and symlink safeguards, support retrying stopped workers, and clean up their temporary branches.
+- Automation creation opens directly into the template picker, keeps its filters and templates in one scrolling region, and lets prompt fields grow beyond the default Composer height.
+- Worktree deletion no longer requires typing the worktree name, while commit actions, modal titles and borders, and provider-setting controls use clearer states and lighter styling.
+- Banked Codex reset details appear only when resets are actually available, and project mascots no longer use a separate unavailable-reset state.
+- The frontend source tree is organized by application composition, product feature, provider integration, platform adapter, and shared code instead of the former `chrome`, `surfaces`, and catch-all `lib` directories. In #331.
+- Session removal, resilient boolean preference storage, and repository-backed GitLab and Azure DevOps Inbox fetching now use shared lifecycle and data-access helpers.
+
+### Fixed
+
+- Removing the final session associated with a worktree asks about deletion only when an unused worktree actually exists.
+- Removing a saved draft is serialized with session persistence so reusing a session ID cannot restore the deleted draft.
+- Antigravity ignores malformed configuration updates without losing valid options, fails closed when access-mode changes are rejected, and retires stale or blocked transports so cancelled, forgotten, timed-out, or replaced sessions cannot leak output into a later turn.
+
+## [0.1.51] - 2026-09-18
+
+### Added
+
+- Git worktrees provide independent working copies for parallel sessions. The working-copy picker can create a worktree from a new or existing branch, open another working copy in a new session, and recover sessions whose worktree was removed. Settings → Worktrees lists branch, status, unpublished commits, and associated sessions, with guarded deletion that preserves branches and sessions by default. In #319.
+- Settings → Providers can rename and remove named Claude Code and Codex accounts. Removing an account deletes its stored credentials, stops its running turns, and retains existing conversations with a clear prompt to switch accounts before continuing.
+- The Go to File dialog now doubles as a fuzzy command palette when opened with Command/Ctrl+Shift+P or a leading `>`. Its first action reloads MonoCode, also available with Command/Ctrl+Shift+R, with confirmation before discarding unsaved files. In #296 by @MichaelOgunjimi.
+- User messages can be copied with their attachments or saved directly to Notes, and selected transcript text offers the same Notes action with success and error feedback. Message timestamps remain visible even for prompts that contain only a note, handoff, or second-opinion card. In #291 and #320 by @ognjeeen.
+- Agent question options support full keyboard navigation with Arrow keys, Home, End, number shortcuts, Enter, and Space for both single- and multi-select prompts.
+
+### Changed
+
+- Add-to-chat actions from file-only workspaces open a new session pane and seed its focused Composer with the quoted or plain text, leaving the caret ready at the end.
+
+### Fixed
+
+- Open editors reliably reload after agent edits and external file changes, including updates that race the initial file watch or preserve the previous modification time.
+- Stopping a turn or beginning the next one cancels unresolved approval requests, removes stale approval controls, and marks their unfinished tools as cancelled.
+- Conversations created before named Claude Code and Codex accounts were introduced continue under the default account instead of losing their provider session association.
+- Composer focus follows the visible active session in split layouts instead of being captured by a hidden session.
+
+## [0.1.50] - 2026-09-17
+
 ### Added
 
 - Hermes Agent is available as an ACP harness with live model discovery, image and file attachments, permission prompts, in-flight redirects, and persisted session resume. Install Hermes, configure a provider with `hermes model`, and MonoCode will add it to the model picker. In #282.
+- Projects can be organized into persistent, collapsible groups in the project rail, with custom names, colors, and mascots. Projects can be assigned or returned to the ungrouped section from their context menu.
+- On Windows, closing a window can hide it to the system tray so running agents continue; the behavior is enabled by default, configurable in Settings, and paired with tray actions to reopen or fully quit MonoCode. Full quits coordinate every window, count all running turns, ask once, wait for workspace saves, recover from stale confirmations, and abort safely if required persistence fails. In #224 by @goujandev.
+- Claude Code and Codex support multiple named accounts. Add or switch accounts from the usage footer; each project remembers its selection, and existing conversations remain pinned to the account that started them. In #280.
+- OpenCode Go usage appears in the status-bar footer with five-hour, weekly, and monthly limits and reset countdowns. Credential discovery supports environment overrides, JSON and JSONC configuration, and XDG data directories. In #263 by @D3nnis72.
+- The branch picker can create a branch through a dedicated name dialog, with the new branch immediately available for selection.
+- Files can be dragged from the Explorer into the Composer, with a drag preview and the same attachment handling as files added through the picker.
+- Project menus can open a project in a detected external editor on macOS, Windows, and Linux.
+- Binary and image viewers can copy the original file to the macOS clipboard from their toolbar or context menu, with temporary success feedback.
+- GitHub pull-request headers include an action to copy the head branch name. Closes #248 in #273 by @bluzername.
+- Contributors can set `MONOCODE_DEV_APP_NAME` to run a separately named macOS development app without changing the default bundle identity. Invalid names and path traversal are rejected. In #284 by @MichaelOgunjimi.
+
+### Changed
+
+- Workspace and file tabs have more consistent alignment, spacing, active-state highlighting, rounded corners, and cursor behavior, while the terminal dock uses a simpler trailing layout.
+- Changing an OpenCode session's access mode updates its live permissions immediately, and switching to Full Access automatically resolves residual approval prompts.
+- Orchestrated workers use private scratch directories and canonical write-path checks. Paused runs remain inspectable, interrupted work can be retried after resuming, and invalid orchestration proposals are repaired before results are published.
+
+### Fixed
+
+- Pasting or dropping files from Finder into the file tree works reliably on macOS, including safe handling of symlink aliases; drop targeting also accounts for Windows display scaling. In #264 by @kartava.
+- The Composer regains focus after answering a question, finishing an agent turn, or returning to the MonoCode window without stealing focus from another Composer or an open picker. In #292 by @MichaelOgunjimi.
+- Context menus can use their intrinsic height, tab-group menus open on the correct side, light-theme popovers remain opaque, and reorderable tabs use the default cursor.
+- Unix orchestration scratch directories retain restrictive `0700` permissions when their ownership is transferred to the worker.
 
 ## [0.1.49] - 2026-09-16
 
@@ -852,7 +945,11 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.49...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.53...HEAD
+[0.1.53]: https://github.com/hardbeat920/monocode/compare/v0.1.52...v0.1.53
+[0.1.52]: https://github.com/hardbeat920/monocode/compare/v0.1.51...v0.1.52
+[0.1.51]: https://github.com/hardbeat920/monocode/compare/v0.1.50...v0.1.51
+[0.1.50]: https://github.com/hardbeat920/monocode/compare/v0.1.49...v0.1.50
 [0.1.49]: https://github.com/hardbeat920/monocode/compare/v0.1.48...v0.1.49
 [0.1.48]: https://github.com/hardbeat920/monocode/compare/v0.1.47...v0.1.48
 [0.1.47]: https://github.com/hardbeat920/monocode/compare/v0.1.46...v0.1.47

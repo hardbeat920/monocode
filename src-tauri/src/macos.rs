@@ -22,7 +22,8 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void, OsStr};
+use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -563,8 +564,17 @@ pub(crate) fn prefer_bundle_dock_icon() {
 fn current_exe_is_bundled() -> bool {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join("..").join("Info.plist")))
-        .is_some_and(|plist| plist.exists())
+        .and_then(|exe| existing_bundle_root_from_exe(&exe))
+        .is_some()
+}
+
+#[cfg(debug_assertions)]
+fn existing_bundle_root_from_exe(exe: &Path) -> Option<(std::path::PathBuf, String)> {
+    let app = exe.parent()?.parent()?.parent()?.to_path_buf();
+    let app_name = bundle_name_from_app_path(&app)?;
+    app.join("Contents/Info.plist")
+        .exists()
+        .then_some((app, app_name))
 }
 
 #[cfg(debug_assertions)]
@@ -574,24 +584,19 @@ fn relaunch_from_dev_bundle() -> Result<(), String> {
     use std::process::Command;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    if current_exe_is_bundled() {
-        let app = exe
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .ok_or("missing bundle root")?
-            .to_path_buf();
-        write_dev_bundle_icons(&app)?;
+    if let Some((app, app_name)) = existing_bundle_root_from_exe(&exe) {
+        write_dev_bundle_icons(&app, &app_name)?;
         return Ok(());
     }
+    let app_name = dev_bundle_name_from_env(DEV_BUNDLE_DEFAULT_NAME);
 
     let app = exe
         .parent()
         .ok_or("missing exe parent")?
-        .join("MonoCode.app");
+        .join(dev_bundle_dir_name(&app_name));
     let macos_dir = app.join("Contents/MacOS");
     std::fs::create_dir_all(&macos_dir).map_err(|e| e.to_string())?;
-    write_dev_bundle_icons(&app)?;
+    write_dev_bundle_icons(&app, &app_name)?;
 
     let bundled = macos_dir.join("monocode");
     let _ = std::fs::remove_file(&bundled);
@@ -624,10 +629,11 @@ fn relaunch_from_dev_bundle() -> Result<(), String> {
 }
 
 #[cfg(debug_assertions)]
-fn write_dev_bundle_icons(app: &std::path::Path) -> Result<(), String> {
+fn write_dev_bundle_icons(app: &Path, app_name: &str) -> Result<(), String> {
     let resources = app.join("Contents/Resources");
     std::fs::create_dir_all(&resources).map_err(|e| e.to_string())?;
-    std::fs::write(app.join("Contents/Info.plist"), DEV_BUNDLE_PLIST).map_err(|e| e.to_string())?;
+    std::fs::write(app.join("Contents/Info.plist"), dev_bundle_plist(app_name))
+        .map_err(|e| e.to_string())?;
     std::fs::write(resources.join("AppIcon.icns"), DEV_ICNS).map_err(|e| e.to_string())?;
     std::fs::write(resources.join("Assets.car"), DEV_ASSETS_CAR).map_err(|e| e.to_string())?;
     let _ = std::process::Command::new("/usr/bin/touch")
@@ -636,7 +642,11 @@ fn write_dev_bundle_icons(app: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Must match `CFBundleIdentifier` in `DEV_BUNDLE_PLIST` and tauri.conf.json.
+/// Must match `CFBundleIdentifier` in the generated dev bundle plist and tauri.conf.json.
+#[cfg(debug_assertions)]
+const DEV_BUNDLE_DEFAULT_NAME: &str = "MonoCode";
+#[cfg(debug_assertions)]
+const DEV_BUNDLE_NAME_ENV: &str = "MONOCODE_DEV_APP_NAME";
 #[cfg(debug_assertions)]
 const DEV_BUNDLE_ID: &str = "com.monocode.desktop";
 #[cfg(debug_assertions)]
@@ -644,14 +654,60 @@ const DEV_ICNS: &[u8] = include_bytes!("../icons/icon.icns");
 #[cfg(debug_assertions)]
 const DEV_ASSETS_CAR: &[u8] = include_bytes!("../macos/Assets.car");
 #[cfg(debug_assertions)]
-const DEV_BUNDLE_PLIST: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+fn dev_bundle_dir_name(app_name: &str) -> String {
+    format!("{app_name}.app")
+}
+
+#[cfg(debug_assertions)]
+fn dev_bundle_name_from_env(fallback: &str) -> String {
+    std::env::var(DEV_BUNDLE_NAME_ENV)
+        .ok()
+        .and_then(|value| sanitized_dev_bundle_name(&value))
+        .unwrap_or_else(|| fallback.into())
+}
+
+#[cfg(debug_assertions)]
+fn sanitized_dev_bundle_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(component)), None) if component == OsStr::new(value) => {
+            Some(value.into())
+        }
+        _ => None,
+    }
+}
+
+#[cfg(debug_assertions)]
+fn bundle_name_from_app_path(app: &Path) -> Option<String> {
+    (app.extension() == Some(OsStr::new("app")))
+        .then(|| app.file_stem())
+        .flatten()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .filter(|name| !name.is_empty())
+}
+
+#[cfg(debug_assertions)]
+fn escape_plist_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg(debug_assertions)]
+fn dev_bundle_plist(app_name: &str) -> Vec<u8> {
+    let app_name = escape_plist_text(app_name);
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>MonoCode</string>
+	<string>{app_name}</string>
 	<key>CFBundleExecutable</key>
 	<string>monocode</string>
 	<key>CFBundleIconFile</key>
@@ -663,7 +719,7 @@ const DEV_BUNDLE_PLIST: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>MonoCode</string>
+	<string>{app_name}</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -676,4 +732,67 @@ const DEV_BUNDLE_PLIST: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 	<true/>
 </dict>
 </plist>
-"#;
+"#
+    )
+    .into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_bundle_exe_path(app_name: &str) -> (PathBuf, PathBuf) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "monocode-macos-tests-{}-{nonce}",
+            std::process::id()
+        ));
+        let app = root.join(app_name);
+        let exe = app.join("Contents/MacOS/monocode");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), b"plist").unwrap();
+        (root, exe)
+    }
+
+    #[test]
+    fn sanitized_dev_bundle_name_accepts_single_component() {
+        assert_eq!(
+            sanitized_dev_bundle_name("  MonoCode Dev  "),
+            Some("MonoCode Dev".into())
+        );
+    }
+
+    #[test]
+    fn sanitized_dev_bundle_name_rejects_invalid_components() {
+        for invalid in ["", "   ", ".", "..", "../Other", "/tmp/Other", "Foo/Bar"] {
+            assert_eq!(sanitized_dev_bundle_name(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn bundle_name_from_app_path_reads_existing_bundle_name() {
+        assert_eq!(
+            bundle_name_from_app_path(Path::new("/tmp/MonoCode Dev.app")),
+            Some("MonoCode Dev".into())
+        );
+    }
+
+    #[test]
+    fn existing_bundle_root_from_exe_rejects_bundle_roots_without_a_usable_name() {
+        let (root, exe) = test_bundle_exe_path(".app");
+        assert_eq!(existing_bundle_root_from_exe(&exe), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dev_bundle_plist_uses_the_provided_app_name() {
+        let plist = String::from_utf8(dev_bundle_plist("MonoCode Dev")).unwrap();
+        assert!(plist.contains("<string>MonoCode Dev</string>"));
+        assert!(!plist.contains("<string>MonoCode</string>"));
+    }
+}

@@ -151,6 +151,12 @@ pub(crate) fn list_skills_from(
     if let Some(home) = home {
         add_root(home.join(".pi/agent/skills"), "user", "pi");
         add_root(home.join(".omp/agent/skills"), "user", "omp");
+        // New-provider roots come after every pre-existing root so an
+        // identically named skill can never shadow an established provider.
+        let root = home.join(".gemini/antigravity/skills");
+        if root.is_dir() {
+            add_root(root, "user", "antigravity");
+        }
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(
                 &mut by_name,
@@ -746,6 +752,44 @@ mod tests {
         let user_skill = skills.iter().find(|s| s.name == "hermes-global").unwrap();
         assert_eq!(user_skill.source, "hermes");
         assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_antigravity_user_skills() {
+        let project = tmp("proj-agy");
+        let home = tmp("home-agy");
+        write_skill(
+            &home.0.join(".gemini/antigravity/skills"),
+            "agy-review",
+            "---\nname: agy-review\ndescription: Antigravity user skill\n---\n",
+        );
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let agy = skills.iter().find(|s| s.name == "agy-review").unwrap();
+        assert_eq!(agy.source, "antigravity");
+        assert_eq!(agy.scope, "user");
+    }
+
+    #[test]
+    fn antigravity_skills_do_not_shadow_existing_providers() {
+        let project = tmp("proj-agy-shadow");
+        let home = tmp("home-agy-shadow");
+        for (root, desc) in [
+            (home.0.join(".omp/agent/skills"), "OMP agent skill"),
+            (
+                home.0.join(".gemini/antigravity/skills"),
+                "Antigravity user skill",
+            ),
+        ] {
+            write_skill(
+                &root,
+                "shared-name",
+                &format!("---\nname: shared-name\ndescription: {desc}\n---\n"),
+            );
+        }
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let skill = skills.iter().find(|s| s.name == "shared-name").unwrap();
+        assert_eq!(skill.description, "OMP agent skill");
+        assert_eq!(skill.source, "omp");
     }
 
     #[test]

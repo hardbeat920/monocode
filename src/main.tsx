@@ -1,12 +1,19 @@
 import React, { useLayoutEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import App from "./App";
-import { activateWindowAppearance, initAppearance } from "./lib/appearance";
-import { initSounds } from "./lib/sounds";
-import { handleQuitRequested, loadBootWorkspace } from "./lib/appLifecycle";
-import { consumeInstalledUpdate } from "./lib/updateNotice";
-import "./index.css";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import App from "./app/App";
+import { activateWindowAppearance, initAppearance } from "./features/settings/model/appearance";
+import { initSounds } from "./features/settings/model/sounds";
+import {
+  abortQuit,
+  askQuitConfirmation,
+  commitQuit,
+  loadBootWorkspace,
+  reportQuitPoll,
+} from "./app/model/appLifecycle";
+import { consumeInstalledUpdate } from "./app/model/updateNotice";
+import "./styles/index.css";
 
 initAppearance();
 initSounds();
@@ -34,8 +41,23 @@ function BootGate({ children }: { children: React.ReactNode }) {
   return children;
 }
 
-void listen("quit_requested", () => {
-  void handleQuitRequested();
+void listen<number>("quit_poll", (event) => {
+  void reportQuitPoll(event.payload);
+});
+// Scoped to this window on purpose: a global `listen` is registered as `Any`,
+// which Tauri matches for every event regardless of the emitter's target, so
+// one dialog would become one per window.
+void getCurrentWebviewWindow().listen<{ id: number; inFlight: number }>(
+  "quit_confirm",
+  (event) => {
+    void askQuitConfirmation(event.payload.id, event.payload.inFlight);
+  },
+);
+void listen<number>("quit_commit", (event) => {
+  void commitQuit(event.payload);
+});
+void listen("quit_aborted", () => {
+  abortQuit();
 });
 
 void loadBootWorkspace().then(

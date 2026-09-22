@@ -25,9 +25,14 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "open_model_picker" | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
-        // Zoom and Close All Tabs target one window: a broadcast would make
-        // every window act on a single menu click.
-        "zoom_in" | "zoom_out" | "zoom_reset" | "close_all_tabs" => emit_to_focused(app, id),
+        // Zoom, Reload, Command Palette, and Close All Tabs target one window: a broadcast would
+        // make every window act on a single menu click.
+        "zoom_in"
+        | "zoom_out"
+        | "zoom_reset"
+        | "reload"
+        | "open_command_palette"
+        | "close_all_tabs" => emit_to_focused(app, id),
         _ => {}
     }
 }
@@ -70,6 +75,9 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .build(app)?;
     let go_to_file = MenuItemBuilder::with_id("go_to_file", "Go to File…")
         .accelerator("CmdOrCtrl+P")
+        .build(app)?;
+    let command_palette = MenuItemBuilder::with_id("open_command_palette", "Command Palette…")
+        .accelerator("CmdOrCtrl+Shift+P")
         .build(app)?;
     let open_search = MenuItemBuilder::with_id("open_search", "Search…")
         .accelerator("CmdOrCtrl+K")
@@ -143,6 +151,9 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let zoom_in = MenuItemBuilder::with_id("zoom_in", "Zoom In").build(app)?;
     let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
     let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
+    let reload = MenuItemBuilder::with_id("reload", "Reload")
+        .accelerator("CmdOrCtrl+Shift+R")
+        .build(app)?;
     let find = MenuItemBuilder::with_id("find", "Find")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
@@ -156,6 +167,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&open_project)
         .item(&open_search)
         .item(&go_to_file)
+        .item(&command_palette)
         .item(&find_in_project)
         .separator()
         .item(&new_tab)
@@ -188,6 +200,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&zoom_in)
         .item(&zoom_out)
         .item(&zoom_reset)
+        .item(&reload)
         .separator()
         .item(&sidebar_opacity)
         .build()?;

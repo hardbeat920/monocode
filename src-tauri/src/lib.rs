@@ -1,10 +1,13 @@
 use tauri::Manager;
 
+mod automations;
+mod azure_devops;
 mod chat_background;
 mod checkpoint;
 mod control;
 pub mod control_cli;
 mod cursor_store;
+mod external_editor;
 mod fs;
 mod gitlab;
 mod harness;
@@ -24,10 +27,14 @@ mod reminders;
 mod search;
 mod session_store;
 mod skills;
+#[cfg(target_os = "windows")]
+mod tray;
 mod window;
 mod window_transfer;
 #[cfg(windows)]
 mod windows;
+mod worktree_lifecycle;
+mod worktrees;
 
 // Phase 1 seam: spawn / kill harness children per MonoCode thread.
 // Adapters own the protocol; this host only supervises processes.
@@ -204,6 +211,8 @@ pub fn run() {
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
             menu::install(app.handle())?;
+            #[cfg(target_os = "windows")]
+            tray::install(app.handle())?;
             #[cfg(target_os = "macos")]
             {
                 macos::install_dock_menu(app.handle());
@@ -247,6 +256,18 @@ pub fn run() {
             reminders::reminder_take_open,
             reminders::reminder_register_window,
             reminders::reminder_open,
+            automations::automations_list,
+            automations::automations_upsert,
+            automations::automations_delete,
+            automations::automation_runs_list,
+            automations::automation_runs_recover,
+            automations::automation_run_now,
+            automations::automations_claim_due,
+            automations::automations_claim_event,
+            automations::automation_run_update,
+            external_editor::list_external_editors,
+            external_editor::open_in_external_editor,
+            fs::resolve_project_location,
             fs::list_dir,
             fs::list_project_files,
             fs::git_diff_stats,
@@ -264,6 +285,7 @@ pub fn run() {
             fs::git_stage_all,
             fs::git_unstage_all,
             fs::git_commit,
+            fs::git_head_message,
             fs::git_staged_context,
             fs::git_push,
             fs::git_pull,
@@ -272,6 +294,8 @@ pub fn run() {
             fs::git_pr_status,
             fs::git_pr_create,
             fs::git_github_status,
+            fs::github_monocode_star_status,
+            fs::github_star_monocode,
             fs::git_github_repo,
             fs::git_github_repositories,
             fs::git_github_work_item,
@@ -293,6 +317,15 @@ pub fn run() {
             gitlab::gitlab_work_item_thread,
             gitlab::gitlab_work_item_comment,
             gitlab::gitlab_mr_diff,
+            azure_devops::azure_devops_status,
+            azure_devops::azure_devops_set_config,
+            azure_devops::azure_devops_repo,
+            azure_devops::azure_devops_list_work_items,
+            azure_devops::azure_devops_list_todos,
+            azure_devops::azure_devops_work_item_details,
+            azure_devops::azure_devops_work_item_thread,
+            azure_devops::azure_devops_work_item_comment,
+            azure_devops::azure_devops_mr_diff,
             linear::linear_status,
             linear::linear_set_token,
             linear::linear_list_teams,
@@ -305,6 +338,14 @@ pub fn run() {
             fs::git_checkout,
             fs::git_create_branch,
             fs::git_stash,
+            worktrees::git_worktrees,
+            worktrees::git_worktree_create,
+            worktrees::git_orchestration_worktree_create,
+            worktrees::git_worktree_rename_branch,
+            worktrees::git_worktree_check_remove,
+            worktrees::git_worktree_remove,
+            worktrees::git_orchestration_worktree_remove,
+            worktrees::git_orchestration_branch_remove,
             fs::create_path,
             fs::rename_path,
             fs::delete_path,
@@ -312,6 +353,7 @@ pub fn run() {
             fs::move_path,
             fs::reveal_path,
             pasteboard::clipboard_file_paths,
+            pasteboard::copy_file_to_clipboard,
             fs::clone_repo,
             fs::read_file_preview,
             fs::stat_files,
@@ -336,6 +378,7 @@ pub fn run() {
             harness::harness_resolve_fx,
             harness::harness_resolve_grok,
             harness::harness_resolve_hermes,
+            harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,
             harness::harness_write,
@@ -345,7 +388,9 @@ pub fn run() {
             harness::harness_sse_open,
             harness::harness_sse_close,
             harness::harness_exec,
+            harness::provider_account_remove,
             rate_limits::fetch_claude_usage,
+            rate_limits::fetch_opencode_go_usage,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
@@ -354,6 +399,7 @@ pub fn run() {
             pty::pty_kill_all,
             session_store::session_upsert,
             session_store::session_list_by_project,
+            session_store::session_rebase_project,
             session_store::session_list_linked,
             session_store::session_search,
             session_store::session_get,
@@ -375,6 +421,9 @@ pub fn run() {
             checkpoint::session_checkpoint_prepare,
             checkpoint::session_checkpoint_capture,
             checkpoint::session_checkpoint_status,
+            checkpoint::session_checkpoint_apply,
+            checkpoint::session_checkpoint_cleanup_safe,
+            checkpoint::session_checkpoint_forget,
             checkpoint::session_checkpoint_file_diff,
             checkpoint::session_checkpoint_undo,
             checkpoint::session_checkpoint_keep,
@@ -384,7 +433,9 @@ pub fn run() {
             open_new_window,
             window::hide_window,
             window::destroy_window,
-            window::confirm_quit,
+            window::quit_poll_reply,
+            window::quit_decision,
+            window::quit_ready,
             window::set_window_glass_enabled,
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
@@ -422,6 +473,7 @@ pub fn run() {
             event: tauri::WindowEvent::Destroyed,
             ..
         } => {
+            window::forget_quit_window(handle, &label);
             let other_window = handle.webview_windows().keys().any(|name| name != &label);
             control::window_closed(handle, &label);
             if !other_window {
