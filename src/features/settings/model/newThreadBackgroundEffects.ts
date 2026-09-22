@@ -12,6 +12,33 @@ const pending = new Map<
 >();
 const loadedSources = new Map<string, Promise<void>>();
 const effectCache = new Map<string, Promise<Blob>>();
+const MAX_CACHED_REVISIONS = 3;
+
+function revisionOf(key: string) {
+  const match = /[?&]v=(\d+)/.exec(key);
+  return match ? Number(match[1]) : 0;
+}
+
+/** Retain only the newest source revisions, including all effect/theme variants. */
+function pruneByRevision(map: Map<string, unknown>) {
+  const revisions = new Set<number>();
+  for (const key of map.keys()) revisions.add(revisionOf(key));
+  if (revisions.size <= MAX_CACHED_REVISIONS) return;
+  const keep = new Set(
+    [...revisions].sort((a, b) => b - a).slice(0, MAX_CACHED_REVISIONS),
+  );
+  for (const key of map.keys()) {
+    if (!keep.has(revisionOf(key))) map.delete(key);
+  }
+}
+
+/** A transient fetch or worker error must remain retryable. */
+function forgetOnReject<K>(map: Map<K, Promise<unknown>>, key: K) {
+  const entry = map.get(key);
+  entry?.catch(() => {
+    if (map.get(key) === entry) map.delete(key);
+  });
+}
 
 function backgroundWorker() {
   if (worker) return worker;
@@ -50,6 +77,8 @@ async function ensureSource(sourceKey: string, src: string) {
         await request({ kind: "load", sourceKey, bytes }, [bytes]);
       });
     loadedSources.set(sourceKey, loading);
+    pruneByRevision(loadedSources);
+    forgetOnReject(loadedSources, sourceKey);
   }
   return loading;
 }
@@ -75,6 +104,8 @@ export async function prepareNewThreadBackgroundEffect(
       return result;
     });
     effectCache.set(cacheKey, prepared);
+    pruneByRevision(effectCache);
+    forgetOnReject(effectCache, cacheKey);
   }
   return prepared;
 }
@@ -96,6 +127,20 @@ export async function applyPreparedNewThreadBackground(
   const revision = ++appliedRevision;
   const root = document.documentElement;
   root.classList.remove("chat-background-effect-ready");
+  if (effect === "none") {
+    if (activeObjectUrl) URL.revokeObjectURL(activeObjectUrl);
+    activeObjectUrl = null;
+    root.style.setProperty(
+      "--chat-background-image",
+      `url(${JSON.stringify(src)})`,
+    );
+    requestAnimationFrame(() => {
+      if (revision === appliedRevision) {
+        root.classList.add("chat-background-effect-ready");
+      }
+    });
+    return;
+  }
   let blob: Blob;
   try {
     blob = await prepareNewThreadBackgroundEffect(

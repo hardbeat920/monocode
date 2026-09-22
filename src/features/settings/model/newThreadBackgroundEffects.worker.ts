@@ -28,6 +28,25 @@ type WorkerRequest = LoadRequest | RenderRequest;
 
 const sources = new Map<string, Source>();
 const rendered = new Map<string, Blob>();
+const MAX_CACHED_REVISIONS = 3;
+
+function revisionOf(key: string) {
+  const match = /[?&]v=(\d+)/.exec(key);
+  return match ? Number(match[1]) : 0;
+}
+
+/** A late stale job may discard itself, but must never evict a newer source. */
+function pruneByRevision(map: Map<string, unknown>) {
+  const revisions = new Set<number>();
+  for (const key of map.keys()) revisions.add(revisionOf(key));
+  if (revisions.size <= MAX_CACHED_REVISIONS) return;
+  const keep = new Set(
+    [...revisions].sort((a, b) => b - a).slice(0, MAX_CACHED_REVISIONS),
+  );
+  for (const key of map.keys()) {
+    if (!keep.has(revisionOf(key))) map.delete(key);
+  }
+}
 
 function post(id: number, result?: Blob, error?: string) {
   self.postMessage({ id, result, error });
@@ -207,6 +226,7 @@ async function loadSource(sourceKey: string, bytes: ArrayBuffer) {
     );
   }
   sources.set(sourceKey, { width, height, pixels, luma });
+  pruneByRevision(sources);
 }
 
 async function render(
@@ -240,6 +260,7 @@ async function render(
   );
   const blob = await canvas.convertToBlob({ type: "image/png" });
   rendered.set(cacheKey, blob);
+  pruneByRevision(rendered);
   return blob;
 }
 
