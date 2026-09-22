@@ -140,6 +140,7 @@ function PrCheckRow({
   onFix,
   fixAnchor,
   repairItem,
+  wideStatus,
   revealToken,
 }: {
   check: GithubPrCheck;
@@ -151,6 +152,7 @@ function PrCheckRow({
   onFix?: (anchor: HTMLButtonElement) => void;
   fixAnchor?: HTMLButtonElement;
   repairItem?: RepairGroup["items"][number];
+  wideStatus: boolean;
   revealToken?: number;
 }) {
   const rowRef = useRef<HTMLLIElement>(null);
@@ -301,20 +303,20 @@ function PrCheckRow({
             {body}
           </div>
         )}
-        {repairItem ? (
-          <CheckRepairStatus item={repairItem} />
-        ) : (
-          <span
-            className={`shrink-0 text-[11px] ${mark.className.replace("animate-spin", "")}`}
-          >
-            {status}
-          </span>
-        )}
-        {duration ? (
-          <span className="mr-1 shrink-0 text-[10px] tabular-nums text-content/40 @max-[480px]/checks:hidden">
-            {duration}
-          </span>
-        ) : null}
+        <span className={`shrink-0 text-left ${wideStatus ? "w-24" : "w-14"}`}>
+          {repairItem ? (
+            <CheckRepairStatus item={repairItem} />
+          ) : (
+            <span
+              className={`text-[11px] ${mark.className.replace("animate-spin", "")}`}
+            >
+              {status}
+            </span>
+          )}
+        </span>
+        <span className="mr-1 w-11 shrink-0 whitespace-nowrap text-right text-[10px] tabular-nums text-content/40 @max-[480px]/checks:hidden">
+          {duration}
+        </span>
         {onFix ? (
           <button
             type="button"
@@ -736,6 +738,7 @@ export function InboxPrChecks({
                           ).length,
                       ])}
                       check={check}
+                      wideStatus={repairGroups.length > 0}
                       revealToken={
                         revealed?.scope === revealScope &&
                         revealed.name === check.name &&
