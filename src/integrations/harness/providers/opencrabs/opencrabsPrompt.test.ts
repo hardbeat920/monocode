@@ -147,3 +147,23 @@ describe("openCrabsPromptBlocks", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 });
+
+describe("spawnArgs (ACP child spawn)", () => {
+  // The wire-proven dogfood leak: the "Default" catalog placeholder spawned
+  // `--model default`, which only worked by server fallback luck.
+  it("omits --model when the placeholder id is selected", async () => {
+    const { spawnArgs } = await import("./opencrabs");
+    expect(spawnArgs("default")).toEqual(["acp"]);
+    expect(spawnArgs("Default")).toEqual(["acp"]);
+  });
+
+  it("passes a real model pair through", async () => {
+    const { spawnArgs } = await import("./opencrabs");
+    // Pairs pass through whole — the server's set_model is pair-aware.
+    expect(spawnArgs("infer/ali/glm-5.3")).toEqual([
+      "acp",
+      "--model",
+      "infer/ali/glm-5.3",
+    ]);
+  });
+});
