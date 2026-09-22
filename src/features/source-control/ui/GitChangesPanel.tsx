@@ -242,7 +242,7 @@ export function GitChangesPanel({
                   title={
                     canPull
                       ? undefined
-                      : "This branch has no upstream to pull from"
+                      : "This branch needs a remote and upstream before it can pull"
                   }
                   onClick={() => void pull()}
                   className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
