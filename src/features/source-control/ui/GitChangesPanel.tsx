@@ -123,9 +123,18 @@ export function GitChangesPanel({
   const paneRef = useRef<HTMLDivElement>(null);
   const branchMenuRef = useRef<HTMLDivElement>(null);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
-  const [pulling, setPulling] = useState(false);
+  // Shared across the header and the changed-files list so no two Git
+  // mutations ever run against the same checkout at once.
+  const [busy, setBusy] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [graphHeight, setGraphHeight] = useState(loadGraphPanelHeight);
   const [graphExpanded, setGraphExpanded] = useState(graphOpen);
+
+  useEffect(() => {
+    if (!status) return;
+    const timer = window.setTimeout(() => setStatus(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
 
   useEffect(() => {
     if (!branchMenuOpen) return;
@@ -139,16 +148,18 @@ export function GitChangesPanel({
   }, [branchMenuOpen]);
 
   const pull = async () => {
-    setBranchMenuOpen(false);
-    setPulling(true);
+    setStatus(null);
+    setBusy("pull");
     try {
       await gitPull(cwd);
       reload();
       notifyGitChanged();
+      setStatus("Pull complete");
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error));
     } finally {
-      setPulling(false);
+      setBusy(null);
+      setBranchMenuOpen(false);
     }
   };
 
@@ -175,6 +186,11 @@ export function GitChangesPanel({
     >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-stroke px-3">
         <span className="text-[12px] font-medium text-content">Changes</span>
+        {status ? (
+          <span role="status" className="text-[11px] text-content/50">
+            {status}
+          </span>
+        ) : null}
         {index?.branch ? (
           <div
             ref={branchMenuRef}
@@ -199,10 +215,15 @@ export function GitChangesPanel({
               aria-haspopup="menu"
               aria-label="Branch actions"
               aria-expanded={branchMenuOpen}
+              disabled={busy !== null}
               onClick={() => setBranchMenuOpen((open) => !open)}
-              className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content aria-expanded:bg-content/10 aria-expanded:text-content"
+              className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content disabled:opacity-40 aria-expanded:bg-content/10 aria-expanded:text-content"
             >
-              <MoreHorizontal className="size-4" strokeWidth={2} />
+              {busy === "pull" ? (
+                <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
+              ) : (
+                <MoreHorizontal className="size-4" strokeWidth={2} />
+              )}
             </button>
             {branchMenuOpen ? (
               <div
@@ -213,16 +234,16 @@ export function GitChangesPanel({
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={pulling}
+                  disabled={busy !== null}
                   onClick={() => void pull()}
                   className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
                 >
-                  {pulling ? (
+                  {busy === "pull" ? (
                     <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
                   ) : (
                     <RefreshCw className="size-3.5" strokeWidth={1.75} />
                   )}
-                  {pulling ? "Pulling…" : "Pull"}
+                  {busy === "pull" ? "Pulling…" : "Pull"}
                 </button>
               </div>
             ) : null}
@@ -240,6 +261,8 @@ export function GitChangesPanel({
         selectedKind={selectedKind}
         enabled={enabled}
         fill
+        busy={busy}
+        setBusy={setBusy}
         onOpenFile={onOpenFile}
         onOpenAllChanges={onOpenAllChanges}
         onMutated={(paths) => {
@@ -298,6 +321,8 @@ function ChangedFiles({
   selectedKind,
   enabled,
   fill,
+  busy,
+  setBusy,
   onOpenFile,
   onOpenAllChanges,
   onMutated,
@@ -310,6 +335,8 @@ function ChangedFiles({
   selectedKind?: GitFileDiffKind;
   enabled: boolean;
   fill: boolean;
+  busy: string | null;
+  setBusy: (value: string | null) => void;
   onOpenFile: (path: string, kind: GitFileDiffKind) => void;
   onOpenAllChanges: () => void;
   onMutated: (paths?: string[]) => void;
@@ -317,7 +344,6 @@ function ChangedFiles({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [amendTarget, setAmendTarget] = useState<AmendTarget | null>(null);
   const amend = amendTarget !== null;
