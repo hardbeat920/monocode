@@ -147,13 +147,17 @@ export function GitChangesPanel({
     return () => window.removeEventListener("pointerdown", onPointer);
   }, [branchMenuOpen]);
 
+  const canPull = Boolean(index?.remote) && Boolean(index?.upstream);
+
   const pull = async () => {
+    if (!canPull) return;
     setStatus(null);
     setBusy("pull");
     try {
       await gitPull(cwd);
       reload();
       notifyGitChanged();
+      invalidateWatchedFiles();
       setStatus("Pull complete");
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error));
@@ -234,7 +238,12 @@ export function GitChangesPanel({
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={busy !== null}
+                  disabled={busy !== null || !canPull}
+                  title={
+                    canPull
+                      ? undefined
+                      : "This branch has no upstream to pull from"
+                  }
                   onClick={() => void pull()}
                   className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
                 >
