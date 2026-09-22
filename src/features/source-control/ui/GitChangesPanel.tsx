@@ -13,6 +13,7 @@ import {
   ListBullet,
   Loader,
   Minus,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Undo2,
@@ -45,6 +46,7 @@ import {
   gitHeadMessage,
   gitPrCreate,
   gitPrStatus,
+  gitPull,
   gitPush,
   gitStageAll,
   gitStageFile,
@@ -119,8 +121,51 @@ export function GitChangesPanel({
   const { index, reload } = useDiffIndex(cwd, enabled);
   const files = index?.files ?? [];
   const paneRef = useRef<HTMLDivElement>(null);
+  const branchMenuRef = useRef<HTMLDivElement>(null);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  // Shared across the header and the changed-files list so no two Git
+  // mutations ever run against the same checkout at once.
+  const [busy, setBusy] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [graphHeight, setGraphHeight] = useState(loadGraphPanelHeight);
   const [graphExpanded, setGraphExpanded] = useState(graphOpen);
+
+  useEffect(() => {
+    if (!status) return;
+    const timer = window.setTimeout(() => setStatus(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
+  useEffect(() => {
+    if (!branchMenuOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!branchMenuRef.current?.contains(event.target as Node)) {
+        setBranchMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointer);
+    return () => window.removeEventListener("pointerdown", onPointer);
+  }, [branchMenuOpen]);
+
+  const canPull = Boolean(index?.remote) && Boolean(index?.upstream);
+
+  const pull = async () => {
+    if (!canPull) return;
+    setStatus(null);
+    setBusy("pull");
+    try {
+      await gitPull(cwd);
+      reload();
+      notifyGitChanged();
+      invalidateWatchedFiles();
+      setStatus("Pull complete");
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+      setBranchMenuOpen(false);
+    }
+  };
 
   useLayoutEffect(() => {
     const pane = paneRef.current;
@@ -145,21 +190,73 @@ export function GitChangesPanel({
     >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-stroke px-3">
         <span className="text-[12px] font-medium text-content">Changes</span>
-        {index?.branch ? (
-          <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-content/50">
-            <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-            <span className="min-w-0 truncate">{index.branch}</span>
-            {index.ahead > 0 ? (
-              <span className="shrink-0 tabular-nums text-content/40">
-                ↑{index.ahead}
-              </span>
-            ) : null}
-            {index.behind > 0 ? (
-              <span className="shrink-0 tabular-nums text-content/40">
-                ↓{index.behind}
-              </span>
-            ) : null}
+        {status ? (
+          <span role="status" className="text-[11px] text-content/50">
+            {status}
           </span>
+        ) : null}
+        {index?.branch ? (
+          <div
+            ref={branchMenuRef}
+            className="relative ml-auto flex min-w-0 items-center gap-1"
+          >
+            <span className="flex min-w-0 items-center gap-1 text-[11px] text-content/50">
+              <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
+              <span className="min-w-0 truncate">{index.branch}</span>
+              {index.ahead > 0 ? (
+                <span className="shrink-0 tabular-nums text-content/40">
+                  ↑{index.ahead}
+                </span>
+              ) : null}
+              {index.behind > 0 ? (
+                <span className="shrink-0 tabular-nums text-content/40">
+                  ↓{index.behind}
+                </span>
+              ) : null}
+            </span>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-label="Branch actions"
+              aria-expanded={branchMenuOpen}
+              disabled={busy !== null}
+              onClick={() => setBranchMenuOpen((open) => !open)}
+              className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content disabled:opacity-40 aria-expanded:bg-content/10 aria-expanded:text-content"
+            >
+              {busy === "pull" ? (
+                <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
+              ) : (
+                <MoreHorizontal className="size-4" strokeWidth={2} />
+              )}
+            </button>
+            {branchMenuOpen ? (
+              <div
+                role="menu"
+                aria-label="Branch actions"
+                className="absolute top-full right-0 z-30 mt-1 min-w-36 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={busy !== null || !canPull}
+                  title={
+                    canPull
+                      ? undefined
+                      : "This branch needs a remote and upstream before it can pull"
+                  }
+                  onClick={() => void pull()}
+                  className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
+                >
+                  {busy === "pull" ? (
+                    <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
+                  ) : (
+                    <RefreshCw className="size-3.5" strokeWidth={1.75} />
+                  )}
+                  {busy === "pull" ? "Pulling…" : "Pull"}
+                </button>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <span className="ml-auto" />
         )}
@@ -173,6 +270,8 @@ export function GitChangesPanel({
         selectedKind={selectedKind}
         enabled={enabled}
         fill
+        busy={busy}
+        setBusy={setBusy}
         onOpenFile={onOpenFile}
         onOpenAllChanges={onOpenAllChanges}
         onMutated={(paths) => {
@@ -231,6 +330,8 @@ function ChangedFiles({
   selectedKind,
   enabled,
   fill,
+  busy,
+  setBusy,
   onOpenFile,
   onOpenAllChanges,
   onMutated,
@@ -243,6 +344,8 @@ function ChangedFiles({
   selectedKind?: GitFileDiffKind;
   enabled: boolean;
   fill: boolean;
+  busy: string | null;
+  setBusy: (value: string | null) => void;
   onOpenFile: (path: string, kind: GitFileDiffKind) => void;
   onOpenAllChanges: () => void;
   onMutated: (paths?: string[]) => void;
@@ -250,7 +353,6 @@ function ChangedFiles({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [amendTarget, setAmendTarget] = useState<AmendTarget | null>(null);
   const amend = amendTarget !== null;

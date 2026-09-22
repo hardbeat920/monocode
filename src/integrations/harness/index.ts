@@ -24,6 +24,7 @@ export {
 export {
   sendCodexTurn,
   compactCodexContext,
+  rewindCodexLastTurn,
   cancelCodexTurn,
   respondCodexApproval,
   stopCodexSession,
@@ -33,8 +34,10 @@ export {
 export {
   sendOpenCodeTurn,
   compactOpenCodeContext,
+  rewindOpenCodeLastTurn,
   cancelOpenCodeTurn,
   respondOpenCodeApproval,
+  respondOpenCodeQuestion,
   stopOpenCodeSession,
   forgetOpenCodeSession,
   bindOpenCodeSession,
@@ -51,6 +54,7 @@ export {
 export {
   sendPiTurn,
   compactPiContext,
+  rewindPiLastTurn,
   cancelPiTurn,
   respondPiApproval,
   stopPiSession,
@@ -60,6 +64,7 @@ export {
 export {
   sendOmpTurn,
   compactOmpContext,
+  rewindOmpLastTurn,
   cancelOmpTurn,
   respondOmpApproval,
   stopOmpSession,
@@ -168,6 +173,8 @@ export {
   canCompactHarnessContext,
   steerHarnessTurn,
   canSteerHarness,
+  canRewindHarnessLastTurn,
+  rewindHarnessLastTurn,
   cancelHarnessTurn,
   respondHarnessApproval,
   respondHarnessQuestion,

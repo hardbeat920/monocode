@@ -148,6 +148,25 @@ describe("agent-markdown paragraph spacing", () => {
     });
   });
 
+  it("leaves a gap between paragraphs nested inside a blockquote", () => {
+    document.body.innerHTML = renderAgentMarkdown(
+      "> First line\n>\n> Second line\n>\n> Third line",
+    );
+    const blockquote = document.querySelector<HTMLElement>(
+      '.agent-markdown [data-streamdown="blockquote"]',
+    )!;
+    const paragraphs = [...blockquote.querySelectorAll<HTMLElement>("p")];
+
+    expect(paragraphs).toHaveLength(3);
+    paragraphs.forEach((paragraph, index) => {
+      expect(paragraph.parentElement).toBe(blockquote);
+      const above = declaredMargin(paragraph, "top");
+      if (index === 0) expect(isZero(above)).toBe(true);
+      else expect(above).toBe("1rem");
+      expect(isZero(declaredMargin(paragraph, "bottom"))).toBe(true);
+    });
+  });
+
   it("keeps lists closer to the paragraphs that introduce them", () => {
     document.body.innerHTML = renderAgentMarkdown(
       "Intro.\n\n- First\n- Second\n\nMore context.\n\n1. First\n2. Second",

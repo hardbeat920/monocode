@@ -68,8 +68,15 @@ export type TaskListMeta = {
 
 /** One-shot behavior selected in the composer for the next harness turn. */
 export type TurnIntent = "default" | "plan" | "build" | "orchestrate";
+export type EditedResendRejection = {
+  /** The provider removed the old turn, so retry as a normal unsent prompt. */
+  providerRewound: boolean;
+};
 export type ComposerTurnOptions = {
   intent?: TurnIntent;
+  resendEdited?: boolean;
+  /** Restore an edited prompt when the resend rejects asynchronously. */
+  onResendRejected?: (recovery: EditedResendRejection) => void;
   /** Promote an existing unsent transcript block instead of appending a turn. */
   draftBlockId?: string;
 };
@@ -263,6 +270,8 @@ export type Block = {
   durationMs?: number;
   /** Stable model label for this turn. Present on newly created user blocks. */
   turnModel?: TurnModel;
+  /** Provider turn boundary used to replace this user message, when known. */
+  providerTurnId?: string;
   /** User turn saved to the session but not submitted to the harness yet. */
   draft?: boolean;
   /** Provider-reported token metrics for this user turn, when available. */

@@ -234,8 +234,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             .separator()
             .item(&quit)
             .build()?;
-        let window_menu = SubmenuBuilder::new(app, "Window").build()?;
-        window_menu.set_as_windows_menu_for_nsapp()?;
+        let window_menu =
+            SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window").build()?;
         return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
     }
 

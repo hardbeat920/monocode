@@ -78,7 +78,11 @@ describe("AgentTranscript collapsed work", () => {
       },
       card, // Existing records have the card before the work.
       tool("inspection"),
-      { id: "answer", role: "assistant", text: "The investigation is complete." },
+      {
+        id: "answer",
+        role: "assistant",
+        text: "The investigation is complete.",
+      },
     ];
     expect(render(blocks, true)).not.toContain("data-orchestration-review");
     const finished = render(blocks);
@@ -198,6 +202,20 @@ describe("AgentTranscript collapsed work", () => {
 
     expect(markup).toContain("Worked for 9s");
     expect(markup).not.toContain("Claude Opus 5 worked for 9s");
+  });
+  it("marks the edited message with a quiet visual state instead of a text banner", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [{ id: "user", role: "user", text: "Edit this prompt" }],
+        onEditLastTurn: () => {},
+        editingLastTurn: true,
+      }),
+    );
+
+    expect(markup).toContain('data-editing-last-turn="true"');
+    expect(markup).toContain("edit-last-turn-bubble");
+    expect(markup).toContain('aria-label="Cancel edit"');
+    expect(markup).not.toContain("Editing this message");
   });
 
   it("renders the summary and answer without mounting a large completed tool trail", () => {
@@ -546,9 +564,9 @@ describe("AgentTranscript collapsed work", () => {
 
     // While the turn is live the same notes still land as their own rows.
     const live = render(blocks, true);
-    expect(
-      live.match(/aria-label="Interjection: irc:incoming"/g),
-    ).toHaveLength(3);
+    expect(live.match(/aria-label="Interjection: irc:incoming"/g)).toHaveLength(
+      3,
+    );
     expect(live).toContain("ping from #general");
   });
 });

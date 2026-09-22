@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
+const textFiles = new Map<string, string>();
 
 vi.mock("../../core/child", () => ({
   resolveHermesBinary: async () => ({ path: "/fake/hermes" }),
@@ -20,6 +21,14 @@ vi.mock("../../core/child", () => ({
   },
   writeChild: async (_id: string, line: string) => {
     sent.push(line);
+  },
+}));
+
+vi.mock("../../../../platform/tauri/fs", () => ({
+  readTextFile: async (path: string) => {
+    const content = textFiles.get(path);
+    if (content == null) throw new Error(`missing ${path}`);
+    return content;
   },
 }));
 
@@ -73,6 +82,7 @@ describe("Hermes live ACP sequence", () => {
     sent.length = 0;
     onLine = undefined;
     onStderr = undefined;
+    textFiles.clear();
   });
 
   it("starts Hermes ACP, selects model and mode, and sends attachments", async () => {
@@ -259,5 +269,123 @@ describe("Hermes live ACP sequence", () => {
 
     await turn;
     await stopHermesSession("hermes-live-permission");
+  });
+
+  it("stays busy and resumes after Hermes background subagents finish", async () => {
+    const events: HarnessEvent[] = [];
+    const transcript = "/tmp/deleg_abcd/task-0.log";
+    const manifest = "/tmp/deleg_abcd/manifest.json";
+    textFiles.set(
+      manifest,
+      JSON.stringify({ tasks: [{ index: 0, status: "running" }] }),
+    );
+    textFiles.set(
+      transcript,
+      "=== Hermes subagent live transcript ===\n12:00:01 assistant | Found the lifecycle race.\n12:00:02 final | end status=completed",
+    );
+
+    const turn = sendHermesTurn({
+      sessionId: "hermes-live-background",
+      cwd: "/repo",
+      model: "hermes:nous:hermes-4",
+      runtimeMode: "supervised",
+      text: "investigate the race",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    await initialize();
+    await newSession();
+    await waitFor(
+      () => parse().some((message) => message.method === "session/set_mode"),
+      "session/set_mode",
+    );
+    const setMode = parse().find(
+      (message) => message.method === "session/set_mode",
+    )!;
+    reply(setMode.id, {});
+    await waitFor(
+      () => parse().some((message) => message.method === "session/prompt"),
+      "first session/prompt",
+    );
+    const firstPrompt = parse().find(
+      (message) => message.method === "session/prompt",
+    )!;
+
+    onLine!(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "hermes-session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "delegate-call",
+            kind: "agent",
+            title: "Delegate task",
+            status: "completed",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "dispatched",
+                  mode: "background",
+                  delegation_id: "deleg_abcd",
+                  live_transcripts: [transcript],
+                }),
+              },
+            ],
+          },
+        },
+      }),
+    );
+    reply(firstPrompt.id, { stopReason: "end_turn" });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    expect(
+      events.find(
+        (event) =>
+          event.type === "tool.updated" && event.callId === "delegate-call",
+      ),
+    ).toMatchObject({ status: "in_progress", kind: "agent" });
+
+    textFiles.set(
+      manifest,
+      JSON.stringify({
+        completed: "2026-09-21 12:00:02",
+        tasks: [{ index: 0, status: "completed" }],
+      }),
+    );
+    await waitFor(
+      () =>
+        parse().filter((message) => message.method === "session/prompt")
+          .length === 2,
+      "background continuation prompt",
+    );
+    const continuation = parse().filter(
+      (message) => message.method === "session/prompt",
+    )[1]!;
+    expect(continuation.params.prompt[0].text).toContain(
+      "Found the lifecycle race",
+    );
+    expect(continuation.params.prompt[0].text).toContain(transcript);
+    expect(
+      events
+        .filter(
+          (event) =>
+            event.type === "tool.updated" && event.callId === "delegate-call",
+        )
+        .at(-1),
+    ).toMatchObject({ status: "completed", kind: "agent" });
+
+    reply(continuation.id, { stopReason: "end_turn" });
+    await turn;
+    expect(settled).toBe(true);
+    await stopHermesSession("hermes-live-background");
   });
 });

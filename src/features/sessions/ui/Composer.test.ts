@@ -22,6 +22,7 @@ vi.mock("../../source-control/hooks/useProjectBranches", () => ({
 }));
 
 import { Composer, ComposerAction } from "./Composer";
+import type { ComposerTurnOptions, Attachment } from "../model/session";
 import type { UserQuestionPrompt } from "../model/userQuestion";
 
 function renderAction(busy: boolean, hasValue: boolean) {
@@ -167,6 +168,295 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe(initialDraft);
     expect(textarea.selectionStart).toBe(initialDraft.length);
     expect(textarea.selectionEnd).toBe(initialDraft.length);
+  });
+
+  it("clears the parent draft before submit so a remounting composer stays empty", async () => {
+    let parentDraft = "Ship the empty-state fix";
+    const onDraftChange = vi.fn((text: string) => {
+      parentDraft = text;
+    });
+    const baseProps = {
+      focused: true,
+      harness: "claude" as const,
+      model: "claude-sonnet",
+      runtimeMode: "supervised" as const,
+      executionCwd: "/repo",
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      initialDraft: parentDraft,
+      onDraftChange,
+      onFocus: vi.fn(),
+      onCwdChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onRuntimeModeChange: vi.fn(),
+    };
+    const onSubmit = vi.fn(() => {
+      act(() =>
+        root.render(
+          createElement(Composer, {
+            ...baseProps,
+            key: "docked",
+            initialDraft: parentDraft,
+            onSubmit,
+          }),
+        ),
+      );
+      return true;
+    });
+    await act(async () =>
+      root.render(
+        createElement(Composer, { ...baseProps, key: "empty", onSubmit }),
+      ),
+    );
+
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.value).toBe("Ship the empty-state fix");
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith("Ship the empty-state fix", [], {
+      intent: "default",
+    });
+    expect(onDraftChange).toHaveBeenCalledWith("");
+    expect(parentDraft).toBe("");
+    expect(textarea.value).toBe("");
+  });
+
+  it("restores the draft when submit is rejected", async () => {
+    let parentDraft = "Blocked while orchestration is paused";
+    const onDraftChange = vi.fn((text: string) => {
+      parentDraft = text;
+    });
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          initialDraft: parentDraft,
+          onDraftChange,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: () => false,
+        }),
+      ),
+    );
+
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+
+    expect(textarea.value).toBe("Blocked while orchestration is paused");
+    expect(parentDraft).toBe("Blocked while orchestration is paused");
+  });
+
+  it("does not restore a failed resend over newer composer text", async () => {
+    let recallLastTurn: (() => void) | undefined;
+    let rejectResend: ComposerTurnOptions["onResendRejected"];
+    const onSubmit = vi.fn(
+      (
+        _text: string,
+        _files: Attachment[],
+        options?: ComposerTurnOptions,
+      ) => {
+        rejectResend = options?.onResendRejected;
+        return true;
+      },
+    );
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "pi",
+          model: "pi:default",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          editLastTurnSupported: true,
+          lastTurnRecall: { text: "Original prompt", attachments: [] },
+          onRecallLastTurnReady: (recall) => {
+            recallLastTurn = recall;
+          },
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+
+    await act(async () => recallLastTurn?.());
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.value).toBe("Original prompt");
+
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+    await act(async () => {
+      textarea.value = "New prompt";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => rejectResend?.({ providerRewound: false }));
+
+    expect(textarea.value).toBe("New prompt");
+  });
+
+  it("retries an already rewound prompt as a normal submission", async () => {
+    let recallLastTurn: (() => void) | undefined;
+    let rejectResend: ComposerTurnOptions["onResendRejected"];
+    const onSubmit = vi.fn(
+      (
+        _text: string,
+        _files: Attachment[],
+        options?: ComposerTurnOptions,
+      ) => {
+        rejectResend = options?.onResendRejected;
+        return true;
+      },
+    );
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "pi",
+          model: "pi:default",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          editLastTurnSupported: true,
+          lastTurnRecall: { text: "Edited prompt", attachments: [] },
+          onRecallLastTurnReady: (recall) => {
+            recallLastTurn = recall;
+          },
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+
+    await act(async () => recallLastTurn?.());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+    await act(async () => rejectResend?.({ providerRewound: true }));
+
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.value).toBe("Edited prompt");
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    expect(onSubmit.mock.calls[1][2]).toEqual({ intent: "default" });
+  });
+
+  it("preserves attachment ownership when a resend is restored", async () => {
+    const createObjectURL = vi.fn(() => "blob:owned");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    let recallLastTurn: (() => void) | undefined;
+    let rejectResend: ComposerTurnOptions["onResendRejected"];
+    const borrowed: Attachment = {
+      id: "borrowed",
+      name: "borrowed.png",
+      mimeType: "image/png",
+      kind: "image",
+      size: 3,
+      previewUrl: "blob:borrowed",
+    };
+    const onSubmit = vi.fn(
+      (
+        _text: string,
+        _files: Attachment[],
+        options?: ComposerTurnOptions,
+      ) => {
+        rejectResend = options?.onResendRejected;
+        return true;
+      },
+    );
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "pi",
+          model: "pi:default",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          editLastTurnSupported: true,
+          lastTurnRecall: {
+            text: "Edited prompt",
+            attachments: [borrowed],
+          },
+          onRecallLastTurnReady: (recall) => {
+            recallLastTurn = recall;
+          },
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+
+    await act(async () => recallLastTurn?.());
+    const owned = new File(["new"], "owned.png", { type: "image/png" });
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        getData: () => "",
+        files: [owned],
+        items: [
+          {
+            kind: "file",
+            type: owned.type,
+            getAsFile: () => owned,
+          },
+        ],
+      },
+    });
+    await act(async () => {
+      container.querySelector("textarea")!.dispatchEvent(paste);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+    await act(async () => rejectResend?.({ providerRewound: false }));
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove owned.png"]')!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove borrowed.png"]')!
+        .click(),
+    );
+
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:owned");
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:borrowed");
   });
 
   it("saves a new message as a draft without submitting it", async () => {

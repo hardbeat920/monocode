@@ -255,12 +255,12 @@ export function BranchPicker({
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      if (createName && createRow) {
-        pick(createRow);
+      const row = rows[active];
+      if (row) {
+        pick(row);
         return;
       }
-      const row = rows[active];
-      if (row) pick(row);
+      if (createName && createRow) pick(createRow);
     }
   };
 

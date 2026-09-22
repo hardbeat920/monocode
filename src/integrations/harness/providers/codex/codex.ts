@@ -36,6 +36,8 @@ import type {
   CompactContextInput,
   HarnessEvent,
   HarnessSessionInput,
+  RewindLastTurnInput,
+  RewindLastTurnResult,
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
@@ -169,6 +171,64 @@ export async function compactCodexContext(
   await live.turns;
 }
 
+export async function rewindCodexLastTurn(
+  input: RewindLastTurnInput,
+): Promise<RewindLastTurnResult> {
+  let live: Live;
+  try {
+    live = await ensureLive(input);
+  } catch (error) {
+    cancelledThreads.delete(input.sessionId);
+    throw error;
+  }
+  if (cancelledThreads.delete(input.sessionId)) return { submitted: false };
+
+  live.onEvent = input.onEvent;
+  await live.turns;
+  if (live.activeTurnId) {
+    throw new Error("Stop the current turn before editing the last message");
+  }
+
+  const beforeTurnId = await lastUserTurnId(live, input.providerTurnId);
+  await live.rpc.request("thread/revert", {
+    threadId: live.threadId,
+    beforeTurnId,
+  });
+  return { submitted: false };
+}
+
+async function lastUserTurnId(
+  live: Live,
+  providerTurnId?: string,
+): Promise<string> {
+  const exact = providerTurnId?.trim();
+  if (exact) return exact;
+
+  const page = await live.rpc.request<{ data?: unknown[] }>(
+    "thread/turns/list",
+    {
+      threadId: live.threadId,
+      limit: 100,
+      sortDirection: "desc",
+      itemsView: "summary",
+    },
+  );
+  const turns = Array.isArray(page.data) ? page.data : [];
+  const userTurn = turns.find((candidate) => {
+    const turn = asRecord(candidate);
+    return (
+      Array.isArray(turn?.items) &&
+      turn.items.some(
+        (item) => stringField(asRecord(item), "type") === "userMessage",
+      )
+    );
+  });
+  const latest = asRecord(userTurn);
+  const turnId = stringField(latest, "id");
+  if (!turnId) throw new Error("Codex did not expose a user turn id to edit");
+  return turnId;
+}
+
 export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
   if (!live) throw new Error("No active Codex session");
@@ -189,6 +249,7 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   }
 
   await live.rpc.request("turn/steer", params);
+  live.onEvent({ type: "turn.started", providerTurnId: turnId });
 }
 
 export function respondCodexApproval(
@@ -550,9 +611,13 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       "turn/start",
       params,
     );
-    const turnId = response.turn?.id;
-    if (turnId) {
+    input.onAccepted?.();
+    const turnId = response.turn?.id ?? live.activeTurnId;
+    // turn/completed can arrive before turn/start returns; don't resurrect a
+    // finished turn's id after finishActiveTurn cleared activeTurnId.
+    if (turnId && live.turnDone) {
       live.activeTurnId = live.activeTurnId ?? turnId;
+      live.onEvent({ type: "turn.started", providerTurnId: turnId });
     }
     settlePendingTurn(live);
     await turnPromise;

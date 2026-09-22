@@ -13,6 +13,104 @@ pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_ATTACHMENT_EMBED_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLocation {
+    path: String,
+    identity: String,
+}
+
+/// Resolve a project by filesystem identity when its directory was renamed.
+///
+/// A rename preserves the directory identity. We only inspect direct siblings
+/// of the missing path, which keeps this bounded and avoids a filesystem watch
+/// or a broad disk search.
+#[tauri::command(async)]
+pub fn resolve_project_location(
+    path: String,
+    identity: Option<String>,
+) -> Result<Option<ProjectLocation>, String> {
+    resolve_project_location_sync(&path, identity.as_deref())
+}
+
+fn resolve_project_location_sync(
+    path: &str,
+    identity: Option<&str>,
+) -> Result<Option<ProjectLocation>, String> {
+    let path = expand_home(path);
+    if path.is_dir() {
+        let identity = directory_identity(&path)?;
+        return Ok(Some(ProjectLocation {
+            path: path_to_js(&path),
+            identity,
+        }));
+    }
+
+    let Some(identity) = identity.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(parent) = path.parent() else {
+        return Ok(None);
+    };
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    for entry in entries.flatten() {
+        let candidate = entry.path();
+        if !candidate.is_dir() {
+            continue;
+        }
+        let Ok(candidate_identity) = directory_identity(&candidate) else {
+            continue;
+        };
+        if candidate_identity == identity {
+            return Ok(Some(ProjectLocation {
+                path: path_to_js(&candidate),
+                identity: candidate_identity,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn directory_identity(path: &Path) -> Result<String, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    Ok(format!("unix:{}:{}", metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn directory_identity(path: &Path) -> Result<String, String> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    let succeeded = unsafe {
+        GetFileInformationByHandle(file.as_raw_handle() as _, std::ptr::addr_of_mut!(info))
+    };
+    if succeeded == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let file_index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Ok(format!(
+        "windows:{}:{file_index}",
+        info.dwVolumeSerialNumber
+    ))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntry {
@@ -331,9 +429,11 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
 /// Immediate children of `path` (project tree). Folders first, then files.
 #[tauri::command(async)]
 pub fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
-    let dir = expand_home(&path);
-    let reader = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let ignore = Ignore::load(&dir);
+    list_dir_sync(&expand_home(&path))
+}
+
+pub(crate) fn list_dir_sync(dir: &Path) -> Result<Vec<DirEntry>, String> {
+    let reader = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
     let mut out = Vec::new();
     for ent in reader {
@@ -349,11 +449,24 @@ pub fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
             .map(|t| t.is_dir() || (t.is_symlink() && path.is_dir()))
             .unwrap_or_else(|_| path.is_dir());
         out.push(DirEntry {
-            ignored: ignore.matches(name),
+            ignored: false,
             name: name.to_string(),
             path: path_to_js(&path),
             is_dir,
         });
+    }
+
+    let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+    let ignored = git_ignored_names(dir, &names).unwrap_or_else(|| {
+        let ignore = Ignore::load(dir);
+        names
+            .iter()
+            .filter(|n| ignore.matches(n))
+            .map(|n| n.to_string())
+            .collect()
+    });
+    for entry in &mut out {
+        entry.ignored = entry.name == ".git" || ignored.contains(&entry.name);
     }
 
     out.sort_by(|a, b| {
@@ -398,6 +511,53 @@ pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, Str
         return Ok(files);
     }
     Ok(walk_project_files(&root))
+}
+
+const CHECK_IGNORE_SOME_MATCHED: i32 = 0;
+const CHECK_IGNORE_NONE_MATCHED: i32 = 1;
+
+fn git_ignored_names(dir: &Path, names: &[&str]) -> Option<HashSet<String>> {
+    if names.is_empty() {
+        return Some(HashSet::new());
+    }
+    let mut child = git_cmd()
+        .arg("-C")
+        .arg(dir)
+        .args(["check-ignore", "--stdin", "-z"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let mut input = Vec::with_capacity(names.iter().map(|n| n.len() + 1).sum());
+    for name in names {
+        input.extend_from_slice(name.as_bytes());
+        input.push(0);
+    }
+    let mut stdin = child.stdin.take()?;
+    // Write on a separate thread: a large listing can fill the stdout pipe
+    // while git still waits for stdin, which would deadlock a serial writer.
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child.wait_with_output().ok()?;
+    writer.join().ok()?.ok()?;
+
+    if !matches!(
+        output.status.code(),
+        Some(CHECK_IGNORE_SOME_MATCHED | CHECK_IGNORE_NONE_MATCHED)
+    ) {
+        return None;
+    }
+    Some(
+        output
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .collect(),
+    )
 }
 
 fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
@@ -4140,6 +4300,8 @@ fn preserves_unix_backslash_filenames() {
     assert_eq!(expand_home(r"~\literal"), PathBuf::from(r"~\literal"));
 }
 
+/// Name-only `.gitignore` subset for directories outside a git repository.
+/// Inside a repository `git check-ignore` is the source of truth.
 struct Ignore {
     exact: HashSet<String>,
     suffixes: Vec<String>,
@@ -5036,6 +5198,38 @@ mod tests {
     }
 
     #[test]
+    fn project_location_follows_a_sibling_rename() {
+        let parent = tmp("project-location-rename");
+        let original = parent.0.join("monocode");
+        let renamed = parent.0.join("monocode-personal");
+        std::fs::create_dir(&original).unwrap();
+
+        let first = resolve_project_location_sync(&path_to_js(&original), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.path, path_to_js(&original));
+
+        std::fs::rename(&original, &renamed).unwrap();
+        let resolved = resolve_project_location_sync(&path_to_js(&original), Some(&first.identity))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.path, path_to_js(&renamed));
+        assert_eq!(resolved.identity, first.identity);
+    }
+
+    #[test]
+    fn project_location_does_not_guess_without_a_saved_identity() {
+        let parent = tmp("project-location-missing");
+        let missing = parent.0.join("old-name");
+        std::fs::create_dir(parent.0.join("some-project")).unwrap();
+
+        assert_eq!(
+            resolve_project_location_sync(&path_to_js(&missing), None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn editor_text_files_round_trip_without_leaving_a_temporary_file() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5250,6 +5444,68 @@ mod tests {
     fn project_dirs_stay_indexable() {
         let dir = tmp("index-root");
         assert!(is_indexable_root(&dir.0));
+    }
+
+    fn ignored_names(entries: &[DirEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .filter(|e| e.ignored)
+            .map(|e| e.name.clone())
+            .collect()
+    }
+
+    fn is_ignored(dir: &Path, name: &str) -> bool {
+        ignored_names(&list_dir_sync(dir).unwrap())
+            .iter()
+            .any(|n| n == name)
+    }
+
+    #[test]
+    fn list_dir_marks_ignored_with_git_semantics() {
+        let dir = tmp("list-dir-git");
+        let init = Command::new("git")
+            .args(["init"])
+            .current_dir(&dir.0)
+            .output();
+        let Ok(init) = init else { return };
+        if !init.status.success() {
+            return;
+        }
+        std::fs::write(
+            dir.0.join(".gitignore"),
+            "*.zzlog\n!keep.zzlog\n/zz-dist\nzz-build/\nnested/*.zztmp\n",
+        )
+        .unwrap();
+        std::fs::write(dir.0.join("a.zzlog"), "x\n").unwrap();
+        std::fs::write(dir.0.join("keep.zzlog"), "x\n").unwrap();
+        std::fs::write(dir.0.join("zz-build"), "x\n").unwrap();
+        std::fs::create_dir_all(dir.0.join("zz-dist")).unwrap();
+        std::fs::create_dir_all(dir.0.join("src").join("zz-dist")).unwrap();
+        std::fs::create_dir_all(dir.0.join("nested")).unwrap();
+        std::fs::write(dir.0.join("nested").join("x.zztmp"), "x\n").unwrap();
+        std::fs::write(dir.0.join("nested").join("x.txt"), "x\n").unwrap();
+
+        assert!(is_ignored(&dir.0, ".git"));
+        assert!(is_ignored(&dir.0, "a.zzlog"));
+        assert!(!is_ignored(&dir.0, "keep.zzlog"));
+        assert!(is_ignored(&dir.0, "zz-dist"));
+        assert!(!is_ignored(&dir.0.join("src"), "zz-dist"));
+        assert!(!is_ignored(&dir.0, "zz-build"));
+        assert!(is_ignored(&dir.0.join("nested"), "x.zztmp"));
+        assert!(!is_ignored(&dir.0.join("nested"), "x.txt"));
+    }
+
+    #[test]
+    fn list_dir_falls_back_to_name_parser_outside_git() {
+        let dir = tmp("list-dir-plain");
+        std::fs::write(dir.0.join(".gitignore"), "secret.txt\n*.log\n").unwrap();
+        std::fs::write(dir.0.join("secret.txt"), "x\n").unwrap();
+        std::fs::write(dir.0.join("a.log"), "x\n").unwrap();
+        std::fs::write(dir.0.join("app.ts"), "x\n").unwrap();
+
+        let mut ignored = ignored_names(&list_dir_sync(&dir.0).unwrap());
+        ignored.sort_unstable();
+        assert_eq!(ignored, vec!["a.log", "secret.txt"]);
     }
 
     #[test]

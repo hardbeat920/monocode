@@ -14,6 +14,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -26,6 +27,11 @@ import {
   type NameIssue,
 } from "../model/fileName";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
+import { formatInteger } from "../../../shared/lib/numbers";
+import {
+  loadShowExcludedFiles,
+  subscribeShowExcludedFiles,
+} from "../../settings/model/appearance";
 import {
   createParentOf,
   dirsTouchedByCreate,
@@ -107,6 +113,7 @@ type TreeCtxValue = {
   cutPath: string | null;
   dragOverPath: string | null;
   epoch: number;
+  showExcludedFiles: boolean;
   gitStatuses?: GitStatusMap;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
@@ -257,6 +264,11 @@ export const FileTree = memo(function FileTree({
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
+  const showExcludedFiles = useSyncExternalStore(
+    subscribeShowExcludedFiles,
+    loadShowExcludedFiles,
+    loadShowExcludedFiles,
+  );
   const creatingRef = useRef(creating);
   creatingRef.current = creating;
   const fileDragCleanup = useRef<(() => void) | null>(null);
@@ -832,6 +844,7 @@ export const FileTree = memo(function FileTree({
         cutPath: clip?.mode === "cut" ? clip.path : null,
         dragOverPath,
         epoch,
+        showExcludedFiles,
         gitStatuses,
         onToggle: toggle,
         onSelect,
@@ -1014,8 +1027,8 @@ function FileTreeDiffButton({
       : "Show changes"
     : [
         `${files} ${files === 1 ? "file" : "files"} changed`,
-        additions > 0 ? `+${additions}` : "",
-        deletions > 0 ? `-${deletions}` : "",
+        additions > 0 ? `+${formatInteger(additions)}` : "",
+        deletions > 0 ? `-${formatInteger(deletions)}` : "",
       ]
         .filter(Boolean)
         .join(" ");
@@ -1074,8 +1087,11 @@ function TreeChildren({
         onCancel={() => ctx.onCreateCancel(creating.id)}
       />
     ) : null;
-  const folders = entries?.filter((e) => e.isDir) ?? [];
-  const files = entries?.filter((e) => !e.isDir) ?? [];
+  const visible = ctx.showExcludedFiles
+    ? entries
+    : entries?.filter((e) => !e.ignored);
+  const folders = visible?.filter((e) => e.isDir) ?? [];
+  const files = visible?.filter((e) => !e.isDir) ?? [];
   const pad = { paddingLeft: 28 + depth * 12 };
 
   return (

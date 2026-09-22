@@ -707,9 +707,11 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
     ]);
   const window =
     numberField(usage, "window") ??
+    numberField(usage, "size") ??
     numberField(usage, "contextWindow") ??
     numberField(usage, "context_window") ??
-    numberField(usage, "maxTokens");
+    numberField(usage, "maxTokens") ??
+    numberField(usage, "max_tokens");
   const events: HarnessEvent[] = [];
   if (used != null || window != null) {
     events.push({
@@ -752,11 +754,22 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
 }
 
 function hasUsageFields(rec: Record<string, unknown>): boolean {
-  return (
-    numberField(rec, "used") != null ||
-    numberField(rec, "totalTokens") != null ||
-    numberField(rec, "inputTokens") != null
-  );
+  return [
+    "used",
+    "usedTokens",
+    "used_tokens",
+    "totalTokens",
+    "inputTokens",
+    "input_tokens",
+    "outputTokens",
+    "output_tokens",
+    "window",
+    "size",
+    "contextWindow",
+    "context_window",
+    "maxTokens",
+    "max_tokens",
+  ].some((field) => numberField(rec, field) != null);
 }
 
 function planEvent(update: Record<string, unknown>): HarnessEvent | null {

@@ -408,6 +408,12 @@ describe("inbox automation events", () => {
     const retried = await claimInboxAutomationRuns([]);
 
     expect(retried).toHaveLength(1);
+    expect(retried[0]?.linkedWorkItem).toEqual({
+      kind: "pr",
+      repo: "acme/web",
+      number: 12,
+      url: "https://github.com/acme/web/pull/12",
+    });
     expect(
       invoke.mock.calls.filter(([command]) => command === "automations_claim_event"),
     ).toHaveLength(2);

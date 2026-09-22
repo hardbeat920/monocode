@@ -464,6 +464,33 @@ export function saveSessionFolders(
   }
 }
 
+/** Move folder and collapsed-section state when a project path changes. */
+export function rebaseSessionFolderSettings(from: string, to: string): void {
+  const oldKey = storageKey(from);
+  const newKey = storageKey(to);
+  if (!oldKey || !newKey || oldKey === newKey) return;
+  try {
+    const folders = parseStore();
+    if (oldKey in folders) {
+      if (!(newKey in folders)) folders[newKey] = folders[oldKey];
+      delete folders[oldKey];
+      localStorage.setItem(KEY, JSON.stringify(folders));
+    }
+    for (const storeKey of [PINNED_COLLAPSED_KEY, REMINDERS_COLLAPSED_KEY]) {
+      const raw = localStorage.getItem(storeKey);
+      const parsed: unknown = raw ? JSON.parse(raw) : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const state = { ...(parsed as Record<string, unknown>) };
+      if (!(oldKey in state)) continue;
+      if (!(newKey in state)) state[newKey] = state[oldKey];
+      delete state[oldKey];
+      localStorage.setItem(storeKey, JSON.stringify(state));
+    }
+  } catch {
+    // private mode / quota
+  }
+}
+
 export function loadPinnedSessionsCollapsed(cwd: string): boolean {
   return loadGroupCollapsed(cwd, PINNED_COLLAPSED_KEY);
 }

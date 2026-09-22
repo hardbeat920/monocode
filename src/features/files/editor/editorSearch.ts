@@ -27,6 +27,10 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MOD, ALT, SHIFT } from "../../../platform/tauri/platform";
+import {
+  handleFilePreviewFindKey,
+  openFindInActiveFilePreview,
+} from "../ui/FilePreviewSearch";
 
 const MATCH_CAP = 999;
 const panels = new WeakMap<EditorView, FindPanel>();
@@ -42,6 +46,8 @@ export function handleEditorFindKey(event: KeyboardEvent): boolean {
   ) {
     return false;
   }
+
+  if (handleFilePreviewFindKey(event)) return true;
 
   const view = editorViewForFind();
   const mod = event.metaKey || event.ctrlKey;
@@ -121,6 +127,7 @@ function editorViewForFind(): EditorView | null {
 }
 
 export function openFindInActiveEditor(): boolean {
+  if (openFindInActiveFilePreview()) return true;
   const view = editorViewForFind();
   if (!view) return false;
   openSearchPanel(view);

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Hermes turns stay busy while detached subagents are running and resume automatically with their completed transcripts instead of requiring a manual Continue. Hermes ACP usage updates also populate the context meter. In #335.
+
+## [0.1.53] - 2026-09-21
+
+### Added
+
+- The workspace picker can attach a session to an existing worktree from a submenu, instead of only creating a new worktree or staying on the current checkout.
+
+### Fixed
+
+- Add-to-chat from a file-only workspace still opens a split session pane when no session tab is already open, seeding a replacement from the first known session instead of dropping the request. In #325.
+- Renaming a project folder on disk keeps that project's sessions, settings, recents, and terminals attached instead of treating the new path as a different project.
+- Agent markdown, code blocks, and diagrams pick up their intended styles after the frontend source-tree move.
+
 ## [0.1.52] - 2026-09-20
 
 ### Added
@@ -929,7 +945,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.52...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.53...HEAD
+[0.1.53]: https://github.com/hardbeat920/monocode/compare/v0.1.52...v0.1.53
 [0.1.52]: https://github.com/hardbeat920/monocode/compare/v0.1.51...v0.1.52
 [0.1.51]: https://github.com/hardbeat920/monocode/compare/v0.1.50...v0.1.51
 [0.1.50]: https://github.com/hardbeat920/monocode/compare/v0.1.49...v0.1.50

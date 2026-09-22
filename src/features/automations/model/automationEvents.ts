@@ -10,6 +10,8 @@ import {
 } from "./automations";
 import { inboxStartDraft, type InboxItem } from "../../inbox/model/githubTasks";
 import { sameProjectPath } from "../../projects/model/recents";
+import type { LinkedWorkItem } from "../../sessions/model/session";
+import { linkedWorkItemFromInboxItem } from "../../sessions/model/sessionWorkItem";
 
 export type InboxAutomationMatch = {
   automation: Automation;
@@ -20,7 +22,10 @@ export type InboxAutomationMatch = {
   prompt: string;
 };
 
-export type ClaimedInboxAutomationRun = DueAutomationRun & { prompt: string };
+export type ClaimedInboxAutomationRun = DueAutomationRun & {
+  prompt: string;
+  linkedWorkItem?: LinkedWorkItem;
+};
 
 const RETRY_STORAGE_KEY = "monocode.automation-inbox-retries.v1";
 const MAX_RETRY_ITEMS = 500;
@@ -176,7 +181,14 @@ export async function claimInboxAutomationRuns(
           now,
         },
       );
-      if (result) claimed.push({ ...result, prompt: match.prompt });
+      if (result) {
+        const linkedWorkItem = linkedWorkItemFromInboxItem(match.item);
+        claimed.push({
+          ...result,
+          prompt: match.prompt,
+          ...(linkedWorkItem ? { linkedWorkItem } : {}),
+        });
+      }
     } catch {
       failed.add(match.eventKey);
     }

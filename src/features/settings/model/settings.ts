@@ -249,6 +249,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "sidebar compact icons hidden navigation layout",
   },
   {
+    id: "show-excluded-files",
+    section: "appearance",
+    label: "Show excluded files",
+    keywords: "explorer gitignore ignored hidden files tree",
+  },
+  {
     id: "chat-background",
     section: "appearance",
     label: "Chat background",

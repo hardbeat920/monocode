@@ -272,6 +272,26 @@ export function clearTabGroupSettings(project: string): void {
   }
 }
 
+/** Move project appearance overrides to the key derived from its new path. */
+export function rebaseProjectTabGroupSettings(from: string, to: string): void {
+  const oldKey = projectKey(from);
+  const newKey = projectKey(to);
+  if (oldKey === newKey) return;
+  let labelsChanged = false;
+  let logosChanged = false;
+  for (const key of APPEARANCE_KEYS) {
+    const next = readRecord(key);
+    if (!(oldKey in next)) continue;
+    if (!(newKey in next)) next[newKey] = next[oldKey];
+    delete next[oldKey];
+    if (!writeRecord(key, next)) continue;
+    labelsChanged ||= key === LABEL_KEY;
+    logosChanged ||= key === LOGO_KEY;
+  }
+  if (labelsChanged) notifyTabGroupLabelsChanged();
+  if (logosChanged) notifyTabGroupLogosChanged();
+}
+
 export function resolveTabGroupMascot(
   project: string,
   overrides?: Record<string, string>,

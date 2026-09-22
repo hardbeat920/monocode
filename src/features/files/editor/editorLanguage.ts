@@ -1,6 +1,8 @@
 import {
   HighlightStyle,
   LanguageSupport,
+  StreamLanguage,
+  type StreamParser,
 } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { tagHighlighter, tags, type Highlighter } from "@lezer/highlight";
@@ -137,6 +139,10 @@ export function syntaxTagHighlighter(scheme: ColorScheme): Highlighter {
   ]);
 }
 
+function legacyLanguage(parser: StreamParser<unknown>): Extension {
+  return StreamLanguage.define(parser);
+}
+
 export async function languageForPath(path: string): Promise<Extension | null> {
   const name = basename(path).toLowerCase();
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
@@ -178,6 +184,109 @@ export async function languageForPath(path: string): Promise<Extension | null> {
   if (extension === ".py") {
     const { python } = await import("@codemirror/lang-python");
     return python();
+  }
+  if (extension === ".c") {
+    const { c } = await import("@codemirror/legacy-modes/mode/clike");
+    return legacyLanguage(c);
+  }
+  if (
+    [".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"].includes(extension)
+  ) {
+    const { cpp } = await import("@codemirror/lang-cpp");
+    return cpp();
+  }
+  if (extension === ".java") {
+    const { java } = await import("@codemirror/lang-java");
+    return java();
+  }
+  if ([".php", ".phtml"].includes(extension)) {
+    const { php } = await import("@codemirror/lang-php");
+    return php();
+  }
+  if (extension === ".sql") {
+    const { sql } = await import("@codemirror/lang-sql");
+    return sql();
+  }
+  if ([".xml", ".svg"].includes(extension)) {
+    const { xml } = await import("@codemirror/lang-xml");
+    return xml();
+  }
+  if ([".yaml", ".yml"].includes(extension)) {
+    const { yaml } = await import("@codemirror/lang-yaml");
+    return yaml();
+  }
+  if (extension === ".cs") {
+    const { csharp } = await import("@codemirror/legacy-modes/mode/clike");
+    return legacyLanguage(csharp);
+  }
+  if (extension === ".go") {
+    const { go } = await import("@codemirror/legacy-modes/mode/go");
+    return legacyLanguage(go);
+  }
+  if (extension === ".dart") {
+    const { dart } = await import("@codemirror/legacy-modes/mode/clike");
+    return legacyLanguage(dart);
+  }
+  if (extension === ".swift") {
+    const { swift } = await import("@codemirror/legacy-modes/mode/swift");
+    return legacyLanguage(swift);
+  }
+  if ([".kt", ".kts"].includes(extension)) {
+    const { kotlin } = await import("@codemirror/legacy-modes/mode/clike");
+    return legacyLanguage(kotlin);
+  }
+  if (
+    [".rb", ".rake"].includes(extension) ||
+    ["gemfile", "rakefile"].includes(name)
+  ) {
+    const { ruby } = await import("@codemirror/legacy-modes/mode/ruby");
+    return legacyLanguage(ruby);
+  }
+  if (
+    [".sh", ".bash", ".zsh"].includes(extension) ||
+    [".bashrc", ".bash_profile", ".zshrc", ".zprofile"].includes(name)
+  ) {
+    const { shell } = await import("@codemirror/legacy-modes/mode/shell");
+    return legacyLanguage(shell);
+  }
+  if (extension === ".toml") {
+    const { toml } = await import("@codemirror/legacy-modes/mode/toml");
+    return legacyLanguage(toml);
+  }
+  if ([".scala", ".sc"].includes(extension)) {
+    const { scala } = await import("@codemirror/legacy-modes/mode/clike");
+    return legacyLanguage(scala);
+  }
+  if (extension === ".lua") {
+    const { lua } = await import("@codemirror/legacy-modes/mode/lua");
+    return legacyLanguage(lua);
+  }
+  if (extension === ".r") {
+    const { r } = await import("@codemirror/legacy-modes/mode/r");
+    return legacyLanguage(r);
+  }
+  if ([".pl", ".pm"].includes(extension)) {
+    const { perl } = await import("@codemirror/legacy-modes/mode/perl");
+    return legacyLanguage(perl);
+  }
+  if ([".ps1", ".psd1", ".psm1"].includes(extension)) {
+    const { powerShell } =
+      await import("@codemirror/legacy-modes/mode/powershell");
+    return legacyLanguage(powerShell);
+  }
+  if ([".m", ".mm"].includes(extension)) {
+    const { objectiveC, objectiveCpp } =
+      await import("@codemirror/legacy-modes/mode/clike");
+    return legacyLanguage(extension === ".mm" ? objectiveCpp : objectiveC);
+  }
+  if (extension === ".proto") {
+    const { protobuf } = await import("@codemirror/legacy-modes/mode/protobuf");
+    return legacyLanguage(protobuf);
+  }
+  if (name === "dockerfile" || name.startsWith("dockerfile.")) {
+    const { dockerFile } =
+      await import("@codemirror/legacy-modes/mode/dockerfile");
+    return legacyLanguage(dockerFile);
   }
   return null;
 }

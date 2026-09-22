@@ -158,6 +158,19 @@ export function clearProjectChatBackgroundSetting(project: string) {
   notifyProjectChatBackgroundChanged();
 }
 
+export function rebaseProjectChatBackgroundSetting(
+  from: string,
+  to: string,
+) {
+  if (!from || !to || from === to) return;
+  const next = read();
+  if (!(from in next)) return;
+  if (!(to in next)) next[to] = next[from];
+  delete next[from];
+  write(next);
+  notifyProjectChatBackgroundChanged();
+}
+
 export function notifyProjectChatBackgroundChanged() {
   revision += 1;
   window.dispatchEvent(new CustomEvent(PROJECT_CHAT_BACKGROUND_CHANGED));

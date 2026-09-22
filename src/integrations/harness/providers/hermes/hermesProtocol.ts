@@ -2,6 +2,12 @@ import { promptBlocks, type PromptContentBlock } from "../../../../features/sess
 import type { AgentModel } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode } from "../../../../features/sessions/model/session";
 
+export type HermesBackgroundDispatch = {
+  callId: string;
+  delegationId: string;
+  transcripts: string[];
+};
+
 export const HERMES_AUTH_HELP =
   "Configure Hermes with `hermes model`, then verify it with `hermes acp --check`.";
 
@@ -71,6 +77,57 @@ export function hermesCurrentModelId(result: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * Hermes' ACP adapter completes `delegate_task` as soon as detached children
+ * are dispatched. The JSON handle is wrapped in the tool call's text content,
+ * so recover it before the shared ACP parser caps the detail for display.
+ */
+export function hermesBackgroundDispatch(
+  params: unknown,
+): HermesBackgroundDispatch | null {
+  const envelope = asRecord(params);
+  const update = asRecord(envelope?.update) ?? envelope;
+  if (!update) return null;
+  const tool =
+    asRecord(update.toolCall) ?? asRecord(update.tool_call) ?? update;
+  const callId = String(
+    tool.toolCallId ??
+      tool.tool_call_id ??
+      update.toolCallId ??
+      update.tool_call_id ??
+      "",
+  ).trim();
+  if (!callId) return null;
+
+  const candidates: unknown[] = [
+    update.rawOutput,
+    update.raw_output,
+    tool.rawOutput,
+    tool.raw_output,
+  ];
+  collectContent(update.content, candidates);
+  if (tool !== update) collectContent(tool.content, candidates);
+
+  for (const candidate of candidates) {
+    const dispatch = dispatchRecord(candidate);
+    if (!dispatch) continue;
+    const delegationId = String(
+      dispatch.delegation_id ?? dispatch.delegationId ?? callId,
+    ).trim();
+    const rawTranscripts =
+      dispatch.live_transcripts ?? dispatch.liveTranscripts;
+    const transcripts = Array.isArray(rawTranscripts)
+      ? rawTranscripts.filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )
+      : [];
+    if (!delegationId || transcripts.length === 0) continue;
+    return { callId, delegationId, transcripts };
+  }
+  return null;
+}
+
 /** Read the standard ACP SessionModelState returned by Hermes session/new. */
 export function modelsFromHermesSession(result: unknown): AgentModel[] {
   const rec = asRecord(result);
@@ -114,6 +171,34 @@ function displayName(nativeId: string): string {
   return slug
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function collectContent(value: unknown, output: unknown[]): void {
+  if (typeof value === "string") {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectContent(item, output);
+    return;
+  }
+  const rec = asRecord(value);
+  if (!rec) return;
+  if (rec.text != null) collectContent(rec.text, output);
+  if (rec.content != null) collectContent(rec.content, output);
+}
+
+function dispatchRecord(value: unknown): Record<string, unknown> | null {
+  let rec = asRecord(value);
+  if (!rec && typeof value === "string") {
+    try {
+      rec = asRecord(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  if (!rec) return null;
+  return rec.status === "dispatched" && rec.mode === "background" ? rec : null;
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | null {

@@ -372,6 +372,34 @@ html.has-user-accent .user-message-bubble {
   border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
 }
 
+.edit-last-turn-composer {
+  border-style: dashed;
+  border-color: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 32%,
+    transparent
+  );
+}
+
+.edit-last-turn-bubble {
+  outline: 1px dashed
+    color-mix(
+      in srgb,
+      var(--user-accent-color, var(--color-accent)) 45%,
+      transparent
+    );
+  outline-offset: 1px;
+}
+
+.edit-last-turn-button {
+  color: var(--user-accent-color, var(--color-accent));
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 10%,
+    transparent
+  );
+}
+
 .user-message-bubble[data-draft="true"] {
   background: color-mix(in srgb, var(--color-content) 4%, transparent);
 }
@@ -421,6 +449,17 @@ input,
 .monocode-terminal .xterm,
 .monocode-terminal .xterm-viewport {
   user-select: text;
+}
+
+.markdown-view-actions {
+  top: 0.5rem;
+}
+
+.markdown-view-shell:has([data-file-preview-search-open])
+  > .markdown-view-actions,
+.markdown-view-shell:has(> [data-markdown-view-active] .cm-panel.cm-find)
+  > .markdown-view-actions {
+  top: calc(35px + 0.5rem);
 }
 
 .inbox-comment-md.agent-markdown p:first-child,
@@ -992,6 +1031,12 @@ header[data-tauri-drag-region] button {
    never ends with a trailing gap. Ignore empty wrappers before the first
    visible block, and keep lists closer to the paragraph that introduces them. */
 .agent-markdown > div:not(:empty) ~ div > p {
+  margin-top: 1rem;
+}
+
+/* Nested blocks do not get Streamdown's root spacing. Keep blank-line
+   paragraphs inside a quote distinct without adding space above the first. */
+.agent-markdown [data-streamdown="blockquote"] > p:not(:first-child) {
   margin-top: 1rem;
 }
 

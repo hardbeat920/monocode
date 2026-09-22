@@ -1039,6 +1039,99 @@ describe("sidebar linked work item updates", () => {
   });
 });
 
+describe("sidebar session GitHub links", () => {
+  function openLinkDialog() {
+    act(() =>
+      card().dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    const link = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Link GitHub issue or PR…")!;
+    expect(link).toBeDefined();
+    act(() => link.click());
+    return document.querySelector<HTMLInputElement>(
+      'input[aria-label="GitHub issue or pull request URL"]',
+    )!;
+  }
+
+  it("manually links a session from its context menu", () => {
+    props.onSetSessionLinkedWorkItem = vi.fn();
+    act(() => render());
+    const input = openLinkDialog();
+    typeTitle(
+      input,
+      "https://github.com/acme/widgets/issues/27?notification=1",
+    );
+    const submit = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Link",
+    )!;
+    act(() => submit.click());
+
+    expect(props.onSetSessionLinkedWorkItem).toHaveBeenCalledWith("session-1", {
+      kind: "issue",
+      repo: "acme/widgets",
+      number: 27,
+      url: "https://github.com/acme/widgets/issues/27",
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("keeps the dialog open when the URL is not a GitHub work item", () => {
+    props.onSetSessionLinkedWorkItem = vi.fn();
+    act(() => render());
+    const input = openLinkDialog();
+    typeTitle(input, "https://example.com/issues/27");
+    const submit = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Link",
+    )!;
+    act(() => submit.click());
+
+    expect(props.onSetSessionLinkedWorkItem).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "valid GitHub issue or pull request URL",
+    );
+  });
+
+  it("edits or removes an existing link", () => {
+    props.sessions[0] = {
+      ...props.sessions[0],
+      linkedWorkItem: {
+        kind: "pr",
+        repo: "acme/widgets",
+        number: 42,
+        url: "https://github.com/acme/widgets/pull/42",
+      },
+    };
+    props.onSetSessionLinkedWorkItem = vi.fn();
+    act(() => render());
+    act(() =>
+      card().dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    const edit = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Edit GitHub issue or PR link…")!;
+    act(() => edit.click());
+
+    expect(
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="GitHub issue or pull request URL"]',
+      )?.value,
+    ).toBe("https://github.com/acme/widgets/pull/42");
+    const remove = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Remove link",
+    )!;
+    act(() => remove.click());
+    expect(props.onSetSessionLinkedWorkItem).toHaveBeenCalledWith(
+      "session-1",
+      undefined,
+    );
+  });
+});
+
 describe("sidebar session reminders", () => {
   function openReminderMenu() {
     act(() =>

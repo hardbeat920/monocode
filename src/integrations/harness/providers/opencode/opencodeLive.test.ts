@@ -65,6 +65,7 @@ const {
   cancelOpenCodeTurn,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
+  rewindOpenCodeLastTurn,
   sendOpenCodeTurn,
   stopOpenCodeSession,
 } = await import("./opencode");
@@ -80,7 +81,7 @@ const waitFor = async (predicate: () => boolean, label: string) => {
 
 function turn(
   events: HarnessEvent[],
-  options: { runtimeMode?: RuntimeMode } = {},
+  options: { runtimeMode?: RuntimeMode; onAccepted?: () => void } = {},
 ) {
   return sendOpenCodeTurn({
     sessionId: "opencode-live",
@@ -89,6 +90,7 @@ function turn(
     runtimeMode: options.runtimeMode ?? "supervised",
     text: "delegate the investigation",
     attachments: [],
+    onAccepted: options.onAccepted,
     onEvent: (event) => events.push(event),
   });
 }
@@ -147,6 +149,17 @@ beforeEach(() => {
 afterEach(async () => {
   await stopOpenCodeSession("opencode-live");
   __openCodeTestReset();
+});
+
+it("reports when OpenCode accepts a turn", async () => {
+  const events: HarnessEvent[] = [];
+  const onAccepted = vi.fn();
+  const done = turn(events, { onAccepted });
+
+  await waitFor(() => onAccepted.mock.calls.length === 1, "turn acceptance");
+  idle();
+  await done;
+  expect(onAccepted).toHaveBeenCalledOnce();
 });
 
 describe("OpenCode subagent trails", () => {
@@ -388,6 +401,101 @@ describe("OpenCode event stream recovery", () => {
   });
 });
 
+describe("OpenCode edit recovery", () => {
+  it("reverts the latest user message before resending an edited prompt", async () => {
+    sessionMessages = [
+      {
+        info: {
+          id: "message_first",
+          role: "user",
+          time: { created: 1 },
+        },
+      },
+      {
+        info: {
+          id: "message_first_reply",
+          role: "assistant",
+          time: { created: 2 },
+        },
+      },
+      {
+        info: {
+          id: "message_latest",
+          role: "user",
+          time: { created: 3 },
+        },
+      },
+    ];
+    bindOpenCodeSession("opencode-live", "session_1", "/repo");
+
+    const rewind = rewindOpenCodeLastTurn({
+      sessionId: "opencode-live",
+      cwd: "/repo",
+      model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/session/session_1/revert"),
+        ),
+      "edited message revert",
+    );
+
+    const request = harnessHttp.mock.calls.find(([input]) =>
+      input.url.includes("/session/session_1/revert"),
+    )?.[0];
+    expect(request).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ messageID: "message_latest" }),
+    });
+    expect(await rewind).toEqual({ submitted: false });
+  });
+
+  it("uses response order when a user timestamp is missing", async () => {
+    sessionMessages = [
+      {
+        info: {
+          id: "message_older",
+          role: "user",
+          time: { created: 100 },
+        },
+      },
+      {
+        info: {
+          id: "message_latest",
+          role: "user",
+        },
+      },
+    ];
+    bindOpenCodeSession("opencode-live", "session_1", "/repo");
+
+    const rewind = rewindOpenCodeLastTurn({
+      sessionId: "opencode-live",
+      cwd: "/repo",
+      model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/session/session_1/revert"),
+        ),
+      "edited message revert",
+    );
+
+    const request = harnessHttp.mock.calls.find(([input]) =>
+      input.url.includes("/session/session_1/revert"),
+    )?.[0];
+    expect(request).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ messageID: "message_latest" }),
+    });
+    await expect(rewind).resolves.toEqual({ submitted: false });
+  });
+});
 describe("OpenCode access modes", () => {
   it("updates a live session when access changes and auto-allows residual full-access prompts", async () => {
     const events: HarnessEvent[] = [];
