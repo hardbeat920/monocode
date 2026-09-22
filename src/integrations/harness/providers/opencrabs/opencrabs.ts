@@ -451,9 +451,14 @@ async function applyModelSelection(
   }
 }
 
-function spawnArgs(model: string): string[] {
+export function spawnArgs(model: string): string[] {
   const native = nativeModelId(model).trim();
-  return native ? ["acp", "--model", native] : ["acp"];
+  // "default" is the placeholder id from the static catalog, not a model the
+  // server knows — spawning `--model default` only works by fallback luck.
+  // Omit the flag so the server uses its configured default model.
+  return native && native.toLowerCase() !== "default"
+    ? ["acp", "--model", native]
+    : ["acp"];
 }
 
 /**
