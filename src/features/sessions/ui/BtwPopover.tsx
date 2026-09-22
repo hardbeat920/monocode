@@ -266,7 +266,7 @@ export function BtwPopover({
               aria-label={`${statusLabel(thread)}: ${shortQuestion(thread)}`}
               title={shortQuestion(thread)}
               onClick={(event) => openExisting(event, thread.id)}
-              className="btw-thread-chip inline-flex min-h-6 max-w-[17rem] items-center gap-1.5 rounded-md px-2 text-left text-content/55 transition-colors hover:bg-content/8 hover:text-content/90 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+              className="btw-thread-chip inline-flex min-h-6 max-w-[17rem] items-center gap-1.5 rounded-md px-2 text-left text-xs text-content/55 transition-colors hover:bg-content/8 hover:text-content/90 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
             >
               <span
                 className={`size-1.5 shrink-0 rounded-full ${statusClass(thread.status)}`}
