@@ -204,7 +204,7 @@ export function userMessagesAfterHandoff(session: Session): string[] {
   return session.blocks
     .slice(start + 1)
     .filter((block) => block.role === "user")
-    .map((block) => block.text.trim())
+    .map((block) => (block.ciContext || block.text).trim())
     .filter(Boolean);
 }
 
@@ -273,11 +273,13 @@ export function buildDeterministicHandoff(
   let lastAssistant = "";
   let lastTasks = "";
   let lastPlan = "";
+  let ciContext = "";
   const files = new Map<string, string>();
 
   for (const block of session.blocks) {
     if (block.role === "handoff" || block.role === "reasoning") continue;
     if (block.role === "user") {
+      if (block.ciContext) ciContext = block.ciContext;
       const text = block.text.trim();
       if (text) users.push(text);
       continue;
@@ -320,6 +322,9 @@ export function buildDeterministicHandoff(
   const prior = priorAll.slice(-MAX_PRIOR_USERS);
 
   const sections: string[] = [];
+  if (ciContext) {
+    sections.push(`## CI context\n${limitSection(ciContext, BRIEF_LIMIT - 400)}`);
+  }
   if (omitted > 0 || prior.length > 0 || lastAssistant) {
     const lines = [
       omitted > 0 ? `(${omitted} earlier messages omitted)` : "",

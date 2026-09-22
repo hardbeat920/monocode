@@ -160,7 +160,7 @@ export function CheckRepairForm({
             {checks.length === 1
               ? checks[0].name
               : `${checks.length} failed checks`}{" "}
-            ? PR #{repair.number}
+            · PR #{repair.number}
           </p>
         </div>
         <button
@@ -281,7 +281,7 @@ export function CheckRepairForm({
               strokeWidth={1.75}
             />
           ) : null}
-          {busy ? "Preparing?" : "Start fix"}
+          {busy ? "Preparing..." : "Start fix"}
           {!busy ? (
             <ChevronRight className="size-3" strokeWidth={1.75} />
           ) : null}

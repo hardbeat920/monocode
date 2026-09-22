@@ -16,7 +16,12 @@ import {
 } from "../../../shared/ui/icons";
 import type { CheckRepair } from "./CheckRepairForm";
 import type { GithubPrChecksView } from "../hooks/useGithubPrChecks";
-import type { GithubPrCheckState } from "../model/githubPrChecks";
+import type {
+  GithubPrCheck,
+  GithubPrChecks,
+  GithubPrCheckState,
+} from "../model/githubPrChecks";
+import { githubActionsJobId } from "../model/githubPrChecks";
 
 type RepairState =
   | GithubPrCheckState
@@ -34,10 +39,41 @@ type RepairItem = {
 };
 export type RepairGroup = { sessionId: string; items: RepairItem[] };
 
+export function findCheckRepair(
+  groups: RepairGroup[],
+  check: GithubPrCheck,
+  current: GithubPrChecks,
+): RepairItem | undefined {
+  const candidates = groups
+    .flatMap((group) => group.items)
+    .filter(
+      (item) =>
+        item.check.name === check.name &&
+        item.check.workflow === check.workflow,
+    );
+  const exact = candidates.find(
+    (item) =>
+      item.attempt.headOid === current.headOid && item.check.url === check.url,
+  );
+  if (exact) return exact;
+  // A new commit changes job URLs. Match by name only when both sides are unique.
+  if (
+    candidates.length !== 1 ||
+    candidates[0].attempt.headOid === current.headOid
+  )
+    return undefined;
+  return current.checks.filter(
+    (item) => item.name === check.name && item.workflow === check.workflow,
+  ).length === 1
+    ? candidates[0]
+    : undefined;
+}
+
 function repairState(
   attempt: TrackedCiRepair,
   check: RepairItem["check"],
   view: GithubPrChecksView,
+  ambiguous: boolean,
 ): RepairState {
   if (attempt.phase === "running") return "repairing";
   if (attempt.phase === "failed") return "agent-error";
@@ -46,7 +82,8 @@ function repairState(
   if (view.stale || view.error) return "stale";
   if (view.loading || view.refreshing) return "refreshing";
   const current = view.checks;
-  if (!current || current.headOid === attempt.headOid) return "waiting";
+  if (!current || current.headOid === attempt.headOid || ambiguous)
+    return "waiting";
   const matches = current.checks.filter(
     (item) => item.name === check.name && item.workflow === check.workflow,
   );
@@ -57,7 +94,7 @@ function repairState(
   const latest = matches[0];
   // Only a distinct, newer job can verify a completed repair attempt.
   if (
-    (check.url && latest.url === check.url) ||
+    (githubActionsJobId(check.url, attempt.repo) && latest.url === check.url) ||
     !latest.startedAt ||
     !Number.isFinite(Date.parse(latest.startedAt)) ||
     Date.parse(latest.startedAt) < attempt.startedAt
@@ -77,8 +114,9 @@ export function useCheckRepairs(
     getCiRepairs,
     getCiRepairs,
   );
-  const seen = new Set<string>();
+  const seen = new Map<string, { headOid: string; urls: Set<string | null> }>();
   const groups = new Map<string, RepairGroup>();
+  const counts = new Map<string, number>();
   for (const attempt of attempts) {
     if (
       !sameProjectPath(attempt.cwd, cwd) ||
@@ -88,8 +126,15 @@ export function useCheckRepairs(
       continue;
     for (const check of attempt.checks) {
       const key = JSON.stringify([check.workflow, check.name]);
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const previous = seen.get(key);
+      if (
+        previous &&
+        (previous.headOid !== attempt.headOid || previous.urls.has(check.url))
+      )
+        continue;
+      if (previous) previous.urls.add(check.url);
+      else
+        seen.set(key, { headOid: attempt.headOid, urls: new Set([check.url]) });
       const group = groups.get(attempt.sessionId) ?? {
         sessionId: attempt.sessionId,
         items: [],
@@ -97,9 +142,21 @@ export function useCheckRepairs(
       group.items.push({
         attempt,
         check,
-        state: repairState(attempt, check, view),
+        state: "waiting",
       });
+      counts.set(key, (counts.get(key) ?? 0) + 1);
       groups.set(attempt.sessionId, group);
+    }
+  }
+  for (const group of groups.values()) {
+    for (const item of group.items) {
+      const key = JSON.stringify([item.check.workflow, item.check.name]);
+      item.state = repairState(
+        item.attempt,
+        item.check,
+        view,
+        (counts.get(key) ?? 0) > 1,
+      );
     }
   }
   return [...groups.values()];
@@ -341,7 +398,7 @@ function RepairCard({
           <ul className="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">
             {group.items.map(({ check }) => (
               <li
-                key={JSON.stringify([check.workflow, check.name])}
+                key={JSON.stringify([check.workflow, check.name, check.url])}
                 title={check.workflow}
                 className="max-w-full truncate rounded bg-content/5 px-2 py-1 text-content/75"
               >

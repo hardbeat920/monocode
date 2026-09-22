@@ -104,6 +104,7 @@ export function buildSecondOpinionPrompt(input: {
   userRequest: string;
   report: string;
   files: string[];
+  ciContext?: string;
 }): string {
   const fromTitle = HARNESS_TITLE[input.from];
   const request = input.userRequest.trim();
@@ -134,7 +135,10 @@ export function buildSecondOpinionPrompt(input: {
     sections.push("## Files it edited\n(none recorded on this turn)");
   }
 
-  return limitSection(sections.join("\n\n"), PROMPT_LIMIT);
+  const prompt = limitSection(sections.join("\n\n"), PROMPT_LIMIT);
+  return input.ciContext
+    ? `${prompt}\n\n## CI context\n${input.ciContext}`
+    : prompt;
 }
 
 export function buildSecondOpinionCard(input: {

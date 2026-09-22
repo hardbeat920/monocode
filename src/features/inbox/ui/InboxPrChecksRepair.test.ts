@@ -11,6 +11,187 @@ import type { GithubPrChecksView } from "../hooks/useGithubPrChecks";
 // @vitest-environment happy-dom
 const roots: Root[] = [];
 
+it("only marks the selected job as repairing when check names repeat", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const first = {
+    name: "tests",
+    workflow: "CI",
+    state: "fail" as const,
+    url: "https://ci.example/jobs/1",
+    startedAt: null,
+    completedAt: null,
+  };
+  const second = { ...first, url: "https://ci.example/jobs/2" };
+  trackCiRepair(
+    "/duplicate-jobs",
+    buildCiRepairRequest({
+      repo: "acme/web",
+      number: 42,
+      headOid: "abc",
+      evidence: [first],
+    }),
+    "first-chat",
+    () => true,
+  );
+  await act(async () =>
+    root.render(
+      createElement(InboxPrChecks, {
+        cwd: "/duplicate-jobs",
+        repo: "acme/web",
+        onRefresh() {},
+        repair: { number: 42, sessions: [], onStart() {} },
+        view: {
+          checks: { headOid: "abc", checks: [first, second] },
+          loading: false,
+          refreshing: false,
+          stale: false,
+          error: null,
+          refresh() {},
+        },
+      }),
+    ),
+  );
+  expect(host.querySelectorAll("[data-repair-status]")).toHaveLength(1);
+  act(() =>
+    trackCiRepair(
+      "/duplicate-jobs",
+      buildCiRepairRequest({
+        repo: "acme/web",
+        number: 42,
+        headOid: "abc",
+        evidence: [second],
+      }),
+      "second-chat",
+      () => true,
+    ),
+  );
+  expect(
+    host.querySelectorAll('[aria-label="Repair progress"] > div'),
+  ).toHaveLength(2);
+});
+
+it("verifies a newer external CI result even when its dashboard URL stays the same", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const check = {
+    name: "External tests",
+    workflow: "",
+    state: "fail" as const,
+    url: "https://ci.example/project/web",
+    startedAt: null,
+    completedAt: null,
+  };
+  trackCiRepair(
+    "/external-ci",
+    buildCiRepairRequest({
+      repo: "acme/web",
+      number: 42,
+      headOid: "old",
+      evidence: [check],
+    }),
+    "external-chat",
+    (settle) => {
+      settle("completed");
+      return true;
+    },
+  );
+  await act(async () =>
+    root.render(
+      createElement(CheckRepairProgress, {
+        cwd: "/external-ci",
+        repo: "acme/web",
+        repair: { number: 42, sessions: [], onStart() {} },
+        view: {
+          checks: {
+            headOid: "new",
+            checks: [
+              {
+                ...check,
+                state: "pass",
+                startedAt: new Date(Date.now() + 1000).toISOString(),
+              },
+            ],
+          },
+          loading: false,
+          refreshing: false,
+          stale: false,
+          error: null,
+          refresh() {},
+        },
+      }),
+    ),
+  );
+  expect(host.textContent).toContain("CI passed");
+});
+
+it("does not use one newer result to verify two different jobs with the same name", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const check = {
+    name: "tests",
+    workflow: "CI",
+    state: "fail" as const,
+    url: "https://ci.example/jobs/1",
+    startedAt: null,
+    completedAt: null,
+  };
+  for (const id of [1, 2]) {
+    trackCiRepair(
+      "/ambiguous-jobs",
+      buildCiRepairRequest({
+        repo: "acme/web",
+        number: 42,
+        headOid: "old",
+        evidence: [{ ...check, url: `https://ci.example/jobs/${id}` }],
+      }),
+      `chat-${id}`,
+      (settle) => {
+        settle("completed");
+        return true;
+      },
+    );
+  }
+  await act(async () =>
+    root.render(
+      createElement(CheckRepairProgress, {
+        cwd: "/ambiguous-jobs",
+        repo: "acme/web",
+        repair: { number: 42, sessions: [], onStart() {} },
+        view: {
+          checks: {
+            headOid: "new",
+            checks: [
+              {
+                ...check,
+                state: "pass",
+                url: "https://ci.example/jobs/3",
+                startedAt: new Date(Date.now() + 1000).toISOString(),
+              },
+            ],
+          },
+          loading: false,
+          refreshing: false,
+          stale: false,
+          error: null,
+          refresh() {},
+        },
+      }),
+    ),
+  );
+  expect(host.textContent).not.toContain("CI passed");
+  expect(host.textContent).toContain("Awaiting new GitHub checks");
+});
+
 it.each([1, 0.8])(
   "reveals and expands the repaired check inside its PR scroller at scale %s",
   async (scale) => {
@@ -582,60 +763,73 @@ it("does not start a repair after leaving checks while details load", async () =
   vi.unstubAllGlobals();
 });
 
-it("closes the repair selection when check results refresh", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  roots.push(root);
-  const failed = {
-    name: "lint",
-    state: "fail" as const,
-    workflow: "CI",
-    url: null,
-    startedAt: null,
-    completedAt: null,
-  };
-  const props = {
-    cwd: "/web",
-    repo: "acme/web",
-    onRefresh() {},
-    repair: { number: 42, sessions: [], onStart: vi.fn() },
-    view: {
-      checks: { headOid: "abc", checks: [failed] },
-      loading: false,
-      refreshing: false,
-      stale: false,
-      error: null,
-      refresh() {},
-    },
-  };
-  await act(async () => root.render(createElement(InboxPrChecks, props)));
-  await act(async () =>
-    host
-      .querySelector<HTMLButtonElement>(
-        'button[aria-label="Fix lint with AI"]',
-      )!
-      .click(),
-  );
-  expect(
-    document.querySelector('[role="dialog"][aria-label="Fix checks with AI"]'),
-  ).not.toBeNull();
-  await act(async () =>
-    root.render(
-      createElement(InboxPrChecks, {
-        ...props,
-        view: {
-          ...props.view,
-          checks: { headOid: "abc", checks: [{ ...failed, state: "pass" }] },
-        },
-      }),
-    ),
-  );
-  expect(
-    document.querySelector('[role="dialog"][aria-label="Fix checks with AI"]'),
-  ).toBeNull();
-  act(() => root.unmount());
-  host.remove();
-  vi.unstubAllGlobals();
-});
+it.each(["results", "refreshing", "pr"])(
+  "closes the repair selection when %s changes",
+  async (change) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const failed = {
+      name: "lint",
+      state: "fail" as const,
+      workflow: "CI",
+      url: null,
+      startedAt: null,
+      completedAt: null,
+    };
+    const props = {
+      cwd: "/web",
+      repo: "acme/web",
+      onRefresh() {},
+      repair: { number: 42, sessions: [], onStart: vi.fn() },
+      view: {
+        checks: { headOid: "abc", checks: [failed] },
+        loading: false,
+        refreshing: false,
+        stale: false,
+        error: null,
+        refresh() {},
+      },
+    };
+    await act(async () => root.render(createElement(InboxPrChecks, props)));
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Fix lint with AI"]',
+        )!
+        .click(),
+    );
+    expect(
+      document.querySelector(
+        '[role="dialog"][aria-label="Fix checks with AI"]',
+      ),
+    ).not.toBeNull();
+    await act(async () =>
+      root.render(
+        createElement(InboxPrChecks, {
+          ...props,
+          view: {
+            ...props.view,
+            refreshing: change === "refreshing",
+            checks:
+              change === "results"
+                ? { headOid: "abc", checks: [{ ...failed, state: "pass" }] }
+                : props.view.checks,
+          },
+          repair:
+            change === "pr" ? { ...props.repair, number: 43 } : props.repair,
+        }),
+      ),
+    );
+    expect(
+      document.querySelector(
+        '[role="dialog"][aria-label="Fix checks with AI"]',
+      ),
+    ).toBeNull();
+    act(() => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  },
+);

@@ -2,6 +2,7 @@ import { CheckRepairForm, type CheckRepair } from "./CheckRepairForm";
 import {
   CheckRepairProgress,
   CheckRepairStatus,
+  findCheckRepair,
   useCheckRepairs,
   type RepairGroup,
 } from "./CheckRepairProgress";
@@ -501,7 +502,10 @@ export function InboxPrChecks({
     anchor: HTMLButtonElement;
   } | null>(null);
   const checksIdentity = JSON.stringify(checks);
-  useEffect(() => setSelection(null), [cwd, repo, checksIdentity, stale]);
+  useEffect(
+    () => setSelection(null),
+    [cwd, repo, repair?.number, checksIdentity, stale, refreshing, error],
+  );
   if (loading) {
     return (
       <div className="flex justify-center py-10 text-content/40">
@@ -576,6 +580,7 @@ export function InboxPrChecks({
         <div className="flex shrink-0 items-center gap-2">
           {repair &&
           !stale &&
+          !error &&
           !refreshing &&
           rows.some((row) => row.state === "fail") ? (
             <button
@@ -646,7 +651,7 @@ export function InboxPrChecks({
           Saved results may be out of date.
         </p>
       ) : null}
-      {selection && repair ? (
+      {selection && repair && !stale && !refreshing && !error ? (
         <CheckRepairForm
           key={`${cwd}:${repo}:${checksIdentity}:${JSON.stringify(selection.checks)}`}
           anchor={selection.anchor}
@@ -713,7 +718,23 @@ export function InboxPrChecks({
                 <ul className="flex flex-col gap-0.5">
                   {group.rows.map((check, index) => (
                     <PrCheckRow
-                      key={`${cwd}:${repo}:${checks?.headOid}:${check.url ?? `${index}:${check.workflow}:${check.name}`}`}
+                      key={JSON.stringify([
+                        cwd,
+                        repo,
+                        repair?.number,
+                        checks?.headOid,
+                        check.workflow,
+                        check.name,
+                        check.url,
+                        group.rows
+                          .slice(0, index)
+                          .filter(
+                            (row) =>
+                              row.workflow === check.workflow &&
+                              row.name === check.name &&
+                              row.url === check.url,
+                          ).length,
+                      ])}
                       check={check}
                       revealToken={
                         revealed?.scope === revealScope &&
@@ -722,16 +743,15 @@ export function InboxPrChecks({
                           ? revealed.token
                           : undefined
                       }
-                      repairItem={repairGroups
-                        .flatMap((group) => group.items)
-                        .find(
-                          (item) =>
-                            item.check.name === check.name &&
-                            item.check.workflow === check.workflow,
-                        )}
+                      repairItem={
+                        checks
+                          ? findCheckRepair(repairGroups, check, checks)
+                          : undefined
+                      }
                       onFix={
                         repair &&
                         !stale &&
+                        !error &&
                         !refreshing &&
                         check.state === "fail"
                           ? (anchor) =>

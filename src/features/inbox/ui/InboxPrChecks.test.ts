@@ -72,6 +72,36 @@ const render = (element: React.ReactElement) => {
 const buttonByLabel = (label: string) =>
   container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
+it("keeps expanded details on the same check when checks share a URL", async () => {
+  invoke.mockResolvedValue({ steps: [], annotations: [], notice: null });
+  const first = check({
+    name: "build",
+    url: "https://github.com/acme/web/actions/runs/1/job/2",
+  });
+  const second = { ...first, name: "lint" };
+  const show = async (checks: GithubPrCheck[]) => {
+    await act(async () =>
+      root.render(
+        createElement(InboxPrChecks, {
+          cwd: "/tmp/web",
+          repo: "acme/web",
+          onRefresh() {},
+          view: view({ checks: { headOid: "abc", checks } }),
+        }),
+      ),
+    );
+  };
+  await show([first, second]);
+  await act(async () => buttonByLabel("build details")!.click());
+  await show([second, first]);
+  expect(buttonByLabel("build details")?.getAttribute("aria-expanded")).toBe(
+    "true",
+  );
+  expect(buttonByLabel("lint details")?.getAttribute("aria-expanded")).toBe(
+    "false",
+  );
+});
+
 it("filters attention checks without hiding cancelled or unknown outcomes", () => {
   render(
     createElement(InboxPrChecks, {

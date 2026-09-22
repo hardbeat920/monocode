@@ -5363,6 +5363,14 @@ export default function App({
         return false;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
       if (
+        options?.ciRepair &&
+        storedCurrent &&
+        (storedCurrent.busy ||
+          storedCurrent.pendingSwitch ||
+          isPreparingHandoff(storedCurrent))
+      )
+        return false;
+      if (
         !storedCurrent ||
         storedCurrent.worktreeRemoved ||
         [...removingWorktreePaths.current].some((path) =>
@@ -5609,10 +5617,20 @@ export default function App({
             if (location.moved) {
               await applyProjectLocationChange(current.cwd, location.path);
             }
-            submitAfterProjectSyncRef.current(sessionId, text, attachments, {
-              ...options,
-              projectLocationReady: true,
-            });
+            const accepted = submitAfterProjectSyncRef.current(
+              sessionId,
+              text,
+              attachments,
+              { ...options, projectLocationReady: true },
+            );
+            if (!accepted) {
+              rejectResend();
+              options?.onSettled?.({
+                status: "failed",
+                text: "",
+                error: "The chat became unavailable before the request could start. Try again when it is ready.",
+              });
+            }
           })
           .catch((error: unknown) => {
             const message =
@@ -5716,9 +5734,12 @@ export default function App({
               worktreePreparing: createDraftWorktree
                 ? true
                 : selected.worktreePreparing,
-              inboxCard: rawCommand ? s.inboxCard : undefined,
-              noteCard: rawCommand ? s.noteCard : undefined,
-              handoffCard: rawCommand ? s.handoffCard : undefined,
+              inboxCard:
+                rawCommand || options?.ciRepair ? s.inboxCard : undefined,
+              noteCard:
+                rawCommand || options?.ciRepair ? s.noteCard : undefined,
+              handoffCard:
+                rawCommand || options?.ciRepair ? s.handoffCard : undefined,
             };
             if (options?.resendEdited) {
               next = replaceEditedResend(next);
@@ -6851,6 +6872,7 @@ export default function App({
         userRequest,
         report: turnReport(turn),
         files,
+        ciContext: turn.find((block) => block.role === "user")?.ciContext,
       });
       const session = {
         ...newSession(harness, source.cwd, model, source.runtimeMode),
@@ -8030,6 +8052,8 @@ export default function App({
       trackCiRepair(cwd, request, repairSessionId, (settle) =>
         onSubmit(repairSessionId, request.text, [], {
           ciRepair: request,
+          noteCard: undefined,
+          handoffCard: undefined,
           onSettled: (outcome) => settle(outcome.status),
         }),
       );

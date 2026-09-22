@@ -3448,6 +3448,8 @@ struct GitHubStatusCheckRow {
     #[serde(default)]
     target_url: Option<String>,
     #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
     started_at: Option<String>,
     #[serde(default)]
     completed_at: Option<String>,
@@ -3490,7 +3492,7 @@ fn github_pr_check_from_row(row: GitHubStatusCheckRow) -> GitHubPrCheck {
             workflow: String::new(),
             state: github_check_conclusion_state(&row.state),
             url: row.target_url.filter(|url| !url.trim().is_empty()),
-            started_at: None,
+            started_at: row.created_at,
             completed_at: None,
         };
     }
@@ -7172,6 +7174,25 @@ mod tests {
         assert_eq!(
             parse_github_pr_oids(json).unwrap(),
             ("aaa111".into(), "bbb222".into())
+        );
+    }
+
+    #[test]
+    fn github_status_context_keeps_its_report_time() {
+        let checks = parse_github_pr_checks(
+            r#"{
+            "headRefOid": "abc",
+            "statusCheckRollup": [{
+                "__typename": "StatusContext", "context": "External tests",
+                "state": "SUCCESS", "createdAt": "2030-01-01T10:00:00Z",
+                "targetUrl": "https://ci.example/project/web"
+            }]
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            checks.checks[0].started_at.as_deref(),
+            Some("2030-01-01T10:00:00Z")
         );
     }
 
