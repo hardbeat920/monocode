@@ -23,6 +23,13 @@ import type {
 
 const PROMPT_TIMEOUT_MS = 30 * 60_000;
 const STDERR_TAIL_LINES = 8;
+/**
+ * `muse exec` releases its server-side session lock only when the process
+ * exits, so a follow-up send that spawns before the previous child has died
+ * fails with "session is already in use". Hold the turn open after the
+ * terminal event until the exit arrives, and kill the child if it lingers.
+ */
+export const EXIT_GRACE_MS = 10_000;
 
 type Resume = {
   sessionId: string;
@@ -70,10 +77,12 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
+    let exitGrace: ReturnType<typeof setTimeout> | undefined;
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (exitGrace) clearTimeout(exitGrace);
       unwatchChild(input.sessionId);
       if (error) reject(error);
       else resolve();
@@ -100,8 +109,16 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
         }
         if (fold.done) {
           input.onEvent({ type: "message.completed" });
-          if (fold.failed) finish(new Error(fold.failed));
-          else finish();
+          if (fold.failed) {
+            finish(new Error(fold.failed));
+            return;
+          }
+          // Wait for the child to die before resolving so the next send
+          // cannot reuse the session id while it is still locked.
+          exitGrace = setTimeout(() => {
+            void killChild(input.sessionId).catch(() => undefined);
+            finish();
+          }, EXIT_GRACE_MS);
         }
       },
       (code) => {

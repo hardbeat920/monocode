@@ -44,6 +44,7 @@ const {
   bindMuseSession,
   forgetMuseSession,
   stopMuseSession,
+  EXIT_GRACE_MS,
 } = await import("./muse");
 import type { HarnessEvent } from "../../core/types";
 
@@ -217,6 +218,44 @@ describe("muse turns", () => {
     await turn;
     expect(events).toContainEqual({ type: "message.delta", text: "partial" });
     expect(events).not.toContainEqual({ type: "message.completed" });
+  });
+
+  it("holds the turn open until the child exits after the terminal line", async () => {
+    // The CLI keeps its session lock until the process dies; resolving on the
+    // terminal line would let a fast follow-up send hit "already in use".
+    autoExit = false;
+    const events: HarnessEvent[] = [];
+    const turn = sendMuseTurn(baseInput(events));
+    await new Promise((r) => setTimeout(r, 5));
+    onLine!(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(events).toContainEqual({ type: "message.completed" });
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    onExit!(0);
+    await turn;
+    expect(settled).toBe(true);
+  });
+
+  it("kills a child that lingers past the exit grace", async () => {
+    vi.useFakeTimers();
+    try {
+      autoExit = false;
+      const events: HarnessEvent[] = [];
+      const turn = sendMuseTurn(baseInput(events));
+      await vi.advanceTimersByTimeAsync(5);
+      onLine!(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));
+      await vi.advanceTimersByTimeAsync(EXIT_GRACE_MS + 1);
+      await turn;
+      expect(killed).toBeGreaterThan(0);
+      expect(events).toContainEqual({ type: "message.completed" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skips spawning when cancel lands during binary resolve", async () => {
