@@ -23,7 +23,11 @@ import {
   stopCodexTextPrompt,
   warmupCodexText,
 } from "./codexText";
-import { registerHarness, type HarnessAdapter } from "../../core/registry";
+import {
+  getHarness,
+  registerHarness,
+  type HarnessAdapter,
+} from "../../core/registry";
 
 export const codexAdapter: HarnessAdapter = {
   id: "codex",
@@ -52,7 +56,7 @@ export const codexAdapter: HarnessAdapter = {
 let registered = false;
 
 export function ensureCodexRegistered(): void {
-  if (registered) return;
+  if (registered && getHarness("codex") === codexAdapter) return;
   registerHarness(codexAdapter);
   registered = true;
 }
