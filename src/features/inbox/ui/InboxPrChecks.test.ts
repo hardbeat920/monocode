@@ -6,6 +6,7 @@ import { InboxPrChecks, PrChecksTab } from "./InboxPrChecks";
 import { InboxDetail, LinkedWorkItemPanel } from "./InboxView";
 import type { GithubPrChecksView } from "../hooks/useGithubPrChecks";
 import type {
+  GithubCheckDetails,
   GithubPrCheck,
   GithubPrChecksOverall,
 } from "../model/githubPrChecks";
@@ -260,6 +261,93 @@ it("opens the only failed Actions job and shows its failed step and error", asyn
   expect(container.textContent).not.toContain("src/app.test.ts:42");
   expect(container.textContent).toContain("Expected 2, received 1");
   expect(container.textContent).toContain("Failed at Run tests");
+});
+
+it("keeps expanded evidence while polling a pending job and shows new steps", async () => {
+  const details: GithubCheckDetails = {
+    steps: [
+      { name: "Install", state: "pass", startedAt: null, completedAt: null },
+    ],
+    annotations: Array.from({ length: 6 }, (_, index) => ({
+      path: "src/app.ts",
+      line: 1,
+      message: `Annotation ${index + 1}`,
+      level: "failure",
+    })),
+    notice: null,
+  };
+  let finishRefresh!: (value: GithubCheckDetails) => void;
+  const refreshed = new Promise<GithubCheckDetails>((resolve) => {
+    finishRefresh = resolve;
+  });
+  const loadDetails = vi
+    .fn()
+    .mockResolvedValueOnce(details)
+    .mockReturnValue(refreshed);
+  invoke.mockImplementation((command) => {
+    if (command === "git_github_check_details") return loadDetails();
+    if (command === "git_commit_file_diff")
+      return Promise.resolve({
+        current: "source preview",
+        original: "",
+        binary: false,
+        tooLarge: false,
+      });
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  const job = check({
+    name: "Windows",
+    state: "pending",
+    url: "https://github.com/acme/web/actions/runs/9/job/123",
+  });
+  const show = () =>
+    render(
+      createElement(InboxPrChecks, {
+        cwd: "/tmp/web",
+        repo: "acme/web",
+        onRefresh() {},
+        view: view({
+          checks: { headOid: "a".repeat(40), checks: [{ ...job }] },
+        }),
+      }),
+    );
+  show();
+  await act(async () => buttonByLabel("Windows details")!.click());
+  await act(async () =>
+    Array.from(container.querySelectorAll("button"))
+      .find((button) =>
+        button.textContent?.includes("Show 1 more annotations"),
+      )!
+      .click(),
+  );
+  const steps = container.querySelector<HTMLDetailsElement>("details")!;
+  steps.open = true;
+  expect(container.textContent).toContain("Annotation 6");
+  show();
+  expect(container.textContent).toContain("Annotation 6");
+  expect(container.textContent).toContain("source preview");
+  expect(container.textContent).not.toContain("Loading steps");
+  expect(container.querySelector("details")?.open).toBe(true);
+  await act(async () =>
+    finishRefresh({
+      ...details,
+      steps: [
+        ...details.steps,
+        {
+          name: "Run tests",
+          state: "pending",
+          startedAt: null,
+          completedAt: null,
+        },
+      ],
+    }),
+  );
+  expect(container.textContent).toContain("Run tests");
+  expect(container.textContent).toContain("Annotation 6");
+  expect(container.querySelector("details")?.open).toBe(true);
+  expect(
+    invoke.mock.calls.filter(([command]) => command === "git_commit_file_diff"),
+  ).toHaveLength(1);
 });
 
 it("clears the old failed step when a collapsed job is refreshed", async () => {

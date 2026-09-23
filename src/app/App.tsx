@@ -1,4 +1,5 @@
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
+import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
 import {
   rebaseCiRepairs,
   trackCiRepair,
@@ -6099,7 +6100,8 @@ export default function App({
           const latest = sessionsRef.current.find((s) => s.id === sessionId);
           const brief = chooseHandoffBrief(
             agentText,
-            buildDeterministicHandoff(latest ?? current, text),
+            latest ?? current,
+            text,
           );
           await forgetHarnessSession(pendingSwitch.from, sessionId);
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -7994,16 +7996,7 @@ export default function App({
     );
   }, [history, sessions, storedLinkedSessions]);
   const repairSessions = useMemo(
-    () => [
-      ...new Map(
-        [
-          ...history,
-          ...sessions
-            .filter((session) => !session.inboxAsk)
-            .map((session) => summaryFromSession(session)),
-        ].map((session) => [session.id, session]),
-      ).values(),
-    ],
+    () => ciRepairSessions(history, sessions),
     [history, sessions],
   );
   const openProjectSessions = useMemo(

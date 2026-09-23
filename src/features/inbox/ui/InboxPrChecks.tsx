@@ -207,18 +207,27 @@ function PrCheckRow({
   const [loading, setLoading] = useState(false);
   const [retry, setRetry] = useState(0);
   const detailsId = useId();
+  const detailsKey = JSON.stringify([
+    cwd,
+    repo,
+    headOid,
+    jobId,
+    check.state,
+    check.startedAt,
+    check.completedAt,
+  ]);
   useEffect(() => {
     if (autoExpand && expandable) setExpanded(true);
   }, [autoExpand, expandable]);
   useEffect(() => {
     setDetails(null);
-  }, [refreshToken]);
+  }, [detailsKey]);
   useEffect(() => {
     if (!expanded || !jobId || !cwd) return;
     let active = true;
     setLoading(true);
     setError(null);
-    setDetails(null);
+    // Routine polls keep evidence mounted while fetching updated job steps.
     fetchGithubCheckDetails(cwd, repo, jobId)
       .then(
         (result) => {
@@ -235,7 +244,7 @@ function PrCheckRow({
     return () => {
       active = false;
     };
-  }, [expanded, cwd, repo, jobId, refreshToken, retry]);
+  }, [expanded, cwd, repo, jobId, detailsKey, refreshToken, retry]);
   const mark = checkMark(check.state);
   const status = checkStateLabel(check.state);
   const duration = checkDuration(check.startedAt, check.completedAt);
@@ -393,7 +402,7 @@ function PrCheckRow({
           id={detailsId}
           className="min-w-0 space-y-3 py-3 pl-10 pr-3 text-[12px] @max-[420px]/checks:pl-3"
         >
-          {loading ? (
+          {loading && !details ? (
             <p
               role="status"
               className="flex items-center gap-2 px-2 py-1 text-content/50"
