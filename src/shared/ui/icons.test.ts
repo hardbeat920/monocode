@@ -62,4 +62,15 @@ describe("hugeicons imports", () => {
     expect(html).toContain("items-center justify-center");
     expect(html).toContain("size-[72%]");
   });
+
+  it("renders the Muse artwork as a plain image", () => {
+    const html = renderToStaticMarkup(
+      createElement(HarnessIcon, {
+        harness: "muse",
+        className: "size-4 shrink-0",
+      }),
+    );
+    expect(html).toContain("<img");
+    expect(html).toContain("data:image/svg+xml");
+  });
 });

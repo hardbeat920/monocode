@@ -34,7 +34,6 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "pi",
   "fx",
   "hermes",
-  "muse",
 ]);
 
 function MonoIcon({
@@ -96,28 +95,6 @@ export function HarnessIcon({
             maskRepeat: "no-repeat",
             maskSize: "contain",
             WebkitMaskImage: `url(${hermes})`,
-            WebkitMaskPosition: "center",
-            WebkitMaskRepeat: "no-repeat",
-            WebkitMaskSize: "contain",
-          }}
-        />
-      </span>
-    );
-  }
-  if (harness === "muse") {
-    return (
-      <span
-        aria-hidden
-        className={`inline-flex items-center justify-center ${className}`}
-      >
-        <span
-          className="block size-[72%] bg-current"
-          style={{
-            maskImage: `url(${muse})`,
-            maskPosition: "center",
-            maskRepeat: "no-repeat",
-            maskSize: "contain",
-            WebkitMaskImage: `url(${muse})`,
             WebkitMaskPosition: "center",
             WebkitMaskRepeat: "no-repeat",
             WebkitMaskSize: "contain",
