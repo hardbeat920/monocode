@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  BTW_COMMAND,
   BTW_MAX_BLOCK_CHARS,
   BTW_MAX_SNAPSHOT_CHARS,
   buildBtwPrompt,
   btwVisibleBlocks,
+  consumeBtwCommand,
   replaceBtwThread,
   serializeBtwBlock,
   serializeBtwSnapshot,
@@ -43,6 +45,33 @@ describe("supportsBtwHarness", () => {
     expect(supportsBtwHarness("hermes")).toBe(false);
     expect(supportsBtwHarness("antigravity")).toBe(false);
     expect(supportsBtwHarness(undefined)).toBe(false);
+  });
+});
+
+describe("consumeBtwCommand", () => {
+  it("opens an empty BTW thread for the bare command", () => {
+    expect(BTW_COMMAND).toMatchObject({
+      kind: "builtin",
+      invocation: "btw",
+    });
+    expect(consumeBtwCommand("  /BTW  ")).toEqual({
+      text: "",
+      matched: true,
+    });
+  });
+
+  it("keeps the text after the command as the side question", () => {
+    expect(consumeBtwCommand("/btw  what does this do?  ")).toEqual({
+      text: "what does this do?",
+      matched: true,
+    });
+  });
+
+  it("only consumes a leading BTW command", () => {
+    expect(consumeBtwCommand("ask /btw about this")).toEqual({
+      text: "ask /btw about this",
+      matched: false,
+    });
   });
 });
 

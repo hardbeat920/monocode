@@ -1,5 +1,6 @@
 import { displayPath } from "../../../shared/lib/paths";
 import type { Attachment, Block, BtwThread, HarnessId } from "./session";
+import type { BuiltinSkill } from "../../skills/model/skills";
 
 /**
  * Harnesses with an isolated text runner suitable for read-only side
@@ -19,6 +20,25 @@ export function supportsBtwHarness(
   harness: HarnessId | undefined,
 ): harness is HarnessId {
   return harness != null && BTW_HARNESSES.includes(harness);
+}
+
+export const BTW_COMMAND: BuiltinSkill = {
+  kind: "builtin",
+  name: "btw",
+  invocation: "btw",
+  description: "Ask a read-only side question about the current turn.",
+  scope: "builtin",
+  source: "monocode",
+};
+
+/** Consume `/btw` when it is the leading composer command. */
+export function consumeBtwCommand(text: string): {
+  text: string;
+  matched: boolean;
+} {
+  const match = text.match(/^\s*\/btw(?:\s+([\s\S]*))?\s*$/i);
+  if (!match) return { text, matched: false };
+  return { text: match[1]?.trim() ?? "", matched: true };
 }
 
 const SNAPSHOT_ROLES: Record<Block["role"], true | undefined> = {

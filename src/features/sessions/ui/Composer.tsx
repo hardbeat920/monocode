@@ -142,6 +142,11 @@ import { resolveTabGroupLogo } from "../../workspace/model/tabGroups";
 import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "../../../shared/ui/Popover";
 import { consumePlanCommand, PLAN_COMMAND } from "../model/plan";
+import {
+  BTW_COMMAND,
+  consumeBtwCommand,
+  supportsBtwHarness,
+} from "../model/btw";
 import { COMPACT_COMMAND, isCompactCommand } from "../model/compact";
 import {
   consumeSessionFolderCommand,
@@ -220,6 +225,7 @@ type Props = {
     attachments: Attachment[],
     options?: ComposerTurnOptions,
   ) => boolean | void;
+  onBtwCommand?: (text: string) => boolean | void;
   canSaveDraft?: boolean;
   onSaveDraft?: (text: string, attachments: Attachment[]) => boolean | void;
   onStop?: () => void;
@@ -487,6 +493,7 @@ export function Composer({
   onRuntimeModeChange,
   onQuoteRequestConsumed,
   onInboxCardDismiss,
+  onBtwCommand,
   onNoteCardDismiss,
   onHandoffCardDismiss,
   onQuestionReply,
@@ -618,15 +625,17 @@ export function Composer({
       SESSION_FOLDER_COMMAND,
       PLAN_COMMAND,
       COMPACT_COMMAND,
+      ...(supportsBtwHarness(harness) ? [BTW_COMMAND] : []),
       ...skills.filter(
         (skill) =>
           skill.kind === "native" ||
           (skill.name !== PLAN_COMMAND.name &&
             skill.name !== COMPACT_COMMAND.name &&
-            skill.name !== SESSION_FOLDER_COMMAND.name),
+            skill.name !== SESSION_FOLDER_COMMAND.name &&
+            skill.name !== BTW_COMMAND.name),
       ),
     ],
-    [skills],
+    [harness, skills],
   );
   const skillLimit = hasNativeCommands(harness)
     ? Number.POSITIVE_INFINITY
@@ -1259,6 +1268,32 @@ export function Composer({
       return;
     }
     const folderCommand = consumeSessionFolderCommand(value);
+    const btwCommand = consumeBtwCommand(value);
+    if (
+      btwCommand.matched &&
+      onBtwCommand &&
+      attachments.length === 0 &&
+      !inboxCard &&
+      !noteCard &&
+      !handoffCard
+    ) {
+      const accepted = onBtwCommand(btwCommand.text);
+      if (accepted !== false) {
+        if (ref.current) {
+          ref.current.value = "";
+          ref.current.style.height = "auto";
+        }
+        setDraft("");
+        onDraftChange?.("");
+        setPlusOpen(false);
+        setSlash(null);
+        setMention(null);
+        setCreatingSkill(false);
+        setCreateError(null);
+        syncHasValue("", []);
+        return;
+      }
+    }
     if (folderCommand.matched && onPlaceInFolder && !sessionFolderSelected) {
       openSessionFolderPicker();
       return;
@@ -1351,6 +1386,15 @@ export function Composer({
     if (disabled) return;
     if (isImeComposition(e.nativeEvent)) return;
     if (creatingSkill) return;
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey &&
+      consumeBtwCommand(e.currentTarget.value).matched
+    ) {
+      e.preventDefault();
+      submit(e.currentTarget.value);
+      return;
+    }
 
     if (
       e.key === " " &&

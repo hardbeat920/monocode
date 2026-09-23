@@ -45,6 +45,7 @@ import {
   type ComposerTurnOptions,
 } from "../model/session";
 import { supportsBtwHarness } from "../model/btw";
+import type { BtwOpenRequest } from "./BtwPopover";
 import { AgentTranscript } from "./AgentTranscript";
 import { TranscriptFind } from "./TranscriptFind";
 import {
@@ -347,6 +348,44 @@ export const SessionPane = memo(function SessionPane({
       void orchestrator.hydrate(session.id).catch(console.error);
   }, [session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
+  const btwRequestId = useRef(0);
+  const [btwOpenRequest, setBtwOpenRequest] = useState<BtwOpenRequest | null>(
+    null,
+  );
+  const onBtwCommand = useCallback(
+    (text: string) => {
+      if (
+        managed ||
+        session.inboxAsk ||
+        session.worktreeRemoved ||
+        !onBtwSubmit ||
+        !onBtwRetry ||
+        !supportsBtwHarness(session.harness) ||
+        !session.blocks.some(
+          (block) => block.role === "user" && block.durationMs != null,
+        )
+      ) {
+        return false;
+      }
+      const id = ++btwRequestId.current;
+      setBtwOpenRequest({ id, text });
+      return true;
+    },
+    [
+      managed,
+      onBtwRetry,
+      onBtwSubmit,
+      session.blocks,
+      session.harness,
+      session.inboxAsk,
+      session.worktreeRemoved,
+    ],
+  );
+  const onBtwOpenRequestHandled = useCallback((requestId: number) => {
+    setBtwOpenRequest((current) =>
+      current?.id === requestId ? null : current,
+    );
+  }, []);
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;
   }, []);
@@ -544,6 +583,7 @@ export const SessionPane = memo(function SessionPane({
         if (!dockComposer) composerDockMotion.captureLaunch();
         return onSubmit(session.id, text, attachments, options);
       }}
+      onBtwCommand={onBtwCommand}
       onStop={() => onStop(session.id)}
       onCompactContext={() => onCompactContext(session.id)}
       onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
@@ -795,6 +835,8 @@ export const SessionPane = memo(function SessionPane({
                         )
                     : undefined
                 }
+                btwOpenRequest={btwOpenRequest}
+                onBtwOpenRequestHandled={onBtwOpenRequestHandled}
                 onJumpToBottomChange={setShowJumpToBottom}
                 onJumpToBottomReady={onJumpToBottomReady}
                 onRevealReady={onRevealReady}

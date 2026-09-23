@@ -27,6 +27,12 @@ import {
   type BtwThread,
   type HarnessId,
 } from "../model/session";
+
+export type BtwOpenRequest = {
+  id: number;
+  text: string;
+};
+
 type Props = {
   harness: HarnessId;
   threads?: BtwThread[];
@@ -34,6 +40,8 @@ type Props = {
   cwd?: string;
   model?: string;
   modelSettings?: Record<string, string>;
+  openRequest?: BtwOpenRequest | null;
+  onOpenRequestHandled?: (requestId: number) => void;
   onSubmit: (
     threadId: string,
     messageId: string,
@@ -84,6 +92,8 @@ export function BtwPopover({
   harness,
   threads = [],
   visible = true,
+  openRequest,
+  onOpenRequestHandled,
   cwd,
   model = "",
   modelSettings = {},
@@ -94,6 +104,7 @@ export function BtwPopover({
 }: Props) {
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
+  const [composerRevision, setComposerRevision] = useState(0);
   const [draftModel, setDraftModel] = useState<string | null>(null);
   const [draftModelSettings, setDraftModelSettings] = useState<Record<
     string,
@@ -103,6 +114,8 @@ export function BtwPopover({
     threadId: string;
     message: BtwMessage;
   } | null>(null);
+  const pendingSubmitRef = useRef<string | null>(null);
+  const lastOpenRequestRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const persisted = useMemo(
     () => threads.find((thread) => thread.id === openThreadId),
@@ -135,6 +148,7 @@ export function BtwPopover({
   const open = openThreadId != null;
 
   const close = () => {
+    pendingSubmitRef.current = null;
     setOpenThreadId(null);
     setDraftText("");
     setDraftModel(null);
@@ -162,6 +176,7 @@ export function BtwPopover({
   }, [optimistic, threads]);
 
   const openNew = (trigger?: HTMLButtonElement) => {
+    pendingSubmitRef.current = null;
     if (trigger) triggerRef.current = trigger;
     setOptimistic(null);
     setDraftText("");
@@ -175,6 +190,7 @@ export function BtwPopover({
   };
 
   const openExisting = (event: MouseEvent<HTMLButtonElement>, id: string) => {
+    pendingSubmitRef.current = null;
     triggerRef.current = event.currentTarget;
     setOptimistic(null);
     setDraftText("");
@@ -192,6 +208,7 @@ export function BtwPopover({
       threadId,
       message: { id: messageId, role: "user", text, createdAt: Date.now() },
     });
+    setComposerRevision((revision) => revision + 1);
     setOpenThreadId(threadId);
     setDraftText("");
     onSubmit(
@@ -202,6 +219,26 @@ export function BtwPopover({
       selectedModelSettings,
     );
   };
+
+  useEffect(() => {
+    if (!openRequest || lastOpenRequestRef.current === openRequest.id) return;
+    lastOpenRequestRef.current = openRequest.id;
+    const text = openRequest.text.trim();
+    setOptimistic(null);
+    setDraftModel(null);
+    setDraftModelSettings(null);
+    setDraftText(text);
+    if (text) pendingSubmitRef.current = text;
+    setOpenThreadId(crypto.randomUUID());
+    onOpenRequestHandled?.(openRequest.id);
+  }, [onOpenRequestHandled, openRequest]);
+
+  useEffect(() => {
+    const text = pendingSubmitRef.current;
+    if (!text || !openThreadId || draftText !== text || running) return;
+    pendingSubmitRef.current = null;
+    submit(text);
+  }, [draftText, openThreadId, running]);
 
   const handleModelChange = (nextHarness: HarnessId, nextModel: string) => {
     if (nextHarness !== harness) return;
@@ -353,10 +390,7 @@ export function BtwPopover({
                           thinking
                         </span>
                       </div>
-                      <Shimmer
-                        duration={1.6}
-                        className="mt-1.5 text-[13px] leading-5 text-content/55"
-                      >
+                      <Shimmer duration={1.6}>
                         Working through a separate thread…
                       </Shimmer>
                     </div>
@@ -390,7 +424,7 @@ export function BtwPopover({
 
           <div className="shrink-0 border-t border-content/10 px-3.5 py-3">
             <Composer
-              key={openThreadId}
+              key={`${openThreadId}-${composerRevision}`}
               compact
               enabled={!running}
               disabled={running}

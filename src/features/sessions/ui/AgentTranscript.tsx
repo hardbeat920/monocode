@@ -37,7 +37,7 @@ import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui";
-import { BtwPopover } from "./BtwPopover";
+import { BtwPopover, type BtwOpenRequest } from "./BtwPopover";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -165,6 +165,8 @@ type Props = {
     modelSettings: Record<string, string>,
     turn: Block[],
   ) => void;
+  btwOpenRequest?: BtwOpenRequest | null;
+  onBtwOpenRequestHandled?: (requestId: number) => void;
   onEditLastTurn?: () => void;
   editingLastTurn?: boolean;
   onJumpToBottomChange?: (show: boolean) => void;
@@ -207,6 +209,8 @@ function AgentTranscriptComponent({
   onBtwRetry,
   onBtwDelete,
   onBtwModelChange,
+  btwOpenRequest,
+  onBtwOpenRequestHandled,
   onEditLastTurn,
   editingLastTurn = false,
   onJumpToBottomChange,
@@ -909,6 +913,8 @@ function AgentTranscriptComponent({
                           )
                       : undefined
                   }
+                  btwOpenRequest={isLastTurn ? btwOpenRequest : undefined}
+                  onBtwOpenRequestHandled={onBtwOpenRequestHandled}
                 />
               ) : null}
             </div>
@@ -996,6 +1002,8 @@ function TurnDuration({
   onBtwRetry,
   onBtwDelete,
   onBtwModelChange,
+  btwOpenRequest,
+  onBtwOpenRequestHandled,
 }: {
   elapsedMs: number | null;
   metrics?: TurnMetrics;
@@ -1028,6 +1036,8 @@ function TurnDuration({
     model: string,
     modelSettings: Record<string, string>,
   ) => void;
+  btwOpenRequest?: BtwOpenRequest | null;
+  onBtwOpenRequestHandled?: (requestId: number) => void;
 }) {
   const label = formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
@@ -1073,6 +1083,8 @@ function TurnDuration({
           onRetry={onBtwRetry}
           onDelete={onBtwDelete}
           onModelChange={onBtwModelChange}
+          openRequest={btwOpenRequest}
+          onOpenRequestHandled={onBtwOpenRequestHandled}
         />
       ) : null}
 
