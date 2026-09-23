@@ -3145,12 +3145,31 @@ function DiffStat({
       className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (
-        <span className="text-emerald-400">+{formatInteger(additions)}</span>
+        <span className="text-emerald-400">
+          +<TightDiffNumber value={additions} />
+        </span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-red-400">-{formatInteger(deletions)}</span>
+        <span className="text-red-400">
+          -<TightDiffNumber value={deletions} />
+        </span>
       ) : null}
     </span>
+  );
+}
+
+function TightDiffNumber({ value }: { value: number }) {
+  const [first, ...rest] = formatInteger(value).split(",");
+  return (
+    <>
+      {first}
+      {rest.map((part, index) => (
+        <span key={index}>
+          <span className="-mr-px">,</span>
+          {part}
+        </span>
+      ))}
+    </>
   );
 }
 

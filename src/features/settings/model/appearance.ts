@@ -3,6 +3,10 @@ import { isHexColor } from "../../../shared/lib/colorUtils";
 import { HAS_NATIVE_GLASS, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
+import {
+  applyPreparedNewThreadBackground,
+  clearPreparedNewThreadBackground,
+} from "./newThreadBackgroundEffects";
 
 const ACCENT_COLOR_KEY = "monocode.accentColor";
 const THEME_HUE_KEY = "monocode.themeHue";
@@ -11,6 +15,7 @@ const THEME_DARK_LIGHTNESS_KEY = "monocode.themeDarkLightness";
 const OPACITY_KEY = "monocode.sidebarOpacity";
 const BLUR_KEY = "monocode.sidebarBlur";
 const PROJECT_RAIL_OPEN_KEY = "monocode.projectRailOpen";
+const SESSION_SIDEBAR_OPEN_KEY = "monocode.sessionSidebarOpen";
 const BODY_KEY = "monocode.bodyGlass";
 const SCHEME_KEY = "monocode.colorScheme";
 const SIDEBAR_TAB_ORDER_KEY = "monocode.sidebarTabOrder";
@@ -23,6 +28,7 @@ const CHAT_BACKGROUND_EMPTY_OPACITY_KEY = "monocode.chatBackgroundEmptyOpacity";
 const CHAT_BACKGROUND_SESSION_OPACITY_KEY =
   "monocode.chatBackgroundSessionOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
+const NEW_THREAD_BACKGROUND_EFFECT_KEY = "monocode.newThreadBackgroundEffect";
 const CHANGES_VIEW_KEY = "monocode.changesView";
 const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 let chatBackgroundRevision = Date.now();
@@ -35,7 +41,37 @@ export type ColorScheme = "dark" | "light";
 export type ThemePreference = ColorScheme | "system";
 export type TranscriptLayout = "full" | "chat";
 export type ChatBackgroundScope = "empty" | "all";
+export type NewThreadBackgroundEffect =
+  "none" | "dither" | "ascii" | "halftone" | "scanlines";
 export type ChangesView = "list" | "tree";
+
+export const NEW_THREAD_BACKGROUND_EFFECTS: readonly NewThreadBackgroundEffect[] =
+  ["none", "dither", "ascii", "halftone", "scanlines"];
+
+export const NEW_THREAD_BACKGROUND_EFFECT_DEFAULT: NewThreadBackgroundEffect =
+  "none";
+
+export const NEW_THREAD_BACKGROUND_EFFECT_LABELS: Record<
+  NewThreadBackgroundEffect,
+  string
+> = {
+  none: "None",
+  dither: "Dither",
+  ascii: "ASCII",
+  halftone: "Halftone",
+  scanlines: "Scanlines",
+};
+
+export const NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS: Record<
+  NewThreadBackgroundEffect,
+  string
+> = {
+  none: "Shows the original artwork.",
+  dither: "Rebuilds the artwork with a dithered color palette.",
+  ascii: "Recreates the artwork with colored characters on black.",
+  halftone: "Recreates the artwork with colored print dots on black.",
+  scanlines: "Adds a pronounced horizontal display-line texture.",
+};
 
 export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";
 
@@ -44,7 +80,7 @@ export const ACCENT_COLOR_DEFAULT = null;
 /** Fired on `window` whenever the color scheme flips (detail: ColorScheme). */
 export const SCHEME_CHANGE_EVENT = "monocode:schemechange";
 
-export const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = "full";
+export const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = "chat";
 
 export const CHANGES_VIEW_DEFAULT: ChangesView = "list";
 
@@ -324,6 +360,13 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
   window.dispatchEvent(
     new CustomEvent<ColorScheme>(SCHEME_CHANGE_EVENT, { detail: next }),
   );
+  const backgroundPath = loadChatBackgroundPath();
+  if (
+    backgroundPath &&
+    document.documentElement.classList.contains("has-chat-background")
+  ) {
+    renderChatBackground(backgroundPath);
+  }
   return next;
 }
 
@@ -437,20 +480,75 @@ export function applyChatBackground(path: string | null) {
   const root = document.documentElement;
   root.classList.toggle("has-chat-background", !!path);
   if (!path) {
-    root.style.removeProperty("--chat-background-image");
+    clearPreparedNewThreadBackground();
     return null;
   }
   chatBackgroundRevision += 1;
-  const src = chatBackgroundSrc(path);
-  root.style.setProperty(
-    "--chat-background-image",
-    `url(${JSON.stringify(src)})`,
-  );
+  renderChatBackground(path);
   return path;
 }
 
 export function chatBackgroundSrc(path: string | null): string | null {
   return path ? `${convertFileSrc(path)}?v=${chatBackgroundRevision}` : null;
+}
+
+function isNewThreadBackgroundEffect(
+  value: unknown,
+): value is NewThreadBackgroundEffect {
+  return NEW_THREAD_BACKGROUND_EFFECTS.includes(
+    value as NewThreadBackgroundEffect,
+  );
+}
+
+export function loadNewThreadBackgroundEffect(): NewThreadBackgroundEffect {
+  try {
+    const raw = localStorage.getItem(NEW_THREAD_BACKGROUND_EFFECT_KEY);
+    return isNewThreadBackgroundEffect(raw)
+      ? raw
+      : NEW_THREAD_BACKGROUND_EFFECT_DEFAULT;
+  } catch {
+    return NEW_THREAD_BACKGROUND_EFFECT_DEFAULT;
+  }
+}
+
+export function saveNewThreadBackgroundEffect(
+  effect: NewThreadBackgroundEffect,
+) {
+  try {
+    localStorage.setItem(NEW_THREAD_BACKGROUND_EFFECT_KEY, effect);
+  } catch {
+    // private mode / quota
+  }
+}
+
+function renderChatBackground(
+  path: string,
+  effect = loadNewThreadBackgroundEffect(),
+) {
+  const src = chatBackgroundSrc(path);
+  if (!src) return;
+  void applyPreparedNewThreadBackground(
+    `${path}?v=${chatBackgroundRevision}`,
+    src,
+    effect,
+    isLightScheme(),
+  );
+}
+
+export function applyNewThreadBackgroundEffect(
+  effect: NewThreadBackgroundEffect,
+) {
+  const path = loadChatBackgroundPath();
+  if (path) renderChatBackground(path, effect);
+  return effect;
+}
+
+export function setNewThreadBackgroundEffect(
+  effect: NewThreadBackgroundEffect,
+) {
+  saveNewThreadBackgroundEffect(effect);
+  applyNewThreadBackgroundEffect(effect);
+  window.dispatchEvent(new Event(CHAT_BACKGROUND_PATH_CHANGE_EVENT));
 }
 
 export function loadChatBackgroundOpacity(): number {
@@ -576,6 +674,14 @@ export function loadProjectRailOpen(): boolean {
 
 export function saveProjectRailOpen(value: boolean) {
   writeFlag(PROJECT_RAIL_OPEN_KEY, value);
+}
+
+export function loadSessionSidebarOpen(): boolean {
+  return readFlag(SESSION_SIDEBAR_OPEN_KEY) ?? true;
+}
+
+export function saveSessionSidebarOpen(value: boolean) {
+  writeFlag(SESSION_SIDEBAR_OPEN_KEY, value);
 }
 
 export function loadSidebarTabOrder(): SidebarTabId[] {

@@ -1,6 +1,6 @@
 import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContext,
   isValidElement,
@@ -26,6 +26,7 @@ import {
 } from "streamdown";
 import type { PluggableList } from "unified";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
@@ -39,7 +40,7 @@ import { isAtxHeadingLine } from "../../files/model/markdownSource";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { revealPath } from "../../../platform/tauri/fs";
+import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
 import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
@@ -461,6 +462,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   allowRemoteMedia?: boolean;
 }) {
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
+  const [fileActionError, setFileActionError] = useState<string | null>(null);
   const onFileContextMenu = useCallback(
     (event: ReactMouseEvent, path: string, navigation?: EditorNavigation) => {
       event.preventDefault();
@@ -486,6 +488,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     if (!fileMenu) return;
     const path = fileMenu.path;
     setFileMenu(null);
+    setFileActionError(null);
 
     if (id === "open-monocode") {
       if (fileMenu.navigation) onOpenFile?.(path, fileMenu.navigation);
@@ -496,7 +499,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     let action: Promise<void>;
     switch (id) {
       case "open-default":
-        action = openPath(path);
+        action = openPathWithDefaultApp(path);
         break;
       case "reveal":
         action = revealPath(path);
@@ -512,6 +515,9 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     }
     void action.catch((error) => {
       console.error(`Failed to run file-link action ${id}:`, error);
+      setFileActionError(
+        `Could not ${id === "open-default" ? "open the file in its default app" : "complete the file action"}: ${String(error)}`,
+      );
     });
   };
 
@@ -541,6 +547,12 @@ export const AgentMarkdown = memo(function AgentMarkdown({
               ariaLabel="File link actions"
               onPick={onFileMenuPick}
               onClose={() => setFileMenu(null)}
+            />
+          ) : null}
+          {fileActionError ? (
+            <FileActionError
+              message={fileActionError}
+              onDismiss={() => setFileActionError(null)}
             />
           ) : null}
         </>

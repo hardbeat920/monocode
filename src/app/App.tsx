@@ -77,8 +77,10 @@ import { useProjectBranches } from "../features/source-control/hooks/useProjectB
 import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
 import {
   loadProjectRailOpen,
+  loadSessionSidebarOpen,
   loadSidebarTabOrder,
   saveProjectRailOpen,
+  saveSessionSidebarOpen,
   type SidebarTabId,
 } from "../features/settings/model/appearance";
 import { HAS_NATIVE_GLASS, IS_MAC } from "../platform/tauri/platform";
@@ -330,6 +332,7 @@ import {
   filterTabsForProject,
   findOpenSessionTab,
   planWorkspaceTabClose,
+  switchSessionInTab,
   workspaceTabCwd,
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
@@ -474,10 +477,8 @@ import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
 import { SearchView } from "../features/search/ui/SearchView";
-import {
-  SettingsView,
-  type SettingsAnchor,
-} from "../features/settings/ui/SettingsView";
+import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
+import { SettingsView, type SettingsAnchor } from "../features/settings/ui/SettingsView";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import { InboxView, LinkedWorkItemPanel } from "../features/inbox/ui/InboxView";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
@@ -847,6 +848,9 @@ export default function App({
     [],
   );
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
+  const [sessionSidebarOpen, setSessionSidebarOpen] = useState(
+    loadSessionSidebarOpen,
+  );
   const tabCloseScope = "project" as const;
   const currentProjectDock = findProjectTerminal(projectTerminals, projectCwd);
   const dockVisible = !!currentProjectDock?.open;
@@ -8499,6 +8503,14 @@ export default function App({
     });
   }, []);
 
+  const onToggleSessionSidebar = useCallback(() => {
+    setSessionSidebarOpen((open) => {
+      const next = !open;
+      saveSessionSidebarOpen(next);
+      return next;
+    });
+  }, []);
+
   const onToggleProjectRail = useCallback(() => {
     setProjectRailOpen((open) => {
       const next = !open;
@@ -8781,7 +8793,7 @@ export default function App({
   }, []);
 
   const onNavigateSessionList = useCallback(
-    (delta: number) => {
+    (delta: number, inCurrentTab = false) => {
       const activeWorkspace = tabsRef.current.find(
         (entry) => entry.id === activeTabIdRef.current,
       );
@@ -8797,9 +8809,26 @@ export default function App({
         delta,
       );
       if (!next || next === current.id) return;
-      void onSelectHistorySession(next);
+      if (!inCurrentTab) {
+        void onSelectHistorySession(next);
+        return;
+      }
+      const activeTabId = activeWorkspace.id;
+      const focusedId = current.id;
+      void ensureOpenSession(next).then((session) => {
+        if (!session || session.inboxAsk) return;
+        if (activeTabIdRef.current !== activeTabId) return;
+        const currentTab = tabsRef.current.find((tab) => tab.id === activeTabId);
+        if (currentTab?.focusedId !== focusedId) return;
+        setTabs((prev) =>
+          switchSessionInTab(prev, activeTabId, focusedId, next) ?? prev,
+        );
+        setComposerFocused(true);
+        const linkedUpdate = linkedSessionUpdatesRef.current.get(next);
+        if (linkedUpdate) revealLinkedSessionUpdate(next, linkedUpdate);
+      });
     },
-    [onSelectHistorySession],
+    [ensureOpenSession, onSelectHistorySession, revealLinkedSessionUpdate],
   );
 
   const onNavigateProjectList = useCallback(
@@ -8829,6 +8858,7 @@ export default function App({
     onSplit,
     onFocusDir,
     onToggleSidebar,
+    onToggleSessionSidebar,
     onGoToFile,
     onOpenCommandPalette,
     onReload,
@@ -8859,6 +8889,7 @@ export default function App({
     onSplit,
     onFocusDir,
     onToggleSidebar,
+    onToggleSessionSidebar,
     onGoToFile,
     onOpenCommandPalette,
     onReload,
@@ -8917,6 +8948,8 @@ export default function App({
         const listNavigation =
           cmd === "prev-session" ||
           cmd === "next-session" ||
+          cmd === "prev-session-in-tab" ||
+          cmd === "next-session-in-tab" ||
           cmd === "prev-project" ||
           cmd === "next-project";
         if (listNavigation) {
@@ -8995,13 +9028,18 @@ export default function App({
           run("prev-session", () => a.onNavigateSessionList(-1));
         else if (cmd === "next-session")
           run("next-session", () => a.onNavigateSessionList(1));
+        else if (cmd === "prev-session-in-tab")
+          run("prev-session-in-tab", () => a.onNavigateSessionList(-1, true));
+        else if (cmd === "next-session-in-tab")
+          run("next-session-in-tab", () => a.onNavigateSessionList(1, true));
         else if (cmd === "prev-project")
           run("prev-project", () => a.onNavigateProjectList(-1));
         else if (cmd === "next-project")
           run("next-project", () => a.onNavigateProjectList(1));
-        else if ("focus" in cmd)
+        else if (typeof cmd === "object" && "focus" in cmd)
           run(`focus-${cmd.focus}`, () => a.onFocusDir(cmd.focus));
-        else run(`activate-${cmd.activate}`, () => a.onActivate(cmd.activate));
+        else if (typeof cmd === "object" && "activate" in cmd)
+          run(`activate-${cmd.activate}`, () => a.onActivate(cmd.activate));
         return;
       }
       if (
@@ -9009,6 +9047,10 @@ export default function App({
         !inboxViewOpenRef.current &&
         !notesViewOpenRef.current &&
         !automationsViewOpenRef.current &&
+        !(
+          e.target instanceof Element &&
+          e.target.closest("[data-session-drop], [data-agent-tab]")
+        ) &&
         handleEditorFindKey(e)
       ) {
         e.stopPropagation();
@@ -9019,6 +9061,12 @@ export default function App({
         e.preventDefault();
         e.stopPropagation();
         run("toggle_sidebar", actions.current.onToggleSidebar);
+        return;
+      }
+      if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        e.stopPropagation();
+        run("toggle_session_sidebar", actions.current.onToggleSessionSidebar);
         return;
       }
       if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
@@ -9110,6 +9158,9 @@ export default function App({
       ),
       listen("toggle_sidebar", () =>
         run("toggle_sidebar", actions.current.onToggleSidebar),
+      ),
+      listen("toggle_session_sidebar", () =>
+        run("toggle_session_sidebar", actions.current.onToggleSessionSidebar),
       ),
       listen("open_project", () => {
         void actions.current.pickProject();
@@ -9260,12 +9311,14 @@ export default function App({
       activeId={activeTabId}
       cwd={sidebarCwd}
       projectRailOpen={projectRailOpen}
+      sessionSidebarOpen={sessionSidebarOpen}
       compactRail={compactTitleBar}
       canGoBack={tabVisitNav.canBack}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
       onGoForward={onRailForward}
       onToggleSidebar={onToggleSidebar}
+      onToggleSessionSidebar={onToggleSessionSidebar}
       onSelect={activateTab}
       onNew={onNew}
       onNewTerminal={onNewTerminal}
@@ -9296,7 +9349,7 @@ export default function App({
               cwd={sidebarCwd}
               gitCwd={gitCwd}
               explorerRootLabel={explorerRootLabel}
-              open
+              open={sessionSidebarOpen}
               tab={sidebarTab}
               onTabChange={setSidebarTab}
               filesSearchOpen={filesSearchOpen}
@@ -9428,6 +9481,7 @@ export default function App({
                     onToggleTerminal={onToggleProjectTerminal}
                     onGoToFile={onGoToFile}
                     onToggleSidebar={onToggleSidebar}
+                    onToggleSessionSidebar={onToggleSessionSidebar}
                     onShowSourceControl={onToggleChanges}
                     onCloseCurrentTab={
                       activeTabId ? () => onCloseTab(activeTabId) : undefined
@@ -9592,7 +9646,10 @@ export default function App({
                   onClose={onLeaveSearch}
                   onToggleSidebar={onToggleSidebar}
                   onOpenFile={onOpenFile}
-                  onOpenSession={onSelectHistorySession}
+                  onOpenSession={(sessionId, blockId, query) => {
+                    if (blockId) requestTranscriptJump(sessionId, blockId, query);
+                    void onSelectHistorySession(sessionId);
+                  }}
                   onOpenProject={onSelectProject}
                 />
               ) : null}

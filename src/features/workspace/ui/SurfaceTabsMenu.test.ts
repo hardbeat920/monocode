@@ -7,12 +7,8 @@ import { SurfaceTabs } from "./SurfaceTabs";
 
 const actions = vi.hoisted(() => ({
   copyText: vi.fn(async () => {}),
-  openPath: vi.fn(async () => {}),
+  openPathWithDefaultApp: vi.fn(async () => {}),
   revealPath: vi.fn(async () => {}),
-}));
-
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openPath: actions.openPath,
 }));
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
@@ -21,6 +17,7 @@ vi.mock("../../../platform/tauri/clipboard", () => ({
 
 vi.mock("../../../platform/tauri/fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../platform/tauri/fs")>()),
+  openPathWithDefaultApp: actions.openPathWithDefaultApp,
   revealPath: actions.revealPath,
 }));
 
@@ -130,7 +127,7 @@ describe("file tab context menu", () => {
     expect(actions.copyText).toHaveBeenLastCalledWith("app.ts");
 
     await pick("Open in Default App");
-    expect(actions.openPath).toHaveBeenCalledWith("/repo/src/app.ts");
+    expect(actions.openPathWithDefaultApp).toHaveBeenCalledWith("/repo/src/app.ts");
 
     const revealLabel = /Mac/.test(navigator.platform)
       ? "Reveal in Finder"
@@ -145,6 +142,17 @@ describe("file tab context menu", () => {
 
     await pick("Close Others");
     expect(props.onCloseOtherFiles).toHaveBeenCalledWith("second");
+  });
+
+  it("shows a file opening error instead of failing silently", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    actions.openPathWithDefaultApp.mockRejectedValueOnce("No application can open this file");
+
+    await pick("Open in Default App");
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "No application can open this file",
+    );
   });
 
   it("disables Close Others when the selected tab is the only tab", () => {

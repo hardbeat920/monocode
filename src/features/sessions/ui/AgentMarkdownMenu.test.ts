@@ -6,13 +6,12 @@ import { AgentMarkdown } from "./AgentMarkdown";
 
 const actions = vi.hoisted(() => ({
   copyText: vi.fn(async () => {}),
-  openPath: vi.fn(async () => {}),
+  openPathWithDefaultApp: vi.fn(async () => {}),
   openUrl: vi.fn(async () => {}),
   revealPath: vi.fn(async () => {}),
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
-  openPath: actions.openPath,
   openUrl: actions.openUrl,
 }));
 
@@ -22,6 +21,7 @@ vi.mock("../../../platform/tauri/clipboard", () => ({
 
 vi.mock("../../../platform/tauri/fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../platform/tauri/fs")>()),
+  openPathWithDefaultApp: actions.openPathWithDefaultApp,
   revealPath: actions.revealPath,
 }));
 
@@ -94,7 +94,7 @@ describe("AgentMarkdown file link context menu", () => {
     expect(props.onOpenFile).toHaveBeenCalledWith("/repo/docs/guide.md");
 
     await pick("Open in Default App");
-    expect(actions.openPath).toHaveBeenCalledWith("/repo/docs/guide.md");
+    expect(actions.openPathWithDefaultApp).toHaveBeenCalledWith("/repo/docs/guide.md");
 
     const revealLabel = /Mac/.test(navigator.platform)
       ? "Reveal in Finder"
@@ -183,7 +183,18 @@ describe("AgentMarkdown file link context menu", () => {
       render();
       expect(openMenu(container.querySelector("code")!)).toBeNull();
       expect(props.onOpenFile).not.toHaveBeenCalled();
-      expect(actions.openPath).not.toHaveBeenCalled();
+      expect(actions.openPathWithDefaultApp).not.toHaveBeenCalled();
     },
   );
+
+  it("shows the reason when the default app cannot open a file", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    actions.openPathWithDefaultApp.mockRejectedValueOnce("No application can open this file");
+
+    await pick("Open in Default App");
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "No application can open this file",
+    );
+  });
 });

@@ -119,6 +119,11 @@ import {
   type TurnItem,
 } from "../model/transcriptActivity";
 import { lastUserTurnBlock } from "../model/editLastTurn";
+import {
+  clearTranscriptHighlights,
+  paintTranscriptHighlights,
+  transcriptWordRanges,
+} from "../model/transcriptHighlights";
 
 const NEAR_BOTTOM_PX = 16;
 const INITIAL_TURNS = 20;
@@ -167,6 +172,9 @@ type Props = {
   onJumpToBottomReady?: (jump: () => void) => void;
   /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
   onRevealReady?: (reveal: (blockId: string) => boolean) => void;
+  onNavigateReady?: (
+    navigate: (blockId: string | null, query?: string) => boolean,
+  ) => void;
   /** Session-level output shown after the latest reply and before its action row. */
   latestTurnAccessory?: ReactNode;
   /** False while another tab is in front; local transcript state is retained. */
@@ -204,6 +212,7 @@ function AgentTranscriptComponent({
   onJumpToBottomChange,
   onJumpToBottomReady,
   onRevealReady,
+  onNavigateReady,
   latestTurnAccessory,
 
   visible = true,
@@ -238,6 +247,9 @@ function AgentTranscriptComponent({
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURNS);
   // Turns whose folded work the reader has opened, by turn id.
   const [openWork, setOpenWork] = useState<Record<string, boolean>>({});
+  const [searchCurrent, setSearchCurrent] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const highlightOwner = useRef(Symbol("transcript-search"));
   const toggleWork = useCallback((turnId: string, currentlyOpen: boolean) => {
     setOpenWork((open) => ({ ...open, [turnId]: !currentlyOpen }));
   }, []);
@@ -333,6 +345,27 @@ function AgentTranscriptComponent({
     syncTranscriptViewport(el);
     pinToBottom(el);
   }, [lastUserId, setShowJump]);
+
+  // In the chat layout a sent prompt rises from the upper screen into its
+  // anchored spot at the top. On mount this only plays for a session's first
+  // send.
+  const introducePrompt = useRef({ chat: false, anchor: false, visible });
+  introducePrompt.current = {
+    chat: transcriptLayout === "chat",
+    anchor: promptAnchor && anchorTurn,
+    visible,
+  };
+  const introducedPromptMount = useRef(false);
+  useLayoutEffect(() => {
+    const mounting = !introducedPromptMount.current;
+    introducedPromptMount.current = true;
+    const { chat, anchor, visible } = introducePrompt.current;
+    if (!lastUserId || !chat || !anchor || !visible) return;
+    if (mounting && !(busy && userTurnCount(blocks, managed) === 1)) return;
+    return riseIntoAnchor(scroller.current, lastUserId);
+    // Only a new prompt starts the motion; later renders must not replay it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastUserId]);
 
   useLayoutEffect(() => {
     const opened = visible && !wasVisible.current;
@@ -431,6 +464,88 @@ function AgentTranscriptComponent({
     onRevealReady?.(revealBlock);
   }, [revealBlock, onRevealReady]);
 
+  const navigateToBlock = useCallback(
+    (blockId: string | null, query = ""): boolean => {
+      if (!blockId) {
+        setSearchCurrent(null);
+        setSearchQuery("");
+        return true;
+      }
+      const turn = turnsRef.current.find((item) =>
+        item.some((block) => block.id === blockId),
+      );
+      if (!turn || !revealBlock(blockId)) return false;
+      const turnId = turn[0].id;
+      // A result inside folded work needs its row rendered before measuring it.
+      flushSync(() => {
+        setOpenWork((current) =>
+          current[turnId] ? current : { ...current, [turnId]: true },
+        );
+        setSearchCurrent(blockId);
+        setSearchQuery(query);
+      });
+      const el = scroller.current;
+      if (!el) return false;
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+      const align = () => {
+        const target =
+          el.querySelector<HTMLElement>(
+            '[data-transcript-search-current="true"]',
+          ) ??
+          el.querySelector<HTMLElement>(
+            `[data-transcript-turn="${CSS.escape(turnId)}"]`,
+          );
+        if (!target) return;
+        const wordRect = query
+          ? transcriptWordRanges(el, query).current?.getBoundingClientRect?.()
+          : null;
+        const targetTop =
+          wordRect && wordRect.height > 0
+            ? wordRect.top
+            : target.getBoundingClientRect().top;
+        const delta = targetTop - el.getBoundingClientRect().top - 42;
+        if (Math.abs(delta) > 2) el.scrollTop += delta;
+      };
+      align();
+      requestAnimationFrame(align);
+      return true;
+    },
+    [revealBlock],
+  );
+
+  useEffect(() => {
+    onNavigateReady?.(navigateToBlock);
+  }, [navigateToBlock, onNavigateReady]);
+
+  useEffect(() => {
+    const el = scroller.current;
+    const owner = highlightOwner.current;
+    if (!el || !visible || !searchQuery) {
+      clearTranscriptHighlights(owner);
+      return;
+    }
+    let frame = 0;
+    const paint = () => {
+      frame = 0;
+      const { matches, current } = transcriptWordRanges(el, searchQuery);
+      paintTranscriptHighlights(owner, matches, current);
+    };
+    const observer = new MutationObserver(() => {
+      if (!frame) frame = requestAnimationFrame(paint);
+    });
+    observer.observe(el, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    paint();
+    return () => {
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+      clearTranscriptHighlights(owner);
+    };
+  }, [visible, searchQuery, searchCurrent, visibleTurnCount, openWork]);
+
   return (
     <div
       ref={setScroller}
@@ -525,6 +640,10 @@ function AgentTranscriptComponent({
             : firstWork >= 0
               ? firstWork
               : items.length;
+          const isCurrentItem = (item: TurnItem) =>
+            item.type === "block"
+              ? item.block.id === searchCurrent
+              : item.blocks.some((block) => block.id === searchCurrent);
           const renderItem = (item: TurnItem, itemIndex: number) =>
             item.type === "subagents" ? (
               <SubagentStack
@@ -632,6 +751,7 @@ function AgentTranscriptComponent({
           return (
             <div
               key={turn[0].id}
+              data-transcript-turn={turnId}
               className={`transcript-turn flex min-w-0 flex-col${
                 isLastTurn ? " transcript-turn-live" : ""
               }${
@@ -652,6 +772,10 @@ function AgentTranscriptComponent({
                         foldWork.map(({ entry, index }, offset) => (
                           <div
                             key={turnItemKey(entry)}
+                            data-transcript-search-item
+                            data-transcript-search-current={
+                              isCurrentItem(entry) || undefined
+                            }
                             className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
                               offset === foldWork.length - 1
                                 ? "zen-fold-tail"
@@ -676,14 +800,28 @@ function AgentTranscriptComponent({
                     // and reading them as the first steps of the main trail
                     // is what made them look like its work.
                     ...foldSubagents.map(({ entry, index }) => (
-                      <div key={turnItemKey(entry)} className="flow-root pb-1">
+                      <div
+                        key={turnItemKey(entry)}
+                        data-transcript-search-item
+                        data-transcript-search-current={
+                          isCurrentItem(entry) || undefined
+                        }
+                        className="flow-root pb-1"
+                      >
                         {renderItem(entry, index)}
                       </div>
                     )),
                   ];
                 }
                 const row = (
-                  <div key={turnItemKey(item)} className="flow-root pb-1">
+                  <div
+                    key={turnItemKey(item)}
+                    data-transcript-search-item
+                    data-transcript-search-current={
+                      isCurrentItem(item) || undefined
+                    }
+                    className="flow-root pb-1"
+                  >
                     {renderItem(item, itemIndex)}
                   </div>
                 );
@@ -3305,6 +3443,59 @@ function turnUserBlock(blocks: Block[], managed = false): Block | undefined {
     if (block.role === "user" && (managed || !block.internal)) return block;
   }
   return undefined;
+}
+
+function userTurnCount(blocks: Block[], managed = false): number {
+  return blocks.filter(
+    (block) => block.role === "user" && (managed || !block.internal),
+  ).length;
+}
+
+const PROMPT_RISE_MS = 560;
+// Keep in sync with the prompt-turn-reveal animation in index.css.
+const PROMPT_REVEAL_MS = 320;
+const PROMPT_FADE_MS = 480;
+// Where the prompt starts, as a fraction of the viewport height from the top.
+const PROMPT_RISE_FROM = 0.3;
+
+/** Fades the prompt in while sliding it from the upper viewport to its row. */
+function riseIntoAnchor(scroller: HTMLElement | null, blockId: string) {
+  const row = scroller?.querySelector<HTMLElement>(
+    `[data-prompt-anchor="${CSS.escape(blockId)}"]`,
+  );
+  if (!scroller || !row || typeof row.animate !== "function") return;
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const view = scroller.getBoundingClientRect();
+  const dy =
+    view.top + view.height * PROMPT_RISE_FROM - row.getBoundingClientRect().top;
+  if (dy <= 1) return;
+  const animation = row.animate(
+    [{ transform: `translateY(${dy}px)` }, { transform: "translateY(0)" }],
+    { duration: PROMPT_RISE_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  );
+  // The fade gets its own gentler curve; on the rise's sharp ease-out it
+  // would be over before the eye catches it.
+  const fade = row.animate([{ opacity: 0 }, { opacity: 1 }], {
+    duration: PROMPT_FADE_MS,
+    easing: "ease-out",
+  });
+  // The rest of the turn waits until the prompt lands, then fades in.
+  const turn = row.closest<HTMLElement>(".transcript-turn");
+  let revealTimer: ReturnType<typeof setTimeout> | undefined;
+  turn?.setAttribute("data-prompt-rise", "rising");
+  animation.onfinish = () => {
+    turn?.setAttribute("data-prompt-rise", "revealing");
+    revealTimer = setTimeout(
+      () => turn?.removeAttribute("data-prompt-rise"),
+      PROMPT_REVEAL_MS,
+    );
+  };
+  return () => {
+    animation.cancel();
+    fade.cancel();
+    clearTimeout(revealTimer);
+    turn?.removeAttribute("data-prompt-rise");
+  };
 }
 
 function isNearBottom(el: HTMLElement): boolean {

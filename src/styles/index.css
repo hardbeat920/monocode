@@ -296,18 +296,35 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
   background-size: cover;
   background-repeat: no-repeat;
   opacity: 0;
+  transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
   pointer-events: none;
 }
 
-html.has-chat-background .chat-pane-background::before,
+html.has-chat-background.chat-background-effect-ready
+  .chat-pane-background::before,
 .chat-pane-background[data-project-chat-background="true"]::before {
   opacity: var(--chat-background-empty-opacity);
 }
 
-html.has-chat-background
+html.has-chat-background.chat-background-effect-ready
   .chat-pane-background[data-session-empty="false"]::before,
 .chat-pane-background[data-project-chat-background="true"][data-session-empty="false"]::before {
   opacity: var(--chat-background-session-opacity);
+}
+
+/*
+ * Sending the first message eases the background into its session look (or
+ * out entirely when it only shows on empty sessions) alongside the composer.
+ */
+.chat-pane-background[data-session-empty="false"]::before {
+  transition-duration: 600ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-background::before,
+  .chat-pane-background[data-session-empty="false"]::before {
+    transition-duration: 0ms;
+  }
 }
 
 html.chat-background-empty-only
@@ -319,6 +336,20 @@ html.chat-background-empty-only
 .transcript-turn {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 240px;
+}
+
+::highlight(monocode-transcript-search-match) {
+  background-color: color-mix(in srgb, #e2c08d 46%, transparent);
+}
+
+::highlight(monocode-transcript-search-current) {
+  background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
+}
+
+.agent-transcript [data-transcript-search-current="true"] .user-message-bubble pre.line-clamp-4 {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
 }
 
 /*
@@ -427,6 +458,28 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
  */
 .transcript-turn-anchor {
   min-height: var(--transcript-viewport, 0px);
+}
+
+/* While a sent prompt rises into place, the rest of its turn waits for it. */
+.transcript-turn[data-prompt-rise="rising"]
+  > :not(:has([data-prompt-anchor])) {
+  opacity: 0;
+}
+
+.transcript-turn[data-prompt-rise="revealing"]
+  > :not(:has([data-prompt-anchor])) {
+  animation: prompt-turn-reveal 320ms var(--motion-ease-out) both;
+}
+
+@keyframes prompt-turn-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 html.has-native-glass.glass-body:not(.theme-light) .body-glass {

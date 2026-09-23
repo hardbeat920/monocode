@@ -293,6 +293,24 @@ describe("modelsForClaudeVersion", () => {
     expect(next).toContain("claude-opus-5");
     expect(next).toContain("claude-fable-5");
     expect(next).toContain("claude-sonnet-5");
+    expect(next).not.toContain("claude-opus-5-5");
+  });
+
+  it("hides Opus 5.5 until 2.1.280, and rejects a missing version", () => {
+    const beforeMinimum = modelsForClaudeVersion("2.1.279").map(
+      (model) => model.nativeId,
+    );
+    expect(beforeMinimum).not.toContain("claude-opus-5-5");
+    expect(beforeMinimum).toContain("claude-opus-5");
+
+    const atMinimum = modelsForClaudeVersion("2.1.280").map(
+      (model) => model.nativeId,
+    );
+    expect(atMinimum).toContain("claude-opus-5-5");
+    expect(atMinimum).toContain("claude-opus-5");
+
+    const missing = modelsForClaudeVersion(null).map((model) => model.nativeId);
+    expect(missing).not.toContain("claude-opus-5-5");
   });
 
   it("hides Sonnet 5 until 2.1.197, and rejects a missing version", () => {
@@ -442,6 +460,49 @@ describe("list_models catalog", () => {
 
     const haiku = models[3];
     expect(haiku?.settings).toBeUndefined();
+  });
+
+  it("adds resolved versions to generic live-catalog alias labels", () => {
+    const models = modelsFromClaudeListModels([
+      {
+        value: "opus[1m]",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Opus (1M context)",
+        description: "Most capable for complex tasks",
+      },
+      {
+        value: "fable",
+        resolvedModel: "claude-fable-5-1",
+        displayName: "Fable",
+        description: "Fast and capable",
+      },
+      {
+        value: "haiku",
+        resolvedModel: "claude-haiku-4-5-20251001",
+        displayName: "Haiku 4.5",
+        description: "Fastest for quick answers",
+      },
+      {
+        value: "next-family",
+        resolvedModel: "claude-next-family-7.2-20300101",
+        displayName: "Next Family — recommended",
+        description: "A future model family",
+      },
+    ]);
+
+    expect(models.map((model) => model.name)).toEqual([
+      "Opus 5.5 (1M context)",
+      "Fable 5.1",
+      "Haiku 4.5",
+      "Next Family 7.2 — recommended",
+    ]);
+    expect(models[0]).toMatchObject({
+      id: "claude:opus",
+      nativeId: "opus",
+    });
+    expect(
+      models[0]?.settings?.find((setting) => setting.id === "context")?.value,
+    ).toBe("1m");
   });
 
   it("parses success and error control responses", () => {

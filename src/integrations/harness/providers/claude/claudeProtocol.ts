@@ -21,7 +21,8 @@ import {
 import { streamTextDelta } from "../../core/streamText";
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
 
-/** Claude Code versions that first ship Opus 5 / Sonnet 5 / Fable 5 / Opus 4.8 / 4.7. */
+/** Claude Code versions that first ship Opus 5.5 / Opus 5 / Sonnet 5 / Fable 5 / Opus 4.8 / 4.7. */
+export const MINIMUM_CLAUDE_OPUS_5_5_VERSION = "2.1.280";
 export const MINIMUM_CLAUDE_OPUS_5_VERSION = "2.1.219";
 export const MINIMUM_CLAUDE_SONNET_5_VERSION = "2.1.197";
 export const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.169";

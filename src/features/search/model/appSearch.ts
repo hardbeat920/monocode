@@ -14,6 +14,7 @@ import type {
 } from "../../sessions/data/sessionStore";
 import type { RankedFile } from "../../files/model/fileIndex";
 import type { ProjectSearchMatch } from "./search";
+import { transcriptBlockText } from "../../sessions/model/transcriptFind";
 
 export type SearchScope = "all" | "conversations" | "files" | "projects";
 
@@ -206,7 +207,7 @@ export function searchSessionMessages(
     const title = sessionDisplayTitle(session.title, session.harness);
     for (const block of session.blocks) {
       if (!isSearchableRole(block.role)) continue;
-      const text = blockSearchText(block);
+      const text = transcriptBlockText(block);
       if (!text.toLowerCase().includes(needle)) continue;
       hits.push({
         id: `message:${session.id}:${block.id}`,
@@ -441,18 +442,6 @@ function isSearchableRole(role: Block["role"]): boolean {
     role === "tasks" ||
     role === "plan"
   );
-}
-
-function blockSearchText(block: Block): string {
-  const parts: string[] = [];
-  if (block.text.trim()) parts.push(block.text);
-  if (block.tool?.title) parts.push(block.tool.title);
-  if (block.tool?.detail) parts.push(block.tool.detail);
-  if (block.tool?.preview?.query) parts.push(block.tool.preview.query);
-  if (block.tool?.preview?.path) parts.push(block.tool.preview.path);
-  if (block.tool?.preview?.output) parts.push(block.tool.preview.output);
-  if (block.tool?.preview?.title) parts.push(block.tool.preview.title);
-  return parts.join("\n");
 }
 
 function recencyBonus(updatedAt: number): number {

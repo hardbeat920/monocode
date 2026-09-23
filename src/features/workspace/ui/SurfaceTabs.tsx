@@ -1,9 +1,8 @@
-import { openPath } from "@tauri-apps/plugin-opener";
 import { GitCompare, GripVertical, Terminal, X } from "../../../shared/ui/icons";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { basename, revealPath } from "../../../platform/tauri/fs";
+import { basename, openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
 import {
   isAgentTab,
   isChangesTab,
@@ -25,6 +24,7 @@ import { useAnimatedReorder } from "../../../shared/hooks/useAnimatedReorder";
 import { useTabCloseMotion } from "../hooks/useTabCloseMotion";
 import { TabWidthMotion } from "../../../app/shell/ClosingTab";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 
@@ -191,6 +191,7 @@ export function SurfaceTabs({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const [menu, setMenu] = useState<SurfaceTabMenu | null>(null);
+  const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileIds = files.map((file) => file.id);
   const sortable = useAnimatedReorder(fileIds, onReorder);
   const {
@@ -205,6 +206,7 @@ export function SurfaceTabs({
   const onMenuPick = (id: string) => {
     if (!menuFile) return;
     setMenu(null);
+    setFileActionError(null);
     if (id === "close") {
       onCloseFile(menuFile.id);
       return;
@@ -218,7 +220,7 @@ export function SurfaceTabs({
     let action: Promise<void>;
     switch (id) {
       case "open-default":
-        action = openPath(menuFile.path);
+        action = openPathWithDefaultApp(menuFile.path);
         break;
       case "reveal":
         action = revealPath(menuFile.path);
@@ -237,6 +239,9 @@ export function SurfaceTabs({
     }
     void action.catch((error) => {
       console.error(`Failed to run file-tab action ${id}:`, error);
+      setFileActionError(
+        `Could not ${id === "open-default" ? "open the file in its default app" : "complete the file action"}: ${String(error)}`,
+      );
     });
   };
 
@@ -437,6 +442,12 @@ export function SurfaceTabs({
           ariaLabel="File tab actions"
           onPick={onMenuPick}
           onClose={() => setMenu(null)}
+        />
+      ) : null}
+      {fileActionError ? (
+        <FileActionError
+          message={fileActionError}
+          onDismiss={() => setFileActionError(null)}
         />
       ) : null}
     </div>
