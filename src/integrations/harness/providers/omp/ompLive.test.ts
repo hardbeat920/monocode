@@ -391,6 +391,17 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
     );
   });
 
+  it("reports when OMP accepts a turn", async () => {
+    const onAccepted = vi.fn();
+    transport.prompt = (id, command) => {
+      response(id, command, { agentInvoked: false });
+    };
+
+    await sendOmpTurn({ ...input(), onAccepted });
+
+    expect(onAccepted).toHaveBeenCalledOnce();
+  });
+
   it.each(["before", "after"])(
     "handles prompt_result %s its acknowledgement",
     async (order) => {

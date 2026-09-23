@@ -1,4 +1,10 @@
-import type { Attachment, Block, HarnessId, Session } from "./session";
+import type {
+  Attachment,
+  Block,
+  EditedResendRejection,
+  HarnessId,
+  Session,
+} from "./session";
 
 /** Harnesses that can rewind provider state before resending an edited prompt. */
 export function harnessSupportsEditLastTurn(harness: HarnessId): boolean {
@@ -74,6 +80,73 @@ export function replaceEditedResend(session: Session): Session {
   return {
     ...session,
     blocks: truncateBeforeLastEditableTurn(session),
+  };
+}
+
+export type EditedResendAttempt = EditedResendPreparation & {
+  markProviderRewound(): void;
+  markAccepted(): void;
+  isAccepted(): boolean;
+  replace(session: Session): Session;
+  recoverAfterFailure(session: Session): Session;
+  reject(): void;
+};
+
+/** State for one edit-and-resend attempt, including its failure recovery. */
+export function createEditedResendAttempt(
+  session: Session,
+  onRejected?: (recovery: EditedResendRejection) => void,
+): EditedResendAttempt | null {
+  const preparation = prepareEditedResend(session);
+  if (!preparation) return null;
+
+  let providerRewound = false;
+  let accepted = false;
+  let rejected = false;
+  return {
+    ...preparation,
+    markProviderRewound() {
+      providerRewound = true;
+    },
+    markAccepted() {
+      accepted = true;
+    },
+    isAccepted() {
+      return accepted;
+    },
+    replace: replaceEditedResend,
+    recoverAfterFailure(current) {
+      return providerRewound && !accepted
+        ? replaceEditedResend(current)
+        : current;
+    },
+    reject() {
+      if (accepted || rejected) return;
+      rejected = true;
+      onRejected?.({ providerRewound });
+    },
+  };
+}
+
+export type EditedResendCoordinator = {
+  isActive(sessionId: string): boolean;
+  start(sessionId: string): boolean;
+  finish(sessionId: string): void;
+};
+
+/** Keeps concurrent submissions out while a provider rewind is in progress. */
+export function createEditedResendCoordinator(): EditedResendCoordinator {
+  const active = new Set<string>();
+  return {
+    isActive: (sessionId) => active.has(sessionId),
+    start(sessionId) {
+      if (active.has(sessionId)) return false;
+      active.add(sessionId);
+      return true;
+    },
+    finish(sessionId) {
+      active.delete(sessionId);
+    },
   };
 }
 

@@ -626,6 +626,7 @@ async function runTurn(
       ),
       turnPromise.then(() => null),
     ]);
+    input.onAccepted?.();
     if (
       flavor.id === "omp" &&
       asRecord(response?.data)?.agentInvoked === false

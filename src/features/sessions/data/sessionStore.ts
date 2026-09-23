@@ -396,6 +396,19 @@ export async function setSessionPinned(
   await invoke<void>("session_set_pinned", { sessionId, pinned });
 }
 
+export async function setSessionLinkedWorkItem(
+  sessionId: string,
+  value: LinkedWorkItem | undefined,
+): Promise<void> {
+  const linkedWorkItem = sanitizeLinkedWorkItem(value);
+  await enqueueSessionWrite(sessionId, () =>
+    invoke<void>("session_set_linked_work_item", {
+      sessionId,
+      linkedWorkItem: linkedWorkItem ?? null,
+    }),
+  );
+}
+
 /** Drain pending saves before a worktree removal changes stored session context. */
 export async function flushSessionWrites(): Promise<void> {
   await Promise.all([...sessionWriteQueues.values()]);

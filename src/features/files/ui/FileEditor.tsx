@@ -63,7 +63,11 @@ import {
 import { editorAutocomplete } from "../editor/editorAutocomplete";
 import { languageForPath, schemeExtensions } from "../editor/editorChrome";
 import { preserveEditorViewport, replaceEditorDoc } from "../editor/editorDoc";
-import { editorMatching, editorTyping, tryExpandEmmet } from "../editor/editorEditing";
+import {
+  editorMatching,
+  editorTyping,
+  tryExpandEmmet,
+} from "../editor/editorEditing";
 import {
   EditorSelectionMenu,
   type EditorSelectionTarget,
@@ -80,6 +84,7 @@ import {
 import { editorLint } from "../editor/editorLint";
 import { editorSearch } from "../editor/editorSearch";
 import { editorScrollbar } from "../editor/editorScrollbar";
+import { FilePreviewSearch } from "./FilePreviewSearch";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
 
@@ -409,12 +414,17 @@ export function FileEditor({
           onModeChange={setMode}
           preview={
             markdown ? (
-              <MarkdownDocumentPreview
-                text={draft}
-                metadataLabel="Properties"
-                cwd={cwd}
-                onOpenFile={onOpenFile}
-              />
+              <FilePreviewSearch
+                active={active && mode === "preview"}
+                contentVersion={draft}
+              >
+                <MarkdownDocumentPreview
+                  text={draft}
+                  metadataLabel="Properties"
+                  cwd={cwd}
+                  onOpenFile={onOpenFile}
+                />
+              </FilePreviewSearch>
             ) : (
               <SvgPreview source={draft} />
             )

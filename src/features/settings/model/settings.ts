@@ -810,6 +810,11 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
+  {
+    command: "App: Toggle Session Sidebar",
+    keys: `${MOD}${SHIFT}B`,
+    when: "Always",
+  },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
   {
     command: "Composer: Toggle Workspace",
@@ -848,6 +853,16 @@ export const KEYBINDINGS: KeybindingRow[] = [
   {
     command: "Session: Next",
     keys: `${MOD}${SHIFT}↓`,
+    when: "!overlay && (!textFocus || emptyComposer)",
+  },
+  {
+    command: "Session: Previous in Current Tab",
+    keys: `${MOD}↑`,
+    when: "!overlay && (!textFocus || emptyComposer)",
+  },
+  {
+    command: "Session: Next in Current Tab",
+    keys: `${MOD}↓`,
     when: "!overlay && (!textFocus || emptyComposer)",
   },
   {

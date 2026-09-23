@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   canEditLastTurn,
+  createEditedResendAttempt,
+  createEditedResendCoordinator,
   lastEditableTurnStartIndex,
   lastTurnRecall,
   lastUserTurnStartIndex,
@@ -136,6 +138,69 @@ describe("editLastTurn", () => {
       "u1",
       "a1",
     ]);
+  });
+
+  it("restores edit mode when the provider never rewound", () => {
+    const session = chat([
+      { id: "u1", role: "user", text: "hello" },
+      { id: "a1", role: "assistant", text: "hi" },
+    ]);
+    const rejected = vi.fn();
+    const attempt = createEditedResendAttempt(session, rejected)!;
+
+    expect(attempt.recoverAfterFailure(session)).toBe(session);
+    attempt.reject();
+    attempt.reject();
+
+    expect(rejected).toHaveBeenCalledOnce();
+    expect(rejected).toHaveBeenCalledWith({ providerRewound: false });
+  });
+
+  it("keeps provider and local history rewound when replacement is rejected", () => {
+    const session = chat([
+      { id: "u1", role: "user", text: "first" },
+      { id: "a1", role: "assistant", text: "done" },
+      { id: "u2", role: "user", text: "replace me" },
+      { id: "a2", role: "assistant", text: "old answer" },
+    ]);
+    const rejected = vi.fn();
+    const attempt = createEditedResendAttempt(session, rejected)!;
+
+    attempt.markProviderRewound();
+    const recovered = attempt.recoverAfterFailure(session);
+    attempt.reject();
+
+    expect(recovered.blocks.map((block) => block.id)).toEqual(["u1", "a1"]);
+    expect(rejected).toHaveBeenCalledWith({ providerRewound: true });
+  });
+
+  it("does not reject or roll back a replacement accepted by the provider", () => {
+    const session = chat([
+      { id: "u1", role: "user", text: "hello" },
+      { id: "a1", role: "assistant", text: "hi" },
+    ]);
+    const rejected = vi.fn();
+    const attempt = createEditedResendAttempt(session, rejected)!;
+
+    attempt.markProviderRewound();
+    attempt.markAccepted();
+    attempt.reject();
+
+    expect(attempt.isAccepted()).toBe(true);
+    expect(attempt.recoverAfterFailure(session)).toBe(session);
+    expect(rejected).not.toHaveBeenCalled();
+  });
+
+  it("coordinates only one rewind per session", () => {
+    const coordinator = createEditedResendCoordinator();
+
+    expect(coordinator.start("one")).toBe(true);
+    expect(coordinator.isActive("one")).toBe(true);
+    expect(coordinator.start("one")).toBe(false);
+    expect(coordinator.start("two")).toBe(true);
+    coordinator.finish("one");
+    expect(coordinator.isActive("one")).toBe(false);
+    expect(coordinator.start("one")).toBe(true);
   });
 
   it("allows edit on idle OpenCode sessions", () => {

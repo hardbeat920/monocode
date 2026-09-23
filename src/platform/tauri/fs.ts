@@ -421,6 +421,10 @@ export function revealPath(path: string): Promise<void> {
   return invoke<void>("reveal_path", { path });
 }
 
+export function openPathWithDefaultApp(path: string): Promise<void> {
+  return invoke<void>("open_path_with_default_app", { path });
+}
+
 export function homeDir(): Promise<string> {
   return invoke<string>("home_dir");
 }

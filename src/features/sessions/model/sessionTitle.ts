@@ -37,6 +37,14 @@ export type GeneratedSessionTitle = {
   workItem: GeneratedWorkItemHint | null;
 };
 
+export function shouldGenerateSessionTitle(
+  isFirstTurn: boolean,
+  placeholderTitle: boolean,
+  refreshTitle = false,
+): boolean {
+  return refreshTitle || (isFirstTurn && placeholderTitle);
+}
+
 export function buildThreadTitlePrompt(message: string): string {
   return `${THREAD_TITLE_PROMPT}\n\nUser message:\n${limitSection(message, MESSAGE_LIMIT)}`;
 }

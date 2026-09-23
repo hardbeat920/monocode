@@ -41,7 +41,7 @@ export function SearchableSelect({
   emptyLabel?: string;
   disabled?: boolean;
   layer?: number;
-  variant?: "field" | "row" | "panel" | "pill";
+  variant?: "field" | "transparent" | "row" | "panel" | "pill";
   searchable?: boolean;
   align?: PopoverAlign;
 }) {
@@ -205,7 +205,9 @@ export function SearchableSelect({
               ? "flex h-14 w-full items-center justify-end gap-3 rounded-xl border border-content/6 bg-content/6 px-4 text-right text-[14px] font-medium outline-none hover:bg-content/8 focus:border-content/12 focus:bg-content/8 disabled:opacity-50 active:scale-[0.995]"
               : variant === "pill"
                 ? "inline-flex h-7 max-w-full items-center gap-1 rounded-md bg-content/10 py-0 pr-1.5 pl-2 text-left text-[12px] outline-none hover:bg-content/[0.14] focus-visible:bg-content/[0.14] disabled:opacity-50"
-                : "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-background-base px-2.5 text-left text-[13px] outline-none hover:border-content/20 focus:border-content/25 disabled:opacity-50 active:scale-[0.99]"
+                : variant === "transparent"
+                  ? "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-transparent px-2.5 text-left text-[13px] outline-none hover:border-content/20 focus:border-content/25 disabled:opacity-50 active:scale-[0.99]"
+                  : "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-background-base px-2.5 text-left text-[13px] outline-none hover:border-content/20 focus:border-content/25 disabled:opacity-50 active:scale-[0.99]"
         }
       >
         <span
@@ -286,9 +288,7 @@ export function SearchableSelect({
                     onMouseEnter={() => setActive(index)}
                     onClick={() => pick(option.value)}
                     className={`flex w-full items-center gap-2 rounded-md px-2 text-left leading-none ${
-                      compact
-                        ? "h-7 text-[12px]"
-                        : "h-8 text-[13px]"
+                      compact ? "h-7 text-[12px]" : "h-8 text-[13px]"
                     } ${
                       highlighted
                         ? "bg-selection text-content"

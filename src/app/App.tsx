@@ -82,8 +82,10 @@ import { useProjectBranches } from "../features/source-control/hooks/useProjectB
 import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
 import {
   loadProjectRailOpen,
+  loadSessionSidebarOpen,
   loadSidebarTabOrder,
   saveProjectRailOpen,
+  saveSessionSidebarOpen,
   type SidebarTabId,
 } from "../features/settings/model/appearance";
 import { HAS_NATIVE_GLASS, IS_MAC } from "../platform/tauri/platform";
@@ -247,8 +249,8 @@ import {
 import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
 import { isEditTool } from "../integrations/harness/core/preview";
 import {
-  prepareEditedResend,
-  replaceEditedResend,
+  createEditedResendAttempt,
+  createEditedResendCoordinator,
 } from "../features/sessions/model/editLastTurn";
 import {
   beginSessionTurn,
@@ -313,6 +315,7 @@ import {
   filterTabsForProject,
   findOpenSessionTab,
   planWorkspaceTabClose,
+  switchSessionInTab,
   workspaceTabCwd,
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
@@ -322,6 +325,7 @@ import {
   type AddToChatRequest,
 } from "../features/sessions/model/quoteDraft";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
+import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
   providerAccountExists,
@@ -345,6 +349,7 @@ import {
   titleFromPrompt,
   type Attachment,
   type Block,
+  type ComposerTurnOptions,
   type HarnessId,
   type LinkedWorkItem,
   type ModelTarget,
@@ -353,7 +358,6 @@ import {
   type PlanStatus,
   type SecondOpinionMeta,
   type Session,
-  type TurnIntent,
   type WorkspaceMode,
 } from "../features/sessions/model/session";
 
@@ -373,6 +377,7 @@ import {
   replaceInFlightSessions,
   saveWorkspaceSnapshot,
   setSessionArchived,
+  setSessionLinkedWorkItem,
   setSessionPinned,
   shouldPersistSession,
   upsertSession,
@@ -450,6 +455,7 @@ import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
 import { SearchView } from "../features/search/ui/SearchView";
+import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
 import { SettingsView, type SettingsAnchor } from "../features/settings/ui/SettingsView";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import { InboxView, LinkedWorkItemPanel } from "../features/inbox/ui/InboxView";
@@ -463,6 +469,7 @@ import {
   type InboxItem,
 } from "../features/inbox/model/githubTasks";
 import {
+  linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
   resolveLinkedWorkItem,
 } from "../features/sessions/model/sessionWorkItem";
@@ -547,24 +554,22 @@ type LinkedWorkItemPanelState = {
   cwd: string;
 };
 
-type SubmitOptions = {
+type SubmitOptions = ComposerTurnOptions & {
   ciRepair?: CiRepairRequest;
   secondOpinion?: SecondOpinionMeta;
   followUpBehavior?: FollowUpBehavior;
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
   queuedMessageId?: string;
-  intent?: TurnIntent;
   planBlockId?: string;
   buildTarget?: PlanBuildTarget;
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
-  draftBlockId?: string;
   onSettled?: (outcome: ControlOutcome) => void;
+  /** Generate a fresh title even when this is not the session's first turn. */
+  refreshTitle?: boolean;
   /** Internal guard for the retry after resolving a renamed project. */
   projectLocationReady?: boolean;
-  onResendRejected?: () => void;
-  resendEdited?: boolean;
 };
 
 type Submit = (
@@ -816,6 +821,9 @@ export default function App({
     [],
   );
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
+  const [sessionSidebarOpen, setSessionSidebarOpen] = useState(
+    loadSessionSidebarOpen,
+  );
   const tabCloseScope = "project" as const;
   const currentProjectDock = findProjectTerminal(projectTerminals, projectCwd);
   const dockVisible = !!currentProjectDock?.open;
@@ -999,7 +1007,7 @@ export default function App({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
-  const rewindingLastTurn = useRef(new Set<string>());
+  const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
   const lastPersistedUserBlock = useRef(new Map<string, string>());
@@ -4372,6 +4380,82 @@ export default function App({
     [],
   );
 
+  const onSetHistorySessionLinkedWorkItem = useCallback(
+    (sessionId: string, linkedWorkItem: LinkedWorkItem | undefined) => {
+      const previousLinkedWorkItem =
+        sessionsRef.current.find((session) => session.id === sessionId)
+          ?.linkedWorkItem ??
+        history.find((session) => session.id === sessionId)?.linkedWorkItem;
+      invalidateLoadedSession(sessionId);
+      loadedSessionCache.current.delete(sessionId);
+
+      const nextSessions = sessionsRef.current.map((session) =>
+        session.id === sessionId ? { ...session, linkedWorkItem } : session,
+      );
+      sessionsRef.current = nextSessions;
+      setSessions(nextSessions);
+      setHistory((current) =>
+        current.map((session) =>
+          session.id === sessionId ? { ...session, linkedWorkItem } : session,
+        ),
+      );
+      setStoredLinkedSessions((current) =>
+        linkedWorkItem
+          ? current.map((session) =>
+              session.id === sessionId
+                ? { ...session, linkedWorkItem }
+                : session,
+            )
+          : current.filter((session) => session.id !== sessionId),
+      );
+      setLinkedWorkItemPanels((current) => {
+        if (!current.has(sessionId)) return current;
+        const next = new Map(current);
+        next.delete(sessionId);
+        return next;
+      });
+
+      void setSessionLinkedWorkItem(sessionId, linkedWorkItem).catch(
+        (error) => {
+          const rolledBackSessions = sessionsRef.current.map((session) =>
+            session.id === sessionId &&
+            session.linkedWorkItem === linkedWorkItem
+              ? { ...session, linkedWorkItem: previousLinkedWorkItem }
+              : session,
+          );
+          sessionsRef.current = rolledBackSessions;
+          setSessions(rolledBackSessions);
+          setHistory((current) =>
+            current.map((session) =>
+              session.id === sessionId &&
+              session.linkedWorkItem === linkedWorkItem
+                ? { ...session, linkedWorkItem: previousLinkedWorkItem }
+                : session,
+            ),
+          );
+          setStoredLinkedSessions((current) =>
+            previousLinkedWorkItem
+              ? current.map((session) =>
+                  session.id === sessionId
+                    ? {
+                        ...session,
+                        linkedWorkItem: previousLinkedWorkItem,
+                      }
+                    : session,
+                )
+              : current.filter((session) => session.id !== sessionId),
+          );
+          void refreshHistory(sidebarCwd);
+          void message(
+            `Could not update this conversation's GitHub link.\n\n${String(error)}`,
+            { title: "MonoCode", kind: "error" },
+          );
+        },
+      );
+    },
+    [history, invalidateLoadedSession, refreshHistory, sidebarCwd],
+  );
+
   const onArchiveHistorySessions = useCallback(
     async (sessionIds: readonly string[], archived: boolean) => {
       for (const sessionId of sessionIds) {
@@ -5326,14 +5410,7 @@ export default function App({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ) => {
-      let resendCommitted = false;
-      let resendRejected = false;
-      const rejectResend = () => {
-        if (!options?.resendEdited || resendCommitted || resendRejected) return;
-        resendRejected = true;
-        options.onResendRejected?.();
-      };
-      if (rewindingLastTurn.current.has(sessionId)) return false;
+      if (editedResends.isActive(sessionId)) return false;
       const controlError = orchestrator.submissionError(
         sessionId,
         options?.managed,
@@ -5403,7 +5480,7 @@ export default function App({
         ? withPlanBuildTarget(draftCleared, options.buildTarget)
         : draftCleared;
       const editedResend = options?.resendEdited
-        ? prepareEditedResend(current)
+        ? createEditedResendAttempt(current, options.onResendRejected)
         : undefined;
       if (options?.resendEdited && !editedResend) return false;
       const editedProviderTurnId = editedResend?.providerTurnId;
@@ -5628,7 +5705,7 @@ export default function App({
               { ...options, projectLocationReady: true },
             );
             if (!accepted) {
-              rejectResend();
+              editedResend?.reject();
               options?.onSettled?.({
                 status: "failed",
                 text: "",
@@ -5646,7 +5723,7 @@ export default function App({
               message,
             });
             flushHarnessEvents();
-            rejectResend();
+            editedResend?.reject();
             options?.onSettled?.({
               status: "failed",
               text: "",
@@ -5745,8 +5822,8 @@ export default function App({
               handoffCard:
                 rawCommand || options?.ciRepair ? s.handoffCard : undefined,
             };
-            if (options?.resendEdited) {
-              next = replaceEditedResend(next);
+            if (editedResend) {
+              next = editedResend.replace(next);
             }
             if (approvedPlan && intent === "build") {
               next = {
@@ -5821,7 +5898,16 @@ export default function App({
       if (!options?.resendEdited) flushSync(commitSubmittedTurn);
 
       const launchTitleGeneration = (workCwd: string) => {
-        if (!isFirstTurn || !live || !placeholderTitle) return;
+        if (
+          !live ||
+          !shouldGenerateSessionTitle(
+            isFirstTurn,
+            placeholderTitle,
+            options?.refreshTitle,
+          )
+        ) {
+          return;
+        }
         const titleMessage =
           harnessText || attachments.map((file) => file.name).join(", ");
         void generateHarnessTitle(current.harness, {
@@ -5831,6 +5917,13 @@ export default function App({
           providerAccountId,
         })
           .then(async (generated) => {
+            if (
+              options?.refreshTitle &&
+              !isFirstTurn &&
+              turnGen.current.get(sessionId) !== gen
+            ) {
+              return;
+            }
             const linkedWorkItem = await resolveLinkedWorkItem(
               titleMessage,
               workCwd,
@@ -5843,7 +5936,8 @@ export default function App({
                 let next = s;
                 if (
                   generated &&
-                  canReplaceSessionTitle(s.title, s.harness, titleSeed)
+                  (options?.refreshTitle ||
+                    canReplaceSessionTitle(s.title, s.harness, titleSeed))
                 ) {
                   next = {
                     ...next,
@@ -5864,7 +5958,7 @@ export default function App({
         if (pendingSwitch) {
           void forgetHarnessSession(pendingSwitch.from, sessionId);
         }
-        rejectResend();
+        editedResend?.reject();
         options?.onSettled?.({
           status: "failed",
           text: "",
@@ -5872,8 +5966,8 @@ export default function App({
         });
         return true;
       }
-      if (options?.resendEdited && canRewindHarnessLastTurn(current.harness)) {
-        rewindingLastTurn.current.add(sessionId);
+      if (editedResend && canRewindHarnessLastTurn(current.harness)) {
+        editedResends.start(sessionId);
         const locked = sessionsRef.current.map((session) =>
           session.id === sessionId ? { ...session, busy: true } : session,
         );
@@ -6053,68 +6147,63 @@ export default function App({
           return event;
         };
 
+        const pendingEditedEvents: HarnessEvent[] = [];
+        const applyTurnEvent = (event: HarnessEvent) => {
+          orchestrator.observe(sessionId, event);
+          if (options?.onSettled && event.type === "message.delta")
+            controlText = (controlText + event.text).slice(-20_000);
+          if (options?.onSettled && event.type === "message.completed")
+            controlText += "\n";
+          if (event.type === "session.error")
+            controlOutcome.error = event.message;
+          if (
+            wrap &&
+            (event.type === "session.started" ||
+              event.type === "session.providerBound")
+          ) {
+            revealHandoff(wrap.text);
+          }
+          nudgeOpenEditors(event, workCwd);
+          if (!orchestrator.forSession(sessionId))
+            trackSessionEdits(sessionId, workCwd, event);
+          const routed = routePlanEvent(event);
+          if (routed) enqueueHarnessEvent(sessionId, routed);
+        };
+        const routeTurnEvent = (event: HarnessEvent) => {
+          if (turnGen.current.get(sessionId) !== gen) return;
+          if (editedResend && !editedResend.isAccepted()) {
+            pendingEditedEvents.push(event);
+            return;
+          }
+          applyTurnEvent(event);
+        };
+        const acceptEditedResend = () => {
+          if (!editedResend || editedResend.isAccepted()) return;
+          flushSync(commitSubmittedTurn);
+          editedResend.markAccepted();
+          for (const event of pendingEditedEvents) applyTurnEvent(event);
+          pendingEditedEvents.length = 0;
+        };
+        const recoverEditedResend = () => {
+          if (!editedResend || editedResend.isAccepted()) return;
+          pendingEditedEvents.length = 0;
+          flushSync(() => {
+            setSessions((prev) =>
+              prev.map((session) =>
+                session.id === sessionId
+                  ? editedResend.recoverAfterFailure(session)
+                  : session,
+              ),
+            );
+          });
+        };
+
         if (!current.inboxAsk && !orchestrator.forSession(sessionId)) {
           await beginSessionTurn(sessionId, workCwd).catch(() => undefined);
         }
         if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
         try {
-          if (
-            options?.resendEdited &&
-            canRewindHarnessLastTurn(current.harness)
-          ) {
-            try {
-              await rewindHarnessLastTurn({
-                harness: current.harness,
-                sessionId,
-                cwd: workCwd,
-                model: current.model,
-                modelSettings: current.modelSettings,
-                runtimeMode: current.runtimeMode,
-                ...(editedProviderTurnId
-                  ? { providerTurnId: editedProviderTurnId }
-                  : {}),
-                onEvent: (event) => {
-                  if (turnGen.current.get(sessionId) !== gen) return;
-                  enqueueHarnessEvent(sessionId, event);
-                },
-              });
-            } catch (error) {
-              flushHarnessEvents();
-              rejectResend();
-              throw error;
-            }
-            flushHarnessEvents();
-            if (turnGen.current.get(sessionId) !== gen) {
-              const latest = sessionsRef.current.find(
-                (session) => session.id === sessionId,
-              );
-              if (
-                !latest ||
-                (!latest.busy &&
-                  latest.providerSessionId === current.providerSessionId)
-              ) {
-                await forgetHarnessSession(current.harness, sessionId);
-                if (latest) {
-                  setSessions((prev) =>
-                    prev.map((session) =>
-                      session.id === sessionId &&
-                      session.providerSessionId === current.providerSessionId
-                        ? { ...session, providerSessionId: undefined }
-                        : session,
-                    ),
-                  );
-                }
-              }
-              return;
-            }
-          }
-          if (options?.resendEdited) {
-            flushSync(() => {
-              commitSubmittedTurn();
-              resendCommitted = true;
-            });
-          }
           const prepared = await prepareAttachments(attachments);
           const prompt =
             intent === "build" && approvedPlan
@@ -6142,6 +6231,58 @@ export default function App({
           const earlier = queuedHandoff
             ? userMessagesAfterHandoff(current)
             : [];
+          if (
+            editedResend &&
+            canRewindHarnessLastTurn(current.harness)
+          ) {
+            try {
+              await rewindHarnessLastTurn({
+                harness: current.harness,
+                sessionId,
+                cwd: workCwd,
+                model: current.model,
+                modelSettings: current.modelSettings,
+                runtimeMode: current.runtimeMode,
+                ...(editedProviderTurnId
+                  ? { providerTurnId: editedProviderTurnId }
+                  : {}),
+                onEvent: (event) => {
+                  if (turnGen.current.get(sessionId) !== gen) return;
+                  enqueueHarnessEvent(sessionId, event);
+                },
+              });
+            } catch (error) {
+              flushHarnessEvents();
+              editedResend.reject();
+              throw error;
+            }
+            editedResend.markProviderRewound();
+            flushHarnessEvents();
+            if (turnGen.current.get(sessionId) !== gen) {
+              const latest = sessionsRef.current.find(
+                (session) => session.id === sessionId,
+              );
+              if (
+                !latest ||
+                (!latest.busy &&
+                  latest.providerSessionId === current.providerSessionId)
+              ) {
+                await forgetHarnessSession(current.harness, sessionId);
+                if (latest) {
+                  setSessions((prev) =>
+                    prev.map((session) =>
+                      session.id === sessionId &&
+                      session.providerSessionId === current.providerSessionId
+                        ? { ...session, providerSessionId: undefined }
+                        : session,
+                    ),
+                  );
+                }
+              }
+              recoverEditedResend();
+              return;
+            }
+          }
           const sendTurn = (text: string, turnAttachments = prepared) =>
             sendHarnessTurn({
               harness: current.harness,
@@ -6157,28 +6298,8 @@ export default function App({
               controlsAgents: orchestrator.run(sessionId)?.status === "active",
               text,
               attachments: turnAttachments,
-              onEvent: (event) => {
-                if (turnGen.current.get(sessionId) !== gen) return;
-                orchestrator.observe(sessionId, event);
-                if (options?.onSettled && event.type === "message.delta")
-                  controlText = (controlText + event.text).slice(-20_000);
-                if (options?.onSettled && event.type === "message.completed")
-                  controlText += "\n";
-                if (event.type === "session.error")
-                  controlOutcome.error = event.message;
-                if (
-                  wrap &&
-                  (event.type === "session.started" ||
-                    event.type === "session.providerBound")
-                ) {
-                  revealHandoff(wrap.text);
-                }
-                nudgeOpenEditors(event, workCwd);
-                if (!orchestrator.forSession(sessionId))
-                  trackSessionEdits(sessionId, workCwd, event);
-                const routed = routePlanEvent(event);
-                if (routed) enqueueHarnessEvent(sessionId, routed);
-              },
+              ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
+              onEvent: routeTurnEvent,
             });
           await sendTurn(
             orchestrator.prompt(
@@ -6196,6 +6317,7 @@ export default function App({
               ),
             ),
           );
+          acceptEditedResend();
           if (proposalDraft && !providerFailureSeen) {
             completedProposal = await completeOrRepairOrchestrationProposal(
               proposalDraft,
@@ -6231,6 +6353,7 @@ export default function App({
           }
           buildSucceeded = true;
         } catch (error: unknown) {
+          recoverEditedResend();
           if (turnGen.current.get(sessionId) !== gen) return;
           if (wrap) revealHandoff(wrap.text);
           const message =
@@ -6353,10 +6476,8 @@ export default function App({
           }
         })
         .finally(() => {
-          rejectResend();
-          if (options?.resendEdited) {
-            rewindingLastTurn.current.delete(sessionId);
-          }
+          editedResend?.reject();
+          if (editedResend) editedResends.finish(sessionId);
           options?.onSettled?.(
             turnGen.current.get(sessionId) !== gen
               ? { status: "cancelled", text: controlText }
@@ -6384,6 +6505,7 @@ export default function App({
       run: AutomationRun,
       reveal = false,
       prompt = run.prompt ?? automation.prompt,
+      sourceWorkItem?: LinkedWorkItem,
     ) => {
       let reservationId: string | undefined;
       let releaseAfterSettle = false;
@@ -6392,6 +6514,9 @@ export default function App({
         automationSessionReservations.current.delete(reservationId);
       };
       try {
+        const eventRun = run.trigger === "event";
+        const linkedWorkItem =
+          sourceWorkItem ?? linkedWorkItemFromAutomationEvent(run);
         let session =
           automation.reuseSession && automation.lastSessionId
             ? sessionsRef.current.find(
@@ -6421,8 +6546,11 @@ export default function App({
               automation.runtimeMode,
               automation.modelSettings,
             ),
-            title: formatSessionTitle(automation.harness, automation.name),
+            title: eventRun
+              ? HARNESS_LABEL[automation.harness]
+              : formatSessionTitle(automation.harness, automation.name),
             automationId: automation.id,
+            ...(linkedWorkItem ? { linkedWorkItem } : {}),
             ...(automation.workspaceMode === "worktree"
               ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
               : automation.workspaceMode === "existing" &&
@@ -6446,6 +6574,7 @@ export default function App({
             model: automation.model,
             modelSettings: automation.modelSettings ?? {},
             runtimeMode: automation.runtimeMode,
+            ...(linkedWorkItem ? { linkedWorkItem } : {}),
           };
           session = stamped;
           const nextSessions = sessionsRef.current.map((entry) =>
@@ -6484,6 +6613,7 @@ export default function App({
           sessionId: session.id,
         });
         const accepted = onSubmit(session.id, prompt, [], {
+          refreshTitle: eventRun,
           onSettled: (outcome) => {
             const status =
               outcome.status === "completed"
@@ -6588,6 +6718,7 @@ export default function App({
               item.run,
               false,
               item.prompt,
+              item.linkedWorkItem,
             ).catch(() => undefined);
           }
         })
@@ -7905,6 +8036,14 @@ export default function App({
     });
   }, []);
 
+  const onToggleSessionSidebar = useCallback(() => {
+    setSessionSidebarOpen((open) => {
+      const next = !open;
+      saveSessionSidebarOpen(next);
+      return next;
+    });
+  }, []);
+
   const onToggleProjectRail = useCallback(() => {
     setProjectRailOpen((open) => {
       const next = !open;
@@ -8246,7 +8385,7 @@ export default function App({
   }, []);
 
   const onNavigateSessionList = useCallback(
-    (delta: number) => {
+    (delta: number, inCurrentTab = false) => {
       const activeWorkspace = tabsRef.current.find(
         (entry) => entry.id === activeTabIdRef.current,
       );
@@ -8262,9 +8401,26 @@ export default function App({
         delta,
       );
       if (!next || next === current.id) return;
-      void onSelectHistorySession(next);
+      if (!inCurrentTab) {
+        void onSelectHistorySession(next);
+        return;
+      }
+      const activeTabId = activeWorkspace.id;
+      const focusedId = current.id;
+      void ensureOpenSession(next).then((session) => {
+        if (!session || session.inboxAsk) return;
+        if (activeTabIdRef.current !== activeTabId) return;
+        const currentTab = tabsRef.current.find((tab) => tab.id === activeTabId);
+        if (currentTab?.focusedId !== focusedId) return;
+        setTabs((prev) =>
+          switchSessionInTab(prev, activeTabId, focusedId, next) ?? prev,
+        );
+        setComposerFocused(true);
+        const linkedUpdate = linkedSessionUpdatesRef.current.get(next);
+        if (linkedUpdate) revealLinkedSessionUpdate(next, linkedUpdate);
+      });
     },
-    [onSelectHistorySession],
+    [ensureOpenSession, onSelectHistorySession, revealLinkedSessionUpdate],
   );
 
   const onNavigateProjectList = useCallback(
@@ -8294,6 +8450,7 @@ export default function App({
     onSplit,
     onFocusDir,
     onToggleSidebar,
+    onToggleSessionSidebar,
     onGoToFile,
     onOpenCommandPalette,
     onReload,
@@ -8324,6 +8481,7 @@ export default function App({
     onSplit,
     onFocusDir,
     onToggleSidebar,
+    onToggleSessionSidebar,
     onGoToFile,
     onOpenCommandPalette,
     onReload,
@@ -8382,6 +8540,8 @@ export default function App({
         const listNavigation =
           cmd === "prev-session" ||
           cmd === "next-session" ||
+          cmd === "prev-session-in-tab" ||
+          cmd === "next-session-in-tab" ||
           cmd === "prev-project" ||
           cmd === "next-project";
         if (listNavigation) {
@@ -8460,13 +8620,18 @@ export default function App({
           run("prev-session", () => a.onNavigateSessionList(-1));
         else if (cmd === "next-session")
           run("next-session", () => a.onNavigateSessionList(1));
+        else if (cmd === "prev-session-in-tab")
+          run("prev-session-in-tab", () => a.onNavigateSessionList(-1, true));
+        else if (cmd === "next-session-in-tab")
+          run("next-session-in-tab", () => a.onNavigateSessionList(1, true));
         else if (cmd === "prev-project")
           run("prev-project", () => a.onNavigateProjectList(-1));
         else if (cmd === "next-project")
           run("next-project", () => a.onNavigateProjectList(1));
-        else if ("focus" in cmd)
+        else if (typeof cmd === "object" && "focus" in cmd)
           run(`focus-${cmd.focus}`, () => a.onFocusDir(cmd.focus));
-        else run(`activate-${cmd.activate}`, () => a.onActivate(cmd.activate));
+        else if (typeof cmd === "object" && "activate" in cmd)
+          run(`activate-${cmd.activate}`, () => a.onActivate(cmd.activate));
         return;
       }
       if (
@@ -8474,6 +8639,10 @@ export default function App({
         !inboxViewOpenRef.current &&
         !notesViewOpenRef.current &&
         !automationsViewOpenRef.current &&
+        !(
+          e.target instanceof Element &&
+          e.target.closest("[data-session-drop], [data-agent-tab]")
+        ) &&
         handleEditorFindKey(e)
       ) {
         e.stopPropagation();
@@ -8484,6 +8653,12 @@ export default function App({
         e.preventDefault();
         e.stopPropagation();
         run("toggle_sidebar", actions.current.onToggleSidebar);
+        return;
+      }
+      if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        e.stopPropagation();
+        run("toggle_session_sidebar", actions.current.onToggleSessionSidebar);
         return;
       }
       if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
@@ -8575,6 +8750,9 @@ export default function App({
       ),
       listen("toggle_sidebar", () =>
         run("toggle_sidebar", actions.current.onToggleSidebar),
+      ),
+      listen("toggle_session_sidebar", () =>
+        run("toggle_session_sidebar", actions.current.onToggleSessionSidebar),
       ),
       listen("open_project", () => {
         void actions.current.pickProject();
@@ -8721,12 +8899,14 @@ export default function App({
       activeId={activeTabId}
       cwd={sidebarCwd}
       projectRailOpen={projectRailOpen}
+      sessionSidebarOpen={sessionSidebarOpen}
       compactRail={compactTitleBar}
       canGoBack={tabVisitNav.canBack}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
       onGoForward={onRailForward}
       onToggleSidebar={onToggleSidebar}
+      onToggleSessionSidebar={onToggleSessionSidebar}
       onSelect={activateTab}
       onNew={onNew}
       onNewTerminal={onNewTerminal}
@@ -8757,7 +8937,7 @@ export default function App({
               cwd={sidebarCwd}
               gitCwd={gitCwd}
               explorerRootLabel={explorerRootLabel}
-              open
+              open={sessionSidebarOpen}
               tab={sidebarTab}
               onTabChange={setSidebarTab}
               filesSearchOpen={filesSearchOpen}
@@ -8779,6 +8959,7 @@ export default function App({
               onArchiveSessions={onArchiveHistorySessions}
               onPinSession={onPinHistorySession}
               onPinSessions={onPinHistorySessions}
+              onSetSessionLinkedWorkItem={onSetHistorySessionLinkedWorkItem}
               reminders={sessionReminders.reminders}
               onSetReminders={sessionReminders.schedule}
               onCancelReminders={sessionReminders.cancel}
@@ -8888,6 +9069,7 @@ export default function App({
                     onToggleTerminal={onToggleProjectTerminal}
                     onGoToFile={onGoToFile}
                     onToggleSidebar={onToggleSidebar}
+                    onToggleSessionSidebar={onToggleSessionSidebar}
                     onShowSourceControl={onToggleChanges}
                     onCloseCurrentTab={
                       activeTabId ? () => onCloseTab(activeTabId) : undefined
@@ -9058,7 +9240,10 @@ export default function App({
                   onClose={onLeaveSearch}
                   onToggleSidebar={onToggleSidebar}
                   onOpenFile={onOpenFile}
-                  onOpenSession={onSelectHistorySession}
+                  onOpenSession={(sessionId, blockId, query) => {
+                    if (blockId) requestTranscriptJump(sessionId, blockId, query);
+                    void onSelectHistorySession(sessionId);
+                  }}
                   onOpenProject={onSelectProject}
                 />
               ) : null}

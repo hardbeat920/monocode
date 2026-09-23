@@ -68,6 +68,7 @@ async function startTurn(
     resumeProviderAccountId?: string;
     expectResume?: boolean;
     beforeThreadReply?: () => Promise<void>;
+    onAccepted?: () => void;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -89,6 +90,7 @@ async function startTurn(
     intent: options.intent,
     text: "summarize the changelog",
     attachments: [],
+    onAccepted: options.onAccepted,
     onEvent: (event) => events.push(event),
   });
 
@@ -131,6 +133,16 @@ describe("codex live turn sequence", () => {
     vi.restoreAllMocks();
     await stopCodexSession("codex-live");
     __codexTestReset();
+  });
+
+  it("reports when the provider accepts a turn", async () => {
+    const onAccepted = vi.fn();
+    const { turn } = await startTurn("codex-live", { onAccepted });
+
+    await waitFor(() => onAccepted.mock.calls.length === 1, "turn acceptance");
+    expect(onAccepted).toHaveBeenCalledOnce();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
   });
 
   it("keeps retries and HTTP fallback out of a successful turn's transcript", async () => {

@@ -1124,7 +1124,11 @@ export function Composer({
     };
   }, [addAttachments, attachmentsSupported, enabled]);
   const restoreDraft = useCallback(
-    (text: string, nextAttachments: Attachment[]) => {
+    (
+      text: string,
+      nextAttachments: Attachment[],
+      borrowedIds: ReadonlySet<string> = borrowedAttachmentIdsRef.current,
+    ) => {
       setDraft(text);
       onDraftChange?.(text);
       if (ref.current) {
@@ -1143,10 +1147,11 @@ export function Composer({
         }
         revokeAttachment(file);
       }
-      borrowedAttachmentIdsRef.current.clear();
-      for (const file of nextAttachments) {
-        borrowedAttachmentIdsRef.current.add(file.id);
-      }
+      borrowedAttachmentIdsRef.current = new Set(
+        nextAttachments
+          .filter((file) => borrowedIds.has(file.id))
+          .map((file) => file.id),
+      );
       attachmentsRef.current = nextAttachments;
       setAttachments(nextAttachments);
       syncHasValue(text, nextAttachments);
@@ -1186,7 +1191,11 @@ export function Composer({
       exitEditMode();
       return;
     }
-    restoreDraft(lastTurnRecall.text, lastTurnRecall.attachments);
+    restoreDraft(
+      lastTurnRecall.text,
+      lastTurnRecall.attachments,
+      new Set(lastTurnRecall.attachments.map((file) => file.id)),
+    );
     setResendEdited(true);
     onEditingLastTurnChange?.(true);
   }, [
@@ -1273,6 +1282,9 @@ export function Composer({
     // docked layout). If draftRef still holds the sent text, the new instance
     // resurrects it as initialDraft.
     const resendDraftRevision = draftRevisionRef.current;
+    const resendBorrowedAttachmentIds = new Set(
+      borrowedAttachmentIdsRef.current,
+    );
     onDraftChange?.("");
     const accepted = onSubmit(text, files, {
       intent:
@@ -1284,11 +1296,11 @@ export function Composer({
       ...(resendEdited
         ? {
             resendEdited: true,
-            onResendRejected: () => {
+            onResendRejected: ({ providerRewound }) => {
               if (draftRevisionRef.current !== resendDraftRevision) return;
-              restoreDraft(text, files);
-              setResendEdited(true);
-              onEditingLastTurnChange?.(true);
+              restoreDraft(text, files, resendBorrowedAttachmentIds);
+              setResendEdited(!providerRewound);
+              onEditingLastTurnChange?.(!providerRewound);
             },
           }
         : {}),

@@ -7,9 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.54] - 2026-09-22
+
+### Added
+
+- The latest user message can be recalled, edited, rewound, and resent across Codex, OpenCode, Pi, and omp sessions, with attachments, drafts, and provider state kept consistent through failures. In #261 by @shxntanu.
+- Sessions can be linked to GitHub issues or pull requests from the sidebar. Linked identities persist, and event automations restore their work-item links while refreshing session titles.
+- Markdown files have a shared document preview with collapsible frontmatter plus in-preview Find, match navigation, case, whole-word, and regular-expression filters, highlighting, and keyboard shortcuts.
+- Explorer can optionally show Git-excluded files, resolved through repository ignore rules. In #217 by @kartava.
+- File-editor syntax highlighting now covers C, C++, C#, Java, PHP, SQL, XML, SVG, YAML, Go, Dart, Swift, Kotlin, Ruby, shell, TOML, Scala, Lua, R, Perl, PowerShell, Objective-C, Protocol Buffers, and Dockerfiles. In #348 by @404khai.
+- The Changes tab can pull the tracked current branch, with shared Git-operation progress, success or error feedback, and automatic refresh of changed files and open editors. In #352 by @jonathanlamela.
+- Claude Code catalogs include Claude Opus 5.5 with extended thinking, fast mode, and 1M-context support for Claude Code 2.1.280 and newer. In #355 by @kartava.
+
+### Changed
+
+- Diff addition and deletion counts use thousands separators throughout the project rail, sidebar, editor, file tree, review, and unified diff views.
+
 ### Fixed
 
 - Hermes turns stay busy while detached subagents are running and resume automatically with their completed transcripts instead of requiring a manual Continue. Hermes ACP usage updates also populate the context meter. In #335.
+- Pressing Enter in the branch picker selects the highlighted branch while preserving the create-branch action for unmatched searches.
+- Composer drafts survive closing and reopening a session pane. In #336 by @bluzername.
+- Edited-turn resend recovery restores the prior transcript and draft cleanly when a provider rejects or fails the rewind, and accepted rewinds retain the right conversation state.
+- The native macOS Window menu again includes the standard tiling actions such as Fill, Center, and Move & Resize. In #344 by @sensitiky.
+- Generic Claude live-catalog aliases now include the concrete version reported by Claude Code, such as `Opus 5.5 (1M context)`, while retaining the stable alias used to launch sessions. The resolver handles future Claude family and version identifiers without requiring another display-label update.
 
 ## [0.1.53] - 2026-09-21
 
@@ -945,7 +966,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.53...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.54...HEAD
+[0.1.54]: https://github.com/hardbeat920/monocode/compare/v0.1.53...v0.1.54
 [0.1.53]: https://github.com/hardbeat920/monocode/compare/v0.1.52...v0.1.53
 [0.1.52]: https://github.com/hardbeat920/monocode/compare/v0.1.51...v0.1.52
 [0.1.51]: https://github.com/hardbeat920/monocode/compare/v0.1.50...v0.1.51

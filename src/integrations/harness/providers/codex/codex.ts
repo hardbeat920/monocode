@@ -611,6 +611,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       "turn/start",
       params,
     );
+    input.onAccepted?.();
     const turnId = response.turn?.id ?? live.activeTurnId;
     // turn/completed can arrive before turn/start returns; don't resurrect a
     // finished turn's id after finishActiveTurn cleared activeTurnId.

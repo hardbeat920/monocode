@@ -81,7 +81,7 @@ const waitFor = async (predicate: () => boolean, label: string) => {
 
 function turn(
   events: HarnessEvent[],
-  options: { runtimeMode?: RuntimeMode } = {},
+  options: { runtimeMode?: RuntimeMode; onAccepted?: () => void } = {},
 ) {
   return sendOpenCodeTurn({
     sessionId: "opencode-live",
@@ -90,6 +90,7 @@ function turn(
     runtimeMode: options.runtimeMode ?? "supervised",
     text: "delegate the investigation",
     attachments: [],
+    onAccepted: options.onAccepted,
     onEvent: (event) => events.push(event),
   });
 }
@@ -148,6 +149,17 @@ beforeEach(() => {
 afterEach(async () => {
   await stopOpenCodeSession("opencode-live");
   __openCodeTestReset();
+});
+
+it("reports when OpenCode accepts a turn", async () => {
+  const events: HarnessEvent[] = [];
+  const onAccepted = vi.fn();
+  const done = turn(events, { onAccepted });
+
+  await waitFor(() => onAccepted.mock.calls.length === 1, "turn acceptance");
+  idle();
+  await done;
+  expect(onAccepted).toHaveBeenCalledOnce();
 });
 
 describe("OpenCode subagent trails", () => {

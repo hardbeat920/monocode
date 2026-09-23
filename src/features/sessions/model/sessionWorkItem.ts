@@ -115,6 +115,25 @@ export function linkedWorkItemFromInboxItem(
   };
 }
 
+/** Restore the GitHub identity persisted on an event-triggered automation run. */
+export function linkedWorkItemFromAutomationEvent(run: {
+  trigger: string;
+  eventKind?: string;
+  eventKey?: string;
+}): LinkedWorkItem | null {
+  if (run.trigger !== "event" || run.eventKind !== "github") return null;
+  const match = /^github:(pr|issue):([^/:]+\/[^/:]+):([1-9]\d*)$/i.exec(
+    run.eventKey?.trim() ?? "",
+  );
+  if (!match) return null;
+  const number = Number(match[3]);
+  if (!validNumber(number)) return null;
+  const kind = match[1].toLowerCase() === "pr" ? "pr" : "issue";
+  const repo = match[2];
+  if (!validRepo(repo)) return null;
+  return { kind, repo, number, url: githubUrl(repo, kind, number) };
+}
+
 export function inboxItemMatchesLinkedWorkItem(
   item: InboxItem,
   linked: LinkedWorkItem,

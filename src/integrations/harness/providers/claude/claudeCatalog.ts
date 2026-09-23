@@ -23,6 +23,7 @@ import {
   MINIMUM_CLAUDE_FABLE_5_VERSION,
   MINIMUM_CLAUDE_OPUS_4_7_VERSION,
   MINIMUM_CLAUDE_OPUS_4_8_VERSION,
+  MINIMUM_CLAUDE_OPUS_5_5_VERSION,
   MINIMUM_CLAUDE_OPUS_5_VERSION,
   MINIMUM_CLAUDE_SONNET_5_VERSION,
   parseClaudeVersion,
@@ -128,6 +129,13 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
     harness: "claude",
     name: "Claude Opus 5",
     nativeId: "claude-opus-5",
+    settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m")],
+  },
+  {
+    id: "claude:opus-5-5",
+    harness: "claude",
+    name: "Claude Opus 5.5",
+    nativeId: "claude-opus-5-5",
     settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m")],
   },
   {
@@ -358,7 +366,7 @@ function modelFromListRow(raw: unknown): AgentModel | null {
 
   const displayName = stringField(rec, "displayName") ?? "";
   const description = stringField(rec, "description") ?? "";
-  const name = pickerName(displayName, description, nativeId);
+  const name = pickerName(displayName, description, nativeId, fromResolved.id);
   const settings = settingsFromListRow(rec, fromValue.context1m || fromResolved.context1m);
 
   return {
@@ -417,18 +425,70 @@ function pickerName(
   displayName: string,
   description: string,
   fallback: string,
+  resolvedModel: string,
 ): string {
   const name = displayName.trim();
   const head = description.split("·")[0]?.trim() ?? "";
+  let picked = name || head || fallback;
   if (
     head &&
     name &&
     head.toLowerCase().startsWith(name.toLowerCase()) &&
     head.length > name.length
   ) {
-    return head;
+    picked = head;
   }
-  return name || head || fallback;
+  return qualifyClaudeAliasName(picked, resolvedModel);
+}
+
+/**
+ * Claude's live catalog can name a moving alias only as "Opus" while also
+ * reporting its concrete target as `claude-opus-5-5`. Keep the alias for CLI
+ * launches, but include the resolved version in the label so model releases do
+ * not silently look like the previous generation.
+ */
+function qualifyClaudeAliasName(name: string, resolvedModel: string): string {
+  const resolved = resolvedClaudeModelName(resolvedModel);
+  if (!resolved) return name;
+
+  const family = escapeRegExp(resolved.family);
+  const match = new RegExp(`^(Claude\\s+)?(${family})(.*)$`, "i").exec(name);
+  if (!match) return name;
+
+  const suffix = match[3] ?? "";
+  // A catalog-supplied version is more authoritative than our interpretation
+  // of the concrete id. Otherwise, enrich any generic alias variation.
+  if (/^\s+v?\d+(?:[.-]\d+)*/i.test(suffix)) return name;
+  return `${match[1] ?? ""}${match[2]} ${resolved.version}${suffix}`;
+}
+
+function resolvedClaudeModelName(
+  model: string,
+): { family: string; version: string } | null {
+  const { id } = splitClaudeModelValue(model);
+  if (!id.toLowerCase().startsWith("claude-")) return null;
+  const parts = id.slice("claude-".length).split("-");
+  const versionStart = parts.findIndex(
+    (part) => /^\d+(?:\.\d+)*$/.test(part) && !/^\d{8}$/.test(part),
+  );
+  if (versionStart <= 0) return null;
+
+  const version: string[] = [];
+  for (const part of parts.slice(versionStart)) {
+    if (!/^\d+(?:\.\d+)*$/.test(part) || /^\d{8}$/.test(part)) break;
+    version.push(...part.split("."));
+  }
+  if (version.length === 0) return null;
+
+  const family = parts
+    .slice(0, versionStart)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1).toLowerCase()}`)
+    .join(" ");
+  return { family, version: version.join(".") };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function splitClaudeModelValue(value: string): { id: string; context1m: boolean } {
@@ -447,6 +507,11 @@ export function modelsForClaudeVersion(
 ): AgentModel[] {
   return CLAUDE_MODEL_CATALOG.filter((model) => {
     const slug = model.nativeId ?? "";
+    if (slug === "claude-opus-5-5") {
+      return version
+        ? compareSemver(version, MINIMUM_CLAUDE_OPUS_5_5_VERSION) >= 0
+        : false;
+    }
     if (slug === "claude-opus-5") {
       return version
         ? compareSemver(version, MINIMUM_CLAUDE_OPUS_5_VERSION) >= 0

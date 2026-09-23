@@ -579,6 +579,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       variant: input.modelSettings?.variant,
       parts,
     });
+    input.onAccepted?.();
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
