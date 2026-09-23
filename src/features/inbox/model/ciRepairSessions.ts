@@ -24,5 +24,5 @@ export function ciRepairSessions(
           .map((session) => summaryFromSession(session)),
       ].map((session) => [session.id, session]),
     ).values(),
-  ].filter((session) => !unavailable.has(session.id));
+  ].filter((session) => !unavailable.has(session.id) && !session.worktreeRemoved);
 }

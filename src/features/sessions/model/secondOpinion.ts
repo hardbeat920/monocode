@@ -163,3 +163,33 @@ export function buildSecondOpinionCard(input: {
     ...(input.kind ? { kind: input.kind } : {}),
   };
 }
+
+/** Keep the prompt and the metadata for its saved user turn together. */
+export function buildSecondOpinionRequest(input: {
+  from: HarnessId;
+  to: HarnessId;
+  turn: Block[];
+  cwd: string;
+}) {
+  const userRequest = turnUserRequest(input.turn);
+  const files = turnEditedFiles(input.turn, input.cwd);
+  const ciContext = input.turn.find((block) => block.role === "user")?.ciContext;
+  return {
+    prompt: buildSecondOpinionPrompt({
+      from: input.from,
+      userRequest,
+      report: turnReport(input.turn),
+      files,
+      ciContext,
+    }),
+    options: {
+      ...(ciContext ? { ciContext } : {}),
+      secondOpinion: buildSecondOpinionCard({
+        from: input.from,
+        to: input.to,
+        userRequest,
+        files,
+      }),
+    },
+  };
+}

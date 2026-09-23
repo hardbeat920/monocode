@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { appendUser } from "../../../integrations/harness/core/apply";
+import { sanitizeSessionForPersist } from "../data/sessionStore";
 import { buildCiRepairRequest } from "../../inbox/model/ciRepair";
 import {
   appendPreparingHandoff,
@@ -10,7 +12,11 @@ import {
   userMessagesAfterHandoff,
   wrapHandoffPrompt,
 } from "./handoff";
-import { buildSecondOpinionPrompt } from "./secondOpinion";
+import {
+  buildSecondOpinionPrompt,
+  buildSecondOpinionRequest,
+  SECOND_OPINION_TITLE,
+} from "./secondOpinion";
 import { newSession, type Block } from "./session";
 
 const repair: Block = {
@@ -68,6 +74,43 @@ function largeRepair() {
     },
   };
 }
+
+it("saves second-opinion CI context for a later handoff and another opinion", () => {
+  const { checks, request, session } = largeRepair();
+  const opinion = buildSecondOpinionRequest({
+    from: "claude",
+    to: "codex",
+    cwd: session.cwd,
+    turn: session.blocks,
+  });
+  expect(opinion.prompt).toContain("Give a second opinion");
+  const submitted = appendUser(
+    newSession("codex", session.cwd),
+    SECOND_OPINION_TITLE,
+    [],
+    opinion.options,
+  );
+  const saved = JSON.parse(
+    JSON.stringify(sanitizeSessionForPersist(submitted)),
+  );
+  expect(saved.blocks[0]).toMatchObject({
+    text: SECOND_OPINION_TITLE,
+    ciContext: request.prompt,
+    secondOpinion: { from: "claude", to: "codex" },
+  });
+  const restored = { ...submitted, blocks: saved.blocks };
+  const handoff = buildDeterministicHandoff(restored);
+  const next = buildSecondOpinionRequest({
+    from: "codex",
+    to: "claude",
+    cwd: restored.cwd,
+    turn: restored.blocks,
+  });
+  for (const check of checks) {
+    expect(handoff).toContain(`CI/${check.name}`);
+    expect(next.prompt).toContain(`CI/${check.name}`);
+  }
+});
 
 it("preserves a large selected-check list and session recap in a deterministic handoff", () => {
   const { checks, request, session } = largeRepair();

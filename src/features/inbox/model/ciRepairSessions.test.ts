@@ -4,6 +4,23 @@ import { appendPreparingHandoff } from "../../sessions/model/handoff";
 import { newSession } from "../../sessions/model/session";
 import { ciRepairSessions } from "./ciRepairSessions";
 
+it("excludes removed worktrees from history and live chats", () => {
+  const ready = { ...newSession("claude", "/web"), id: "ready" };
+  const removed = {
+    ...newSession("claude", "/web"),
+    id: "removed-live",
+    worktreeRemoved: true,
+  };
+  const history = [
+    { ...removed, id: "removed-history" },
+    { ...removed, worktreeRemoved: false },
+    ready,
+  ].map((session) => summaryFromSession(session));
+  expect(
+    ciRepairSessions(history, [removed]).map((session) => session.id),
+  ).toEqual(["ready"]);
+});
+
 it("offers available chats without restoring unavailable live chats from history", () => {
   const closed = { ...newSession("claude", "/web"), id: "closed" };
   const ready = {
