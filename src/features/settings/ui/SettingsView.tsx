@@ -2537,7 +2537,7 @@ function ProviderAccountsSettings() {
                           {account.label}
                         </span>
                         {orgTag ? (
-                          <span className="shrink-0 rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
+                          <span className="max-w-[8rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
                             {orgTag}
                           </span>
                         ) : null}

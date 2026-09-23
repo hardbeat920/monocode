@@ -106,7 +106,10 @@ export function UsageProviderChip({
   const activeAccount = accounts.find((account) => account.id === accountId);
   const canManageAccounts = Boolean(onSelectAccount && onAddAccount);
   const activeAccountLabel = activeAccount?.label ?? "Removed account";
-  const identities = useProviderAccountIdentities(accounts, open);
+  const identities = useProviderAccountIdentities(
+    accounts,
+    `${open}:${limits.updatedAt}`,
+  );
   const activeIdentity = activeAccount
     ? identities[identityKey(activeAccount)]
     : null;
@@ -306,7 +309,9 @@ export function UsageProviderChip({
                       aria-label={`Switch ${providerLabel} account`}
                       onClick={() => setAccountView("accounts")}
                     >
-                      <span className="shrink-0">{activeAccountLabel}</span>
+                      <span className="max-w-[60%] shrink-0 truncate">
+                        {activeAccountLabel}
+                      </span>
                       {activeSubtitle ? (
                         <span className="truncate text-content/35">
                           {activeSubtitle}
@@ -468,7 +473,7 @@ function ProviderAccountPicker({
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate">{account.label}</span>
                   {orgTag ? (
-                    <span className="shrink-0 rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
+                    <span className="max-w-[8rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
                       {orgTag}
                     </span>
                   ) : null}
