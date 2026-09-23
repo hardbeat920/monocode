@@ -448,6 +448,28 @@ function stopTextPrompt(adapter: HarnessAdapter): Promise<void> {
     : Promise.resolve();
 }
 
+const activeTextPromptOwners = new Map<HarnessAdapter, Set<symbol>>();
+
+function beginTextPrompt(adapter: HarnessAdapter): symbol {
+  const owner = Symbol("text-prompt");
+  const owners = activeTextPromptOwners.get(adapter) ?? new Set<symbol>();
+  owners.add(owner);
+  activeTextPromptOwners.set(adapter, owners);
+  return owner;
+}
+
+function finishTextPrompt(
+  adapter: HarnessAdapter,
+  owner: symbol,
+  stopIfLast: boolean,
+): void {
+  const owners = activeTextPromptOwners.get(adapter);
+  if (!owners?.delete(owner)) return;
+  if (owners.size > 0) return;
+  activeTextPromptOwners.delete(adapter);
+  if (stopIfLast) void stopTextPrompt(adapter);
+}
+
 function cancelledTextPrompt(): Error {
   return new Error("By-the-way request cancelled");
 }
@@ -465,17 +487,29 @@ export async function runHarnessTextPrompt(
 
   const signal = input.signal;
   if (signal?.aborted) {
-    await stopTextPrompt(adapter);
     throw cancelledTextPrompt();
   }
 
-  const run = adapter.runTextPrompt(input);
-  if (!signal) return run;
+  const owner = beginTextPrompt(adapter);
+  let run: Promise<string>;
+  try {
+    run = adapter.runTextPrompt(input);
+  } catch (error) {
+    finishTextPrompt(adapter, owner, false);
+    throw error;
+  }
+  if (!signal) {
+    try {
+      return await run;
+    } finally {
+      finishTextPrompt(adapter, owner, false);
+    }
+  }
 
   let abortHandler: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     abortHandler = () => {
-      void stopTextPrompt(adapter);
+      finishTextPrompt(adapter, owner, true);
       reject(cancelledTextPrompt());
     };
     signal.addEventListener("abort", abortHandler, { once: true });
@@ -485,6 +519,7 @@ export async function runHarnessTextPrompt(
     return await Promise.race([run, abortPromise]);
   } finally {
     if (abortHandler) signal.removeEventListener("abort", abortHandler);
+    finishTextPrompt(adapter, owner, false);
   }
 }
 

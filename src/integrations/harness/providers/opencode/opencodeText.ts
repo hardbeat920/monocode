@@ -197,12 +197,12 @@ function pickTextModel(requested?: string): {
 } {
   const selected = requested?.trim();
   if (selected) {
-    const parsedSelected = parseOpenCodeModelSlug(selected);
-    if (parsedSelected) return parsedSelected;
-    const modelID = selected.startsWith("opencode:")
+    const modelSlug = selected.startsWith("opencode:")
       ? selected.slice("opencode:".length)
       : selected;
-    if (modelID) return { providerID: "opencode", modelID };
+    const parsedSelected = parseOpenCodeModelSlug(modelSlug);
+    if (parsedSelected) return parsedSelected;
+    if (modelSlug) return { providerID: "opencode", modelID: modelSlug };
   }
   const models = modelsFor("opencode");
   for (const model of models) {

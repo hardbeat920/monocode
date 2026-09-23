@@ -45,8 +45,17 @@ const PRIVATE_ROLES: Record<Block["role"], true | undefined> = {
   tool: undefined,
 };
 
+/** Keep isolated prompts below the context limits of the supported runners. */
+export const BTW_MAX_BLOCK_CHARS = 8_000;
+export const BTW_MAX_SNAPSHOT_CHARS = 64_000;
+
 function normalizeText(value: string): string {
   return value.replace(/\r\n?/g, "\n").trim();
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
 function attachmentSummary(attachments: Attachment[] | undefined): string[] {
@@ -140,10 +149,24 @@ export function serializeBtwSnapshot(
   if (visible.length === 0) {
     throw new Error("The completed turn is no longer available.");
   }
-  return visible
+  const serialized = visible
     .map((block) => serializeBtwBlock(block, cwd))
     .filter(Boolean)
-    .join("\n\n");
+    .map((block) => truncateText(block, BTW_MAX_BLOCK_CHARS));
+
+  const bounded: string[] = [];
+  let size = 0;
+  for (let index = serialized.length - 1; index >= 0; index -= 1) {
+    const separator = bounded.length > 0 ? 2 : 0;
+    const remaining = BTW_MAX_SNAPSHOT_CHARS - size - separator;
+    if (remaining <= 0) break;
+    const block = truncateText(serialized[index], remaining);
+    if (!block) break;
+    bounded.unshift(block);
+    size += separator + block.length;
+    if (block.length < serialized[index].length) break;
+  }
+  return bounded.join("\n\n");
 }
 
 function messageLabel(role: "user" | "assistant"): string {

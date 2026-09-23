@@ -246,8 +246,9 @@ async function ensureLive(input: {
       await openThread(live, input.cwd, requestedThreadId);
       input.onThreadId?.(live.threadId);
       return live;
-    } catch {
+    } catch (error) {
       await dropLive();
+      throw error;
     }
   }
   const started = await startLive(
@@ -369,7 +370,9 @@ async function openThread(
       );
     } catch (error) {
       if (!isRecoverableThreadResumeError(error)) throw error;
+      opened = undefined;
     }
+    if (!opened?.thread?.id?.trim()) opened = undefined;
   }
   if (!opened) {
     opened = await session.rpc.request<{ thread?: { id?: string } }>(
