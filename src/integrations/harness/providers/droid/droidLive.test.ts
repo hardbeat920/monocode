@@ -19,6 +19,9 @@ vi.mock("../../core/child", () => ({
   },
 }));
 
+const refreshDroidCatalog = vi.fn(async () => undefined);
+vi.mock("./droidCatalog", () => ({ refreshDroidCatalog }));
+
 const {
   bindDroidSession,
   respondDroidApproval,
@@ -180,6 +183,8 @@ describe("Factory Droid live ACP sequence", () => {
       providerSessionId: "droid-session-1",
     });
     expect(events).toContainEqual({ type: "message.delta", text: "done" });
+    // The first live session seeds the catalog and kicks off the effort probe.
+    expect(refreshDroidCatalog).toHaveBeenCalledTimes(1);
     await stopDroidSession("droid-live-new");
   });
 
