@@ -153,6 +153,7 @@ export { refreshPiCatalog, refreshOmpCatalog } from "./providers/pi/piCatalog";
 export { refreshFxCatalog } from "./providers/fx/fxCatalog";
 export { refreshGrokCatalog } from "./providers/grok/grokCatalog";
 export { refreshHermesCatalog } from "./providers/hermes/hermesCatalog";
+export { refreshMuseCatalog } from "./providers/muse/museCatalog";
 export { refreshAntigravityCatalog } from "./providers/antigravity/antigravityCatalog";
 export { registerBuiltinHarnesses } from "./core/register";
 export {

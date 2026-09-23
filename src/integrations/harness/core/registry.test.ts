@@ -153,7 +153,7 @@ describe("harness registry", () => {
     const adapter = listHarnesses().find((adapter) => adapter.id === "muse")!;
     expect(adapter.canSteer).toBe(false);
     expect(adapter.bindSession).toBeTypeOf("function");
-    expect(adapter.refreshCatalog).toBeUndefined();
+    expect(adapter.refreshCatalog).toBeTypeOf("function");
     expect(adapter.generateTitle).toBeUndefined();
     expect(adapter.generateCommitMessage).toBeUndefined();
   });

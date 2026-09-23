@@ -7,6 +7,7 @@ import {
   steerMuseTurn,
   stopMuseSession,
 } from "./muse";
+import { refreshMuseCatalog } from "./museCatalog";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 
 export const museAdapter: HarnessAdapter = {
@@ -20,6 +21,7 @@ export const museAdapter: HarnessAdapter = {
   stopSession: stopMuseSession,
   forgetSession: forgetMuseSession,
   bindSession: bindMuseSession,
+  refreshCatalog: refreshMuseCatalog,
 };
 
 let registered = false;
