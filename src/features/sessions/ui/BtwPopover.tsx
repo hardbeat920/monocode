@@ -319,7 +319,7 @@ export function BtwPopover({
                     <div
                       className={
                         message.role === "user"
-                          ? "btw-message btw-message-user ml-auto max-w-[92%]"
+                          ? "user-message-bubble btw-message relative ml-auto w-fit max-w-[92%] rounded-full bg-content/10 px-3 py-2 font-sans text-content transition-[background-color] duration-200"
                           : "btw-message btw-message-assistant max-w-[96%]"
                       }
                     >
@@ -327,7 +327,11 @@ export function BtwPopover({
                       <AgentMarkdown
                         text={message.text}
                         cwd={cwd}
-                        className="mt-1.5 text-[13px] leading-5"
+                        className={
+                          message.role === "user"
+                            ? "text-sm leading-5"
+                            : "mt-1.5 text-[13px] leading-5"
+                        }
                       />
                     </div>
                     {message.role === "assistant" ? (

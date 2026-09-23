@@ -1722,18 +1722,6 @@ html.theme-light .popover-backdrop {
   min-width: 0;
 }
 
-.btw-message-user {
-  padding: 10px 12px;
-  border: 1px solid
-    color-mix(in srgb, var(--user-accent-color, #34d399) 32%, transparent);
-  border-radius: 12px;
-  background: color-mix(
-    in srgb,
-    var(--user-accent-color, #34d399) 16%,
-    transparent
-  );
-}
-
 .btw-message-assistant {
   overflow: clip;
   padding: 0 2px;
@@ -1806,24 +1794,7 @@ html.theme-light .popover-backdrop {
   background: color-mix(in srgb, #f87171 7%, transparent);
 }
 
-html.theme-light .btw-message-user {
-  border-color: color-mix(
-    in srgb,
-    var(--user-accent-color, #059669) 28%,
-    transparent
-  );
-  background: color-mix(
-    in srgb,
-    var(--user-accent-color, #059669) 9%,
-    transparent
-  );
-}
-
 @media (max-width: 560px) {
-  [data-btw-popover] .btw-message-user {
-    max-width: 100%;
-  }
-
   [data-btw-popover] .btw-message-assistant {
     max-width: 100%;
   }
