@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+mod account_identity;
 mod automations;
 mod azure_devops;
 mod chat_background;
@@ -396,6 +397,7 @@ pub fn run() {
             harness::harness_sse_close,
             harness::harness_exec,
             harness::provider_account_remove,
+            account_identity::provider_account_identity,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
             pty::pty_spawn,
