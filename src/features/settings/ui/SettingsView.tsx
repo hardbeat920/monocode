@@ -4,6 +4,7 @@ import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  Globe,
   ImagePlus,
   Loader,
   Pencil,
@@ -226,9 +227,18 @@ import {
   type LinearTeam,
 } from "../../inbox/model/linear";
 import {
+  loadTabGroupColors,
+  loadTabGroupCustomColors,
   loadTabGroupLabels,
+  loadTabGroupMascots,
+  resolveTabGroupColor,
   resolveTabGroupLabel,
+  resolveTabGroupLogo,
+  resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
+import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
+import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
+import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import {
   filterKeybindings,
   KEYBINDINGS,
@@ -2313,8 +2323,17 @@ function ProvidersPage({
   const [hiddenGlobally, setHiddenGlobally] = useState(loadHiddenPickerProviders);
 
   const scopeOptions = useMemo(() => {
-    const options = [
-      { value: GLOBAL_PROVIDER_SCOPE, label: "Global" },
+    const options: { value: string; label: string; icon?: ReactNode }[] = [
+      {
+        value: GLOBAL_PROVIDER_SCOPE,
+        label: "Global",
+        icon: (
+          <Globe
+            className="size-3.5 shrink-0 text-content/60"
+            strokeWidth={1.75}
+          />
+        ),
+      },
     ];
     const seen = new Set<string>();
     for (const path of [cwd, ...(recents ?? []).map((entry) => entry.path)]) {
@@ -2322,7 +2341,11 @@ function ProvidersPage({
       const key = pathKey(path);
       if (seen.has(key)) continue;
       seen.add(key);
-      options.push({ value: path, label: projectName(path) });
+      options.push({
+        value: path,
+        label: projectName(path),
+        icon: <ProjectScopeIcon path={path} />,
+      });
     }
     return options;
   }, [cwd, recents]);
@@ -2741,6 +2764,34 @@ function ProviderAccountEditor({
         </button>
       </div>
     </form>
+  );
+}
+
+/** The icon the project rail shows: custom logo, else the project mascot. */
+function ProjectScopeIcon({ path }: { path: string }) {
+  const logos = useTabGroupLogos();
+  const [colors] = useState(loadTabGroupColors);
+  const [customColors] = useState(loadTabGroupCustomColors);
+  const [mascots] = useState(loadTabGroupMascots);
+  const key = projectKey(path);
+  const name = projectName(path);
+  const logoPath = resolveTabGroupLogo(key, logos);
+  if (logoPath) {
+    return (
+      <ProjectLogoIcon
+        path={logoPath}
+        className="size-4 rounded-sm"
+        imageClassName="size-4"
+      />
+    );
+  }
+  return (
+    <ProjectMascot
+      project={name}
+      color={resolveTabGroupColor(key, colors, customColors, name)}
+      name={resolveTabGroupMascot(key, mascots)}
+      className="size-3.5"
+    />
   );
 }
 
@@ -3325,7 +3376,7 @@ function Select({
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -3410,8 +3461,15 @@ function Select({
         onClick={() => setOpen((prev) => !prev)}
         className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20"
       >
-        <span className="min-w-0 flex-1 truncate">
-          {selected ? selected.label : value}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {selected?.icon ? (
+            <span className="grid size-4 shrink-0 place-items-center">
+              {selected.icon}
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate">
+            {selected ? selected.label : value}
+          </span>
         </span>
         <ChevronDown
           className={`size-3.5 shrink-0 text-content/50 transition-transform ${open ? "rotate-180" : ""}`}
@@ -3458,6 +3516,11 @@ function Select({
                     : "text-content hover:bg-content/5"
                 }`}
               >
+                {option.icon ? (
+                  <span className="grid size-4 shrink-0 place-items-center">
+                    {option.icon}
+                  </span>
+                ) : null}
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
                 {isSelected ? (
                   <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
