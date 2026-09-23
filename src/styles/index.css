@@ -1704,11 +1704,7 @@ html.theme-light .popover-backdrop {
 /* The btw thread borrows the chat transcript's quiet, asymmetric
    language instead of introducing a second card system. */
 .btw-popover-surface {
-  background: color-mix(
-    in srgb,
-    var(--color-background-base) 94%,
-    var(--color-content) 6%
-  );
+  background: transparent;
 }
 
 .btw-thread-chip {
@@ -1833,9 +1829,6 @@ html.theme-light .popover-backdrop {
   background: color-mix(in srgb, var(--color-content) 7%, transparent);
 }
 
-html.theme-light .btw-popover-surface {
-  background: var(--color-background-base);
-}
 
 html.theme-light .btw-message-user {
   border-color: color-mix(
