@@ -186,7 +186,11 @@ function FilePaneComponent({
                   }
                 />
               ) : isImagePath(file.path) || isPdfPath(file.path) ? (
-                <BinaryFileView path={file.path} cwd={file.cwd} />
+                <BinaryFileView
+                  path={file.path}
+                  cwd={file.cwd}
+                  visible={file.id === pane.activeFileId}
+                />
               ) : (
                 <FileEditor
                   path={file.path}

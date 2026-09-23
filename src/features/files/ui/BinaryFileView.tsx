@@ -28,7 +28,12 @@ import {
 import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 
-type Props = { path: string; cwd: string };
+type Props = {
+  path: string;
+  cwd: string;
+  /** Whether the tab is showing. Defaults to true. */
+  visible?: boolean;
+};
 
 type LoadState =
   | { status: "loading" }
@@ -41,7 +46,7 @@ type LoadState =
  * Read-only surface for files the editor can't open. Images and PDFs render;
  * bytes that turn out to be neither get a card pointing at the file on disk.
  */
-export function BinaryFileView({ path, cwd }: Props) {
+export function BinaryFileView({ path, cwd, visible = true }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -143,6 +148,7 @@ export function BinaryFileView({ path, cwd }: Props) {
       <PdfView
         bytes={state.bytes}
         size={state.size}
+        visible={visible}
         onError={(message) => setState({ status: "error", message })}
       />
     );
