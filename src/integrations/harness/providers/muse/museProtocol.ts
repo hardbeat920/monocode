@@ -47,6 +47,7 @@ export function musePromptParts(
 ): MusePrompt {
   const images: string[] = [];
   const mentions: string[] = [];
+  const dropped: string[] = [];
   for (const attachment of attachments ?? []) {
     if (attachment.kind === "image" && attachment.path) {
       images.push(attachment.path);
@@ -56,9 +57,16 @@ export function musePromptParts(
       mentions.push(mentionFor(cwd, attachment.path));
       continue;
     }
+    dropped.push(attachment.name || attachment.id);
   }
-  const suffix = mentions.length > 0 ? `\n\nAttached files:\n${mentions.join("\n")}` : "";
-  return { text: `${text}${suffix}`, images };
+  const lines = mentions.length > 0 ? ["", "", "Attached files:", ...mentions] : [];
+  if (dropped.length > 0) {
+    lines.push(
+      "",
+      `[Note: ${dropped.length} attachment(s) could not be attached (no file path): ${dropped.join(", ")}]`,
+    );
+  }
+  return { text: `${text}${lines.join("\n")}`, images };
 }
 
 function mentionFor(cwd: string, path: string): string {
@@ -111,7 +119,7 @@ export function toolTitleForTaskKind(taskKind: string): string {
 
 type ExecRecord = {
   payload_type?: string;
-  stream?: { id?: string };
+  stream?: { kind?: string; id?: string };
   payload?: Record<string, unknown>;
 };
 
@@ -145,8 +153,11 @@ export class MuseExecFold {
     } catch {
       return [];
     }
-    const streamId = record.stream?.id;
-    if (streamId && !this.sessionId) this.sessionId = streamId;
+    // Only the session stream id is resumable via `--session-id`; run/task
+    // streams multiplexed inside the payload must never be adopted.
+    if (record.stream?.kind === "session" && record.stream.id && !this.sessionId) {
+      this.sessionId = record.stream.id;
+    }
     const payload = asRecord(record.payload);
     if (!payload) return [];
     switch (record.payload_type) {
@@ -196,7 +207,7 @@ export class MuseExecFold {
         const ref = asRecord(event?.output_ref);
         const refId = ref ? textField(ref, "id") : undefined;
         if (!taskId || !refId) return [];
-        const callId = refId.match(/call_[A-Za-z0-9]+/)?.[0];
+        const callId = refId.match(/call_[A-Za-z0-9_-]+/)?.[0];
         if (callId) this.callToTask.set(callId, taskId);
         return [];
       }

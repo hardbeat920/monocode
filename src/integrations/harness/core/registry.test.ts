@@ -129,6 +129,7 @@ describe("harness registry", () => {
       "pi",
       "omp",
       "fx",
+      "muse",
     ];
 
     expect(
@@ -142,6 +143,7 @@ describe("harness registry", () => {
       pi: true,
       omp: true,
       fx: false,
+      muse: false,
     });
   });
 

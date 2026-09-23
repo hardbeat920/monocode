@@ -11,6 +11,10 @@ import {
 
 const SID = "01a0cfef-7b4a-7a21-8da4-98066fcadbd7";
 
+function rawLine(record: unknown): string {
+  return JSON.stringify(record);
+}
+
 function line(payloadType: string, payload: unknown): string {
   return JSON.stringify({
     schema_version: 1,
@@ -221,5 +225,101 @@ describe("muse exec fold", () => {
 
   it("titles tool kinds", () => {
     expect(toolTitleForTaskKind("tool.write_file")).toBe("write_file");
+  });
+
+  it("only adopts ids from the session stream", () => {
+    const fold = new MuseExecFold();
+    fold.pushLine(
+      rawLine({
+        stream: { kind: "run", id: "run-id-not-a-session" },
+        payload_type: "run.output.delta",
+        payload: { kind: "run_output_delta", text: "x" },
+      }),
+    );
+    expect(fold.sessionId).toBeUndefined();
+    fold.pushLine(
+      rawLine({
+        stream: { kind: "session", id: SID },
+        payload_type: "run.output.delta",
+        payload: { kind: "run_output_delta", text: "x" },
+      }),
+    );
+    expect(fold.sessionId).toBe(SID);
+  });
+
+  it("joins tool results with dashed call ids", () => {
+    const fold = new MuseExecFold();
+    const taskId = "task-1";
+    const callId = "call_abc-123_def";
+    fold.pushLine(
+      line("task.lifecycle.proposed", {
+        kind: "task_lifecycle",
+        task_id: taskId,
+        event: { kind: "proposed", task_id: taskId, task_kind: "tool.bash" },
+      }),
+    );
+    fold.pushLine(
+      line("task.lifecycle.tool_output_ref", {
+        kind: "task_lifecycle",
+        task_id: taskId,
+        event: {
+          kind: "tool_output_ref",
+          task_id: taskId,
+          output_ref: { id: `tool_patch-${taskId}-${callId}` },
+        },
+      }),
+    );
+    const result = fold.pushLine(
+      line("tool.result", {
+        kind: "tool_result",
+        call_id: callId,
+        text: "done",
+        correlation_facts: { tool_name: "bash", outcome: "success" },
+      }),
+    );
+    expect(result[0]).toMatchObject({ type: "tool.updated", callId: taskId });
+  });
+
+  it("falls back to the call id for unmapped tool results", () => {
+    const fold = new MuseExecFold();
+    const result = fold.pushLine(
+      line("tool.result", {
+        kind: "tool_result",
+        call_id: "call_orphan",
+        text: "done",
+        correlation_facts: { tool_name: "bash", outcome: "success" },
+      }),
+    );
+    expect(result).toEqual([
+      {
+        type: "tool.updated",
+        callId: "call_orphan",
+        title: "bash",
+        status: "completed",
+        detail: "done",
+        paths: undefined,
+      },
+    ]);
+  });
+
+  it("tracks interleaved tool tasks independently", () => {
+    const fold = new MuseExecFold();
+    for (const taskId of ["task-a", "task-b"]) {
+      fold.pushLine(
+        line("task.lifecycle.proposed", {
+          kind: "task_lifecycle",
+          task_id: taskId,
+          event: { kind: "proposed", task_id: taskId, task_kind: "tool.read" },
+        }),
+      );
+    }
+    const updateB = fold.pushLine(
+      line("task.lifecycle.output", {
+        kind: "task_lifecycle",
+        task_id: "task-b",
+        event: { kind: "output", task_id: "task-b", chunk: "b-out", final_result: false },
+      }),
+    );
+    expect(updateB).toEqual([{ type: "tool.updated", callId: "task-b", detail: "b-out" }]);
   });
 });

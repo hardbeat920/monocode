@@ -39,6 +39,8 @@ const cancelledThreads = new Set<string>();
  * stop/forget only kill an in-flight turn and drop resume state.
  */
 export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
+  // Note: `muse exec` has no plan mode; a plan intent runs as a normal turn
+  // and its output returns as chat messages rather than plan blocks.
   if (cancelledThreads.delete(input.sessionId)) return;
 
   let binary: string;
@@ -47,6 +49,7 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
   } catch (error) {
     throw museStartupError(error);
   }
+  if (cancelledThreads.delete(input.sessionId)) return;
 
   const prompt = musePromptParts(input.text, input.attachments, input.cwd);
   const resume = resumeByThread.get(input.sessionId);
@@ -83,6 +86,9 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
     watchChild(
       input.sessionId,
       (line) => {
+        // Non-consuming peek: late output after a cancel must not land in the
+        // transcript. The exit handler below owns consuming the flag.
+        if (cancelledThreads.has(input.sessionId)) return;
         for (const event of fold.pushLine(line)) {
           if (event.type === "message.completed") continue;
           input.onEvent(event);
@@ -156,11 +162,15 @@ export async function steerMuseTurn(_input: SteerTurnInput): Promise<void> {
 }
 
 export async function stopMuseSession(sessionId: string): Promise<void> {
+  // Clearing here (not just in the exit handler) matters: stop can land while
+  // idle with no child running, and a stale flag would swallow the next turn.
+  cancelledThreads.delete(sessionId);
   await killChild(sessionId).catch(() => undefined);
 }
 
 export async function forgetMuseSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
+  cancelledThreads.delete(sessionId);
   await killChild(sessionId).catch(() => undefined);
 }
 
@@ -169,6 +179,7 @@ export function bindMuseSession(
   providerSessionId: string,
   cwd: string,
 ): void {
+  if (!threadId.trim() || !providerSessionId.trim() || !cwd.trim()) return;
   resumeByThread.set(threadId, { sessionId: providerSessionId, cwd });
 }
 

@@ -34,6 +34,7 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "pi",
   "fx",
   "hermes",
+  "muse",
 ]);
 
 function MonoIcon({
