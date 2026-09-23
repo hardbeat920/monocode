@@ -30,42 +30,48 @@ vi.mock("../../core/child", () => ({
             id: message.id,
             result: {
               providerId: "meta",
+              profileId: null,
+              source: "providerCatalog",
               models: [
                 {
-                  model_id: "muse-spark-1.3",
-                  display_label: "muse-spark-1.3",
-                  visibility: "visible",
-                  context_limit: 1007997,
-                  reasoning_effort_variants: [
-                    { tier: "minimal" },
-                    { tier: "low" },
-                    { tier: "medium" },
-                    { tier: "high" },
-                    { tier: "xhigh" },
-                    { tier: "max" },
-                    { tier: "ultra" },
-                  ],
+                  modelId: "muse-spark-1.3-contributor",
+                  displayLabel: "Muse Spark 1.3 (Contributor)",
+                  contextLimit: 1007997,
+                  isDefault: false,
+                  isActive: false,
+                  providerId: "meta",
+                  profileId: null,
+                  releaseDate: "2026-09-02",
+                  outputLimit: 128000,
+                  cost: null,
+                  description: null,
                 },
                 {
-                  model_id: "muse-spark-1.3-contributor",
-                  display_label: "muse-spark-1.3-contributor",
-                  visibility: "visible",
-                  context_limit: 1007997,
-                  reasoning_effort_variants: [
-                    { tier: "minimal" },
-                    { tier: "low" },
-                    { tier: "medium" },
-                    { tier: "high" },
-                    { tier: "xhigh" },
-                    { tier: "max" },
-                  ],
+                  modelId: "muse-spark-1.3",
+                  displayLabel: "Muse Spark 1.3",
+                  contextLimit: 1007997,
+                  isDefault: true,
+                  isActive: false,
+                  providerId: "meta",
+                  profileId: null,
+                  releaseDate: "2026-09-02",
+                  outputLimit: 128000,
+                  cost: null,
+                  description: null,
                 },
                 {
-                  model_id: "muse-spark-retired",
-                  display_label: "retired",
+                  modelId: "muse-spark-retired",
+                  displayLabel: "retired",
+                  contextLimit: 1,
+                  isDefault: false,
+                  isActive: false,
                   visibility: "hidden",
-                  context_limit: 1,
-                  reasoning_effort_variants: [{ tier: "low" }],
+                  providerId: "meta",
+                  profileId: null,
+                  releaseDate: null,
+                  outputLimit: null,
+                  cost: null,
+                  description: null,
                 },
               ],
             },
@@ -84,6 +90,7 @@ const { refreshMuseCatalog } = await import("./museCatalog");
 const {
   modelsFor,
   hasLiveCatalog,
+  defaultModelId,
   resetHarnessModelOverlays,
 } = await import("../../../../features/sessions/model/models");
 
@@ -102,10 +109,12 @@ describe("muse catalog", () => {
     expect(hasLiveCatalog("muse")).toBe(true);
 
     const models = modelsFor("muse");
+    expect(models.length).toBeGreaterThan(0);
     expect(models.map((model) => model.id)).toEqual([
       "muse:muse-spark-1.3",
       "muse:muse-spark-1.3-contributor",
     ]);
+    expect(defaultModelId("muse")).toBe("muse:muse-spark-1.3");
     expect(models[0]).toMatchObject({
       harness: "muse",
       name: "Muse Spark 1.3",
@@ -114,7 +123,6 @@ describe("muse catalog", () => {
     });
     expect(models[1]?.name).toBe("Muse Spark 1.3 (Contributor)");
 
-    // `ultra` is undocumented and `max` is Standard-tier only.
     const standard = models[0]?.settings?.[0];
     expect(standard?.options.map((option) => option.value)).toEqual([
       "minimal",
@@ -124,6 +132,8 @@ describe("muse catalog", () => {
       "xhigh",
       "max",
     ]);
+    expect(standard?.options.map((option) => option.value)).not.toContain("none");
+    expect(standard?.options.map((option) => option.value)).not.toContain("ultra");
     expect(standard?.value).toBe("high");
     const contributor = models[1]?.settings?.[0];
     expect(contributor?.options.map((option) => option.value)).toEqual([
@@ -133,11 +143,12 @@ describe("muse catalog", () => {
       "high",
       "xhigh",
     ]);
+    expect(contributor?.options.map((option) => option.value)).not.toContain("max");
   });
 
   it("falls back to documented tiers when the list carries no variants", async () => {
     const { effortChoicesForRow } = await import("./museCatalog");
-    expect(effortChoicesForRow({ model_id: "muse-spark-9" }).map((c) => c.value)).toEqual([
+    expect(effortChoicesForRow({ modelId: "muse-spark-9" }).map((c) => c.value)).toEqual([
       "minimal",
       "low",
       "medium",
@@ -146,8 +157,25 @@ describe("muse catalog", () => {
       "max",
     ]);
     expect(
-      effortChoicesForRow({ model_id: "muse-spark-9-contributor" }).map((c) => c.value),
+      effortChoicesForRow({ modelId: "muse-spark-9-contributor" }).map((c) => c.value),
     ).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+    expect(
+      effortChoicesForRow({
+        modelId: "muse-spark-9",
+        reasoningEffortVariants: [
+          { tier: "none" },
+          { tier: "ultra" },
+          { tier: "high" },
+          { tier: "max" },
+        ],
+      }).map((c) => c.value),
+    ).toEqual(["high", "max"]);
+    expect(
+      effortChoicesForRow({
+        modelId: "muse-spark-9-contributor",
+        reasoningEffortVariants: [{ tier: "high" }, { tier: "max" }, { tier: "ultra" }],
+      }).map((c) => c.value),
+    ).toEqual(["high"]);
   });
 
   it("keeps the fallback when the probe fails", async () => {

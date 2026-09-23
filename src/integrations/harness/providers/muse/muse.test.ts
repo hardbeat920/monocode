@@ -88,8 +88,17 @@ describe("muse turns", () => {
     const turn = sendMuseTurn(baseInput(events));
     await new Promise((r) => setTimeout(r, 5));
     expect(spawned?.command).toBe("/fake/muse");
-    expect(spawned?.args.slice(0, 4)).toEqual(["exec", "--json", "--workspace", "/tmp/work"]);
+    expect(spawned?.args.slice(0, 5)).toEqual([
+      "exec",
+      "--json",
+      "--workspace",
+      "/tmp/work",
+      "--trust-workspace",
+    ]);
     expect(spawned?.args).not.toContain("--session-id");
+    expect(spawned?.args).not.toContain("--yolo");
+    expect(spawned?.args).not.toContain("--disable-sandbox");
+    expect(spawned?.args).toContain("--disable-shell");
 
     onLine!(line("run.output.delta", { kind: "run_output_delta", text: "hello" }));
     onLine!(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));

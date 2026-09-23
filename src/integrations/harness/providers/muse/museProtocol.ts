@@ -33,11 +33,29 @@ export function museEffortForModel(
   return effort;
 }
 
-/** Map MonoCode access levels to `muse exec` approval flags. The OS sandbox
- * stays on: full-access only relaxes the approval prompts, never the sandbox. */
+/**
+ * Map MonoCode access levels onto `muse exec` flags.
+ *
+ * Full access stops prompts and leaves the OS sandbox on (`--approval-mode
+ * never`). Every other mode stays off that posture. `muse exec` cannot accept
+ * a mid-run approval reply, and `on-request` blocks the child on a dangerous
+ * shell with no JSONL event to answer, so those modes fail closed: shell and
+ * web are removed rather than auto-approved. In-workspace edits stay available
+ * only for auto-accept-edits. Auto lets the CLI's approval judge decide.
+ */
 export function museApprovalArgs(runtimeMode: RuntimeMode): string[] {
   if (runtimeMode === "full-access") return ["--approval-mode", "never"];
-  return [];
+  if (runtimeMode === "auto") return ["--permission-profile", ":auto-review"];
+  if (runtimeMode === "auto-accept-edits") {
+    return ["--approval-mode", "on-request", "--disable-shell", "--disable-web-tools"];
+  }
+  return [
+    "--approval-mode",
+    "on-request",
+    "--disable-shell",
+    "--disable-write",
+    "--disable-web-tools",
+  ];
 }
 
 export type MusePrompt = {
@@ -78,6 +96,14 @@ export function musePromptParts(
   return { text: `${text}${lines.join("\n")}`, images };
 }
 
+/** Effort values safe to put on the argv. `none` and `ultra` are never sent;
+ * `max` is refused for contributor model ids. */
+function spawnEffort(effort: string | undefined, modelId: string | undefined): string | undefined {
+  if (!effort || !EFFORTS.has(effort)) return undefined;
+  if (effort === "max" && /contributor/i.test(modelId ?? "")) return undefined;
+  return effort;
+}
+
 function mentionFor(cwd: string, path: string): string {
   const cleanCwd = cwd.replace(/\/+$/, "");
   if (cleanCwd && path.startsWith(`${cleanCwd}/`)) {
@@ -97,13 +123,14 @@ export function museSpawnArgs(options: {
   effort?: string;
   runtimeMode: RuntimeMode;
 }): string[] {
-  const args = ["exec", "--json", "--workspace", options.cwd];
+  const args = ["exec", "--json", "--workspace", options.cwd, "--trust-workspace"];
   if (options.resumeSessionId) {
     args.push("--session-id", options.resumeSessionId);
   }
   const model = options.modelId?.trim();
   if (model) args.push("--model", model);
-  if (options.effort) args.push("--reasoning-effort", options.effort);
+  const effort = spawnEffort(options.effort, model);
+  if (effort) args.push("--reasoning-effort", effort);
   args.push(...museApprovalArgs(options.runtimeMode));
   for (const image of options.images) args.push("--image", image);
   args.push(options.prompt);

@@ -152,8 +152,9 @@ export function respondMuseApproval(
   _requestId: number,
   _decision: ApprovalDecision,
 ): void {
-  // Headless `muse exec` resolves approvals inside the CLI run; there is no
-  // live channel to answer on, so MonoCode approvals cannot be routed here.
+  // `muse exec` stdout is one-way JSONL: a blocked approval emits nothing to
+  // answer, and stdin is not an approval channel. Spawn flags in
+  // `museApprovalArgs` keep the child from waiting on that prompt.
 }
 
 export async function steerMuseTurn(_input: SteerTurnInput): Promise<void> {

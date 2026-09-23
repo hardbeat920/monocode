@@ -867,6 +867,10 @@ function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
       DEFAULT_MODEL_ID.grok
     );
   }
+  if (harness === "muse") {
+    // Live rows are ordered with the catalog `isDefault` model first.
+    return models[0]?.id ?? DEFAULT_MODEL_ID.muse;
+  }
   if (harness === "fx") {
     const preferred = [
       "zai/glm-5.2-fast",

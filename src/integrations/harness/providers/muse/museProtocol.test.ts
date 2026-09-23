@@ -34,7 +34,19 @@ describe("muse spawn args", () => {
         images: [],
         runtimeMode: "supervised",
       }),
-    ).toEqual(["exec", "--json", "--workspace", "/tmp/work", "hi"]);
+    ).toEqual([
+      "exec",
+      "--json",
+      "--workspace",
+      "/tmp/work",
+      "--trust-workspace",
+      "--approval-mode",
+      "on-request",
+      "--disable-shell",
+      "--disable-write",
+      "--disable-web-tools",
+      "hi",
+    ]);
   });
 
   it("resumes with session id, model, effort and images", () => {
@@ -53,30 +65,110 @@ describe("muse spawn args", () => {
       "--json",
       "--workspace",
       "/tmp/work",
+      "--trust-workspace",
       "--session-id",
       SID,
       "--model",
       "muse-spark-1.3",
       "--reasoning-effort",
       "low",
+      "--approval-mode",
+      "on-request",
+      "--disable-shell",
+      "--disable-write",
+      "--disable-web-tools",
       "--image",
       "/tmp/work/shot.png",
       "hi",
     ]);
   });
 
-  it("relaxes approvals only for full-access, never the sandbox", () => {
-    expect(museApprovalArgs("supervised")).toEqual([]);
-    expect(museApprovalArgs("auto")).toEqual([]);
+  it("trusts the workspace without disabling the sandbox", () => {
+    for (const runtimeMode of ["supervised", "auto-accept-edits", "auto", "full-access"] as const) {
+      const args = museSpawnArgs({
+        cwd: "/tmp/work",
+        prompt: "hi",
+        images: [],
+        runtimeMode,
+      });
+      expect(args).toContain("--trust-workspace");
+      expect(args.join(" ")).not.toMatch(/--yolo|--disable-sandbox/);
+    }
+  });
+
+  it("stops prompts only in full-access and fails other modes closed", () => {
     expect(museApprovalArgs("full-access")).toEqual(["--approval-mode", "never"]);
-    const args = museSpawnArgs({
+    expect(museApprovalArgs("auto")).toEqual(["--permission-profile", ":auto-review"]);
+    expect(museApprovalArgs("auto-accept-edits")).toEqual([
+      "--approval-mode",
+      "on-request",
+      "--disable-shell",
+      "--disable-web-tools",
+    ]);
+    expect(museApprovalArgs("supervised")).toEqual([
+      "--approval-mode",
+      "on-request",
+      "--disable-shell",
+      "--disable-write",
+      "--disable-web-tools",
+    ]);
+    const full = museSpawnArgs({
       cwd: "/tmp/work",
       prompt: "hi",
       images: [],
       runtimeMode: "full-access",
     });
-    expect(args).toContain("--approval-mode");
-    expect(args.join(" ")).not.toMatch(/--yolo|--disable-sandbox|--disable-approval/);
+    expect(full).toContain("--approval-mode");
+    expect(full[full.indexOf("--approval-mode") + 1]).toBe("never");
+    expect(full.join(" ")).not.toMatch(/--yolo|--disable-sandbox|--disable-approval|--disable-shell/);
+    const supervised = museSpawnArgs({
+      cwd: "/tmp/work",
+      prompt: "hi",
+      images: [],
+      runtimeMode: "supervised",
+    });
+    expect(supervised).not.toContain("never");
+    expect(supervised).toContain("--disable-shell");
+    expect(supervised).toContain("--disable-write");
+  });
+
+  it("never forwards none, ultra, or contributor max", () => {
+    const blocked = museSpawnArgs({
+      cwd: "/tmp/work",
+      prompt: "hi",
+      images: [],
+      modelId: "muse-spark-1.3-contributor",
+      effort: "ultra",
+      runtimeMode: "full-access",
+    });
+    expect(blocked).not.toContain("--reasoning-effort");
+    const none = museSpawnArgs({
+      cwd: "/tmp/work",
+      prompt: "hi",
+      images: [],
+      modelId: "muse-spark-1.3",
+      effort: "none",
+      runtimeMode: "full-access",
+    });
+    expect(none).not.toContain("--reasoning-effort");
+    const contributorMax = museSpawnArgs({
+      cwd: "/tmp/work",
+      prompt: "hi",
+      images: [],
+      modelId: "muse-spark-1.3-contributor",
+      effort: "max",
+      runtimeMode: "full-access",
+    });
+    expect(contributorMax).not.toContain("--reasoning-effort");
+    const standardMax = museSpawnArgs({
+      cwd: "/tmp/work",
+      prompt: "hi",
+      images: [],
+      modelId: "muse-spark-1.3",
+      effort: "max",
+      runtimeMode: "full-access",
+    });
+    expect(standardMax[standardMax.indexOf("--reasoning-effort") + 1]).toBe("max");
   });
 
   it("reads effort from model settings and rejects unknown tiers", () => {
@@ -146,6 +238,7 @@ describe("muse spawn args", () => {
 describe("muse auth errors", () => {
   it("recognizes login failures", () => {
     expect(museAuthError("not logged in, run `muse login`")).toBe(true);
+    expect(museAuthError("missing META_API_KEY")).toBe(true);
     expect(museAuthError("turn complete")).toBe(false);
   });
 });
@@ -163,6 +256,13 @@ describe("muse exec fold", () => {
     );
     expect(fold.done).toBe(true);
     expect(end).toEqual([{ type: "message.completed" }]);
+    const cancelled = new MuseExecFold();
+    const cancelEvents = cancelled.pushLine(
+      line("run.terminal.cancelled", { kind: "run_terminal", terminal: "cancelled" }),
+    );
+    expect(cancelled.done).toBe(true);
+    expect(cancelled.failed).toBeUndefined();
+    expect(cancelEvents).toEqual([{ type: "message.completed" }]);
   });
 
   it("maps tool tasks to started/updated events with paths", () => {

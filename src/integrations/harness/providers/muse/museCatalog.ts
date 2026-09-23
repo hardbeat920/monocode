@@ -134,8 +134,36 @@ type CatalogRow = {
   visibility?: unknown;
   context_limit?: unknown;
   contextLimit?: unknown;
+  is_default?: unknown;
+  isDefault?: unknown;
   reasoning_effort_variants?: unknown;
+  reasoningEffortVariants?: unknown;
 };
+
+function stringField(camel: unknown, snake: unknown): string {
+  if (typeof camel === "string" && camel.trim()) return camel.trim();
+  if (typeof snake === "string" && snake.trim()) return snake.trim();
+  return "";
+}
+
+function rowModelId(row: CatalogRow): string {
+  return stringField(row.modelId, row.model_id);
+}
+
+function rowLabel(row: CatalogRow): string {
+  return stringField(row.displayLabel, row.display_label);
+}
+
+function rowContextLimit(row: CatalogRow): number | undefined {
+  for (const value of [row.contextLimit, row.context_limit]) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
+function rowIsDefault(row: CatalogRow): boolean {
+  return row.isDefault === true || row.is_default === true;
+}
 
 const EFFORT_LABELS: Record<string, string> = {
   minimal: "Minimal",
@@ -150,10 +178,12 @@ const EFFORT_LABELS: Record<string, string> = {
  * so neither is offered even when the CLI advertises them. `max` exists only
  * on Standard-tier Muse Spark, never on `-contributor` models. */
 export function effortChoicesForRow(row: CatalogRow): ModelSettingChoice[] {
-  const modelId = typeof row.model_id === "string" ? row.model_id : "";
-  const variants = Array.isArray(row.reasoning_effort_variants)
-    ? row.reasoning_effort_variants
-    : [];
+  const modelId = rowModelId(row);
+  const variants = Array.isArray(row.reasoningEffortVariants)
+    ? row.reasoningEffortVariants
+    : Array.isArray(row.reasoning_effort_variants)
+      ? row.reasoning_effort_variants
+      : [];
   const advertised = new Set(
     variants.flatMap((variant) => {
       const tier =
@@ -184,17 +214,13 @@ function EFFORTS_IN_ORDER(tiers: Set<string>): string[] {
 }
 
 export function displayNameForRow(row: CatalogRow): string {
-  const modelId = typeof row.model_id === "string" ? row.model_id : "";
+  const modelId = rowModelId(row);
+  const label = rowLabel(row);
+  if (label && label !== modelId) return label;
   const match = /^muse-spark-(.+?)(-contributor)?$/.exec(modelId);
   if (match) {
     return `Muse Spark ${match[1]}${match[2] ? " (Contributor)" : ""}`;
   }
-  const label =
-    typeof row.display_label === "string" && row.display_label
-      ? row.display_label
-      : typeof row.displayLabel === "string"
-        ? row.displayLabel
-        : "";
   return label || modelId;
 }
 
@@ -204,41 +230,43 @@ export function modelsFromList(listed: unknown): AgentModel[] {
       ? (listed as Record<string, unknown>)
       : undefined;
   const rows = Array.isArray(root?.models) ? root.models : [];
-  const models: AgentModel[] = [];
+  const models: Array<{ model: AgentModel; isDefault: boolean; index: number }> = [];
   for (const entry of rows) {
     if (typeof entry !== "object" || entry === null) continue;
     const row = entry as CatalogRow;
-    const modelId = typeof row.model_id === "string" ? row.model_id : undefined;
+    const modelId = rowModelId(row);
     if (!modelId) continue;
     if (row.visibility === "hidden") continue;
-    const contextLimit =
-      typeof row.context_limit === "number"
-        ? row.context_limit
-        : typeof row.contextLimit === "number"
-          ? row.contextLimit
-          : undefined;
     const choices = effortChoicesForRow(row);
     models.push({
-      id: `muse:${modelId}`,
-      harness: "muse",
-      name: displayNameForRow(row),
-      nativeId: modelId,
-      contextWindow: contextLimit,
-      settings:
-        choices.length > 0
-          ? [
-              {
-                id: "effort",
-                label: "Reasoning",
-                kind: "select",
-                value: choices.some((choice) => choice.value === "high")
-                  ? "high"
-                  : choices[0].value,
-                options: choices,
-              },
-            ]
-          : undefined,
+      isDefault: rowIsDefault(row),
+      index: models.length,
+      model: {
+        id: `muse:${modelId}`,
+        harness: "muse",
+        name: displayNameForRow(row),
+        nativeId: modelId,
+        contextWindow: rowContextLimit(row),
+        settings:
+          choices.length > 0
+            ? [
+                {
+                  id: "effort",
+                  label: "Reasoning",
+                  kind: "select",
+                  value: choices.some((choice) => choice.value === "high")
+                    ? "high"
+                    : choices[0].value,
+                  options: choices,
+                },
+              ]
+            : undefined,
+      },
     });
   }
-  return models;
+  models.sort((a, b) => {
+    if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+    return a.index - b.index;
+  });
+  return models.map((entry) => entry.model);
 }
