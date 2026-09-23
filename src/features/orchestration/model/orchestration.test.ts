@@ -254,6 +254,28 @@ describe("local orchestration", () => {
       vi.mocked(f.host.submit).mock.calls.find(([id]) => id === "lead")?.[1],
     ).toContain('"modelSettings":{"reasoningEffort":"xhigh"}');
   });
+  it("prepares a worker before its first turn and excludes only the lead from edit tracking", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.startApproved("lead", "card", proposal());
+    await vi.waitFor(() =>
+      expect(f.host.createWorker).toHaveBeenCalledTimes(1),
+    );
+    const worker = f.tasks().find((task) => task.status === "running")!;
+    const created = vi.mocked(f.host.createWorker).mock.invocationCallOrder[0];
+    const firstTurn = vi
+      .mocked(f.host.submit)
+      .mock.calls.findIndex(([id]) => id === worker.sessionId);
+    expect(firstTurn).toBeGreaterThanOrEqual(0);
+    expect(
+      vi.mocked(f.host.submit).mock.invocationCallOrder[firstTurn],
+    ).toBeGreaterThan(created);
+    // App.tsx records edits for every session where run() is undefined.
+    expect(f.manager.forSession(worker.sessionId)?.leadId).toBe("lead");
+    expect(f.manager.run(worker.sessionId)).toBeUndefined();
+    expect(f.manager.run("lead")).toBeDefined();
+  });
+
   it("names the conversation that blocks a paused run from resuming", async () => {
     const f = setup();
     f.lead.busy = false;

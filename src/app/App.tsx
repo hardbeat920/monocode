@@ -250,13 +250,13 @@ import {
 import {
   beginSessionTurn,
   applySessionCheckpoint,
-  captureSessionCheckpoint,
+  ensureSessionCheckpoint,
   forgetSessionCheckpoint,
   flushSessionCheckpoint,
   keepSessionChanges,
   notifyReviewChanged,
-  prepareSessionCheckpoint,
   sessionCheckpointCleanupSafe,
+  trackSessionEdits,
 } from "../features/sessions/model/checkpoint";
 import { notifyDirsChanged } from "../features/files/model/fileTree";
 import { invalidateWatchedFiles, nudgeWatchedFiles } from "../features/files/model/fileWatch";
@@ -6152,7 +6152,9 @@ export default function App({
             revealHandoff(wrap.text);
           }
           nudgeOpenEditors(event, workCwd);
-          if (!orchestrator.forSession(sessionId))
+          // Workers need their edits recorded so an accepted task can be
+          // applied to the lead checkout. Only the lead is excluded.
+          if (!orchestrator.run(sessionId))
             trackSessionEdits(sessionId, workCwd, event);
           const routed = routePlanEvent(event);
           if (routed) enqueueHarnessEvent(sessionId, routed);
@@ -6186,6 +6188,9 @@ export default function App({
           });
         };
 
+        // Workers get their checkpoint in createWorker, before any turn. A turn
+        // must not create one later: it would count earlier worker edits as
+        // the baseline and drop them from the accepted result.
         if (!current.inboxAsk && !orchestrator.forSession(sessionId)) {
           await beginSessionTurn(sessionId, workCwd).catch(() => undefined);
         }
@@ -7359,6 +7364,11 @@ export default function App({
                   ),
                 );
         const checkoutCwd = workspace.checkoutCwd;
+        // Record the worker's starting state before its first turn so
+        // integrateWorker can apply exactly what it changed. A retained
+        // worktree already has worker edits and keeps its existing checkpoint.
+        if (task.workspacePolicy === "shared" || !task.workspace)
+          await ensureSessionCheckpoint(task.sessionId, checkoutCwd);
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
@@ -9562,30 +9572,6 @@ function dropOpenFiles(
     });
   }
   return { ...tab, layout, focusedId, editorPanes };
-}
-
-function trackSessionEdits(
-  sessionId: string,
-  cwd: string,
-  event: HarnessEvent,
-) {
-  if (event.type !== "tool.started" && event.type !== "tool.updated") return;
-  if (!isEditTool(event.kind, event.title, event.preview)) return;
-  const paths = [
-    ...(event.paths ?? []),
-    ...(event.preview?.path ? [event.preview.path] : []),
-  ].filter((path, index, all) => all.indexOf(path) === index);
-  if (paths.length === 0 || cwd === "~") return;
-  const completed =
-    event.type === "tool.updated" &&
-    (event.status === "completed" || event.status === "success");
-  if (!completed) {
-    void prepareSessionCheckpoint(sessionId, cwd, paths).catch(() => undefined);
-    return;
-  }
-  void captureSessionCheckpoint(sessionId, cwd, paths)
-    .catch(() => undefined)
-    .then(() => notifyReviewChanged(sessionId));
 }
 
 function nudgeWorkspace(cwd?: string) {

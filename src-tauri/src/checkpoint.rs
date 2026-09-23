@@ -205,9 +205,11 @@ impl CheckpointStore {
         from_cwd: &str,
         to_cwd: &str,
     ) -> Result<CheckpointApplyResult, String> {
-        let manifest = self
-            .load_matching(session_id, from_cwd)?
-            .ok_or("This worker has no recoverable change checkpoint")?;
+        let manifest = self.load_matching(session_id, from_cwd)?.ok_or_else(|| {
+            format!(
+                "This worker has no change checkpoint, so MonoCode cannot tell which changes are its own. Its edits are still in {from_cwd}. Copy them into the lead checkout by hand, then cancel the task."
+            )
+        })?;
         let from_root = project_root(from_cwd)?;
         let to_root = project_root(to_cwd)?;
         if same_cwd(from_cwd, to_cwd) {
@@ -2062,6 +2064,49 @@ mod tests {
             .apply("worker", &from, &to)
             .unwrap_err()
             .contains("not captured"));
+    }
+
+    #[test]
+    fn worker_new_and_modified_files_apply_to_lead_worktree() {
+        let lead = tmp("worker-lead");
+        if !init_git_commit(&lead.0, &[("tracked.txt", "head\n")]) {
+            return;
+        }
+        let worker = lead.0.join("worker-tree");
+        let worker_path = worker.to_string_lossy().into_owned();
+        if !git(&lead.0, &["worktree", "add", "-b", "worker", &worker_path]) {
+            return;
+        }
+        let from = worker_path;
+        let to = lead.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+
+        // Without ensure, prepare and capture record nothing and apply names
+        // the worktree so the user can recover by hand.
+        store.prepare("worker", &from, &["tracked.txt".into()]).unwrap();
+        store.capture("worker", &from, &["tracked.txt".into()]).unwrap();
+        let missing = store.apply("worker", &from, &to).unwrap_err();
+        assert!(missing.contains("no change checkpoint"));
+        assert!(missing.contains(&from));
+
+        store.ensure("worker", &from).unwrap();
+        let edited = vec!["tracked.txt".to_string(), "src/new.txt".to_string()];
+        store.prepare("worker", &from, &edited).unwrap();
+        std::fs::write(worker.join("tracked.txt"), "worker\n").unwrap();
+        std::fs::create_dir_all(worker.join("src")).unwrap();
+        std::fs::write(worker.join("src/new.txt"), "created\n").unwrap();
+        store.capture("worker", &from, &edited).unwrap();
+
+        let applied = store.apply("worker", &from, &to).unwrap();
+        assert_eq!(applied.files, ["src/new.txt", "tracked.txt"]);
+        assert_eq!(
+            std::fs::read_to_string(lead.0.join("tracked.txt")).unwrap(),
+            "worker\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(lead.0.join("src/new.txt")).unwrap(),
+            "created\n"
+        );
     }
 
     #[test]
