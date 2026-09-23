@@ -8,6 +8,7 @@ import type { OrchestrationProposal } from "../../orchestration/model/orchestrat
 import type { LinkedWorkItemUpdateCard } from "../../inbox/model/linkedWorkItemActivity";
 import {
   defaultSessionChoice,
+  firstEnabledHarness,
   preferredModelId,
   preferredModelSettings,
   resolveModel,
@@ -453,8 +454,23 @@ export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
 ): Session {
-  const choice = defaultSessionChoice();
+  const choice = defaultSessionChoice(cwd);
   return newSession(choice.harness, cwd, choice.model, runtimeMode);
+}
+
+/**
+ * New conversation for a project, carrying a seed session's choice when the
+ * project still allows that provider. A provider the project has hidden is
+ * swapped for its first enabled one.
+ */
+export function newSessionForProject(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
+  const preferred = seed?.harness ?? "claude";
+  const harness = firstEnabledHarness(cwd, preferred);
+  if (harness === preferred) return newSessionLike(seed, cwd);
+  return newSession(harness, cwd, undefined, seed?.runtimeMode);
 }
 
 /** New conversation carrying another session's harness, model and settings. */

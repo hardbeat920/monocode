@@ -88,7 +88,7 @@ import { formatRelativeTime, githubStatus } from "../../inbox/model/githubTasks"
 import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
 import { LAYER } from "../../../shared/lib/layers";
 import { LINEAR_CHANGE_EVENT, linearConnected } from "../../inbox/model/linear";
-import { defaultSessionChoice, modelsFor, resolveModel } from "../../sessions/model/models";
+import { defaultSessionChoice, firstEnabledHarness, modelsFor, resolveModel } from "../../sessions/model/models";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
@@ -257,14 +257,17 @@ function AutomationsContent({
   const selected = automations.find((entry) => entry.id === selectedId) ?? null;
 
   const defaultDraftTarget = () => {
-    const preferred = defaultSessionChoice();
-    const harness = selected?.harness ?? preferred.harness;
+    const project =
+      cwd && looksLikeProject(cwd) ? cwd : (recents[0]?.path ?? "~");
+    const preferred = defaultSessionChoice(project);
+    const harness = firstEnabledHarness(
+      project,
+      selected?.harness ?? preferred.harness,
+    );
     const model =
       (selected?.harness === harness ? selected.model : undefined) ??
       modelsFor(harness)[0]?.id ??
       preferred.model;
-    const project =
-      cwd && looksLikeProject(cwd) ? cwd : (recents[0]?.path ?? "~");
     return { project, harness, model };
   };
 
@@ -1318,6 +1321,7 @@ function AutomationEditor({
                         harness={draft.harness}
                         model={draft.model}
                         values={draft.modelSettings}
+                        project={draft.cwd}
                         hideSettings={controlsBeside}
                         onChange={(harness, model) =>
                           onChange({ ...draft, harness, model })

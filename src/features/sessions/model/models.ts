@@ -1,5 +1,6 @@
 import type { HarnessId } from "./session";
 import { HARNESSES } from "./session";
+import { loadProjectProviderSettings } from "./projectProviders";
 
 export type ModelSettingChoice = {
   value: string;
@@ -658,11 +659,33 @@ export function preferredModelId(harness: HarnessId): string {
   return defaultModelId(harness);
 }
 
+/**
+ * `preferred` unless the project hides it, in which case the first provider the
+ * project still allows. Falls back to `preferred` when a project has hidden
+ * everything, so a conversation always has a provider.
+ */
+export function firstEnabledHarness(
+  cwd: string | undefined,
+  preferred: HarnessId,
+): HarnessId {
+  const hidden = new Set(loadProjectProviderSettings(cwd).hidden ?? []);
+  if (!hidden.has(preferred)) return preferred;
+  return HARNESSES.find((id) => !hidden.has(id)) ?? preferred;
+}
+
 /** Provider + model new conversations should start with. */
-export function defaultSessionChoice(): LastModelChoice {
+export function defaultSessionChoice(cwd?: string): LastModelChoice {
+  const project = loadProjectProviderSettings(cwd);
   const last = loadLastModelChoice();
-  const harness = last?.harness ?? "cursor";
-  return { harness, model: preferredModelId(harness) };
+  const harness = firstEnabledHarness(
+    cwd,
+    project.defaultHarness ?? last?.harness ?? "cursor",
+  );
+  const model =
+    project.models?.[harness] ??
+    (project.defaultHarness === harness ? project.defaultModel : undefined) ??
+    preferredModelId(harness);
+  return { harness, model };
 }
 
 export function loadLastModelChoice(): LastModelChoice | null {

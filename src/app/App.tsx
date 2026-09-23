@@ -334,6 +334,7 @@ import {
   sessionNeedsInput,
   newDefaultSession,
   newSession,
+  newSessionForProject,
   removeSessionDraft,
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -4818,13 +4819,7 @@ export default function App({
       }
 
       const seed = current ?? sessionsRef.current[0];
-      const session = newSession(
-        seed?.harness ?? "claude",
-        normalized,
-        seed?.model,
-        seed?.runtimeMode,
-        seed?.modelSettings,
-      );
+      const session = newSessionForProject(seed, normalized);
       const tab = newTab(session.id);
       setProjectCwd(normalized);
       setRecents(rememberProject(normalized));
