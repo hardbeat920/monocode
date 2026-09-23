@@ -63,7 +63,7 @@ describe("hugeicons imports", () => {
     expect(html).toContain("size-[72%]");
   });
 
-  it("renders the Muse artwork as a plain image", () => {
+  it("renders the Meta artwork as a plain image", () => {
     const html = renderToStaticMarkup(
       createElement(HarnessIcon, {
         harness: "muse",
@@ -71,6 +71,10 @@ describe("hugeicons imports", () => {
       }),
     );
     expect(html).toContain("<img");
-    expect(html).toContain("data:image/svg+xml");
+    expect(html).toContain("muse.svg");
+    // The committed file must stay the vendor gradient mark, not a placeholder.
+    const artwork = readFileSync(join(SRC, "assets/providers/muse.svg"), "utf8");
+    expect(artwork).toContain("linearGradient");
+    expect(artwork).toContain('viewBox="0 0 32 32"');
   });
 });
