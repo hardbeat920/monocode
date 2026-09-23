@@ -145,6 +145,37 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe("");
   });
 
+  it("clears the draft when the reset token advances", async () => {
+    const onDraftChange = vi.fn();
+    const props = {
+      focused: true,
+      harness: "claude" as const,
+      model: "claude-sonnet",
+      runtimeMode: "supervised" as const,
+      executionCwd: "/repo",
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      initialDraft: "something here...",
+      draftResetToken: 1,
+      onDraftChange,
+      onFocus: vi.fn(),
+      onCwdChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onRuntimeModeChange: vi.fn(),
+      onSubmit: vi.fn(),
+    };
+    await act(async () => root.render(createElement(Composer, props)));
+    expect(container.querySelector("textarea")?.value).toBe(
+      "something here...",
+    );
+
+    await act(async () =>
+      root.render(createElement(Composer, { ...props, draftResetToken: 2 })),
+    );
+    expect(container.querySelector("textarea")?.value).toBe("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("");
+  });
+
   it("keeps drafts and blocks sending until a working copy is selected", async () => {
     const onSubmit = vi.fn();
     const props = {

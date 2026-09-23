@@ -104,7 +104,7 @@ export function BtwPopover({
 }: Props) {
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
-  const [composerRevision, setComposerRevision] = useState(0);
+  const [draftResetToken, setDraftResetToken] = useState(0);
   const [draftModel, setDraftModel] = useState<string | null>(null);
   const [draftModelSettings, setDraftModelSettings] = useState<Record<
     string,
@@ -208,7 +208,7 @@ export function BtwPopover({
       threadId,
       message: { id: messageId, role: "user", text, createdAt: Date.now() },
     });
-    setComposerRevision((revision) => revision + 1);
+    setDraftResetToken((revision) => revision + 1);
     setOpenThreadId(threadId);
     setDraftText("");
     onSubmit(
@@ -424,7 +424,7 @@ export function BtwPopover({
 
           <div className="shrink-0 border-t border-content/10 px-3.5 py-3">
             <Composer
-              key={`${openThreadId}-${composerRevision}`}
+              key={openThreadId}
               compact
               enabled={!running}
               disabled={running}
@@ -447,6 +447,7 @@ export function BtwPopover({
               inputAriaLabel="By-the-way question"
               allowedModelHarnesses={[harness]}
               initialDraft={draftText}
+              draftResetToken={draftResetToken}
               onFocus={() => {}}
               onCwdChange={() => {}}
               onModelChange={handleModelChange}

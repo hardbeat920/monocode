@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,16 +10,26 @@ vi.mock("./Composer", () => ({
   Composer: ({
     focused,
     initialDraft,
+    draftResetToken,
   }: {
     focused?: boolean;
     initialDraft?: string;
-  }) =>
-    createElement("textarea", {
+    draftResetToken?: number;
+  }) => {
+    const [draft, setDraft] = useState(initialDraft ?? "");
+    const resetTokenRef = useRef(draftResetToken);
+    useEffect(() => {
+      if (resetTokenRef.current === draftResetToken) return;
+      resetTokenRef.current = draftResetToken;
+      setDraft("");
+    }, [draftResetToken]);
+    return createElement("textarea", {
       "data-btw-composer": "true",
       "data-focused": focused ? "true" : "false",
       readOnly: true,
-      value: initialDraft ?? "",
-    }),
+      value: draft,
+    });
+  },
 }));
 type BtwSubmit = (
   threadId: string,

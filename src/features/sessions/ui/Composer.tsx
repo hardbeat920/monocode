@@ -189,6 +189,7 @@ type Props = {
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
   initialDraft?: string;
+  draftResetToken?: number;
   inboxCard?: InboxComposerCard;
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
@@ -467,6 +468,7 @@ export function Composer({
   compactSupported = false,
   quoteRequest,
   initialDraft,
+  draftResetToken,
   inboxCard,
   noteCard,
   handoffCard,
@@ -524,6 +526,7 @@ export function Composer({
   const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
+  const draftResetTokenRef = useRef(draftResetToken);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
@@ -847,6 +850,33 @@ export function Composer({
   useEffect(() => {
     onDraftChange?.(draft);
   }, [draft, onDraftChange]);
+  useEffect(() => {
+    if (
+      draftResetToken == null ||
+      draftResetTokenRef.current === draftResetToken
+    ) {
+      return;
+    }
+    draftResetTokenRef.current = draftResetToken;
+    draftRevisionRef.current += 1;
+    if (ref.current) {
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+    }
+    setDraft("");
+    onDraftChange?.("");
+    setDraftSelected(false);
+    setPlanSelected(false);
+    setOrchestrationSelected(false);
+    setSessionFolderSelected(false);
+    setSessionFolderOpen(false);
+    setPlusOpen(false);
+    setSlash(null);
+    setMention(null);
+    setCreatingSkill(false);
+    setCreateError(null);
+    syncHasValue("", attachmentsRef.current);
+  }, [draftResetToken, onDraftChange, syncHasValue]);
 
   const syncHighlightScroll = useCallback((el: HTMLTextAreaElement) => {
     const highlight = highlightRef.current;
