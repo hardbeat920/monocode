@@ -188,6 +188,56 @@ export const MODELS: AgentModel[] = [
     nativeId: "",
   },
   {
+    id: "muse:muse-spark-1.3-contributor",
+    harness: "muse",
+    name: "Muse Spark 1.3 (Contributor)",
+    nativeId: "muse-spark-1.3-contributor",
+    contextWindow: 1_007_997,
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "none", label: "None" },
+          { value: "minimal", label: "Minimal" },
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+          { value: "max", label: "Max" },
+          { value: "ultra", label: "Ultra" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "muse:muse-spark-1.3",
+    harness: "muse",
+    name: "Muse Spark 1.3",
+    nativeId: "muse-spark-1.3",
+    contextWindow: 1_007_997,
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "none", label: "None" },
+          { value: "minimal", label: "Minimal" },
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+          { value: "max", label: "Max" },
+          { value: "ultra", label: "Ultra" },
+        ],
+      },
+    ],
+  },
+  {
     id: "antigravity:gemini-3.8-flash-high",
     harness: "antigravity",
     name: "Gemini 3.8 Flash (High)",
@@ -205,6 +255,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
   hermes: "hermes:default",
+  muse: "muse:muse-spark-1.3-contributor",
   antigravity: "antigravity:gemini-3.8-flash-high",
 };
 
@@ -234,6 +285,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "omp",
   "fx",
   "hermes",
+  "muse",
   "antigravity",
 ];
 

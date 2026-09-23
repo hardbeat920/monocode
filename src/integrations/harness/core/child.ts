@@ -319,6 +319,10 @@ export function resolveHermesBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_hermes");
 }
 
+export function resolveMuseBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_muse");
+}
+
 export function resolveAntigravityBinary(): Promise<{
   path: string;
   args: string[];

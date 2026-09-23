@@ -40,6 +40,7 @@ const LOGIN_RESOLVERS: Partial<
   cursor: () => child.resolveCursorBinary(),
   grok: () => child.resolveGrokBinary(),
   fx: () => child.resolveFxBinary(),
+  muse: () => child.resolveMuseBinary(),
 };
 
 const inflight = new Map<string, Promise<void>>();

@@ -105,6 +105,14 @@ export {
   respondAntigravityApproval,
   bindAntigravitySession,
 } from "./providers/antigravity/antigravity";
+export {
+  sendMuseTurn,
+  cancelMuseTurn,
+  respondMuseApproval,
+  stopMuseSession,
+  forgetMuseSession,
+  bindMuseSession,
+} from "./providers/muse/muse";
 export { generateCursorSessionTitle } from "./providers/cursor/cursorTitle";
 export { generateCodexSessionTitle } from "./providers/codex/codexTitle";
 export { generateOpenCodeSessionTitle } from "./providers/opencode/opencodeTitle";

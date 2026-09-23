@@ -99,6 +99,7 @@ describe("harness registry", () => {
       "omp",
       "fx",
       "antigravity",
+      "muse",
     ];
 
     expect(
@@ -113,6 +114,7 @@ describe("harness registry", () => {
       omp: true,
       fx: false,
       antigravity: false,
+      muse: false,
     });
   });
 
@@ -141,6 +143,17 @@ describe("harness registry", () => {
       omp: true,
       fx: false,
     });
+  });
+
+  it("registers Muse as a live exec harness", () => {
+    registerBuiltinHarnesses();
+    expect(isLiveHarness("muse")).toBe(true);
+    const adapter = listHarnesses().find((adapter) => adapter.id === "muse")!;
+    expect(adapter.canSteer).toBe(false);
+    expect(adapter.bindSession).toBeTypeOf("function");
+    expect(adapter.refreshCatalog).toBeUndefined();
+    expect(adapter.generateTitle).toBeUndefined();
+    expect(adapter.generateCommitMessage).toBeUndefined();
   });
 
   it("registers Antigravity as a live fx-tier harness", () => {

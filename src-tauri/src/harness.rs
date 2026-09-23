@@ -383,6 +383,19 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Meta Muse Code (`muse`).
+#[tauri::command(async)]
+pub fn harness_resolve_muse() -> Result<CursorBinary, String> {
+    resolve_muse()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Muse CLI not found. Install it with `curl -fsSL https://dev.meta.ai/install.sh | sh` and run `muse login`, then retry."
+                .into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -879,6 +892,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_omp(),
         resolve_fx(),
         resolve_grok(),
+        resolve_muse(),
         resolve_antigravity(),
     ]
     .into_iter()
@@ -1221,6 +1235,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "muse"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
@@ -1669,6 +1684,72 @@ fn resolve_hermes() -> Option<PathBuf> {
     }
 
     first_binary(candidates)
+}
+
+fn resolve_muse() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        // Official installer: ~/.local/bin/muse
+        candidates.push(home.join(".local/bin/muse"));
+        candidates.push(home.join(".npm-global/bin/muse"));
+        candidates.push(home.join(".cargo/bin/muse"));
+        candidates.push(home.join("n/bin/muse"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/muse"));
+    candidates.push(PathBuf::from("/usr/local/bin/muse"));
+    candidates.push(PathBuf::from("/usr/bin/muse"));
+    candidates.push(PathBuf::from("/snap/bin/muse"));
+    if let Some(from_shell) = which_via_login_shell("muse") {
+        candidates.push(from_shell);
+    }
+
+    first_binary_matching(candidates, is_muse_code)
+}
+
+fn is_muse_code(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if !binary_name_eq(path, "muse") {
+        return false;
+    }
+    muse_version_mentions_code(path)
+}
+
+fn muse_version_mentions_code(path: &Path) -> bool {
+    let mut cmd = Command::new(path);
+    cmd.arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_gui_env(&mut cmd);
+    isolate_child(&mut cmd);
+    let Ok(child) = spawn_managed(&mut cmd) else {
+        return false;
+    };
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(output)) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .to_ascii_lowercase();
+            text.contains("muse code")
+        }
+        _ => {
+            terminate(pid);
+            false
+        }
+    }
 }
 
 fn resolve_antigravity() -> Option<PathBuf> {
@@ -2967,6 +3048,9 @@ mod reap_logic_tests {
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
+        assert!(looks_like_harness_argv(
+            "/Users/n/.local/bin/muse exec --json"
+        ));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(
