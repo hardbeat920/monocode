@@ -1,4 +1,5 @@
 import { homeDir } from "../../../../platform/tauri/fs";
+import { museSupportsMax } from "./museProtocol";
 import {
   setHarnessModels,
   type AgentModel,
@@ -175,8 +176,8 @@ const EFFORT_LABELS: Record<string, string> = {
 };
 
 /** Documented tiers only: `none` 400s on Spark and `ultra` is undocumented,
- * so neither is offered even when the CLI advertises them. `max` exists only
- * on Standard-tier Muse Spark, never on `-contributor` models. */
+ * so neither is offered even when the CLI advertises them. `max` is
+ * standard `muse-spark-1.3` only; 1.2 and contributor ids omit it. */
 export function effortChoicesForRow(row: CatalogRow): ModelSettingChoice[] {
   const modelId = rowModelId(row);
   const variants = Array.isArray(row.reasoningEffortVariants)
@@ -197,14 +198,14 @@ export function effortChoicesForRow(row: CatalogRow): ModelSettingChoice[] {
   // per-tier list so fresh model ids still get a correct select.
   const tiers = advertised.size > 0 ? advertised : new Set(defaultTiersFor(modelId));
   return [...EFFORTS_IN_ORDER(tiers)]
-    .filter((tier) => tier !== "max" || !/contributor/i.test(modelId))
+    .filter((tier) => tier !== "max" || museSupportsMax(modelId))
     .map((tier) => ({ value: tier, label: EFFORT_LABELS[tier] ?? tier }));
 }
 
 function defaultTiersFor(modelId: string): string[] {
-  return /contributor/i.test(modelId)
-    ? ["minimal", "low", "medium", "high", "xhigh"]
-    : ["minimal", "low", "medium", "high", "xhigh", "max"];
+  const tiers = ["minimal", "low", "medium", "high", "xhigh"];
+  if (museSupportsMax(modelId)) tiers.push("max");
+  return tiers;
 }
 
 function EFFORTS_IN_ORDER(tiers: Set<string>): string[] {

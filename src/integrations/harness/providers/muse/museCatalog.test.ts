@@ -148,7 +148,7 @@ describe("muse catalog", () => {
 
   it("falls back to documented tiers when the list carries no variants", async () => {
     const { effortChoicesForRow } = await import("./museCatalog");
-    expect(effortChoicesForRow({ modelId: "muse-spark-9" }).map((c) => c.value)).toEqual([
+    expect(effortChoicesForRow({ modelId: "muse-spark-1.3" }).map((c) => c.value)).toEqual([
       "minimal",
       "low",
       "medium",
@@ -156,12 +156,19 @@ describe("muse catalog", () => {
       "xhigh",
       "max",
     ]);
+    expect(effortChoicesForRow({ modelId: "muse-spark-1.2" }).map((c) => c.value)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
     expect(
-      effortChoicesForRow({ modelId: "muse-spark-9-contributor" }).map((c) => c.value),
+      effortChoicesForRow({ modelId: "muse-spark-1.2-contributor" }).map((c) => c.value),
     ).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
     expect(
       effortChoicesForRow({
-        modelId: "muse-spark-9",
+        modelId: "muse-spark-1.2",
         reasoningEffortVariants: [
           { tier: "none" },
           { tier: "ultra" },
@@ -169,10 +176,16 @@ describe("muse catalog", () => {
           { tier: "max" },
         ],
       }).map((c) => c.value),
+    ).toEqual(["high"]);
+    expect(
+      effortChoicesForRow({
+        modelId: "muse-spark-1.3",
+        reasoningEffortVariants: [{ tier: "high" }, { tier: "max" }, { tier: "ultra" }],
+      }).map((c) => c.value),
     ).toEqual(["high", "max"]);
     expect(
       effortChoicesForRow({
-        modelId: "muse-spark-9-contributor",
+        modelId: "muse-spark-1.3-contributor",
         reasoningEffortVariants: [{ tier: "high" }, { tier: "max" }, { tier: "ultra" }],
       }).map((c) => c.value),
     ).toEqual(["high"]);

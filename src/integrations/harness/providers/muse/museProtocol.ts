@@ -21,15 +21,20 @@ export function museEffort(settings?: Record<string, string>): string | undefine
 }
 
 /**
- * `max` exists only on Standard-tier Muse Spark 1.3; Contributor-tier models
- * reject it, so it is dropped for `-contributor` model ids.
+ * `max` is Standard-tier `muse-spark-1.3` only. Spark 1.2 and every
+ * contributor id reject it with HTTP 400.
  */
+export function museSupportsMax(modelId: string | undefined): boolean {
+  return (modelId ?? "").trim() === "muse-spark-1.3";
+}
+
+/** Reasoning tier safe for this model. `max` is dropped unless {@link museSupportsMax}. */
 export function museEffortForModel(
   settings: Record<string, string> | undefined,
   modelId: string,
 ): string | undefined {
   const effort = museEffort(settings);
-  if (effort === "max" && /contributor/i.test(modelId)) return undefined;
+  if (effort === "max" && !museSupportsMax(modelId)) return undefined;
   return effort;
 }
 
@@ -97,10 +102,10 @@ export function musePromptParts(
 }
 
 /** Effort values safe to put on the argv. `none` and `ultra` are never sent;
- * `max` is refused for contributor model ids. */
+ * `max` is sent only for standard `muse-spark-1.3`. */
 function spawnEffort(effort: string | undefined, modelId: string | undefined): string | undefined {
   if (!effort || !EFFORTS.has(effort)) return undefined;
-  if (effort === "max" && /contributor/i.test(modelId ?? "")) return undefined;
+  if (effort === "max" && !museSupportsMax(modelId)) return undefined;
   return effort;
 }
 

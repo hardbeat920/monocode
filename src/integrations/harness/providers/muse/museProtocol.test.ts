@@ -160,6 +160,15 @@ describe("muse spawn args", () => {
       runtimeMode: "full-access",
     });
     expect(contributorMax).not.toContain("--reasoning-effort");
+    const spark12 = museSpawnArgs({
+      cwd: "/tmp/work",
+      prompt: "hi",
+      images: [],
+      modelId: "muse-spark-1.2",
+      effort: "max",
+      runtimeMode: "full-access",
+    });
+    expect(spark12).not.toContain("--reasoning-effort");
     const standardMax = museSpawnArgs({
       cwd: "/tmp/work",
       prompt: "hi",
@@ -182,9 +191,12 @@ describe("muse spawn args", () => {
     // `ultra` is not a documented tier and `none` returns HTTP 400 on Spark.
     expect(museEffort({ effort: "ultra" })).toBeUndefined();
     expect(museEffort({ effort: "none" })).toBeUndefined();
-    // `max` exists only on Standard-tier Muse Spark.
+    // `max` is standard muse-spark-1.3 only. 1.2 and contributor return HTTP 400.
     expect(museEffortForModel({ effort: "max" }, "muse-spark-1.3")).toBe("max");
+    expect(museEffortForModel({ effort: "max" }, "muse-spark-1.2")).toBeUndefined();
+    expect(museEffortForModel({ effort: "max" }, "muse-spark-1.2-contributor")).toBeUndefined();
     expect(museEffortForModel({ effort: "max" }, "muse-spark-1.3-contributor")).toBeUndefined();
+    expect(museEffortForModel({ effort: "high" }, "muse-spark-1.2")).toBe("high");
     expect(museEffortForModel({ effort: "high" }, "muse-spark-1.3-contributor")).toBe("high");
   });
 
