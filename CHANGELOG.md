@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fedora and Enterprise Linux 10 workstations (registered RHEL, Rocky, Alma, CentOS Stream, Oracle) can install native Tauri prerequisites with `npm run setup:linux:fedora`, which enables EPEL 10 and CRB automatically where needed, and build a distributable `.rpm` with `npm run build:fedora`. Each GitHub release ships that `.rpm` alongside the `.deb` and AppImage. In #449.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added
