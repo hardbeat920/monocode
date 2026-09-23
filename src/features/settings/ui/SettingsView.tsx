@@ -154,7 +154,12 @@ import {
   savePickerProviderVisible,
   subscribeModels,
 } from "../../sessions/model/models";
-import { prettyCwd, projectKey, projectName } from "../../../shared/lib/paths";
+import {
+  pathKey,
+  prettyCwd,
+  projectKey,
+  projectName,
+} from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
@@ -470,7 +475,9 @@ export function SettingsView({
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
-              {section === "providers" ? <ProvidersPage cwd={cwd} /> : null}
+              {section === "providers" ? (
+                <ProvidersPage cwd={cwd} recents={recents} />
+              ) : null}
               {section === "worktrees" ? (
                 <WorktreesPage
                   cwd={cwd}
@@ -2278,7 +2285,15 @@ function KeybindingsPage() {
   );
 }
 
-function ProvidersPage({ cwd }: { cwd?: string }) {
+const GLOBAL_PROVIDER_SCOPE = "global";
+
+function ProvidersPage({
+  cwd,
+  recents,
+}: {
+  cwd?: string;
+  recents?: RecentProject[];
+}) {
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
   useSyncExternalStore(
     subscribeHarnessAvailability,
@@ -2294,19 +2309,36 @@ function ProvidersPage({ cwd }: { cwd?: string }) {
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
-  const [scope, setScope] = useState<"global" | "project">("global");
+  const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
   const [hiddenGlobally, setHiddenGlobally] = useState(loadHiddenPickerProviders);
-  const project = cwd && looksLikeProject(cwd) ? cwd : null;
+
+  const scopeOptions = useMemo(() => {
+    const options = [
+      { value: GLOBAL_PROVIDER_SCOPE, label: "Global" },
+    ];
+    const seen = new Set<string>();
+    for (const path of [cwd, ...(recents ?? []).map((entry) => entry.path)]) {
+      if (!path || !looksLikeProject(path)) continue;
+      const key = pathKey(path);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({ value: path, label: projectName(path) });
+    }
+    return options;
+  }, [cwd, recents]);
+
+  const project = scope === GLOBAL_PROVIDER_SCOPE ? null : scope;
   const projectSettings = project ? loadProjectProviderSettings(project) : {};
-  const forProject = scope === "project" && project != null;
 
   useEffect(() => {
     void probeHarnessAvailability();
   }, []);
 
   useEffect(() => {
-    if (!project) setScope("global");
-  }, [project]);
+    if (!scopeOptions.some((option) => option.value === scope)) {
+      setScope(GLOBAL_PROVIDER_SCOPE);
+    }
+  }, [scope, scopeOptions]);
 
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
@@ -2314,7 +2346,7 @@ function ProvidersPage({ cwd }: { cwd?: string }) {
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
-    if (forProject && project) {
+    if (project) {
       setProjectDefaultModel(project, harness, model);
       return;
     }
@@ -2327,7 +2359,7 @@ function ProvidersPage({ cwd }: { cwd?: string }) {
   };
 
   const onDefault = (harness: HarnessId, model: string) => {
-    if (forProject && project) {
+    if (project) {
       setProjectDefaultProvider(project, harness, model);
       return;
     }
@@ -2337,7 +2369,7 @@ function ProvidersPage({ cwd }: { cwd?: string }) {
   };
 
   const onPickerVisible = (harness: HarnessId, visible: boolean) => {
-    if (forProject && project) {
+    if (project) {
       setProjectProviderHidden(project, harness, !visible);
       return;
     }
@@ -2356,44 +2388,36 @@ function ProvidersPage({ cwd }: { cwd?: string }) {
       <Group
         title="Agent CLIs"
         action={
-          project ? (
-            <Segmented
-              label="Provider defaults scope"
-              value={scope}
-              onChange={setScope}
-              options={[
-                { value: "global", label: "Global" },
-                { value: "project", label: "This project" },
-              ]}
-            />
-          ) : null
+          <Select
+            label="Provider defaults scope"
+            value={scope}
+            options={scopeOptions}
+            onChange={setScope}
+          />
         }
         description={
-          forProject && project
+          project
             ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project.`
             : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
         }
       >
         {HARNESSES.map((harness) => {
-          const inPicker =
-            forProject && project
-              ? !(projectSettings.hidden ?? []).includes(harness)
-              : !hiddenGlobally.includes(harness);
-          const selectedModel =
-            forProject && project
-              ? (projectSettings.models?.[harness] ??
-                (projectSettings.defaultHarness === harness
-                  ? projectSettings.defaultModel
-                  : undefined) ??
-                defaultModelId(harness))
-              : (defaultModels[harness] ??
-                (choice?.harness === harness
-                  ? choice.model
-                  : defaultModelId(harness)));
-          const isDefault =
-            forProject && project
-              ? projectSettings.defaultHarness === harness
-              : choice?.harness === harness;
+          const inPicker = project
+            ? !(projectSettings.hidden ?? []).includes(harness)
+            : !hiddenGlobally.includes(harness);
+          const selectedModel = project
+            ? (projectSettings.models?.[harness] ??
+              (projectSettings.defaultHarness === harness
+                ? projectSettings.defaultModel
+                : undefined) ??
+              defaultModelId(harness))
+            : (defaultModels[harness] ??
+              (choice?.harness === harness
+                ? choice.model
+                : defaultModelId(harness)));
+          const isDefault = project
+            ? projectSettings.defaultHarness === harness
+            : choice?.harness === harness;
           return (
             <ProviderRow
               key={harness}
