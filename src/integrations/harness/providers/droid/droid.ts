@@ -1,4 +1,8 @@
-import { nativeModelId } from "../../../../features/sessions/model/models";
+import {
+  hasLiveCatalog,
+  nativeModelId,
+  setHarnessModels,
+} from "../../../../features/sessions/model/models";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import { AcpSubagents } from "../../core/acpSubagents";
@@ -25,6 +29,7 @@ import {
   droidStartupError,
   isDroidAuthError,
   isDroidErrorEcho,
+  modelsFromDroidSession,
   type DroidConfigOption,
 } from "./droidProtocol";
 import {
@@ -39,6 +44,7 @@ import type {
   HarnessSessionInput,
   SendTurnInput,
 } from "../../core/types";
+import { refreshDroidCatalog } from "./droidCatalog";
 
 type Live = {
   subagents: AcpSubagents;
@@ -325,6 +331,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       providerSessionId: acpSessionId,
     });
     live.onEvent({ type: "session.started" });
+    if (!hasLiveCatalog("droid")) {
+      // A running session already knows Droid's models; show them now and
+      // let the catalog probe fill in per-model reasoning levels.
+      const models = modelsFromDroidSession(setup);
+      if (models.length > 0) setHarnessModels("droid", models);
+      void refreshDroidCatalog();
+    }
     return live;
   } catch (error) {
     acp.close(error instanceof Error ? error : new Error(String(error)));

@@ -387,11 +387,9 @@ export function ModelPicker({
   }, [tab, visibleTab]);
 
   useEffect(() => {
-    if (!open || submenu?.kind !== "models" || visibleTab === "favorites") {
-      return;
-    }
+    if (!open || visibleTab === "favorites") return;
     void refreshHarnessCatalogs([visibleTab]);
-  }, [open, submenu?.kind, visibleTab]);
+  }, [open, visibleTab]);
 
   useEffect(() => {
     if (!open) return;
