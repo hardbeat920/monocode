@@ -7,8 +7,10 @@ let spawned: { command: string; args: string[]; cwd: string } | undefined;
 let killed = 0;
 let autoExit = true;
 
+let resolveImpl: () => Promise<{ path: string }> = async () => ({ path: "/fake/muse" });
+
 vi.mock("../../core/child", () => ({
-  resolveMuseBinary: async () => ({ path: "/fake/muse" }),
+  resolveMuseBinary: () => resolveImpl(),
   spawnChild: async (sessionId: string, command: string, args: string[], cwd: string) => {
     spawned = { command, args, cwd };
   },
@@ -71,6 +73,7 @@ beforeEach(() => {
   spawned = undefined;
   killed = 0;
   autoExit = true;
+  resolveImpl = async () => ({ path: "/fake/muse" });
 });
 
 describe("muse turns", () => {
@@ -199,6 +202,34 @@ describe("muse turns", () => {
     await turn;
     expect(events).toContainEqual({ type: "message.delta", text: "partial" });
     expect(events).not.toContainEqual({ type: "message.completed" });
+  });
+
+  it("skips spawning when cancel lands during binary resolve", async () => {
+    let release!: () => void;
+    resolveImpl = () =>
+      new Promise<{ path: string }>((resolve) => {
+        release = () => resolve({ path: "/fake/muse" });
+      });
+    const events: HarnessEvent[] = [];
+    const turn = sendMuseTurn({ ...baseInput(events), sessionId: "thread-resolve" });
+    await new Promise((r) => setTimeout(r, 5));
+    await cancelMuseTurn("thread-resolve");
+    release();
+    await turn;
+    expect(spawned).toBeUndefined();
+    expect(events).toEqual([]);
+  });
+
+  it("ignores binds with empty ids", async () => {
+    bindMuseSession("  ", SID, "/tmp/work");
+    bindMuseSession("thread-empty", "  ", "/tmp/work");
+    const events: HarnessEvent[] = [];
+    const turn = sendMuseTurn({ ...baseInput(events), sessionId: "thread-empty" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(spawned?.args).not.toContain("--session-id");
+    onLine!(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));
+    onExit!(0);
+    await turn;
   });
 
   it("binds restored sessions and forgets them", async () => {

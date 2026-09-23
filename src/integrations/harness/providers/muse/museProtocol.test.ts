@@ -85,6 +85,25 @@ describe("muse spawn args", () => {
     expect(museEffort(undefined)).toBeUndefined();
   });
 
+  it("notes pathless attachments in the prompt text", () => {
+    const parts = musePromptParts(
+      "look",
+      [
+        {
+          id: "c",
+          name: "pasted.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: 10,
+        },
+      ],
+      "/tmp/work",
+    );
+    expect(parts.images).toEqual([]);
+    expect(parts.text).toContain("[Note: 1 attachment(s) could not be attached");
+    expect(parts.text).toContain("pasted.png");
+  });
+
   it("routes image attachments to --image and files to mentions", () => {
     const parts = musePromptParts(
       "look",
