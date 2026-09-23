@@ -34,8 +34,8 @@ vi.mock("../../core/child", () => ({
               source: "providerCatalog",
               models: [
                 {
-                  modelId: "muse-spark-1.3-contributor",
-                  displayLabel: "Muse Spark 1.3 (Contributor)",
+                  modelId: "muse-spark-1.3",
+                  displayLabel: "muse-spark-1.3",
                   contextLimit: 1007997,
                   isDefault: false,
                   isActive: false,
@@ -47,14 +47,40 @@ vi.mock("../../core/child", () => ({
                   description: null,
                 },
                 {
-                  modelId: "muse-spark-1.3",
-                  displayLabel: "Muse Spark 1.3",
+                  modelId: "muse-spark-1.3-contributor",
+                  displayLabel: "muse-spark-1.3-contributor",
                   contextLimit: 1007997,
                   isDefault: true,
                   isActive: false,
                   providerId: "meta",
                   profileId: null,
                   releaseDate: "2026-09-02",
+                  outputLimit: 128000,
+                  cost: null,
+                  description: null,
+                },
+                {
+                  modelId: "muse-spark-1.2",
+                  displayLabel: "muse-spark-1.2",
+                  contextLimit: 1007997,
+                  isDefault: false,
+                  isActive: false,
+                  providerId: "meta",
+                  profileId: null,
+                  releaseDate: "2026-08-05",
+                  outputLimit: 128000,
+                  cost: null,
+                  description: null,
+                },
+                {
+                  modelId: "muse-spark-1.2-contributor",
+                  displayLabel: "muse-spark-1.2-contributor",
+                  contextLimit: 1007997,
+                  isDefault: false,
+                  isActive: false,
+                  providerId: "meta",
+                  profileId: null,
+                  releaseDate: "2026-08-05",
                   outputLimit: 128000,
                   cost: null,
                   description: null,
@@ -110,20 +136,34 @@ describe("muse catalog", () => {
 
     const models = modelsFor("muse");
     expect(models.length).toBeGreaterThan(0);
+    // The live catalog flags the contributor model as default and is sorted
+    // with it first, mirroring `muse serve` on the installed CLI.
     expect(models.map((model) => model.id)).toEqual([
-      "muse:muse-spark-1.3",
       "muse:muse-spark-1.3-contributor",
+      "muse:muse-spark-1.3",
+      "muse:muse-spark-1.2",
+      "muse:muse-spark-1.2-contributor",
     ]);
-    expect(defaultModelId("muse")).toBe("muse:muse-spark-1.3");
+    expect(defaultModelId("muse")).toBe("muse:muse-spark-1.3-contributor");
     expect(models[0]).toMatchObject({
       harness: "muse",
-      name: "Muse Spark 1.3",
-      nativeId: "muse-spark-1.3",
+      name: "Muse Spark 1.3 (Contributor)",
+      nativeId: "muse-spark-1.3-contributor",
       contextWindow: 1007997,
     });
-    expect(models[1]?.name).toBe("Muse Spark 1.3 (Contributor)");
+    expect(models[1]?.name).toBe("Muse Spark 1.3");
 
-    const standard = models[0]?.settings?.[0];
+    const contributor = models[0]?.settings?.[0];
+    expect(contributor?.options.map((option) => option.value)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(contributor?.options.map((option) => option.value)).not.toContain("max");
+    expect(contributor?.value).toBe("high");
+    const standard = models[1]?.settings?.[0];
     expect(standard?.options.map((option) => option.value)).toEqual([
       "minimal",
       "low",
@@ -135,15 +175,15 @@ describe("muse catalog", () => {
     expect(standard?.options.map((option) => option.value)).not.toContain("none");
     expect(standard?.options.map((option) => option.value)).not.toContain("ultra");
     expect(standard?.value).toBe("high");
-    const contributor = models[1]?.settings?.[0];
-    expect(contributor?.options.map((option) => option.value)).toEqual([
+    // Spark 1.2 rows get the documented tiers without `max`.
+    const spark12 = models[2]?.settings?.[0];
+    expect(spark12?.options.map((option) => option.value)).toEqual([
       "minimal",
       "low",
       "medium",
       "high",
       "xhigh",
     ]);
-    expect(contributor?.options.map((option) => option.value)).not.toContain("max");
   });
 
   it("falls back to documented tiers when the list carries no variants", async () => {
