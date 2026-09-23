@@ -4,6 +4,7 @@ import {
   museApprovalArgs,
   museAuthError,
   museEffort,
+  museEffortForModel,
   musePromptParts,
   museSpawnArgs,
   toolTitleForTaskKind,
@@ -83,6 +84,16 @@ describe("muse spawn args", () => {
     expect(museEffort({ reasoning: "low" })).toBe("low");
     expect(museEffort({ effort: "turbo" })).toBeUndefined();
     expect(museEffort(undefined)).toBeUndefined();
+  });
+
+  it("drops undocumented tiers and contributor-unavailable max", () => {
+    // `ultra` is not a documented tier and `none` returns HTTP 400 on Spark.
+    expect(museEffort({ effort: "ultra" })).toBeUndefined();
+    expect(museEffort({ effort: "none" })).toBeUndefined();
+    // `max` exists only on Standard-tier Muse Spark.
+    expect(museEffortForModel({ effort: "max" }, "muse-spark-1.3")).toBe("max");
+    expect(museEffortForModel({ effort: "max" }, "muse-spark-1.3-contributor")).toBeUndefined();
+    expect(museEffortForModel({ effort: "high" }, "muse-spark-1.3-contributor")).toBe("high");
   });
 
   it("notes pathless attachments in the prompt text", () => {

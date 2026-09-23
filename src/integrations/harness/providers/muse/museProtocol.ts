@@ -5,16 +5,12 @@ import type { HarnessEvent } from "../../core/types";
 export const MUSE_AUTH_HELP =
   "Muse CLI not signed in. Run `muse login` in a terminal (or set META_API_KEY), then retry.";
 
-const EFFORTS = new Set([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-]);
+/**
+ * Documented Model API vocabulary (dev.meta.ai/docs/reasoning): `none`
+ * returns HTTP 400 on Muse Spark, and `ultra` is not a documented tier even
+ * though the CLI help lists it, so neither is ever forwarded.
+ */
+const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** Reasoning tier from model settings, mirroring the grok `effort` key. */
 export function museEffort(settings?: Record<string, string>): string | undefined {
@@ -22,6 +18,19 @@ export function museEffort(settings?: Record<string, string>): string | undefine
     settings?.effort?.trim() || settings?.reasoning?.trim() || settings?.reasoningEffort?.trim();
   if (!value || !EFFORTS.has(value)) return undefined;
   return value;
+}
+
+/**
+ * `max` exists only on Standard-tier Muse Spark 1.3; Contributor-tier models
+ * reject it, so it is dropped for `-contributor` model ids.
+ */
+export function museEffortForModel(
+  settings: Record<string, string> | undefined,
+  modelId: string,
+): string | undefined {
+  const effort = museEffort(settings);
+  if (effort === "max" && /contributor/i.test(modelId)) return undefined;
+  return effort;
 }
 
 /** Map MonoCode access levels to `muse exec` approval flags. The OS sandbox

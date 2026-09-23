@@ -10,7 +10,7 @@ import {
   MUSE_AUTH_HELP,
   MuseExecFold,
   museAuthError,
-  museEffort,
+  museEffortForModel,
   musePromptParts,
   museSpawnArgs,
   museStartupError,
@@ -53,13 +53,14 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
 
   const prompt = musePromptParts(input.text, input.attachments, input.cwd);
   const resume = resumeByThread.get(input.sessionId);
+  const modelId = nativeModelId(input.model);
   const args = museSpawnArgs({
     cwd: input.cwd,
     prompt: prompt.text,
     images: prompt.images,
     resumeSessionId: resume && resume.cwd === input.cwd ? resume.sessionId : undefined,
-    modelId: nativeModelId(input.model),
-    effort: museEffort(input.modelSettings),
+    modelId,
+    effort: museEffortForModel(input.modelSettings, modelId),
     runtimeMode: input.runtimeMode,
   });
 
