@@ -8,12 +8,15 @@ let killed = 0;
 let autoExit = true;
 
 let resolveImpl: () => Promise<{ path: string }> = async () => ({ path: "/fake/muse" });
+let spawnImpl: (sessionId: string, command: string, args: string[], cwd: string) => Promise<void> =
+  async (sessionId, command, args, cwd) => {
+    spawned = { command, args, cwd };
+  };
 
 vi.mock("../../core/child", () => ({
   resolveMuseBinary: () => resolveImpl(),
-  spawnChild: async (sessionId: string, command: string, args: string[], cwd: string) => {
-    spawned = { command, args, cwd };
-  },
+  spawnChild: (sessionId: string, command: string, args: string[], cwd: string) =>
+    spawnImpl(sessionId, command, args, cwd),
   killChild: async () => {
     killed += 1;
     // Mirror the real bridge: killing the child delivers its exit event.
@@ -74,6 +77,9 @@ beforeEach(() => {
   killed = 0;
   autoExit = true;
   resolveImpl = async () => ({ path: "/fake/muse" });
+  spawnImpl = async (sessionId, command, args, cwd) => {
+    spawned = { command, args, cwd };
+  };
 });
 
 describe("muse turns", () => {
@@ -242,5 +248,36 @@ describe("muse turns", () => {
     onExit!(0);
     await turn;
     await forgetMuseSession("thread-9");
+
+    spawned = undefined;
+    const events2: HarnessEvent[] = [];
+    const turn2 = sendMuseTurn({ ...baseInput(events2), sessionId: "thread-9" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(spawned?.args).not.toContain("--session-id");
+    onLine!(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));
+    onExit!(0);
+    await turn2;
+  });
+
+  it("wraps spawn failures as startup errors", async () => {
+    spawnImpl = async () => {
+      throw new Error("nope");
+    };
+    const events: HarnessEvent[] = [];
+    await expect(sendMuseTurn(baseInput(events))).rejects.toThrow(/Muse did not start/);
+    expect(events).toEqual([]);
+  });
+
+  it("reports non-auth stderr tails on early exit", async () => {
+    const events: HarnessEvent[] = [];
+    await expect(
+      (async () => {
+        const turn = sendMuseTurn(baseInput(events));
+        await new Promise((r) => setTimeout(r, 5));
+        onStderr!("something broke");
+        onExit!(2);
+        await turn;
+      })(),
+    ).rejects.toThrow(/Muse turn failed: something broke/);
   });
 });

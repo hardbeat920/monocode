@@ -114,7 +114,7 @@ export function museAuthError(message: string): boolean {
 /** Human title for a `tool.<name>` task kind. */
 export function toolTitleForTaskKind(taskKind: string): string {
   const name = taskKind.startsWith("tool.") ? taskKind.slice("tool.".length) : taskKind;
-  return name.trim() || taskKind;
+  return name.trim() || "tool";
 }
 
 type ExecRecord = {
@@ -242,7 +242,7 @@ export function museStartupError(error: unknown): Error {
     return new Error(`${detail.trim()}\n\n${MUSE_AUTH_HELP}`);
   }
   if (/timed out/i.test(detail)) {
-    return new Error(`Muse did not start. ${MUSE_AUTH_HELP}`);
+    return new Error("Muse did not start (timed out). Check the CLI, then run `muse login` if needed.");
   }
   return new Error(`Muse did not start. ${detail}`);
 }

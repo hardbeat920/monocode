@@ -65,7 +65,6 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
 
   const fold = new MuseExecFold();
   const stderrTail: string[] = [];
-  let turnCancelled = false;
   let bound = false;
 
   await new Promise<void>((resolve, reject) => {
@@ -105,8 +104,7 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
         }
       },
       (code) => {
-        if (turnCancelled || cancelledThreads.delete(input.sessionId)) {
-          turnCancelled = true;
+        if (cancelledThreads.delete(input.sessionId)) {
           finish();
           return;
         }
