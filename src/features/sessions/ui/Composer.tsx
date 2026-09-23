@@ -66,7 +66,10 @@ import {
   type InboxComposerCard,
 } from "../../inbox/model/githubTasks";
 import type { HandoffComposerCard } from "../model/handoff";
-import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
+import {
+  looksLikeProject,
+  type RecentProject,
+} from "../../projects/model/recents";
 import type {
   Attachment,
   HarnessId,
@@ -160,6 +163,11 @@ type Props = {
   /** Bump to force a refocus even when `focused` was already true (e.g. window regains OS focus). */
   focusToken?: number;
   shell?: boolean;
+  compact?: boolean;
+  placeholder?: string;
+  inputAriaLabel?: string;
+  disabled?: boolean;
+  allowedModelHarnesses?: readonly HarnessId[];
   harness: HarnessId;
   model: string;
   modelSettings?: Record<string, string>;
@@ -432,8 +440,13 @@ export function Composer({
   focusToken,
   hotkeys = false,
   shell = false,
+  compact = false,
+  placeholder,
+  inputAriaLabel,
+  disabled = false,
   harness,
   model,
+  allowedModelHarnesses,
   modelSettings = {},
   runtimeMode,
   cwd = "~",
@@ -969,7 +982,7 @@ export function Composer({
   );
 
   useEffect(() => {
-    if (!focused) return;
+    if (!focused || disabled) return;
 
     const composer = ref.current?.closest("[data-composer]");
     const activeComposer = document.activeElement?.closest("[data-composer]");
@@ -998,10 +1011,10 @@ export function Composer({
     )
       return;
     ref.current?.focus();
-  }, [focused, question, busy, focusToken]);
+  }, [disabled, focused, question, busy, focusToken]);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || disabled) {
       setFileDrag(false);
       return;
     }
@@ -1225,7 +1238,7 @@ export function Composer({
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
   const submit = (value: string) => {
-    if (worktreeRemoved) return;
+    if (disabled || worktreeRemoved) return;
     if (draftSelected && onSaveDraft) {
       const files = attachments;
       if (!value.trim() && files.length === 0) return;
@@ -1335,6 +1348,7 @@ export function Composer({
     syncHasValue("", []);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (disabled) return;
     if (isImeComposition(e.nativeEvent)) return;
     if (creatingSkill) return;
 
@@ -1462,6 +1476,7 @@ export function Composer({
   };
 
   const onComposerKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     if (
       !draftWorkspace ||
       !onWorkspaceModeChange ||
@@ -1518,9 +1533,9 @@ export function Composer({
   return (
     <div
       data-composer
-      className={`relative shrink-0 ${shell ? "" : "p-1.5 pt-0"}`}
-      onMouseDown={onFocus}
-      onKeyDownCapture={onComposerKeyDown}
+      className={`relative shrink-0 ${shell || compact ? "" : "p-1.5 pt-0"}`}
+      onMouseDown={disabled ? undefined : onFocus}
+      onKeyDownCapture={disabled ? undefined : onComposerKeyDown}
     >
       {question && onQuestionReply ? (
         <QuestionForm
@@ -1798,10 +1813,13 @@ export function Composer({
                       ? "Add a message, or send…"
                       : handoffCard
                         ? "Add context, or send to continue…"
-                        : shell
-                          ? "Ask, build, / for commands, @ for references... "
-                          : "Ask, build, / for commands, @ for references... "
+                        : (placeholder ??
+                          (shell
+                            ? "Ask, build, / for commands, @ for references... "
+                            : "Ask, build, / for commands, @ for references... "))
               }
+              aria-label={inputAriaLabel}
+              disabled={disabled}
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
@@ -1830,7 +1848,10 @@ export function Composer({
           </div>
 
           <div className="flex items-center gap-1 px-2 pb-2">
-            <div ref={plusRef} className="relative shrink-0">
+            <div
+              ref={plusRef}
+              className={compact ? "hidden" : "relative shrink-0"}
+            >
               <ToolButton
                 label="Add files or choose a mode"
                 active={plusOpen}
@@ -1955,7 +1976,7 @@ export function Composer({
                 </Popover>
               ) : null}
             </div>
-            {orchestrationSelected && (
+            {!compact && orchestrationSelected && (
               <button
                 type="button"
                 title="Turn off Orchestrator mode"
@@ -1972,7 +1993,7 @@ export function Composer({
                 <X className="size-3" />
               </button>
             )}
-            {planSelected ? (
+            {!compact && planSelected ? (
               <button
                 type="button"
                 title="Turn off Plan mode"
@@ -1988,7 +2009,7 @@ export function Composer({
                 <X className="size-3" />
               </button>
             ) : null}
-            {draftSelected ? (
+            {!compact && draftSelected ? (
               <button
                 type="button"
                 title="Turn off Draft mode"
@@ -2021,18 +2042,21 @@ export function Composer({
               }}
             >
               <div className="flex shrink-0 items-center gap-1">
-                <ModelPicker
-                  harness={harness}
-                  model={model}
-                  values={modelSettings}
-                  hideSettings={controlsBeside}
-                  hotkeys={hotkeys && enabled}
-                  onChange={onModelChange}
-                  onSettingsChange={(settings) =>
-                    onModelSettingsChange?.(settings)
-                  }
-                  onClose={() => ref.current?.focus()}
-                />
+                {model ? (
+                  <ModelPicker
+                    harness={harness}
+                    model={model}
+                    values={modelSettings}
+                    allowedHarnesses={allowedModelHarnesses}
+                    hideSettings={controlsBeside}
+                    hotkeys={hotkeys && enabled}
+                    onChange={onModelChange}
+                    onSettingsChange={(settings) =>
+                      onModelSettingsChange?.(settings)
+                    }
+                    onClose={() => ref.current?.focus()}
+                  />
+                ) : null}
                 {controlsBeside ? (
                   <ModelControlPills
                     harness={harness}
@@ -2044,7 +2068,7 @@ export function Composer({
                     onClose={() => ref.current?.focus()}
                   />
                 ) : null}
-                {harness !== "fx" ? (
+                {!compact && harness !== "fx" ? (
                   <AccessPicker
                     value={runtimeMode}
                     busy={busy}
@@ -2071,6 +2095,7 @@ export function Composer({
             <div className="flex shrink-0 items-center gap-1">
               <ComposerAction
                 busy={busy}
+                disabled={disabled}
                 hasValue={hasValue && !worktreeRemoved}
                 label={draftSelected ? "Save draft" : "Send"}
                 onSend={() => submit(ref.current?.value ?? "")}
@@ -2162,17 +2187,32 @@ function MentionRuns({
 
 export function ComposerAction({
   busy,
+  disabled = false,
   hasValue,
   label = "Send",
   onSend,
   onStop,
 }: {
   busy: boolean;
+  disabled?: boolean;
   hasValue: boolean;
   label?: string;
   onSend: () => void;
   onStop: () => void;
 }) {
+  if (disabled) {
+    return (
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        disabled
+        className="composer-send primary-action grid size-6.5 place-items-center rounded-md disabled:cursor-default"
+      >
+        <ArrowUp className="size-3.5" strokeWidth={2.25} />
+      </button>
+    );
+  }
   if (busy) {
     return hasValue ? (
       <button

@@ -4,11 +4,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
   type MouseEvent,
 } from "react";
 import {
-  ArrowUp,
   MessageSquarePlus,
   RefreshCw,
   Trash2,
@@ -17,11 +15,12 @@ import {
 
 import { Popover } from "../../../shared/ui/Popover";
 import { Shimmer } from "../../../shared/ui/Shimmer";
+import { Composer } from "./Composer";
 import { AgentMarkdown } from "./AgentMarkdown";
-import { ModelPicker } from "./ModelPicker";
 import { HarnessIcon as ProviderIcon } from "./HarnessIcon";
 import { preferredModelSettings, resolveModel } from "../model/models";
 import {
+  DEFAULT_RUNTIME_MODE,
   HARNESS_LABEL,
   HARNESS_TITLE,
   type BtwMessage,
@@ -109,7 +108,6 @@ export function BtwPopover({
     message: BtwMessage;
   } | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const persisted = useMemo(
     () => threads.find((thread) => thread.id === openThreadId),
     [openThreadId, threads],
@@ -153,11 +151,6 @@ export function BtwPopover({
   }, [visible, open]);
 
   useEffect(() => {
-    if (!open || !composerRef.current) return;
-    composerRef.current.focus();
-  }, [openThreadId, open]);
-
-  useEffect(() => {
     if (
       optimistic &&
       threads.some(
@@ -194,8 +187,8 @@ export function BtwPopover({
     setOpenThreadId(id);
   };
 
-  const submit = () => {
-    const text = draftText.trim();
+  const submit = (value = draftText) => {
+    const text = value.trim();
     if (!text || running) return;
     const threadId = openThreadId ?? crypto.randomUUID();
     const messageId = crypto.randomUUID();
@@ -212,12 +205,6 @@ export function BtwPopover({
       selectedModel || undefined,
       selectedModelSettings,
     );
-  };
-
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    submit();
   };
 
   const handleModelChange = (nextHarness: HarnessId, nextModel: string) => {
@@ -402,49 +389,42 @@ export function BtwPopover({
           </div>
 
           <div className="shrink-0 border-t border-content/10 px-3.5 py-3">
-            <textarea
-              ref={composerRef}
-              value={draftText}
-              rows={2}
+            <Composer
+              key={openThreadId}
+              compact
+              enabled={!running}
+              disabled={running}
+              focused={!running}
+              harness={harness}
+              model={selectedModel}
+              modelSettings={selectedModelSettings}
+              runtimeMode={DEFAULT_RUNTIME_MODE}
+              cwd={cwd ?? "~"}
+              executionCwd={cwd ?? "~"}
+              sessionId={openThreadId}
+              hideProjectPicker
+              hideBranchPicker
+              hideTopBar
               placeholder={
                 running
                   ? `${HARNESS_TITLE[harness]} is thinking…`
                   : "Ask a side question…"
               }
-              aria-label="By-the-way question"
-              disabled={running}
-              onChange={(event) => setDraftText(event.target.value)}
-              onKeyDown={onComposerKeyDown}
-              className="btw-composer-field block w-full resize-none rounded-lg px-3 py-2.5 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:cursor-wait disabled:opacity-55"
+              inputAriaLabel="By-the-way question"
+              allowedModelHarnesses={[harness]}
+              initialDraft={draftText}
+              onFocus={() => {}}
+              onCwdChange={() => {}}
+              onModelChange={handleModelChange}
+              onModelSettingsChange={handleSettingsChange}
+              onRuntimeModeChange={() => {}}
+              onSubmit={(text) => {
+                if (running) return false;
+                submit(text);
+                return true;
+              }}
+              onDraftChange={setDraftText}
             />
-            <div className="mt-2 flex items-center justify-between gap-2">
-              {selectedModel ? (
-                <ModelPicker
-                  harness={harness}
-                  model={selectedModel}
-                  values={selectedModelSettings}
-                  allowedHarnesses={[harness]}
-                  onChange={handleModelChange}
-                  onSettingsChange={handleSettingsChange}
-                  onClose={() => composerRef.current?.focus()}
-                />
-              ) : null}
-              <div className="flex items-center gap-2">
-                <span className="hidden text-[10px] text-content/30 sm:inline">
-                  Enter to send
-                </span>
-                <button
-                  type="button"
-                  aria-label="Send by-the-way question"
-                  disabled={!draftText.trim() || running}
-                  onClick={submit}
-                  className="primary-action inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-transform active:scale-[0.97] disabled:cursor-default"
-                >
-                  <ArrowUp className="size-3.5" strokeWidth={2.25} />
-                  Send
-                </button>
-              </div>
-            </div>
             {running ? (
               <div
                 className="mt-2 flex items-center gap-1.5 text-[11px] text-content/40"

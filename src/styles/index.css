@@ -346,7 +346,10 @@ html.chat-background-empty-only
   background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
 }
 
-.agent-transcript [data-transcript-search-current="true"] .user-message-bubble pre.line-clamp-4 {
+.agent-transcript
+  [data-transcript-search-current="true"]
+  .user-message-bubble
+  pre.line-clamp-4 {
   display: block;
   overflow: visible;
   -webkit-line-clamp: unset;
@@ -461,8 +464,7 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
 }
 
 /* While a sent prompt rises into place, the rest of its turn waits for it. */
-.transcript-turn[data-prompt-rise="rising"]
-  > :not(:has([data-prompt-anchor])) {
+.transcript-turn[data-prompt-rise="rising"] > :not(:has([data-prompt-anchor])) {
   opacity: 0;
 }
 
@@ -1811,24 +1813,6 @@ html.theme-light .popover-backdrop {
   border-radius: 10px;
   background: color-mix(in srgb, #f87171 7%, transparent);
 }
-
-.btw-composer-field {
-  border: 1px solid color-mix(in srgb, var(--color-content) 12%, transparent);
-  background: color-mix(in srgb, var(--color-content) 5%, transparent);
-  transition:
-    border-color var(--motion-feedback-duration) var(--motion-ease-out),
-    background-color var(--motion-feedback-duration) var(--motion-ease-out);
-}
-
-.btw-composer-field:hover {
-  border-color: color-mix(in srgb, var(--color-content) 18%, transparent);
-}
-
-.btw-composer-field:focus {
-  border-color: color-mix(in srgb, var(--color-accent) 64%, transparent);
-  background: color-mix(in srgb, var(--color-content) 7%, transparent);
-}
-
 
 html.theme-light .btw-message-user {
   border-color: color-mix(
