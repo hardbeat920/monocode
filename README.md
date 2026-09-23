@@ -78,6 +78,22 @@ npm run build:linux
 The Linux build emits `.deb` and AppImage bundles under `target/release/bundle/`.
 Tauri loads `src-tauri/tauri.linux.conf.json` automatically for Linux development and builds.
 
+### Fedora / Enterprise Linux packages
+
+On a Fedora workstation — or an Enterprise Linux 10 one (registered RHEL, Rocky, Alma, CentOS Stream, Oracle), where the setup script enables EPEL 10 and CRB automatically — the repository can install the native Tauri prerequisites and build a distributable `.rpm` directly. EL 9 and older are unsupported (`webkit2gtk4.1-devel` only exists in EPEL 10):
+
+```bash
+npm run setup:linux:fedora
+npm ci
+npm run build:fedora
+```
+
+The Fedora build emits a `.rpm` bundle under `target/release/bundle/rpm/`, installable with `sudo dnf install ./target/release/bundle/rpm/MonoCode-*.rpm`. Building natively links the system WebKitGTK instead of the Ubuntu-built libraries shipped in the AppImage, which avoids graphics issues (e.g. `Could not create default EGL display`) on newer Mesa/Wayland systems.
+
+### Troubleshooting on Fedora / Wayland
+
+The portable AppImage bundles Ubuntu-built Wayland libraries that can fail against newer Mesa drivers: the app aborts at startup with `Could not create default EGL display: EGL_BAD_PARAMETER`, or opens a blank window. The native `.rpm` above links the system WebKitGTK stack and does not have this problem — prefer it on Fedora.
+
 ### Windows packages
 
 ```bash
