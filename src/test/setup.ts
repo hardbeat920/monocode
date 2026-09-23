@@ -1,8 +1,11 @@
-// Node 22+ exposes Web Storage only when --localstorage-file is set. Without
-// that flag the globals are missing and happy-dom does not fill them in.
+// Node 22+ exposes Web Storage only as lazy getters that warn — and yield
+// undefined — unless --localstorage-file is set. Read the property descriptor
+// instead of the property itself: an existing value storage (e.g. happy-dom)
+// is kept as-is, while a bare getter is replaced before it is ever invoked so
+// no worker emits the ExperimentalWarning.
 function installMemoryStorage(name: "localStorage" | "sessionStorage") {
-  const current = (globalThis as Record<string, unknown>)[name];
-  if (current && typeof (current as { clear?: unknown }).clear === "function") return;
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+  if (descriptor?.value && typeof descriptor.value.clear === "function") return;
   const store = new Map<string, string>();
   const storage: Storage = {
     get length() {
