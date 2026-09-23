@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Factory Droid is available as an ACP harness (`droid exec --output-format acp`) with live model discovery, per-model reasoning levels, image and file attachments, permission prompts mapped onto Droid autonomy levels, spec mode for plan turns, `.factory/skills` discovery, and persisted session resume. Install Droid, sign in with `droid`, and MonoCode will add it to the model picker.
+
 ## [0.1.54] - 2026-09-22
 
 ### Added

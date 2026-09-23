@@ -5,6 +5,7 @@ import {
   resolveClaudeBinary,
   resolveCodexBinary,
   resolveCursorBinary,
+  resolveDroidBinary,
   resolveFxBinary,
   resolveGrokBinary,
   resolveHermesBinary,
@@ -37,6 +38,10 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
     install:
       "Install from hermes-agent.nousresearch.com, then run hermes model",
   },
+  droid: {
+    name: "Factory Droid CLI",
+    install: "curl -fsSL https://app.factory.ai/cli | sh",
+  },
   antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
 };
 
@@ -50,6 +55,7 @@ let availability: HarnessAvailability = {
   omp: false,
   fx: false,
   hermes: false,
+  droid: false,
   antigravity: false,
 };
 let version = 0;
@@ -172,6 +178,14 @@ export function probeHarnessAvailability(
       if (id === "hermes") {
         try {
           await resolveHermesBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "droid") {
+        try {
+          await resolveDroidBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;
