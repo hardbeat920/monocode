@@ -71,12 +71,8 @@ function statusClass(status: BtwThread["status"]): string {
 }
 
 function messageMeta(role: BtwMessage["role"], harness: HarnessId) {
-  return role === "user" ? (
-    <div className="btw-message-meta btw-message-meta-user">
-      <span>YOU</span>
-      <span className="btw-message-rule" aria-hidden />
-    </div>
-  ) : (
+  if (role === "user") return null;
+  return (
     <div className="btw-message-meta">
       <ProviderIcon harness={harness} className="size-3.5 shrink-0" />
       <span>{HARNESS_LABEL[harness].toUpperCase()}</span>

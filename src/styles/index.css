@@ -1761,14 +1761,6 @@ html.theme-light .popover-backdrop {
   text-transform: uppercase;
 }
 
-.btw-message-meta-user {
-  color: color-mix(
-    in srgb,
-    var(--user-accent-color, #34d399) 82%,
-    var(--color-content)
-  );
-}
-
 .btw-message-rule {
   min-width: 12px;
   flex: 1 1 auto;
