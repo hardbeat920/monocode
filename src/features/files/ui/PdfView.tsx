@@ -3,7 +3,9 @@ import { Minus, Plus } from "../../../shared/ui/icons";
 import { formatFileSize } from "../model/filePreview";
 import {
   openPdfDocument,
+  renderPixelRatio,
   type PDFDocumentProxy,
+  type PDFPageProxy,
 } from "../model/pdfDocument";
 import { clampZoom, ZoomButton } from "./ViewerControls";
 
@@ -13,30 +15,43 @@ const PAGE_GAP = 16;
 /** Pages this far outside the viewport render early so scrolling stays smooth. */
 const RENDER_MARGIN = "100% 0px";
 
+/** Pages measured per round trip to the worker after the first one shows. */
+const SIZE_BATCH = 50;
+
 type Size = { width: number; height: number };
 
 type Props = {
   bytes: Uint8Array;
   size: number;
+  /** Whether the tab is showing. The document opens the first time it is. */
+  visible: boolean;
   onError: (message: string) => void;
 };
 
 /**
- * Scrolling column of PDF pages. Every page gets a placeholder of its real
- * size up front, so the scrollbar is right from the start, and a page draws to
- * its canvas only when it comes near the viewport.
+ * Scrolling column of PDF pages. Every page starts with a placeholder the size
+ * of page 1, corrected in batches as later pages are measured, and a page draws
+ * to its canvas only when it comes near the viewport.
  */
-export function PdfView({ bytes, size, onError }: Props) {
+export function PdfView({ bytes, size, visible, onError }: Props) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageSizes, setPageSizes] = useState<Size[]>([]);
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [viewportWidth, setViewportWidth] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
+  // File tabs stay mounted while hidden, so a PDF in a background tab waits
+  // until it is first shown. It stays open after that, like other tabs.
+  const [activated, setActivated] = useState(visible);
   const scroller = useRef<HTMLDivElement>(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
   useEffect(() => {
+    if (visible) setActivated(true);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!activated) return;
     let cancelled = false;
     setDoc(null);
     setPageSizes([]);
@@ -47,15 +62,11 @@ export function PdfView({ bytes, size, onError }: Props) {
     handle.promise
       .then(async (loaded) => {
         if (cancelled) return;
-        const sizes: Size[] = [];
-        for (let number = 1; number <= loaded.numPages; number += 1) {
-          const page = await loaded.getPage(number);
-          const { width, height } = page.getViewport({ scale: 1 });
-          sizes.push({ width, height });
-        }
+        const first = pageSize(await loaded.getPage(1));
         if (cancelled) return;
-        setPageSizes(sizes);
+        setPageSizes(Array.from({ length: loaded.numPages }, () => first));
         setDoc(loaded);
+        return measurePages(loaded, () => cancelled, setPageSizes);
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
@@ -66,7 +77,7 @@ export function PdfView({ bytes, size, onError }: Props) {
       cancelled = true;
       handle.destroy();
     };
-  }, [bytes]);
+  }, [bytes, activated]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -180,6 +191,7 @@ function PdfPage({
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [near, setNear] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
     const element = frame.current;
@@ -205,11 +217,22 @@ function PdfPage({
     let cancelled = false;
     let task: { cancel: () => void } | null = null;
 
+    const fail = (cause: unknown) => {
+      // Cancellation is how a zoom change or scroll-away stops a render.
+      if (cancelled || isRenderCancellation(cause)) return;
+      setFailure(cause instanceof Error ? cause.message : String(cause));
+    };
+
     // A short delay lets a burst of zoom clicks settle before drawing.
     const timer = window.setTimeout(() => {
       void doc.getPage(number).then((page) => {
         if (cancelled) return;
-        const ratio = window.devicePixelRatio || 1;
+        const cssSize = page.getViewport({ scale });
+        const ratio = renderPixelRatio(
+          cssSize.width,
+          cssSize.height,
+          window.devicePixelRatio || 1,
+        );
         const viewport = page.getViewport({ scale: scale * ratio });
         // Draw offscreen and copy over, so the old rendering stays visible
         // until the new one is complete.
@@ -218,18 +241,14 @@ function PdfPage({
         offscreen.height = Math.floor(viewport.height);
         const render = page.render({ canvas: offscreen, viewport });
         task = render;
-        render.promise.then(
-          () => {
-            if (cancelled) return;
-            target.width = offscreen.width;
-            target.height = offscreen.height;
-            target.getContext("2d")?.drawImage(offscreen, 0, 0);
-          },
-          () => {
-            // Cancelled renders reject; there is nothing to show for them.
-          },
-        );
-      });
+        render.promise.then(() => {
+          if (cancelled) return;
+          target.width = offscreen.width;
+          target.height = offscreen.height;
+          target.getContext("2d")?.drawImage(offscreen, 0, 0);
+          setFailure(null);
+        }, fail);
+      }, fail);
     }, 30);
 
     return () => {
@@ -243,7 +262,7 @@ function PdfPage({
     <div
       ref={frame}
       data-page={number}
-      className="shrink-0 bg-white shadow-sm ring-1 ring-black/10"
+      className="relative shrink-0 bg-white shadow-sm ring-1 ring-black/10"
       style={{ width, height }}
     >
       <canvas
@@ -251,8 +270,62 @@ function PdfPage({
         aria-label={`Page ${number}`}
         className="block size-full"
       />
+      {failure ? (
+        <div
+          role="alert"
+          className="absolute inset-0 grid place-items-center p-4 text-center text-[12px] leading-5 text-neutral-500"
+        >
+          Couldn’t draw page {number}: {failure}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function pageSize(page: PDFPageProxy): Size {
+  const { width, height } = page.getViewport({ scale: 1 });
+  return { width, height };
+}
+
+/**
+ * Measure pages 2 onward in batches and correct the placeholders whose size
+ * differs from page 1. Most PDFs use one page size, so most batches change
+ * nothing. A page that can't be read keeps page 1's size, and its own render
+ * reports the failure.
+ */
+async function measurePages(
+  doc: PDFDocumentProxy,
+  isCancelled: () => boolean,
+  setPageSizes: (update: (current: Size[]) => Size[]) => void,
+): Promise<void> {
+  for (let start = 2; start <= doc.numPages; start += SIZE_BATCH) {
+    const numbers = Array.from(
+      { length: Math.min(SIZE_BATCH, doc.numPages - start + 1) },
+      (_, offset) => start + offset,
+    );
+    const sizes = await Promise.all(
+      numbers.map((number) =>
+        doc.getPage(number).then(pageSize, () => null),
+      ),
+    );
+    if (isCancelled()) return;
+    setPageSizes((current) => {
+      let next = current;
+      sizes.forEach((size, offset) => {
+        const index = numbers[offset] - 1;
+        const old = current[index];
+        if (!size || !old) return;
+        if (size.width === old.width && size.height === old.height) return;
+        if (next === current) next = current.slice();
+        next[index] = size;
+      });
+      return next;
+    });
+  }
+}
+
+function isRenderCancellation(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "RenderingCancelledException";
 }
 
 function describePdfError(cause: unknown): string {
