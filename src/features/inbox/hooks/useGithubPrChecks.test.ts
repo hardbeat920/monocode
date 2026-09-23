@@ -128,6 +128,21 @@ it("polls every 30 seconds for open PRs", async () => {
   expect(fetchGithubPrChecks).toHaveBeenCalledTimes(2);
 });
 
+it("pauses polling for a hidden PR panel and refreshes when shown", async () => {
+  fetchGithubPrChecks.mockResolvedValue(checks("a"));
+  await render({ ...base, poll: false });
+  await flush();
+  expect(fetchGithubPrChecks).toHaveBeenCalledTimes(1);
+  await advance(90_000);
+  expect(fetchGithubPrChecks).toHaveBeenCalledTimes(1);
+  await rerender({ ...base, poll: true });
+  await flush();
+  expect(fetchGithubPrChecks).toHaveBeenCalledTimes(2);
+  await rerender({ ...base, poll: false });
+  await advance(60_000);
+  expect(fetchGithubPrChecks).toHaveBeenCalledTimes(2);
+});
+
 it("skips hidden ticks and refreshes when the document becomes visible again", async () => {
   fetchGithubPrChecks.mockResolvedValue(checks("a"));
   await render(base);

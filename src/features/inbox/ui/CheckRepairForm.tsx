@@ -1,4 +1,8 @@
-import { buildCiRepairRequest, type CiRepairRequest } from "../model/ciRepair";
+import {
+  buildCiRepairRequest,
+  type CiRepairEvidence,
+  type CiRepairRequest,
+} from "../model/ciRepair";
 import { Popover, type PopoverAnchor } from "../../../shared/ui/Popover";
 import {
   Check,
@@ -34,6 +38,7 @@ export function CheckRepairForm({
   cwd,
   repo,
   repair,
+  blocked = false,
   onClose,
 }: {
   anchor: PopoverAnchor;
@@ -42,6 +47,7 @@ export function CheckRepairForm({
   cwd: string;
   repo: string;
   repair: CheckRepair;
+  blocked?: boolean;
   onClose: () => void;
 }) {
   const [sessionId, setSessionId] = useState("");
@@ -92,27 +98,36 @@ export function CheckRepairForm({
     };
   }, []);
   async function start() {
-    if (starting.current) return;
+    if (starting.current || blocked) return;
     starting.current = true;
     setBusy(true);
     setError(null);
     try {
-      const evidence = [];
-      for (const check of checks) {
-        const jobId = githubActionsJobId(check.url, repo);
-        let details;
-        try {
-          details = jobId
-            ? await fetchGithubCheckDetails(cwd, repo, jobId)
-            : undefined;
-        } catch {
-          details = {
-            notice: "Job details unavailable. Inspect the check URL for logs.",
-          };
+      const evidence = new Array<CiRepairEvidence>(checks.length);
+      let nextIndex = 0;
+      const loadNext = async () => {
+        while (mounted.current && nextIndex < checks.length) {
+          const index = nextIndex++;
+          const check = checks[index];
+          const jobId = githubActionsJobId(check.url, repo);
+          let details;
+          try {
+            details = jobId
+              ? await fetchGithubCheckDetails(cwd, repo, jobId)
+              : undefined;
+          } catch {
+            details = {
+              notice: "Job details unavailable. Inspect the check URL for logs.",
+            };
+          }
+          if (!mounted.current) return;
+          evidence[index] = { ...check, details };
         }
-        if (!mounted.current) return;
-        evidence.push({ ...check, details });
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(3, checks.length) }, () => loadNext()),
+      );
+      if (!mounted.current) return;
       await repair.onStart(
         buildCiRepairRequest({
           repo,
@@ -262,6 +277,11 @@ export function CheckRepairForm({
           {error}
         </p>
       ) : null}
+      {blocked && !busy ? (
+        <p role="status" className="px-3.5 pb-3 text-[12px] leading-4 text-content/55">
+          Wait for the latest checks before starting a fix.
+        </p>
+      ) : null}
       <div className="flex shrink-0 items-center gap-3 border-t border-stroke px-3 py-2.5">
         <div className="min-w-0 flex-1 text-[11px] leading-4">
           <p className="truncate text-content/65" title={selectedTitle}>
@@ -271,7 +291,7 @@ export function CheckRepairForm({
         </div>
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || blocked}
           onClick={() => void start()}
           className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-selection px-2.5 text-[12px] font-medium text-content hover:bg-selection-hover disabled:opacity-50 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
         >

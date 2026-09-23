@@ -1252,6 +1252,7 @@ export function LinkedWorkItemPanel({
             revision={0}
             relatedSessions={[]}
             mode="panel"
+            visible={visible}
             repairSessions={repairSessions}
             onRepairChecks={onRepairChecks}
             onOpenSession={onOpenSession}
@@ -1868,6 +1869,7 @@ export function InboxDetail({
   revision,
   relatedSessions,
   mode = "inbox",
+  visible = true,
   onDiscuss,
   onStart,
   repairSessions,
@@ -1881,6 +1883,7 @@ export function InboxDetail({
   revision: number;
   relatedSessions: readonly SessionSummary[];
   mode?: "inbox" | "panel";
+  visible?: boolean;
   onDiscuss?: () => void;
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   repairSessions?: CiRepairProps["repairSessions"];
@@ -2023,6 +2026,7 @@ export function InboxDetail({
     number: item.number,
     enabled: prChecksEnabled,
     open: isPr && item.state.trim().toLowerCase() === "open",
+    poll: visible,
     revision,
   });
   const prChecksOverall = prChecksEnabled

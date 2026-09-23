@@ -44,6 +44,23 @@ it("tracks a submitted repair until its own agent turn finishes", async () => {
   expect(getCiRepairs()[0].phase).toBe("completed");
 });
 
+it("keeps an active repair linked to a project after its folder moves", async () => {
+  const store = await import("./ciRepairTracking");
+  let finish!: (outcome: "completed") => void;
+  store.trackCiRepair("/old-project", request, "chat1", (settle) => {
+    finish = settle;
+    return true;
+  });
+  store.rebaseCiRepairs("/old-project", "/new-project");
+  expect(store.getCiRepairs()[0].cwd).toBe("/new-project");
+  finish("completed");
+  vi.resetModules();
+  const reopened = await import("./ciRepairTracking");
+  expect(reopened.getCiRepairs()[0]).toEqual(
+    expect.objectContaining({ cwd: "/new-project", phase: "completed" }),
+  );
+});
+
 it("does not retain a repair that the chat could not start", async () => {
   const { trackCiRepair, getCiRepairs } = await import("./ciRepairTracking");
   expect(() =>

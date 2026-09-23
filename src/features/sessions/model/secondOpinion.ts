@@ -1,4 +1,5 @@
 import { isEditTool } from "../../../integrations/harness/core/preview";
+import { compactCiRepairContext } from "../../inbox/model/ciRepair";
 import { limitSection } from "../../../shared/lib/jsonText";
 import { displayPath } from "../../../shared/lib/paths";
 import {
@@ -12,6 +13,7 @@ import {
 const USER_LIMIT = 400;
 const REPORT_LIMIT = 900;
 const PROMPT_LIMIT = 1_800;
+const CI_BASE_LIMIT = 900;
 
 export const SECOND_OPINION_TITLE = "Second opinion";
 
@@ -135,10 +137,14 @@ export function buildSecondOpinionPrompt(input: {
     sections.push("## Files it edited\n(none recorded on this turn)");
   }
 
-  const prompt = limitSection(sections.join("\n\n"), PROMPT_LIMIT);
-  return input.ciContext
-    ? `${prompt}\n\n## CI context\n${input.ciContext}`
-    : prompt;
+  const base = sections.join("\n\n");
+  if (!input.ciContext) return limitSection(base, PROMPT_LIMIT);
+  const suffix = "\n\n## CI context\n";
+  const basePrefix =
+    base.length <= CI_BASE_LIMIT
+      ? base
+      : `${base.slice(0, CI_BASE_LIMIT - "\n\n[truncated]".length)}\n\n[truncated]`;
+  return `${basePrefix}${suffix}${compactCiRepairContext(input.ciContext, PROMPT_LIMIT - basePrefix.length - suffix.length)}`;
 }
 
 export function buildSecondOpinionCard(input: {

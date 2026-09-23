@@ -279,7 +279,7 @@ export function buildDeterministicHandoff(
   for (const block of session.blocks) {
     if (block.role === "handoff" || block.role === "reasoning") continue;
     if (block.role === "user") {
-      if (block.ciContext) ciContext = block.ciContext;
+      ciContext = block.ciContext ?? "";
       const text = block.text.trim();
       if (text) users.push(text);
       continue;

@@ -763,7 +763,61 @@ it("does not start a repair after leaving checks while details load", async () =
   vi.unstubAllGlobals();
 });
 
-it.each(["results", "refreshing", "pr"])(
+it("prepares several CI jobs concurrently before starting a repair", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { CheckRepairForm } = await import("./CheckRepairForm");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const resolveDetails: Array<(value: unknown) => void> = [];
+  vi.mocked(invoke).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveDetails.push(resolve);
+      }),
+  );
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const start = vi.fn();
+  await act(async () =>
+    root.render(
+      createElement(CheckRepairForm, {
+        anchor: host,
+        checks: Array.from({ length: 4 }, (_, index) => ({
+          name: `tests-${index}`,
+          state: "fail" as const,
+          workflow: "CI",
+          url: `https://github.com/acme/web/actions/runs/1/job/${index + 1}`,
+          startedAt: null,
+          completedAt: null,
+        })),
+        headOid: "abc",
+        cwd: "/web",
+        repo: "acme/web",
+        repair: { number: 42, sessions: [], onStart: start },
+        onClose() {},
+      }),
+    ),
+  );
+  await act(async () =>
+    [...document.querySelectorAll("button")]
+      .find((button) => button.textContent === "Start fix")!
+      .click(),
+  );
+  expect(resolveDetails).toHaveLength(3);
+  await act(async () =>
+    resolveDetails[0]({ steps: [], annotations: [], notice: null }),
+  );
+  expect(resolveDetails).toHaveLength(4);
+  await act(async () => {
+    for (const resolve of resolveDetails.slice(1)) {
+      resolve({ steps: [], annotations: [], notice: null });
+    }
+  });
+  expect(start).toHaveBeenCalledTimes(1);
+});
+
+it.each(["results", "pr"])(
   "closes the repair selection when %s changes",
   async (change) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -833,3 +887,126 @@ it.each(["results", "refreshing", "pr"])(
     vi.unstubAllGlobals();
   },
 );
+
+it.each(["refreshing", "failed"] as const)(
+  "keeps a pending repair through a %s checks refresh",
+  async (refreshState) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const { invoke } = await import("@tauri-apps/api/core");
+    let resolveDetails!: (value: unknown) => void;
+    vi.mocked(invoke).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDetails = resolve;
+        }),
+    );
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const check = {
+      name: "lint",
+      state: "fail" as const,
+      workflow: "CI",
+      url: "https://github.com/acme/web/actions/runs/1/job/2",
+      startedAt: null,
+      completedAt: null,
+    };
+    const start = vi.fn();
+    const props = {
+      cwd: "/web",
+      repo: "acme/web",
+      onRefresh() {},
+      repair: { number: 42, sessions: [], onStart: start },
+      view: {
+        checks: { headOid: "abc", checks: [check] },
+        loading: false,
+        refreshing: false,
+        stale: false,
+        error: null,
+        refresh() {},
+      },
+    };
+    await act(async () => root.render(createElement(InboxPrChecks, props)));
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('button[aria-label="Fix lint with AI"]')!.click(),
+    );
+    await act(async () =>
+      [...document.querySelectorAll("button")]
+        .find((button) => button.textContent === "Start fix")!
+        .click(),
+    );
+    await act(async () =>
+      root.render(
+        createElement(InboxPrChecks, {
+          ...props,
+          view: {
+            ...props.view,
+            refreshing: refreshState === "refreshing",
+            stale: refreshState === "failed",
+            error: refreshState === "failed" ? "network down" : null,
+          },
+        }),
+      ),
+    );
+    expect(
+      document.querySelector('[role="dialog"][aria-label="Fix checks with AI"]'),
+    ).not.toBeNull();
+    await act(async () =>
+      resolveDetails({ steps: [], annotations: [], notice: null }),
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("keeps the selected failed job when another check changes", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const failed = {
+    name: "lint",
+    state: "fail" as const,
+    workflow: "CI",
+    url: null,
+    startedAt: null,
+    completedAt: null,
+  };
+  const other = { ...failed, name: "build", state: "pending" as const };
+  const props = {
+    cwd: "/web",
+    repo: "acme/web",
+    onRefresh() {},
+    repair: { number: 42, sessions: [], onStart() {} },
+    view: {
+      checks: { headOid: "abc", checks: [failed, other] },
+      loading: false,
+      refreshing: false,
+      stale: false,
+      error: null,
+      refresh() {},
+    },
+  };
+  await act(async () => root.render(createElement(InboxPrChecks, props)));
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('button[aria-label="Fix lint with AI"]')!.click(),
+  );
+  await act(async () =>
+    root.render(
+      createElement(InboxPrChecks, {
+        ...props,
+        view: {
+          ...props.view,
+          checks: {
+            headOid: "abc",
+            checks: [failed, { ...other, state: "pass" as const }],
+          },
+        },
+      }),
+    ),
+  );
+  expect(
+    document.querySelector('[role="dialog"][aria-label="Fix checks with AI"]'),
+  ).not.toBeNull();
+});

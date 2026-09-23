@@ -1,5 +1,8 @@
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
-import { trackCiRepair } from "../features/inbox/model/ciRepairTracking";
+import {
+  rebaseCiRepairs,
+  trackCiRepair,
+} from "../features/inbox/model/ciRepairTracking";
 import { invoke } from "@tauri-apps/api/core";
 import {
   orchestrationCheckoutCwd,
@@ -4934,6 +4937,7 @@ export default function App({
   const applyProjectLocationChange = useCallback(
     async (from: string, to: string) => {
       await rebaseProjectSessions(from, to);
+      rebaseCiRepairs(from, to);
 
       const nextSessions = sessionsRef.current.map((session) =>
         sameProjectPath(session.cwd, from) ? { ...session, cwd: to } : session,

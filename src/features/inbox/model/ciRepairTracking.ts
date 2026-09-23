@@ -1,4 +1,5 @@
 import type { CiRepairRequest } from "./ciRepair";
+import { sameProjectPath } from "../../projects/model/recents";
 
 export type CiRepairOutcome = "completed" | "failed" | "cancelled";
 export type TrackedCiRepair = CiRepairRequest["target"] & {
@@ -190,7 +191,8 @@ export function trackCiRepair(
   save(repair);
   try {
     const accepted = submit((phase) => {
-      save({ ...repair, phase });
+      const current = getCiRepairs().find((item) => item.id === repair.id) ?? repair;
+      save({ ...current, phase });
     });
     if (!accepted)
       throw new Error(
@@ -199,5 +201,11 @@ export function trackCiRepair(
   } catch (error) {
     save(repair, true);
     throw error;
+  }
+}
+
+export function rebaseCiRepairs(from: string, to: string): void {
+  for (const repair of load()) {
+    if (sameProjectPath(repair.cwd, from)) save({ ...repair, cwd: to });
   }
 }

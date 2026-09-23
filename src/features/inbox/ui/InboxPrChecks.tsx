@@ -130,6 +130,27 @@ export function PrChecksTab({
 const REFRESH_BUTTON =
   "grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45";
 
+function selectedChecksStillFailed(
+  selected: readonly GithubPrCheck[],
+  current: readonly GithubPrCheck[],
+): boolean {
+  const failures = new Map<string, number>();
+  const identity = (check: GithubPrCheck) =>
+    JSON.stringify([check.workflow, check.name, check.url]);
+  for (const check of current) {
+    if (check.state !== "fail") continue;
+    const key = identity(check);
+    failures.set(key, (failures.get(key) ?? 0) + 1);
+  }
+  return selected.every((check) => {
+    const key = identity(check);
+    const count = failures.get(key) ?? 0;
+    if (count === 0) return false;
+    failures.set(key, count - 1);
+    return true;
+  });
+}
+
 function PrCheckRow({
   check,
   cwd,
@@ -138,6 +159,7 @@ function PrCheckRow({
   autoExpand,
   refreshToken,
   onFix,
+  fixDisabled,
   fixAnchor,
   repairItem,
   wideStatus,
@@ -150,6 +172,7 @@ function PrCheckRow({
   autoExpand: boolean;
   refreshToken: unknown;
   onFix?: (anchor: HTMLButtonElement) => void;
+  fixDisabled?: boolean;
   fixAnchor?: HTMLButtonElement;
   repairItem?: RepairGroup["items"][number];
   wideStatus: boolean;
@@ -322,6 +345,7 @@ function PrCheckRow({
             type="button"
             ref={fixRef}
             onClick={(event) => onFix(event.currentTarget)}
+            disabled={fixDisabled}
             aria-haspopup="dialog"
             aria-expanded={fixOpen}
             aria-label={`Fix ${check.name} with AI`}
@@ -502,12 +526,17 @@ export function InboxPrChecks({
   const [selection, setSelection] = useState<{
     checks: GithubPrCheck[];
     anchor: HTMLButtonElement;
+    scope: string;
   } | null>(null);
-  const checksIdentity = JSON.stringify(checks);
-  useEffect(
-    () => setSelection(null),
-    [cwd, repo, repair?.number, checksIdentity, stale, refreshing, error],
+  const selectionValid = Boolean(
+    selection &&
+      checks &&
+      selection.scope === revealScope &&
+      selectedChecksStillFailed(selection.checks, checks.checks),
   );
+  useEffect(() => {
+    if (selection && !selectionValid) setSelection(null);
+  }, [selection, selectionValid]);
   if (loading) {
     return (
       <div className="flex justify-center py-10 text-content/40">
@@ -580,18 +609,16 @@ export function InboxPrChecks({
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {repair &&
-          !stale &&
-          !error &&
-          !refreshing &&
-          rows.some((row) => row.state === "fail") ? (
+          {repair && rows.some((row) => row.state === "fail") ? (
             <button
               ref={allFixRef}
               type="button"
+              disabled={refreshing || stale || Boolean(error)}
               onClick={(event) =>
                 setSelection({
                   checks: rows.filter((row) => row.state === "fail"),
                   anchor: event.currentTarget,
+                  scope: revealScope,
                 })
               }
               aria-haspopup="dialog"
@@ -653,15 +680,16 @@ export function InboxPrChecks({
           Saved results may be out of date.
         </p>
       ) : null}
-      {selection && repair && !stale && !refreshing && !error ? (
+      {selection && selectionValid && repair ? (
         <CheckRepairForm
-          key={`${cwd}:${repo}:${checksIdentity}:${JSON.stringify(selection.checks)}`}
+          key={`${selection.scope}:${JSON.stringify(selection.checks)}`}
           anchor={selection.anchor}
           checks={selection.checks}
           headOid={checks?.headOid ?? ""}
           cwd={cwd}
           repo={repo}
           repair={repair}
+          blocked={refreshing || stale || Boolean(error)}
           onClose={() => setSelection(null)}
         />
       ) : null}
@@ -753,14 +781,16 @@ export function InboxPrChecks({
                       }
                       onFix={
                         repair &&
-                        !stale &&
-                        !error &&
-                        !refreshing &&
                         check.state === "fail"
                           ? (anchor) =>
-                              setSelection({ checks: [check], anchor })
+                              setSelection({
+                                checks: [check],
+                                anchor,
+                                scope: revealScope,
+                              })
                           : undefined
                       }
+                      fixDisabled={refreshing || stale || Boolean(error)}
                       fixAnchor={selection?.anchor}
                       cwd={cwd}
                       repo={repo}

@@ -29,9 +29,10 @@ export function useGithubPrChecks(params: {
   enabled: boolean;
   /** Open PRs poll; closed or merged ones load once and on demand. */
   open: boolean;
+  poll?: boolean;
   revision?: number;
 }): GithubPrChecksView {
-  const { cwd, repo, number, enabled, open, revision = 0 } = params;
+  const { cwd, repo, number, enabled, open, poll = true, revision = 0 } = params;
   const [checks, setChecks] = useState<GithubPrChecks | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [refreshing, setRefreshing] = useState(false);
@@ -48,6 +49,9 @@ export function useGithubPrChecks(params: {
   const queuedRef = useRef<"manual" | "auto" | null>(null);
   const openRef = useRef(open);
   openRef.current = open;
+  const pollRef = useRef(poll);
+  pollRef.current = poll;
+  const previousPollRef = useRef(poll);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -101,7 +105,11 @@ export function useGithubPrChecks(params: {
         queuedRef.current = null;
         // An automatic follow-up waits for an open PR and a visible document;
         // visibilitychange or the next tick picks the work back up.
-        if (queued === "auto" && (document.hidden || !openRef.current)) return;
+        if (
+          queued === "auto" &&
+          (document.hidden || !openRef.current || !pollRef.current)
+        )
+          return;
         runRef.current(queued === "auto" ? "auto" : undefined);
       });
   }, [cwd, repo, number]);
@@ -137,7 +145,10 @@ export function useGithubPrChecks(params: {
   }, [cwd, repo, number, enabled, revision, manualTick]);
 
   useEffect(() => {
-    if (!enabled || !open) return;
+    const resumed = poll && !previousPollRef.current;
+    previousPollRef.current = poll;
+    if (!enabled || !open || !poll) return;
+    if (resumed && !document.hidden) runRef.current("auto");
     const timer = window.setInterval(() => {
       if (document.hidden) return;
       runRef.current("auto");
@@ -150,7 +161,7 @@ export function useGithubPrChecks(params: {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [enabled, open]);
+  }, [enabled, open, poll]);
 
   return { checks, loading, refreshing, error, stale, refresh };
 }
