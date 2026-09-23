@@ -30,6 +30,13 @@ import {
   type ProviderSignInState,
 } from "../../features/sessions/ui/ProviderSignInPanel";
 import type { ProviderAccount } from "../../features/providers/model/providerAccounts";
+import {
+  identityKey,
+  identityOrganizationTag,
+  identitySubtitle,
+  useProviderAccountIdentities,
+  type ProviderAccountIdentity,
+} from "../../features/providers/model/providerAccountIdentity";
 
 type UsageWindowEntry = {
   key: "session" | "weekly" | "monthly";
@@ -99,6 +106,11 @@ export function UsageProviderChip({
   const activeAccount = accounts.find((account) => account.id === accountId);
   const canManageAccounts = Boolean(onSelectAccount && onAddAccount);
   const activeAccountLabel = activeAccount?.label ?? "Removed account";
+  const identities = useProviderAccountIdentities(accounts, open);
+  const activeIdentity = activeAccount
+    ? identities[identityKey(activeAccount)]
+    : null;
+  const activeSubtitle = identitySubtitle(activeIdentity);
   const mascotProject = project ? projectName(project) : providerLabel;
   const appearanceKey = project ? projectKey(project) : mascotProject;
   const mascotName = resolveTabGroupMascot(
@@ -235,6 +247,7 @@ export function UsageProviderChip({
             <ProviderAccountPicker
               providerLabel={providerLabel}
               accounts={accounts}
+              identities={identities}
               accountId={accountId ?? ""}
               onBack={() => setAccountView("usage")}
               onAdd={() => setAccountView("add")}
@@ -293,7 +306,12 @@ export function UsageProviderChip({
                       aria-label={`Switch ${providerLabel} account`}
                       onClick={() => setAccountView("accounts")}
                     >
-                      <span className="truncate">{activeAccountLabel}</span>
+                      <span className="shrink-0">{activeAccountLabel}</span>
+                      {activeSubtitle ? (
+                        <span className="truncate text-content/35">
+                          {activeSubtitle}
+                        </span>
+                      ) : null}
                       <ChevronRight
                         className="size-2.5 shrink-0"
                         strokeWidth={1.75}
@@ -395,6 +413,7 @@ function AccountSwitchRow({
 function ProviderAccountPicker({
   providerLabel,
   accounts,
+  identities,
   accountId,
   onBack,
   onAdd,
@@ -403,6 +422,7 @@ function ProviderAccountPicker({
 }: {
   providerLabel: string;
   accounts: ProviderAccount[];
+  identities: Record<string, ProviderAccountIdentity | null>;
   accountId: string;
   onBack: () => void;
   onAdd: () => void;
@@ -428,6 +448,9 @@ function ProviderAccountPicker({
       <div className="mt-2 flex flex-col gap-1" role="listbox">
         {accounts.map((account) => {
           const selected = account.id === accountId;
+          const identity = identities[identityKey(account)];
+          const orgTag = identityOrganizationTag(identity);
+          const subtitle = identitySubtitle(identity);
           return (
             <button
               key={account.id}
@@ -441,7 +464,21 @@ function ProviderAccountPicker({
               }`}
               onClick={() => onSelect(account.id)}
             >
-              <span className="min-w-0 flex-1 truncate">{account.label}</span>
+              <span className="min-w-0 flex-1 py-1.5">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate">{account.label}</span>
+                  {orgTag ? (
+                    <span className="shrink-0 rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
+                      {orgTag}
+                    </span>
+                  ) : null}
+                </span>
+                {subtitle ? (
+                  <span className="mt-0.5 block truncate text-[9px] text-content/40">
+                    {subtitle}
+                  </span>
+                ) : null}
+              </span>
               {selected ? (
                 <Check
                   className="size-3.5 shrink-0 text-accent"
