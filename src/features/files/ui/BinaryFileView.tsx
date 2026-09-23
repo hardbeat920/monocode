@@ -10,8 +10,14 @@ import {
 } from "../../../shared/ui/icons";
 import { ExplorerMenu } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { PdfView } from "./PdfView";
+import { clampZoom, ZoomButton } from "./ViewerControls";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { formatFileSize, sniffImageMime } from "../model/filePreview";
+import {
+  formatFileSize,
+  isPdfBytes,
+  sniffImageMime,
+} from "../model/filePreview";
 import { watchFile } from "../model/fileWatch";
 import {
   basename,
@@ -22,20 +28,18 @@ import {
 import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 
-const MIN_ZOOM = 0.1;
-const MAX_ZOOM = 16;
-
 type Props = { path: string; cwd: string };
 
 type LoadState =
   | { status: "loading" }
   | { status: "ready"; url: string; mime: string; size: number }
+  | { status: "pdf"; bytes: Uint8Array; size: number }
   | { status: "unsupported"; size: number }
   | { status: "error"; message: string };
 
 /**
- * Read-only surface for files the editor can't open. Images render; bytes that
- * turn out not to be an image get a card pointing at the file on disk.
+ * Read-only surface for files the editor can't open. Images and PDFs render;
+ * bytes that turn out to be neither get a card pointing at the file on disk.
  */
 export function BinaryFileView({ path, cwd }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -49,6 +53,10 @@ export function BinaryFileView({ path, cwd }: Props) {
     readBinaryFile(path).then(
       (bytes) => {
         if (cancelled) return;
+        if (isPdfBytes(bytes)) {
+          setState({ status: "pdf", bytes, size: bytes.byteLength });
+          return;
+        }
         // The blob's MIME comes from the bytes, never the extension, so a file
         // named `.png` that holds markup can't become a same-origin document.
         const mime = sniffImageMime(bytes);
@@ -120,12 +128,22 @@ export function BinaryFileView({ path, cwd }: Props) {
         path={path}
         cwd={cwd}
         title={basename(path)}
-        detail={`${formatFileSize(state.size)} · not a readable image`}
+        detail={`${formatFileSize(state.size)} · not a readable image or PDF`}
         icon={
           <div className="mx-auto mb-3 flex justify-center">
             <FileTypeIcon name={basename(path)} isDir={false} size={28} />
           </div>
         }
+      />
+    );
+  }
+
+  if (state.status === "pdf") {
+    return (
+      <PdfView
+        bytes={state.bytes}
+        size={state.size}
+        onError={(message) => setState({ status: "error", message })}
       />
     );
   }
@@ -291,28 +309,6 @@ function ImageView({
   );
 }
 
-function ZoomButton({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-      className="grid size-5 place-items-center rounded hover:bg-content/10 hover:text-content"
-    >
-      {children}
-    </button>
-  );
-}
-
 function FileCard({
   path,
   cwd,
@@ -373,8 +369,4 @@ function CardButton({
       {children}
     </button>
   );
-}
-
-function clampZoom(value: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
 }
