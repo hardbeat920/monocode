@@ -65,12 +65,11 @@ fn claude_identity(dir: Option<PathBuf>) -> Option<ProviderAccountIdentity> {
         None => home()?.join(".claude.json"),
     };
     let account = read_json(&path)?.get("oauthAccount")?.clone();
-    let email = text(&account, "emailAddress")?;
     // organizationType is e.g. "claude_max", "claude_pro", "claude_team".
     let plan = text(&account, "organizationType")
         .map(|kind| capitalize(kind.strip_prefix("claude_").unwrap_or(&kind)));
     Some(ProviderAccountIdentity {
-        email: Some(email),
+        email: text(&account, "emailAddress"),
         name: text(&account, "displayName").or_else(|| text(&account, "fullName")),
         plan,
         organization: text(&account, "organizationName"),
