@@ -39,3 +39,36 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo check
       - run: cargo test
+
+  fedora:
+    name: Fedora rpm build
+    runs-on: ubuntu-latest
+    container: fedora:43
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Fedora system dependencies
+        run: bash scripts/install-linux-deps-fedora.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm ci
+      - run: npm run build:fedora
+
+      - name: Verify rpm bundle
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          rpm=(target/release/bundle/rpm/*.rpm)
+          if (( ${#rpm[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          rpm -qip "${rpm[0]}"
