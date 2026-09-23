@@ -154,6 +154,7 @@ export type DiscoveredSkill = {
     | "fx"
     | "grok"
     | "hermes"
+    | "droid"
     | "antigravity"
     | "monocode";
 };

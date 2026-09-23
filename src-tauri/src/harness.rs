@@ -794,6 +794,19 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Factory Droid (`droid`), driven over ACP via `droid exec --output-format acp`.
+#[tauri::command(async)]
+pub fn harness_resolve_droid() -> Result<CursorBinary, String> {
+    resolve_droid()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Factory Droid CLI not found. Install it with `curl -fsSL https://app.factory.ai/cli | sh`, run `droid` once to sign in, then retry."
+                .into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -1676,6 +1689,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "droid"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
@@ -2319,6 +2333,30 @@ fn resolve_hermes() -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/bin/hermes"));
     candidates.push(PathBuf::from("/snap/bin/hermes"));
     if let Some(from_shell) = which_via_login_shell("hermes") {
+        candidates.push(from_shell);
+    }
+
+    first_binary(candidates)
+}
+
+fn resolve_droid() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        // The official installer drops a single binary into ~/.local/bin.
+        candidates.push(home.join(".local/bin/droid"));
+        candidates.push(home.join(".factory/bin/droid"));
+        candidates.push(home.join(".npm-global/bin/droid"));
+        candidates.push(home.join("n/bin/droid"));
+        #[cfg(windows)]
+        candidates.push(home.join("bin/droid"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/droid"));
+    candidates.push(PathBuf::from("/usr/local/bin/droid"));
+    candidates.push(PathBuf::from("/usr/bin/droid"));
+    if let Some(from_shell) = which_via_login_shell("droid") {
         candidates.push(from_shell);
     }
 
@@ -3916,6 +3954,9 @@ mod reap_logic_tests {
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
+        assert!(looks_like_harness_argv(
+            "/Users/n/.local/bin/droid exec --output-format acp"
+        ));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(

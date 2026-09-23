@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Factory Droid is available through ACP, with model discovery, per-model reasoning levels, attachments, approvals, spec mode, skills, saved-session resume, remote host sessions, and local usage.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added
