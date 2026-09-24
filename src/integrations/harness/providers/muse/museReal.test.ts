@@ -50,6 +50,10 @@ vi.mock("../../core/child", async () => {
       });
     },
     killChild: async (id: string) => {
+      live.listeners.delete(id);
+      live.exits.delete(id);
+      live.stderrListeners.delete(id);
+      live.pids.delete(id);
       live.children.get(id)?.kill("SIGKILL");
       live.children.delete(id);
     },

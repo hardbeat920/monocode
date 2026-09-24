@@ -5,7 +5,7 @@ let onExit: ((code: number | null) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
 let spawned: { command: string; args: string[]; cwd: string } | undefined;
 let killed = 0;
-let autoExit = true;
+let beforeUnwatch: (() => void) | undefined;
 
 let resolveImpl: () => Promise<{ path: string }> = async () => ({ path: "/fake/muse" });
 let spawnImpl: (sessionId: string, command: string, args: string[], cwd: string) => Promise<void> =
@@ -19,11 +19,13 @@ vi.mock("../../core/child", () => ({
     spawnImpl(sessionId, command, args, cwd),
   killChild: async () => {
     killed += 1;
-    // Mirror the real bridge: killing the child delivers its exit event.
-    if (!autoExit) return;
-    const exit = onExit;
+    // A line already queued still sees the cancel flag. The real bridge then
+    // unwatches, so the exit never reaches the turn.
+    beforeUnwatch?.();
+    beforeUnwatch = undefined;
+    onLine = undefined;
     onExit = undefined;
-    exit?.(null);
+    onStderr = undefined;
   },
   unwatchChild: () => undefined,
   watchChild: (
@@ -76,7 +78,7 @@ beforeEach(() => {
   onStderr = undefined;
   spawned = undefined;
   killed = 0;
-  autoExit = true;
+  beforeUnwatch = undefined;
   resolveImpl = async () => ({ path: "/fake/muse" });
   spawnImpl = async (sessionId, command, args, cwd) => {
     spawned = { command, args, cwd };
@@ -194,6 +196,7 @@ describe("muse turns", () => {
             reason: "boom",
           }),
         );
+        onExit!(1);
         await turn;
       })(),
     ).rejects.toThrow(/ended \(failed\): boom/);
@@ -205,16 +208,15 @@ describe("muse turns", () => {
   });
 
   it("mutes late output after cancel", async () => {
-    // Hold the exit back so the late line lands while the flag is still set,
-    // mirroring output that arrives between kill and process death.
-    autoExit = false;
     const events: HarnessEvent[] = [];
     const turn = sendMuseTurn(baseInput(events));
     await new Promise((r) => setTimeout(r, 5));
     onLine!(line("run.output.delta", { kind: "run_output_delta", text: "partial" }));
+    const deliver = onLine!;
+    beforeUnwatch = () => {
+      deliver(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));
+    };
     await cancelMuseTurn("thread-1");
-    onLine!(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));
-    onExit!(null);
     await turn;
     expect(events).toContainEqual({ type: "message.delta", text: "partial" });
     expect(events).not.toContainEqual({ type: "message.completed" });
@@ -223,7 +225,6 @@ describe("muse turns", () => {
   it("holds the turn open until the child exits after the terminal line", async () => {
     // The CLI keeps its session lock until the process dies; resolving on the
     // terminal line would let a fast follow-up send hit "already in use".
-    autoExit = false;
     const events: HarnessEvent[] = [];
     const turn = sendMuseTurn(baseInput(events));
     await new Promise((r) => setTimeout(r, 5));
@@ -244,7 +245,6 @@ describe("muse turns", () => {
   it("kills a child that lingers past the exit grace", async () => {
     vi.useFakeTimers();
     try {
-      autoExit = false;
       const events: HarnessEvent[] = [];
       const turn = sendMuseTurn(baseInput(events));
       await vi.advanceTimersByTimeAsync(5);
@@ -253,6 +253,24 @@ describe("muse turns", () => {
       await turn;
       expect(killed).toBeGreaterThan(0);
       expect(events).toContainEqual({ type: "message.completed" });
+      expect(killed).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("arms one exit-grace kill when more stdout follows the terminal", async () => {
+    vi.useFakeTimers();
+    try {
+      const events: HarnessEvent[] = [];
+      const turn = sendMuseTurn(baseInput(events));
+      await vi.advanceTimersByTimeAsync(5);
+      onLine!(line("run.terminal.completed", { kind: "run_terminal", terminal: "completed" }));
+      onLine!(line("run.output.delta", { kind: "run_output_delta", text: "late" }));
+      await vi.advanceTimersByTimeAsync(EXIT_GRACE_MS + 1);
+      await turn;
+      expect(events.filter((event) => event.type === "message.completed")).toHaveLength(1);
+      expect(killed).toBe(1);
     } finally {
       vi.useRealTimers();
     }

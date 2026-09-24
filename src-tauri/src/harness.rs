@@ -391,8 +391,12 @@ pub fn harness_resolve_muse() -> Result<CursorBinary, String> {
             path: path.to_string_lossy().into_owned(),
         })
         .ok_or_else(|| {
-            "Muse CLI not found. Install it with `curl -fsSL https://dev.meta.ai/install.sh | sh` and run `muse login`, then retry."
-                .into()
+            if cfg!(windows) {
+                "Muse CLI not found. Install it with `irm https://dev.meta.ai/install.ps1 | iex` and run `muse login`, then retry."
+            } else {
+                "Muse CLI not found. Install it with `curl -fsSL https://dev.meta.ai/install.sh | sh` and run `muse login`, then retry."
+            }
+            .into()
         })
 }
 

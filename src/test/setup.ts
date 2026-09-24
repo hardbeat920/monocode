@@ -3,9 +3,17 @@
 // instead of the property itself: an existing value storage (e.g. happy-dom)
 // is kept as-is, while a bare getter is replaced before it is ever invoked so
 // no worker emits the ExperimentalWarning.
+function isNodeWebStorageGetter(get: () => unknown): boolean {
+  const source = Function.prototype.toString.call(get);
+  // Node 22+ installs a lazy getter that warns and returns undefined unless
+  // --localstorage-file is set. happy-dom's accessor does not look like this.
+  return source.includes("internal/webstorage") || source.includes("lazyLocalStorage");
+}
+
 function installMemoryStorage(name: "localStorage" | "sessionStorage") {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
   if (descriptor?.value && typeof descriptor.value.clear === "function") return;
+  if (descriptor?.get && !isNodeWebStorageGetter(descriptor.get)) return;
   const store = new Map<string, string>();
   const storage: Storage = {
     get length() {

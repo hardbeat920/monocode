@@ -177,8 +177,16 @@ fn list_skills_with_xdg(
         if root.is_dir() {
             add_root(root, "user", "antigravity");
         }
-        // After every earlier root, so a Muse skill cannot replace `.agents/skills`.
-        add_root(muse_user_skill_root(home, xdg_config_home), "user", "muse");
+    }
+    // After every earlier root, so a Muse skill cannot replace `.agents/skills`.
+    // `$XDG_CONFIG_HOME` does not need a home directory; the fallback does.
+    if let Some(root) = match xdg_config_home {
+        Some(xdg) if !xdg.is_empty() => Some(muse_user_skill_root(Path::new(""), Some(xdg))),
+        _ => home.map(|dir| muse_user_skill_root(dir, None)),
+    } {
+        add_root(root, "user", "muse");
+    }
+    if let Some(home) = home {
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(
                 &mut by_name,
@@ -850,6 +858,21 @@ mod tests {
         let skill = skills.iter().find(|s| s.name == "shared-name").unwrap();
         assert_eq!(skill.description, "Agents project skill");
         assert_eq!(skill.source, "agents");
+    }
+
+    #[test]
+    fn discovers_muse_xdg_skills_without_a_home_directory() {
+        let project = tmp("proj-muse-nohome");
+        let xdg = tmp("xdg-muse-nohome");
+        write_skill(
+            &xdg.0.join("muse/skills"),
+            "muse-xdg-only",
+            "---\nname: muse-xdg-only\ndescription: XDG Muse skill\n---\n",
+        );
+        let skills = list_skills_with_xdg(&project.0, None, None, Some(xdg.0.as_os_str()));
+        let skill = skills.iter().find(|s| s.name == "muse-xdg-only").unwrap();
+        assert_eq!(skill.source, "muse");
+        assert_eq!(skill.scope, "user");
     }
 
     #[test]

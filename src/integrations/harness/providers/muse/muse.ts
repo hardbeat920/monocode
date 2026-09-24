@@ -38,6 +38,9 @@ type Resume = {
 
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
+/** Resolves the in-flight turn. `killChild` drops the exit handler first, so
+ * cancel/stop/forget must settle the promise themselves. */
+const activeTurns = new Map<string, () => void>();
 
 /**
  * Live Muse adapter. Spawns one headless `muse exec --json` child per turn
@@ -81,6 +84,8 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
+      activeTurns.delete(input.sessionId);
+      cancelledThreads.delete(input.sessionId);
       clearTimeout(timer);
       if (exitGrace) clearTimeout(exitGrace);
       unwatchChild(input.sessionId);
@@ -107,17 +112,17 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
           resumeByThread.set(input.sessionId, { sessionId: fold.sessionId, cwd: input.cwd });
           input.onEvent({ type: "session.providerBound", providerSessionId: fold.sessionId });
         }
-        if (fold.done) {
+        // One terminal settles the turn. Later stdout must not emit
+        // `message.completed` again or arm a second kill timer.
+        if (fold.done && !exitGrace) {
           input.onEvent({ type: "message.completed" });
-          if (fold.failed) {
-            finish(new Error(fold.failed));
-            return;
-          }
           // Wait for the child to die before resolving so the next send
-          // cannot reuse the session id while it is still locked.
+          // cannot reuse the session id while it is still locked. A failed
+          // terminal uses the same wait; the exit handler rejects sooner
+          // when the process dies first.
           exitGrace = setTimeout(() => {
             void killChild(input.sessionId).catch(() => undefined);
-            finish();
+            finish(fold.failed ? new Error(fold.failed) : undefined);
           }, EXIT_GRACE_MS);
         }
       },
@@ -152,6 +157,7 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
       },
     );
 
+    activeTurns.set(input.sessionId, () => finish());
     spawnChild(input.sessionId, binary, args, input.cwd).then(
       () => input.onAccepted?.(),
       (error: unknown) => finish(museStartupError(error)),
@@ -160,8 +166,12 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
 }
 
 export async function cancelMuseTurn(sessionId: string): Promise<void> {
+  const settle = activeTurns.get(sessionId);
+  // Mute output that is already queued. A live turn clears the flag when it
+  // settles; a cancel during binary resolve keeps it so send bails out.
   cancelledThreads.add(sessionId);
   await killChild(sessionId).catch(() => undefined);
+  settle?.();
 }
 
 export function respondMuseApproval(
@@ -182,13 +192,17 @@ export async function stopMuseSession(sessionId: string): Promise<void> {
   // Clearing here (not just in the exit handler) matters: stop can land while
   // idle with no child running, and a stale flag would swallow the next turn.
   cancelledThreads.delete(sessionId);
+  const settle = activeTurns.get(sessionId);
   await killChild(sessionId).catch(() => undefined);
+  settle?.();
 }
 
 export async function forgetMuseSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
   cancelledThreads.delete(sessionId);
+  const settle = activeTurns.get(sessionId);
   await killChild(sessionId).catch(() => undefined);
+  settle?.();
 }
 
 export function bindMuseSession(

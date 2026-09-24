@@ -1,5 +1,6 @@
 import type { HarnessId } from "../../../features/sessions/model/session";
 import { HARNESSES } from "../../../features/sessions/model/session";
+import { IS_WIN } from "../../../platform/tauri/platform";
 import {
   resolveAntigravityBinary,
   resolveClaudeBinary,
@@ -40,7 +41,9 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
   },
   muse: {
     name: "Muse CLI",
-    install: "curl -fsSL https://dev.meta.ai/install.sh | sh",
+    install: IS_WIN
+      ? "irm https://dev.meta.ai/install.ps1 | iex"
+      : "curl -fsSL https://dev.meta.ai/install.sh | sh",
   },
   antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
 };
