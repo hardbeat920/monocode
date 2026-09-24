@@ -15,7 +15,10 @@ describe("OpenClaw Gateway protocol", () => {
 
   it("rejects malformed or unsupported frames", () => {
     expect(() => parseOpenClawFrame("not-json")).toThrow(/invalid JSON/i);
-    expect(() => parseOpenClawFrame('{"type":"req","id":1,"method":"x"}')).toThrow(/unsupported/i);
+    expect(() => parseOpenClawFrame('{"type":"req","id":1,"method":"x"}')).toThrow(/invalid/i);
+    expect(() => parseOpenClawFrame('{"type":"res","id":"1","ok":false}')).toThrow(/invalid/i);
+    expect(() => parseOpenClawFrame('{"type":"event","event":"connect.challenge"}')).toThrow(/payload/i);
+    expect(() => parseOpenClawFrame('{"type":"event","event":"heartbeat","seq":-1}')).toThrow(/sequence/i);
   });
 
   it("builds request and connect frames without credentials", () => {
