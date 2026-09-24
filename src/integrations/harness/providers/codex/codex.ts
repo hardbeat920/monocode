@@ -29,7 +29,7 @@ import {
   type CodexApprovalKind,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
-import { saveGeneratedImage } from "../../../../platform/tauri/fs";
+import { deleteGeneratedImages, saveGeneratedImage } from "../../../../platform/tauri/fs";
 import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
 import { codexMcpConfirmation } from "./codexElicitation";
 import { snapshotRemainder } from "../../core/streamText";
@@ -93,6 +93,7 @@ type Live = {
   emittedAssistantByItem: Map<string, string>;
   emittedReasoningByItem: Map<string, string>;
   emittedGeneratedImages: Set<string>;
+  turnGeneration: number;
   notificationQueue: Promise<void> | null;
   /** Child thread id -> the agent tool row that spawned it. */
   subagentThreads: Map<string, string>;
@@ -105,6 +106,16 @@ type Live = {
   /** The active turn failed on a spent usage limit. */
   usageLimited: boolean;
 };
+
+function trackNotificationQueue(
+  live: Live,
+  queued: Promise<void>,
+): void {
+  live.notificationQueue = queued;
+  void queued.then(() => {
+    if (live.notificationQueue === queued) live.notificationQueue = null;
+  });
+}
 
 type Resume = {
   threadId: string;
@@ -434,19 +445,19 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         const live = liveRef.current;
         if (!live || live.muteUpdates) return;
         if (live.notificationQueue) {
+          const turnGeneration = live.turnGeneration;
           const queued = live.notificationQueue
             .catch(() => undefined)
-            .then(() => handleNotification(live, method, params));
-          live.notificationQueue = queued.catch(() => undefined);
+            .then(() => {
+              if (turnGeneration !== live.turnGeneration) return;
+              return handleNotification(live, method, params);
+            });
+          trackNotificationQueue(live, queued.catch(() => undefined));
           return;
         }
         const result = handleNotification(live, method, params);
         if (!result) return;
-        const queued = result.catch(() => undefined);
-        live.notificationQueue = queued;
-        void queued.then(() => {
-          if (live.notificationQueue === queued) live.notificationQueue = null;
-        });
+        trackNotificationQueue(live, result.catch(() => undefined));
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
@@ -595,6 +606,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
        emittedAssistantByItem: new Map(),
        emittedReasoningByItem: new Map(),
        emittedGeneratedImages: new Set(),
+       turnGeneration: 0,
        notificationQueue: null,
        subagentThreads: new Map(),
       pendingSubagent: new Map(),
@@ -646,6 +658,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
   live.emittedGeneratedImages.clear();
+  live.turnGeneration += 1;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -735,8 +748,7 @@ function handleNotification(
       ? stringField(asRecord(rec?.thread), "id")
       : undefined);
   if (threadId && threadId !== live.threadId) {
-    handleSubagentNotification(live, threadId, method, params);
-    return;
+    return handleSubagentNotification(live, threadId, method, params);
   }
   // A Codex turn is a sequence of items. Completing an agentMessage does not
   // mean the turn is over — more tools and messages can still arrive. Only
@@ -778,44 +790,65 @@ function handleNotification(
     live.onEvent(event);
   }
   // Metadata and steps can arrive before the spawn. Create its row first.
+  let replay: Promise<void> | undefined;
   for (const childId of codexSubagentThreadIds(asRecord(rec?.item) ?? {})) {
     const owner = live.subagentThreads.get(childId);
     if (!owner) continue;
     const backlog = live.pendingSubagent.get(childId);
     live.pendingSubagent.delete(childId);
-    for (const pending of backlog ?? [])
-      emitSubagentSteps(live, owner, pending.method, pending.params);
-  }
-  settleSubagentRows(live, rec);
-  if (mapped.rateLimits) noteRateLimits(live, mapped.rateLimits);
-  if (mapped.usageLimited) live.usageLimited = true;
-  if (mapped.activeTurnId !== undefined) {
-    live.activeTurnId = mapped.activeTurnId;
-  }
-  if (mapped.turnCompleted) {
-    // Report the limit before the turn settles so queued follow-ups hold.
-    if (live.usageLimited && !live.cancelled) {
-      const resetsAt = usageLimitResetAt(live);
-      live.onEvent({
-        type: "usage.limited",
-        ...(resetsAt != null ? { resetsAt } : {}),
-      });
+    for (const pending of backlog ?? []) {
+      const emit = () =>
+        emitSubagentSteps(live, owner, pending.method, pending.params);
+      if (replay) {
+        replay = replay.then(emit);
+      } else {
+        const result = emit();
+        if (result) replay = result;
+      }
     }
-    live.usageLimited = false;
-    finishActiveTurn(live);
   }
+  const finish = () => {
+    settleSubagentRows(live, rec);
+    if (mapped.rateLimits) noteRateLimits(live, mapped.rateLimits);
+    if (mapped.usageLimited) live.usageLimited = true;
+    if (mapped.activeTurnId !== undefined) {
+      live.activeTurnId = mapped.activeTurnId;
+    }
+    if (mapped.turnCompleted) {
+      // Report the limit before the turn settles so queued follow-ups hold.
+      if (live.usageLimited && !live.cancelled) {
+        const resetsAt = usageLimitResetAt(live);
+        live.onEvent({
+          type: "usage.limited",
+          ...(resetsAt != null ? { resetsAt } : {}),
+        });
+      }
+      live.usageLimited = false;
+      finishActiveTurn(live);
+    }
+  };
+  if (replay) return replay.then(finish);
+  finish();
 }
 
 async function materializeGeneratedImage(
   live: Live,
   event: Extract<HarnessEvent, { type: "image.generated"; data: string }>,
 ): Promise<void> {
+  const turnGeneration = live.turnGeneration;
   try {
     const asset = await saveGeneratedImage({
       data: event.data,
       name: event.name,
     });
-    if (live.cancelled || live.muteUpdates) return;
+    if (
+      live.cancelled ||
+      live.muteUpdates ||
+      turnGeneration !== live.turnGeneration
+    ) {
+      void deleteGeneratedImages([asset.path]).catch(() => undefined);
+      return;
+    }
     live.onEvent({
       type: "image.generated",
       itemId: event.itemId,
@@ -826,7 +859,13 @@ async function materializeGeneratedImage(
       ...(event.alt ? { alt: event.alt } : {}),
     });
   } catch (cause) {
-    if (live.cancelled || live.muteUpdates) return;
+    if (
+      live.cancelled ||
+      live.muteUpdates ||
+      turnGeneration !== live.turnGeneration
+    ) {
+      return;
+    }
     live.onEvent({
       type: "session.error",
       message: `Could not save generated image: ${
@@ -926,12 +965,12 @@ function handleSubagentNotification(
   threadId: string,
   method: string,
   params: unknown,
-): void {
+): void | Promise<void> {
   const callId = live.subagentThreads.get(threadId);
   if (callId) {
-    emitSubagentSteps(live, callId, method, params);
-    return;
+    return emitSubagentSteps(live, callId, method, params);
   }
+  if (!live.activeTurnId) return;
   if (
     method !== "item/started" &&
     method !== "item/completed" &&
@@ -949,7 +988,18 @@ function emitSubagentSteps(
   callId: string,
   method: string,
   params: unknown,
-): void {
+): void | Promise<void> {
+  const image = mapCodexNotification(method, params).events.find(
+    (event): event is Extract<HarnessEvent, { type: "image.generated" }> =>
+      event.type === "image.generated",
+  );
+  if (image) {
+    if (live.emittedGeneratedImages.has(image.itemId)) return;
+    live.emittedGeneratedImages.add(image.itemId);
+    if ("data" in image) return materializeGeneratedImage(live, image);
+    live.onEvent(image);
+    return;
+  }
   for (const event of mapCodexSubagentSteps(callId, method, params)) {
     live.onEvent(event);
   }
@@ -1040,10 +1090,13 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   clearServerRequests(live);
   closeOpenAgentRows(live);
   live.turnEndPending = false;
+  live.turnGeneration += 1;
   live.activeTurnId = null;
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
   live.emittedGeneratedImages.clear();
+  live.subagentThreads.clear();
+  live.pendingSubagent.clear();
   for (const event of extraEvents) {
     live.onEvent(event);
   }
