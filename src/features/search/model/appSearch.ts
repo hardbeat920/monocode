@@ -440,7 +440,8 @@ function isSearchableRole(role: Block["role"]): boolean {
     role === "assistant" ||
     role === "tool" ||
     role === "tasks" ||
-    role === "plan"
+    role === "plan" ||
+    role === "image"
   );
 }
 

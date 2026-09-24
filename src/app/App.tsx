@@ -97,6 +97,7 @@ import { runUpdateFlow } from "./model/updater";
 import { displayAttachments, prepareAttachments } from "../features/sessions/model/attachments";
 import {
   basename,
+  deleteGeneratedImages,
   notifyGitChanged,
   pickFolder,
   type GitFileDiffKind,
@@ -364,6 +365,7 @@ import {
 import { dropContextWindow } from "../features/sessions/model/contextUsage";
 import {
   discardDraftSessionRecord,
+  deleteSession,
   getSession,
   listLinkedSessions,
   listSessionsByProject,
@@ -628,6 +630,26 @@ function scheduleHarnessFlush(run: () => void): ScheduledFlush {
     return { kind: "timeout", id: window.setTimeout(run, 32) };
   }
   return { kind: "raf", id: requestAnimationFrame(run) };
+}
+
+function removedGeneratedImagePaths(previous: Block[], next: Block[]): string[] {
+  const retained = new Set(
+    next
+      .filter((block) => block.role === "image" && block.image)
+      .map((block) => block.image!.path),
+  );
+  return previous
+    .filter(
+      (block) =>
+        block.role === "image" && block.image && !retained.has(block.image.path),
+    )
+    .map((block) => block.image!.path);
+}
+
+function deleteGeneratedImagePaths(paths: string[]): void {
+  if (paths.length > 0) {
+    void deleteGeneratedImages(paths).catch(() => undefined);
+  }
 }
 
 function userTurnCards(
@@ -3677,21 +3699,27 @@ export default function App({
       removingSessionIds.current.add(id);
       try {
         await stopSessionForRemoval(id);
+        const stopped =
+          sessionsRef.current.find((session) => session.id === id) ?? current;
         await Promise.all(
-          sessionChildHarnesses(current).map((harness) =>
+          sessionChildHarnesses(stopped).map((harness) =>
             forgetHarnessSession(harness, id),
           ),
         );
+        const imagePaths = stopped.blocks.flatMap((block) =>
+          block.role === "image" && block.image ? [block.image.path] : [],
+        );
+        await deleteSession(id, imagePaths).catch(() => undefined);
         const fresh = {
           ...newSession(
-            current.harness,
-            current.cwd,
-            current.model,
-            current.runtimeMode,
-            current.modelSettings,
+            stopped.harness,
+            stopped.cwd,
+            stopped.model,
+            stopped.runtimeMode,
+            stopped.modelSettings,
           ),
-          title: current.title,
-          inboxAsk: current.inboxAsk,
+          title: stopped.title,
+          inboxAsk: stopped.inboxAsk,
         };
         const next = sessionsRef.current.map((session) =>
           session.id === id ? fresh : session,
@@ -5791,6 +5819,12 @@ export default function App({
       }
 
       dismissNoticesForContinuedSession(sessionId);
+      const removedImagePaths = editedResend
+        ? removedGeneratedImagePaths(
+            current.blocks,
+            editedResend.replace(current).blocks,
+          )
+        : [];
       const commitSubmittedTurn = () => {
         setSessions((prev) =>
           prev.map((s) => {
@@ -5888,7 +5922,10 @@ export default function App({
           }),
         );
       };
-      if (!options?.resendEdited) flushSync(commitSubmittedTurn);
+      if (!options?.resendEdited) {
+        flushSync(commitSubmittedTurn);
+        deleteGeneratedImagePaths(removedImagePaths);
+      }
 
       const launchTitleGeneration = (workCwd: string) => {
         if (
@@ -6172,23 +6209,33 @@ export default function App({
         };
         const acceptEditedResend = () => {
           if (!editedResend || editedResend.isAccepted()) return;
-          flushSync(commitSubmittedTurn);
-          editedResend.markAccepted();
+           flushSync(commitSubmittedTurn);
+           deleteGeneratedImagePaths(removedImagePaths);
+           editedResend.markAccepted();
           for (const event of pendingEditedEvents) applyTurnEvent(event);
           pendingEditedEvents.length = 0;
         };
         const recoverEditedResend = () => {
           if (!editedResend || editedResend.isAccepted()) return;
           pendingEditedEvents.length = 0;
+          const previous = sessionsRef.current.find(
+            (session) => session.id === sessionId,
+          );
+          const recovered = previous
+            ? editedResend.recoverAfterFailure(previous)
+            : undefined;
+          const removedImagePaths =
+            previous && recovered
+              ? removedGeneratedImagePaths(previous.blocks, recovered.blocks)
+              : [];
           flushSync(() => {
             setSessions((prev) =>
               prev.map((session) =>
-                session.id === sessionId
-                  ? editedResend.recoverAfterFailure(session)
-                  : session,
+                session.id === sessionId && recovered ? recovered : session,
               ),
             );
           });
+          deleteGeneratedImagePaths(removedImagePaths);
         };
 
         if (!current.inboxAsk && !orchestrator.forSession(sessionId)) {

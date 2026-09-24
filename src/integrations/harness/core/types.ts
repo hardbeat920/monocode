@@ -30,6 +30,22 @@ export type HarnessEvent =
   | ({ type: "interjection"; text: string } & InterjectionMeta)
   | { type: "message.delta"; text: string }
   | { type: "message.completed" }
+  | {
+      type: "image.generated";
+      itemId: string;
+      data: string;
+      name: string;
+      alt?: string;
+    }
+  | {
+      type: "image.generated";
+      itemId: string;
+      path: string;
+      name: string;
+      mimeType: string;
+      size: number;
+      alt?: string;
+    }
   | { type: "reasoning.delta"; text: string }
   | { type: "reasoning.completed" }
   | {

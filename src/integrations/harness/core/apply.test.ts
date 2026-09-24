@@ -190,6 +190,35 @@ describe("streamed markdown", () => {
     expect(session.blocks[0]?.text).toBe(chunks.join(""));
   });
 
+  it("stores generated images as standalone blocks without assistant text", () => {
+    const session = applyHarnessEvent(
+      newSession("codex", "/tmp"),
+      {
+        type: "image.generated",
+        itemId: "image_1",
+        path: "/app-data/generated-images/image.png",
+        name: "generated-image",
+        mimeType: "image/png",
+        size: 8,
+        alt: "A clean product photo",
+      },
+    );
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      },
+    ]);
+  });
+
   it("does not double an assistant block when a completed snapshot repeats it", () => {
     let session = newSession("claude", "/tmp");
     session = applyHarnessEvent(session, {
