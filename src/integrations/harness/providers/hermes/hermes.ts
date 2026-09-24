@@ -3,6 +3,7 @@ import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { readTextFile } from "../../../../platform/tauri/fs";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import { AcpSubagents } from "../../core/acpSubagents";
+import { recoverAcpSession } from "../../core/acpLifecycle";
 import {
   killChild,
   resolveHermesBinary,
@@ -270,42 +271,49 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       throw hermesStartupError(error);
     }
 
-    let setup: unknown;
-    let acpSessionId: string | undefined;
-    let didLoad = false;
-    if (canLoad && resume) {
-      muteGate.current = true;
-      try {
-        setup = await acp.request(
-          "session/load",
-          { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers: [] },
-          SESSION_TIMEOUT_MS,
-        );
-        acpSessionId = hermesSessionId(setup) ?? resume.acpSessionId;
-        didLoad = true;
-      } catch {
-        setup = undefined;
-        acpSessionId = undefined;
-      } finally {
-        muteGate.current = false;
-      }
-    }
-
-    if (!acpSessionId) {
-      try {
-        setup = await acp.request(
-          "session/new",
-          { cwd: input.cwd, mcpServers: [] },
-          SESSION_TIMEOUT_MS,
-        );
-      } catch (error) {
-        throw hermesStartupError(error);
-      }
-      acpSessionId = hermesSessionId(setup);
-    }
-    if (!acpSessionId)
-      throw new Error("Hermes Agent did not return a session id");
-
+    const previous = canLoad && resume ? resume.acpSessionId : undefined;
+    const recovery = await recoverAcpSession(previous, {
+      resume: async (sessionId) => {
+        muteGate.current = true;
+        try {
+          return await acp.request(
+            "session/load",
+            { sessionId, cwd: input.cwd, mcpServers: [] },
+            SESSION_TIMEOUT_MS,
+          );
+        } finally {
+          muteGate.current = false;
+        }
+      },
+      load: async (sessionId) => {
+        muteGate.current = true;
+        try {
+          return await acp.request(
+            "session/load",
+            { sessionId, cwd: input.cwd, mcpServers: [] },
+            SESSION_TIMEOUT_MS,
+          );
+        } finally {
+          muteGate.current = false;
+        }
+      },
+      create: async () => {
+        try {
+          return await acp.request(
+            "session/new",
+            { cwd: input.cwd, mcpServers: [] },
+            SESSION_TIMEOUT_MS,
+          );
+        } catch (error) {
+          throw hermesStartupError(error);
+        }
+      },
+      sessionId: hermesSessionId,
+      isTimeout: (error) => error instanceof Error && error.message.endsWith("timed out"),
+    });
+    const setup = recovery.setup;
+    const acpSessionId = recovery.sessionId;
+    const didLoad = recovery.restored;
     const live: Live = {
       subagents: new AcpSubagents(),
       background: new Map(),
