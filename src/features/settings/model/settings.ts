@@ -89,7 +89,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "Inbox",
     description:
       "Manage Inbox services and notification preferences for each project.",
-    keywords: "github gitlab linear azure devops connect token integration",
+    keywords: "github gitlab linear jira atlassian azure devops connect token integration",
   },
   {
     id: "archive",
@@ -338,6 +338,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "inbox",
     label: "ADO",
     keywords: "azure devops boards repos pull request pat organization connect",
+  },
+  {
+    id: "jira",
+    section: "inbox",
+    label: "Jira",
+    keywords: "atlassian cloud site email api token issues projects connect",
   },
   {
     id: "linear",
@@ -810,6 +816,11 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
+  {
+    command: "App: Toggle Session Sidebar",
+    keys: `${MOD}${SHIFT}B`,
+    when: "Always",
+  },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
   {
     command: "Composer: Toggle Workspace",
@@ -848,6 +859,16 @@ export const KEYBINDINGS: KeybindingRow[] = [
   {
     command: "Session: Next",
     keys: `${MOD}${SHIFT}↓`,
+    when: "!overlay && (!textFocus || emptyComposer)",
+  },
+  {
+    command: "Session: Previous in Current Tab",
+    keys: `${MOD}↑`,
+    when: "!overlay && (!textFocus || emptyComposer)",
+  },
+  {
+    command: "Session: Next in Current Tab",
+    keys: `${MOD}↓`,
     when: "!overlay && (!textFocus || emptyComposer)",
   },
   {

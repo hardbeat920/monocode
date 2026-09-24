@@ -690,15 +690,16 @@ export function parseTaskNotification(
   };
 }
 
-export type ClaudeBackgroundAgentTask = {
+export type ClaudeBackgroundTask = {
   taskId: string;
   taskType: string;
   description: string;
 };
 
-export function parseBackgroundAgentTasks(
+/** Every task Claude is running for the session: subagents, shells, monitors. */
+export function parseBackgroundTasks(
   rec: Record<string, unknown>,
-): ClaudeBackgroundAgentTask[] | null {
+): ClaudeBackgroundTask[] | null {
   if (
     stringField(rec, "type") !== "system" ||
     stringField(rec, "subtype") !== "background_tasks_changed"
@@ -711,7 +712,7 @@ export function parseBackgroundAgentTasks(
     if (!row || row.ambient === true) return [];
     const taskId = stringField(row, "task_id");
     const taskType = stringField(row, "task_type") ?? "";
-    if (!taskId || !isAgentTaskType(taskType)) return [];
+    if (!taskId) return [];
     return [
       {
         taskId,

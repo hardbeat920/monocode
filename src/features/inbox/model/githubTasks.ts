@@ -9,6 +9,15 @@ import {
   type LinearIssue,
 } from "./linear";
 import {
+  clearJiraCache,
+  jiraConnected,
+  jiraProjectIdsForFetch,
+  listJiraIssues,
+  listJiraProjects,
+  loadHiddenJiraProjectIds,
+  type JiraIssue,
+} from "./jira";
+import {
   clearGitlabCache,
   gitlabConnected,
   gitlabRepo,
@@ -35,7 +44,7 @@ import { recordInboxSelfActivity } from "./inboxSelfActivity";
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
   "merge" | "squash" | "rebase" | "draft" | "ready" | "close" | "reopen";
-export type InboxKind = GithubTaskKind | "linear";
+export type InboxKind = GithubTaskKind | "linear" | "jira";
 
 export type GithubLabel = {
   name: string;
@@ -61,7 +70,8 @@ export type GithubWorkItem = {
   repo: string;
 };
 
-export type InboxProvider = "github" | "linear" | "gitlab" | "azuredevops";
+export type InboxProvider =
+  "github" | "linear" | "jira" | "gitlab" | "azuredevops";
 
 export type InboxItem = Omit<GithubWorkItem, "kind"> & {
   kind: InboxKind;
@@ -144,6 +154,7 @@ export type GithubWorkItemQuery = {
 
 export type InboxQuery = Omit<GithubWorkItemQuery, "kind"> & {
   linearHiddenTeamIds?: string[];
+  jiraHiddenProjectIds?: string[];
 };
 
 export type InboxProviderErrors = Partial<Record<InboxProvider, string>>;
@@ -172,6 +183,7 @@ type InboxListCache = InboxListResult & {
 };
 
 let inboxListCache: InboxListCache | null = null;
+let inboxCacheGeneration = 0;
 const inboxListInflight = new Map<string, Promise<InboxListResult>>();
 const repoByPath = new Map<string, string>();
 const repositoriesByPath = new Map<string, string[]>();
@@ -184,6 +196,8 @@ const prDiffByKey = new Map<string, GithubPrDiff>();
 const prDiffInflight = new Map<string, Promise<GithubPrDiff>>();
 
 export function clearInboxCache() {
+  inboxCacheGeneration += 1;
+  clearJiraCache();
   clearKnownInboxItems();
   inboxListCache = null;
   inboxListInflight.clear();
@@ -209,7 +223,8 @@ export function inboxListCacheKey(
     .sort()
     .join("|");
   const teams = [...(query.linearHiddenTeamIds ?? [])].sort().join(",");
-  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}`;
+  const jiraProjects = [...(query.jiraHiddenProjectIds ?? [])].sort().join(",");
+  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}`;
 }
 
 export function peekInboxList(
@@ -647,9 +662,12 @@ export async function listInboxItems(
   }
   const pending = inboxListInflight.get(key);
   if (pending) return pending;
+  const generation = inboxCacheGeneration;
   const promise = fetchInboxItems(projects, query)
     .then((result) => {
-      inboxListCache = { key, ...result, fetchedAt: Date.now() };
+      if (generation === inboxCacheGeneration) {
+        inboxListCache = { key, ...result, fetchedAt: Date.now() };
+      }
       return result;
     })
     .finally(() => {
@@ -707,6 +725,15 @@ async function fetchInboxItems(
     }
   }
 
+  let jiraItems: InboxItem[] = [];
+  try {
+    if ((await jiraConnected()).connected) {
+      jiraItems = await fetchJiraInboxItems(query);
+    }
+  } catch (error) {
+    errors.jira = inboxErrorMessage(error);
+  }
+
   let gitlabItems: InboxItem[] = [];
   if ((await gitlabConnected()).connected) {
     const gitlab = await fetchRepositoryInboxItems(
@@ -733,7 +760,13 @@ async function fetchInboxItems(
 
   return {
     items: dedupeInboxItems(
-      [...github.items, ...linearItems, ...gitlabItems, ...azureDevOpsItems],
+      [
+        ...github.items,
+        ...linearItems,
+        ...jiraItems,
+        ...gitlabItems,
+        ...azureDevOpsItems,
+      ],
       preferredPaths,
     ),
     errors,
@@ -855,6 +888,47 @@ function linearIssueToInboxItem(issue: LinearIssue): InboxItem {
   };
 }
 
+async function fetchJiraInboxItems(query: InboxQuery): Promise<InboxItem[]> {
+  const hiddenIds = query.jiraHiddenProjectIds ?? loadHiddenJiraProjectIds();
+  let projectIds: string[] | null = null;
+  if (hiddenIds.length > 0) {
+    projectIds = jiraProjectIdsForFetch(await listJiraProjects(), hiddenIds);
+    if (projectIds?.length === 0) return [];
+  }
+  const issues = await listJiraIssues({
+    assignedToMe: query.assignedToMe,
+    state: query.state,
+    projectIds: projectIds ?? [],
+    limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
+  });
+  const hidden = new Set(hiddenIds);
+  return issues
+    .filter((issue) => hidden.size === 0 || !hidden.has(issue.teamId))
+    .map(jiraIssueToInboxItem);
+}
+
+function jiraIssueToInboxItem(issue: JiraIssue): InboxItem {
+  return {
+    provider: "jira",
+    kind: "jira",
+    id: issue.id,
+    identifier: issue.identifier,
+    number: issue.number,
+    title: issue.title,
+    url: issue.url,
+    state: issue.state,
+    stateType: issue.stateType,
+    updatedAt: issue.updatedAt,
+    labels: issue.labels,
+    assignees: issue.assignees,
+    draft: false,
+    repo: issue.repo,
+    teamId: issue.teamId,
+    teamName: issue.teamName,
+    projectPath: issue.projectPath || "",
+  };
+}
+
 function gitlabWorkItemToInboxItem(
   item: GitlabWorkItem,
   projectPath: string,
@@ -959,6 +1033,12 @@ export function inboxIdentityKey(item: {
     if (identity) return identity.toLowerCase();
     return `linear:${item.number}`;
   }
+  if (item.provider === "jira") {
+    // The numeric id survives an issue moving projects; its key does not.
+    const identity = item.id?.trim() || item.identifier?.trim();
+    if (identity) return identity.toLowerCase();
+    return `jira:${item.number}`;
+  }
   const repo = item.repo.trim().toLowerCase();
   if (repo) return `${repo}:${item.kind}:${item.number}`;
   const url = item.url.trim().toLowerCase();
@@ -1031,6 +1111,9 @@ export function inboxItemStatus(item: {
     if (type === "completed" || type === "canceled") return "Closed";
     return "Open";
   }
+  if (item.kind === "jira") {
+    return item.stateType?.trim().toLowerCase() === "done" ? "Closed" : "Open";
+  }
   if (item.draft) return "Draft";
   if (item.state === "merged") return "Merged";
   if (item.state === "closed") return "Closed";
@@ -1047,7 +1130,9 @@ export function matchesInboxQuery(item: InboxItem, query: string): boolean {
         : "pull request pr"
       : item.kind === "linear"
         ? "linear issue"
-        : "issue";
+        : item.kind === "jira"
+          ? "jira issue"
+          : "issue";
   const haystack = [
     item.title,
     item.repo,
@@ -1079,17 +1164,18 @@ export function inboxItemRef(item: {
   number: number;
   identifier?: string;
 }): string {
-  if (item.provider === "linear") {
+  if (item.provider === "linear" || item.provider === "jira") {
     return item.identifier?.trim() || `#${item.number}`;
   }
   return `#${item.number}`;
 }
 
 export function inboxStartDraft(item: InboxItem, body?: string): string {
-  if (item.provider === "linear") {
-    const id = item.identifier?.trim() || `Linear #${item.number}`;
+  if (item.provider === "linear" || item.provider === "jira") {
+    const provider = item.provider === "jira" ? "Jira" : "Linear";
+    const id = item.identifier?.trim() || `${provider} #${item.number}`;
     const title = item.title.trim() || id;
-    const lines = ["Work on this Linear issue:", "", `${id} ${title}`];
+    const lines = [`Work on this ${provider} issue:`, "", `${id} ${title}`];
     const url = item.url.trim();
     if (url) lines.push(url);
     const description = body?.trim();
@@ -1135,14 +1221,14 @@ export function inboxComposerCard(
   item: InboxItem,
   body?: string,
 ): InboxComposerCard {
-  const linear = item.provider === "linear";
+  const tracker = item.provider === "linear" || item.provider === "jira";
   return {
     provider: item.provider,
     kind: item.kind,
     identifier: inboxItemRef(item),
     title: item.title.trim() || inboxItemRef(item),
     url: item.url.trim(),
-    source: linear ? item.teamName || item.repo : item.repo,
+    source: tracker ? item.teamName || item.repo : item.repo,
     labels: item.labels.slice(0, 2),
     prompt: inboxStartDraft(item, body).trimEnd(),
   };

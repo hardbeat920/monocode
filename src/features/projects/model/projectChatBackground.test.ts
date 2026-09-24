@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearProjectChatBackgroundSetting,
   loadProjectChatBackground,
+  loadProjectChatBackgroundSettings,
+  projectChatBackgroundImageRevision,
   saveProjectChatBackground,
+  saveProjectChatBackgroundSettings,
 } from "./projectChatBackground";
 
 const KEY = "monocode:project-chat-backgrounds";
@@ -108,5 +111,61 @@ describe("project chat background settings", () => {
     expect(loadProjectChatBackground("/work/beta")?.path).toBe(
       "/backgrounds/beta.webp",
     );
+  });
+
+  it("stores effects independently and preserves older project images", () => {
+    localStorage.setItem("monocode.newThreadBackgroundEffect", "ascii");
+    saveProjectChatBackgroundSettings("/work/alpha", {
+      path: "/backgrounds/alpha.webp",
+      emptyOpacity: 0.2,
+      sessionOpacity: 0.3,
+      scope: "all",
+      effect: "dither",
+    });
+    saveProjectChatBackground("/work/beta", {
+      path: "/backgrounds/beta.webp",
+      opacity: 0.4,
+      scope: "empty",
+    });
+
+    expect(loadProjectChatBackgroundSettings("/work/alpha")?.effect).toBe(
+      "dither",
+    );
+    expect(loadProjectChatBackgroundSettings("/work/beta")?.effect).toBe(
+      "none",
+    );
+
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        "/work/alpha": {
+          path: "/backgrounds/alpha.webp",
+          effect: "unknown",
+        },
+      }),
+    );
+    expect(loadProjectChatBackgroundSettings("/work/alpha")?.effect).toBe(
+      "none",
+    );
+  });
+
+  it("does not reprocess the image for effect and visibility updates", () => {
+    const imageRevision = projectChatBackgroundImageRevision();
+    const settings = {
+      path: "/backgrounds/alpha.webp",
+      emptyOpacity: 0.2,
+      sessionOpacity: 0.3,
+      scope: "all" as const,
+      effect: "none" as const,
+    };
+    saveProjectChatBackgroundSettings("/work/alpha", settings, true);
+    expect(projectChatBackgroundImageRevision()).toBe(imageRevision + 1);
+
+    saveProjectChatBackgroundSettings("/work/alpha", {
+      ...settings,
+      emptyOpacity: 0.4,
+      effect: "dither",
+    });
+    expect(projectChatBackgroundImageRevision()).toBe(imageRevision + 1);
   });
 });

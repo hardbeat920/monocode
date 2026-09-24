@@ -38,7 +38,7 @@ import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { WindowControls } from "./WindowControls";
-import { IS_MAC, IS_WIN, MOD } from "../../platform/tauri/platform";
+import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../platform/tauri/platform";
 import type { RecentProject } from "../../features/projects/model/recents";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
 import {
@@ -81,12 +81,14 @@ type Props = {
   activeId: string;
   cwd: string;
   projectRailOpen?: boolean;
+  sessionSidebarOpen?: boolean;
   compactRail?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
   onGoBack?: () => void;
   onGoForward?: () => void;
   onToggleSidebar: () => void;
+  onToggleSessionSidebar?: () => void;
   onSelect: (id: string) => void;
   onNew: () => void;
   onNewTerminal?: () => void;
@@ -590,12 +592,14 @@ function TitleBarComponent({
   activeId,
   cwd,
   projectRailOpen = true,
+  sessionSidebarOpen = true,
   compactRail = false,
   canGoBack = false,
   canGoForward = false,
   onGoBack,
   onGoForward,
   onToggleSidebar,
+  onToggleSessionSidebar,
   onSelect,
   onNew,
   onNewTerminal,
@@ -868,6 +872,19 @@ function TitleBarComponent({
             </IconButton>
           </div>
         </>
+      ) : null}
+      {!sessionSidebarOpen && !projectless && onToggleSessionSidebar ? (
+        <div className="flex shrink-0 items-center px-1.5">
+          {IS_MAC && railClosed && !compactRail ? (
+            <div className="w-[70px] shrink-0" />
+          ) : null}
+          <IconButton
+            label={`Toggle Session Sidebar (${MOD}${SHIFT}B)`}
+            onClick={onToggleSessionSidebar}
+          >
+            <PanelLeft className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        </div>
       ) : null}
       {showProjectButton && onSelectProject ? (
         <CwdPicker

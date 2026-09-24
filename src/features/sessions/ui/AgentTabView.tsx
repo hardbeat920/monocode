@@ -1,5 +1,11 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AgentTranscript } from "./AgentTranscript";
+import { TranscriptFind } from "./TranscriptFind";
+import {
+  clearTranscriptJump,
+  peekTranscriptJump,
+  subscribeTranscriptJump,
+} from "../model/transcriptJump";
 import { HarnessIcon } from "./HarnessIcon";
 import { findModel } from "../model/models";
 import {
@@ -23,13 +29,45 @@ export function AgentTabView({
   title,
   session,
   visible,
+  focused = visible,
   onOpenFile,
 }: {
   title: string;
   session?: Session;
   visible: boolean;
+  focused?: boolean;
   onOpenFile?: (path: string) => void;
 }) {
+  const navigateBlockRef = useRef<
+    ((blockId: string | null, query?: string) => boolean) | null
+  >(null);
+  const [navigatorReady, setNavigatorReady] = useState(false);
+  const onNavigateReady = useCallback(
+    (navigate: (blockId: string | null, query?: string) => boolean) => {
+      navigateBlockRef.current = navigate;
+      setNavigatorReady(true);
+    },
+    [],
+  );
+  const navigateBlock = useCallback(
+    (blockId: string | null, query?: string) =>
+      navigateBlockRef.current?.(blockId, query) ?? false,
+    [],
+  );
+  const jumpRequest = useSyncExternalStore(
+    subscribeTranscriptJump,
+    () => peekTranscriptJump(session?.id ?? ""),
+    () => null,
+  );
+  useEffect(() => {
+    if (!visible || !navigatorReady || !session || !jumpRequest) return;
+    const frame = requestAnimationFrame(() => {
+      if (navigateBlock(jumpRequest.blockId, jumpRequest.query)) {
+        clearTranscriptJump(session.id, jumpRequest.token);
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visible, navigatorReady, jumpRequest, navigateBlock, session?.id]);
   const notesEnabled = useSyncExternalStore(
     subscribeNotesEnabled,
     loadNotesEnabled,
@@ -75,8 +113,8 @@ export function AgentTabView({
   }
   const model = findModel(session.model)?.name ?? session.model;
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1">
+    <div data-agent-tab className="flex h-full min-h-0 flex-col">
+      <div className="@container relative min-h-0 flex-1">
         <AgentTranscript
           blocks={session.blocks}
           busy={session.busy}
@@ -87,7 +125,14 @@ export function AgentTabView({
           onOpenFile={onOpenFile}
           onSaveNote={notesEnabled ? saveNote : undefined}
           onSaveSelectionNote={notesEnabled ? saveSelectionNote : undefined}
+          onNavigateReady={onNavigateReady}
           managed
+        />
+        <TranscriptFind
+          blocks={session.blocks}
+          visible={visible}
+          focused={focused}
+          onNavigate={navigateBlock}
         />
       </div>
       <footer className="flex shrink-0 items-center gap-1.5 border-t border-stroke px-3 py-1.5 font-sans text-[11px] text-content/45">

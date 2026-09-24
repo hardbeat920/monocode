@@ -5038,6 +5038,22 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+pub async fn open_path_with_default_app(path: String) -> Result<(), String> {
+    // The Tauri opener command needs a static path scope, and its detached
+    // launcher cannot report a failing `open` process back to the UI.
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = expand_home(&path);
+        if !path.is_absolute() {
+            return Err("Expected an absolute file path".to_string());
+        }
+        std::fs::metadata(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        open::that(&path).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

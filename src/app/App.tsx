@@ -77,8 +77,10 @@ import { useProjectBranches } from "../features/source-control/hooks/useProjectB
 import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
 import {
   loadProjectRailOpen,
+  loadSessionSidebarOpen,
   loadSidebarTabOrder,
   saveProjectRailOpen,
+  saveSessionSidebarOpen,
   type SidebarTabId,
 } from "../features/settings/model/appearance";
 import { HAS_NATIVE_GLASS, IS_MAC } from "../platform/tauri/platform";
@@ -308,6 +310,7 @@ import {
   filterTabsForProject,
   findOpenSessionTab,
   planWorkspaceTabClose,
+  switchSessionInTab,
   workspaceTabCwd,
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
@@ -377,6 +380,10 @@ import {
   type SessionSummary,
 } from "../features/sessions/data/sessionStore";
 import { rememberLoadedSession } from "../features/sessions/data/sessionCache";
+import {
+  TranscriptPool,
+  TranscriptPoolOutlet,
+} from "../features/sessions/ui/TranscriptPool";
 import { syncDockBadge } from "../features/notifications/model/dockBadge";
 import { liveAgentsFromSessions } from "../features/sessions/model/liveAgents";
 import { hiddenApprovalNotices } from "../features/notifications/model/approvalToast";
@@ -447,6 +454,7 @@ import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
 import { SearchView } from "../features/search/ui/SearchView";
+import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
 import { SettingsView, type SettingsAnchor } from "../features/settings/ui/SettingsView";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import { InboxView, LinkedWorkItemPanel } from "../features/inbox/ui/InboxView";
@@ -472,7 +480,7 @@ import {
 } from "../features/inbox/model/linkedWorkItemActivity";
 import type { LinkedSessionUpdate } from "../features/inbox/model/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
-import { linearIssueDetails, peekLinearIssueDetails } from "../features/inbox/model/linear";
+import { inboxTrackerDescription } from "../features/inbox/model/inboxContext";
 import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "../features/inbox/model/gitlab";
 import {
   azureDevOpsWorkItemDetails,
@@ -538,6 +546,9 @@ import {
   setQuitWorkspace,
   type ResumedWorkspace,
 } from "./model/appLifecycle";
+
+/** How long a hidden idle session stays attached after it leaves every tab. */
+const SESSION_DETACH_DELAY_MS = 250;
 
 type LinkedWorkItemPanelState = {
   item: LinkedWorkItem;
@@ -811,6 +822,9 @@ export default function App({
     [],
   );
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
+  const [sessionSidebarOpen, setSessionSidebarOpen] = useState(
+    loadSessionSidebarOpen,
+  );
   const tabCloseScope = "project" as const;
   const currentProjectDock = findProjectTerminal(projectTerminals, projectCwd);
   const dockVisible = !!currentProjectDock?.open;
@@ -1009,6 +1023,7 @@ export default function App({
   const sessionLoadEpochs = useRef(new Map<string, number>());
   const openingSessionIds = useRef(new Set<string>());
   const activeSessionPrefetch = useRef<Promise<Session | null> | null>(null);
+  const [transcriptPool] = useState(() => new TranscriptPool());
   // Tokens arrive many times per frame; apply them once so React/markdown aren't
   // recomputed for every delta.
   const harnessQueued = useRef(new Map<string, HarnessEvent[]>());
@@ -1596,6 +1611,9 @@ export default function App({
     )
       return;
     const fingerprint = persistFingerprint(session);
+    // Leaving a session flushes it. An unchanged one would still rewrite and
+    // re-diff its whole transcript under the store lock, stalling the next load.
+    if (lastPersisted.current.get(session.id) === fingerprint) return;
     void upsertSession(session)
       .then((summary) => {
         if (!summary) return;
@@ -1757,8 +1775,16 @@ export default function App({
   // Tabs are views. Hidden idle sessions drop their child. A visible session
   // keeps its child for a few minutes after a turn so follow-ups stay instant,
   // then parks it and resumes on the next prompt.
-  useEffect(() => {
-    const visibleIds = openSessionIds(tabs);
+  // Dropping a session re-renders the whole app, so it waits until a switch
+  // has painted, and a burst of switches pays for it once.
+  const detachInputs = useRef({ orchestrationRuns, liveAgentsEnabled });
+  detachInputs.current = { orchestrationRuns, liveAgentsEnabled };
+  const detachTimer = useRef<number | null>(null);
+  const detachIdleSessions = useCallback(() => {
+    detachTimer.current = null;
+    const sessions = sessionsRef.current;
+    const { orchestrationRuns, liveAgentsEnabled } = detachInputs.current;
+    const visibleIds = openSessionIds(tabsRef.current);
     // Inbox owns these panes independently of project tabs. Keep their drafts
     // and attachments mounted when the panel closes or switches items.
     for (const session of sessions) {
@@ -1811,7 +1837,28 @@ export default function App({
           skipForgetSessionIds.current.has(session.id),
       ),
     );
-  }, [sessions, tabs, persistSession, liveAgentsEnabled, orchestrationRuns]);
+  }, [persistSession]);
+
+  useEffect(() => {
+    if (detachTimer.current != null) return;
+    detachTimer.current = window.setTimeout(
+      detachIdleSessions,
+      SESSION_DETACH_DELAY_MS,
+    );
+  }, [
+    sessions,
+    tabs,
+    liveAgentsEnabled,
+    orchestrationRuns,
+    detachIdleSessions,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (detachTimer.current != null) window.clearTimeout(detachTimer.current);
+    },
+    [],
+  );
 
   const activateTab = useCallback((id: string, paneId?: string) => {
     const tab = tabsRef.current.find((entry) => entry.id === id);
@@ -1973,7 +2020,7 @@ export default function App({
         const cwd =
           item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
         const ref =
-          item.provider === "linear"
+          item.provider === "linear" || item.provider === "jira"
             ? item.identifier?.trim() || `#${item.number}`
             : `#${item.number}`;
         const linkedWorkItem = linkedWorkItemFromInboxItem(item);
@@ -1990,24 +2037,7 @@ export default function App({
         setComposerFocused(true);
       };
 
-      if (item.provider !== "linear") {
-        start();
-        return;
-      }
-      if (!item.id) {
-        throw new Error("Missing Linear issue");
-      }
-      if (body !== undefined) {
-        start(body);
-        return;
-      }
-      const cached = peekLinearIssueDetails(item.id);
-      if (cached) {
-        start(cached.body);
-        return;
-      }
-      const details = await linearIssueDetails(item.id);
-      start(details.body);
+      start(await inboxTrackerDescription(item, body));
     },
     [
       active?.cwd,
@@ -3583,11 +3613,8 @@ export default function App({
               ? candidate
               : await invoke<string>("default_cwd");
           const description =
-            item.provider === "linear" && item.id
-              ? (
-                  peekLinearIssueDetails(item.id) ??
-                  (await linearIssueDetails(item.id))
-                ).body
+            item.provider === "linear" || item.provider === "jira"
+              ? await inboxTrackerDescription(item)
               : item.provider === "gitlab" &&
                   (item.kind === "issue" || item.kind === "pr")
                 ? (
@@ -5552,7 +5579,12 @@ export default function App({
           intent === "plan" ||
           intent === "orchestrate"
             ? "queue"
-            : (options?.followUpBehavior ?? loadFollowUpBehavior());
+            : // The agent has yielded and only background work is left, which
+              // may never end (a dev server). Queuing would park the message
+              // behind it, so hand it to the agent now.
+              current.backgroundTasks?.length
+              ? "steer"
+              : (options?.followUpBehavior ?? loadFollowUpBehavior());
         if (followUpBehavior === "queue") {
           setSessions((prev) =>
             prev.map((s) =>
@@ -7983,6 +8015,14 @@ export default function App({
     });
   }, []);
 
+  const onToggleSessionSidebar = useCallback(() => {
+    setSessionSidebarOpen((open) => {
+      const next = !open;
+      saveSessionSidebarOpen(next);
+      return next;
+    });
+  }, []);
+
   const onToggleProjectRail = useCallback(() => {
     setProjectRailOpen((open) => {
       const next = !open;
@@ -8265,7 +8305,7 @@ export default function App({
   }, []);
 
   const onNavigateSessionList = useCallback(
-    (delta: number) => {
+    (delta: number, inCurrentTab = false) => {
       const activeWorkspace = tabsRef.current.find(
         (entry) => entry.id === activeTabIdRef.current,
       );
@@ -8281,9 +8321,42 @@ export default function App({
         delta,
       );
       if (!next || next === current.id) return;
-      void onSelectHistorySession(next);
+      // Stepping gives no hover to warm the transcript, so load the one a
+      // further step away once this switch has its own session.
+      const prefetchAhead = () => {
+        const ahead = adjacentItemId(
+          sessionNavigationIdsRef.current,
+          next,
+          delta,
+        );
+        if (ahead && ahead !== current.id) onPrefetchHistorySession(ahead);
+      };
+      if (!inCurrentTab) {
+        void onSelectHistorySession(next).then(prefetchAhead);
+        return;
+      }
+      const activeTabId = activeWorkspace.id;
+      const focusedId = current.id;
+      void ensureOpenSession(next).then((session) => {
+        prefetchAhead();
+        if (!session || session.inboxAsk) return;
+        if (activeTabIdRef.current !== activeTabId) return;
+        const currentTab = tabsRef.current.find((tab) => tab.id === activeTabId);
+        if (currentTab?.focusedId !== focusedId) return;
+        setTabs((prev) =>
+          switchSessionInTab(prev, activeTabId, focusedId, next) ?? prev,
+        );
+        setComposerFocused(true);
+        const linkedUpdate = linkedSessionUpdatesRef.current.get(next);
+        if (linkedUpdate) revealLinkedSessionUpdate(next, linkedUpdate);
+      });
     },
-    [onSelectHistorySession],
+    [
+      ensureOpenSession,
+      onPrefetchHistorySession,
+      onSelectHistorySession,
+      revealLinkedSessionUpdate,
+    ],
   );
 
   const onNavigateProjectList = useCallback(
@@ -8313,6 +8386,7 @@ export default function App({
     onSplit,
     onFocusDir,
     onToggleSidebar,
+    onToggleSessionSidebar,
     onGoToFile,
     onOpenCommandPalette,
     onReload,
@@ -8343,6 +8417,7 @@ export default function App({
     onSplit,
     onFocusDir,
     onToggleSidebar,
+    onToggleSessionSidebar,
     onGoToFile,
     onOpenCommandPalette,
     onReload,
@@ -8401,6 +8476,8 @@ export default function App({
         const listNavigation =
           cmd === "prev-session" ||
           cmd === "next-session" ||
+          cmd === "prev-session-in-tab" ||
+          cmd === "next-session-in-tab" ||
           cmd === "prev-project" ||
           cmd === "next-project";
         if (listNavigation) {
@@ -8479,13 +8556,18 @@ export default function App({
           run("prev-session", () => a.onNavigateSessionList(-1));
         else if (cmd === "next-session")
           run("next-session", () => a.onNavigateSessionList(1));
+        else if (cmd === "prev-session-in-tab")
+          run("prev-session-in-tab", () => a.onNavigateSessionList(-1, true));
+        else if (cmd === "next-session-in-tab")
+          run("next-session-in-tab", () => a.onNavigateSessionList(1, true));
         else if (cmd === "prev-project")
           run("prev-project", () => a.onNavigateProjectList(-1));
         else if (cmd === "next-project")
           run("next-project", () => a.onNavigateProjectList(1));
-        else if ("focus" in cmd)
+        else if (typeof cmd === "object" && "focus" in cmd)
           run(`focus-${cmd.focus}`, () => a.onFocusDir(cmd.focus));
-        else run(`activate-${cmd.activate}`, () => a.onActivate(cmd.activate));
+        else if (typeof cmd === "object" && "activate" in cmd)
+          run(`activate-${cmd.activate}`, () => a.onActivate(cmd.activate));
         return;
       }
       if (
@@ -8493,6 +8575,10 @@ export default function App({
         !inboxViewOpenRef.current &&
         !notesViewOpenRef.current &&
         !automationsViewOpenRef.current &&
+        !(
+          e.target instanceof Element &&
+          e.target.closest("[data-session-drop], [data-agent-tab]")
+        ) &&
         handleEditorFindKey(e)
       ) {
         e.stopPropagation();
@@ -8503,6 +8589,12 @@ export default function App({
         e.preventDefault();
         e.stopPropagation();
         run("toggle_sidebar", actions.current.onToggleSidebar);
+        return;
+      }
+      if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        e.stopPropagation();
+        run("toggle_session_sidebar", actions.current.onToggleSessionSidebar);
         return;
       }
       if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
@@ -8594,6 +8686,9 @@ export default function App({
       ),
       listen("toggle_sidebar", () =>
         run("toggle_sidebar", actions.current.onToggleSidebar),
+      ),
+      listen("toggle_session_sidebar", () =>
+        run("toggle_session_sidebar", actions.current.onToggleSessionSidebar),
       ),
       listen("open_project", () => {
         void actions.current.pickProject();
@@ -8740,12 +8835,14 @@ export default function App({
       activeId={activeTabId}
       cwd={sidebarCwd}
       projectRailOpen={projectRailOpen}
+      sessionSidebarOpen={sessionSidebarOpen}
       compactRail={compactTitleBar}
       canGoBack={tabVisitNav.canBack}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
       onGoForward={onRailForward}
       onToggleSidebar={onToggleSidebar}
+      onToggleSessionSidebar={onToggleSessionSidebar}
       onSelect={activateTab}
       onNew={onNew}
       onNewTerminal={onNewTerminal}
@@ -8776,7 +8873,7 @@ export default function App({
               cwd={sidebarCwd}
               gitCwd={gitCwd}
               explorerRootLabel={explorerRootLabel}
-              open
+              open={sessionSidebarOpen}
               tab={sidebarTab}
               onTabChange={setSidebarTab}
               filesSearchOpen={filesSearchOpen}
@@ -8908,6 +9005,7 @@ export default function App({
                     onToggleTerminal={onToggleProjectTerminal}
                     onGoToFile={onGoToFile}
                     onToggleSidebar={onToggleSidebar}
+                    onToggleSessionSidebar={onToggleSessionSidebar}
                     onShowSourceControl={onToggleChanges}
                     onCloseCurrentTab={
                       activeTabId ? () => onCloseTab(activeTabId) : undefined
@@ -9025,6 +9123,7 @@ export default function App({
                                 onReorderFiles={onReorderFiles}
                                 onFileDirtyChange={onFileDirtyChange}
                                 onFileErrorCountChange={onFileErrorCountChange}
+                                transcriptPool={transcriptPool}
                                 onRatio={(splitId, index, ratio) =>
                                   onRatio(tab.id, splitId, index, ratio)
                                 }
@@ -9072,7 +9171,10 @@ export default function App({
                   onClose={onLeaveSearch}
                   onToggleSidebar={onToggleSidebar}
                   onOpenFile={onOpenFile}
-                  onOpenSession={onSelectHistorySession}
+                  onOpenSession={(sessionId, blockId, query) => {
+                    if (blockId) requestTranscriptJump(sessionId, blockId, query);
+                    void onSelectHistorySession(sessionId);
+                  }}
                   onOpenProject={onSelectProject}
                 />
               ) : null}
@@ -9259,6 +9361,7 @@ export default function App({
             />
           ) : null}
         </div>
+        <TranscriptPoolOutlet pool={transcriptPool} />
       </OrchestrationWorkers.Provider>
     </OrchestrationActions.Provider>
   );

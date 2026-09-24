@@ -98,22 +98,22 @@ describe("transcript layout setting", () => {
     localStorage.removeItem(KEY);
   });
 
-  it("defaults to full width", () => {
-    expect(TRANSCRIPT_LAYOUT_DEFAULT).toBe("full");
-    expect(loadTranscriptLayout()).toBe("full");
+  it("defaults to chat", () => {
+    expect(TRANSCRIPT_LAYOUT_DEFAULT).toBe("chat");
+    expect(loadTranscriptLayout()).toBe("chat");
   });
 
-  it("persists the chat layout", () => {
-    saveTranscriptLayout("chat");
-    expect(localStorage.getItem(KEY)).toBe("chat");
-    expect(loadTranscriptLayout()).toBe("chat");
+  it("persists an explicit full width layout", () => {
     saveTranscriptLayout("full");
+    expect(localStorage.getItem(KEY)).toBe("full");
     expect(loadTranscriptLayout()).toBe("full");
+    saveTranscriptLayout("chat");
+    expect(loadTranscriptLayout()).toBe("chat");
   });
 
   it("ignores unknown stored values", () => {
     localStorage.setItem(KEY, "bubbles");
-    expect(loadTranscriptLayout()).toBe("full");
+    expect(loadTranscriptLayout()).toBe("chat");
   });
 });
 

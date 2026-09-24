@@ -20,6 +20,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("background work", () => {
+  it("tracks what a yielded turn waits on and drops it when the turn ends", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "hi");
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm test"],
+    });
+    expect(session.backgroundTasks).toEqual(["npm test"]);
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: [],
+    });
+    expect(session.backgroundTasks).toBeUndefined();
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm run dev"],
+    });
+    session = stopStreaming(session);
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+});
+
 describe("turn duration", () => {
   it("records the selected provider and model on a user turn", () => {
     const session = appendUser(

@@ -2214,7 +2214,7 @@ dependencies = [
 
 [[package]]
 name = "monocode"
-version = "0.1.54"
+version = "0.1.55"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -2224,6 +2224,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-user-notifications",
+ "open",
  "portable-pty",
  "raw-window-handle",
  "rusqlite",

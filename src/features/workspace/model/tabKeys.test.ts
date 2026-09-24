@@ -135,6 +135,18 @@ describe("tabCommand", () => {
     ).toBe("next-project");
   });
 
+  it("uses unshifted mod arrows to switch sessions in the current tab", () => {
+    expect(
+      tabCommand(key({ key: "ArrowUp", metaKey: true })),
+    ).toBe("prev-session-in-tab");
+    expect(
+      tabCommand(key({ key: "ArrowDown", ctrlKey: true })),
+    ).toBe("next-session-in-tab");
+    expect(
+      tabCommand(key({ key: "ArrowUp", metaKey: true, altKey: true, shiftKey: true })),
+    ).toBeNull();
+  });
+
   it("cycles ordered item ids and wraps at both ends", () => {
     expect(adjacentItemId(["a", "b", "c"], "b", 1)).toBe("c");
     expect(adjacentItemId(["a", "b", "c"], "c", 1)).toBe("a");

@@ -603,6 +603,9 @@ type PhaseTally = {
   edits: Set<string>;
   searches: number;
   runs: number;
+  /** Commands the agent left running when it yielded, and how many still are. */
+  background: number;
+  backgroundLive: number;
   agents: number;
   others: number;
   /** Interjections the turn absorbed. Status rows count nowhere. */
@@ -616,6 +619,8 @@ function tallySteps(steps: Block[]): PhaseTally {
     edits: new Set(),
     searches: 0,
     runs: 0,
+    background: 0,
+    backgroundLive: 0,
     agents: 0,
     others: 0,
     notes: 0,
@@ -645,7 +650,12 @@ function tallySteps(steps: Block[]): PhaseTally {
         tally.agents += 1;
         break;
       case "run":
-        tally.runs += 1;
+        // A background row is the same command again, waited on. It says
+        // what the wait is, not one more command run.
+        if (block.tool?.background) {
+          tally.background += 1;
+          if (toolCallState(block) === "pending") tally.backgroundLive += 1;
+        } else tally.runs += 1;
         break;
       case "research":
         if (/^Find\b/i.test(label) || isSearchTool(kind, title, preview)) {
@@ -683,6 +693,10 @@ function workSummary(
       }
       return live ? "Exploring the project" : "Explored the project";
     case "run":
+      if (tally.backgroundLive > 0) return "Running in background";
+      if (tally.runs === 0 && tally.background > 0) {
+        return "Finished in background";
+      }
       return tally.runs === 1
         ? live
           ? "Running a command"

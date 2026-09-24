@@ -210,6 +210,22 @@ describe("grid arcade enabled setting", () => {
 });
 
 describe("workspace navigation keybindings", () => {
+  it("keeps separate shortcuts for the project rail and session sidebar", () => {
+    expect(
+      KEYBINDINGS.filter((row) =>
+        ["App: Toggle Sidebar", "App: Toggle Session Sidebar"].includes(
+          row.command,
+        ),
+      ),
+    ).toEqual([
+      { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
+      {
+        command: "App: Toggle Session Sidebar",
+        keys: `${MOD}${SHIFT}B`,
+        when: "Always",
+      },
+    ]);
+  });
   it("documents the command palette and reload shortcuts", () => {
     expect(
       KEYBINDINGS.filter((row) =>
@@ -252,6 +268,22 @@ describe("workspace navigation keybindings", () => {
         (row) => row.when === "!overlay && (!textFocus || emptyComposer)",
       ),
     ).toBe(true);
+  });
+  it("documents same-tab session switching", () => {
+    expect(
+      KEYBINDINGS.filter((row) => row.command.includes("in Current Tab")),
+    ).toEqual([
+      {
+        command: "Session: Previous in Current Tab",
+        keys: `${MOD}↑`,
+        when: "!overlay && (!textFocus || emptyComposer)",
+      },
+      {
+        command: "Session: Next in Current Tab",
+        keys: `${MOD}↓`,
+        when: "!overlay && (!textFocus || emptyComposer)",
+      },
+    ]);
   });
 });
 

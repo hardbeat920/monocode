@@ -312,8 +312,17 @@ html.has-chat-background.chat-background-effect-ready
   opacity: var(--chat-background-session-opacity);
 }
 
+/*
+ * Sending the first message eases the background into its session look (or
+ * out entirely when it only shows on empty sessions) alongside the composer.
+ */
+.chat-pane-background[data-session-empty="false"]::before {
+  transition-duration: 600ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .chat-pane-background::before {
+  .chat-pane-background::before,
+  .chat-pane-background[data-session-empty="false"]::before {
     transition-duration: 0ms;
   }
 }
@@ -327,6 +336,20 @@ html.chat-background-empty-only
 .transcript-turn {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 240px;
+}
+
+::highlight(monocode-transcript-search-match) {
+  background-color: color-mix(in srgb, #e2c08d 46%, transparent);
+}
+
+::highlight(monocode-transcript-search-current) {
+  background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
+}
+
+.agent-transcript [data-transcript-search-current="true"] .user-message-bubble pre.line-clamp-4 {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
 }
 
 /*
@@ -435,6 +458,28 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
  */
 .transcript-turn-anchor {
   min-height: var(--transcript-viewport, 0px);
+}
+
+/* While a sent prompt rises into place, the rest of its turn waits for it. */
+.transcript-turn[data-prompt-rise="rising"]
+  > :not(:has([data-prompt-anchor])) {
+  opacity: 0;
+}
+
+.transcript-turn[data-prompt-rise="revealing"]
+  > :not(:has([data-prompt-anchor])) {
+  animation: prompt-turn-reveal 320ms var(--motion-ease-out) both;
+}
+
+@keyframes prompt-turn-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 html.has-native-glass.glass-body:not(.theme-light) .body-glass {
@@ -1343,16 +1388,19 @@ header[data-tauri-drag-region] button {
   left: 6px;
 }
 
+/*
+ * A height, not top/bottom, so the spine can grow down past a step when the
+ * next one lands under it.
+ */
 .zen-phase-step::before {
   top: 0;
-  bottom: 0;
+  height: 100%;
   width: 1px;
   background: var(--zen-rail);
 }
 
 /* The last step is where the spine leaves off, curve and all. */
 .zen-phase-step:last-child::before {
-  bottom: auto;
   height: 7px;
 }
 
@@ -1542,18 +1590,128 @@ header[data-tauri-drag-region] button {
   }
 }
 
-/* Live steps fade in place. A slide or blur hitch the autoscroll. */
-@keyframes zen-step-in {
+/*
+ * A live step arrives in beats over its --step-ms: its slot opens and pushes
+ * what is below down while the spine runs on past the step above into the
+ * gap and the branch curves off it. Only once the branch is drawn does the
+ * row rise into the room, revealed from the bottom up by a soft-edged mask. The next step in a burst
+ * waits for the last beat. The slot clips while it opens, so the row's rise
+ * never adds scrollable overflow to the pinned live window.
+ */
+@keyframes zen-step-open {
   from {
-    opacity: 0;
+    grid-template-rows: 0fr;
   }
   to {
-    opacity: 1;
+    grid-template-rows: 1fr;
   }
 }
 
-.zen-step-in {
-  animation: zen-step-in 180ms ease-out both;
+@keyframes zen-rail-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+/* A wipe from the top-left traces the quarter curve in order. */
+@keyframes zen-branch-draw {
+  from {
+    clip-path: inset(0 100% 100% 0);
+  }
+  to {
+    clip-path: inset(0);
+  }
+}
+
+/*
+ * The mask is three times the row's height: clear on top, a soft ramp, then
+ * solid. Sliding it up from the clear third to the solid one sweeps the ramp
+ * over the row from its bottom edge to its top.
+ */
+@keyframes zen-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    -webkit-mask-position: 0 0;
+    mask-position: 0 0;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    -webkit-mask-position: 0 100%;
+    mask-position: 0 100%;
+  }
+}
+
+/*
+ * The step above lengthening its spine once it is no longer the last, at its
+ * own pace: steps next to each other in a burst are paced alike.
+ */
+.zen-phase-step[data-live]::before {
+  transition: height calc(var(--step-ms, 320ms) * 0.3) ease-in;
+}
+
+/*
+ * A step queued behind others is out of the layout until its turn, and the
+ * step above keeps the short spine of a last step until then too, so no rail
+ * hangs into a gap that is not there yet.
+ */
+.zen-phase-step[data-waiting] {
+  display: none;
+}
+
+.zen-phase-step:has(+ .zen-phase-step[data-waiting])::before {
+  height: 7px;
+}
+
+.zen-phase-step[data-entering] {
+  display: grid;
+  overflow: clip;
+  animation: zen-step-open calc(var(--step-ms) * 0.4)
+    cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.zen-phase-step[data-entering]:is(
+    :last-child,
+    :has(+ .zen-phase-step[data-waiting])
+  )::before {
+  transform-origin: top;
+  animation: zen-rail-grow calc(var(--step-ms) * 0.15) ease-in-out
+    calc(var(--step-ms) * 0.15) both;
+}
+
+.zen-phase-step[data-entering]::after {
+  animation: zen-branch-draw calc(var(--step-ms) * 0.2) ease-out
+    calc(var(--step-ms) * 0.3) both;
+}
+
+.zen-phase-step[data-entering] > * {
+  min-height: 0;
+  -webkit-mask-image: linear-gradient(to top, #000 33.3%, transparent 66.7%);
+  mask-image: linear-gradient(to top, #000 33.3%, transparent 66.7%);
+  -webkit-mask-size: 100% 300%;
+  mask-size: 100% 300%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  animation: zen-step-in calc(var(--step-ms) * 0.5)
+    cubic-bezier(0.16, 1, 0.3, 1) calc(var(--step-ms) * 0.5) both;
+}
+
+/*
+ * A streamed word fading in as the paced reveal lets it out (wordFade.tsx).
+ * Opacity only: a word that moved would jostle the line it is set on. The
+ * fade plays as a word's span is added, and words already on screen keep
+ * theirs; only while the reply is coming in, so a finished one hidden and
+ * shown again never replays.
+ */
+@keyframes word-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.agent-markdown.word-fading [data-word-fade] {
+  animation: word-fade-in 320ms ease-out both;
 }
 
 @keyframes zen-thinking-pulse {
@@ -1583,14 +1741,33 @@ header[data-tauri-drag-region] button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .zen-step-in,
+  .agent-markdown.word-fading [data-word-fade],
+  .zen-phase-step[data-entering],
+  .zen-phase-step[data-entering]::before,
+  .zen-phase-step[data-entering]::after,
   .zen-tool-spin,
   .zen-thinking-pulse {
     animation: none;
   }
 
+  .zen-phase-step[data-live]::before,
   .zen-phase-body {
     transition: none;
+  }
+
+  /*
+   * No fade means no animationend to settle on, so the arriving step drops
+   * straight into its settled layout.
+   */
+  .zen-phase-step[data-entering] {
+    display: block;
+    overflow: visible;
+  }
+
+  .zen-phase-step[data-entering] > * {
+    -webkit-mask-image: none;
+    mask-image: none;
+    animation: none;
   }
 
   .zen-fold-item[data-fold-state="opening"] {
