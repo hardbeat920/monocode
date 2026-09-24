@@ -443,7 +443,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
 
 /** fx ACP rejects attachment prompt blocks. */
 export function harnessSupportsAttachments(id: HarnessId): boolean {
-  return id !== "fx";
+  return id !== "fx" && id !== "openclaw";
 }
 
 export function newSession(

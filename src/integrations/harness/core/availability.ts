@@ -162,7 +162,12 @@ export function probeHarnessAvailability(
         }
       }
       if (id === "openclaw") {
-        return [id, isLiveHarness(id)] as const;
+        try {
+          await resolveOpenClawBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
       }
       return [id, false] as const;
     }),
