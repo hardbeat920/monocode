@@ -4,7 +4,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 #[cfg(not(windows))]
@@ -1490,6 +1490,32 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
     }
 }
 
+const MAX_CONFIGURED_BINARY_VALIDATIONS: usize = 32;
+type ConfiguredBinaryValidation = (String, PathBuf);
+type ConfiguredBinaryValidationCache = HashMap<(String, String), ConfiguredBinaryValidation>;
+
+static CONFIGURED_BINARY_VALIDATIONS: OnceLock<Mutex<ConfiguredBinaryValidationCache>> =
+    OnceLock::new();
+
+fn configured_binary_fingerprint(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(format!(
+            "{}:{}:{}:{:?}",
+            metadata.len(),
+            metadata.dev(),
+            metadata.ino(),
+            metadata.modified().ok()
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        Some(format!("{}:{:?}", metadata.len(), metadata.modified().ok()))
+    }
+}
+
 fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<PathBuf, String> {
     if provider == "antigravity" && cfg!(windows) {
         return Err("Antigravity ACP server overrides are not supported on Windows.".into());
@@ -1512,7 +1538,30 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         }
     };
     let path = resolve_configured_harness_binary(binary_path, provider, names)?;
+    let fingerprint = configured_binary_fingerprint(&path);
+    let key = (provider.to_string(), binary_path.to_string());
+    let cache = CONFIGURED_BINARY_VALIDATIONS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(fingerprint) = fingerprint.as_deref() {
+        if let Ok(cache) = cache.lock() {
+            if cache
+                .get(&key)
+                .is_some_and(|(cached, _)| Some(cached.as_str()) == Some(fingerprint))
+            {
+                return Ok(path);
+            }
+        }
+    }
     validate_harness_binary_version(provider, &path)?;
+    if let Some(fingerprint) = fingerprint {
+        if let Ok(mut cache) = cache.lock() {
+            if cache.len() >= MAX_CONFIGURED_BINARY_VALIDATIONS {
+                if let Some(oldest) = cache.keys().next().cloned() {
+                    cache.remove(&oldest);
+                }
+            }
+            cache.insert(key, (fingerprint, path.clone()));
+        }
+    }
     Ok(path)
 }
 
@@ -2758,11 +2807,41 @@ mod tests {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let codex_path = codex.to_string_lossy().into_owned();
+        let version_log = dir.join("version.log");
+        std::fs::write(
+            &codex,
+            format!(
+                "#!/bin/sh\necho check >> '{}'\necho 'codex-cli 0.156.1'\n",
+                version_log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(
             resolve_harness_binary_override("codex", &codex_path),
             Ok(codex.clone())
         );
+        let _ = std::fs::remove_file(&version_log);
+        assert_eq!(
+            resolve_harness_binary_override("codex", &codex_path),
+            Ok(codex.clone())
+        );
+        assert!(!version_log.exists());
+        std::fs::write(
+            &codex,
+            format!(
+                "#!/bin/sh\necho check >> '{}'\necho 'codex-cli 0.157.0'\n",
+                version_log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            resolve_harness_binary_override("codex", &codex_path),
+            Ok(codex.clone())
+        );
+        assert!(version_log.exists());
         assert_eq!(
             resolve_harness_binary_override("opencode", &opencode.to_string_lossy()),
             Ok(opencode.clone())
