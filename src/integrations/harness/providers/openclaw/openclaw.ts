@@ -35,12 +35,9 @@ export async function sendOpenClawTurn(input: SendTurnInput): Promise<void> {
   try { await live.turns; } catch (e) { if (liveByThread.get(input.sessionId) === live) await stopOpenClawSession(input.sessionId); throw e; }
 }
 
-export async function steerOpenClawTurn(input: SteerTurnInput): Promise<void> {
-  const live = liveByThread.get(input.sessionId); if (!live) throw new Error("No active OpenClaw session");
-  if (input.text.trim()) await live.acp.request("session/prompt", { sessionId: live.acpSessionId, prompt: [{ type: "text", text: input.text.trim() }] }, CONTROL_TIMEOUT_MS);
-}
+export async function steerOpenClawTurn(input: SteerTurnInput): Promise<void> { const live = liveByThread.get(input.sessionId); if (!live) throw new Error("No active OpenClaw session"); if (!input.text.trim()) return; try { await live.acp.request("session/prompt", { sessionId: live.acpSessionId, prompt: [{ type: "text", text: input.text.trim() }] }, CONTROL_TIMEOUT_MS); } catch (error) { await stopOpenClawSession(input.sessionId); throw error; } }
 export function respondOpenClawApproval(sessionId: string, requestId: number, decision: ApprovalDecision): void { liveByThread.get(sessionId)?.approvals.get(requestId)?.(decision); }
-export async function cancelOpenClawTurn(sessionId: string): Promise<void> { const live = liveByThread.get(sessionId); if (!live) { cancelled.add(sessionId); return; } live.cancelled = true; live.mute = true; resolveApprovals(live, "deny"); await live.acp.notify("session/cancel", { sessionId: live.acpSessionId }).catch(() => undefined); live.acp.rejectPending(new Error("cancelled")); }
+export async function cancelOpenClawTurn(sessionId: string): Promise<void> { const live = liveByThread.get(sessionId); if (!live) { cancelled.add(sessionId); return; } live.cancelled = true; live.mute = true; resolveApprovals(live, "deny"); live.acp.rejectPending(new Error("cancelled")); void live.acp.notify("session/cancel", { sessionId: live.acpSessionId }).catch(() => undefined); }
 export async function stopOpenClawSession(sessionId: string): Promise<void> { cancelled.delete(sessionId); const live = liveByThread.get(sessionId); liveByThread.delete(sessionId); if (live) { live.cancelled = true; live.mute = true; resolveApprovals(live, "deny"); } live?.acp.close(); unwatchChild(sessionId); await killChild(sessionId).catch(() => undefined); }
 export async function forgetOpenClawSession(sessionId: string): Promise<void> { resumeByThread.delete(sessionId); await stopOpenClawSession(sessionId); }
 export function bindOpenClawSession(threadId: string, providerSessionId: string, cwd: string): void { const parts = providerSessionId.split("|", 2); if (threadId && parts[0]?.trim() && cwd.trim()) resumeByThread.set(threadId, { acpSessionId: parts[0].trim(), cwd, key: parts[1] ?? openClawSessionKey(undefined) }); }
