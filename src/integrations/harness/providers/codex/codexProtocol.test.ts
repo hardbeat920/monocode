@@ -278,6 +278,43 @@ describe("mapCodexNotification", () => {
     expect(mapped.events).toEqual([{ type: "message.delta", text: "\n\n" }]);
   });
 
+  it("maps completed image generation items as image events", () => {
+    const item = {
+      id: "image_1",
+      type: "imageGeneration",
+      result: "aW1hZ2U=",
+      revisedPrompt: "A clean product photo",
+      savedPath: "/tmp/image_1.png",
+    };
+
+    expect(
+      mapCodexNotification("item/started", { item }).events,
+    ).toEqual([]);
+    expect(
+      mapCodexNotification("item/completed", { item }).events,
+    ).toEqual([
+      {
+        type: "image.generated",
+        itemId: "image_1",
+        data: "aW1hZ2U=",
+        name: "generated-image",
+        alt: "A clean product photo",
+      },
+    ]);
+  });
+
+  it("does not map an empty image generation result", () => {
+    expect(
+      mapCodexNotification("item/completed", {
+        item: {
+          id: "image_2",
+          type: "imageGeneration",
+          result: "",
+        },
+      }).events,
+    ).toEqual([]);
+  });
+
   it("maps reasoning summary deltas", () => {
     const mapped = mapCodexNotification("item/reasoning/summaryTextDelta", {
       delta: "thinking…",
