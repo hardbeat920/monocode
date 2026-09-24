@@ -33,7 +33,7 @@ export async function startOpenClawAcpBridge(input: {
   cwd: string;
   gatewaySessionKey?: string;
   gatewayUrl?: string;
-}): Promise<{ acp: AcpClient; sessionId: string; gatewaySessionKey: string }> {
+}): Promise<{ acp: AcpClient; sessionId: string; gatewaySessionKey: string; dispose: () => Promise<void> }> {
   const { path } = await resolveOpenClawBinary();
   if (input.gatewayUrl) await validateOpenClawGatewayWs(input.gatewayUrl);
   const descriptor = openClawTransport(path);
@@ -65,7 +65,12 @@ export async function startOpenClawAcpBridge(input: {
       sessionId: sessionIdFromSetup,
       isTimeout,
     });
-    return { acp, sessionId: recovery.sessionId, gatewaySessionKey: key };
+  const dispose = async () => {
+    acp.close(new Error("OpenClaw bridge disposed"));
+    unwatchChild(childId);
+    await killChild(childId).catch(() => undefined);
+  };
+  return { acp, sessionId: recovery.sessionId, gatewaySessionKey: key, dispose };
   } catch (error) {
     acp.close(error instanceof Error ? error : new Error(String(error)));
     unwatchChild(childId);

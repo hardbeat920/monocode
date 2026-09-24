@@ -49,6 +49,8 @@ describe("OpenClaw ACP bridge", () => {
       args: ["acp"],
     }, "/repo");
     expect(result.gatewaySessionKey).toBe("acp-bridge:team/main");
+    await result.dispose();
+    expect(mocks.kill).toHaveBeenCalledWith("openclaw#1");
   });
 
   it("keeps generated session keys namespaced and never exposes credentials", async () => {
