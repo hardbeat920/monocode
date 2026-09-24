@@ -144,7 +144,7 @@ async function startLive(cwd: string): Promise<LiveText> {
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, ["acp"], cwd);
+    await spawnChild(TEXT_CHILD_ID, path, ["acp"], cwd, undefined, "cursor");
     await acp.request(
       "initialize",
       {

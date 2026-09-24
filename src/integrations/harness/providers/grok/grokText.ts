@@ -145,7 +145,14 @@ async function startLive(cwd: string): Promise<LiveText> {
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, grokTextSpawnArgs(), cwd);
+    await spawnChild(
+      TEXT_CHILD_ID,
+      path,
+      grokTextSpawnArgs(),
+      cwd,
+      undefined,
+      "grok",
+    );
     const init = await acp.request(
       "initialize",
       {

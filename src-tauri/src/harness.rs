@@ -427,6 +427,7 @@ pub fn harness_free_port() -> Result<u16, String> {
 /// login-shell read. Callers await this before writing to the child. Kill can
 /// still race the fork, so a cancelled spawn must not reinsert the child.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn harness_spawn(
     app: AppHandle,
     host: State<'_, HarnessHost>,
@@ -435,6 +436,8 @@ pub fn harness_spawn(
     args: Vec<String>,
     cwd: String,
     account: Option<HarnessAccount>,
+    binary_provider: Option<String>,
+    binary_path: Option<String>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
@@ -443,7 +446,7 @@ pub fn harness_spawn(
             workdir.display()
         ));
     }
-    if !is_resolved_or_configured_harness_binary(&command) {
+    if !is_resolved_harness_binary(&command, binary_provider.as_deref(), binary_path.as_deref()) {
         return Err("harness_spawn: not a resolved harness CLI".to_string());
     }
 
@@ -894,55 +897,15 @@ fn is_resolved_harness_binary(
     binary_provider: Option<&str>,
     binary_path: Option<&str>,
 ) -> bool {
-    if let Some(provider) = binary_provider {
-        let resolved = match binary_path {
-            Some(binary_path) => resolve_harness_binary_override(provider, binary_path),
-            None => resolve_harness_binary_default(provider)
-                .ok_or_else(|| format!("Unsupported configured harness provider: {provider}")),
-        };
-        return resolved.is_ok_and(|path| path == Path::new(command));
-    }
-    if binary_path.is_some() {
+    let Some(provider) = binary_provider else {
         return false;
-    }
-
-    let path = PathBuf::from(command);
-    [
-        resolve_cursor_agent(),
-        resolve_codex(),
-        resolve_opencode(),
-        resolve_claude(),
-        resolve_pi(),
-        resolve_omp(),
-        resolve_fx(),
-        resolve_grok(),
-        resolve_hermes(),
-        resolve_antigravity(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|resolved| resolved == path)
-}
-
-const HARNESS_PROVIDERS: &[&str] = &[
-    "claude",
-    "codex",
-    "cursor",
-    "grok",
-    "opencode",
-    "pi",
-    "omp",
-    "fx",
-    "hermes",
-    "antigravity",
-];
-
-fn is_resolved_or_configured_harness_binary(command: &str) -> bool {
-    is_resolved_harness_binary(command, None, None)
-        || HARNESS_PROVIDERS.iter().any(|provider| {
-            resolve_harness_binary_override(provider, command)
-                .is_ok_and(|path| path == Path::new(command))
-        })
+    };
+    let resolved = match binary_path {
+        Some(binary_path) => resolve_harness_binary_override(provider, binary_path),
+        None => resolve_harness_binary_default(provider)
+            .ok_or_else(|| format!("Unsupported configured harness provider: {provider}")),
+    };
+    resolved.is_ok_and(|path| path == Path::new(command))
 }
 
 /// One-shot capture of stdout (used for `cursor-agent --list-models`).
@@ -1564,17 +1527,14 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
             .strip_prefix('v')
             .or_else(|| token.strip_prefix('V'))
             .unwrap_or(token);
-        let mut parts = token.split('.');
-        let valid = parts
+        let mut parts = token.splitn(3, '.');
+        let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+        let major = parts.next().is_some_and(digits);
+        let minor = parts.next().is_some_and(digits);
+        let patch = parts
             .next()
-            .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-            && parts
-                .next()
-                .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-            && parts
-                .next()
-                .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
-        valid && parts.next().is_none()
+            .is_some_and(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()));
+        major && minor && patch
     });
     let provider_marker = match provider {
         "claude" => lower.contains("claude"),
@@ -2792,7 +2752,7 @@ mod tests {
             } else if path == &codex {
                 b"#!/bin/sh\necho 'codex-cli 0.156.1'\n"
             } else {
-                b"#!/bin/sh\necho '1.18.32'\n"
+                b"#!/bin/sh\necho '1.18.32-beta'\n"
             };
             std::fs::write(path, script).unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2803,16 +2763,18 @@ mod tests {
             resolve_harness_binary_override("codex", &codex_path),
             Ok(codex.clone())
         );
+        assert_eq!(
+            resolve_harness_binary_override("opencode", &opencode.to_string_lossy()),
+            Ok(opencode.clone())
+        );
         assert!(is_resolved_harness_binary(
             &codex_path,
             Some("codex"),
             Some(&codex_path)
         ));
-        assert!(is_resolved_or_configured_harness_binary(&codex_path));
-        assert!(!is_resolved_or_configured_harness_binary("/bin/sh"));
         assert!(!is_resolved_harness_binary(
-            &opencode.to_string_lossy(),
-            Some("codex"),
+            &codex_path,
+            Some("opencode"),
             Some(&codex_path)
         ));
         assert!(resolve_harness_binary_override("codex", &opencode.to_string_lossy()).is_err());

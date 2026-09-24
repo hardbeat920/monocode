@@ -132,6 +132,8 @@ async function startLive(
     path,
     ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
     cwd,
+    undefined,
+    "opencode",
   );
 
   try {

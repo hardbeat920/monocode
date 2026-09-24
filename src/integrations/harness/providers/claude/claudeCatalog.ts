@@ -293,6 +293,8 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
       path,
       buildClaudeSpawnArgs({ isolated: true, sessionId }),
       cwd,
+      undefined,
+      "claude",
     );
     await writeChild(
       PROBE_ID,

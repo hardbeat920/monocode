@@ -562,6 +562,8 @@ async function startLive(
       plan: input.intent === "plan",
     }),
     input.cwd,
+    undefined,
+    flavor.id,
   );
 
   liveByThread.set(input.sessionId, live);

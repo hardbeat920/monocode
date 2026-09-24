@@ -362,7 +362,7 @@ describe("settings pages", () => {
       JSON.parse(
         localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}",
       ).codex,
-    ).toBe("/opt/codex/bin/codex");
+    ).toBeUndefined();
 
     failAutoCodex = false;
     await save("Codex", "");

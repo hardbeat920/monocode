@@ -178,6 +178,7 @@ async function startLive(
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },
+      "claude",
     );
     live = session;
     await waitForReady(session, INIT_TIMEOUT_MS);

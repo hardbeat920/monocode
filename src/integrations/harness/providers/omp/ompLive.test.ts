@@ -388,6 +388,8 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
       "/fake/omp",
       ["--mode", "rpc"],
       "/repo",
+      undefined,
+      "omp",
     );
   });
 

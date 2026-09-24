@@ -220,6 +220,8 @@ async function startLive(flavor: PiFlavor, cwd: string): Promise<LiveText> {
         model: pickTextModel(flavor),
       }),
       cwd,
+      undefined,
+      flavor.id,
     );
     await rpc.request({ type: "get_state" }, INIT_TIMEOUT_MS);
     state.live = session;

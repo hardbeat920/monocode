@@ -243,15 +243,21 @@ export async function spawnChild(
   args: string[],
   cwd: string,
   account?: { provider: "claude" | "codex"; id: string },
+  binaryProvider?: ConfigurableBinaryProvider,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
+  const binaryPath = binaryProvider
+    ? runtimeProviderBinaryPath(binaryProvider)
+    : undefined;
   const pid = await invoke<number>("harness_spawn", {
     sessionId,
     command,
     args,
     cwd,
     account,
+    binaryProvider,
+    binaryPath,
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);
