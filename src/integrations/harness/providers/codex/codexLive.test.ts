@@ -5,6 +5,13 @@ let onLine: ((line: string) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
   sent.push(line);
 });
+const saveGeneratedImage = vi.hoisted(() =>
+  vi.fn(async () => ({
+    path: "/app-data/generated-images/image.png",
+    mimeType: "image/png",
+    size: 8,
+  })),
+);
 
 vi.mock("../../core/child", () => ({
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
@@ -16,6 +23,8 @@ vi.mock("../../core/child", () => ({
   },
   writeChild,
 }));
+
+vi.mock("../../../../platform/tauri/fs", () => ({ saveGeneratedImage }));
 
 const {
   compactCodexContext,
@@ -126,6 +135,7 @@ describe("codex live turn sequence", () => {
     sent.length = 0;
     onLine = undefined;
     writeChild.mockClear();
+    saveGeneratedImage.mockClear();
   });
 
   afterEach(async () => {
@@ -143,6 +153,46 @@ describe("codex live turn sequence", () => {
     expect(onAccepted).toHaveBeenCalledOnce();
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it("materializes image generations before completing the turn", async () => {
+    const { events, turn } = await startTurn("codex-live");
+
+    notify("item/completed", {
+      item: {
+        id: "image_1",
+        type: "imageGeneration",
+        result: "aW1hZ2U=",
+        revisedPrompt: "A clean product photo",
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    expect(saveGeneratedImage).toHaveBeenCalledWith({
+      data: "aW1hZ2U=",
+      name: "generated-image",
+    });
+    expect(events).toContainEqual({
+      type: "image.generated",
+      itemId: "image_1",
+      path: "/app-data/generated-images/image.png",
+      name: "generated-image",
+      mimeType: "image/png",
+      size: 8,
+      alt: "A clean product photo",
+    });
+    expect(
+      events.reduce(applyHarnessEvent, newSession("codex", "/repo")).blocks,
+    ).toMatchObject([
+      {
+        role: "image",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          mimeType: "image/png",
+        },
+      },
+    ]);
   });
 
   it.each([

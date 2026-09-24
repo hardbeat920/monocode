@@ -25,6 +25,7 @@ import {
   type CodexApprovalKind,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
+import { saveGeneratedImage } from "../../../../platform/tauri/fs";
 import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
 import {
   codexMcpConfirmation,
@@ -88,6 +89,8 @@ type Live = {
   /** Completed snapshots describe one item, not all text in the turn. */
   emittedAssistantByItem: Map<string, string>;
   emittedReasoningByItem: Map<string, string>;
+  emittedGeneratedImages: Set<string>;
+  notificationQueue: Promise<void> | null;
   /** Child thread id -> the agent tool row that spawned it. */
   subagentThreads: Map<string, string>;
   /** Child notifications that arrived before their row was known. */
@@ -413,7 +416,20 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       onNotification: (method, params) => {
         const live = liveRef.current;
         if (!live || live.muteUpdates) return;
-        handleNotification(live, method, params);
+        if (live.notificationQueue) {
+          const queued = live.notificationQueue
+            .catch(() => undefined)
+            .then(() => handleNotification(live, method, params));
+          live.notificationQueue = queued.catch(() => undefined);
+          return;
+        }
+        const result = handleNotification(live, method, params);
+        if (!result) return;
+        const queued = result.catch(() => undefined);
+        live.notificationQueue = queued;
+        void queued.then(() => {
+          if (live.notificationQueue === queued) live.notificationQueue = null;
+        });
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
@@ -551,9 +567,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turnDone: null,
       turnFailed: null,
       turnEndPending: false,
-      emittedAssistantByItem: new Map(),
-      emittedReasoningByItem: new Map(),
-      subagentThreads: new Map(),
+       emittedAssistantByItem: new Map(),
+       emittedReasoningByItem: new Map(),
+       emittedGeneratedImages: new Set(),
+       notificationQueue: null,
+       subagentThreads: new Map(),
       pendingSubagent: new Map(),
       openAgentRows: new Map(),
     };
@@ -600,6 +618,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
+  live.emittedGeneratedImages.clear();
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -638,6 +657,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 async function runCompaction(live: Live): Promise<void> {
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
+  live.emittedGeneratedImages.clear();
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
     live.turnFailed = reject;
@@ -656,7 +676,11 @@ async function runCompaction(live: Live): Promise<void> {
   }
 }
 
-function handleNotification(live: Live, method: string, params: unknown): void {
+function handleNotification(
+  live: Live,
+  method: string,
+  params: unknown,
+): void | Promise<void> {
   const rec = asRecord(params);
   if (method === "serverRequest/resolved") {
     for (const pending of live.approvals.values()) {
@@ -708,6 +732,13 @@ function handleNotification(live: Live, method: string, params: unknown): void {
     : stringField(rec, "itemId");
   for (const event of mapped.events) {
     if (duplicate && duplicateAgentRow(event)) continue;
+    if (event.type === "image.generated") {
+      if (live.emittedGeneratedImages.has(event.itemId)) continue;
+      live.emittedGeneratedImages.add(event.itemId);
+      if ("data" in event) return materializeGeneratedImage(live, event);
+      live.onEvent(event);
+      continue;
+    }
     trackAgentRow(live, event);
     if (event.type === "message.delta") {
       publishCodexText(live, "assistant", event.text, snapshot, itemId);
@@ -734,6 +765,36 @@ function handleNotification(live: Live, method: string, params: unknown): void {
   }
   if (mapped.turnCompleted) {
     finishActiveTurn(live);
+  }
+}
+
+async function materializeGeneratedImage(
+  live: Live,
+  event: Extract<HarnessEvent, { type: "image.generated"; data: string }>,
+): Promise<void> {
+  try {
+    const asset = await saveGeneratedImage({
+      data: event.data,
+      name: event.name,
+    });
+    if (live.cancelled || live.muteUpdates) return;
+    live.onEvent({
+      type: "image.generated",
+      itemId: event.itemId,
+      path: asset.path,
+      name: event.name,
+      mimeType: asset.mimeType,
+      size: asset.size,
+      ...(event.alt ? { alt: event.alt } : {}),
+    });
+  } catch (cause) {
+    if (live.cancelled || live.muteUpdates) return;
+    live.onEvent({
+      type: "session.error",
+      message: `Could not save generated image: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    });
   }
 }
 
@@ -925,6 +986,7 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   live.activeTurnId = null;
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
+  live.emittedGeneratedImages.clear();
   for (const event of extraEvents) {
     live.onEvent(event);
   }
