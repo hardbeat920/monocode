@@ -632,20 +632,23 @@ function scheduleHarnessFlush(run: () => void): ScheduledFlush {
   return { kind: "raf", id: requestAnimationFrame(run) };
 }
 
-function deleteRemovedGeneratedImages(previous: Block[], next: Block[]): void {
+function removedGeneratedImagePaths(previous: Block[], next: Block[]): string[] {
   const retained = new Set(
     next
       .filter((block) => block.role === "image" && block.image)
       .map((block) => block.image!.path),
   );
-  const removed = previous
+  return previous
     .filter(
       (block) =>
         block.role === "image" && block.image && !retained.has(block.image.path),
     )
     .map((block) => block.image!.path);
-  if (removed.length > 0) {
-    void deleteGeneratedImages(removed).catch(() => undefined);
+}
+
+function deleteGeneratedImagePaths(paths: string[]): void {
+  if (paths.length > 0) {
+    void deleteGeneratedImages(paths).catch(() => undefined);
   }
 }
 
@@ -3706,9 +3709,7 @@ export default function App({
         const imagePaths = stopped.blocks.flatMap((block) =>
           block.role === "image" && block.image ? [block.image.path] : [],
         );
-        const deleted = await deleteSession(id, imagePaths)
-          .then(() => true)
-          .catch(() => false);
+        await deleteSession(id, imagePaths).catch(() => undefined);
         const fresh = {
           ...newSession(
             stopped.harness,
@@ -3720,7 +3721,6 @@ export default function App({
           title: stopped.title,
           inboxAsk: stopped.inboxAsk,
         };
-        if (!deleted) deleteRemovedGeneratedImages(stopped.blocks, fresh.blocks);
         const next = sessionsRef.current.map((session) =>
           session.id === id ? fresh : session,
         );
@@ -5819,6 +5819,12 @@ export default function App({
       }
 
       dismissNoticesForContinuedSession(sessionId);
+      const removedImagePaths = editedResend
+        ? removedGeneratedImagePaths(
+            current.blocks,
+            editedResend.replace(current).blocks,
+          )
+        : [];
       const commitSubmittedTurn = () => {
         setSessions((prev) =>
           prev.map((s) => {
@@ -5844,9 +5850,7 @@ export default function App({
               handoffCard: rawCommand ? s.handoffCard : undefined,
             };
             if (editedResend) {
-              const beforeEdit = next.blocks;
               next = editedResend.replace(next);
-              deleteRemovedGeneratedImages(beforeEdit, next.blocks);
             }
             if (approvedPlan && intent === "build") {
               next = {
@@ -5918,7 +5922,10 @@ export default function App({
           }),
         );
       };
-      if (!options?.resendEdited) flushSync(commitSubmittedTurn);
+      if (!options?.resendEdited) {
+        flushSync(commitSubmittedTurn);
+        deleteGeneratedImagePaths(removedImagePaths);
+      }
 
       const launchTitleGeneration = (workCwd: string) => {
         if (
@@ -6202,24 +6209,33 @@ export default function App({
         };
         const acceptEditedResend = () => {
           if (!editedResend || editedResend.isAccepted()) return;
-          flushSync(commitSubmittedTurn);
-          editedResend.markAccepted();
+           flushSync(commitSubmittedTurn);
+           deleteGeneratedImagePaths(removedImagePaths);
+           editedResend.markAccepted();
           for (const event of pendingEditedEvents) applyTurnEvent(event);
           pendingEditedEvents.length = 0;
         };
         const recoverEditedResend = () => {
           if (!editedResend || editedResend.isAccepted()) return;
           pendingEditedEvents.length = 0;
+          const previous = sessionsRef.current.find(
+            (session) => session.id === sessionId,
+          );
+          const recovered = previous
+            ? editedResend.recoverAfterFailure(previous)
+            : undefined;
+          const removedImagePaths =
+            previous && recovered
+              ? removedGeneratedImagePaths(previous.blocks, recovered.blocks)
+              : [];
           flushSync(() => {
             setSessions((prev) =>
-              prev.map((session) => {
-                if (session.id !== sessionId) return session;
-                const recovered = editedResend.recoverAfterFailure(session);
-                deleteRemovedGeneratedImages(session.blocks, recovered.blocks);
-                return recovered;
-              }),
+              prev.map((session) =>
+                session.id === sessionId && recovered ? recovered : session,
+              ),
             );
           });
+          deleteGeneratedImagePaths(removedImagePaths);
         };
 
         if (!current.inboxAsk && !orchestrator.forSession(sessionId)) {

@@ -84,9 +84,10 @@ impl SessionStore {
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let store = SessionStore::open(data_dir.join("monocode.db"))?;
-    if let Err(error) =
-        crate::fs::cleanup_orphaned_generated_images(app, &store.generated_image_paths()?)
-    {
+    let cleanup = store
+        .generated_image_paths()
+        .and_then(|paths| crate::fs::cleanup_orphaned_generated_images(app, &paths));
+    if let Err(error) = cleanup {
         eprintln!("Generated image cleanup will need a retry: {error}");
     }
     app.manage(store);
