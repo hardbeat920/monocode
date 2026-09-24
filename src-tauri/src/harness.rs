@@ -76,6 +76,13 @@ pub struct CursorBinary {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConfiguredBinary {
+    pub path: String,
+    pub args: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AntigravityBinary {
     pub path: String,
     pub args: Vec<String>,
@@ -305,6 +312,17 @@ pub fn harness_resolve_opencode() -> Result<CursorBinary, String> {
             "OpenCode CLI not found. Install it from https://opencode.ai and run `opencode auth login`, then retry."
                 .into()
         })
+}
+
+#[tauri::command(async)]
+pub fn harness_resolve_configured(
+    provider: String,
+    binary_path: String,
+) -> Result<ConfiguredBinary, String> {
+    resolve_harness_binary_override(&provider, &binary_path).map(|path| ConfiguredBinary {
+        path: path.to_string_lossy().into_owned(),
+        args: (provider == "antigravity").then(antigravity_args),
+    })
 }
 
 /// Resolve the Claude Code CLI (`claude`).
@@ -868,7 +886,23 @@ fn exec_args_allowed(args: &[String]) -> bool {
 
 /// Must be a path a resolver would hand back, not an arbitrary binary
 /// that merely shares a file name.
-fn is_resolved_harness_binary(command: &str) -> bool {
+fn is_resolved_harness_binary(
+    command: &str,
+    binary_provider: Option<&str>,
+    binary_path: Option<&str>,
+) -> bool {
+    if let Some(provider) = binary_provider {
+        let resolved = match binary_path {
+            Some(binary_path) => resolve_harness_binary_override(provider, binary_path),
+            None => resolve_harness_binary_default(provider)
+                .ok_or_else(|| format!("Unsupported configured harness provider: {provider}")),
+        };
+        return resolved.is_ok_and(|path| path == Path::new(command));
+    }
+    if binary_path.is_some() {
+        return false;
+    }
+
     let path = PathBuf::from(command);
     [
         resolve_cursor_agent(),
@@ -879,6 +913,7 @@ fn is_resolved_harness_binary(command: &str) -> bool {
         resolve_omp(),
         resolve_fx(),
         resolve_grok(),
+        resolve_hermes(),
         resolve_antigravity(),
     ]
     .into_iter()
@@ -892,12 +927,15 @@ pub async fn harness_exec(
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
+    binary_provider: Option<String>,
+    binary_path: Option<String>,
 ) -> Result<String, String> {
     if !exec_args_allowed(&args) {
         return Err("harness_exec: unsupported arguments".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        if !is_resolved_harness_binary(&command) {
+        if !is_resolved_harness_binary(&command, binary_provider.as_deref(), binary_path.as_deref())
+        {
             return Err("harness_exec: not a resolved harness CLI".to_string());
         }
         exec_capture(&command, &args, cwd.as_deref())
@@ -1447,6 +1485,83 @@ fn resolve_cursor_agent() -> Option<PathBuf> {
     }
 
     first_binary_matching(candidates, is_cursor_agent)
+}
+
+fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
+    match provider {
+        "claude" => resolve_claude(),
+        "codex" => resolve_codex(),
+        "cursor" => resolve_cursor_agent(),
+        "grok" => resolve_grok(),
+        "opencode" => resolve_opencode(),
+        "pi" => resolve_pi(),
+        "omp" => resolve_omp(),
+        "fx" => resolve_fx(),
+        "hermes" => resolve_hermes(),
+        "antigravity" => resolve_antigravity(),
+        _ => None,
+    }
+}
+
+fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<PathBuf, String> {
+    let names: &[&str] = match provider {
+        "claude" => &["claude"],
+        "codex" => &["codex"],
+        "cursor" => &["cursor-agent", "agent"],
+        "grok" => &["grok"],
+        "opencode" => &["opencode"],
+        "pi" => &["pi", "pi-coding-agent"],
+        "omp" => &["omp"],
+        "fx" => &["fx"],
+        "hermes" => &["hermes"],
+        "antigravity" => &["agy_acp_server"],
+        _ => {
+            return Err(format!(
+                "Unsupported configured harness provider: {provider}"
+            ))
+        }
+    };
+    resolve_configured_harness_binary(binary_path, provider, names)
+}
+
+fn resolve_configured_harness_binary(
+    binary_path: &str,
+    provider: &str,
+    names: &[&str],
+) -> Result<PathBuf, String> {
+    let binary_path = binary_path.trim();
+    if binary_path.is_empty() {
+        return Err(format!("Configured {provider} binary path is empty."));
+    }
+    if binary_path.contains('\0') {
+        return Err(format!("Invalid configured {provider} binary path."));
+    }
+    if !Path::new(binary_path).is_absolute() {
+        return Err(format!(
+            "Configured {provider} binary path must be absolute."
+        ));
+    }
+    let path = existing_binary(expand_home(binary_path))
+        .ok_or_else(|| format!("Configured {provider} binary is not executable: {binary_path}"))?;
+    if !names.iter().any(|name| binary_name_eq(&path, name)) {
+        return Err(format!(
+            "Configured path is not a {provider} binary: {binary_path}"
+        ));
+    }
+    let identity_valid = match provider {
+        "cursor" => is_cursor_agent(&path),
+        "pi" => is_pi_coding_agent(&path),
+        "omp" => is_omp_agent(&path),
+        "fx" => is_fx_agent(&path),
+        "grok" => is_grok_agent(&path),
+        _ => true,
+    };
+    if !identity_valid {
+        return Err(format!(
+            "Configured path is not a valid {provider} binary: {binary_path}"
+        ));
+    }
+    Ok(path)
 }
 
 fn resolve_codex() -> Option<PathBuf> {
@@ -2577,6 +2692,50 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn configured_binary_paths_fail_closed_and_stay_exact() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "monocode-configured-binaries-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let codex = dir.join("codex");
+        let opencode = dir.join("opencode");
+        for path in [&codex, &opencode] {
+            std::fs::write(path, b"#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let codex_path = codex.to_string_lossy().into_owned();
+
+        assert_eq!(
+            resolve_harness_binary_override("codex", &codex_path),
+            Ok(codex.clone())
+        );
+        assert!(is_resolved_harness_binary(
+            &codex_path,
+            Some("codex"),
+            Some(&codex_path)
+        ));
+        assert!(!is_resolved_harness_binary(
+            &opencode.to_string_lossy(),
+            Some("codex"),
+            Some(&codex_path)
+        ));
+        assert!(resolve_harness_binary_override("codex", &opencode.to_string_lossy()).is_err());
+        assert!(resolve_harness_binary_override(
+            "opencode",
+            &dir.join("missing").to_string_lossy()
+        )
+        .is_err());
+        assert!(resolve_harness_binary_override("codex", "codex").is_err());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn which_in_path_takes_the_first_executable_hit() {
         use std::os::unix::fs::PermissionsExt;
@@ -2859,6 +3018,36 @@ mod exec_allowlist_tests {
         assert!(!exec_args_allowed(&args(&["--version", "--json"])));
         assert!(!exec_args_allowed(&args(&["-c", "id"])));
         assert!(!exec_args_allowed(&args(&["agent", "list", "--json"])));
+    }
+}
+
+#[cfg(all(windows, test))]
+mod windows_binary_tests {
+    use super::*;
+
+    #[test]
+    fn configured_binary_path_accepts_windows_shim_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "monocode-configured-windows-binary-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let shim = dir.join("codex.cmd");
+        std::fs::write(&shim, b"@echo off\r\n").unwrap();
+        let shim_path = shim.to_string_lossy().into_owned();
+
+        assert_eq!(
+            resolve_harness_binary_override("codex", &shim_path),
+            Ok(shim.clone())
+        );
+        assert!(is_resolved_harness_binary(
+            &shim_path,
+            Some("codex"),
+            Some(&shim_path)
+        ));
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 

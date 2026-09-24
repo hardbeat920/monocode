@@ -121,7 +121,7 @@ async function discoverViaAcp() {
 async function discoverViaCli() {
   const { path } = await resolveGrokBinary();
   const cwd = await homeDir();
-  const stdout = await execChild(path, ["models"], cwd);
+  const stdout = await execChild(path, ["models"], cwd, "grok");
   return modelsFromGrokModelsOutput(stdout);
 }
 

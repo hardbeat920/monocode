@@ -115,7 +115,7 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
 async function discoverViaCli(): Promise<AgentModel[]> {
   const { path } = await resolveCursorBinary();
   const cwd = await homeDir();
-  const stdout = await execChild(path, ["--list-models"], cwd);
+  const stdout = await execChild(path, ["--list-models"], cwd, "cursor");
   return modelsFromListModelsOutput(stdout);
 }
 
