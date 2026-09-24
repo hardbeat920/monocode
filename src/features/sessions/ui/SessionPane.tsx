@@ -81,8 +81,10 @@ import {
   subscribeProjectChatBackground,
 } from "../../projects/model/projectChatBackground";
 import { useProjectBackgroundEffect } from "../../projects/ui/useProjectBackgroundEffect";
+import { GradientBlurBackground } from "../../settings/ui/GradientBlurBackground";
 import {
   loadChatBackgroundPath,
+  loadNewThreadBackgroundEffect,
   subscribeChatBackgroundPath,
 } from "../../settings/model/appearance";
 import type { SessionFolderTarget } from "../model/sessionFolders";
@@ -263,6 +265,11 @@ export const SessionPane = memo(function SessionPane({
     subscribeChatBackgroundPath,
     loadChatBackgroundPath,
     loadChatBackgroundPath,
+  );
+  const globalBackgroundEffect = useSyncExternalStore(
+    subscribeChatBackgroundPath,
+    loadNewThreadBackgroundEffect,
+    loadNewThreadBackgroundEffect,
   );
   const projectBackground = loadProjectChatBackgroundSettings(
     projectKey(session.cwd),
@@ -564,11 +571,18 @@ export const SessionPane = memo(function SessionPane({
       data-session-drop={session.id}
       data-session-empty={isEmpty}
       data-project-chat-background={!!projectBackground}
+      data-project-background-effect={projectBackground?.effect}
       data-project-background-scope={projectBackground?.scope}
       style={projectBackgroundStyle}
       className="chat-pane-background relative isolate flex h-full min-h-0 min-w-0 flex-1 flex-col"
       onMouseDown={() => onFocus(session.id)}
     >
+      {projectBackground?.effect === "gradient-blur" ||
+      (!projectBackground &&
+        globalBackgroundPath &&
+        globalBackgroundEffect === "gradient-blur") ? (
+        <GradientBlurBackground />
+      ) : null}
       {modelWelcome && visible ? (
         modelWelcome.kind === "astra" ? (
           <AstraWelcome key={modelWelcome.run} onDone={dismissModelWelcome} />

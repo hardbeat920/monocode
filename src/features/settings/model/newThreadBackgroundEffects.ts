@@ -116,6 +116,7 @@ export function clearPreparedNewThreadBackground() {
   activeObjectUrl = null;
   document.documentElement.style.removeProperty("--chat-background-image");
   document.documentElement.classList.remove("chat-background-effect-ready");
+  document.documentElement.classList.remove("chat-background-gradient-blur");
 }
 
 export async function applyPreparedNewThreadBackground(
@@ -127,7 +128,11 @@ export async function applyPreparedNewThreadBackground(
   const revision = ++appliedRevision;
   const root = document.documentElement;
   root.classList.remove("chat-background-effect-ready");
-  if (effect === "none") {
+  root.classList.toggle(
+    "chat-background-gradient-blur",
+    effect === "gradient-blur",
+  );
+  if (effect === "none" || effect === "gradient-blur") {
     if (activeObjectUrl) URL.revokeObjectURL(activeObjectUrl);
     activeObjectUrl = null;
     root.style.setProperty(

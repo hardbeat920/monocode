@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { Loader } from "../../../shared/ui/icons";
 import { Modal } from "../../../shared/ui/Modal";
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
@@ -10,6 +10,7 @@ import {
   loadChatBackgroundPath,
   loadChatBackgroundSessionOpacity,
   loadChatBackgroundScope,
+  loadNewThreadBackgroundEffect,
   NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
   NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS,
   NEW_THREAD_BACKGROUND_EFFECT_LABELS,
@@ -29,6 +30,7 @@ import {
   saveProjectChatBackgroundSettings,
 } from "../model/projectChatBackground";
 import { useProjectBackgroundEffect } from "./useProjectBackgroundEffect";
+import { GradientBlurBackground } from "../../settings/ui/GradientBlurBackground";
 
 type Props = {
   project: string;
@@ -59,6 +61,7 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
   const previewSrc = path
     ? (effectPreviewSrc ?? projectChatBackgroundSrc(path, revision))
     : chatBackgroundSrc(globalPath);
+  const previewEffect = path ? effect : loadNewThreadBackgroundEffect();
 
   const save = (
     nextPath: string,
@@ -148,15 +151,31 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
     >
       <div className="flex flex-col gap-5 p-4">
         <div>
-          <div className="overflow-hidden rounded-xl border border-content/10 bg-content/5">
+          <div
+            className={`overflow-hidden rounded-xl border border-content/10 ${previewEffect === "gradient-blur" ? "bg-background-base" : "bg-content/5"}`}
+          >
             {previewSrc ? (
-              <img
-                src={previewSrc}
-                alt=""
-                draggable={false}
-                className="h-40 w-full object-cover"
-                style={{ opacity: emptyOpacity }}
-              />
+              previewEffect === "gradient-blur" ? (
+                <div className="relative h-40">
+                  <GradientBlurBackground
+                    className="gradient-blur-preview absolute inset-0"
+                    style={
+                      {
+                        "--chat-background-image": `url(${JSON.stringify(previewSrc)})`,
+                        opacity: emptyOpacity,
+                      } as CSSProperties
+                    }
+                  />
+                </div>
+              ) : (
+                <img
+                  src={previewSrc}
+                  alt=""
+                  draggable={false}
+                  className="h-40 w-full object-cover"
+                  style={{ opacity: emptyOpacity }}
+                />
+              )
             ) : (
               <div className="grid h-40 place-items-center text-[12px] text-content/40">
                 No background selected

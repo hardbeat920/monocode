@@ -42,11 +42,11 @@ export type ThemePreference = ColorScheme | "system";
 export type TranscriptLayout = "full" | "chat";
 export type ChatBackgroundScope = "empty" | "all";
 export type NewThreadBackgroundEffect =
-  "none" | "dither" | "ascii" | "halftone" | "scanlines";
+  "none" | "dither" | "ascii" | "halftone" | "scanlines" | "gradient-blur";
 export type ChangesView = "list" | "tree";
 
 export const NEW_THREAD_BACKGROUND_EFFECTS: readonly NewThreadBackgroundEffect[] =
-  ["none", "dither", "ascii", "halftone", "scanlines"];
+  ["none", "dither", "ascii", "halftone", "scanlines", "gradient-blur"];
 
 export const NEW_THREAD_BACKGROUND_EFFECT_DEFAULT: NewThreadBackgroundEffect =
   "none";
@@ -60,6 +60,7 @@ export const NEW_THREAD_BACKGROUND_EFFECT_LABELS: Record<
   ascii: "ASCII",
   halftone: "Halftone",
   scanlines: "Scanlines",
+  "gradient-blur": "Haze",
 };
 
 export const NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS: Record<
@@ -71,6 +72,7 @@ export const NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS: Record<
   ascii: "Recreates the artwork with colored characters on black.",
   halftone: "Recreates the artwork with colored print dots on black.",
   scanlines: "Adds a pronounced horizontal display-line texture.",
+  "gradient-blur": "Blurs and fades the artwork into the background below.",
 };
 
 export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";

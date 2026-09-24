@@ -129,6 +129,37 @@ describe("settings pages", () => {
     );
   });
 
+  it("previews and restores Haze with the existing empty-chat visibility", async () => {
+    localStorage.setItem("monocode.chatBackgroundPath", "/background.png");
+    localStorage.setItem("monocode.chatBackgroundEmptyOpacity", "0.4");
+    await render("appearance");
+
+    const option = container.querySelector<HTMLButtonElement>(
+      "#new-thread-background-effect-gradient-blur",
+    )!;
+    expect(option.textContent).toBe("Haze");
+    await act(async () => option.click());
+
+    const preview = container.querySelector<HTMLElement>(
+      ".gradient-blur-background",
+    )!;
+    expect(option.getAttribute("aria-checked")).toBe("true");
+    expect(preview.style.opacity).toBe("0.4");
+    expect(preview.querySelectorAll("span")).toHaveLength(2);
+    expect(localStorage.getItem("monocode.newThreadBackgroundEffect")).toBe(
+      "gradient-blur",
+    );
+
+    await render("providers");
+    await render("appearance");
+    expect(
+      container
+        .querySelector("#new-thread-background-effect-gradient-blur")
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(container.querySelector(".gradient-blur-background")).not.toBeNull();
+  });
+
   it("manages named accounts independently for each supported provider", async () => {
     saveProviderAccount({
       id: "account-work",

@@ -25,7 +25,10 @@ export function useProjectBackgroundEffect(
   );
   const src = path ? projectChatBackgroundSrc(path, revision) : null;
   const sourceKey = path ? `${path}?v=${revision}` : null;
-  const themeKey = effect === "dither" || effect === "none" ? false : light;
+  const themeKey =
+    effect === "dither" || effect === "none" || effect === "gradient-blur"
+      ? false
+      : light;
   const key = sourceKey ? `${sourceKey}:${effect}:${themeKey}` : null;
   const [prepared, setPrepared] = useState<{
     key: string;
@@ -33,7 +36,14 @@ export function useProjectBackgroundEffect(
   } | null>(null);
 
   useEffect(() => {
-    if (!sourceKey || !src || effect === "none" || !key) return;
+    if (
+      !sourceKey ||
+      !src ||
+      effect === "none" ||
+      effect === "gradient-blur" ||
+      !key
+    )
+      return;
     let cancelled = false;
     let objectUrl: string | null = null;
     void prepareNewThreadBackgroundEffect(sourceKey, src, effect, themeKey)
@@ -51,6 +61,6 @@ export function useProjectBackgroundEffect(
     };
   }, [sourceKey, src, effect, themeKey, key]);
 
-  if (!src || effect === "none") return src;
+  if (!src || effect === "none" || effect === "gradient-blur") return src;
   return prepared?.key === key ? prepared.url : null;
 }

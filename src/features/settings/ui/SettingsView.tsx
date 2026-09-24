@@ -36,6 +36,7 @@ import {
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { JiraSettings } from "./JiraSettings";
+import { GradientBlurBackground } from "./GradientBlurBackground";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -2105,15 +2106,24 @@ function ChatBackgroundCard({
       <div className="border-b border-content/5 p-4 last:border-b-0">
         <div className="overflow-hidden rounded-lg border border-content/10">
           {hasImage ? (
-            <div className="relative h-36">
-              <div
-                aria-hidden
-                className="size-full bg-cover bg-center bg-no-repeat"
-                style={{
-                  backgroundImage: "var(--chat-background-image)",
-                  opacity: appearance.chatBackgroundEmptyOpacity,
-                }}
-              />
+            <div
+              className={`relative h-36 ${appearance.newThreadBackgroundEffect === "gradient-blur" ? "bg-background-base" : ""}`}
+            >
+              {appearance.newThreadBackgroundEffect === "gradient-blur" ? (
+                <GradientBlurBackground
+                  className="gradient-blur-preview absolute inset-0"
+                  style={{ opacity: appearance.chatBackgroundEmptyOpacity }}
+                />
+              ) : (
+                <div
+                  aria-hidden
+                  className="size-full bg-cover bg-center bg-no-repeat"
+                  style={{
+                    backgroundImage: "var(--chat-background-image)",
+                    opacity: appearance.chatBackgroundEmptyOpacity,
+                  }}
+                />
+              )}
               <span className="pointer-events-none absolute bottom-2 left-2 text-[11px] text-content/40">
                 Empty chat preview at {emptyVisibility}%
               </span>

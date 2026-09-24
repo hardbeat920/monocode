@@ -300,15 +300,161 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
   pointer-events: none;
 }
 
-html.has-chat-background.chat-background-effect-ready
-  .chat-pane-background::before,
-.chat-pane-background[data-project-chat-background="true"]::before {
+/* Each masked copy samples the same artwork; only the image is blurred. */
+.gradient-blur-background {
+  --gradient-blur-soft: 7px;
+  --gradient-blur-strong: 18px;
+  --gradient-blur-soft-mask: linear-gradient(
+    to bottom,
+    transparent 18%,
+    #000 60%
+  );
+  --gradient-blur-strong-mask: linear-gradient(
+    to bottom,
+    transparent 28%,
+    #000 76%
+  );
+  --gradient-blur-overlay: linear-gradient(
+    to bottom,
+    transparent 16%,
+    color-mix(in srgb, var(--color-background-base) 26%, transparent) 38%,
+    color-mix(in srgb, var(--color-background-base) 55%, transparent) 55%,
+    color-mix(in srgb, var(--color-background-base) 78%, transparent) 75%
+  );
+  --gradient-blur-mask: linear-gradient(
+    to bottom,
+    #000 0 19%,
+    rgb(0 0 0 / 94%) 30%,
+    rgb(0 0 0 / 72%) 42%,
+    rgb(0 0 0 / 42%) 54%,
+    rgb(0 0 0 / 16%) 66%,
+    rgb(0 0 0 / 4%) 78%,
+    transparent 90%
+  );
+  overflow: hidden;
+  pointer-events: none;
+  background-image: var(--chat-background-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  -webkit-mask-image: var(--gradient-blur-mask);
+  mask-image: var(--gradient-blur-mask);
+}
+
+.gradient-blur-preview {
+  --gradient-blur-soft: 2px;
+  --gradient-blur-strong: 5px;
+}
+
+.gradient-blur-background > span {
+  position: absolute;
+  inset: 0;
+  background-image: var(--chat-background-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.gradient-blur-background-soft {
+  filter: blur(var(--gradient-blur-soft));
+  -webkit-mask-image: var(--gradient-blur-soft-mask);
+  mask-image: var(--gradient-blur-soft-mask);
+}
+
+.gradient-blur-background-strong {
+  filter: blur(var(--gradient-blur-strong));
+  -webkit-mask-image: var(--gradient-blur-strong-mask);
+  mask-image: var(--gradient-blur-strong-mask);
+}
+
+.gradient-blur-background::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-background-base) 36%, transparent) 0 1px,
+      transparent 1px 3px
+    ),
+    var(--gradient-blur-overlay);
+}
+
+.chat-pane-background > .gradient-blur-background {
+  display: none;
+  position: absolute;
+  left: var(--chat-background-left, 0);
+  top: var(--chat-background-top, 0);
+  width: var(--chat-background-width, 100%);
+  height: var(--chat-background-height, 100%);
+  z-index: -1;
+  opacity: 0;
+  transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+/* Keep the active transcript clear of the wide blurred haze used by the empty hero. */
+.chat-pane-background[data-session-empty="false"] > .gradient-blur-background {
+  --gradient-blur-soft: 5px;
+  --gradient-blur-strong: 12px;
+  --gradient-blur-soft-mask: linear-gradient(
+    to bottom,
+    transparent 18%,
+    #000 70%
+  );
+  --gradient-blur-strong-mask: linear-gradient(
+    to bottom,
+    transparent 22%,
+    #000 76%
+  );
+  --gradient-blur-overlay: linear-gradient(
+    to bottom,
+    transparent 15%,
+    color-mix(in srgb, var(--color-background-base) 70%, transparent) 76%
+  );
+  --gradient-blur-mask: linear-gradient(to bottom, #000 0 18%, transparent 76%);
+}
+
+html.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"]
+  > .gradient-blur-background {
+  display: block;
+}
+
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"]
+  > .gradient-blur-background {
   opacity: var(--chat-background-empty-opacity);
 }
 
-html.has-chat-background.chat-background-effect-ready
-  .chat-pane-background[data-session-empty="false"]::before,
-.chat-pane-background[data-project-chat-background="true"][data-session-empty="false"]::before {
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"][data-session-empty="false"]
+  > .gradient-blur-background {
+  opacity: var(--chat-background-session-opacity);
+}
+
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  )
+  .chat-pane-background[data-project-chat-background="false"]::before,
+.chat-pane-background[data-project-chat-background="true"]:not(
+    [data-project-background-effect="gradient-blur"]
+  )::before {
+  opacity: var(--chat-background-empty-opacity);
+}
+
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  )
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]::before,
+.chat-pane-background[data-project-chat-background="true"]:not(
+    [data-project-background-effect="gradient-blur"]
+  )[data-session-empty="false"]::before {
   opacity: var(--chat-background-session-opacity);
 }
 
@@ -327,10 +473,31 @@ html.has-chat-background.chat-background-effect-ready
   }
 }
 
-html.chat-background-empty-only
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  ).chat-background-empty-only
   .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]::before,
 .chat-pane-background[data-project-chat-background="true"][data-project-background-scope="empty"][data-session-empty="false"]::before {
   opacity: 0;
+}
+
+/* Scope and visibility follow the same rules as the existing image layer. */
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur.chat-background-empty-only
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-scope="empty"][data-session-empty="false"]
+  > .gradient-blur-background {
+  opacity: 0;
+}
+
+.chat-pane-background[data-session-empty="false"] > .gradient-blur-background {
+  transition-duration: 600ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-background > .gradient-blur-background {
+    transition-duration: 0ms;
+  }
 }
 
 .transcript-turn {
@@ -346,7 +513,10 @@ html.chat-background-empty-only
   background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
 }
 
-.agent-transcript [data-transcript-search-current="true"] .user-message-bubble pre.line-clamp-4 {
+.agent-transcript
+  [data-transcript-search-current="true"]
+  .user-message-bubble
+  pre.line-clamp-4 {
   display: block;
   overflow: visible;
   -webkit-line-clamp: unset;
@@ -461,8 +631,7 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
 }
 
 /* While a sent prompt rises into place, the rest of its turn waits for it. */
-.transcript-turn[data-prompt-rise="rising"]
-  > :not(:has([data-prompt-anchor])) {
+.transcript-turn[data-prompt-rise="rising"] > :not(:has([data-prompt-anchor])) {
   opacity: 0;
 }
 
