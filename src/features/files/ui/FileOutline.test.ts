@@ -21,6 +21,20 @@ vi.mock("@tauri-apps/api/core", async (original) => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
   invoke,
 }));
+// Resolve the language synchronously so the outline does not wait on a dynamic
+// import, which is slow and flaky under CI load.
+vi.mock("../editor/editorChrome", async (original) => {
+  const actual =
+    await original<typeof import("../editor/editorChrome")>();
+  const { javascript } = await import("@codemirror/lang-javascript");
+  return {
+    ...actual,
+    languageForPath: async (path: string) =>
+      path.endsWith(".ts") || path.endsWith(".tsx")
+        ? javascript({ typescript: true })
+        : null,
+  };
+});
 
 const SOURCE = [
   "function alpha() {",
