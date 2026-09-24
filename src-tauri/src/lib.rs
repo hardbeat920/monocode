@@ -12,6 +12,7 @@ mod fs;
 mod gitlab;
 mod harness;
 mod inbox_media;
+mod jira;
 mod linear;
 mod link_preview;
 #[cfg(target_os = "macos")]
@@ -332,6 +333,13 @@ pub fn run() {
             linear::linear_issue_details,
             linear::linear_issue_thread,
             linear::linear_issue_comment,
+            jira::jira_status,
+            jira::jira_set_config,
+            jira::jira_list_projects,
+            jira::jira_list_issues,
+            jira::jira_issue_details,
+            jira::jira_issue_thread,
+            jira::jira_issue_comment,
             link_preview::fetch_link_preview,
             fs::git_branches,
             fs::git_checkout,

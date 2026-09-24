@@ -278,7 +278,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.trigger_kind.as_str(),
-        "time" | "github" | "linear" | "gitlab" | "azuredevops"
+        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -317,7 +317,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
 fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     if !matches!(
         trigger.kind.as_str(),
-        "time" | "github" | "linear" | "gitlab" | "azuredevops"
+        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -908,7 +908,7 @@ pub fn automations_claim_event(
     validate_event_key(&claim.event_key)?;
     if !matches!(
         claim.event_kind.as_str(),
-        "github" | "linear" | "gitlab" | "azuredevops"
+        "github" | "linear" | "jira" | "gitlab" | "azuredevops"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -1243,9 +1243,24 @@ mod tests {
     fn accepts_inbox_event_keys() {
         assert!(validate_event_key("github:pr:acme/web:12").is_ok());
         assert!(validate_event_key("linear:issue:eng-12").is_ok());
+        assert!(validate_event_key("jira:issue:10042").is_ok());
         assert!(validate_event_key("azuredevops:pr:acme/web:12").is_ok());
         assert!(validate_event_key("").is_err());
         assert!(validate_event_key("github:pr:acme web:12").is_err());
+    }
+
+    #[test]
+    fn accepts_jira_triggers() {
+        let trigger = trigger_from_fields(
+            "jira-trigger",
+            "jira",
+            "issue_created",
+            "weekdays",
+            0,
+            "09:00",
+            1,
+        );
+        assert!(validate_trigger(&trigger).is_ok());
     }
 
     #[test]

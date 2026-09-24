@@ -49,6 +49,7 @@ import {
 } from "../../sessions/model/session";
 import { FilePane } from "../../files/ui/FilePane";
 import { SessionPane } from "../../sessions/ui/SessionPane";
+import type { TranscriptPool } from "../../sessions/ui/TranscriptPool";
 import type { SessionFolderTarget } from "../../sessions/model/sessionFolders";
 import type { Worktree } from "../../source-control/model/worktrees";
 
@@ -179,6 +180,7 @@ type Shared = {
   ) => void;
   onNewTerminal: (sessionId: string) => void;
   onTerminalMetaChange?: (fileId: string, patch: TerminalMetaPatch) => void;
+  transcriptPool?: TranscriptPool;
 };
 
 type Props = Shared & { layout: LayoutNode };
@@ -259,6 +261,7 @@ function PaneTreeComponent({
   onDetachPane,
   onNewTerminal,
   onTerminalMetaChange,
+  transcriptPool,
 }: Props) {
   const treeRef = useRef<HTMLDivElement>(null);
   const layoutRef = useRef(layout);
@@ -507,6 +510,7 @@ function PaneTreeComponent({
                 onBtwModelChange={onBtwModelChange}
                 onNewTerminal={onNewTerminal}
                 onPaneDragStart={onPaneDragStart}
+                transcriptPool={transcriptPool}
               />
             ) : null}
           </div>

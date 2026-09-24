@@ -145,6 +145,143 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
+  it.each([
+    { name: "fully streamed", chunks: ["Here is the ", "final answer."] },
+    { name: "partially streamed", chunks: ["Here is the "] },
+    { name: "completion only", chunks: [] },
+  ])("emits a $name final answer once after commentary", async ({ chunks }) => {
+    const { events, turn } = await startTurn("codex-live");
+    const commentary = "I'll inspect the workspace first.\n\n";
+    const answer = "Here is the final answer.";
+    notify("item/agentMessage/delta", {
+      itemId: "commentary",
+      delta: commentary,
+    });
+    notify("item/completed", {
+      item: { id: "commentary", type: "agentMessage", text: commentary },
+    });
+    for (const delta of chunks) {
+      notify("item/agentMessage/delta", { itemId: "final", delta });
+    }
+    // A repeated completion must also be harmless.
+    for (let i = 0; i < 2; i++) {
+      notify("item/completed", {
+        item: { id: "final", type: "agentMessage", text: answer },
+      });
+    }
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    expect(
+      events
+        .filter((event) => event.type === "message.delta")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe(commentary + answer);
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/repo"),
+    );
+    expect(session.blocks).toMatchObject([
+      { role: "assistant", text: commentary + answer, streaming: false },
+    ]);
+  });
+
+  it("keeps completion history for separate items and preserves repeated tokens", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    const complete = (id: string, text: string) =>
+      notify("item/completed", {
+        item: { id, type: "agentMessage", text },
+      });
+    complete("first", "Earlier commentary.\n\n");
+    for (const delta of ["very ", "very ", "good."]) {
+      notify("item/agentMessage/delta", { itemId: "second", delta });
+    }
+    complete("first", "Earlier commentary.\n\n");
+    complete("second", "very very good.");
+    // The same text in a different item is real new output.
+    complete("third", "Earlier commentary.\n\n");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    expect(
+      events
+        .filter((event) => event.type === "message.delta")
+        .map((event) => event.text),
+    ).toEqual([
+      "Earlier commentary.\n\n",
+      "very ",
+      "very ",
+      "good.",
+      "Earlier commentary.\n\n",
+    ]);
+  });
+
+  it("deduplicates reasoning completions per item", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    for (const [itemId, text] of [
+      ["reason_1", "First thought."],
+      ["reason_2", "Next thought."],
+    ]) {
+      notify("item/reasoning/summaryTextDelta", {
+        itemId,
+        summaryIndex: 0,
+        delta: text,
+      });
+      notify("item/completed", {
+        item: {
+          id: itemId,
+          type: "reasoning",
+          summary: [{ type: "summary_text", text }],
+        },
+      });
+    }
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    expect(
+      events
+        .filter((event) => event.type === "reasoning.delta")
+        .map((event) => event.text),
+    ).toEqual(["First thought.", "Next thought."]);
+  });
+
+  it("resets text tracking between turns when an item id is reused", async () => {
+    const itemId = "reused_item";
+    const { events, turn } = await startTurn("codex-live");
+    const text = "The answer.";
+    const complete = () =>
+      notify("item/completed", {
+        item: { id: itemId, type: "agentMessage", text },
+      });
+    notify("item/agentMessage/delta", { itemId, delta: text });
+    complete();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    const nextTurn = sendCodexTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      text: "Repeat the answer",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().filter((m) => m.method === "turn/start").length === 2,
+      "next turn",
+    );
+    const request = parse().filter((m) => m.method === "turn/start")[1];
+    reply(request.id as number, { turn: { id: "turn_2" } });
+    notify("turn/started", { turn: { id: "turn_2" } });
+    complete();
+    notify("turn/completed", { turn: { id: "turn_2", status: "completed" } });
+    await nextTurn;
+    expect(
+      events
+        .filter((event) => event.type === "message.delta")
+        .map((event) => event.text),
+    ).toEqual([text, text]);
+  });
+
   it("keeps retries and HTTP fallback out of a successful turn's transcript", async () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
     const { events, turn } = await startTurn("codex-live");

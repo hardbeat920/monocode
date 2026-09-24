@@ -111,6 +111,84 @@ afterEach(async () => {
   __claudeTestReset();
 });
 
+describe("claude streamed tool inputs", () => {
+  it("replaces an empty Shell row with the complete assistant tool input", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_shell",
+          name: "Bash",
+          input: {},
+        },
+      },
+    });
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '{"command":"git status',
+        },
+      },
+    });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_shell",
+            name: "Bash",
+            input: {
+              command: "git status --short",
+              description: "Check changes",
+            },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_shell", content: "clean" },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool.updated",
+        callId: "toolu_shell",
+        title: "git status --short",
+        status: "pending",
+      }),
+    );
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const tool = session.blocks.find(
+      (block) => block.tool?.callId === "toolu_shell",
+    );
+    expect(tool?.text).toBe("git status --short");
+    expect(tool?.tool?.status).toBe("completed");
+  });
+});
+
 describe("claude model switching", () => {
   it("restarts a named account with the new model while resuming the provider conversation", async () => {
     const first = await startTurn("s1", {

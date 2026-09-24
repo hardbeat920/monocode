@@ -403,6 +403,10 @@ import {
   type SessionSummary,
 } from "../features/sessions/data/sessionStore";
 import { rememberLoadedSession } from "../features/sessions/data/sessionCache";
+import {
+  TranscriptPool,
+  TranscriptPoolOutlet,
+} from "../features/sessions/ui/TranscriptPool";
 import { syncDockBadge } from "../features/notifications/model/dockBadge";
 import { liveAgentsFromSessions } from "../features/sessions/model/liveAgents";
 import { hiddenApprovalNotices } from "../features/notifications/model/approvalToast";
@@ -503,14 +507,8 @@ import {
 } from "../features/inbox/model/linkedWorkItemActivity";
 import type { LinkedSessionUpdate } from "../features/inbox/model/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
-import {
-  linearIssueDetails,
-  peekLinearIssueDetails,
-} from "../features/inbox/model/linear";
-import {
-  gitlabWorkItemDetails,
-  peekGitlabWorkItemDetails,
-} from "../features/inbox/model/gitlab";
+import { inboxTrackerDescription } from "../features/inbox/model/inboxContext";
+import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "../features/inbox/model/gitlab";
 import {
   azureDevOpsWorkItemDetails,
   peekAzureDevOpsWorkItemDetails,
@@ -575,6 +573,9 @@ import {
   setQuitWorkspace,
   type ResumedWorkspace,
 } from "./model/appLifecycle";
+
+/** How long a hidden idle session stays attached after it leaves every tab. */
+const SESSION_DETACH_DELAY_MS = 250;
 
 type LinkedWorkItemPanelState = {
   item: LinkedWorkItem;
@@ -1071,6 +1072,7 @@ export default function App({
   const sessionLoadEpochs = useRef(new Map<string, number>());
   const openingSessionIds = useRef(new Set<string>());
   const activeSessionPrefetch = useRef<Promise<Session | null> | null>(null);
+  const [transcriptPool] = useState(() => new TranscriptPool());
   // Tokens arrive many times per frame; apply them once so React/markdown aren't
   // recomputed for every delta.
   const harnessQueued = useRef(new Map<string, HarnessEvent[]>());
@@ -1658,6 +1660,9 @@ export default function App({
     )
       return;
     const fingerprint = persistFingerprint(session);
+    // Leaving a session flushes it. An unchanged one would still rewrite and
+    // re-diff its whole transcript under the store lock, stalling the next load.
+    if (lastPersisted.current.get(session.id) === fingerprint) return;
     void upsertSession(session)
       .then((summary) => {
         if (!summary) return;
@@ -1819,8 +1824,16 @@ export default function App({
   // Tabs are views. Hidden idle sessions drop their child. A visible session
   // keeps its child for a few minutes after a turn so follow-ups stay instant,
   // then parks it and resumes on the next prompt.
-  useEffect(() => {
-    const visibleIds = openSessionIds(tabs);
+  // Dropping a session re-renders the whole app, so it waits until a switch
+  // has painted, and a burst of switches pays for it once.
+  const detachInputs = useRef({ orchestrationRuns, liveAgentsEnabled });
+  detachInputs.current = { orchestrationRuns, liveAgentsEnabled };
+  const detachTimer = useRef<number | null>(null);
+  const detachIdleSessions = useCallback(() => {
+    detachTimer.current = null;
+    const sessions = sessionsRef.current;
+    const { orchestrationRuns, liveAgentsEnabled } = detachInputs.current;
+    const visibleIds = openSessionIds(tabsRef.current);
     // Inbox owns these panes independently of project tabs. Keep their drafts
     // and attachments mounted when the panel closes or switches items.
     for (const session of sessions) {
@@ -1873,7 +1886,28 @@ export default function App({
           skipForgetSessionIds.current.has(session.id),
       ),
     );
-  }, [sessions, tabs, persistSession, liveAgentsEnabled, orchestrationRuns]);
+  }, [persistSession]);
+
+  useEffect(() => {
+    if (detachTimer.current != null) return;
+    detachTimer.current = window.setTimeout(
+      detachIdleSessions,
+      SESSION_DETACH_DELAY_MS,
+    );
+  }, [
+    sessions,
+    tabs,
+    liveAgentsEnabled,
+    orchestrationRuns,
+    detachIdleSessions,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (detachTimer.current != null) window.clearTimeout(detachTimer.current);
+    },
+    [],
+  );
 
   const activateTab = useCallback((id: string, paneId?: string) => {
     const tab = tabsRef.current.find((entry) => entry.id === id);
@@ -2035,7 +2069,7 @@ export default function App({
         const cwd =
           item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
         const ref =
-          item.provider === "linear"
+          item.provider === "linear" || item.provider === "jira"
             ? item.identifier?.trim() || `#${item.number}`
             : `#${item.number}`;
         const linkedWorkItem = linkedWorkItemFromInboxItem(item);
@@ -2052,24 +2086,7 @@ export default function App({
         setComposerFocused(true);
       };
 
-      if (item.provider !== "linear") {
-        start();
-        return;
-      }
-      if (!item.id) {
-        throw new Error("Missing Linear issue");
-      }
-      if (body !== undefined) {
-        start(body);
-        return;
-      }
-      const cached = peekLinearIssueDetails(item.id);
-      if (cached) {
-        start(cached.body);
-        return;
-      }
-      const details = await linearIssueDetails(item.id);
-      start(details.body);
+      start(await inboxTrackerDescription(item, body));
     },
     [
       active?.cwd,
@@ -3645,11 +3662,8 @@ export default function App({
               ? candidate
               : await invoke<string>("default_cwd");
           const description =
-            item.provider === "linear" && item.id
-              ? (
-                  peekLinearIssueDetails(item.id) ??
-                  (await linearIssueDetails(item.id))
-                ).body
+            item.provider === "linear" || item.provider === "jira"
+              ? await inboxTrackerDescription(item)
               : item.provider === "gitlab" &&
                   (item.kind === "issue" || item.kind === "pr")
                 ? (
@@ -8809,13 +8823,24 @@ export default function App({
         delta,
       );
       if (!next || next === current.id) return;
+      // Stepping gives no hover to warm the transcript, so load the one a
+      // further step away once this switch has its own session.
+      const prefetchAhead = () => {
+        const ahead = adjacentItemId(
+          sessionNavigationIdsRef.current,
+          next,
+          delta,
+        );
+        if (ahead && ahead !== current.id) onPrefetchHistorySession(ahead);
+      };
       if (!inCurrentTab) {
-        void onSelectHistorySession(next);
+        void onSelectHistorySession(next).then(prefetchAhead);
         return;
       }
       const activeTabId = activeWorkspace.id;
       const focusedId = current.id;
       void ensureOpenSession(next).then((session) => {
+        prefetchAhead();
         if (!session || session.inboxAsk) return;
         if (activeTabIdRef.current !== activeTabId) return;
         const currentTab = tabsRef.current.find((tab) => tab.id === activeTabId);
@@ -8828,7 +8853,12 @@ export default function App({
         if (linkedUpdate) revealLinkedSessionUpdate(next, linkedUpdate);
       });
     },
-    [ensureOpenSession, onSelectHistorySession, revealLinkedSessionUpdate],
+    [
+      ensureOpenSession,
+      onPrefetchHistorySession,
+      onSelectHistorySession,
+      revealLinkedSessionUpdate,
+    ],
   );
 
   const onNavigateProjectList = useCallback(
@@ -9599,6 +9629,7 @@ export default function App({
                                 onReorderFiles={onReorderFiles}
                                 onFileDirtyChange={onFileDirtyChange}
                                 onFileErrorCountChange={onFileErrorCountChange}
+                                transcriptPool={transcriptPool}
                                 onRatio={(splitId, index, ratio) =>
                                   onRatio(tab.id, splitId, index, ratio)
                                 }
@@ -9836,6 +9867,7 @@ export default function App({
             />
           ) : null}
         </div>
+        <TranscriptPoolOutlet pool={transcriptPool} />
       </OrchestrationWorkers.Provider>
     </OrchestrationActions.Provider>
   );

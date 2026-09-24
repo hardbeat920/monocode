@@ -704,7 +704,33 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   }
 
   for (const use of assistantToolUses(rec)) {
-    if (live.toolsById.has(use.id)) continue;
+    const streamed = live.toolsById.get(use.id);
+    if (streamed) {
+      // content_block_start often has an empty input. The input JSON delta may
+      // never form a parseable object before the complete assistant snapshot.
+      // Reconcile that snapshot instead of leaving the tool labelled "Shell".
+      if (JSON.stringify(streamed.input) !== JSON.stringify(use.input)) {
+        streamed.input = use.input;
+        streamed.title = toolTitle(use.name, use.input);
+        live.onEvent({
+          type: "tool.updated",
+          callId: streamed.id,
+          title: streamed.title,
+          kind: toolKindFromName(streamed.name),
+          ...(isAgentToolName(streamed.name) && stringField(use.input, "model")
+            ? { agentModel: stringField(use.input, "model") }
+            : {}),
+          status: isAgentToolName(streamed.name) ? "in_progress" : "pending",
+          preview: previewFromTool(streamed.name, use.input),
+        });
+        emitTaskListIfNeeded(live, streamed.name, use.input);
+      }
+      if (use.name === "ExitPlanMode") {
+        const plan = extractExitPlanModePlan(use.input);
+        if (plan) live.onEvent({ type: "plan", text: plan });
+      }
+      continue;
+    }
     const tool: InFlightTool = {
       id: use.id,
       name: use.name,

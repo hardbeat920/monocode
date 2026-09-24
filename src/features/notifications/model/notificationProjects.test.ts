@@ -10,6 +10,22 @@ import {
 
 beforeEach(() => localStorage.clear());
 
+it("groups Jira notification preferences by site and stable project ID", () => {
+  const item = {
+    provider: "jira" as const, repo: "ENG", teamId: "10000",
+    teamName: "Engineering", url: "https://acme.atlassian.net/browse/ENG-42",
+  };
+  const project = inboxNotificationProject(item);
+  expect(project).toEqual({
+    id: "jira:acme.atlassian.net:project:10000", name: "Engineering",
+    detail: "Jira · acme.atlassian.net", kind: "jira", paths: [],
+  });
+  expect(inboxNotificationProject({ ...item, repo: "RENAMED", url: "https://acme.atlassian.net/browse/RENAMED-1" }).id).toBe(project.id);
+  expect(inboxNotificationProject({ ...item, url: "https://other.atlassian.net/browse/ENG-42" }).id).not.toBe(project.id);
+  rememberNotificationProjects([project]);
+  expect(loadNotificationProjects()).toContainEqual(project);
+});
+
 it("derives local notification identity immediately from the normalized path", () => {
   expect(knownNotificationProject("C:/Work/App")).toEqual({
     id: "local:c:/work/app",

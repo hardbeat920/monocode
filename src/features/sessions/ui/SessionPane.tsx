@@ -47,6 +47,7 @@ import {
 import { supportsBtwHarness } from "../model/btw";
 import type { BtwOpenRequest } from "./BtwPopover";
 import { AgentTranscript } from "./AgentTranscript";
+import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
 import { TranscriptFind } from "./TranscriptFind";
 import {
   clearTranscriptJump,
@@ -201,6 +202,8 @@ type Props = {
   onNewTerminal: (sessionId: string) => void;
 
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
+  /** Keeps this transcript mounted after the pane closes. */
+  transcriptPool?: TranscriptPool;
 };
 
 export const SessionPane = memo(function SessionPane({
@@ -258,6 +261,7 @@ export const SessionPane = memo(function SessionPane({
   onBtwModelChange,
   onNewTerminal,
   onPaneDragStart,
+  transcriptPool,
 }: Props) {
   const orchestrationRuns = useSyncExternalStore(
     orchestrator.subscribe,
@@ -327,6 +331,12 @@ export const SessionPane = memo(function SessionPane({
   );
   const jumpToBottomRef = useRef<(() => void) | null>(null);
   const transcriptScope = useRef<HTMLDivElement>(null);
+  const [transcriptScroller, setTranscriptScroller] =
+    useState<HTMLDivElement | null>(null);
+  const focusPane = useCallback(
+    () => onFocus(session.id),
+    [onFocus, session.id],
+  );
   const quoteRequestId = useRef(0);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [editingLastTurn, setEditingLastTurn] = useState(false);
@@ -734,148 +744,156 @@ export const SessionPane = memo(function SessionPane({
             )
           ) : (
             <>
-              <AgentTranscript
-                blocks={session.blocks}
-                busy={!!session.busy}
-                visible={visible}
-                cwd={workCwd}
-                harness={session.harness}
-                model={session.model}
-                modelSettings={session.modelSettings}
-                pendingQuestion={!!session.pendingQuestion}
-                onApproval={session.worktreeRemoved ? undefined : approve}
-                onAddToChat={addSelectionToChat}
-                onSaveNote={notesEnabled ? saveNote : undefined}
-                onSendDraft={
-                  draftBlock
-                    ? (block) =>
-                        onSubmit(
-                          session.id,
-                          block.text,
-                          block.attachments ?? [],
-                          { draftBlockId: block.id },
-                        )
-                    : undefined
-                }
-                onRemoveDraft={
-                  draftBlock
-                    ? (block) => onRemoveDraft(session.id, block.id)
-                    : undefined
-                }
-                onSaveSelectionNote={
-                  notesEnabled ? saveSelectionNote : undefined
-                }
-                onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
-                onOpenPlan={openPlan}
-                onBuildPlan={session.worktreeRemoved ? undefined : buildPlan}
-                onSecondOpinion={
-                  !session.inboxAsk &&
-                  !session.worktreeRemoved &&
-                  onSecondOpinion
-                    ? (target, turn) =>
-                        onSecondOpinion(session.id, target, turn)
-                    : undefined
-                }
-                onHandoff={
-                  !session.inboxAsk && !session.worktreeRemoved && onHandoff
-                    ? (target, turn) => onHandoff(session.id, target, turn)
-                    : undefined
-                }
-                onBtwSubmit={
-                  !managed &&
-                  supportsBtwHarness(session.harness) &&
-                  !session.inboxAsk &&
-                  !session.worktreeRemoved &&
-                  onBtwSubmit
-                    ? (threadId, messageId, text, turn, model, modelSettings) =>
-                        onBtwSubmit(
-                          session.id,
-                          turn,
-                          threadId,
-                          messageId,
-                          text,
-                          model,
-                          modelSettings,
-                        )
-                    : undefined
-                }
-                onBtwRetry={
-                  !managed &&
-                  supportsBtwHarness(session.harness) &&
-                  !session.inboxAsk &&
-                  !session.worktreeRemoved &&
-                  onBtwRetry
-                    ? (threadId, turn) => onBtwRetry(session.id, turn, threadId)
-                    : undefined
-                }
-                onBtwDelete={
-                  !managed &&
-                  supportsBtwHarness(session.harness) &&
-                  !session.inboxAsk &&
-                  !session.worktreeRemoved &&
-                  onBtwDelete
-                    ? (threadId, turn) =>
-                        onBtwDelete(session.id, turn, threadId)
-                    : undefined
-                }
-                onBtwModelChange={
-                  !managed &&
-                  supportsBtwHarness(session.harness) &&
-                  !session.inboxAsk &&
-                  !session.worktreeRemoved &&
-                  onBtwModelChange
-                    ? (threadId, model, modelSettings, turn) =>
-                        onBtwModelChange(
-                          session.id,
-                          turn,
-                          threadId,
-                          model,
-                          modelSettings,
-                        )
-                    : undefined
-                }
-                btwOpenRequest={btwOpenRequest}
-                onBtwOpenRequestHandled={onBtwOpenRequestHandled}
-                onJumpToBottomChange={setShowJumpToBottom}
-                onJumpToBottomReady={onJumpToBottomReady}
-                onRevealReady={onRevealReady}
-                onNavigateReady={onNavigateReady}
-                editingLastTurn={editingLastTurn}
-                onEditLastTurn={
-                  editLastTurnSupported
-                    ? () => {
-                        onFocus(session.id);
-                        recallLastTurnRef.current?.();
-                      }
-                    : undefined
-                }
-                latestTurnAccessory={
-                  session.inboxAsk ||
-                  session.worktreeRemoved ||
-                  draftBlock ? undefined : (
-                    <SessionReview
-                      sessionId={session.id}
-                      cwd={workCwd}
-                      enabled={visible}
-                      busy={!!session.busy}
-                      undoLocked={
-                        reviewUndoLocked ||
-                        orchestrationRuns.some(
-                          (run) =>
-                            (run.status === "active" ||
-                              run.status === "paused") &&
-                            (run.leadId === session.id ||
-                              run.tasks.some(
-                                (task) => task.sessionId === session.id,
-                              )),
-                        )
-                      }
-                      onOpenDiff={onOpenDiff}
-                    />
-                  )
-                }
-              />
+              <PooledTranscript
+                pool={transcriptPool}
+                sessionId={session.id}
+                onMouseDown={focusPane}
+              >
+                <AgentTranscript
+                  blocks={session.blocks}
+                  busy={!!session.busy}
+                  visible={visible}
+                  cwd={workCwd}
+                  harness={session.harness}
+                  model={session.model}
+                  modelSettings={session.modelSettings}
+                  pendingQuestion={!!session.pendingQuestion}
+                  onApproval={session.worktreeRemoved ? undefined : approve}
+                  onAddToChat={addSelectionToChat}
+                  onSaveNote={notesEnabled ? saveNote : undefined}
+                  onSendDraft={
+                    draftBlock
+                      ? (block) =>
+                          onSubmit(
+                            session.id,
+                            block.text,
+                            block.attachments ?? [],
+                            { draftBlockId: block.id },
+                          )
+                      : undefined
+                  }
+                  onRemoveDraft={
+                    draftBlock
+                      ? (block) => onRemoveDraft(session.id, block.id)
+                      : undefined
+                  }
+                  onSaveSelectionNote={
+                    notesEnabled ? saveSelectionNote : undefined
+                  }
+                  onOpenFile={onOpenFile}
+                  onOpenDiff={onOpenDiff}
+                  onOpenPlan={openPlan}
+                  onBuildPlan={session.worktreeRemoved ? undefined : buildPlan}
+                  onSecondOpinion={
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onSecondOpinion
+                      ? (target, turn) =>
+                          onSecondOpinion(session.id, target, turn)
+                      : undefined
+                  }
+                  onHandoff={
+                    !session.inboxAsk && !session.worktreeRemoved && onHandoff
+                      ? (target, turn) => onHandoff(session.id, target, turn)
+                      : undefined
+                  }
+                  onBtwSubmit={
+                    !managed &&
+                    supportsBtwHarness(session.harness) &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwSubmit
+                      ? (threadId, messageId, text, turn, model, modelSettings) =>
+                          onBtwSubmit(
+                            session.id,
+                            turn,
+                            threadId,
+                            messageId,
+                            text,
+                            model,
+                            modelSettings,
+                          )
+                      : undefined
+                  }
+                  onBtwRetry={
+                    !managed &&
+                    supportsBtwHarness(session.harness) &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwRetry
+                      ? (threadId, turn) =>
+                          onBtwRetry(session.id, turn, threadId)
+                      : undefined
+                  }
+                  onBtwDelete={
+                    !managed &&
+                    supportsBtwHarness(session.harness) &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwDelete
+                      ? (threadId, turn) =>
+                          onBtwDelete(session.id, turn, threadId)
+                      : undefined
+                  }
+                  onBtwModelChange={
+                    !managed &&
+                    supportsBtwHarness(session.harness) &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwModelChange
+                      ? (threadId, model, modelSettings, turn) =>
+                          onBtwModelChange(
+                            session.id,
+                            turn,
+                            threadId,
+                            model,
+                            modelSettings,
+                          )
+                      : undefined
+                  }
+                  btwOpenRequest={btwOpenRequest}
+                  onBtwOpenRequestHandled={onBtwOpenRequestHandled}
+                  onJumpToBottomChange={setShowJumpToBottom}
+                  onJumpToBottomReady={onJumpToBottomReady}
+                  onRevealReady={onRevealReady}
+                  onNavigateReady={onNavigateReady}
+                  onScrollerChange={setTranscriptScroller}
+                  editingLastTurn={editingLastTurn}
+                  onEditLastTurn={
+                    editLastTurnSupported
+                      ? () => {
+                          onFocus(session.id);
+                          recallLastTurnRef.current?.();
+                        }
+                      : undefined
+                  }
+                  latestTurnAccessory={
+                    session.inboxAsk ||
+                    session.worktreeRemoved ||
+                    draftBlock ? undefined : (
+                      <SessionReview
+                        sessionId={session.id}
+                        cwd={workCwd}
+                        enabled={visible}
+                        busy={!!session.busy}
+                        undoLocked={
+                          reviewUndoLocked ||
+                          orchestrationRuns.some(
+                            (run) =>
+                              (run.status === "active" ||
+                                run.status === "paused") &&
+                              (run.leadId === session.id ||
+                                run.tasks.some(
+                                  (task) => task.sessionId === session.id,
+                                )),
+                          )
+                        }
+                        onOpenDiff={onOpenDiff}
+                      />
+                    )
+                  }
+                />
+              </PooledTranscript>
               {!session.inboxAsk ? (
                 <TranscriptFind
                   blocks={session.blocks}
@@ -893,6 +911,7 @@ export const SessionPane = memo(function SessionPane({
               <PromptOutline
                 blocks={session.blocks}
                 scope={transcriptScope}
+                scroller={transcriptScroller}
                 visible={visible}
                 revealBlock={revealBlock}
               />

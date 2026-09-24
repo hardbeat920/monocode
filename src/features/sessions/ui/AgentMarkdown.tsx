@@ -45,6 +45,7 @@ import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMe
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
+import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -90,6 +91,17 @@ const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
       imageBlockPolicy: "remove" as const,
     },
   ],
+];
+
+// A reply that streams renders its words as spans that fade in as they land.
+const FADING_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
+  ...MARKDOWN_REHYPE_PLUGINS,
+  rehypeWordFade,
+];
+
+const FADING_INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
+  ...INBOX_MEDIA_REHYPE_PLUGINS,
+  rehypeWordFade,
 ];
 
 type FileLinkMenu = {
@@ -483,6 +495,19 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
+  const paced = usePacedText(text, !!streaming);
+  const fading = useWordFading(!!streaming || paced.revealing);
+  // Once a reply has streamed its words stay spans: dropping them would swap
+  // every word's element and could catch the last few mid-fade.
+  const streamed = useRef(!!streaming);
+  if (streaming) streamed.current = true;
+  const rehypePlugins = streamed.current
+    ? remoteMedia
+      ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
+      : FADING_MARKDOWN_REHYPE_PLUGINS
+    : remoteMedia
+      ? INBOX_MEDIA_REHYPE_PLUGINS
+      : MARKDOWN_REHYPE_PLUGINS;
 
   const onFileMenuPick = (id: string) => {
     if (!fileMenu) return;
@@ -526,18 +551,16 @@ export const AgentMarkdown = memo(function AgentMarkdown({
       <FileOpenContext.Provider value={fileOpen}>
         <>
           <Streamdown
-            className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${className ?? ""}`}
+            className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
             components={MARKDOWN_COMPONENTS}
             controls={false}
             dir="auto"
-            isAnimating={!!streaming}
+            isAnimating={!!streaming || paced.revealing}
             plugins={MARKDOWN_PLUGINS}
             remarkPlugins={remarkPlugins}
-            rehypePlugins={
-              remoteMedia ? INBOX_MEDIA_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS
-            }
+            rehypePlugins={rehypePlugins}
           >
-            {text}
+            {paced.text}
           </Streamdown>
           {fileMenu ? (
             <ExplorerMenu
