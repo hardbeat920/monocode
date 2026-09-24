@@ -100,6 +100,7 @@ import {
 } from "../editor/editorOutline";
 import {
   OUTLINE_WIDTH_DEFAULT,
+  OUTLINE_WIDTH_MAX,
   OUTLINE_WIDTH_MIN,
   loadOutlineView,
   saveOutlineView,
@@ -538,6 +539,9 @@ function CodeMirrorEditor({
   onDocChange?: (content: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  // The pane holding the editor and the docked outline. Its width stays put as
+  // the outline grows, so it is the stable basis for the resize maximum.
+  const paneRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const savedDocumentRef = useRef<Text | null>(null);
   const dirtyRef = useRef(false);
@@ -623,11 +627,14 @@ function CodeMirrorEditor({
   const outlineResize = useDragResize({
     direction: "left",
     min: OUTLINE_WIDTH_MIN,
-    max: () =>
-      Math.max(
-        OUTLINE_WIDTH_MIN,
-        Math.round((hostRef.current?.clientWidth ?? 640) * 0.6),
-      ),
+    max: () => {
+      const pane = paneRef.current ?? hostRef.current;
+      const width = pane?.clientWidth ?? 640;
+      return Math.min(
+        OUTLINE_WIDTH_MAX,
+        Math.max(OUTLINE_WIDTH_MIN, Math.round(width * 0.6)),
+      );
+    },
     defaultWidth: OUTLINE_WIDTH_DEFAULT,
     initial: outlineView.width,
     onCommit: (width) => saveOutlineView({ ...outlineViewRef.current, width }),
@@ -1040,7 +1047,7 @@ function CodeMirrorEditor({
           outlineCount={outlineItems.length}
           onToggleOutline={toggleOutline}
         />
-        <div className="flex min-h-0 flex-1">
+        <div ref={paneRef} className="flex min-h-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {showDiff ? (
               <DiffChunkNav
