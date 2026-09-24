@@ -105,6 +105,14 @@ export {
   respondAntigravityApproval,
   bindAntigravitySession,
 } from "./providers/antigravity/antigravity";
+export {
+  sendMuseTurn,
+  cancelMuseTurn,
+  respondMuseApproval,
+  stopMuseSession,
+  forgetMuseSession,
+  bindMuseSession,
+} from "./providers/muse/muse";
 export { generateCursorSessionTitle } from "./providers/cursor/cursorTitle";
 export { generateCodexSessionTitle } from "./providers/codex/codexTitle";
 export { generateOpenCodeSessionTitle } from "./providers/opencode/opencodeTitle";
@@ -145,6 +153,7 @@ export { refreshPiCatalog, refreshOmpCatalog } from "./providers/pi/piCatalog";
 export { refreshFxCatalog } from "./providers/fx/fxCatalog";
 export { refreshGrokCatalog } from "./providers/grok/grokCatalog";
 export { refreshHermesCatalog } from "./providers/hermes/hermesCatalog";
+export { refreshMuseCatalog } from "./providers/muse/museCatalog";
 export { refreshAntigravityCatalog } from "./providers/antigravity/antigravityCatalog";
 export { registerBuiltinHarnesses } from "./core/register";
 export {

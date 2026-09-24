@@ -297,10 +297,10 @@ pub fn control_attach_worker(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if !inner
+    if inner
         .grants
         .get(&lead_id)
-        .is_some_and(|grant| grant.window == window.label())
+        .is_none_or(|grant| grant.window != window.label())
     {
         return Err("Lead connection is inactive".into());
     }

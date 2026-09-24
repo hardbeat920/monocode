@@ -62,4 +62,19 @@ describe("hugeicons imports", () => {
     expect(html).toContain("items-center justify-center");
     expect(html).toContain("size-[72%]");
   });
+
+  it("renders the Meta artwork as a plain image", () => {
+    const html = renderToStaticMarkup(
+      createElement(HarnessIcon, {
+        harness: "muse",
+        className: "size-4 shrink-0",
+      }),
+    );
+    expect(html).toContain("<img");
+    expect(html).toContain("muse.svg");
+    // The committed file must stay the vendor gradient mark, not a placeholder.
+    const artwork = readFileSync(join(SRC, "assets/providers/muse.svg"), "utf8");
+    expect(artwork).toContain("linearGradient");
+    expect(artwork).toContain('viewBox="0 0 32 32"');
+  });
 });
