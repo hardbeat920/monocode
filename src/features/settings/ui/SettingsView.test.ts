@@ -15,6 +15,10 @@ import {
   providerAccounts,
   saveProviderAccount,
 } from "../../providers/model/providerAccounts";
+import {
+  HARNESSES,
+  HARNESS_TITLE,
+} from "../../sessions/model/session";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -91,6 +95,7 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   onSelectSection = vi.fn();
+  vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
@@ -235,6 +240,157 @@ describe("settings pages", () => {
       accountId: "account-work",
     });
     expect(providerAccounts("codex")).toHaveLength(1);
+  });
+
+  it("validates and stores Codex and OpenCode binary overrides", async () => {
+    let failAutoCodex = false;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const payload = args as { binaryPath?: string } | undefined;
+      if (command === "harness_resolve_configured") {
+        return { path: payload?.binaryPath };
+      }
+      if (command === "harness_resolve_codex") {
+        if (failAutoCodex && payload?.binaryPath == null) {
+          throw new Error("Codex auto-detection failed");
+        }
+        return { path: payload?.binaryPath ?? "/auto/codex" };
+      }
+      if (command === "harness_resolve_opencode") {
+        return { path: payload?.binaryPath ?? "/auto/opencode" };
+      }
+      if (command === "harness_exec") {
+        if (payload?.binaryPath === "/bad/codex") {
+          throw new Error("Codex failed to start");
+        }
+        return payload?.binaryPath?.includes("opencode")
+          ? "opencode 1.18.32"
+          : "codex-cli 0.156.1";
+      }
+      return undefined;
+    });
+    await render("providers");
+
+    const details = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Show Codex CLI details"]',
+    )!;
+    await act(async () => details.click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Open Codex CLI location"]',
+        )!
+        .click(),
+    );
+    expect(invoke).toHaveBeenCalledWith("reveal_path", {
+      path: "/auto/codex",
+    });
+
+    const save = async (provider: "Codex" | "OpenCode", path: string) => {
+      const id = `${provider.toLowerCase()}-binary-path`;
+      if (!document.querySelector(`#${id}`)) {
+        if (!document.querySelector(`[aria-label="Edit ${provider} CLI path"]`)) {
+          await act(async () =>
+            container
+              .querySelector<HTMLButtonElement>(
+                `[aria-label="Show ${provider} CLI details"]`,
+              )!
+              .click(),
+          );
+        }
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(
+              `[aria-label="Edit ${provider} CLI path"]`,
+            )!
+            .click(),
+        );
+      }
+      const input = document.querySelector<HTMLInputElement>(`#${id}`)!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(input, path);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => input.closest("form")!.requestSubmit());
+    };
+
+    await save("Codex", "/opt/codex/bin/codex");
+    await save("OpenCode", "/opt/opencode/bin/opencode");
+    expect(
+      JSON.parse(
+        localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}",
+      ),
+    ).toEqual({
+      codex: "/opt/codex/bin/codex",
+      opencode: "/opt/opencode/bin/opencode",
+    });
+    await act(async () => details.click());
+    expect(document.body.textContent).toContain("/opt/codex/bin/codex");
+    expect(document.body.textContent).toContain("codex-cli 0.156.1");
+    expect(document.body.textContent).toContain("Restart required");
+    await act(async () => details.click());
+    const openCodeDetails = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Show OpenCode CLI details"]',
+    )!;
+    await act(async () => openCodeDetails.click());
+    expect(document.body.textContent).toContain("/opt/opencode/bin/opencode");
+    expect(document.body.textContent).toContain("opencode 1.18.32");
+    await act(async () => openCodeDetails.click());
+
+    await save("Codex", "/bad/codex");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Codex failed to start",
+    );
+    expect(container.textContent).not.toContain("/opt/codex/bin/codex");
+    expect(
+      JSON.parse(
+        localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}",
+      ).codex,
+    ).toBe("/opt/codex/bin/codex");
+
+    failAutoCodex = true;
+    await save("Codex", "");
+    expect(
+      JSON.parse(
+        localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}",
+      ).codex,
+    ).toBe("/opt/codex/bin/codex");
+
+    failAutoCodex = false;
+    await save("Codex", "");
+    expect(
+      JSON.parse(
+        localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}",
+      ).codex,
+    ).toBeUndefined();
+    await act(async () => details.click());
+    expect(document.body.textContent).toContain("/auto/codex");
+    expect(document.body.textContent).toContain("Auto-detected");
+  });
+
+  it("offers manual auto-detect retry when a CLI is missing", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "harness_resolve_codex") {
+        throw new Error("Codex CLI not found");
+      }
+      return undefined;
+    });
+    await render("providers");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Show Codex CLI details"]',
+        )!
+        .click(),
+    );
+    const retry = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Retry Codex auto-detect"]',
+    )!;
+    expect(retry).not.toBeNull();
+    await act(async () => retry.click());
+    expect(invoke).toHaveBeenCalledWith("harness_resolve_codex");
   });
 
   it("reopens, scrolls to, focuses and highlights the same project on a repeated notification settings request", async () => {
@@ -429,6 +585,17 @@ describe("settings pages", () => {
       expect(renderedSettingIds().sort()).toEqual(expected.sort());
     },
   );
+
+  it("shows path details for every Agent CLI", async () => {
+    await render("providers");
+    for (const harness of HARNESSES) {
+      expect(
+        container.querySelector(
+          `[aria-label="Show ${HARNESS_TITLE[harness]} CLI details"]`,
+        ),
+      ).not.toBeNull();
+    }
+  });
 
   it("only tags rows that search can find", async () => {
     for (const section of SETTINGS_SECTIONS.map((item) => item.id)) {
