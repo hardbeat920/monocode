@@ -14,9 +14,9 @@ import {
 } from "../../../shared/ui/icons";
 
 import { Popover } from "../../../shared/ui/Popover";
-import { Shimmer } from "../../../shared/ui/Shimmer";
 import { Composer } from "./Composer";
 import { AgentMarkdown } from "./AgentMarkdown";
+import { TurnResponseView } from "./AgentTranscript";
 import { HarnessIcon as ProviderIcon } from "./HarnessIcon";
 import { preferredModelSettings, resolveModel } from "../model/models";
 import {
@@ -56,6 +56,8 @@ type Props = {
     model: string,
     modelSettings: Record<string, string>,
   ) => void;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
 };
 
 function shortQuestion(thread: BtwThread): string {
@@ -101,6 +103,8 @@ export function BtwPopover({
   onRetry,
   onDelete,
   onModelChange,
+  onOpenFile,
+  onOpenDiff,
 }: Props) {
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
@@ -132,6 +136,14 @@ export function BtwPopover({
       ? [...messages, optimisticForThread]
       : messages;
   const running = persisted?.status === "running" || !!optimisticForThread;
+  const pendingBlocks = persisted?.pendingBlocks ?? [];
+  const activeUserMessageId = useMemo(() => {
+    for (let index = displayedMessages.length - 1; index >= 0; index -= 1) {
+      const message = displayedMessages[index];
+      if (message.role === "user") return message.id;
+    }
+    return openThreadId ?? "";
+  }, [displayedMessages, openThreadId]);
   const selectedModel = draftModel ?? persisted?.model ?? model;
   const selectedModelSettings = useMemo(() => {
     if (draftModelSettings) return draftModelSettings;
@@ -363,41 +375,47 @@ export function BtwPopover({
               </div>
             ) : (
               <div className="space-y-5">
-                {displayedMessages.map((message) => (
+                {displayedMessages.map((message, index) => (
                   <Fragment key={message.id}>
-                    <div
-                      className={
-                        message.role === "user"
-                          ? "user-message-bubble btw-message relative ml-auto w-fit max-w-[92%] rounded-full bg-content/10 px-3 py-2 font-sans text-content transition-[background-color] duration-200"
-                          : "btw-message btw-message-assistant max-w-[96%]"
-                      }
-                    >
-                      {messageMeta(message.role, harness)}
-                      <AgentMarkdown
-                        text={message.text}
+                    {message.role === "user" ? (
+                      <div className="user-message-bubble btw-message relative ml-auto w-fit max-w-[92%] rounded-full bg-content/10 px-3 py-2 font-sans text-content transition-[background-color] duration-200">
+                        <AgentMarkdown
+                          text={message.text}
+                          cwd={cwd}
+                          className="text-sm leading-5"
+                        />
+                      </div>
+                    ) : message.blocks?.length ? (
+                      <TurnResponseView
+                        blocks={message.blocks}
                         cwd={cwd}
-                        className={
-                          message.role === "user"
-                            ? "text-sm leading-5"
-                            : "mt-1.5 text-[13px] leading-5"
+                        userMessageId={
+                          displayedMessages[index - 1]?.id ?? message.id
                         }
+                        onOpenFile={onOpenFile}
+                        onOpenDiff={onOpenDiff}
                       />
-                    </div>
+                    ) : (
+                      <div className="btw-message btw-message-assistant max-w-[96%]">
+                        {messageMeta(message.role, harness)}
+                        <AgentMarkdown
+                          text={message.text}
+                          cwd={cwd}
+                          className="mt-1.5 text-[13px] leading-5"
+                        />
+                      </div>
+                    )}
                   </Fragment>
                 ))}
                 {running ? (
-                  <div className="btw-message btw-message-assistant max-w-[96%]">
-                    <div className="btw-message-meta">
-                      <ProviderIcon
-                        harness={harness}
-                        className="size-3.5 shrink-0"
-                      />
-                      <span>{HARNESS_LABEL[harness].toUpperCase()}</span>
-                    </div>
-                    <Shimmer duration={1.6}>
-                      Working through a separate thread…
-                    </Shimmer>
-                  </div>
+                  <TurnResponseView
+                    blocks={pendingBlocks}
+                    live
+                    cwd={cwd}
+                    userMessageId={activeUserMessageId}
+                    onOpenFile={onOpenFile}
+                    onOpenDiff={onOpenDiff}
+                  />
                 ) : null}
               </div>
             )}

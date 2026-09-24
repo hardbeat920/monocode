@@ -1006,6 +1006,8 @@ function AgentTranscriptComponent({
                   }
                   btwOpenRequest={isLastTurn ? btwOpenRequest : undefined}
                   onBtwOpenRequestHandled={onBtwOpenRequestHandled}
+                  onOpenFile={onOpenFile}
+                  onOpenDiff={onOpenDiff}
                 />
               ) : null}
             </div>
@@ -1023,6 +1025,114 @@ function AgentTranscriptComponent({
     </div>
   );
 }
+
+export type TurnResponseViewProps = {
+  blocks: Block[];
+  live?: boolean;
+  cwd?: string;
+  userMessageId: string;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+};
+
+/** Compact harness activity view reused by BTW side conversations. */
+function TurnResponseViewComponent({
+  blocks,
+  live = false,
+  cwd,
+  userMessageId,
+  onOpenFile,
+  onOpenDiff,
+}: TurnResponseViewProps) {
+  const transcriptLayout = useTranscriptLayout();
+  const turn = useMemo(
+    () => [{ id: userMessageId, role: "user" as const, text: "" }, ...blocks],
+    [blocks, userMessageId],
+  );
+  const settled = !live;
+  const items = useMemo(
+    () =>
+      groupTurnItems(
+        turn.filter((block) => !block.orchestration),
+        { settled },
+      ),
+    [turn, settled],
+  );
+  const initialThinkingAt = initialThinkingIndex(items);
+  const foldedAt = lastActivityIndex(items);
+  const workStillRunning = activityStillRunning(turn);
+  const answering =
+    foldedAt >= 0 &&
+    items
+      .slice(foldedAt + 1)
+      .some((item) => item.type === "block" && isProseBlock(item.block));
+
+  if (blocks.length === 0 && live) {
+    return <InitialThinking live />;
+  }
+  if (blocks.length === 0) return null;
+
+  return (
+    <div className="btw-turn-response min-w-0 font-mono text-[13px] leading-5">
+      {items.map((item, itemIndex) => {
+        if (item.type === "subagents") {
+          return (
+            <SubagentStack
+              key={item.blocks[0].id}
+              blocks={item.blocks}
+              cwd={cwd}
+              live={live}
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+          );
+        }
+        if (item.type === "activity") {
+          if (itemIndex === initialThinkingAt) {
+            return (
+              <InitialThinking
+                key={`thinking-${item.blocks[0].id}`}
+                live={live}
+              />
+            );
+          }
+          return (
+            <ActivityPhases
+              key={item.blocks[0].id}
+              blocks={item.blocks}
+              cwd={cwd}
+              done={
+                !live ||
+                itemIndex < foldedAt ||
+                (answering && !workStillRunning)
+              }
+              padded={false}
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+          );
+        }
+        if (item.type === "block") {
+          if (item.block.role === "user") return null;
+          return (
+            <TranscriptBlock
+              key={item.block.id}
+              block={item.block}
+              layout={transcriptLayout}
+              stickyIndex={0}
+              cwd={cwd}
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+export const TurnResponseView = memo(TurnResponseViewComponent);
 
 // Keep hidden panes' local state, and catch up with current props on activation.
 export const AgentTranscript = memo(
@@ -1095,6 +1205,8 @@ function TurnDuration({
   onBtwModelChange,
   btwOpenRequest,
   onBtwOpenRequestHandled,
+  onOpenFile,
+  onOpenDiff,
 }: {
   elapsedMs: number | null;
   metrics?: TurnMetrics;
@@ -1129,6 +1241,8 @@ function TurnDuration({
   ) => void;
   btwOpenRequest?: BtwOpenRequest | null;
   onBtwOpenRequestHandled?: (requestId: number) => void;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
 }) {
   const label = formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
@@ -1176,6 +1290,8 @@ function TurnDuration({
           onModelChange={onBtwModelChange}
           openRequest={btwOpenRequest}
           onOpenRequestHandled={onBtwOpenRequestHandled}
+          onOpenFile={onOpenFile}
+          onOpenDiff={onOpenDiff}
         />
       ) : null}
 

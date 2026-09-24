@@ -11,6 +11,7 @@ import type { NativeCommandProvider } from "./nativeCommands";
 import type {
   ApprovalDecision,
   CompactContextInput,
+  HarnessEvent,
   RewindLastTurnInput,
   RewindLastTurnResult,
   SendTurnInput,
@@ -36,6 +37,7 @@ export type TextPromptInput = {
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 };
 
 /**

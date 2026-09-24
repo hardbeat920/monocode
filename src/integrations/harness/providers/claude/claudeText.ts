@@ -7,17 +7,27 @@ import {
   watchChild,
   writeChild,
 } from "../../core/child";
+import { isAgentToolName } from "../../core/preview";
 import {
   assistantTextBlocks,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  inputJsonDeltaFromEvent,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
   parseJsonLine,
+  previewFromTool,
   resolveClaudeApiModelId,
+  streamDeltaFromEvent,
   stringField,
+  summarizeToolRequest,
+  toolKindFromName,
+  toolStartFromEvent,
+  toolTitle,
+  tryParseJsonRecord,
   turnStatusFromResult,
 } from "./claudeProtocol";
+import type { HarnessEvent } from "../../core/types";
 import { mergeStream } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-claude-text";
@@ -33,6 +43,14 @@ type TextSettings = {
   settings: Record<string, boolean>;
 };
 
+type InFlightTool = {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+  partialJson: string;
+  title: string;
+};
+
 type LiveText = {
   cwd: string;
   providerAccountId?: string;
@@ -45,6 +63,9 @@ type LiveText = {
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
   readyDone: (() => void) | null;
+  onEvent?: (event: HarnessEvent) => void;
+  toolsByIndex: Map<number, InFlightTool>;
+  toolsById: Map<string, InFlightTool>;
 };
 
 let live: LiveText | null = null;
@@ -106,6 +127,7 @@ export async function runClaudeTextPrompt(input: {
   modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
   turns = run.then(
@@ -122,6 +144,7 @@ async function promptOnLive(input: {
   modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   const model = pickTextModel(input.model);
   const settings = textSettings(model, input.modelSettings);
@@ -133,6 +156,9 @@ async function promptOnLive(input: {
   );
   session.output = "";
   session.collecting = true;
+  session.onEvent = input.onEvent;
+  session.toolsByIndex = new Map();
+  session.toolsById = new Map();
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
 
   try {
@@ -216,6 +242,8 @@ async function startLive(
     turnDone: null,
     turnFailed: null,
     readyDone: null,
+    toolsByIndex: new Map(),
+    toolsById: new Map(),
   };
 
   watchChild(
@@ -291,12 +319,7 @@ function handleLine(session: LiveText, line: string): void {
     return;
   }
   if (type === "stream_event") {
-    const event = rec.event;
-    if (!event || typeof event !== "object") return;
-    const delta = (event as { delta?: { type?: string; text?: string } }).delta;
-    if (delta?.type === "text_delta" && typeof delta.text === "string") {
-      session.output = mergeStream(session.output, delta.text);
-    }
+    handleStreamEvent(session, rec);
     return;
   }
   if (type === "result") {
@@ -309,6 +332,69 @@ function handleLine(session: LiveText, line: string): void {
     session.turnDone = null;
     session.turnFailed = null;
   }
+}
+
+function handleStreamEvent(
+  session: LiveText,
+  rec: Record<string, unknown>,
+): void {
+  const delta = streamDeltaFromEvent(rec);
+  if (delta) {
+    if (delta.kind === "assistant") {
+      session.output = mergeStream(session.output, delta.text);
+      session.onEvent?.({ type: "message.delta", text: delta.text });
+    } else {
+      session.onEvent?.({ type: "reasoning.delta", text: delta.text });
+    }
+    return;
+  }
+
+  const started = toolStartFromEvent(rec);
+  if (started) {
+    const tool: InFlightTool = {
+      id: started.id,
+      name: started.name,
+      input: started.input,
+      partialJson: "",
+      title: toolTitle(started.name, started.input),
+    };
+    if (started.index >= 0) session.toolsByIndex.set(started.index, tool);
+    session.toolsById.set(started.id, tool);
+    session.onEvent?.({
+      type: "tool.started",
+      callId: tool.id,
+      title: tool.title,
+      kind: toolKindFromName(tool.name),
+      ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+        ? { agentModel: stringField(tool.input, "model") }
+        : {}),
+      status: isAgentToolName(tool.name) ? "in_progress" : "pending",
+      preview: previewFromTool(tool.name, tool.input),
+    });
+    return;
+  }
+
+  const jsonDelta = inputJsonDeltaFromEvent(rec);
+  if (!jsonDelta) return;
+  const tool = session.toolsByIndex.get(jsonDelta.index);
+  if (!tool) return;
+  tool.partialJson += jsonDelta.partial;
+  const parsed = tryParseJsonRecord(tool.partialJson);
+  if (!parsed) return;
+  tool.input = parsed;
+  tool.title = toolTitle(tool.name, parsed);
+  session.onEvent?.({
+    type: "tool.updated",
+    callId: tool.id,
+    title: tool.title,
+    kind: toolKindFromName(tool.name),
+    ...(isAgentToolName(tool.name) && stringField(tool.input, "model")
+      ? { agentModel: stringField(tool.input, "model") }
+      : {}),
+    status: "pending",
+    detail: summarizeToolRequest(tool.name, parsed),
+    preview: previewFromTool(tool.name, parsed),
+  });
 }
 
 function waitForReady(session: LiveText, timeoutMs: number): Promise<void> {

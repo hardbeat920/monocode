@@ -118,6 +118,8 @@ export type BtwMessage = {
   role: "user" | "assistant";
   text: string;
   createdAt: number;
+  /** Rich harness activity for assistant replies, when available. */
+  blocks?: Block[];
 };
 
 export type BtwThreadStatus = "running" | "ready" | "error";
@@ -137,6 +139,8 @@ export type BtwThread = {
   /** Provider-specific side-thread id when the text runner supports resume. */
   providerThreadId?: string;
   error?: string;
+  /** Live harness blocks for the in-flight reply; not persisted. */
+  pendingBlocks?: Block[];
 };
 
 /** Compact transcript card for a second-opinion or split-pane handoff turn. */

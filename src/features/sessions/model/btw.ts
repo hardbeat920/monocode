@@ -1,5 +1,8 @@
+import { applyHarnessEvent } from "../../../integrations/harness/core/apply";
+import type { HarnessEvent } from "../../../integrations/harness/core/types";
 import { displayPath } from "../../../shared/lib/paths";
 import type { Attachment, Block, BtwThread, HarnessId } from "./session";
+import { newSession } from "./session";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 /**
@@ -222,6 +225,47 @@ export function buildBtwPrompt(input: {
     "## By-the-way conversation",
     messages || "(no side question yet)",
   ].join("\n");
+}
+
+/** Apply one harness event to a BTW reply's live activity blocks. */
+export function applyBtwHarnessEvent(
+  blocks: Block[],
+  event: HarnessEvent,
+  harness: HarnessId,
+  model: string,
+  userMessageId: string,
+): Block[] {
+  const session = newSession(harness, "~", model);
+  session.blocks = [
+    { id: userMessageId, role: "user", text: "" },
+    ...blocks,
+  ];
+  return applyHarnessEvent(session, event).blocks.slice(1);
+}
+
+/** Clear streaming flags before persisting a completed BTW reply. */
+export function sealBtwResponseBlocks(
+  blocks: Block[],
+  harness: HarnessId,
+  model: string,
+  userMessageId: string,
+): Block[] {
+  let next = blocks;
+  next = applyBtwHarnessEvent(
+    next,
+    { type: "message.completed" },
+    harness,
+    model,
+    userMessageId,
+  );
+  next = applyBtwHarnessEvent(
+    next,
+    { type: "reasoning.completed" },
+    harness,
+    model,
+    userMessageId,
+  );
+  return next;
 }
 
 export function replaceBtwThread(block: Block, thread: BtwThread): Block {

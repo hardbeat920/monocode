@@ -251,8 +251,10 @@ import {
 } from "../features/sessions/model/handoff";
 import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
 import {
+  applyBtwHarnessEvent,
   buildBtwPrompt,
   replaceBtwThread,
+  sealBtwResponseBlocks,
   supportsBtwHarness,
 } from "../features/sessions/model/btw";
 
@@ -7230,6 +7232,11 @@ export default function App({
         controller,
       });
 
+      const userMessageId =
+        input.thread.messages[input.thread.messages.length - 1]?.id ??
+        input.thread.id;
+      const responseModel = model || input.source.model;
+
       void runHarnessTextPrompt({
         harness,
         cwd,
@@ -7252,6 +7259,27 @@ export default function App({
                 : thread,
           );
         },
+        onEvent: (event) => {
+          updateBtwThread(
+            input.sessionId,
+            input.userBlockId,
+            input.thread.id,
+            (thread) =>
+              thread
+                ? {
+                    ...thread,
+                    updatedAt: Date.now(),
+                    pendingBlocks: applyBtwHarnessEvent(
+                      thread.pendingBlocks ?? [],
+                      event,
+                      harness,
+                      responseModel,
+                      userMessageId,
+                    ),
+                  }
+                : undefined,
+          );
+        },
         intent: "plan",
         prompt,
         signal: controller.signal,
@@ -7268,24 +7296,36 @@ export default function App({
             input.sessionId,
             input.userBlockId,
             input.thread.id,
-            (thread) =>
-              thread
-                ? {
-                    ...thread,
-                    status: "ready",
-                    updatedAt: Date.now(),
-                    messages: [
-                      ...thread.messages,
-                      {
-                        id: crypto.randomUUID(),
-                        role: "assistant",
-                        text,
-                        createdAt: Date.now(),
-                      },
-                    ],
-                    error: undefined,
-                  }
-                : undefined,
+            (thread) => {
+              if (!thread) return undefined;
+              const pendingBlocks = thread.pendingBlocks ?? [];
+              const blocks =
+                pendingBlocks.length > 0
+                  ? sealBtwResponseBlocks(
+                      pendingBlocks,
+                      harness,
+                      responseModel,
+                      userMessageId,
+                    )
+                  : undefined;
+              return {
+                ...thread,
+                status: "ready",
+                updatedAt: Date.now(),
+                pendingBlocks: undefined,
+                messages: [
+                  ...thread.messages,
+                  {
+                    id: crypto.randomUUID(),
+                    role: "assistant",
+                    text,
+                    createdAt: Date.now(),
+                    ...(blocks?.length ? { blocks } : {}),
+                  },
+                ],
+                error: undefined,
+              };
+            },
           );
         })
         .catch((error: unknown) => {
@@ -7304,6 +7344,7 @@ export default function App({
                     ...thread,
                     status: "error",
                     updatedAt: Date.now(),
+                    pendingBlocks: undefined,
                     error: message,
                   }
                 : undefined,
@@ -7378,6 +7419,7 @@ export default function App({
             status: "running",
             updatedAt: now,
             error: undefined,
+            pendingBlocks: [],
             messages: [
               ...existing.messages,
               { id: messageId, role: "user", text, createdAt: now },
@@ -7389,6 +7431,7 @@ export default function App({
             createdAt: now,
             updatedAt: now,
             status: "running",
+            pendingBlocks: [],
             ...(selectedModel ? { model: selectedModel } : {}),
             modelSettings: selectedModelSettings,
             messages: [{ id: messageId, role: "user", text, createdAt: now }],
@@ -7507,6 +7550,7 @@ export default function App({
         status: "running",
         updatedAt: Date.now(),
         error: undefined,
+        pendingBlocks: [],
       };
       const updated = updateBtwThread(
         sessionId,

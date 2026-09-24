@@ -11,8 +11,10 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
   isRecoverableThreadResumeError,
+  mapCodexNotification,
   stringField,
 } from "./codexProtocol";
+import type { HarnessEvent } from "../../core/types";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
 import type { TurnIntent } from "../../../../features/sessions/model/session";
 
@@ -38,6 +40,7 @@ type LiveText = {
   closed: boolean;
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
+  onEvent?: (event: HarnessEvent) => void;
 };
 
 let live: LiveText | null = null;
@@ -111,6 +114,7 @@ export async function runCodexTextPrompt(input: {
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   if (input.model !== undefined && !input.model.trim()) {
     throw new Error("The selected Codex model is unavailable.");
@@ -134,10 +138,12 @@ async function promptOnLive(input: {
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   const session = await ensureLive(input);
   session.output = "";
   session.collecting = true;
+  session.onEvent = input.onEvent;
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
   let abortHandler: (() => void) | undefined;
   const abortPromise = input.signal
@@ -414,6 +420,11 @@ function handleNotification(
       session.turnFailed = null;
     }
     return;
+  }
+
+  const mapped = mapCodexNotification(method, params);
+  for (const event of mapped.events) {
+    session.onEvent?.(event);
   }
 
   if (method === "item/agentMessage/delta") {

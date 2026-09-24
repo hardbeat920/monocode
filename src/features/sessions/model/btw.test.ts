@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyBtwHarnessEvent,
   BTW_COMMAND,
   BTW_MAX_BLOCK_CHARS,
   BTW_MAX_SNAPSHOT_CHARS,
@@ -238,6 +239,24 @@ describe("buildBtwPrompt", () => {
     expect(prompt).toContain(
       "## By-the-way conversation\n(no side question yet)",
     );
+  });
+});
+
+describe("applyBtwHarnessEvent", () => {
+  it("records harness activity blocks for a BTW reply", () => {
+    const blocks = applyBtwHarnessEvent(
+      [],
+      { type: "reasoning.delta", text: "Checking docs" },
+      "codex",
+      "codex:gpt-5.4",
+      "user-1",
+    );
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      role: "reasoning",
+      text: "Checking docs",
+      streaming: true,
+    });
   });
 });
 

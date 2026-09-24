@@ -608,7 +608,19 @@ function sanitizeBtwMessage(value: unknown): BtwMessage | undefined {
       ? record.role
       : undefined;
   if (!id || text == null || createdAt == null || !role) return undefined;
-  return { id, role, text, createdAt };
+  const blocks = Array.isArray(record.blocks)
+    ? record.blocks.flatMap((block) => {
+        const next = sanitizeBlock(block as Block);
+        return next ? [next] : [];
+      })
+    : [];
+  return {
+    id,
+    role,
+    text,
+    createdAt,
+    ...(blocks.length > 0 ? { blocks } : {}),
+  };
 }
 
 function sanitizeBtwThreads(
