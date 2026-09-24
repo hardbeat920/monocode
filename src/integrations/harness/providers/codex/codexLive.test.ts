@@ -990,14 +990,9 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
-  it.each([
-    { decision: "allow", boolean: false },
-    { decision: "deny", boolean: false },
-    { decision: "allow", boolean: true },
-    { decision: "deny", boolean: true },
-  ] as const)(
-    "shows other MCP confirmation in Full Access and sends $decision, boolean=$boolean",
-    async ({ decision, boolean }) => {
+  it.each([false, true])(
+    "auto-approves supported MCP confirmations in Full Access, boolean=%s",
+    async (boolean) => {
       const { events, turn } = await startTurn("codex-live", {
         runtimeMode: "full-access",
       });
@@ -1019,52 +1014,56 @@ describe("codex live turn sequence", () => {
           },
         }),
       );
-      await waitFor(
-        () => events.some((e) => e.type === "approval.requested"),
-        "MCP approval UI",
-      );
-      expect(parse().some((m) => m.id === 91)).toBe(false);
-      const approval = events.find((e) => e.type === "approval.requested")!;
-      respondCodexApproval("codex-live", approval.requestId, decision);
       await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
       expect(parse().find((m) => m.id === 91)?.result).toEqual({
-        action: decision === "allow" ? "accept" : "decline",
-        content:
-          decision === "allow" ? (boolean ? { approved: true } : {}) : null,
+        action: "accept",
+        content: boolean ? { approved: true } : {},
         _meta: null,
       });
+      expect(events.some((e) => e.type === "approval.requested")).toBe(false);
       notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
       await turn;
     },
   );
 
-  it("auto-approves computer-use app access in Full Access", async () => {
+  it("keeps plan MCP confirmations explicit in Full Access", async () => {
     const { events, turn } = await startTurn("codex-live", {
       runtimeMode: "full-access",
+      intent: "plan",
     });
     onLine!(
       JSON.stringify({
         id: 91,
         method: "mcpServer/elicitation/request",
         params: {
-          serverName: "cua_repl",
+          serverName: "example",
           mode: "form",
-          message: 'Allow Computer Use to use "QuickTime Player"?',
+          message: "Read this source?",
           requestedSchema: {
             type: "object",
-            properties: {},
-            required: [],
+            properties: { approved: { type: "boolean" } },
+            required: ["approved"],
           },
         },
       }),
     );
-    await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
-    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+    await waitFor(
+      () => events.some((event) => event.type === "approval.requested"),
+      "plan MCP approval UI",
+    );
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    respondCodexApproval("codex-live", approval.requestId, "allow");
+    await waitFor(
+      () => parse().some((message) => message.id === 91),
+      "MCP response",
+    );
+    expect(parse().find((message) => message.id === 91)?.result).toEqual({
       action: "accept",
-      content: {},
+      content: { approved: true },
       _meta: null,
     });
-    expect(events.some((e) => e.type === "approval.requested")).toBe(false);
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
   });

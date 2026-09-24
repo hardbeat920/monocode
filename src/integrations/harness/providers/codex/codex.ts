@@ -26,10 +26,7 @@ import {
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
 import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
-import {
-  codexMcpConfirmation,
-  isCodexComputerUseAccessConfirmation,
-} from "./codexElicitation";
+import { codexMcpConfirmation } from "./codexElicitation";
 import { snapshotRemainder } from "../../core/streamText";
 import type {
   ApprovalDecision,
@@ -1023,11 +1020,7 @@ async function handleServerRequest(
       });
       return;
     }
-    if (
-      !live.planning &&
-      live.runtimeMode === "full-access" &&
-      isCodexComputerUseAccessConfirmation(params)
-    ) {
+    if (!live.planning && live.runtimeMode === "full-access") {
       await live.rpc.respond(id, {
         action: "accept",
         content: confirmation.content,
@@ -1037,7 +1030,7 @@ async function handleServerRequest(
     }
     const uiId = live.nextApprovalUiId++;
     const pending = waitApproval(live, uiId, id, "permissions", threadId);
-    // Other MCP consent must carry the user's decision, including in Full Access.
+    // MCP consent requires an explicit decision outside non-plan Full Access turns.
     live.onEvent({
       type: "approval.requested",
       requestId: uiId,
