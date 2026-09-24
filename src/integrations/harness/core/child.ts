@@ -344,6 +344,10 @@ export function openClawGatewayConfig(url?: string): Promise<{
   return invoke("harness_openclaw_gateway_config", { url });
 }
 
+export function validateOpenClawGatewayWs(url: string): Promise<void> {
+  return invoke("harness_openclaw_gateway_ws", { url });
+}
+
 export function resolveAntigravityBinary(): Promise<{
   path: string;
   args: string[];
