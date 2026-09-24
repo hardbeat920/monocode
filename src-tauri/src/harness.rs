@@ -383,6 +383,18 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve the OpenClaw CLI used by the fixed `openclaw acp` bridge.
+#[tauri::command(async)]
+pub fn harness_resolve_openclaw() -> Result<CursorBinary, String> {
+    resolve_openclaw()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "OpenClaw CLI not found. Install OpenClaw and retry.".into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -904,7 +916,7 @@ fn validate_spawn_request(command: &str, args: &[String]) -> Result<(), String> 
     let resolved = [
         resolve_cursor_agent(), resolve_codex(), resolve_opencode(),
         resolve_claude(), resolve_pi(), resolve_omp(), resolve_fx(),
-        resolve_grok(), resolve_hermes(), resolve_antigravity(),
+        resolve_grok(), resolve_hermes(), resolve_openclaw(), resolve_antigravity(),
     ]
     .into_iter()
     .flatten();
@@ -1696,6 +1708,27 @@ fn resolve_hermes() -> Option<PathBuf> {
         candidates.push(from_shell);
     }
 
+    first_binary(candidates)
+}
+
+fn resolve_openclaw() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates = Vec::new();
+    if let Some(home) = &home {
+        candidates.push(home.join(".local/bin/openclaw"));
+        candidates.push(home.join(".npm-global/bin/openclaw"));
+    }
+    #[cfg(windows)]
+    if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
+        candidates.push(app_data.join("npm/openclaw.cmd"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/openclaw"));
+    candidates.push(PathBuf::from("/usr/local/bin/openclaw"));
+    candidates.push(PathBuf::from("/usr/bin/openclaw"));
+    if let Some(from_shell) = which_via_login_shell("openclaw") {
+        candidates.push(from_shell);
+    }
     first_binary(candidates)
 }
 
