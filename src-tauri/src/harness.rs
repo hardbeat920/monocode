@@ -1530,7 +1530,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "omp" => &["omp"],
         "fx" => &["fx"],
         "hermes" => &["hermes"],
-        "antigravity" => &["agy_acp_server"],
+        "antigravity" => &["agy_acp_server.par"],
         _ => {
             return Err(format!(
                 "Unsupported configured harness provider: {provider}"
@@ -1551,6 +1551,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
             }
         }
     }
+    validate_configured_harness_binary_identity(provider, &path, binary_path)?;
     validate_harness_binary_version(provider, &path)?;
     if let Some(fingerprint) = fingerprint {
         if let Ok(mut cache) = cache.lock() {
@@ -1627,20 +1628,29 @@ fn resolve_configured_harness_binary(
             "Configured path is not a {provider} binary: {binary_path}"
         ));
     }
+    Ok(path)
+}
+
+fn validate_configured_harness_binary_identity(
+    provider: &str,
+    path: &Path,
+    binary_path: &str,
+) -> Result<(), String> {
     let identity_valid = match provider {
-        "cursor" => is_cursor_agent(&path),
-        "pi" => is_pi_coding_agent(&path),
-        "omp" => is_omp_agent(&path),
-        "fx" => is_fx_agent(&path),
-        "grok" => is_grok_agent(&path),
+        "cursor" => is_cursor_agent(path),
+        "pi" => is_pi_coding_agent(path),
+        "omp" => is_omp_agent(path),
+        "fx" => is_fx_agent(path),
+        "grok" => is_grok_agent(path),
         _ => true,
     };
-    if !identity_valid {
-        return Err(format!(
+    if identity_valid {
+        Ok(())
+    } else {
+        Err(format!(
             "Configured path is not a valid {provider} binary: {binary_path}"
-        ));
+        ))
     }
-    Ok(path)
 }
 
 fn resolve_codex() -> Option<PathBuf> {
@@ -2199,7 +2209,7 @@ fn configured_binary_name_eq(path: &Path, expected: &str) -> bool {
     if cfg!(windows) {
         return binary_name_eq(path, expected);
     }
-    name == expected || (expected == "agy_acp_server" && name == "agy_acp_server.par")
+    name == expected
 }
 
 fn binary_name_eq(path: &Path, expected: &str) -> bool {
@@ -2795,14 +2805,23 @@ mod tests {
         let codex = dir.join("codex");
         let opencode = dir.join("opencode");
         let decoy = dir.join("codex.sh");
-        for path in [&codex, &opencode, &decoy] {
-            let script: &[u8] = if path == &decoy {
-                b"#!/bin/sh\n"
-            } else if path == &codex {
-                b"#!/bin/sh\necho 'codex-cli 0.156.1'\n"
-            } else {
-                b"#!/bin/sh\necho '1.18.32-beta'\n"
-            };
+        let antigravity = dir.join("agy_acp_server");
+        let antigravity_wrapper = dir.join("agy_acp_server.par");
+        for path in [
+            &codex,
+            &opencode,
+            &decoy,
+            &antigravity,
+            &antigravity_wrapper,
+        ] {
+            let script: &[u8] =
+                if path == &decoy || path == &antigravity || path == &antigravity_wrapper {
+                    b"#!/bin/sh\n"
+                } else if path == &codex {
+                    b"#!/bin/sh\necho 'codex-cli 0.156.1'\n"
+                } else {
+                    b"#!/bin/sh\necho '1.18.32-beta'\n"
+                };
             std::fs::write(path, script).unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -2864,6 +2883,13 @@ mod tests {
         .is_err());
         assert!(resolve_harness_binary_override("codex", "codex").is_err());
         assert!(resolve_harness_binary_override("codex", &decoy.to_string_lossy()).is_err());
+        assert!(
+            resolve_harness_binary_override("antigravity", &antigravity.to_string_lossy()).is_err()
+        );
+        assert_eq!(
+            resolve_harness_binary_override("antigravity", &antigravity_wrapper.to_string_lossy()),
+            Ok(antigravity_wrapper.clone())
+        );
 
         std::fs::remove_dir_all(dir).unwrap();
     }
