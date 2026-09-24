@@ -165,7 +165,6 @@ export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
       live.runtimeMode = input.runtimeMode;
       live.planning = input.intent === "plan";
       live.cancelled = false;
-      live.muteUpdates = false;
       // From here until the prompt settles, a cancel can interrupt an
       // in-flight state-changing request whose server-side effect is
       // unknowable — mark the transport stale so the next send recycles.
@@ -178,6 +177,9 @@ export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
           input.runtimeMode,
           input.intent === "plan",
         );
+        // Resume/load history stays muted through setup and configuration.
+        // Open the transcript only once the new turn is ready to prompt.
+        live.muteUpdates = false;
         if (live.cancelled || cancelled()) return;
         await prompt(live, input);
       } catch (error) {
@@ -403,6 +405,13 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     if (!live) return;
     noteActivity(live);
     handleNotification(live, method, params);
+  };
+  handlers.onRequestRaw = (id, method) => {
+    if (typeof id === "number") return;
+    void acp.respondError(id, {
+      code: -32601,
+      message: `Method not found: ${method}`,
+    }).catch(() => undefined);
   };
   handlers.onRequest = (id, method, params) => {
     const live = liveRef.current;
