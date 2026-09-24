@@ -911,12 +911,20 @@ fn validate_spawn_request_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn spawn_args_allowed_for(provider: &str, args: &[String]) -> bool {
+    provider != "openclaw" || args == ["acp"]
+}
+
 fn validate_spawn_request(command: &str, args: &[String]) -> Result<(), String> {
     validate_spawn_request_args(args)?;
+    let openclaw = resolve_openclaw();
+    if openclaw.as_deref() == Some(Path::new(command)) && !spawn_args_allowed_for("openclaw", args) {
+        return Err("harness_spawn: OpenClaw requires the fixed `acp` command".into());
+    }
     let resolved = [
         resolve_cursor_agent(), resolve_codex(), resolve_opencode(),
         resolve_claude(), resolve_pi(), resolve_omp(), resolve_fx(),
-        resolve_grok(), resolve_hermes(), resolve_openclaw(), resolve_antigravity(),
+        resolve_grok(), resolve_hermes(), openclaw, resolve_antigravity(),
     ]
     .into_iter()
     .flatten();
@@ -2883,6 +2891,13 @@ mod tests {
         let trusted = PathBuf::from("/trusted/agent");
         assert!(is_allowed_spawn_command("/trusted/agent", [trusted.clone()]));
         assert!(!is_allowed_spawn_command("/tmp/agent", [trusted]));
+    }
+
+    #[test]
+    fn openclaw_spawn_args_are_fixed() {
+        assert!(spawn_args_allowed_for("openclaw", &["acp".into()]));
+        assert!(!spawn_args_allowed_for("openclaw", &["acp", "--shell"].into_iter().map(String::from).collect()));
+        assert!(spawn_args_allowed_for("hermes", &["acp", "--model", "m"].into_iter().map(String::from).collect()));
     }
 
     #[test]
