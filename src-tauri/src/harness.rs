@@ -423,7 +423,7 @@ pub fn harness_openclaw_gateway_ws(url: String) -> Result<(), String> {
     if !(lower.starts_with("ws://") || lower.starts_with("wss://")) {
         return Err("OpenClaw Gateway URL must use ws:// or wss://".into());
     }
-    if url.contains('@') || url.contains(' ') {
+    if url.contains('@') || url.contains('\0') {
         return Err("OpenClaw Gateway URL must not contain credentials".into());
     }
     // The actual WebSocket session is intentionally native-only. This command
@@ -446,7 +446,7 @@ pub fn harness_openclaw_gateway_config(
         if !(lower.starts_with("ws://") || lower.starts_with("wss://")) {
             return Err("OpenClaw Gateway URL must use ws:// or wss://".into());
         }
-        if url.contains('@') || url.contains(' ') {
+        if url.contains('@') || url.contains('\0') {
             return Err("OpenClaw Gateway URL must not contain credentials".into());
         }
     }
