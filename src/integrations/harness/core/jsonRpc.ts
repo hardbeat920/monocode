@@ -89,6 +89,10 @@ export class JsonRpcClient {
     return this.closed;
   }
 
+  private key(id: JsonRpcId): string {
+    return `${typeof id}:${String(id)}`;
+  }
+
   async request<T>(
     method: string,
     params?: unknown,
@@ -96,7 +100,7 @@ export class JsonRpcClient {
   ): Promise<T> {
     if (this.closed) throw new Error("Harness process is not running");
     const id = this.nextId++;
-    const key = String(id);
+    const key = this.key(id);
     // Register before writing. A local harness can answer quickly enough for
     // Tauri to deliver its stdout event before harness_write resolves; adding
     // the pending entry after send() silently discarded that response.
@@ -193,7 +197,7 @@ export class JsonRpcClient {
 
   private handle(msg: JsonRpcMessage) {
     if (msg.id != null && (msg.result !== undefined || msg.error)) {
-      const key = String(msg.id);
+      const key = this.key(msg.id);
       const pending = this.pending.get(key);
       if (!pending) return;
       this.pending.delete(key);

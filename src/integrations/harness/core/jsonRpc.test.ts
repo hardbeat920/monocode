@@ -148,6 +148,20 @@ describe("JsonRpcClient", () => {
     await Promise.all(inbound);
   });
 
+  it("does not collide numeric and string response ids", async () => {
+    const sent: Array<{ id: number }> = [];
+    transport.onWrite = async (_sessionId, line) => sent.push(JSON.parse(line));
+    const client = new JsonRpcClient("typed-ids", {});
+    const request = client.request("initialize");
+    await Promise.resolve();
+    client.pushLine(JSON.stringify({ id: "1", result: { wrong: true } }));
+    let settled = false;
+    void request.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    client.pushLine(JSON.stringify({ id: sent[0].id, result: { right: true } }));
+    await expect(request).resolves.toEqual({ right: true });
+  });
   it("rejects every pending request when the child closes", async () => {
     transport.onWrite = async () => undefined;
     const client = new JsonRpcClient("closed", {});
@@ -162,6 +176,7 @@ describe("JsonRpcClient", () => {
       "Harness process is not running",
     );
   });
+
 
   it("does not resolve a request after its deadline", async () => {
     vi.useFakeTimers();
