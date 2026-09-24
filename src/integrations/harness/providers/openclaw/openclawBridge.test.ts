@@ -15,6 +15,7 @@ vi.mock("../../core/child", () => ({
   spawnTrustedChild: mocks.spawn,
   killChild: mocks.kill,
   watchChild: mocks.watch,
+  validateOpenClawGatewayWs: vi.fn(async () => undefined),
   unwatchChild: mocks.unwatch,
 }));
 

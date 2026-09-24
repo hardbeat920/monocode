@@ -5,6 +5,7 @@ import {
   resolveOpenClawBinary,
   spawnTrustedChild,
   unwatchChild,
+  validateOpenClawGatewayWs,
   watchChild,
 } from "../../core/child";
 import { openClawSessionKey, openClawTransport } from "./openclawTransport";
@@ -34,6 +35,7 @@ export async function startOpenClawAcpBridge(input: {
   gatewayUrl?: string;
 }): Promise<{ acp: AcpClient; sessionId: string; gatewaySessionKey: string }> {
   const { path } = await resolveOpenClawBinary();
+  if (input.gatewayUrl) await validateOpenClawGatewayWs(input.gatewayUrl);
   const descriptor = openClawTransport(path);
   const childId = input.childId;
   let acp!: AcpClient;
