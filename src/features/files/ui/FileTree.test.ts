@@ -298,6 +298,24 @@ describe("FileTree accepts files from outside the tree", () => {
   });
 });
 
+describe("FileTree copies paths", () => {
+  it("copies the selected path on Mod+Shift+C", async () => {
+    saveSelected(cwd, `${cwd}/first.ts`);
+    await act(async () => render());
+    await act(async () => {
+      row("first.ts").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "C",
+          metaKey: true,
+          shiftKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+});
+
 describe("FileTree starts Explorer file drags", () => {
   beforeEach(async () => {
     directories.set(cwd, [folder("docs"), file("first.ts")]);

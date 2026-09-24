@@ -61,7 +61,7 @@ import {
   type FsEntry,
 } from "../../../platform/tauri/fs";
 import { displayPath, parentPath, rebasePath } from "../../../shared/lib/paths";
-import { IS_MAC, IS_WIN, MOD } from "../../../platform/tauri/platform";
+import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
 import type { OpenFileFn } from "../../search/model/search";
 import type { GitStatusMap } from "../../source-control/hooks/useGitFileStatuses";
 import { useProjectDiffStats } from "../../source-control/hooks/useProjectDiffStats";
@@ -205,7 +205,12 @@ function explorerItems(
       disabled: target.isRoot,
     },
     { kind: "sep" },
-    { kind: "item", id: "copy-path", label: "Copy Path" },
+    {
+      kind: "item",
+      id: "copy-path",
+      label: "Copy Path",
+      shortcut: `${MOD}${SHIFT}C`,
+    },
     { kind: "item", id: "copy-relative-path", label: "Copy Relative Path" },
     { kind: "sep" },
     {
@@ -716,6 +721,11 @@ export const FileTree = memo(function FileTree({
     const isDir = isDirAt(cwd, path);
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();
+    if (mod && !e.altKey && e.shiftKey && key === "c") {
+      e.preventDefault();
+      void copyText(path);
+      return;
+    }
     if (mod && !e.altKey && !e.shiftKey && key === "c") {
       if (isRoot) return;
       e.preventDefault();
