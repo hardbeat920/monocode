@@ -369,6 +369,7 @@ pub fn run() {
             fs::read_binary_file,
             fs::write_attachment,
             fs::save_generated_image,
+            fs::delete_generated_images,
             fs::read_text_file,
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,

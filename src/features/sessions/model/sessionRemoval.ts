@@ -146,7 +146,12 @@ async function removeSession(
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
   if (options.mode === "delete") {
-    await orchestrator.deleteSession(sessionId, () => deleteSession(sessionId));
+    const imagePaths = stopped?.blocks.flatMap((block) =>
+      block.role === "image" && block.image ? [block.image.path] : [],
+    ) ?? [];
+    await orchestrator.deleteSession(sessionId, () =>
+      deleteSession(sessionId, imagePaths),
+    );
     options.workspace.apply({
       type: "orchestrationReleased",
       leadId: sessionId,

@@ -97,6 +97,7 @@ import { runUpdateFlow } from "./model/updater";
 import { displayAttachments, prepareAttachments } from "../features/sessions/model/attachments";
 import {
   basename,
+  deleteGeneratedImages,
   notifyGitChanged,
   pickFolder,
   type GitFileDiffKind,
@@ -364,6 +365,7 @@ import {
 import { dropContextWindow } from "../features/sessions/model/contextUsage";
 import {
   discardDraftSessionRecord,
+  deleteSession,
   getSession,
   listLinkedSessions,
   listSessionsByProject,
@@ -628,6 +630,23 @@ function scheduleHarnessFlush(run: () => void): ScheduledFlush {
     return { kind: "timeout", id: window.setTimeout(run, 32) };
   }
   return { kind: "raf", id: requestAnimationFrame(run) };
+}
+
+function deleteRemovedGeneratedImages(previous: Block[], next: Block[]): void {
+  const retained = new Set(
+    next
+      .filter((block) => block.role === "image" && block.image)
+      .map((block) => block.image!.path),
+  );
+  const removed = previous
+    .filter(
+      (block) =>
+        block.role === "image" && block.image && !retained.has(block.image.path),
+    )
+    .map((block) => block.image!.path);
+  if (removed.length > 0) {
+    void deleteGeneratedImages(removed).catch(() => undefined);
+  }
 }
 
 function userTurnCards(
@@ -3677,22 +3696,31 @@ export default function App({
       removingSessionIds.current.add(id);
       try {
         await stopSessionForRemoval(id);
+        const stopped =
+          sessionsRef.current.find((session) => session.id === id) ?? current;
         await Promise.all(
-          sessionChildHarnesses(current).map((harness) =>
+          sessionChildHarnesses(stopped).map((harness) =>
             forgetHarnessSession(harness, id),
           ),
         );
+        const imagePaths = stopped.blocks.flatMap((block) =>
+          block.role === "image" && block.image ? [block.image.path] : [],
+        );
+        const deleted = await deleteSession(id, imagePaths)
+          .then(() => true)
+          .catch(() => false);
         const fresh = {
           ...newSession(
-            current.harness,
-            current.cwd,
-            current.model,
-            current.runtimeMode,
-            current.modelSettings,
+            stopped.harness,
+            stopped.cwd,
+            stopped.model,
+            stopped.runtimeMode,
+            stopped.modelSettings,
           ),
-          title: current.title,
-          inboxAsk: current.inboxAsk,
+          title: stopped.title,
+          inboxAsk: stopped.inboxAsk,
         };
+        if (!deleted) deleteRemovedGeneratedImages(stopped.blocks, fresh.blocks);
         const next = sessionsRef.current.map((session) =>
           session.id === id ? fresh : session,
         );
@@ -5816,7 +5844,9 @@ export default function App({
               handoffCard: rawCommand ? s.handoffCard : undefined,
             };
             if (editedResend) {
+              const beforeEdit = next.blocks;
               next = editedResend.replace(next);
+              deleteRemovedGeneratedImages(beforeEdit, next.blocks);
             }
             if (approvedPlan && intent === "build") {
               next = {
@@ -6182,11 +6212,12 @@ export default function App({
           pendingEditedEvents.length = 0;
           flushSync(() => {
             setSessions((prev) =>
-              prev.map((session) =>
-                session.id === sessionId
-                  ? editedResend.recoverAfterFailure(session)
-                  : session,
-              ),
+              prev.map((session) => {
+                if (session.id !== sessionId) return session;
+                const recovered = editedResend.recoverAfterFailure(session);
+                deleteRemovedGeneratedImages(session.blocks, recovered.blocks);
+                return recovered;
+              }),
             );
           });
         };

@@ -503,6 +503,10 @@ export function saveGeneratedImage(input: {
   return invoke<GeneratedImageAsset>("save_generated_image", input);
 }
 
+export function deleteGeneratedImages(paths: string[]): Promise<void> {
+  return invoke<void>("delete_generated_images", { paths });
+}
+
 export function writeTextFile(path: string, content: string): Promise<void> {
   return invoke<void>("write_text_file", { path, content });
 }

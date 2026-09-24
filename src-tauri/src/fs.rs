@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+use uuid::Uuid;
 
 use crate::dirs_home;
 
@@ -4709,23 +4710,29 @@ fn save_generated_image_sync(
         .map_err(|e| e.to_string())?
         .join(GENERATED_IMAGE_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
     let safe_name = safe_attachment_name(name);
-    let destination = dir.join(format!(
-        "{}-{}-{}.png",
-        std::process::id(),
-        stamp,
-        safe_name
-    ));
-    std::fs::write(&destination, &bytes).map_err(|e| format!("{}: {e}", destination.display()))?;
+    let destination = dir.join(format!("{}-{}.png", Uuid::new_v4(), safe_name));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|e| format!("{}: {e}", destination.display()))?;
+    if let Err(error) = file.write_all(&bytes) {
+        let _ = std::fs::remove_file(&destination);
+        return Err(format!("{}: {error}", destination.display()));
+    }
     Ok(GeneratedImageAsset {
         path: destination.to_string_lossy().into_owned(),
         mime_type: "image/png".into(),
         size: bytes.len() as u64,
     })
+}
+
+#[tauri::command]
+pub async fn delete_generated_images(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_generated_images_sync(&app, &paths))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 pub(crate) fn delete_generated_images_sync(
@@ -4749,6 +4756,38 @@ pub(crate) fn delete_generated_images_sync(
             return Err("Invalid generated image path".into());
         }
         std::fs::remove_file(candidate).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn cleanup_orphaned_generated_images(
+    app: &AppHandle,
+    referenced: &[String],
+) -> Result<(), String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join(GENERATED_IMAGE_DIR);
+    let root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let referenced = referenced
+        .iter()
+        .filter_map(|path| PathBuf::from(path).canonicalize().ok())
+        .collect::<HashSet<_>>();
+    for entry in std::fs::read_dir(&root).map_err(|error| error.to_string())? {
+        let path = entry
+            .map_err(|error| error.to_string())?
+            .path()
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if !path.starts_with(&root) || !path.is_file() || referenced.contains(&path) {
+            continue;
+        }
+        std::fs::remove_file(path).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
