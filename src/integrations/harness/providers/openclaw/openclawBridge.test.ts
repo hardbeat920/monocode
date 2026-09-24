@@ -20,6 +20,7 @@ vi.mock("../../core/child", () => ({
 
 vi.mock("../../core/acp", () => ({
   AcpClient: class {
+    pushLine = vi.fn();
     request = vi.fn(async (method: string) => {
       if (method === "initialize") return {};
       if (method === "session/new") return { sessionId: "openclaw-session" };
@@ -58,5 +59,14 @@ describe("OpenClaw ACP bridge", () => {
     expect(result.gatewaySessionKey).toMatch(/^acp-bridge:/);
     expect(result.gatewaySessionKey).not.toContain("token");
     expect(result.gatewaySessionKey).not.toContain("password");
+  });
+
+  it("rejects unknown incoming methods with the original string ID", async () => {
+    const result = await startOpenClawAcpBridge({ childId: "openclaw#3", cwd: "/repo" });
+    const handler = mocks.watch.mock.calls.at(-1)?.[1] as ((line: string) => void) | undefined;
+    expect(handler).toBeTypeOf("function");
+    handler?.(JSON.stringify({ jsonrpc: "2.0", id: "raw-1", method: "future/request" }));
+    await Promise.resolve();
+    expect(result.acp).toBeDefined();
   });
 });

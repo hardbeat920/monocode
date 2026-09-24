@@ -1,4 +1,4 @@
-import { AcpClient } from "../../core/acp";
+import { AcpClient, type AcpHandlers } from "../../core/acp";
 import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
 import {
   killChild,
@@ -36,7 +36,12 @@ export async function startOpenClawAcpBridge(input: {
   const { path } = await resolveOpenClawBinary();
   const descriptor = openClawTransport(path);
   const childId = input.childId;
-  const acp = new AcpClient(childId, {});
+  let acp!: AcpClient;
+  const handlers: AcpHandlers = {
+    onRequestRaw: (id, method) =>
+      void unknownAcpRequest(acp.respondError.bind(acp), id, method).catch(() => undefined),
+  };
+  acp = new AcpClient(childId, handlers);
   watchChild(childId, (line) => acp.pushLine(line), () => acp.close(new Error("OpenClaw exited")));
   try {
     await spawnTrustedChild(childId, descriptor, input.cwd);
