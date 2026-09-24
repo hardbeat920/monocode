@@ -355,6 +355,10 @@ export function resolveAntigravityBinary(): Promise<{
   return invoke("harness_resolve_antigravity");
 }
 
+export function resolveOpenClawGateway(): Promise<{ url: string }> {
+  return invoke("harness_resolve_openclaw");
+}
+
 export function freeHarnessPort(): Promise<number> {
   return invoke("harness_free_port");
 }
