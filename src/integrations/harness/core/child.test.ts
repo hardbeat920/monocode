@@ -115,6 +115,18 @@ describe("child bridge", () => {
     await vi.runAllTimersAsync();
   });
 
+  it("validates trusted descriptors before spawning", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    await expect(child.spawnTrustedChild("trusted", {
+      provider: "test",
+      path: "",
+      args: ["acp"],
+    }, "/repo")).rejects.toThrow("Trusted transport executable is required");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("harness_spawn", expect.anything());
+    release();
+  });
   it("reconciles an exit that arrives before spawn returns its pid", async () => {
     installResolvedListeners();
     const spawned = deferred<number>();
@@ -138,6 +150,7 @@ describe("child bridge", () => {
     expect(onExit).toHaveBeenCalledWith(1);
     release();
   });
+
 
   it("never routes a retired generation's stdout or exit to its replacement", async () => {
     installResolvedListeners();

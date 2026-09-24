@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  validateTrustedTransport,
+  type TrustedTransportDescriptor,
+} from "./trustedTransport";
 
 type LinePayload = { sessionId: string; line: string };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
@@ -257,6 +261,16 @@ export async function spawnChild(
   if (!exited) return;
   livePid.delete(sessionId);
   exitHandlers.get(sessionId)?.(exited.code);
+}
+
+export async function spawnTrustedChild(
+  sessionId: string,
+  descriptor: TrustedTransportDescriptor,
+  cwd: string,
+  account?: { provider: "claude" | "codex"; id: string },
+): Promise<void> {
+  const trusted = validateTrustedTransport(descriptor);
+  return spawnChild(sessionId, trusted.path, [...trusted.args], cwd, account);
 }
 
 export function writeChild(sessionId: string, line: string): Promise<void> {
