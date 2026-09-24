@@ -206,6 +206,7 @@ export function sanitizeSessionForPersist(
  * write concurrently.
  */
 const sessionWriteQueues = new Map<string, Promise<unknown>>();
+const sessionWriteLeadById = new Map<string, string>();
 const deletedSessionIds = new Set<string>();
 
 function enqueueSessionWrite<T>(
@@ -222,6 +223,7 @@ function enqueueSessionWrite<T>(
   void tail.then(() => {
     if (sessionWriteQueues.get(sessionId) === tail) {
       sessionWriteQueues.delete(sessionId);
+      sessionWriteLeadById.delete(sessionId);
     }
   });
   return run;
@@ -234,6 +236,11 @@ export async function upsertSession(
     return null;
   }
   const payload = sanitizeSessionForPersist(session);
+  if (session.orchestrationLeadId) {
+    sessionWriteLeadById.set(session.id, session.orchestrationLeadId);
+  } else {
+    sessionWriteLeadById.delete(session.id);
+  }
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
     return invoke<SessionSummary>("session_upsert", {
@@ -423,15 +430,27 @@ export function backfillClaudeShellCommands(
   return changed ? repaired : blocks;
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
+export async function deleteSession(
+  sessionId: string,
+  imagePaths: string[] = [],
+): Promise<void> {
   deletedSessionIds.add(sessionId);
   try {
     // A lead with workers still has writes in flight. Finish those before
     // the deletion transaction strips their ownership metadata.
-    await Promise.all([...sessionWriteQueues.values()]);
+    const pendingWrites = [...sessionWriteQueues.entries()]
+      .filter(
+        ([queuedSessionId]) =>
+          queuedSessionId === sessionId ||
+          sessionWriteLeadById.get(queuedSessionId) === sessionId,
+      )
+      .map(([, pending]) => pending);
+    if (pendingWrites.length > 0) await Promise.all(pendingWrites);
     await enqueueSessionWrite(sessionId, () =>
-      invoke<void>("session_delete", { sessionId }),
+      invoke<void>("session_delete", { sessionId, imagePaths }),
     );
+    const tombstone = setTimeout(() => deletedSessionIds.delete(sessionId), 60_000);
+    if (typeof tombstone === "object") tombstone.unref();
   } catch (error) {
     deletedSessionIds.delete(sessionId);
     throw error;
@@ -443,7 +462,7 @@ export async function discardDraftSessionRecord(
   sessionId: string,
 ): Promise<void> {
   await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_delete", { sessionId }),
+    invoke<void>("session_delete", { sessionId, imagePaths: [] }),
   );
 }
 
