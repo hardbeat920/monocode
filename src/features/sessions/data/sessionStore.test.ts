@@ -106,6 +106,60 @@ describe("sanitizeSessionForPersist", () => {
     ]);
   });
 
+  it("persists generated image metadata without binary payloads", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[1]).toEqual({
+      id: "image",
+      role: "image",
+      text: "",
+      image: {
+        path: "/app-data/generated-images/image.png",
+        name: "generated-image",
+        mimeType: "image/png",
+        size: 8,
+        alt: "A clean product photo",
+      },
+    });
+  });
+
+  it("drops malformed generated image metadata", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 0,
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks).toEqual([
+      { id: "u", role: "user", text: "Draw this" },
+    ]);
+  });
+
   it("persists a removed worktree as an explicit unselected working-copy state", () => {
     const session = newSession("codex", "/repo");
     session.worktreeCwd = "/repo-worktrees/feature";

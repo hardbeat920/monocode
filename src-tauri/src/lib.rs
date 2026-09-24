@@ -368,6 +368,7 @@ pub fn run() {
             fs::read_file_base64,
             fs::read_binary_file,
             fs::write_attachment,
+            fs::save_generated_image,
             fs::read_text_file,
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,

@@ -6,12 +6,24 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 use crate::dirs_home;
 
 pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_ATTACHMENT_EMBED_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_DATA_BYTES: u64 = MAX_GENERATED_IMAGE_BYTES * 4 / 3 + 4;
+const GENERATED_IMAGE_DIR: &str = "generated-images";
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedImageAsset {
+    path: String,
+    mime_type: String,
+    size: u64,
+}
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -4654,6 +4666,97 @@ fn write_attachment_sync(name: &str, data: &str) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+pub async fn save_generated_image(
+    app: AppHandle,
+    data: String,
+    name: String,
+) -> Result<GeneratedImageAsset, String> {
+    tauri::async_runtime::spawn_blocking(move || save_generated_image_sync(&app, &data, &name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn save_generated_image_sync(
+    app: &AppHandle,
+    data: &str,
+    name: &str,
+) -> Result<GeneratedImageAsset, String> {
+    if data.len() as u64 > MAX_GENERATED_IMAGE_DATA_BYTES {
+        return Err(format!(
+            "Generated image is too large (maximum {} MB).",
+            MAX_GENERATED_IMAGE_BYTES / 1024 / 1024
+        ));
+    }
+    let encoded: String = data
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+        .map_err(|_| "Generated image data is not valid base64.".to_string())?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_GENERATED_IMAGE_BYTES {
+        return Err(format!(
+            "Generated image is too large (maximum {} MB).",
+            MAX_GENERATED_IMAGE_BYTES / 1024 / 1024
+        ));
+    }
+    if !is_png(&bytes) {
+        return Err("Generated image data is not a PNG image.".into());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(GENERATED_IMAGE_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let safe_name = safe_attachment_name(name);
+    let destination = dir.join(format!(
+        "{}-{}-{}.png",
+        std::process::id(),
+        stamp,
+        safe_name
+    ));
+    std::fs::write(&destination, &bytes).map_err(|e| format!("{}: {e}", destination.display()))?;
+    Ok(GeneratedImageAsset {
+        path: destination.to_string_lossy().into_owned(),
+        mime_type: "image/png".into(),
+        size: bytes.len() as u64,
+    })
+}
+
+pub(crate) fn delete_generated_images_sync(
+    app: &AppHandle,
+    paths: &[String],
+) -> Result<(), String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(GENERATED_IMAGE_DIR)
+        .canonicalize()
+        .map_err(|error| format!("Generated image directory is unavailable: {error}"))?;
+    for path in paths {
+        let candidate = match PathBuf::from(path).canonicalize() {
+            Ok(candidate) => candidate,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if !candidate.starts_with(&root) || !candidate.is_file() {
+            return Err("Invalid generated image path".into());
+        }
+        std::fs::remove_file(candidate).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn is_png(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && bytes.starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+}
+
 fn safe_attachment_name(name: &str) -> String {
     let leaf = Path::new(name)
         .file_name()
@@ -5066,6 +5169,14 @@ mod tests {
             text: text.into(),
             concat: concat.into(),
         }
+    }
+
+    #[test]
+    fn generated_image_validation_accepts_png_only() {
+        assert!(is_png(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+        assert!(!is_png(&[0xff, 0xd8, 0xff, 0x00]));
+        assert!(!is_png(b"<html>"));
+        assert!(!is_png(&[]));
     }
 
     #[test]

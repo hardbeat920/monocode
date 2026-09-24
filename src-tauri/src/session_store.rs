@@ -315,8 +315,31 @@ pub fn session_delete(
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    let image_paths = get_session(&conn, &session_id)
+        .ok()
+        .flatten()
+        .map(|record| {
+            record
+                .blocks
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|block| block.get("role").and_then(Value::as_str) == Some("image"))
+                .filter_map(|block| {
+                    block
+                        .get("image")
+                        .and_then(|image| image.get("path"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
     drop(conn);
+    if !image_paths.is_empty() {
+        crate::fs::delete_generated_images_sync(&app, &image_paths)?;
+    }
     let _ = app.emit(crate::reminders::CHANGED, ());
     Ok(())
 }
@@ -1188,7 +1211,10 @@ fn block_hits(blocks: &Value, needle: &str) -> Vec<(String, String, String)> {
             .get("role")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(role, "user" | "assistant" | "tool" | "tasks" | "plan") {
+        if !matches!(
+            role,
+            "user" | "assistant" | "tool" | "tasks" | "plan" | "image"
+        ) {
             continue;
         }
         let id = block
@@ -1213,6 +1239,10 @@ fn block_hits(blocks: &Value, needle: &str) -> Vec<(String, String, String)> {
 fn block_texts(block: &Value) -> Vec<String> {
     let mut texts = Vec::new();
     push_text(&mut texts, block.get("text"));
+    if let Some(image) = block.get("image") {
+        push_text(&mut texts, image.get("name"));
+        push_text(&mut texts, image.get("alt"));
+    }
     if let Some(tool) = block.get("tool") {
         push_text(&mut texts, tool.get("title"));
         push_text(&mut texts, tool.get("detail"));

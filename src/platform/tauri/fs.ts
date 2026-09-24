@@ -490,6 +490,19 @@ export async function readBinaryFile(path: string): Promise<Uint8Array> {
   return new Uint8Array(buffer);
 }
 
+export type GeneratedImageAsset = {
+  path: string;
+  mimeType: string;
+  size: number;
+};
+
+export function saveGeneratedImage(input: {
+  data: string;
+  name: string;
+}): Promise<GeneratedImageAsset> {
+  return invoke<GeneratedImageAsset>("save_generated_image", input);
+}
+
 export function writeTextFile(path: string, content: string): Promise<void> {
   return invoke<void>("write_text_file", { path, content });
 }
