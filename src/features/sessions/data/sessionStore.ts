@@ -19,6 +19,7 @@ import type {
   Block,
   BtwMessage,
   BtwThread,
+  GeneratedImageMeta,
   HarnessId,
   HandoffMeta,
   HandoffStatus,
@@ -425,7 +426,7 @@ export function backfillClaudeShellCommands(
 export async function deleteSession(sessionId: string): Promise<void> {
   deletedSessionIds.add(sessionId);
   try {
-    // A lead's workers may still have writes in flight. Finish those before
+    // A lead with workers still has writes in flight. Finish those before
     // the deletion transaction strips their ownership metadata.
     await Promise.all([...sessionWriteQueues.values()]);
     await enqueueSessionWrite(sessionId, () =>
@@ -554,6 +555,9 @@ function sanitizeBlock(
   if (block.attachments?.length) {
     next.attachments = block.attachments.map(persistableAttachment);
   }
+  const image = sanitizeGeneratedImage(block.image);
+  if (block.role === "image" && !image) return null;
+  if (image) next.image = image;
   if (block.startedAt != null) next.startedAt = block.startedAt;
   if (block.durationMs != null) next.durationMs = block.durationMs;
   const turnModel = sanitizeTurnModel(block.turnModel);
@@ -765,6 +769,35 @@ function sanitizeBtwThreads(
     ];
   });
   return threads.length > 0 ? threads : undefined;
+}
+
+function sanitizeGeneratedImage(value: unknown): GeneratedImageMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path.trim() : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  const mimeType = typeof record.mimeType === "string" ? record.mimeType.trim() : "";
+  const size = record.size;
+  if (
+    !path ||
+    !name ||
+    !mimeType.startsWith("image/") ||
+    typeof size !== "number" ||
+    !Number.isSafeInteger(size) ||
+    size <= 0
+  ) {
+    return undefined;
+  }
+  const alt = typeof record.alt === "string" ? record.alt.trim() : "";
+  return {
+    path,
+    name,
+    mimeType,
+    size,
+    ...(alt ? { alt } : {}),
+  };
 }
 
 function sanitizeTurnMetrics(value: unknown): TurnMetrics | undefined {
