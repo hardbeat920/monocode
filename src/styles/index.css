@@ -1859,15 +1859,6 @@ html.theme-light .popover-backdrop {
   padding: 0 2px;
 }
 
-.btw-message-divider {
-  display: block;
-  height: 1px;
-  margin-top: 14px !important;
-  background: color-mix(in srgb, var(--color-content) 9%, transparent);
-  user-select: none;
-  pointer-events: none;
-}
-
 .btw-message-meta {
   display: flex;
   min-width: 0;
@@ -1879,13 +1870,6 @@ html.theme-light .popover-backdrop {
   line-height: 1.4;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.btw-message-rule {
-  min-width: 12px;
-  flex: 1 1 auto;
-  height: 1px;
-  background: color-mix(in srgb, var(--color-content) 9%, transparent);
 }
 
 .btw-empty-state {

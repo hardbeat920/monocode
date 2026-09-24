@@ -383,31 +383,21 @@ export function BtwPopover({
                         }
                       />
                     </div>
-                    {message.role === "assistant" ? (
-                      <span className="btw-message-divider" aria-hidden />
-                    ) : null}
                   </Fragment>
                 ))}
                 {running ? (
-                  <Fragment>
-                    <div className="btw-message btw-message-assistant max-w-[96%]">
-                      <div className="btw-message-meta">
-                        <ProviderIcon
-                          harness={harness}
-                          className="size-3.5 shrink-0"
-                        />
-                        <span>{HARNESS_LABEL[harness].toUpperCase()}</span>
-                        <span className="btw-message-rule" aria-hidden />
-                        <span className="normal-case tracking-normal text-content/45">
-                          thinking
-                        </span>
-                      </div>
-                      <Shimmer duration={1.6}>
-                        Working through a separate thread…
-                      </Shimmer>
+                  <div className="btw-message btw-message-assistant max-w-[96%]">
+                    <div className="btw-message-meta">
+                      <ProviderIcon
+                        harness={harness}
+                        className="size-3.5 shrink-0"
+                      />
+                      <span>{HARNESS_LABEL[harness].toUpperCase()}</span>
                     </div>
-                    <span className="btw-message-divider" aria-hidden />
-                  </Fragment>
+                    <Shimmer duration={1.6}>
+                      Working through a separate thread…
+                    </Shimmer>
+                  </div>
                 ) : null}
               </div>
             )}
@@ -454,11 +444,7 @@ export function BtwPopover({
               hideProjectPicker
               hideBranchPicker
               hideTopBar
-              placeholder={
-                running
-                  ? `${HARNESS_TITLE[harness]} is thinking…`
-                  : "Ask a side question…"
-              }
+              placeholder="Ask a side question…"
               inputAriaLabel="By-the-way question"
               allowedModelHarnesses={[harness]}
               initialDraft={draftText}
