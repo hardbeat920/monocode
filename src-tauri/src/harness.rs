@@ -1548,7 +1548,47 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
             ))
         }
     };
-    resolve_configured_harness_binary(binary_path, provider, names)
+    let path = resolve_configured_harness_binary(binary_path, provider, names)?;
+    validate_harness_binary_version(provider, &path)?;
+    Ok(path)
+}
+
+fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), String> {
+    if provider == "antigravity" {
+        return Ok(());
+    }
+    let version = exec_capture(&path.to_string_lossy(), &["--version".to_string()], None)?;
+    let lower = version.to_ascii_lowercase();
+    let has_version = version.split_whitespace().any(|token| {
+        let token = token
+            .strip_prefix('v')
+            .or_else(|| token.strip_prefix('V'))
+            .unwrap_or(token);
+        let mut parts = token.split('.');
+        let valid = parts
+            .next()
+            .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+            && parts
+                .next()
+                .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+            && parts
+                .next()
+                .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+        valid && parts.next().is_none()
+    });
+    let provider_marker = match provider {
+        "claude" => lower.contains("claude"),
+        "codex" => lower.contains("codex"),
+        "hermes" => lower.contains("hermes"),
+        _ => true,
+    };
+    if has_version && provider_marker {
+        Ok(())
+    } else {
+        Err(format!(
+            "Configured {provider} binary returned an invalid version."
+        ))
+    }
 }
 
 fn resolve_configured_harness_binary(
@@ -2747,7 +2787,14 @@ mod tests {
         let opencode = dir.join("opencode");
         let decoy = dir.join("codex.sh");
         for path in [&codex, &opencode, &decoy] {
-            std::fs::write(path, b"#!/bin/sh\n").unwrap();
+            let script: &[u8] = if path == &decoy {
+                b"#!/bin/sh\n"
+            } else if path == &codex {
+                b"#!/bin/sh\necho 'codex-cli 0.156.1'\n"
+            } else {
+                b"#!/bin/sh\necho '1.18.32'\n"
+            };
+            std::fs::write(path, script).unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let codex_path = codex.to_string_lossy().into_owned();
@@ -3078,7 +3125,7 @@ mod windows_binary_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let shim = dir.join("codex.cmd");
-        std::fs::write(&shim, b"@echo off\r\n").unwrap();
+        std::fs::write(&shim, b"@echo off\r\necho codex-cli 0.156.1\r\n").unwrap();
         let shim_path = shim.to_string_lossy().into_owned();
 
         assert_eq!(
