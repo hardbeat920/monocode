@@ -337,6 +337,13 @@ export function resolveOpenClawBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_openclaw");
 }
 
+export function openClawGatewayConfig(url?: string): Promise<{
+  url?: string;
+  secretSource: "native-runtime";
+}> {
+  return invoke("harness_openclaw_gateway_config", { url });
+}
+
 export function resolveAntigravityBinary(): Promise<{
   path: string;
   args: string[];

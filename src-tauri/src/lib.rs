@@ -400,6 +400,7 @@ pub fn run() {
             harness::harness_resolve_grok,
             harness::harness_resolve_hermes,
             harness::harness_resolve_openclaw,
+            harness::harness_openclaw_gateway_config,
             harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,

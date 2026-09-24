@@ -63,6 +63,13 @@ struct HarnessSseEnd {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenClawGatewayConfig {
+    pub url: Option<String>,
+    pub secret_source: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HarnessHttpResponse {
     pub status: u16,
     pub body: String,
@@ -406,6 +413,31 @@ pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
         .ok_or_else(|| {
             "Antigravity ACP server (agy_acp_server.par) not found. Install Antigravity and run `agy` once in Terminal.".into()
         })
+}
+
+/// Validate non-secret OpenClaw Gateway configuration. Credentials stay in the
+/// native runtime/environment and are never returned to the frontend.
+#[tauri::command]
+pub fn harness_openclaw_gateway_config(
+    url: Option<String>,
+) -> Result<OpenClawGatewayConfig, String> {
+    let url = url.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    if let Some(url) = &url {
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("ws://") || lower.starts_with("wss://")) {
+            return Err("OpenClaw Gateway URL must use ws:// or wss://".into());
+        }
+        if url.contains('@') || url.contains(' ') {
+            return Err("OpenClaw Gateway URL must not contain credentials".into());
+        }
+    }
+    Ok(OpenClawGatewayConfig {
+        url,
+        secret_source: "native-runtime",
+    })
 }
 
 /// Bind an ephemeral loopback port for `opencode serve`.
