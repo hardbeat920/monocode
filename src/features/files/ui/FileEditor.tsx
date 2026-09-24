@@ -5,6 +5,7 @@ import {
   foldKeymap,
   getIndentUnit,
   indentUnit,
+  syntaxTree,
 } from "@codemirror/language";
 import {
   Annotation,
@@ -30,11 +31,19 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  ListBullet,
   RotateCcw,
 } from "../../../shared/ui/icons";
 import { formatInteger } from "../../../shared/lib/numbers";
 import { minimalSetup } from "codemirror";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   MarkdownViewShell,
   useMarkdownMode,
@@ -85,6 +94,22 @@ import {
 import { editorLint } from "../editor/editorLint";
 import { editorSearch } from "../editor/editorSearch";
 import { editorScrollbar } from "../editor/editorScrollbar";
+import {
+  activeOutlineId,
+  outlineFromState,
+  type OutlineItem,
+} from "../editor/editorOutline";
+import {
+  OUTLINE_WIDTH_DEFAULT,
+  OUTLINE_WIDTH_MAX,
+  OUTLINE_WIDTH_MIN,
+  loadOutlineView,
+  saveOutlineView,
+  subscribeOutlineView,
+} from "../model/outlineView";
+import { useDragResize } from "../../../shared/hooks/useDragResize";
+import { FileTypeIcon } from "./FileTypeIcon";
+import { FloatingOutline, OutlinePanel } from "./OutlinePanel";
 import { FilePreviewSearch } from "./FilePreviewSearch";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
@@ -515,6 +540,9 @@ function CodeMirrorEditor({
   onDocChange?: (content: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  // The pane holding the editor and the docked outline. Its width stays put as
+  // the outline grows, so it is the stable basis for the resize maximum.
+  const paneRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const savedDocumentRef = useRef<Text | null>(null);
   const dirtyRef = useRef(false);
@@ -541,6 +569,18 @@ function CodeMirrorEditor({
     useState<DiffCommentComposerTarget | null>(null);
   const [selectionTarget, setSelectionTarget] =
     useState<EditorSelectionTarget | null>(null);
+  const outlineView = useSyncExternalStore(
+    subscribeOutlineView,
+    loadOutlineView,
+    loadOutlineView,
+  );
+  const [outlineItems, setOutlineItems] = useState<OutlineItem[]>([]);
+  const [outlineActive, setOutlineActive] = useState<string | null>(null);
+  const outlineItemsRef = useRef<OutlineItem[]>([]);
+  const outlineOpenRef = useRef(outlineView.open);
+  const outlineTimerRef = useRef(0);
+  const pathRef = useRef(path);
+  const outlineViewRef = useRef(outlineView);
   activeRef.current = active;
   onDirtyChangeRef.current = onDirtyChange;
   onErrorCountChangeRef.current = onErrorCountChange;
@@ -549,6 +589,85 @@ function CodeMirrorEditor({
   onDocChangeRef.current = onDocChange;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
+  outlineOpenRef.current = outlineView.open;
+  pathRef.current = path;
+  outlineViewRef.current = outlineView;
+
+  const refreshOutline = useCallback((view: EditorView) => {
+    const items = outlineFromState(view.state, pathRef.current);
+    outlineItemsRef.current = items;
+    setOutlineItems((current) =>
+      sameOutline(current, items) ? current : items,
+    );
+    setOutlineActive(activeOutlineId(items, view.state.selection.main.head));
+  }, []);
+
+  const scheduleOutline = useCallback(
+    (view: EditorView) => {
+      if (!outlineOpenRef.current) return;
+      window.clearTimeout(outlineTimerRef.current);
+      outlineTimerRef.current = window.setTimeout(
+        () => refreshOutline(view),
+        150,
+      );
+    },
+    [refreshOutline],
+  );
+
+  const revealOutlineItem = useCallback((item: OutlineItem) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const anchor = Math.min(item.from, view.state.doc.length);
+    view.dispatch({
+      selection: { anchor },
+      effects: EditorView.scrollIntoView(anchor, { y: "center" }),
+    });
+    view.focus();
+  }, []);
+
+  const outlineResize = useDragResize({
+    direction: "left",
+    min: OUTLINE_WIDTH_MIN,
+    max: () => {
+      const pane = paneRef.current ?? hostRef.current;
+      const width = pane?.clientWidth ?? 640;
+      return Math.min(
+        OUTLINE_WIDTH_MAX,
+        Math.max(OUTLINE_WIDTH_MIN, Math.round(width * 0.6)),
+      );
+    },
+    defaultWidth: OUTLINE_WIDTH_DEFAULT,
+    initial: outlineView.width,
+    onCommit: (width) => saveOutlineView({ ...outlineViewRef.current, width }),
+  });
+
+  const toggleOutline = useCallback(() => {
+    const current = outlineViewRef.current;
+    saveOutlineView({ ...current, open: !current.open });
+  }, []);
+
+  const closeOutline = useCallback(() => {
+    saveOutlineView({ ...outlineViewRef.current, open: false });
+  }, []);
+
+  const detachOutline = useCallback(() => {
+    saveOutlineView({
+      ...outlineViewRef.current,
+      open: true,
+      detached: true,
+    });
+  }, []);
+
+  const dockOutline = useCallback(() => {
+    saveOutlineView({ ...outlineViewRef.current, detached: false });
+  }, []);
+
+  const commitOutlinePosition = useCallback(
+    (position: { x: number; y: number }) => {
+      saveOutlineView({ ...outlineViewRef.current, position });
+    },
+    [],
+  );
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
     const positions = diffNavigablePositions(view);
@@ -737,6 +856,20 @@ function CodeMirrorEditor({
           } else if (update.docChanged) {
             setSelectionTarget(null);
           }
+          if (update.selectionSet) {
+            setOutlineActive(
+              activeOutlineId(
+                outlineItemsRef.current,
+                update.state.selection.main.head,
+              ),
+            );
+          }
+          if (
+            update.docChanged ||
+            syntaxTree(update.state) !== syntaxTree(update.startState)
+          ) {
+            scheduleOutline(update.view);
+          }
           if (!update.docChanged) return;
           onDocChangeRef.current?.(update.state.doc.toString());
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
@@ -762,6 +895,7 @@ function CodeMirrorEditor({
     dirtyRef.current = false;
     viewRef.current = view;
     lockOverscroll(view.scrollDOM as HTMLDivElement);
+    if (outlineOpenRef.current) refreshOutline(view);
     if (showDiff) {
       if (gitOriginalRef.current) {
         setGitOriginal(view, gitOriginalRef.current);
@@ -787,13 +921,21 @@ function CodeMirrorEditor({
       disposed = true;
       onErrorCountChangeRef.current(0);
       lockOverscroll(null);
+      window.clearTimeout(outlineTimerRef.current);
       viewRef.current = null;
       savedDocumentRef.current = null;
       setChunkNav(null);
       setSelectionTarget(null);
       view.destroy();
     };
-  }, [lockOverscroll, path, showDiff, syncChunkNav]);
+  }, [
+    lockOverscroll,
+    path,
+    refreshOutline,
+    scheduleOutline,
+    showDiff,
+    syncChunkNav,
+  ]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -892,21 +1034,59 @@ function CodeMirrorEditor({
     if (!active) setSelectionTarget(null);
   }, [active]);
 
+  useEffect(() => {
+    if (!outlineView.open) return;
+    const view = viewRef.current;
+    if (view) refreshOutline(view);
+  }, [outlineView.open, refreshOutline]);
+
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {showDiff ? (
-          <DiffChunkNav
-            index={chunkNav?.index ?? 0}
-            total={chunkNav?.positions.length ?? 0}
-            additions={chunkNav?.additions ?? 0}
-            deletions={chunkNav?.deletions ?? 0}
-            onPrev={() => stepChunkNav(-1)}
-            onNext={() => stepChunkNav(1)}
-          />
-        ) : null}
-        <div ref={hostRef} className="min-h-0 flex-1" />
+        <FileTopBar
+          path={path}
+          relativePath={commentPath}
+          outlineOpen={outlineView.open}
+          outlineCount={outlineItems.length}
+          onToggleOutline={toggleOutline}
+        />
+        <div ref={paneRef} className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {showDiff ? (
+              <DiffChunkNav
+                index={chunkNav?.index ?? 0}
+                total={chunkNav?.positions.length ?? 0}
+                additions={chunkNav?.additions ?? 0}
+                deletions={chunkNav?.deletions ?? 0}
+                onPrev={() => stepChunkNav(-1)}
+                onNext={() => stepChunkNav(1)}
+              />
+            ) : null}
+            <div ref={hostRef} className="min-h-0 flex-1" />
+          </div>
+          {outlineView.open && !outlineView.detached ? (
+            <OutlinePanel
+              items={outlineItems}
+              activeId={outlineActive}
+              onSelect={revealOutlineItem}
+              onClose={closeOutline}
+              onDetach={detachOutline}
+              resize={outlineResize}
+            />
+          ) : null}
+        </div>
       </div>
+      {active && outlineView.open && outlineView.detached ? (
+        <FloatingOutline
+          items={outlineItems}
+          activeId={outlineActive}
+          onSelect={revealOutlineItem}
+          onClose={closeOutline}
+          onDock={dockOutline}
+          initialPosition={outlineView.position}
+          onCommitPosition={commitOutlinePosition}
+        />
+      ) : null}
       {commentTarget ? (
         <DiffCommentComposer
           path={commentPath}
@@ -920,6 +1100,87 @@ function CodeMirrorEditor({
       />
     </>
   );
+}
+
+function FileTopBar({
+  path,
+  relativePath,
+  outlineOpen,
+  outlineCount,
+  onToggleOutline,
+}: {
+  path: string;
+  relativePath: string;
+  outlineOpen: boolean;
+  outlineCount: number;
+  onToggleOutline: () => void;
+}) {
+  const segments = relativePath.split("/").filter(Boolean);
+  const name = segments[segments.length - 1] ?? relativePath;
+  return (
+    <header
+      className="flex h-8 shrink-0 items-center gap-2 border-b border-stroke px-3"
+      title={path}
+    >
+      <FileTypeIcon name={name} isDir={false} size={14} />
+      <nav
+        aria-label="File path"
+        className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden font-mono text-[11px]"
+      >
+        {segments.map((segment, index) => (
+          <Fragment key={`${index}:${segment}`}>
+            {index > 0 ? (
+              <span className="shrink-0 text-content/25">/</span>
+            ) : null}
+            <span
+              className={`min-w-0 truncate ${
+                index === segments.length - 1
+                  ? "text-content/85"
+                  : "text-content/45"
+              }`}
+            >
+              {segment}
+            </span>
+          </Fragment>
+        ))}
+      </nav>
+      <button
+        type="button"
+        aria-pressed={outlineOpen}
+        title={outlineOpen ? "Hide outline" : "Show outline"}
+        onClick={onToggleOutline}
+        className={`flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] ${
+          outlineOpen
+            ? "bg-content/10 text-content"
+            : "text-content/55 hover:bg-content/10 hover:text-content"
+        }`}
+      >
+        <ListBullet className="size-3.5" strokeWidth={1.75} />
+        {outlineOpen ? (
+          <span className="tabular-nums">{outlineCount}</span>
+        ) : null}
+      </button>
+    </header>
+  );
+}
+
+function sameOutline(a: OutlineItem[], b: OutlineItem[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index++) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left.id !== right.id ||
+      left.label !== right.label ||
+      left.kind !== right.kind ||
+      left.depth !== right.depth ||
+      left.line !== right.line
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function editorSelectionTarget(
