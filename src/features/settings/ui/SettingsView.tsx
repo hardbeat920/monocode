@@ -145,6 +145,7 @@ import { refreshHarnessCatalogs } from "../../../integrations/harness/core/regis
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
+  firstEnabledHarness,
   getModelSnapshot,
   loadDefaultModels,
   loadHiddenPickerProviders,
@@ -2366,6 +2367,14 @@ function ProvidersPage({
 
   const project = scope === GLOBAL_PROVIDER_SCOPE ? null : scope;
   const projectSettings = project ? loadProjectProviderSettings(project) : {};
+  // A project without overrides inherits the global default provider, the same
+  // way `defaultSessionChoice` resolves it for new conversations.
+  const effectiveDefaultHarness = project
+    ? firstEnabledHarness(
+        project,
+        projectSettings.defaultHarness ?? choice?.harness ?? "cursor",
+      )
+    : (choice?.harness ?? null);
 
   useEffect(() => {
     void probeHarnessAvailability();
@@ -2440,7 +2449,8 @@ function ProvidersPage({
       >
         {HARNESSES.map((harness) => {
           const inPicker = project
-            ? !(projectSettings.hidden ?? []).includes(harness)
+            ? !(projectSettings.hidden ?? []).includes(harness) &&
+              !hiddenGlobally.includes(harness)
             : !hiddenGlobally.includes(harness);
           const selectedModel = project
             ? (projectSettings.models?.[harness] ??
@@ -2456,7 +2466,7 @@ function ProvidersPage({
                 ? choice.model
                 : defaultModelId(harness)));
           const isDefault = project
-            ? projectSettings.defaultHarness === harness
+            ? effectiveDefaultHarness === harness
             : choice?.harness === harness;
           return (
             <ProviderRow

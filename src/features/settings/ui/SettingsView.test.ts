@@ -28,6 +28,14 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
+vi.mock("../../../integrations/harness/core/availability", () => ({
+  isHarnessAvailable: (id: string) => id === "claude" || id === "cursor",
+  hasProbedHarnessAvailability: () => true,
+  getHarnessAvailabilitySnapshot: () => 0,
+  subscribeHarnessAvailability: () => () => {},
+  probeHarnessAvailability: async () => {},
+  harnessUnavailableHint: () => "",
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -500,5 +508,58 @@ describe("settings search", () => {
     expect(onSelectSection).not.toHaveBeenCalled();
     const row = container.querySelector('[data-setting-id="sounds"]')!;
     expect(row.className).toContain("bg-accent/10");
+  });
+});
+
+describe("providers scope inheritance", () => {
+  async function selectScope(label: string) {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label^="Provider defaults scope"]',
+    )!;
+    await act(async () => trigger.click());
+    const option = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((node) => node.textContent?.trim() === label);
+    expect(option).toBeTruthy();
+    await act(async () => option!.click());
+  }
+
+  it("inherits the global default provider and picker visibility in project scope", async () => {
+    localStorage.setItem(
+      "monocode.lastModel",
+      JSON.stringify({ harness: "claude", model: "claude:opus-5" }),
+    );
+    localStorage.setItem(
+      "monocode.hiddenPickerProviders",
+      JSON.stringify(["cursor"]),
+    );
+    await render("providers");
+
+    await selectScope("repo");
+
+    // A project with no overrides shows the inherited global default provider.
+    const claudeRow = container
+      .querySelector('[aria-label^="Claude Code model"]')!
+      .closest(".settings-row")!;
+    const claudeDefault = Array.from(
+      claudeRow.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((node) => node.textContent?.trim() === "Default");
+    expect(claudeDefault).toBeTruthy();
+
+    // Picker visibility also inherits the global setting.
+    expect(
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Show Claude Code in the model picker"]',
+        )!
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Show Cursor in the model picker"]',
+        )!
+        .getAttribute("aria-checked"),
+    ).toBe("false");
   });
 });
