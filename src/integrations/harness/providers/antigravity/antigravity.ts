@@ -2,7 +2,7 @@ import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
-import { recoverAcpSession } from "../../core/acpLifecycle";
+import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
 import {
   killChild,
   resolveAntigravityBinary,
@@ -418,11 +418,7 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     const live = liveRef.current;
     if (live) noteActivity(live);
     if (!live) {
-      void acp
-        .respondError(id, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
+      void unknownAcpRequest(acp.respondError.bind(acp), id, method)
         .catch(() => undefined);
       return;
     }
@@ -744,10 +740,7 @@ async function handleRequest(
   // Propagate: the caller turns a failed response write into a transport
   // failure for the active generation, so the provider cannot wedge waiting
   // for a reply that never left the pipe.
-  await live.acp.respondError(id, {
-    code: -32601,
-    message: `Method not found: ${method}`,
-  });
+  await unknownAcpRequest(live.acp.respondError.bind(live.acp), id, method);
 }
 
 async function handlePermission(live: Live, id: number, params: unknown) {

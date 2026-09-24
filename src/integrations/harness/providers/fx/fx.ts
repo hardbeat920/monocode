@@ -1,6 +1,6 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
-import { recoverAcpSession } from "../../core/acpLifecycle";
+import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import {
@@ -225,11 +225,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
   handlers.onRequest = (id, method, params) => {
     const live = liveRef.current;
     if (!live) {
-      void acp
-        .respondError(id, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
+      void unknownAcpRequest(acp.respondError.bind(acp), id, method)
         .catch(() => undefined);
       return;
     }
@@ -472,11 +468,7 @@ async function handleRequest(
     await handlePermission(live, id, params);
     return;
   }
-  await live.acp
-    .respondError(id, {
-      code: -32601,
-      message: `Method not found: ${method}`,
-    })
+  await unknownAcpRequest(live.acp.respondError.bind(live.acp), id, method)
     .catch(() => undefined);
 }
 
