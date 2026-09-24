@@ -7,10 +7,19 @@ import {
 
 export type { JsonRpcMessage };
 
+export type AcpRequestId = JsonRpcId;
+
 export type AcpHandlers = {
   onNotification?: (method: string, params: unknown) => void;
+  /** Existing providers use numeric ACP request IDs. */
   onRequest?: (
     id: number,
+    method: string,
+    params: unknown,
+  ) => void | Promise<void>;
+  /** Generic/third-party providers can preserve string IDs exactly. */
+  onRequestRaw?: (
+    id: JsonRpcId,
     method: string,
     params: unknown,
   ) => void | Promise<void>;
@@ -28,9 +37,10 @@ export class AcpClient {
       onNotification: (method, params) =>
         this.handlers.onNotification?.(method, params),
       onRequest: (id, method, params) => {
-        const numeric =
-          typeof id === "number" ? id : Number(id);
-        void this.handlers.onRequest?.(numeric, method, params);
+        void this.handlers.onRequestRaw?.(id, method, params);
+        if (typeof id === "number") {
+          void this.handlers.onRequest?.(id, method, params);
+        }
       },
     };
     this.rpc = new JsonRpcClient(sessionId, rpcHandlers, {
@@ -59,14 +69,14 @@ export class AcpClient {
     return this.rpc.notify(method, params);
   }
 
-  respond(id: number, result: unknown): Promise<void> {
-    return this.rpc.respond(id as JsonRpcId, result);
+  respond(id: JsonRpcId, result: unknown): Promise<void> {
+    return this.rpc.respond(id, result);
   }
 
   respondError(
-    id: number,
+    id: JsonRpcId,
     error: { code: number; message: string; data?: unknown },
   ): Promise<void> {
-    return this.rpc.respondError(id as JsonRpcId, error);
+    return this.rpc.respondError(id, error);
   }
 }
