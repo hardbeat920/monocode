@@ -7433,7 +7433,7 @@ export default function App({
         modelSettings ??
         existing?.modelSettings ??
         preferredModelSettings(
-          resolveModel(turnHarness, selectedModel || source.model),
+          resolveModel(requestHarness!, selectedModel || source.model),
           source.modelSettings,
         );
       if (existing?.status === "running") return;

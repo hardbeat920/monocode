@@ -61,11 +61,7 @@ import { visibleUserPrompt } from "../../orchestration/model/orchestration";
 import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
 import { resolveModel } from "../model/models";
-import {
-  btwOpenTargetTurnId,
-  resolveBtwHarness,
-  supportsBtwHarness,
-} from "../model/btw";
+import { btwOpenTargetTurnId, resolveBtwHarness } from "../model/btw";
 import { harnessForTurn } from "../model/secondOpinion";
 import { Shimmer } from "../../../shared/ui/Shimmer";
 import {
