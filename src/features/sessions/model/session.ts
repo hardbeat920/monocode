@@ -320,7 +320,8 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
   supervised: "Ask before commands and file changes.",
   "auto-accept-edits": "Auto-approve edits, ask before other actions.",
   auto: "An AI reviewer can approve or deny actions.",
-  "full-access": "Allow commands, edits, and MCP actions without prompts.",
+  "full-access":
+    "Allow commands, edits, and supported MCP confirmations in non-plan turns without prompts.",
 };
 
 export type WorkspaceMode = "current" | "worktree";

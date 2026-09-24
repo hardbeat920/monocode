@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Full Access Codex turns now accept supported MCP elicitation confirmations without an additional approval prompt.
+- Non-plan Full Access Codex turns now accept supported MCP elicitation confirmations without an additional approval prompt.
 
 ## [0.1.55] - 2026-09-23
 
