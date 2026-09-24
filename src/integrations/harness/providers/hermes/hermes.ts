@@ -45,6 +45,7 @@ type Live = {
   modeId: string;
   muteUpdates: boolean;
   cancelled: boolean;
+  stopReason?: "cancelled" | "process-exit";
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -91,12 +92,12 @@ export async function sendHermesTurn(input: SendTurnInput): Promise<void> {
       live.muteUpdates = false;
       try {
         await applyModelSelection(live, input);
-        if (live.cancelled) return;
+        if (live.cancelled && live.stopReason !== "process-exit") return;
         await applyRuntimeMode(live, input.runtimeMode, live.planning);
-        if (live.cancelled) return;
+        if (live.cancelled && live.stopReason !== "process-exit") return;
         await prompt(live, input);
       } catch (error) {
-        if (live.cancelled) return;
+        if (live.cancelled && live.stopReason !== "process-exit") return;
         throw error;
       }
     });
@@ -139,6 +140,7 @@ export async function cancelHermesTurn(sessionId: string): Promise<void> {
     return;
   }
   live.cancelled = true;
+  live.stopReason = "cancelled";
   live.muteUpdates = true;
   live.background.clear();
   resolveApprovals(live);
@@ -232,6 +234,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       const live = liveRef.current;
       if (live) {
         live.cancelled = true;
+        live.stopReason = "process-exit";
         live.background.clear();
       }
       acp.close(new Error("Hermes Agent exited"));
@@ -374,7 +377,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
         { sessionId: live.acpSessionId, prompt: blocks },
         PROMPT_TIMEOUT_MS,
       );
-      if (live.cancelled) return;
+      if (live.cancelled && live.stopReason !== "process-exit") return;
       // Close this assistant bubble without ending MonoCode's busy turn. A
       // background handoff opens a fresh assistant bubble after it arrives.
       live.onEvent({ type: "message.completed" });
@@ -386,7 +389,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
       blocks = hermesPromptBlocks(await backgroundHandoff(finished));
     }
   } catch (error) {
-    if (live.cancelled) return;
+    if (live.cancelled && live.stopReason !== "process-exit") return;
     const detail = error instanceof Error ? error.message : String(error);
     live.onEvent({
       type: "session.error",

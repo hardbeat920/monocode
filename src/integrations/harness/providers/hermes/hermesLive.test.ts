@@ -375,7 +375,7 @@ describe("Hermes live ACP sequence", () => {
       "session/prompt",
     );
     onExit!(17);
-    await turn;
+    await expect(turn).rejects.toThrow("Hermes Agent exited");
     expect(events).toContainEqual({ type: "session.ended", code: 17 });
     await stopHermesSession("hermes-live-exit");
   });
