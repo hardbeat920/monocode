@@ -1066,7 +1066,7 @@ function CodeMirrorEditor({
           ) : null}
         </div>
       </div>
-      {outlineView.open && outlineView.detached ? (
+      {active && outlineView.open && outlineView.detached ? (
         <FloatingOutline
           items={outlineItems}
           activeId={outlineActive}

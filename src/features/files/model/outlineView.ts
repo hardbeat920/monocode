@@ -92,6 +92,11 @@ export function saveOutlineView(view: OutlineView) {
     localStorage.setItem(OUTLINE_VIEW_KEY, serialized);
   } catch {
     // private mode / quota
+    try {
+      serialized = localStorage.getItem(OUTLINE_VIEW_KEY);
+    } catch {
+      serialized = null;
+    }
   }
   cached = next;
   cachedRaw = serialized;
