@@ -355,6 +355,30 @@ describe("collectWorkspaceSnapshot", () => {
     ]);
     expect(snapshot.projectTerminals[0]?.pane.files[0]?.id).toBe(term.id);
   });
+
+  it("stores the last dock side for new projects", () => {
+    const term = newTerminalFile("/tmp/a", "zsh");
+    const dock = createProjectTerminal("/tmp/a", term);
+    const snapshot = collectWorkspaceSnapshot(
+      [{ ...newTab("s1"), id: "t1" }],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+      [dock],
+      "right",
+    );
+    expect(snapshot.lastDockSide).toBe("right");
+    expect(
+      collectWorkspaceSnapshot(
+        [{ ...newTab("s1"), id: "t1" }],
+        [],
+        "t1",
+        "/tmp/a",
+        new Map(),
+      ).lastDockSide,
+    ).toBeUndefined();
+  });
 });
 
 describe("parseWorkspaceSnapshot", () => {
@@ -364,6 +388,26 @@ describe("parseWorkspaceSnapshot", () => {
     expect(
       parseWorkspaceSnapshot({ tabs: [{}], activeTabId: "t1" }),
     ).toBeNull();
+  });
+
+  it("keeps a valid last dock side and drops an invalid one", () => {
+    const term = newTerminalFile("/tmp/a", "zsh");
+    const snapshot = collectWorkspaceSnapshot(
+      [{ ...newTab("s1"), id: "t1" }],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+      [createProjectTerminal("/tmp/a", term)],
+      "right",
+    );
+    const raw = JSON.parse(JSON.stringify(snapshot)) as Record<
+      string,
+      unknown
+    >;
+    expect(parseWorkspaceSnapshot(raw)?.lastDockSide).toBe("right");
+    raw.lastDockSide = "diagonal";
+    expect(parseWorkspaceSnapshot(raw)?.lastDockSide).toBeUndefined();
   });
 
   it("drops unknown fields and repairs a missing active tab", () => {
@@ -569,5 +613,20 @@ describe("hydrateWorkspaceSnapshot", () => {
     expect(
       workspace?.projectTerminals?.[0]?.pane.files[0]?.foreground,
     ).toBeUndefined();
+  });
+
+  it("restores the last dock side", () => {
+    const term = newTerminalFile("/tmp/a", "zsh");
+    const snapshot = collectWorkspaceSnapshot(
+      [{ ...newTab("s1"), id: "t1" }],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+      [createProjectTerminal("/tmp/a", term)],
+      "left",
+    );
+    const workspace = hydrateWorkspaceSnapshot(snapshot, new Map());
+    expect(workspace?.lastDockSide).toBe("left");
   });
 });

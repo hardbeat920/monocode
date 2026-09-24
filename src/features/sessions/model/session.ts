@@ -1,4 +1,4 @@
-import type { ContextUsage } from "./contextUsage";
+import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
 import type { InboxComposerCard } from "../../inbox/model/githubTasks";
@@ -8,10 +8,12 @@ import type { OrchestrationProposal } from "../../orchestration/model/orchestrat
 import type { LinkedWorkItemUpdateCard } from "../../inbox/model/linkedWorkItemActivity";
 import {
   defaultSessionChoice,
+  firstEnabledHarness,
   preferredModelId,
   preferredModelSettings,
   resolveModel,
 } from "./models";
+import { loadProjectProviderSettings } from "./projectProviders";
 
 export type HarnessId =
   | "claude"
@@ -289,6 +291,8 @@ export type Block = {
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    /** Left running by the agent when it yielded; the turn waits on it. */
+    background?: boolean;
   };
   approval?: {
     requestId: number;
@@ -373,6 +377,11 @@ export type Session = {
   blocks: Block[];
   /** True while a harness turn is in flight. */
   busy?: boolean;
+  /**
+   * What the live turn is waiting on after the agent yielded with work still
+   * running in the background. In-memory only.
+   */
+  backgroundTasks?: string[];
   /** Follow-ups waiting for current turn. In-memory only. */
   queuedMessages?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
@@ -487,8 +496,86 @@ export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
 ): Session {
-  const choice = defaultSessionChoice();
+  const choice = defaultSessionChoice(cwd);
   return newSession(choice.harness, cwd, choice.model, runtimeMode);
+}
+
+/**
+ * Provider and model a seeded session should use in `cwd`. The project's own
+ * default provider and model win over the seed; when the project has neither,
+ * the seed's provider and model are carried. A provider the project hides is
+ * swapped for its first enabled one.
+ */
+function projectSessionChoice(
+  seed: Pick<Session, "harness" | "model"> | undefined,
+  cwd: string,
+): { harness: HarnessId; model?: string } {
+  const project = loadProjectProviderSettings(cwd);
+  const seedHarness = seed?.harness ?? "claude";
+  const harness = firstEnabledHarness(
+    cwd,
+    project.defaultHarness ?? seedHarness,
+  );
+  const model =
+    project.models?.[harness] ??
+    (project.defaultHarness === harness ? project.defaultModel : undefined) ??
+    (project.defaultHarness == null && harness === seedHarness
+      ? seed?.model
+      : undefined);
+  return { harness, model };
+}
+
+/**
+ * New conversation for a project. The project's default provider and model win
+ * over the seed's; a provider the project has hidden is swapped for its first
+ * enabled one.
+ */
+export function newSessionForProject(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
+  const { harness, model } = projectSessionChoice(seed, cwd);
+  const carriesSeed =
+    model != null && model === seed?.model && harness === seed?.harness;
+  return newSession(
+    harness,
+    cwd,
+    model,
+    seed?.runtimeMode,
+    carriesSeed ? seed?.modelSettings : undefined,
+  );
+}
+
+/**
+ * Retarget an existing session (typically a blank one) to a project, adopting
+ * that project's provider defaults while keeping its id, blocks and composer
+ * seed.
+ */
+export function retargetSessionToProject(
+  session: Session,
+  cwd: string,
+): Session {
+  const { harness, model } = projectSessionChoice(session, cwd);
+  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const carriesSeed =
+    model != null && model === session.model && harness === session.harness;
+  return {
+    ...session,
+    cwd,
+    harness,
+    model: resolved.id,
+    modelSettings: preferredModelSettings(
+      resolved,
+      carriesSeed ? session.modelSettings : undefined,
+    ),
+    title: HARNESS_LABEL[harness],
+    ...(harness === session.harness
+      ? {}
+      : { providerSessionId: undefined, providerAccountId: undefined }),
+    ...(resolved.id === session.model
+      ? {}
+      : { context: dropContextWindow(session.context) }),
+  };
 }
 
 /** New conversation carrying another session's harness, model and settings. */

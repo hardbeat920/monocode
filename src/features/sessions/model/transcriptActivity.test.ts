@@ -16,6 +16,7 @@ import {
   lastActivityIndex,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  resolveToolCallDisplay,
   isSubagentBlock,
   subagentBrief,
   subagentFailureSummary,
@@ -1261,6 +1262,149 @@ describe("editVerb", () => {
   it("falls back to Edit for unknown phrasing", () => {
     expect(editVerb("Patching src/App.tsx")).toBe("Edit");
     expect(editVerb("")).toBe("Edit");
+  });
+});
+
+describe("resolveToolCallDisplay", () => {
+  it("opens the exact path shown in the label, even when preview.path disagrees", () => {
+    // Two skills named SKILL.md: one under the provider's own skills folder
+    // (what the label names, from issue #322) and one under the project's
+    // .claude/skills that a preview field points at instead.
+    const label = "Read /Users/dev/.codex/skills/zuse/SKILL.md";
+    const preview = {
+      kind: "read" as const,
+      path: "/Users/dev/project/.claude/skills/custom-skill/SKILL.md",
+      fileName: "SKILL.md",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("/Users/dev/.codex/skills/zuse/SKILL.md");
+    expect(result.filePath).toBe(result.target);
+    expect(result.filePath).not.toBe(preview.path);
+  });
+
+  it("still resolves from preview.path when the label carries no literal path", () => {
+    const preview = {
+      kind: "read" as const,
+      path: "/Users/dev/project/src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay("Read", preview, "/Users/dev/project");
+    expect(result.target).toBe("src/App.tsx");
+    expect(result.filePath).toBe("/Users/dev/project/src/App.tsx");
+  });
+
+  it("falls back to the raw label when there is no recognisable action", () => {
+    const result = resolveToolCallDisplay("Thinking", undefined, "/Users/dev/project");
+    expect(result.action).toBeUndefined();
+    expect(result.target).toBeUndefined();
+  });
+
+  it("flags a write preview whose own path disagrees with the label's file", () => {
+    // Same two-SKILL.md situation as above, but for a write: the row must
+    // still open the label's file, and must not show it a diff meant for the
+    // other one.
+    const label = "Edit /Users/dev/.codex/skills/zuse/SKILL.md";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/.claude/skills/custom-skill/SKILL.md",
+      fileName: "SKILL.md",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.filePath).toBe("/Users/dev/.codex/skills/zuse/SKILL.md");
+    expect(result.previewMatchesFile).toBe(false);
+  });
+
+  it("keeps the write preview when its path agrees with the label's file", () => {
+    const label = "Edit src/App.tsx";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.filePath).toBe("/Users/dev/project/src/App.tsx");
+    expect(result.previewMatchesFile).toBe(true);
+  });
+
+  it("keeps the write preview when the label carries no literal path of its own", () => {
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay("Write", preview, "/Users/dev/project");
+    expect(result.previewMatchesFile).toBe(true);
+  });
+
+  it("falls back to the write preview's path when the label's target is plain English, not a filename", () => {
+    // A harness can phrase an edit's label as a description ("dependency
+    // versions") rather than a path. That description does not look like a
+    // file, so the row must still open and diff the preview's real file
+    // instead of failing to resolve anything.
+    const label = "Edit dependency versions";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/package.json",
+      fileName: "package.json",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("package.json");
+    expect(result.filePath).toBe("/Users/dev/project/package.json");
+    expect(result.previewMatchesFile).toBe(true);
+  });
+
+  it("still trusts a label's own path over the write preview when it looks like a file", () => {
+    const label = "Edit /Users/dev/.codex/skills/zuse/SKILL.md";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/.claude/skills/custom-skill/SKILL.md",
+      fileName: "SKILL.md",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("/Users/dev/.codex/skills/zuse/SKILL.md");
+  });
+
+  it("does not treat an unresolved write-preview path as a confirmed match", () => {
+    // The preview's own path is relative and cwd is unknown here, so it
+    // cannot be resolved at all - that is not the same as it agreeing with
+    // the label's file, and must not be shown as though it were.
+    const label = "Edit /Users/dev/project/src/App.tsx";
+    const preview = {
+      kind: "write" as const,
+      path: "src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay(label, preview, undefined);
+    expect(result.filePath).toBe("/Users/dev/project/src/App.tsx");
+    expect(result.previewMatchesFile).toBe(false);
+  });
+
+  it("trusts a label target with a line:column suffix over a disagreeing write preview", () => {
+    // "main.ts:12" does not end in ".ts" once the location suffix is
+    // counted, so a plain extension check on the label text alone rejects
+    // it. resolveWorkspacePath already strips that suffix, so the trust
+    // check must go through it instead of looksLikeFilePath directly.
+    const label = "Edit src/main.ts:12";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/other.ts",
+      fileName: "other.ts",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("src/main.ts:12");
+    expect(result.filePath).toBe("/Users/dev/project/src/main.ts");
+    expect(result.previewMatchesFile).toBe(false);
+  });
+
+  it("trusts a Windows-style label target ending in an extensionless filename", () => {
+    // Backslash separators mean looksLikeFilePath's own "/" check never
+    // fires, and "Dockerfile" alone has no dot extension - resolving through
+    // resolveWorkspacePath (which normalises slashes first) is what makes
+    // this recognisable as a real path instead of plain English.
+    const label = "Read C:\\repo\\docker\\Dockerfile";
+    const result = resolveToolCallDisplay(label, undefined, "C:/repo");
+    expect(result.target).toBe("C:\\repo\\docker\\Dockerfile");
+    expect(result.filePath).toBe("C:/repo/docker/Dockerfile");
   });
 });
 

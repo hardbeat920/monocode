@@ -119,10 +119,15 @@ export function replaceProjectPath(from: string, to: string): RecentProject[] {
     }
     saveArchived(replaced);
   }
+  notifyProjectPathsChanged();
+  return recents;
+}
+
+/** Rail projects, pins, groups, or their appearance changed in storage. */
+export function notifyProjectPathsChanged(): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(PROJECT_PATHS_CHANGED));
   }
-  return recents;
 }
 
 export function subscribeProjectPathsChanged(onChange: () => void): () => void {
@@ -273,6 +278,16 @@ export function loadPinnedProjects(): string[] {
 
 export function savePinnedProjects(pinned: string[]) {
   savePathList(RAIL_PINNED_KEY, pinned.map(normalize));
+  notifyProjectPathsChanged();
+}
+
+export function toggleProjectPin(path: string): void {
+  const pinned = loadPinnedProjects();
+  savePinnedProjects(
+    pinned.some((item) => sameProjectPath(item, path))
+      ? pinned.filter((item) => !sameProjectPath(item, path))
+      : [...pinned, path],
+  );
 }
 
 /** Every project path we still remember — rail, pins, saved order, archive. */

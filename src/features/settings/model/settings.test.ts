@@ -7,6 +7,7 @@ import {
   settingsSectionsByGroup,
   MODEL_CONTROLS_DEFAULT,
   DIFF_VIEWER_DEFAULT,
+  FORMAT_ON_SAVE_DEFAULT,
   FILE_TAB_MODE_DEFAULT,
   FOLLOW_UP_BEHAVIOR_DEFAULT,
   GRID_ARCADE_ENABLED_DEFAULT,
@@ -17,6 +18,7 @@ import {
   loadCollapsedProjectRailMode,
   loadModelControls,
   loadDiffViewer,
+  loadFormatOnSave,
   loadFileTabMode,
   loadFollowUpBehavior,
   loadGridArcadeEnabled,
@@ -28,6 +30,7 @@ import {
   saveCollapsedProjectRailMode,
   saveModelControls,
   saveDiffViewer,
+  saveFormatOnSave,
   saveFileTabMode,
   saveFollowUpBehavior,
   saveGridArcadeEnabled,
@@ -44,6 +47,7 @@ const NOTES_KEY = "monocode.notesEnabled";
 const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
+const FORMAT_ON_SAVE_KEY = "monocode.formatOnSave";
 const FILE_TAB_MODE_KEY = "monocode.fileTabMode";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 const TAB_ANIMATIONS_KEY = "monocode.tabAnimationsEnabled";
@@ -287,6 +291,26 @@ describe("workspace navigation keybindings", () => {
   });
 });
 
+describe("format on save setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(FORMAT_ON_SAVE_KEY);
+  });
+
+  it("defaults to on", () => {
+    expect(FORMAT_ON_SAVE_DEFAULT).toBe(true);
+    expect(loadFormatOnSave()).toBe(true);
+  });
+
+  it("persists an off switch", () => {
+    saveFormatOnSave(false);
+    expect(localStorage.getItem(FORMAT_ON_SAVE_KEY)).toBe("0");
+    expect(loadFormatOnSave()).toBe(false);
+    saveFormatOnSave(true);
+    expect(loadFormatOnSave()).toBe(true);
+  });
+});
+
 describe("diff viewer setting", () => {
   beforeEach(mockLocalStorage);
   afterEach(() => {
@@ -361,20 +385,20 @@ describe("collapsed project rail setting", () => {
     localStorage.removeItem(COLLAPSED_PROJECT_RAIL_MODE_KEY);
   });
 
-  it("defaults to the previously shipped hidden rail", () => {
-    expect(COLLAPSED_PROJECT_RAIL_MODE_DEFAULT).toBe("hidden");
-    expect(loadCollapsedProjectRailMode()).toBe("hidden");
+  it("defaults to the icon rail", () => {
+    expect(COLLAPSED_PROJECT_RAIL_MODE_DEFAULT).toBe("compact");
+    expect(loadCollapsedProjectRailMode()).toBe("compact");
   });
 
-  it("persists the compact mode and ignores unknown values", () => {
-    saveCollapsedProjectRailMode("compact");
+  it("persists the hidden mode and ignores unknown values", () => {
+    saveCollapsedProjectRailMode("hidden");
     expect(localStorage.getItem(COLLAPSED_PROJECT_RAIL_MODE_KEY)).toBe(
-      "compact",
+      "hidden",
     );
-    expect(loadCollapsedProjectRailMode()).toBe("compact");
+    expect(loadCollapsedProjectRailMode()).toBe("hidden");
 
     localStorage.setItem(COLLAPSED_PROJECT_RAIL_MODE_KEY, "floating");
-    expect(loadCollapsedProjectRailMode()).toBe("hidden");
+    expect(loadCollapsedProjectRailMode()).toBe("compact");
   });
 });
 
@@ -431,6 +455,12 @@ describe("settings search", () => {
       sectionLabel: "Chat",
       settingId: "follow-up",
       label: "Follow-up behavior",
+    });
+
+    expect(searchSettings("prettier")[0]).toMatchObject({
+      section: "chat",
+      settingId: "format-on-save",
+      label: "Format on save",
     });
   });
 

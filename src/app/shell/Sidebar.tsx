@@ -34,6 +34,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -137,6 +138,7 @@ import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
 import { ProjectSearch } from "../../features/projects/ui/ProjectSearch";
 import { Popover } from "../../shared/ui/Popover";
 import { SearchableProjectPicker } from "../../features/projects/ui/SearchableProjectPicker";
+import { useProjectMenu } from "./useProjectMenu";
 import { SessionFiltersMenu } from "../../features/sessions/ui/SessionFiltersMenu";
 import { LinkSessionWorkItemDialog } from "../../features/sessions/ui/LinkSessionWorkItemDialog";
 import { sessionReminderPresets } from "../../features/sessions/ui/sessionReminderPresets";
@@ -1420,6 +1422,7 @@ function SidebarComponent({
               busy={projectPathBusy(busyProjectPaths, cwd)}
               onSelectProject={onSelectProject}
               onOpenProject={onOpenProject}
+              onRemoveProject={onRemoveProject}
               onNew={onNew}
               onSearch={onSearch}
               onOpenInbox={onOpenInbox}
@@ -1805,13 +1808,14 @@ function SidebarComponent({
               agents={liveAgents}
               activeSessionId={activeSessionId}
               onSelect={onSelectAgent}
+              bottomSpacing={compactRailVisible}
             />
             <SidebarUpdateFooter
               update={updateNotice}
               onOpenWhatsNew={onOpenWhatsNew}
               onDismissUpdate={onDismissUpdate}
             />
-            <div className="flex shrink-0 flex-col gap-px p-2">
+            <div className="flex shrink-0 flex-col gap-px p-2 empty:hidden">
               <GithubStarPrompt />
               {!compactProjectRail ? (
                 <RailAction
@@ -1918,6 +1922,7 @@ function SidebarComponent({
           inboxUnseen={inboxUnseen}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
+          onRemoveProject={onRemoveProject}
           onTabChange={onCompactTabPick}
           onSearch={onSearch}
           searchActive={searchActive}
@@ -1991,12 +1996,41 @@ function SidebarComponent({
 
 export const Sidebar = memo(SidebarComponent);
 
+/** Project picker whose rows open the shared project context menu. */
+function SearchableProjectPickerWithMenu({
+  onRemoveProject,
+  onOpenNotificationSettings,
+  ...pickerProps
+}: Omit<
+  ComponentProps<typeof SearchableProjectPicker>,
+  "onProjectContextMenu" | "projectMenuActive"
+> & {
+  onRemoveProject?: Props["onRemoveProject"];
+  onOpenNotificationSettings?: (projectPath?: string) => void;
+}) {
+  const projectMenu = useProjectMenu({
+    onRemoveProject,
+    onOpenNotificationSettings,
+  });
+  return (
+    <>
+      <SearchableProjectPicker
+        {...pickerProps}
+        onProjectContextMenu={projectMenu.open}
+        projectMenuActive={projectMenu.isActive}
+      />
+      {projectMenu.element}
+    </>
+  );
+}
+
 function SidebarProjectPicker({
   cwd,
   recents,
   busy,
   onSelectProject,
   onOpenProject,
+  onRemoveProject,
   onNew,
   onSearch,
   onOpenInbox,
@@ -2014,6 +2048,7 @@ function SidebarProjectPicker({
   busy: boolean;
   onSelectProject: (path: string) => void;
   onOpenProject?: () => void;
+  onRemoveProject?: Props["onRemoveProject"];
   onNew?: () => string | void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
@@ -2035,13 +2070,15 @@ function SidebarProjectPicker({
       className="flex h-9 items-center gap-0.5 border-b border-stroke px-2"
       data-tauri-drag-region="deep"
     >
-      <SearchableProjectPicker
+      <SearchableProjectPickerWithMenu
         cwd={cwd}
         recents={recents}
         busy={busy}
         className="flex-1"
         onSelectProject={onSelectProject}
         onOpenProject={onOpenProject}
+        onRemoveProject={onRemoveProject}
+        onOpenNotificationSettings={onOpenNotificationSettings}
       />
       <div className="ml-auto flex items-center">
         {onNew ? (
@@ -2124,6 +2161,7 @@ function CompactProjectRail({
   inboxUnseen,
   onSelectProject,
   onOpenProject,
+  onRemoveProject,
   onTabChange,
   onSearch,
   searchActive,
@@ -2150,12 +2188,13 @@ function CompactProjectRail({
   inboxUnseen: boolean;
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
+  onRemoveProject?: Props["onRemoveProject"];
   onTabChange: (tab: SidebarTab) => void;
   onSearch?: () => void;
   searchActive: boolean;
   onOpenInbox?: () => void;
   inboxActive: boolean;
-  onOpenNotificationSettings?: () => void;
+  onOpenNotificationSettings?: (projectPath?: string) => void;
   onOpenNotes?: () => void;
   notesActive: boolean;
   onOpenAutomations?: () => void;
@@ -2207,7 +2246,7 @@ function CompactProjectRail({
           onClick={onTogglePanel}
         />
         {onSelectProject ? (
-          <SearchableProjectPicker
+          <SearchableProjectPickerWithMenu
             cwd={cwd}
             recents={recents}
             busy={busy}
@@ -2215,6 +2254,8 @@ function CompactProjectRail({
             className="w-full justify-center"
             onSelectProject={onSelectProject}
             onOpenProject={onOpenProject}
+            onRemoveProject={onRemoveProject}
+            onOpenNotificationSettings={onOpenNotificationSettings}
           />
         ) : null}
         <div

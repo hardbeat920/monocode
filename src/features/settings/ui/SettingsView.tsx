@@ -4,6 +4,7 @@ import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  Globe,
   ImagePlus,
   Loader,
   Pencil,
@@ -36,6 +37,7 @@ import {
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { JiraSettings } from "./JiraSettings";
+import { GradientBlurBackground } from "./GradientBlurBackground";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -144,9 +146,10 @@ import { refreshHarnessCatalogs } from "../../../integrations/harness/core/regis
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
+  firstEnabledHarness,
   getModelSnapshot,
-  isPickerProviderVisible,
   loadDefaultModels,
+  loadHiddenPickerProviders,
   loadLastModelChoice,
   modelsFor,
   resolveModel,
@@ -155,7 +158,12 @@ import {
   savePickerProviderVisible,
   subscribeModels,
 } from "../../sessions/model/models";
-import { prettyCwd, projectKey, projectName } from "../../../shared/lib/paths";
+import {
+  pathKey,
+  prettyCwd,
+  projectKey,
+  projectName,
+} from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
@@ -170,6 +178,14 @@ import {
   sessionDisplayTitle,
   type HarnessId,
 } from "../../sessions/model/session";
+import {
+  loadProjectProviderSettings,
+  projectProvidersRevision,
+  setProjectDefaultModel,
+  setProjectDefaultProvider,
+  setProjectProviderHidden,
+  subscribeProjectProviders,
+} from "../../sessions/model/projectProviders";
 import {
   newProviderAccount,
   providerAccounts,
@@ -214,9 +230,18 @@ import {
   type LinearTeam,
 } from "../../inbox/model/linear";
 import {
+  loadTabGroupColors,
+  loadTabGroupCustomColors,
   loadTabGroupLabels,
+  loadTabGroupMascots,
+  resolveTabGroupColor,
   resolveTabGroupLabel,
+  resolveTabGroupLogo,
+  resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
+import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
+import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
+import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import {
   filterKeybindings,
   KEYBINDINGS,
@@ -227,6 +252,7 @@ import {
   loadDiffViewer,
   loadFileTabMode,
   loadFollowUpBehavior,
+  loadFormatOnSave,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadModelControls,
@@ -239,6 +265,7 @@ import {
   saveDiffViewer,
   saveFileTabMode,
   saveFollowUpBehavior,
+  saveFormatOnSave,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveModelControls,
@@ -463,7 +490,9 @@ export function SettingsView({
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
-              {section === "providers" ? <ProvidersPage /> : null}
+              {section === "providers" ? (
+                <ProvidersPage cwd={cwd} recents={recents} />
+              ) : null}
               {section === "worktrees" ? (
                 <WorktreesPage
                   cwd={cwd}
@@ -811,6 +840,7 @@ function ChatPage() {
   const [modelControls, setModelControls] =
     useState<ModelControls>(loadModelControls);
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
+  const [formatOnSave, setFormatOnSave] = useState(loadFormatOnSave);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
     loadGridArcadeEnabled,
@@ -849,6 +879,11 @@ function ChatPage() {
   const onDiffViewer = (next: DiffViewer) => {
     saveDiffViewer(next);
     setDiffViewer(next);
+  };
+
+  const onFormatOnSave = (next: boolean) => {
+    saveFormatOnSave(next);
+    setFormatOnSave(next);
   };
 
   const onComposerRunner = (next: boolean) => {
@@ -927,6 +962,23 @@ function ChatPage() {
               { value: "beside", label: "Beside" },
             ]}
             onChange={onModelControls}
+          />
+        </Row>
+      </Group>
+
+      <Group
+        title="Editor"
+        description="What happens when you save a file in the workspace editor."
+      >
+        <Row
+          id="format-on-save"
+          label="Format on save"
+          description="Run Prettier on supported files before writing. Off keeps the text you typed, including quote style."
+        >
+          <Toggle
+            label="Format on save"
+            on={formatOnSave}
+            onChange={onFormatOnSave}
           />
         </Row>
       </Group>
@@ -2105,15 +2157,24 @@ function ChatBackgroundCard({
       <div className="border-b border-content/5 p-4 last:border-b-0">
         <div className="overflow-hidden rounded-lg border border-content/10">
           {hasImage ? (
-            <div className="relative h-36">
-              <div
-                aria-hidden
-                className="size-full bg-cover bg-center bg-no-repeat"
-                style={{
-                  backgroundImage: "var(--chat-background-image)",
-                  opacity: appearance.chatBackgroundEmptyOpacity,
-                }}
-              />
+            <div
+              className={`relative h-36 ${appearance.newThreadBackgroundEffect === "gradient-blur" ? "bg-background-base" : ""}`}
+            >
+              {appearance.newThreadBackgroundEffect === "gradient-blur" ? (
+                <GradientBlurBackground
+                  className="gradient-blur-preview absolute inset-0"
+                  style={{ opacity: appearance.chatBackgroundEmptyOpacity }}
+                />
+              ) : (
+                <div
+                  aria-hidden
+                  className="size-full bg-cover bg-center bg-no-repeat"
+                  style={{
+                    backgroundImage: "var(--chat-background-image)",
+                    opacity: appearance.chatBackgroundEmptyOpacity,
+                  }}
+                />
+              )}
               <span className="pointer-events-none absolute bottom-2 left-2 text-[11px] text-content/40">
                 Empty chat preview at {emptyVisibility}%
               </span>
@@ -2284,20 +2345,81 @@ function KeybindingsPage() {
   );
 }
 
-function ProvidersPage() {
+const GLOBAL_PROVIDER_SCOPE = "global";
+
+function ProvidersPage({
+  cwd,
+  recents,
+}: {
+  cwd?: string;
+  recents?: RecentProject[];
+}) {
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
   useSyncExternalStore(
     subscribeHarnessAvailability,
     getHarnessAvailabilitySnapshot,
     getHarnessAvailabilitySnapshot,
   );
+  const providersRevision = useSyncExternalStore(
+    subscribeProjectProviders,
+    projectProvidersRevision,
+    projectProvidersRevision,
+  );
+  void providersRevision;
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
+  const [hiddenGlobally, setHiddenGlobally] = useState(loadHiddenPickerProviders);
+
+  const scopeOptions = useMemo(() => {
+    const options: { value: string; label: string; icon?: ReactNode }[] = [
+      {
+        value: GLOBAL_PROVIDER_SCOPE,
+        label: "Global",
+        icon: (
+          <Globe
+            className="size-3.5 shrink-0 text-content/60"
+            strokeWidth={1.75}
+          />
+        ),
+      },
+    ];
+    const seen = new Set<string>();
+    for (const path of [cwd, ...(recents ?? []).map((entry) => entry.path)]) {
+      if (!path || !looksLikeProject(path)) continue;
+      const key = pathKey(path);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({
+        value: path,
+        label: projectName(path),
+        icon: <ProjectScopeIcon path={path} />,
+      });
+    }
+    return options;
+  }, [cwd, recents]);
+
+  const project = scope === GLOBAL_PROVIDER_SCOPE ? null : scope;
+  const projectSettings = project ? loadProjectProviderSettings(project) : {};
+  // A project without overrides inherits the global default provider, the same
+  // way `defaultSessionChoice` resolves it for new conversations.
+  const effectiveDefaultHarness = project
+    ? firstEnabledHarness(
+        project,
+        projectSettings.defaultHarness ?? choice?.harness ?? "cursor",
+      )
+    : (choice?.harness ?? null);
 
   useEffect(() => {
     void probeHarnessAvailability();
   }, []);
+
+  useEffect(() => {
+    if (!scopeOptions.some((option) => option.value === scope)) {
+      setScope(GLOBAL_PROVIDER_SCOPE);
+    }
+  }, [scope, scopeOptions]);
 
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
@@ -2305,6 +2427,10 @@ function ProvidersPage() {
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
+    if (project) {
+      setProjectDefaultModel(project, harness, model);
+      return;
+    }
     saveDefaultModel(harness, model);
     setDefaultModels((prev) => ({ ...prev, [harness]: model }));
     if (choice?.harness === harness) {
@@ -2314,9 +2440,26 @@ function ProvidersPage() {
   };
 
   const onDefault = (harness: HarnessId, model: string) => {
+    if (project) {
+      setProjectDefaultProvider(project, harness, model);
+      return;
+    }
     saveLastModelChoice(harness, model);
     setDefaultModels((prev) => ({ ...prev, [harness]: model }));
     setChoice({ harness, model });
+  };
+
+  const onPickerVisible = (harness: HarnessId, visible: boolean) => {
+    if (project) {
+      setProjectProviderHidden(project, harness, !visible);
+      return;
+    }
+    savePickerProviderVisible(harness, visible);
+    setHiddenGlobally((prev) =>
+      visible
+        ? prev.filter((id) => id !== harness)
+        : [...new Set([...prev, harness])],
+    );
   };
 
   return (
@@ -2325,23 +2468,59 @@ function ProvidersPage() {
 
       <Group
         title="Agent CLIs"
-        description="A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+        action={
+          <Select
+            label="Provider defaults scope"
+            value={scope}
+            options={scopeOptions}
+            onChange={setScope}
+          />
+        }
+        description={
+          project
+            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project.`
+            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+        }
       >
-        {HARNESSES.map((harness) => (
-          <ProviderRow
-            key={harness}
-            harness={harness}
-            selectedModel={
+        {HARNESSES.map((harness) => {
+          const inPicker = project
+            ? !(projectSettings.hidden ?? []).includes(harness) &&
+              !hiddenGlobally.includes(harness)
+            : !hiddenGlobally.includes(harness);
+          // A globally hidden provider stays out of every project's picker, so
+          // the project toggle is shown locked rather than appearing to work.
+          const pickerLocked =
+            project != null && hiddenGlobally.includes(harness);
+          const selectedModel = project
+            ? (projectSettings.models?.[harness] ??
+              (projectSettings.defaultHarness === harness
+                ? projectSettings.defaultModel
+                : undefined) ??
               defaultModels[harness] ??
               (choice?.harness === harness
                 ? choice.model
-                : defaultModelId(harness))
-            }
-            isDefault={choice?.harness === harness}
-            onDefault={onDefault}
-            onModelChange={onModelChange}
-          />
-        ))}
+                : defaultModelId(harness)))
+            : (defaultModels[harness] ??
+              (choice?.harness === harness
+                ? choice.model
+                : defaultModelId(harness)));
+          const isDefault = project
+            ? effectiveDefaultHarness === harness
+            : choice?.harness === harness;
+          return (
+            <ProviderRow
+              key={harness}
+              harness={harness}
+              selectedModel={selectedModel}
+              isDefault={isDefault}
+              inPicker={inPicker}
+              pickerLocked={pickerLocked}
+              onDefault={onDefault}
+              onModelChange={onModelChange}
+              onPickerVisible={(visible) => onPickerVisible(harness, visible)}
+            />
+          );
+        })}
       </Group>
 
       <Group title="Advanced">
@@ -2655,36 +2834,63 @@ function ProviderAccountEditor({
   );
 }
 
+/** The icon the project rail shows: custom logo, else the project mascot. */
+function ProjectScopeIcon({ path }: { path: string }) {
+  const logos = useTabGroupLogos();
+  const [colors] = useState(loadTabGroupColors);
+  const [customColors] = useState(loadTabGroupCustomColors);
+  const [mascots] = useState(loadTabGroupMascots);
+  const key = projectKey(path);
+  const name = projectName(path);
+  const logoPath = resolveTabGroupLogo(key, logos);
+  if (logoPath) {
+    return (
+      <ProjectLogoIcon
+        path={logoPath}
+        className="size-4 rounded-sm"
+        imageClassName="size-4"
+      />
+    );
+  }
+  return (
+    <ProjectMascot
+      project={name}
+      color={resolveTabGroupColor(key, colors, customColors, name)}
+      name={resolveTabGroupMascot(key, mascots)}
+      className="size-3.5"
+    />
+  );
+}
+
 function ProviderRow({
   harness,
   selectedModel,
   isDefault,
+  inPicker,
+  pickerLocked = false,
   onDefault,
   onModelChange,
+  onPickerVisible,
 }: {
   harness: HarnessId;
   selectedModel: string;
   isDefault: boolean;
+  inPicker: boolean;
+  /** Globally hidden providers cannot be turned on per project. */
+  pickerLocked?: boolean;
   onDefault: (harness: HarnessId, model: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
+  onPickerVisible: (visible: boolean) => void;
 }) {
   const models = modelsFor(harness);
   const available = isHarnessAvailable(harness);
   const current =
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
-  const [inPicker, setInPicker] = useState(() =>
-    isPickerProviderVisible(harness),
-  );
 
   useEffect(() => {
     if (!available || models.length > 0) return;
     void refreshHarnessCatalogs([harness]);
   }, [available, harness, models.length]);
-
-  const onPickerVisible = (visible: boolean) => {
-    savePickerProviderVisible(harness, visible);
-    setInPicker(visible);
-  };
 
   return (
     <Row
@@ -2724,11 +2930,14 @@ function ProviderRow({
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">Show in picker</span>
+          <span className="text-[12px] text-content/50">
+            {pickerLocked ? "Hidden globally" : "Show in picker"}
+          </span>
           <Toggle
             label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
             on={inPicker}
             onChange={onPickerVisible}
+            disabled={pickerLocked}
           />
         </div>
       ) : null}
@@ -3240,7 +3449,7 @@ function Select({
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -3325,8 +3534,15 @@ function Select({
         onClick={() => setOpen((prev) => !prev)}
         className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20"
       >
-        <span className="min-w-0 flex-1 truncate">
-          {selected ? selected.label : value}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {selected?.icon ? (
+            <span className="grid size-4 shrink-0 place-items-center">
+              {selected.icon}
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate">
+            {selected ? selected.label : value}
+          </span>
         </span>
         <ChevronDown
           className={`size-3.5 shrink-0 text-content/50 transition-transform ${open ? "rotate-180" : ""}`}
@@ -3373,6 +3589,11 @@ function Select({
                     : "text-content hover:bg-content/5"
                 }`}
               >
+                {option.icon ? (
+                  <span className="grid size-4 shrink-0 place-items-center">
+                    {option.icon}
+                  </span>
+                ) : null}
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
                 {isSelected ? (
                   <Check className="size-3.5 shrink-0" strokeWidth={2.25} />

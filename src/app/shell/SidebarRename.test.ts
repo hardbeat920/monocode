@@ -552,7 +552,7 @@ describe("sidebar session rename", () => {
 });
 
 describe("sidebar project picker", () => {
-  it("focuses the project search input when opened", () => {
+  it("focuses the project search input when opened", async () => {
     // Hold animation frames so the deferred focus retry runs on demand.
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -561,7 +561,7 @@ describe("sidebar project picker", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     props.onSelectProject = vi.fn();
-    act(() => render());
+    await act(async () => render());
 
     const trigger = container.querySelector<HTMLButtonElement>(
       '[aria-label^="Switch project"]',
@@ -1470,6 +1470,144 @@ describe("collapsed rail Inbox actions", () => {
     props.open = true;
     act(() => render());
     expect(drawer()).toBeNull();
+  });
+
+  it.each([
+    ["compact rail", true],
+    ["sidebar header", false],
+  ])(
+    "deletes a project from the %s picker while the rail is hidden",
+    async (_, compact) => {
+      props.projectRailOpen = false;
+      props.compactProjectRail = compact;
+      props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+      props.onSelectProject = vi.fn();
+      props.onOpenProject = vi.fn();
+      props.onRemoveProject = vi.fn();
+      await act(async () => render());
+
+      act(() =>
+        container
+          .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+          .click(),
+      );
+      const row = document.querySelector<HTMLButtonElement>(
+        'button[title="/workspace/other"]',
+      )!;
+      await act(async () => {
+        row.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+      });
+      expect(projectSearchInput()).not.toBeNull();
+      const remove = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((item) => item.textContent?.startsWith("Delete"))!;
+      act(() => {
+        remove.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        remove.click();
+      });
+      expect(projectSearchInput()).not.toBeNull();
+      const dialog = document.querySelector('[aria-label="Delete other"]')!;
+      const confirm = Array.from(
+        dialog.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "Delete")!;
+      act(() => confirm.click());
+      expect(props.onRemoveProject).toHaveBeenCalledWith("/workspace/other", {
+        purgeData: true,
+      });
+      expect(document.activeElement).toBe(projectSearchInput());
+    },
+  );
+
+  it("opens the active picker project's menu from the keyboard", async () => {
+    props.projectRailOpen = false;
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    props.onRemoveProject = vi.fn();
+    await act(async () => render());
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+        .click(),
+    );
+    pressKey(projectSearchInput()!, "ArrowDown");
+    await act(async () => {
+      projectSearchInput()!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ContextMenu",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(
+      document.querySelector<HTMLInputElement>('input[aria-label="Group name"]')
+        ?.value,
+    ).toBe("other");
+  });
+
+  it("opens a Tab-focused picker row's menu rather than the highlighted one", async () => {
+    props.projectRailOpen = false;
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    await act(async () => render());
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+        .click(),
+    );
+    const row = document.querySelector<HTMLButtonElement>(
+      'button[title="/workspace/other"]',
+    )!;
+    row.focus();
+    await act(async () => {
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "F10",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(
+      document.querySelector<HTMLInputElement>('input[aria-label="Group name"]')
+        ?.value,
+    ).toBe("other");
+  });
+
+  it("shows a rename from the picker menu in the open picker", async () => {
+    props.projectRailOpen = false;
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    await act(async () => render());
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+        .click(),
+    );
+    const row = () =>
+      document.querySelector<HTMLButtonElement>('button[title="/workspace/other"]')!;
+    await act(async () => {
+      row().dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+    const name = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Group name"]',
+    )!;
+    typeTitle(name, "Client site");
+    pressKey(name, "Enter");
+
+    expect(document.querySelector('input[aria-label="Group name"]')).toBeNull();
+    expect(row().textContent).toContain("Client site");
   });
 
   it("marks the compact Changes shortcut when the working tree has changes", async () => {

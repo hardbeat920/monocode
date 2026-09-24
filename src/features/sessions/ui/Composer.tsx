@@ -2120,6 +2120,7 @@ export function Composer({
                   model={model}
                   values={modelSettings}
                   allowedHarnesses={allowedModelHarnesses}
+                  project={cwd}
                   hideSettings={controlsBeside}
                   hotkeys={hotkeys && enabled}
                   onChange={onModelChange}

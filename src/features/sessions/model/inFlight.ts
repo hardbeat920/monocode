@@ -1,5 +1,5 @@
 import { leafIds, newTab, type WorkspaceTab } from "../../workspace/model/layout";
-import type { ProjectTerminalDock } from "../../projects/model/projectTerminal";
+import type { DockSide, ProjectTerminalDock } from "../../projects/model/projectTerminal";
 import { sessionNeedsInput, type Session } from "./session";
 import { stopStreaming } from "../../../integrations/harness/core/apply";
 import type { ProjectReturnMemory } from "../../projects/model/projectReturn";
@@ -21,6 +21,7 @@ export type ResumedWorkspace = {
   projectCwd: string;
   projectTerminals?: ProjectTerminalDock[];
   projectReturnMemory?: ProjectReturnMemory;
+  lastDockSide?: DockSide;
 };
 
 /** A turn or approval that would be lost if this webview died. */

@@ -183,7 +183,8 @@ describe("codex live turn sequence", () => {
       newSession("codex", "/repo"),
     );
     expect(session.blocks).toMatchObject([
-      { role: "assistant", text: commentary + answer, streaming: false },
+      { role: "assistant", text: commentary, streaming: false },
+      { role: "assistant", text: answer, streaming: false },
     ]);
   });
 

@@ -1,6 +1,6 @@
 import type { Tab } from "../../../app/shell/TitleBar";
 import { projectKey, projectName } from "../../../shared/lib/paths";
-import { knownProjectPaths } from "../../projects/model/recents";
+import { knownProjectPaths, notifyProjectPathsChanged } from "../../projects/model/recents";
 
 /** Chrome-like palette — saturated enough to read on dark glass. */
 export const TAB_GROUP_COLORS = [
@@ -201,6 +201,7 @@ export function saveTabGroupColor(project: string, index: number | null): void {
   if (index == null) delete next[project];
   else next[project] = index;
   writeTabGroupColorIndices(next);
+  notifyProjectPathsChanged();
 }
 
 export function saveTabGroupCustomColor(
@@ -212,6 +213,7 @@ export function saveTabGroupCustomColor(
   if (color == null || !HEX_COLOR_RE.test(color)) delete next[project];
   else next[project] = color.toLowerCase();
   writeTabGroupCustomColors(next);
+  notifyProjectPathsChanged();
 }
 
 export function loadTabGroupLabels(): Record<string, string> {
@@ -234,7 +236,9 @@ export function saveTabGroupLabel(project: string, label: string): void {
   const next = loadTabGroupLabels();
   if (!trimmed) delete next[project];
   else next[project] = trimmed;
-  if (writeRecord(LABEL_KEY, next)) notifyTabGroupLabelsChanged();
+  if (!writeRecord(LABEL_KEY, next)) return;
+  notifyTabGroupLabelsChanged();
+  notifyProjectPathsChanged();
 }
 
 export function loadTabGroupLogos(): Record<string, string> {
@@ -258,6 +262,7 @@ export function saveTabGroupMascot(project: string, name: string | null): void {
   if (!name) delete next[project];
   else next[project] = name;
   writeRecord(MASCOT_KEY, next);
+  notifyProjectPathsChanged();
 }
 
 /** Drops every saved appearance override for a project. */

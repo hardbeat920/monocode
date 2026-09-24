@@ -361,6 +361,8 @@ import {
   sessionNeedsInput,
   newDefaultSession,
   newSession,
+  newSessionForProject,
+  retargetSessionToProject,
   removeSessionDraft,
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -829,6 +831,12 @@ export default function App({
   const [projectTerminals, setProjectTerminals] = useState<ProjectTerminal[]>(
     () => windowTransfer?.projectTerminals ?? resumed?.projectTerminals ?? [],
   );
+  /** Dock side a brand-new project's terminal starts with, persisted in the workspace snapshot. */
+  const [lastDockSide, setLastDockSide] = useState<DockSide | null>(
+    () => resumed?.lastDockSide ?? null,
+  );
+  const lastDockSideRef = useRef(lastDockSide);
+  lastDockSideRef.current = lastDockSide;
   const [projectTerminalFocused, setProjectTerminalFocused] = useState(false);
   const [activeTabId, setActiveTabId] = useState(
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
@@ -1200,6 +1208,7 @@ export default function App({
         readProjectReturnMemory(),
         "unload",
         projectTerminalsRef.current,
+        lastDockSideRef.current ?? undefined,
       ).finally(() => {
         void reapWindowRuntime(
           sessionsRef.current,
@@ -1566,6 +1575,7 @@ export default function App({
       () => projectTerminalsRef.current,
       readProjectReturnMemory,
       flushHarnessEvents,
+      () => lastDockSideRef.current,
     );
     void getCurrentWindow()
       .onCloseRequested((event) => {
@@ -1592,6 +1602,7 @@ export default function App({
           readProjectReturnMemory(),
           "unload",
           projectTerminalsRef.current,
+          lastDockSideRef.current ?? undefined,
         ).finally(() => {
           void (toTray ? hideCurrentWindow() : closeCurrentWindow());
         });
@@ -1780,6 +1791,7 @@ export default function App({
         activeTabId,
       }),
       projectTerminals,
+      lastDockSide ?? undefined,
     );
     const key = workspaceSnapshotKey(snapshot);
     if (workspaceSyncKey.current === key) return;
@@ -1794,6 +1806,7 @@ export default function App({
     activeTabId,
     projectCwd,
     projectTerminals,
+    lastDockSide,
     windowTransfer,
   ]);
 
@@ -2245,7 +2258,14 @@ export default function App({
           projectPath,
         );
         if (!existing) {
-          return [...prev, createProjectTerminal(projectPath, file)];
+          return [
+            ...prev,
+            createProjectTerminal(
+              projectPath,
+              file,
+              lastDockSideRef.current ?? "bottom",
+            ),
+          ];
         }
         return mapProjectTerminal(prev, projectPath, (dock) =>
           addTerminalToDock(dock, file),
@@ -2363,6 +2383,7 @@ export default function App({
   }, []);
 
   const onProjectTerminalSide = useCallback((side: DockSide) => {
+    setLastDockSide(side);
     setProjectTerminals((prev) =>
       mapProjectTerminal(prev, projectCwdRef.current, (dock) =>
         withDockSide(dock, side, {
@@ -4634,19 +4655,23 @@ export default function App({
       setProjectCwd(normalized);
       setRecents(rememberProject(normalized));
       setSessions((prev) =>
-        prev.map((s) =>
-          s.id === sessionId
-            ? {
-                ...s,
-                cwd: normalized,
-                branch: undefined,
-                worktreeCwd: undefined,
-                worktreeRemoved: undefined,
-                workspaceMode: undefined,
-                worktreeBase: undefined,
-              }
-            : s,
-        ),
+        prev.map((s) => {
+          if (s.id !== sessionId) return s;
+          // A blank session moving into a project adopts its provider defaults;
+          // a conversation keeps its own provider.
+          const base = isBlankSession(s)
+            ? retargetSessionToProject(s, normalized)
+            : s;
+          return {
+            ...base,
+            cwd: normalized,
+            branch: undefined,
+            worktreeCwd: undefined,
+            worktreeRemoved: undefined,
+            workspaceMode: undefined,
+            worktreeBase: undefined,
+          };
+        }),
       );
       // The session's project just moved in place; a group only holds tabs that
       // share one project, so drop this tab out if it no longer matches.
@@ -4896,13 +4921,7 @@ export default function App({
       }
 
       const seed = current ?? sessionsRef.current[0];
-      const session = newSession(
-        seed?.harness ?? "claude",
-        normalized,
-        seed?.model,
-        seed?.runtimeMode,
-        seed?.modelSettings,
-      );
+      const session = newSessionForProject(seed, normalized);
       const tab = newTab(session.id);
       setProjectCwd(normalized);
       setRecents(rememberProject(normalized));
@@ -5630,7 +5649,12 @@ export default function App({
           intent === "plan" ||
           intent === "orchestrate"
             ? "queue"
-            : (options?.followUpBehavior ?? loadFollowUpBehavior());
+            : // The agent has yielded and only background work is left, which
+              // may never end (a dev server). Queuing would park the message
+              // behind it, so hand it to the agent now.
+              current.backgroundTasks?.length
+              ? "steer"
+              : (options?.followUpBehavior ?? loadFollowUpBehavior());
         if (followUpBehavior === "queue") {
           setSessions((prev) =>
             prev.map((s) =>

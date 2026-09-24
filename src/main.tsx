@@ -12,11 +12,19 @@ import {
   loadBootWorkspace,
   reportQuitPoll,
 } from "./app/model/appLifecycle";
+import { homeDir } from "./platform/tauri/fs";
+import { setHomeDir } from "./shared/lib/paths";
 import { consumeInstalledUpdate } from "./app/model/updateNotice";
 import "./styles/index.css";
 
 initAppearance();
 initSounds();
+// Prime the real home directory before the first render so every `~/` file
+// reference resolves consistently. The IPC call is local and failures remain
+// best-effort, falling back to inference from a session's cwd.
+const homeDirPrimed = homeDir()
+  .then(setHomeDir)
+  .catch(() => {});
 
 function dismissBootSplash() {
   const splash = document.getElementById("boot-splash");
@@ -60,8 +68,8 @@ void listen("quit_aborted", () => {
   abortQuit();
 });
 
-void loadBootWorkspace().then(
-  ({ windowTransfer, resumed, history, historyCwd }) => {
+void Promise.all([homeDirPrimed, loadBootWorkspace()]).then(
+  ([, { windowTransfer, resumed, history, historyCwd }]) => {
     const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>

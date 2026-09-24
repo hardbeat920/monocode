@@ -20,6 +20,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("background work", () => {
+  it("tracks what a yielded turn waits on and drops it when the turn ends", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "hi");
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm test"],
+    });
+    expect(session.backgroundTasks).toEqual(["npm test"]);
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: [],
+    });
+    expect(session.backgroundTasks).toBeUndefined();
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm run dev"],
+    });
+    session = stopStreaming(session);
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+});
+
 describe("turn duration", () => {
   it("records the selected provider and model on a user turn", () => {
     const session = appendUser(
@@ -194,6 +218,34 @@ describe("streamed markdown", () => {
     session = applyHarnessEvent(session, { type: "message.delta", text: "Next message." });
     expect(session.blocks[0].streaming).toBe(false);
     expect(session.blocks[2]).toMatchObject({ role: "assistant", text: "Next message." });
+  });
+
+  it("keeps adjacent completed assistant messages in separate blocks", () => {
+    let session = newSession("codex", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "- update the notes and commit",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Connect returned an empty file for one image.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "assistant",
+        text: "- update the notes and commit",
+        streaming: false,
+      },
+      {
+        role: "assistant",
+        text: "Connect returned an empty file for one image.",
+        streaming: false,
+      },
+    ]);
+    expect(session.blocks[0].id).not.toBe(session.blocks[1].id);
   });
 
   it.each([false, true])("seals open prose at an interjection, with preceding status: %s", status => {
