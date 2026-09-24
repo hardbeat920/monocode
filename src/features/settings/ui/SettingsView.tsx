@@ -2452,6 +2452,10 @@ function ProvidersPage({
             ? !(projectSettings.hidden ?? []).includes(harness) &&
               !hiddenGlobally.includes(harness)
             : !hiddenGlobally.includes(harness);
+          // A globally hidden provider stays out of every project's picker, so
+          // the project toggle is shown locked rather than appearing to work.
+          const pickerLocked =
+            project != null && hiddenGlobally.includes(harness);
           const selectedModel = project
             ? (projectSettings.models?.[harness] ??
               (projectSettings.defaultHarness === harness
@@ -2475,6 +2479,7 @@ function ProvidersPage({
               selectedModel={selectedModel}
               isDefault={isDefault}
               inPicker={inPicker}
+              pickerLocked={pickerLocked}
               onDefault={onDefault}
               onModelChange={onModelChange}
               onPickerVisible={(visible) => onPickerVisible(harness, visible)}
@@ -2827,6 +2832,7 @@ function ProviderRow({
   selectedModel,
   isDefault,
   inPicker,
+  pickerLocked = false,
   onDefault,
   onModelChange,
   onPickerVisible,
@@ -2835,6 +2841,8 @@ function ProviderRow({
   selectedModel: string;
   isDefault: boolean;
   inPicker: boolean;
+  /** Globally hidden providers cannot be turned on per project. */
+  pickerLocked?: boolean;
   onDefault: (harness: HarnessId, model: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onPickerVisible: (visible: boolean) => void;
@@ -2887,11 +2895,14 @@ function ProviderRow({
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">Show in picker</span>
+          <span className="text-[12px] text-content/50">
+            {pickerLocked ? "Hidden globally" : "Show in picker"}
+          </span>
           <Toggle
             label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
             on={inPicker}
             onChange={onPickerVisible}
+            disabled={pickerLocked}
           />
         </div>
       ) : null}

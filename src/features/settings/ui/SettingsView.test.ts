@@ -554,12 +554,15 @@ describe("providers scope inheritance", () => {
         )!
         .getAttribute("aria-checked"),
     ).toBe("true");
+    const cursorToggle = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Show Cursor in the model picker"]',
+    )!;
+    expect(cursorToggle.getAttribute("aria-checked")).toBe("false");
+    // Global precedence: the project toggle cannot turn a globally hidden
+    // provider back on, so it is locked and explained.
+    expect(cursorToggle.hasAttribute("disabled")).toBe(true);
     expect(
-      container
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="Show Cursor in the model picker"]',
-        )!
-        .getAttribute("aria-checked"),
-    ).toBe("false");
+      cursorToggle.closest(".settings-row")?.textContent,
+    ).toContain("Hidden globally");
   });
 });

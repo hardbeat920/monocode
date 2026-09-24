@@ -3,6 +3,7 @@ import {
   newSession,
   newSessionForProject,
   retargetSessionToProject,
+  type Session,
 } from "./session";
 import {
   setProjectDefaultModel,
@@ -94,5 +95,31 @@ describe("retargetSessionToProject", () => {
     const retargeted = retargetSessionToProject(blank, "/repo/a");
     expect(retargeted.harness).toBe("claude");
     expect(retargeted.model).toBe("claude:opus-5");
+  });
+
+  it("drops provider-bound fields when retargeting changes the harness", () => {
+    setProjectDefaultProvider("/repo/a", "cursor", "cursor:composer-2.5");
+    const blank: Session = {
+      ...newSession("claude", "~", "claude:opus-5"),
+      providerSessionId: "claude-session",
+      providerAccountId: "claude-account",
+    };
+    const retargeted = retargetSessionToProject(blank, "/repo/a");
+    expect(retargeted.harness).toBe("cursor");
+    expect(retargeted.providerSessionId).toBeUndefined();
+    expect(retargeted.providerAccountId).toBeUndefined();
+  });
+
+  it("keeps provider-bound fields when the harness is unchanged", () => {
+    setProjectDefaultModel("/repo/a", "claude", "claude:haiku-4.5");
+    const blank: Session = {
+      ...newSession("claude", "~", "claude:opus-5"),
+      providerSessionId: "claude-session",
+      providerAccountId: "claude-account",
+    };
+    const retargeted = retargetSessionToProject(blank, "/repo/a");
+    expect(retargeted.harness).toBe("claude");
+    expect(retargeted.providerSessionId).toBe("claude-session");
+    expect(retargeted.providerAccountId).toBe("claude-account");
   });
 });

@@ -1,4 +1,4 @@
-import type { ContextUsage } from "./contextUsage";
+import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
 import type { InboxComposerCard } from "../../inbox/model/githubTasks";
@@ -535,6 +535,12 @@ export function retargetSessionToProject(
       carriesSeed ? session.modelSettings : undefined,
     ),
     title: HARNESS_LABEL[harness],
+    ...(harness === session.harness
+      ? {}
+      : { providerSessionId: undefined, providerAccountId: undefined }),
+    ...(resolved.id === session.model
+      ? {}
+      : { context: dropContextWindow(session.context) }),
   };
 }
 
