@@ -2115,21 +2115,19 @@ export function Composer({
               }}
             >
               <div className="flex shrink-0 items-center gap-1">
-                {model ? (
-                  <ModelPicker
-                    harness={harness}
-                    model={model}
-                    values={modelSettings}
-                    allowedHarnesses={allowedModelHarnesses}
-                    hideSettings={controlsBeside}
-                    hotkeys={hotkeys && enabled}
-                    onChange={onModelChange}
-                    onSettingsChange={(settings) =>
-                      onModelSettingsChange?.(settings)
-                    }
-                    onClose={() => ref.current?.focus()}
-                  />
-                ) : null}
+                <ModelPicker
+                  harness={harness}
+                  model={model}
+                  values={modelSettings}
+                  allowedHarnesses={allowedModelHarnesses}
+                  hideSettings={controlsBeside}
+                  hotkeys={hotkeys && enabled}
+                  onChange={onModelChange}
+                  onSettingsChange={(settings) =>
+                    onModelSettingsChange?.(settings)
+                  }
+                  onClose={() => ref.current?.focus()}
+                />
                 {controlsBeside ? (
                   <ModelControlPills
                     harness={harness}

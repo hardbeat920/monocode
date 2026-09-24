@@ -62,7 +62,11 @@ import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
 import { displayPath, resolveWorkspacePath } from "../../../shared/lib/paths";
 import { resolveModel } from "../model/models";
-import { supportsBtwHarness } from "../model/btw";
+import {
+  btwOpenTargetTurnId,
+  resolveBtwHarness,
+  supportsBtwHarness,
+} from "../model/btw";
 import { harnessForTurn } from "../model/secondOpinion";
 import { Shimmer } from "../../../shared/ui/Shimmer";
 import {
@@ -473,6 +477,9 @@ function AgentTranscriptComponent({
   }, [scrollerEl, setShowJump, visible]);
 
   const turns = groupTurns(blocks, managed);
+  const btwOpenTurnId = btwOpenRequest
+    ? btwOpenTargetTurnId(turns, managed)
+    : undefined;
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
   const turnsRef = useRef(turns);
@@ -965,7 +972,8 @@ function AgentTranscriptComponent({
                   btwThreads={userBlock?.btwThreads}
                   visible={visible}
                   onBtwSubmit={
-                    supportsBtwHarness(turnHarness) && onBtwSubmit
+                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
+                    onBtwSubmit
                       ? (
                           threadId,
                           messageId,
@@ -984,17 +992,20 @@ function AgentTranscriptComponent({
                       : undefined
                   }
                   onBtwRetry={
-                    supportsBtwHarness(turnHarness) && onBtwRetry
+                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
+                    onBtwRetry
                       ? (threadId) => onBtwRetry(threadId, turn)
                       : undefined
                   }
                   onBtwDelete={
-                    supportsBtwHarness(turnHarness) && onBtwDelete
+                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
+                    onBtwDelete
                       ? (threadId) => onBtwDelete(threadId, turn)
                       : undefined
                   }
                   onBtwModelChange={
-                    supportsBtwHarness(turnHarness) && onBtwModelChange
+                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
+                    onBtwModelChange
                       ? (threadId, nextModel, nextModelSettings) =>
                           onBtwModelChange(
                             threadId,
@@ -1004,7 +1015,9 @@ function AgentTranscriptComponent({
                           )
                       : undefined
                   }
-                  btwOpenRequest={isLastTurn ? btwOpenRequest : undefined}
+                  btwOpenRequest={
+                    btwOpenTurnId === turnId ? btwOpenRequest : undefined
+                  }
                   onBtwOpenRequestHandled={onBtwOpenRequestHandled}
                   onOpenFile={onOpenFile}
                   onOpenDiff={onOpenDiff}
@@ -1276,9 +1289,9 @@ function TurnDuration({
         <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
 
-      {supportsBtwHarness(harness) && onBtwSubmit && onBtwRetry ? (
+      {resolveBtwHarness(harness, btwThreads) && onBtwSubmit && onBtwRetry ? (
         <BtwPopover
-          harness={harness}
+          harness={resolveBtwHarness(harness, btwThreads)!}
           cwd={cwd}
           model={model}
           modelSettings={modelSettings}

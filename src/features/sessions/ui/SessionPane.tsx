@@ -44,7 +44,7 @@ import {
   type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../model/session";
-import { supportsBtwHarness } from "../model/btw";
+import { sessionHasBtwThreads, supportsBtwHarness } from "../model/btw";
 import type { BtwOpenRequest } from "./BtwPopover";
 import { AgentTranscript } from "./AgentTranscript";
 import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
@@ -362,6 +362,8 @@ export const SessionPane = memo(function SessionPane({
   const [btwOpenRequest, setBtwOpenRequest] = useState<BtwOpenRequest | null>(
     null,
   );
+  const btwEnabled =
+    supportsBtwHarness(session.harness) || sessionHasBtwThreads(session.blocks);
   const onBtwCommand = useCallback(
     (text: string) => {
       if (
@@ -799,7 +801,7 @@ export const SessionPane = memo(function SessionPane({
                   }
                   onBtwSubmit={
                     !managed &&
-                    supportsBtwHarness(session.harness) &&
+                    btwEnabled &&
                     !session.inboxAsk &&
                     !session.worktreeRemoved &&
                     onBtwSubmit
@@ -817,7 +819,7 @@ export const SessionPane = memo(function SessionPane({
                   }
                   onBtwRetry={
                     !managed &&
-                    supportsBtwHarness(session.harness) &&
+                    btwEnabled &&
                     !session.inboxAsk &&
                     !session.worktreeRemoved &&
                     onBtwRetry
@@ -827,7 +829,7 @@ export const SessionPane = memo(function SessionPane({
                   }
                   onBtwDelete={
                     !managed &&
-                    supportsBtwHarness(session.harness) &&
+                    btwEnabled &&
                     !session.inboxAsk &&
                     !session.worktreeRemoved &&
                     onBtwDelete
@@ -837,7 +839,7 @@ export const SessionPane = memo(function SessionPane({
                   }
                   onBtwModelChange={
                     !managed &&
-                    supportsBtwHarness(session.harness) &&
+                    btwEnabled &&
                     !session.inboxAsk &&
                     !session.worktreeRemoved &&
                     onBtwModelChange

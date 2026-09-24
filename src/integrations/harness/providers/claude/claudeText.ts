@@ -27,6 +27,7 @@ import {
   tryParseJsonRecord,
   turnStatusFromResult,
 } from "./claudeProtocol";
+import type { TurnIntent } from "../../../../features/sessions/model/session";
 import type { HarnessEvent } from "../../core/types";
 import { mergeStream } from "../../core/streamText";
 
@@ -41,6 +42,8 @@ type TextSettings = {
   effort?: string;
   promptEffort?: string;
   settings: Record<string, boolean>;
+  permissionMode?: "plan";
+  maxTurns?: number;
 };
 
 type InFlightTool = {
@@ -74,21 +77,24 @@ let turns: Promise<void> = Promise.resolve();
 function textSettings(
   model: string,
   modelSettings?: Record<string, string>,
+  intent?: TurnIntent,
 ): TextSettings {
   const effort = modelSettings?.effort?.trim() || undefined;
   const context = modelSettings?.context?.trim() || undefined;
   const thinking = modelSettings?.thinking === "true";
   const fast = modelSettings?.fast === "true";
+  const readOnly = intent === "plan";
   const settings: Record<string, boolean> = {};
   if (thinking) settings.alwaysThinkingEnabled = true;
   if (fast) settings.fastMode = true;
   if (isClaudeUltracodeEffort(effort)) settings.ultracode = true;
   return {
-    key: JSON.stringify({ effort, context, thinking, fast }),
+    key: JSON.stringify({ effort, context, thinking, fast, readOnly }),
     launchModel: resolveClaudeApiModelId(model, context),
     effort: normalizeClaudeCliEffort(effort, model),
     promptEffort: effort,
     settings,
+    ...(readOnly ? { permissionMode: "plan" as const, maxTurns: 1 } : {}),
   };
 }
 
@@ -125,8 +131,10 @@ export async function runClaudeTextPrompt(input: {
   providerAccountId?: string;
   model?: string;
   modelSettings?: Record<string, string>;
+  intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
@@ -142,12 +150,14 @@ async function promptOnLive(input: {
   providerAccountId?: string;
   model?: string;
   modelSettings?: Record<string, string>;
+  intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   const model = pickTextModel(input.model);
-  const settings = textSettings(model, input.modelSettings);
+  const settings = textSettings(model, input.modelSettings, input.intent);
   const session = await ensureLive(
     input.cwd,
     input.providerAccountId,
@@ -160,6 +170,18 @@ async function promptOnLive(input: {
   session.toolsByIndex = new Map();
   session.toolsById = new Map();
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  let abortHandler: (() => void) | undefined;
+  const abortPromise = input.signal
+    ? new Promise<never>((_, reject) => {
+        const cancel = () => {
+          session.turnFailed?.(new Error("By-the-way request cancelled"));
+          reject(new Error("By-the-way request cancelled"));
+        };
+        abortHandler = cancel;
+        input.signal!.addEventListener("abort", cancel, { once: true });
+        if (input.signal!.aborted) cancel();
+      })
+    : null;
 
   try {
     const turnPromise = new Promise<void>((resolve, reject) => {
@@ -185,6 +207,7 @@ async function promptOnLive(input: {
           timeoutMs,
         );
       }),
+      ...(abortPromise ? [abortPromise] : []),
     ]);
 
     const output = session.output.trim();
@@ -194,6 +217,9 @@ async function promptOnLive(input: {
     if (session.closed) await dropLive();
     throw error;
   } finally {
+    if (abortHandler && input.signal) {
+      input.signal.removeEventListener("abort", abortHandler);
+    }
     session.collecting = false;
     session.turnDone = null;
     session.turnFailed = null;
@@ -269,6 +295,8 @@ async function startLive(
         model: settings.launchModel,
         effort: settings.effort,
         settings: settings.settings,
+        permissionMode: settings.permissionMode,
+        maxTurns: settings.maxTurns,
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },

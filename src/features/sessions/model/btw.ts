@@ -25,6 +25,39 @@ export function supportsBtwHarness(
   return harness != null && BTW_HARNESSES.includes(harness);
 }
 
+export function sessionHasBtwThreads(blocks: Block[]): boolean {
+  return blocks.some((block) => (block.btwThreads?.length ?? 0) > 0);
+}
+
+/** Provider for a BTW surface, including threads saved before a handoff. */
+export function resolveBtwHarness(
+  turnHarness: HarnessId | undefined,
+  threads?: BtwThread[],
+): HarnessId | undefined {
+  if (supportsBtwHarness(turnHarness)) return turnHarness;
+  const stored = threads
+    ?.map((thread) => thread.harness)
+    .find((harness) => supportsBtwHarness(harness));
+  return stored;
+}
+
+/** Completed turn that should receive a composer `/btw` open request. */
+export function btwOpenTargetTurnId(
+  turns: Block[][],
+  managed = false,
+): string | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    for (let i = turn.length - 1; i >= 0; i -= 1) {
+      const block = turn[i];
+      if (block.role !== "user" || (managed && block.internal)) continue;
+      if (block.durationMs != null) return turn[0]?.id;
+      break;
+    }
+  }
+  return undefined;
+}
+
 export const BTW_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "btw",

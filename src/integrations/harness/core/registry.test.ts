@@ -166,7 +166,33 @@ describe("harness registry", () => {
 
     await expect(request).rejects.toThrow("By-the-way request cancelled");
     expect(runTextPrompt).toHaveBeenCalledOnce();
-    expect(stopTextPrompt).toHaveBeenCalledOnce();
+    expect(stopTextPrompt).not.toHaveBeenCalled();
+  });
+
+  it("does not stop the shared text backend while another prompt is active", async () => {
+    const runTextPrompt = vi.fn(() => new Promise<string>(() => undefined));
+    const stopTextPrompt = vi.fn(async () => undefined);
+    registerHarness(stub("claude", { runTextPrompt, stopTextPrompt }));
+    const first = new AbortController();
+    const second = new AbortController();
+    const firstRequest = runHarnessTextPrompt({
+      harness: "claude",
+      cwd: "/tmp",
+      prompt: "first",
+      signal: first.signal,
+    });
+    const secondRequest = runHarnessTextPrompt({
+      harness: "claude",
+      cwd: "/tmp",
+      prompt: "second",
+      signal: second.signal,
+    });
+    first.abort();
+    await expect(firstRequest).rejects.toThrow("By-the-way request cancelled");
+    expect(stopTextPrompt).not.toHaveBeenCalled();
+    second.abort();
+    await expect(secondRequest).rejects.toThrow("By-the-way request cancelled");
+    expect(stopTextPrompt).not.toHaveBeenCalled();
   });
 
   it("exposes the edit-last-turn support matrix", () => {

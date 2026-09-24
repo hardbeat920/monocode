@@ -511,7 +511,7 @@ export async function runHarnessTextPrompt(
   let abortHandler: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     abortHandler = () => {
-      finishTextPrompt(adapter, owner, true);
+      finishTextPrompt(adapter, owner, false);
       reject(cancelledTextPrompt());
     };
     signal.addEventListener("abort", abortHandler, { once: true });

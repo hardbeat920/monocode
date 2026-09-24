@@ -132,6 +132,8 @@ export type BtwThread = {
   updatedAt: number;
   status: BtwThreadStatus;
   messages: BtwMessage[];
+  /** Provider that answered this side thread. */
+  harness?: HarnessId;
   /** Selected harness model for this side thread; absent means session default. */
   model?: string;
   /** Provider settings selected for this side thread's model. */

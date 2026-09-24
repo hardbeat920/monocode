@@ -5,9 +5,12 @@ import {
   BTW_MAX_BLOCK_CHARS,
   BTW_MAX_SNAPSHOT_CHARS,
   buildBtwPrompt,
+  btwOpenTargetTurnId,
   btwVisibleBlocks,
   consumeBtwCommand,
   replaceBtwThread,
+  resolveBtwHarness,
+  sessionHasBtwThreads,
   serializeBtwBlock,
   serializeBtwSnapshot,
   supportsBtwHarness,
@@ -73,6 +76,40 @@ describe("consumeBtwCommand", () => {
       text: "ask /btw about this",
       matched: false,
     });
+  });
+});
+
+describe("btwOpenTargetTurnId", () => {
+  it("targets the latest completed turn while the current turn is still running", () => {
+    const turns = [
+      [
+        { id: "u1", role: "user" as const, text: "first", durationMs: 1000 },
+        { id: "a1", role: "assistant" as const, text: "done" },
+      ],
+      [
+        { id: "u2", role: "user" as const, text: "second" },
+        { id: "a2", role: "assistant" as const, text: "working", streaming: true },
+      ],
+    ];
+    expect(btwOpenTargetTurnId(turns)).toBe("u1");
+  });
+});
+
+describe("resolveBtwHarness", () => {
+  it("falls back to a stored thread harness after a handoff", () => {
+    expect(
+      resolveBtwHarness("fx", [thread({ harness: "claude" })]),
+    ).toBe("claude");
+  });
+});
+
+describe("sessionHasBtwThreads", () => {
+  it("detects persisted side threads", () => {
+    expect(
+      sessionHasBtwThreads([
+        { id: "u1", role: "user", text: "hi", btwThreads: [thread()] },
+      ]),
+    ).toBe(true);
   });
 });
 

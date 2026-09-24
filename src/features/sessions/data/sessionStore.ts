@@ -661,6 +661,12 @@ function sanitizeBtwThreads(
     }
     const error = typeof record.error === "string" ? record.error.trim() : "";
     const model = typeof record.model === "string" ? record.model.trim() : "";
+    const harness =
+      typeof record.harness === "string" &&
+      record.harness.trim() &&
+      HARNESSES.includes(record.harness as HarnessId)
+        ? (record.harness as HarnessId)
+        : undefined;
     const modelSettings = sanitizeStringRecord(record.modelSettings);
     const providerThreadId = sanitizeNestedId(record.providerThreadId);
     const interrupted = hydrate && status === "running";
@@ -672,6 +678,7 @@ function sanitizeBtwThreads(
         updatedAt,
         status: interrupted ? "error" : status,
         messages,
+        ...(harness ? { harness } : {}),
         ...(model ? { model } : {}),
         ...(modelSettings ? { modelSettings } : {}),
         ...(providerThreadId ? { providerThreadId } : {}),

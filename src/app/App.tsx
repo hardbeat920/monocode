@@ -7379,23 +7379,27 @@ export default function App({
         : undefined;
       const turnModel = turn.find((block) => block.role === "user")?.turnModel
         ?.id;
+      const sourceBlockEarly = source?.blocks.find(
+        (block) => block.id === sourceUserId && block.role === "user",
+      );
+      const existingEarly = sourceBlockEarly?.btwThreads?.find(
+        (thread) => thread.id === threadId,
+      );
+      const requestHarness = supportsBtwHarness(turnHarness)
+        ? turnHarness
+        : existingEarly?.harness;
       if (
         !source ||
-        !supportsBtwHarness(source.harness) ||
-        !supportsBtwHarness(turnHarness) ||
+        !supportsBtwHarness(requestHarness) ||
         source.worktreeRemoved ||
         !sourceUserId ||
         !sourceEndBlockId
       ) {
         return;
       }
-      const sourceBlock = source.blocks.find(
-        (block) => block.id === sourceUserId && block.role === "user",
-      );
+      const sourceBlock = sourceBlockEarly;
       if (!sourceBlock) return;
-      const existing = sourceBlock.btwThreads?.find(
-        (thread) => thread.id === threadId,
-      );
+      const existing = existingEarly;
       const selectedModel =
         model?.trim() ||
         existing?.model ||
@@ -7414,6 +7418,7 @@ export default function App({
       const thread: BtwThread = existing
         ? {
             ...existing,
+            harness: existing.harness ?? turnHarness,
             model: selectedModel || undefined,
             modelSettings: selectedModelSettings,
             status: "running",
@@ -7432,6 +7437,7 @@ export default function App({
             updatedAt: now,
             status: "running",
             pendingBlocks: [],
+            harness: requestHarness,
             ...(selectedModel ? { model: selectedModel } : {}),
             modelSettings: selectedModelSettings,
             messages: [{ id: messageId, role: "user", text, createdAt: now }],
@@ -7448,7 +7454,7 @@ export default function App({
         userBlockId: sourceUserId,
         source,
         thread,
-        harness: turnHarness,
+        harness: thread.harness ?? requestHarness!,
       });
     },
     [runBtwRequest, updateBtwThread],
@@ -7470,10 +7476,15 @@ export default function App({
         ? harnessForTurn(source.blocks, turn, source.harness)
         : undefined;
       const nextModel = model.trim();
+      const sourceBlock = source?.blocks.find(
+        (block) => block.id === sourceUserId && block.role === "user",
+      );
+      const threadHarness =
+        sourceBlock?.btwThreads?.find((thread) => thread.id === threadId)
+          ?.harness ?? turnHarness;
       if (
         !source ||
-        !supportsBtwHarness(source.harness) ||
-        !supportsBtwHarness(turnHarness) ||
+        !supportsBtwHarness(threadHarness) ||
         source.worktreeRemoved ||
         !sourceUserId ||
         !nextModel
@@ -7503,10 +7514,15 @@ export default function App({
       const turnHarness = source
         ? harnessForTurn(source.blocks, turn, source.harness)
         : undefined;
+      const sourceBlock = source?.blocks.find(
+        (block) => block.id === sourceUserId && block.role === "user",
+      );
+      const threadHarness =
+        sourceBlock?.btwThreads?.find((thread) => thread.id === threadId)
+          ?.harness ?? turnHarness;
       if (
         !source ||
-        !supportsBtwHarness(source.harness) ||
-        !supportsBtwHarness(turnHarness) ||
+        !supportsBtwHarness(threadHarness) ||
         source.worktreeRemoved ||
         !sourceUserId
       ) {
@@ -7529,21 +7545,21 @@ export default function App({
       const turnHarness = source
         ? harnessForTurn(source.blocks, turn, source.harness)
         : undefined;
-      if (
-        !source ||
-        !supportsBtwHarness(source.harness) ||
-        !supportsBtwHarness(turnHarness) ||
-        source.worktreeRemoved ||
-        !sourceUserId
-      ) {
-        return;
-      }
-      const sourceBlock = source.blocks.find(
+      const sourceBlock = source?.blocks.find(
         (block) => block.id === sourceUserId && block.role === "user",
       );
       const existing = sourceBlock?.btwThreads?.find(
         (thread) => thread.id === threadId,
       );
+      const threadHarness = existing?.harness ?? turnHarness;
+      if (
+        !source ||
+        !supportsBtwHarness(threadHarness) ||
+        source.worktreeRemoved ||
+        !sourceUserId
+      ) {
+        return;
+      }
       if (!sourceBlock || !existing || existing.status !== "error") return;
       const thread: BtwThread = {
         ...existing,
@@ -7564,7 +7580,7 @@ export default function App({
         userBlockId: sourceUserId,
         source: updated,
         thread,
-        harness: turnHarness,
+        harness: thread.harness ?? threadHarness!,
       });
     },
     [runBtwRequest, updateBtwThread],
