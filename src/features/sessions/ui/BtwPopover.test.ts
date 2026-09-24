@@ -72,17 +72,32 @@ describe("BtwPopover command requests", () => {
   });
 
   it("focuses an empty composer without sending", async () => {
+    const mainComposer = document.createElement("div");
+    mainComposer.setAttribute("data-composer", "");
+    const mainTextarea = document.createElement("textarea");
+    mainComposer.append(mainTextarea);
+    document.body.append(mainComposer);
+    mainTextarea.focus();
+    expect(document.activeElement).toBe(mainTextarea);
+
     const onSubmit = vi.fn();
     await act(async () =>
       root.render(renderPopover({ id: 1, text: "" }, onSubmit)),
     );
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+    });
 
     const composer = container.querySelector<HTMLTextAreaElement>(
       "[data-btw-composer]",
     );
     expect(composer?.value).toBe("");
     expect(composer?.dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(composer);
     expect(onSubmit).not.toHaveBeenCalled();
+    mainComposer.remove();
   });
 
   it("sends text requests and clears the composer", async () => {

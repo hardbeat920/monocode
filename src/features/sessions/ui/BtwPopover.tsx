@@ -115,8 +115,10 @@ export function BtwPopover({
     message: BtwMessage;
   } | null>(null);
   const pendingSubmitRef = useRef<string | null>(null);
+  const pendingEmptyFocusRef = useRef(false);
   const lastOpenRequestRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const btwComposerRef = useRef<HTMLDivElement | null>(null);
   const persisted = useMemo(
     () => threads.find((thread) => thread.id === openThreadId),
     [openThreadId, threads],
@@ -229,9 +231,19 @@ export function BtwPopover({
     setDraftModelSettings(null);
     setDraftText(text);
     if (text) pendingSubmitRef.current = text;
+    else pendingEmptyFocusRef.current = true;
     setOpenThreadId(crypto.randomUUID());
     onOpenRequestHandled?.(openRequest.id);
   }, [onOpenRequestHandled, openRequest]);
+
+  useEffect(() => {
+    if (!open || running || !pendingEmptyFocusRef.current) return;
+    pendingEmptyFocusRef.current = false;
+    const frame = requestAnimationFrame(() => {
+      btwComposerRef.current?.querySelector("textarea")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, openThreadId, running]);
 
   useEffect(() => {
     const text = pendingSubmitRef.current;
@@ -422,7 +434,10 @@ export function BtwPopover({
             ) : null}
           </div>
 
-          <div className="shrink-0 border-t border-content/10 px-3.5 py-3">
+          <div
+            ref={btwComposerRef}
+            className="shrink-0 border-t border-content/10 px-3.5 py-3"
+          >
             <Composer
               key={openThreadId}
               compact

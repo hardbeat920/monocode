@@ -145,6 +145,33 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe("");
   });
 
+  it("keeps the draft when onBtwCommand rejects the command", async () => {
+    const onBtwCommand = vi.fn(() => false);
+    const onSubmit = vi.fn();
+    await renderComposer(
+      undefined,
+      vi.fn(),
+      false,
+      0,
+      "/btw",
+      onBtwCommand,
+      onSubmit,
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(onBtwCommand).toHaveBeenCalledWith("");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("/btw");
+  });
+
   it("clears the draft when the reset token advances", async () => {
     const onDraftChange = vi.fn();
     const props = {

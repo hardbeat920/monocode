@@ -1308,21 +1308,20 @@ export function Composer({
       !handoffCard
     ) {
       const accepted = onBtwCommand(btwCommand.text);
-      if (accepted !== false) {
-        if (ref.current) {
-          ref.current.value = "";
-          ref.current.style.height = "auto";
-        }
-        setDraft("");
-        onDraftChange?.("");
-        setPlusOpen(false);
-        setSlash(null);
-        setMention(null);
-        setCreatingSkill(false);
-        setCreateError(null);
-        syncHasValue("", []);
-        return;
+      if (accepted === false) return;
+      if (ref.current) {
+        ref.current.value = "";
+        ref.current.style.height = "auto";
       }
+      setDraft("");
+      onDraftChange?.("");
+      setPlusOpen(false);
+      setSlash(null);
+      setMention(null);
+      setCreatingSkill(false);
+      setCreateError(null);
+      syncHasValue("", []);
+      return;
     }
     if (folderCommand.matched && onPlaceInFolder && !sessionFolderSelected) {
       openSessionFolderPicker();
