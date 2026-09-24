@@ -13,6 +13,7 @@ import {
   preferredModelSettings,
   resolveModel,
 } from "./models";
+import { loadProjectProviderSettings } from "./projectProviders";
 
 export type HarnessId =
   | "claude"
@@ -477,7 +478,11 @@ export function newSessionForProject(
   const preferred = seed?.harness ?? "claude";
   const harness = firstEnabledHarness(cwd, preferred);
   if (harness === preferred) return newSessionLike(seed, cwd);
-  return newSession(harness, cwd, undefined, seed?.runtimeMode);
+  const project = loadProjectProviderSettings(cwd);
+  const model =
+    project.models?.[harness] ??
+    (project.defaultHarness === harness ? project.defaultModel : undefined);
+  return newSession(harness, cwd, model, seed?.runtimeMode);
 }
 
 /** New conversation carrying another session's harness, model and settings. */

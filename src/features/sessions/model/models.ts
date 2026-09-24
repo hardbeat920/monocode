@@ -1,6 +1,10 @@
 import type { HarnessId } from "./session";
 import { HARNESSES } from "./session";
 import { loadProjectProviderSettings } from "./projectProviders";
+import {
+  hasProbedHarnessAvailability,
+  isHarnessAvailable,
+} from "../../../integrations/harness/core/availabilityState";
 
 export type ModelSettingChoice = {
   value: string;
@@ -669,8 +673,15 @@ export function firstEnabledHarness(
   preferred: HarnessId,
 ): HarnessId {
   const hidden = new Set(loadProjectProviderSettings(cwd).hidden ?? []);
-  if (!hidden.has(preferred)) return preferred;
-  return HARNESSES.find((id) => !hidden.has(id)) ?? preferred;
+  const enabled = (id: HarnessId) =>
+    !hidden.has(id) &&
+    showProviderInModelPicker(
+      id,
+      isHarnessAvailable(id),
+      hasProbedHarnessAvailability(),
+    );
+  if (enabled(preferred)) return preferred;
+  return HARNESSES.find(enabled) ?? preferred;
 }
 
 /** Provider + model new conversations should start with. */

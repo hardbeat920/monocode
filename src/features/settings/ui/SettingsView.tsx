@@ -2447,7 +2447,10 @@ function ProvidersPage({
               (projectSettings.defaultHarness === harness
                 ? projectSettings.defaultModel
                 : undefined) ??
-              defaultModelId(harness))
+              defaultModels[harness] ??
+              (choice?.harness === harness
+                ? choice.model
+                : defaultModelId(harness)))
             : (defaultModels[harness] ??
               (choice?.harness === harness
                 ? choice.model

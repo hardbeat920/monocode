@@ -105,7 +105,11 @@ export function rebaseProjectProviders(from: string, to: string): void {
 export function subscribeProjectProviders(listener: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   const storage = (event: StorageEvent) => {
-    if (event.key === KEY) listener();
+    if (event.key !== KEY) return;
+    cache = null;
+    cacheRaw = null;
+    revision += 1;
+    listener();
   };
   window.addEventListener(PROJECT_PROVIDERS_CHANGE_EVENT, listener);
   window.addEventListener("storage", storage);
