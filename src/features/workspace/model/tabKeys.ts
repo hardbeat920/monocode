@@ -23,6 +23,8 @@
  *   Reset zoom          cmd-0
  *   Previous session    shift-cmd-up
  *   Next session        shift-cmd-down
+ *   Previous in tab     cmd-up
+ *   Next in tab         cmd-down
  *   Archive session     shift-cmd-a
  *   Previous project    shift-cmd-left
  *   Next project        shift-cmd-right
@@ -47,6 +49,8 @@ export type TabCommand =
   | "toggle-terminal"
   | "prev-session"
   | "next-session"
+  | "prev-session-in-tab"
+  | "next-session-in-tab"
   | "archive-session"
   | "prev-project"
   | "next-project"
@@ -93,6 +97,8 @@ export function tabCommand(e: KeyboardEvent): TabCommand | null {
   }
 
   if (key === "t") return "new";
+  if (e.key === "ArrowUp") return "prev-session-in-tab";
+  if (e.key === "ArrowDown") return "next-session-in-tab";
   if (key === "w") return "close";
   if (key === "d") return "split-right";
   if (key === "j") return "toggle-terminal";

@@ -44,6 +44,7 @@ export function applyHarnessEvent(
         preview: event.preview,
         streaming: true,
         agentModel: event.agentModel,
+        ...(event.background ? { background: true } : {}),
       });
     case "tool.updated":
       return upsertTool(session, {
@@ -109,6 +110,13 @@ export function applyHarnessEvent(
       return mergeTurnMetrics(session, event);
     case "tasks.updated":
       return upsertTaskList(session, event);
+    case "background.updated":
+      if (event.tasks.length === 0) {
+        if (!session.backgroundTasks) return session;
+        const { backgroundTasks: _cleared, ...rest } = session;
+        return rest;
+      }
+      return { ...session, backgroundTasks: event.tasks };
     case "plan":
       return upsertPlan(session, event);
     case "session.error":
@@ -435,7 +443,8 @@ export function appendSteerUser(
 }
 
 export function stopStreaming(session: Session): Session {
-  const settled = settlePendingApprovals(session);
+  const { backgroundTasks: _cleared, ...settled } =
+    settlePendingApprovals(session);
   return {
     ...settled,
     busy: false,
@@ -793,6 +802,7 @@ function upsertTool(
     preview?: ToolPreview;
     streaming: boolean;
     agentModel?: string;
+    background?: boolean;
   },
 ): Session {
   const index = findToolIndex(session, patch);
@@ -820,6 +830,7 @@ function upsertTool(
         status: patch.status,
         ...(detail ? { detail } : {}),
         ...(preview ? { preview } : {}),
+        ...(patch.background ? { background: true } : {}),
       },
     });
   }
@@ -875,6 +886,7 @@ function upsertTool(
       status,
       ...(detail ? { detail } : {}),
       ...(preview ? { preview } : {}),
+      ...(prev.tool?.background ? { background: true } : {}),
     },
   };
   return { ...session, blocks };

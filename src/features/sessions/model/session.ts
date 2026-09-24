@@ -257,6 +257,8 @@ export type Block = {
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    /** Left running by the agent when it yielded; the turn waits on it. */
+    background?: boolean;
   };
   approval?: {
     requestId: number;
@@ -340,6 +342,11 @@ export type Session = {
   blocks: Block[];
   /** True while a harness turn is in flight. */
   busy?: boolean;
+  /**
+   * What the live turn is waiting on after the agent yielded with work still
+   * running in the background. In-memory only.
+   */
+  backgroundTasks?: string[];
   /** Follow-ups waiting for current turn. In-memory only. */
   queuedMessages?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */

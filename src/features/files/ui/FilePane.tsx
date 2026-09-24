@@ -163,6 +163,7 @@ function FilePaneComponent({
                     (entry) => entry.id === file.agent.sessionId,
                   )}
                   visible={file.id === pane.activeFileId}
+                  focused={focused && file.id === pane.activeFileId}
                   onOpenFile={onOpenFile}
                 />
               ) : isPlanTab(file) ? (

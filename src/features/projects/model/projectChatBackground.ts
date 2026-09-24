@@ -2,10 +2,13 @@ import {
   CHAT_BACKGROUND_OPACITY_MAX,
   CHAT_BACKGROUND_OPACITY_MIN,
   CHAT_BACKGROUND_SCOPE_DEFAULT,
+  NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
   loadChatBackgroundEmptyOpacity,
   loadChatBackgroundSessionOpacity,
   loadChatBackgroundScope,
+  NEW_THREAD_BACKGROUND_EFFECTS,
   type ChatBackgroundScope,
+  type NewThreadBackgroundEffect,
 } from "../../settings/model/appearance";
 
 const KEY = "monocode:project-chat-backgrounds";
@@ -24,14 +27,17 @@ export type ProjectChatBackgroundSettings = {
   emptyOpacity: number;
   sessionOpacity: number;
   scope: ChatBackgroundScope;
+  effect: NewThreadBackgroundEffect;
 };
 
 type StoredProjectChatBackground = Partial<ProjectChatBackground> & {
   emptyOpacity?: number;
   sessionOpacity?: number;
+  effect?: NewThreadBackgroundEffect;
 };
 
 let revision = Date.now();
+let imageRevision = revision;
 
 function clampOpacity(value: number): number {
   return Math.min(
@@ -63,6 +69,12 @@ function write(value: Record<string, StoredProjectChatBackground>) {
 
 function validScope(value: unknown): value is ChatBackgroundScope {
   return value === "empty" || value === "all";
+}
+
+function validEffect(value: unknown): value is NewThreadBackgroundEffect {
+  return NEW_THREAD_BACKGROUND_EFFECTS.includes(
+    value as NewThreadBackgroundEffect,
+  );
 }
 
 function storedOpacity(value: unknown, fallback: number): number {
@@ -98,12 +110,16 @@ export function loadProjectChatBackgroundSettings(
           : loadChatBackgroundSessionOpacity(),
     ),
     scope: validScope(stored.scope) ? stored.scope : loadChatBackgroundScope(),
+    effect: validEffect(stored.effect)
+      ? stored.effect
+      : NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
   };
 }
 
 export function saveProjectChatBackgroundSettings(
   project: string,
   value: ProjectChatBackgroundSettings,
+  imageChanged = false,
 ) {
   const path = value.path.trim();
   if (!project || !path) return;
@@ -115,9 +131,12 @@ export function saveProjectChatBackgroundSettings(
     scope: validScope(value.scope)
       ? value.scope
       : CHAT_BACKGROUND_SCOPE_DEFAULT,
+    effect: validEffect(value.effect)
+      ? value.effect
+      : NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
   };
   write(next);
-  notifyProjectChatBackgroundChanged();
+  notifyProjectChatBackgroundChanged(imageChanged);
 }
 
 export function loadProjectChatBackground(
@@ -158,10 +177,7 @@ export function clearProjectChatBackgroundSetting(project: string) {
   notifyProjectChatBackgroundChanged();
 }
 
-export function rebaseProjectChatBackgroundSetting(
-  from: string,
-  to: string,
-) {
+export function rebaseProjectChatBackgroundSetting(from: string, to: string) {
   if (!from || !to || from === to) return;
   const next = read();
   if (!(from in next)) return;
@@ -171,13 +187,18 @@ export function rebaseProjectChatBackgroundSetting(
   notifyProjectChatBackgroundChanged();
 }
 
-export function notifyProjectChatBackgroundChanged() {
+export function notifyProjectChatBackgroundChanged(imageChanged = true) {
   revision += 1;
+  if (imageChanged) imageRevision += 1;
   window.dispatchEvent(new CustomEvent(PROJECT_CHAT_BACKGROUND_CHANGED));
 }
 
 export function projectChatBackgroundRevision(): number {
   return revision;
+}
+
+export function projectChatBackgroundImageRevision(): number {
+  return imageRevision;
 }
 
 export function subscribeProjectChatBackground(listener: () => void) {

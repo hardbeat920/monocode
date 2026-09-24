@@ -16,7 +16,7 @@ import {
   isTodoTool,
   listModelsFromControlResponse,
   normalizeClaudeCliEffort,
-  parseBackgroundAgentTasks,
+  parseBackgroundTasks,
   parseClaudeVersion,
   parseControlRequest,
   parseControlResponse,
@@ -824,7 +824,7 @@ describe("subagent messages", () => {
       summary: "Found the tokens",
     });
     expect(
-      parseBackgroundAgentTasks({
+      parseBackgroundTasks({
         type: "system",
         subtype: "background_tasks_changed",
         tasks: [
@@ -848,6 +848,7 @@ describe("subagent messages", () => {
       }),
     ).toEqual([
       { taskId: "t1", taskType: "local_agent", description: "Explore" },
+      { taskId: "bash_1", taskType: "local_bash", description: "sleep 10" },
     ]);
     expect(
       parseToolProgress({

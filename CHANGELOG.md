@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.55] - 2026-09-23
+
+### Added
+
+- Jira Cloud joins the Inbox with site, email, and API-token connection settings; issue browsing; descriptions and comment threads; comment posting; and shared project filters. **Ask** and **Start work** include the ticket's description and Jira identifier, and Start work lets you choose a local project. This integration uses API tokens without scopes; scoped tokens and Jira Data Center are not supported. See [Jira setup](https://github.com/hardbeat920/monocode/blob/v0.1.55/docs/jira.md).
+- Jira issues support background activity notifications, project-level mute controls scoped to each Jira site, and **Issue appeared** automation triggers that run in the automation's selected workspace. Project lists follow pagination, connection failures remain isolated from other Inbox providers, and disconnecting clears saved credentials and cached Jira content.
+- Conversations have in-transcript Find with match highlighting, previous/next navigation, and Command/Ctrl+F, F3, and Command/Ctrl+G shortcuts. Global conversation-search results now jump to the matching transcript block.
+- Command/Ctrl+Up and Command/Ctrl+Down switch to the previous or next session inside the focused tab. Sessions already visible elsewhere swap panes instead of mounting twice.
+- The session sidebar can be shown or hidden independently through the title bar, View menu, or Command/Ctrl+Shift+B, with the choice remembered across launches.
+- Background artwork supports Dither, ASCII, Halftone, and Scanlines effects, processed in a worker and cached by image revision and theme. Effects can be selected globally or overridden per project with a live preview. Initial background-effect support in #347 by @404khai.
+- Claude Opus 5.5 sessions have a dedicated animated welcome scene that adapts to the available space around the Composer, alongside the existing Astra welcome screen.
+
+### Changed
+
+- Chat is the default transcript layout; saved choices of chat or full-width layout remain unchanged.
+- Sent prompts rise into the transcript, and the Composer moves into its dock on the first message without changing width. Streaming replies reveal words progressively, while tool steps use paced, masked entrance animations to smooth bursts of updates. Motion respects reduced-motion preferences.
+- Switching sessions preserves recently rendered transcripts and scroll positions, prefetches neighboring sessions, and avoids redundant transcript saves. Deferred cleanup, memoized sidebar cards, and staged initial transcript rendering reduce work during navigation and improve first paint.
+- Sidebar diff statistics use tighter spacing around thousands separators.
+- The project background dialog stays within the viewport with scrollable content and updated effect controls.
+
+### Fixed
+
+- Explorer sorts numbered files and folders naturally, placing names such as `chapter-2` before `chapter-10` while keeping folders first. In #356 by @404khai.
+- Opening a file in its default application validates the path and reports launch failures. File and tab context-menu actions show actionable errors instead of silently failing.
+
 ## [0.1.54] - 2026-09-22
 
 ### Added
@@ -966,7 +991,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.54...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.55...HEAD
+[0.1.55]: https://github.com/hardbeat920/monocode/compare/v0.1.54...v0.1.55
 [0.1.54]: https://github.com/hardbeat920/monocode/compare/v0.1.53...v0.1.54
 [0.1.53]: https://github.com/hardbeat920/monocode/compare/v0.1.52...v0.1.53
 [0.1.52]: https://github.com/hardbeat920/monocode/compare/v0.1.51...v0.1.52

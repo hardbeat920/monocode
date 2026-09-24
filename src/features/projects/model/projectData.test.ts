@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { projectKey } from "../../../shared/lib/paths";
-import { loadSessionFolders, saveSessionFolders } from "../../sessions/model/sessionFolders";
+import {
+  loadSessionFolders,
+  saveSessionFolders,
+} from "../../sessions/model/sessionFolders";
 import {
   loadTabGroupLabels,
   saveTabGroupLabel,
@@ -54,6 +57,7 @@ describe("rebaseProjectData", () => {
       emptyOpacity: 0.2,
       sessionOpacity: 0.1,
       scope: "all",
+      effect: "dither",
     });
     saveSessionFolders(from, [
       {
@@ -72,6 +76,7 @@ describe("rebaseProjectData", () => {
     expect(loadProjectChatBackgroundSettings(newKey)?.path).toBe(
       "/images/background.png",
     );
+    expect(loadProjectChatBackgroundSettings(newKey)?.effect).toBe("dither");
     expect(loadSessionFolders(from)).toEqual([]);
     expect(loadSessionFolders(to)[0]?.name).toBe("Active");
   });

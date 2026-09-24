@@ -133,6 +133,7 @@ afterEach(() => {
   localStorage.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("sidebar session multiselection", () => {
@@ -1375,6 +1376,100 @@ describe("collapsed rail Inbox actions", () => {
         .click(),
     );
     expect(props.onToggleProjectRail).toHaveBeenCalledOnce();
+  });
+
+  it("slides the collapsed sidebar open until dismissed from the compact tabs", async () => {
+    // happy-dom animations never finish, so drive them by hand.
+    const animations: { keyframes: Keyframe[]; animation: Animation }[] = [];
+    vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(
+      (keyframes) => {
+        const animation = {
+          cancel: vi.fn(),
+          onfinish: null,
+        } as unknown as Animation;
+        animations.push({ keyframes: keyframes as Keyframe[], animation });
+        return animation;
+      },
+    );
+    const finish = () =>
+      act(() => {
+        const { animation } = animations.at(-1)!;
+        animation.onfinish?.call(animation, new Event("finish") as never);
+      });
+    props.open = false;
+    props.projectRailOpen = false;
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    props.onTabChange = vi.fn((tab) => {
+      props = { ...props, tab };
+      render();
+    });
+    await act(async () => render());
+
+    const drawer = () =>
+      container.querySelector<HTMLElement>("[data-sidebar-drawer]");
+    const compactTab = (label: string) =>
+      container.querySelector<HTMLButtonElement>(
+        `[data-compact-project-rail] [role="tab"][aria-label="${label}"]`,
+      )!;
+    // A dismissed drawer slides shut before it unmounts.
+    const expectDrawerDismissed = () => {
+      expect(drawer()?.dataset.sidebarDrawer).toBe("closing");
+      expect(drawer()?.inert).toBe(true);
+      expect(animations.at(-1)!.keyframes.at(-1)).toEqual({ width: "0px" });
+      finish();
+      expect(drawer()).toBeNull();
+    };
+    expect(drawer()).toBeNull();
+    expect(compactTab("Sessions").getAttribute("aria-selected")).toBe("false");
+
+    act(() => compactTab("Explorer").click());
+    expect(props.onTabChange).toHaveBeenLastCalledWith("files");
+    expect(drawer()?.dataset.sidebarDrawer).toBe("open");
+    // It pushes the workspace like the pinned sidebar, growing from nothing.
+    expect(drawer()?.className).not.toContain("absolute");
+    expect(drawer()?.querySelector("aside")?.className).toContain("body-glass");
+    expect(animations).toHaveLength(1);
+    expect(animations[0].keyframes[0]).toEqual({ width: "0px" });
+    expect(compactTab("Explorer").getAttribute("aria-selected")).toBe("true");
+
+    act(() => compactTab("Sessions").click());
+    expect(drawer()?.contains(card())).toBe(true);
+    // Switching tabs keeps the drawer open without replaying the slide.
+    expect(animations).toHaveLength(1);
+
+    act(() => compactTab("Sessions").click());
+    expectDrawerDismissed();
+
+    // Reopening mid-slide reverses the running animation.
+    act(() => compactTab("Sessions").click());
+    act(() => compactTab("Sessions").click());
+    const closing = animations.at(-1)!.animation;
+    act(() => compactTab("Sessions").click());
+    expect(closing.cancel).toHaveBeenCalled();
+    expect(drawer()?.dataset.sidebarDrawer).toBe("open");
+
+    pressKey(document.body, "Escape");
+    expectDrawerDismissed();
+
+    act(() => compactTab("Sessions").click());
+    act(() => {
+      document.body.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true }),
+      );
+    });
+    expectDrawerDismissed();
+
+    act(() => compactTab("Sessions").click());
+    act(() => card().click());
+    expect(props.onSelectSession).toHaveBeenCalledWith("session-1");
+    expectDrawerDismissed();
+
+    // Pinning the sidebar open replaces the drawer at once.
+    act(() => compactTab("Sessions").click());
+    props.open = true;
+    act(() => render());
+    expect(drawer()).toBeNull();
   });
 
   it("marks the compact Changes shortcut when the working tree has changes", async () => {

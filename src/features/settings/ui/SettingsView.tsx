@@ -36,6 +36,7 @@ import {
 } from "../../../shared/ui/ColorPickerPopover";
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import { JiraSettings } from "./JiraSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -1073,6 +1074,19 @@ function InboxPage({
         description="Pull requests and Boards work items from your ADO organization."
       >
         <AzureDevOpsSettings />
+      </Group>
+
+      <Group
+        id="jira"
+        title={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark provider="jira" className="size-4 shrink-0" />
+            Jira
+          </span>
+        }
+        description="Jira Cloud issues from the projects you pick."
+      >
+        <JiraSettings />
       </Group>
 
       <Group

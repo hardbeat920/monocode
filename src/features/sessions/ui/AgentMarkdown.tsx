@@ -1,6 +1,6 @@
 import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContext,
   isValidElement,
@@ -26,6 +26,7 @@ import {
 } from "streamdown";
 import type { PluggableList } from "unified";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
@@ -39,11 +40,12 @@ import { isAtxHeadingLine } from "../../files/model/markdownSource";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { revealPath } from "../../../platform/tauri/fs";
+import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
 import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
+import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -89,6 +91,17 @@ const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
       imageBlockPolicy: "remove" as const,
     },
   ],
+];
+
+// A reply that streams renders its words as spans that fade in as they land.
+const FADING_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
+  ...MARKDOWN_REHYPE_PLUGINS,
+  rehypeWordFade,
+];
+
+const FADING_INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
+  ...INBOX_MEDIA_REHYPE_PLUGINS,
+  rehypeWordFade,
 ];
 
 type FileLinkMenu = {
@@ -461,6 +474,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   allowRemoteMedia?: boolean;
 }) {
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
+  const [fileActionError, setFileActionError] = useState<string | null>(null);
   const onFileContextMenu = useCallback(
     (event: ReactMouseEvent, path: string, navigation?: EditorNavigation) => {
       event.preventDefault();
@@ -481,11 +495,25 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
+  const paced = usePacedText(text, !!streaming);
+  const fading = useWordFading(!!streaming || paced.revealing);
+  // Once a reply has streamed its words stay spans: dropping them would swap
+  // every word's element and could catch the last few mid-fade.
+  const streamed = useRef(!!streaming);
+  if (streaming) streamed.current = true;
+  const rehypePlugins = streamed.current
+    ? remoteMedia
+      ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
+      : FADING_MARKDOWN_REHYPE_PLUGINS
+    : remoteMedia
+      ? INBOX_MEDIA_REHYPE_PLUGINS
+      : MARKDOWN_REHYPE_PLUGINS;
 
   const onFileMenuPick = (id: string) => {
     if (!fileMenu) return;
     const path = fileMenu.path;
     setFileMenu(null);
+    setFileActionError(null);
 
     if (id === "open-monocode") {
       if (fileMenu.navigation) onOpenFile?.(path, fileMenu.navigation);
@@ -496,7 +524,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     let action: Promise<void>;
     switch (id) {
       case "open-default":
-        action = openPath(path);
+        action = openPathWithDefaultApp(path);
         break;
       case "reveal":
         action = revealPath(path);
@@ -512,6 +540,9 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     }
     void action.catch((error) => {
       console.error(`Failed to run file-link action ${id}:`, error);
+      setFileActionError(
+        `Could not ${id === "open-default" ? "open the file in its default app" : "complete the file action"}: ${String(error)}`,
+      );
     });
   };
 
@@ -520,18 +551,16 @@ export const AgentMarkdown = memo(function AgentMarkdown({
       <FileOpenContext.Provider value={fileOpen}>
         <>
           <Streamdown
-            className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${className ?? ""}`}
+            className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
             components={MARKDOWN_COMPONENTS}
             controls={false}
             dir="auto"
-            isAnimating={!!streaming}
+            isAnimating={!!streaming || paced.revealing}
             plugins={MARKDOWN_PLUGINS}
             remarkPlugins={remarkPlugins}
-            rehypePlugins={
-              remoteMedia ? INBOX_MEDIA_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS
-            }
+            rehypePlugins={rehypePlugins}
           >
-            {text}
+            {paced.text}
           </Streamdown>
           {fileMenu ? (
             <ExplorerMenu
@@ -541,6 +570,12 @@ export const AgentMarkdown = memo(function AgentMarkdown({
               ariaLabel="File link actions"
               onPick={onFileMenuPick}
               onClose={() => setFileMenu(null)}
+            />
+          ) : null}
+          {fileActionError ? (
+            <FileActionError
+              message={fileActionError}
+              onDismiss={() => setFileActionError(null)}
             />
           ) : null}
         </>
