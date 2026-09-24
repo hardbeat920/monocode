@@ -556,6 +556,24 @@ function mapItemLifecycle(
     return { events: [] };
   }
 
+  if (itemType === "imageGeneration") {
+    if (!completed) return { events: [] };
+    const result = stringField(item, "result")?.trim();
+    if (!result) return { events: [] };
+    const prompt = stringField(item, "revisedPrompt")?.trim();
+    return {
+      events: [
+        {
+          type: "image.generated",
+          itemId: callId,
+          data: result,
+          name: "generated-image",
+          ...(prompt ? { alt: prompt } : {}),
+        },
+      ],
+    };
+  }
+
   if (itemType === "reasoning") {
     if (completed) {
       const summary = item.summary;

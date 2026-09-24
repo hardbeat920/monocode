@@ -31,6 +31,9 @@ export function applyHarnessEvent(
       return patchStreaming(session, "assistant", event.text, true);
     case "message.completed":
       return finishRole(session, "assistant");
+    case "image.generated":
+      if (!("path" in event)) return session;
+      return appendImage(session, event);
     case "reasoning.delta":
       return patchStreaming(session, "reasoning", event.text, true);
     case "reasoning.completed":
@@ -649,6 +652,24 @@ function appendStatus(session: Session, text: string): Session {
     id: crypto.randomUUID(),
     role: "system",
     text: trimmed,
+  });
+}
+
+function appendImage(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "image.generated"; path: string }>,
+): Session {
+  return appendBlock(session, {
+    id: crypto.randomUUID(),
+    role: "image",
+    text: "",
+    image: {
+      path: event.path,
+      name: event.name,
+      mimeType: event.mimeType,
+      size: event.size,
+      ...(event.alt ? { alt: event.alt } : {}),
+    },
   });
 }
 
