@@ -1,5 +1,5 @@
 import { AcpClient, type AcpHandlers } from "../../core/acp";
-import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
+import { recoverAcpSession } from "../../core/acpLifecycle";
 import {
   killChild,
   resolveOpenClawBinary,
@@ -40,8 +40,8 @@ export async function startOpenClawAcpBridge(input: {
   const childId = input.childId;
   let acp!: AcpClient;
   const handlers: AcpHandlers = {
-    onRequestRaw: (id, method) =>
-      void unknownAcpRequest(acp.respondError.bind(acp), id, method).catch(() => undefined),
+    onRequest: (id, method) =>
+      void acp.respondError(id, { code: -32601, message: `Method not found: ${method}` }).catch(() => undefined),
   };
   acp = new AcpClient(childId, handlers);
   watchChild(childId, (line) => acp.pushLine(line), () => acp.close(new Error("OpenClaw exited")));
@@ -84,5 +84,5 @@ export async function rejectOpenClawRequest(
   id: number | string,
   method: string,
 ): Promise<void> {
-  await unknownAcpRequest(acp.respondError.bind(acp), id, method);
+  await acp.respondError(Number(id), { code: -32601, message: `Method not found: ${method}` });
 }
