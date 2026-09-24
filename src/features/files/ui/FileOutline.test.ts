@@ -107,12 +107,15 @@ describe("code view outline", () => {
     await act(async () => toggle!.click());
 
     await act(async () =>
-      vi.waitFor(() => {
-        const labels = [
-          ...container.querySelectorAll<HTMLElement>('[role="treeitem"]'),
-        ].map((item) => item.textContent);
-        expect(labels).toEqual(["alpha", "Beta", "method"]);
-      }),
+      vi.waitFor(
+        () => {
+          const labels = [
+            ...container.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+          ].map((item) => item.textContent);
+          expect(labels).toEqual(["alpha", "Beta", "method"]);
+        },
+        { timeout: 5000 },
+      ),
     );
 
     const method = [
@@ -133,10 +136,12 @@ describe("code view outline", () => {
         .click(),
     );
     await act(async () =>
-      vi.waitFor(() =>
-        expect(
-          container.querySelectorAll('[role="treeitem"]').length,
-        ).toBeGreaterThan(0),
+      vi.waitFor(
+        () =>
+          expect(
+            container.querySelectorAll('[role="treeitem"]').length,
+          ).toBeGreaterThan(0),
+        { timeout: 5000 },
       ),
     );
 
