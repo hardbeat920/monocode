@@ -795,10 +795,18 @@ html.is-resizing * {
 }
 
 .composer-toolbar {
+  container: composer-toolbar / inline-size;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
+}
+
+@container composer-toolbar (width < 220px) {
+  [data-access-picker-trigger] > span,
+  [data-access-picker-trigger] > svg:last-child {
+    display: none;
+  }
 }
 
 html.theme-light [data-composer-box] {

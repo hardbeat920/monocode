@@ -1664,7 +1664,7 @@ export function Composer({
             </div>
           ) : null}
           {hideTopBar ? null : (
-            <div className="flex min-w-0 items-center gap-2.5 px-3 pt-2.5">
+            <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
               {hideProjectPicker ? null : (
                 <CwdPicker
                   cwd={cwd}
