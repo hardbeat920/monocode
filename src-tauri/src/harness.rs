@@ -418,6 +418,7 @@ pub fn harness_spawn(
     cwd: String,
     account: Option<HarnessAccount>,
 ) -> Result<u32, String> {
+    validate_spawn_request(&command, &args)?;
     let workdir = expand_home(&cwd);
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
@@ -884,6 +885,33 @@ fn is_resolved_harness_binary(command: &str) -> bool {
     .into_iter()
     .flatten()
     .any(|resolved| resolved == path)
+}
+
+fn is_allowed_spawn_command(command: &str, resolved: impl IntoIterator<Item = PathBuf>) -> bool {
+    let command = Path::new(command);
+    resolved.into_iter().any(|path| path == command)
+}
+
+fn validate_spawn_request_args(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|arg| arg.contains('\0')) {
+        return Err("harness_spawn: invalid NUL byte in arguments".into());
+    }
+    Ok(())
+}
+
+fn validate_spawn_request(command: &str, args: &[String]) -> Result<(), String> {
+    validate_spawn_request_args(args)?;
+    let resolved = [
+        resolve_cursor_agent(), resolve_codex(), resolve_opencode(),
+        resolve_claude(), resolve_pi(), resolve_omp(), resolve_fx(),
+        resolve_grok(), resolve_hermes(), resolve_antigravity(),
+    ]
+    .into_iter()
+    .flatten();
+    if !is_allowed_spawn_command(command, resolved) {
+        return Err("harness_spawn: executable was not returned by a trusted resolver".into());
+    }
+    Ok(())
 }
 
 /// One-shot capture of stdout (used for `cursor-agent --list-models`).
@@ -2815,6 +2843,19 @@ mod tests {
         } else {
             assert!(antigravity_args().is_empty());
         }
+    }
+
+    #[test]
+    fn spawn_validation_accepts_only_resolver_paths() {
+        let trusted = PathBuf::from("/trusted/agent");
+        assert!(is_allowed_spawn_command("/trusted/agent", [trusted.clone()]));
+        assert!(!is_allowed_spawn_command("/tmp/agent", [trusted]));
+    }
+
+    #[test]
+    fn spawn_validation_rejects_nul_arguments() {
+        assert!(validate_spawn_request_args(&["acp".into()]).is_ok());
+        assert!(validate_spawn_request_args(&["acp\0--shell".into()]).is_err());
     }
 
     #[test]
