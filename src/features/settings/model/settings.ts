@@ -63,8 +63,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "agents",
     label: "Chat",
     description:
-      "How transcripts read, what the composer does with a follow-up, and how diffs open.",
-    keywords: "transcript composer prompt message diff review layout",
+      "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open.",
+    keywords: "transcript composer prompt message diff review layout format save editor",
   },
   {
     id: "providers",
@@ -290,6 +290,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "chat",
     label: "Composer mascot",
     keywords: "runner animation coin fun",
+  },
+  {
+    id: "format-on-save",
+    section: "chat",
+    label: "Format on save",
+    keywords: "prettier quotes editor save format",
   },
   {
     id: "diff-view",
@@ -781,6 +787,18 @@ export function subscribeDiffViewer(onStoreChange: () => void) {
   window.addEventListener(DIFF_VIEWER_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(DIFF_VIEWER_CHANGE_EVENT, onStoreChange);
+}
+
+const FORMAT_ON_SAVE_KEY = "monocode.formatOnSave";
+
+export const FORMAT_ON_SAVE_DEFAULT = true;
+
+export function loadFormatOnSave(): boolean {
+  return readFlag(FORMAT_ON_SAVE_KEY) ?? FORMAT_ON_SAVE_DEFAULT;
+}
+
+export function saveFormatOnSave(value: boolean) {
+  writeFlag(FORMAT_ON_SAVE_KEY, value);
 }
 
 const CLAUDE_HOOKS_KEY = "monocode.claudeHooks";

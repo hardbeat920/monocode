@@ -228,6 +228,7 @@ import {
   loadDiffViewer,
   loadFileTabMode,
   loadFollowUpBehavior,
+  loadFormatOnSave,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadModelControls,
@@ -240,6 +241,7 @@ import {
   saveDiffViewer,
   saveFileTabMode,
   saveFollowUpBehavior,
+  saveFormatOnSave,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveModelControls,
@@ -812,6 +814,7 @@ function ChatPage() {
   const [modelControls, setModelControls] =
     useState<ModelControls>(loadModelControls);
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
+  const [formatOnSave, setFormatOnSave] = useState(loadFormatOnSave);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
     loadGridArcadeEnabled,
@@ -850,6 +853,11 @@ function ChatPage() {
   const onDiffViewer = (next: DiffViewer) => {
     saveDiffViewer(next);
     setDiffViewer(next);
+  };
+
+  const onFormatOnSave = (next: boolean) => {
+    saveFormatOnSave(next);
+    setFormatOnSave(next);
   };
 
   const onComposerRunner = (next: boolean) => {
@@ -928,6 +936,23 @@ function ChatPage() {
               { value: "beside", label: "Beside" },
             ]}
             onChange={onModelControls}
+          />
+        </Row>
+      </Group>
+
+      <Group
+        title="Editor"
+        description="What happens when you save a file in the workspace editor."
+      >
+        <Row
+          id="format-on-save"
+          label="Format on save"
+          description="Run Prettier on supported files before writing. Off keeps the text you typed, including quote style."
+        >
+          <Toggle
+            label="Format on save"
+            on={formatOnSave}
+            onChange={onFormatOnSave}
           />
         </Row>
       </Group>

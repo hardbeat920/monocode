@@ -42,6 +42,7 @@ import {
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { isLightScheme } from "../../settings/model/appearance";
+import { loadFormatOnSave } from "../../settings/model/settings";
 import { formatText } from "../../../shared/lib/format";
 import {
   basename,
@@ -636,26 +637,28 @@ function CodeMirrorEditor({
       const generation = ++saveGeneration;
       void (async () => {
         const before = view.state.doc.toString();
-        const result = await formatText(
-          path,
-          before,
-          view.state.selection.main.head,
-        );
-        if (disposed || generation !== saveGeneration) return;
+        if (loadFormatOnSave()) {
+          const result = await formatText(
+            path,
+            before,
+            view.state.selection.main.head,
+          );
+          if (disposed || generation !== saveGeneration) return;
 
-        if (
-          result &&
-          result.formatted !== before &&
-          view.state.doc.toString() === before
-        ) {
-          replaceEditorDoc(view, result.formatted, {
-            selection: {
-              anchor: Math.min(
-                Math.max(0, result.cursorOffset),
-                result.formatted.length,
-              ),
-            },
-          });
+          if (
+            result &&
+            result.formatted !== before &&
+            view.state.doc.toString() === before
+          ) {
+            replaceEditorDoc(view, result.formatted, {
+              selection: {
+                anchor: Math.min(
+                  Math.max(0, result.cursorOffset),
+                  result.formatted.length,
+                ),
+              },
+            });
+          }
         }
 
         const document = view.state.doc;
