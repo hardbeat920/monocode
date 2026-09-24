@@ -144,10 +144,10 @@ export async function cancelHermesTurn(sessionId: string): Promise<void> {
   live.muteUpdates = true;
   live.background.clear();
   resolveApprovals(live);
-  await live.acp
+  live.acp.rejectPending(new Error("cancelled"));
+  void live.acp
     .notify("session/cancel", { sessionId: live.acpSessionId })
     .catch(() => undefined);
-  live.acp.rejectPending(new Error("cancelled"));
 }
 
 export async function stopHermesSession(sessionId: string): Promise<void> {

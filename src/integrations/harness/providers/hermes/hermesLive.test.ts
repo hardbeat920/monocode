@@ -4,6 +4,7 @@ const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
 let onExit: ((code: number | null) => void) | undefined;
+let blockCancelWrite = false;
 const textFiles = new Map<string, string>();
 
 vi.mock("../../core/child", () => ({
@@ -23,6 +24,9 @@ vi.mock("../../core/child", () => ({
   },
   writeChild: async (_id: string, line: string) => {
     sent.push(line);
+    if (blockCancelWrite && JSON.parse(line).method === "session/cancel") {
+      await new Promise<void>(() => undefined);
+    }
   },
 }));
 
@@ -85,6 +89,7 @@ describe("Hermes live ACP sequence", () => {
     onLine = undefined;
     onExit = undefined;
     onStderr = undefined;
+    blockCancelWrite = false;
     textFiles.clear();
   });
 
@@ -344,7 +349,13 @@ describe("Hermes live ACP sequence", () => {
       "session/prompt",
     );
     const { cancelHermesTurn } = await import("./hermes");
-    await cancelHermesTurn("hermes-live-cancel");
+    blockCancelWrite = true;
+    await Promise.race([
+      cancelHermesTurn("hermes-live-cancel"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("cancel hung")), 100),
+      ),
+    ]);
     await turn;
     expect(parse().filter((message) => message.method === "session/prompt")).toHaveLength(1);
     expect(parse().some((message) => message.method === "session/cancel")).toBe(true);
