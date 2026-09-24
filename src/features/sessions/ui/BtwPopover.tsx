@@ -334,7 +334,7 @@ export function BtwPopover({
           role="dialog"
           aria-label="By-the-way conversation"
           onDismiss={close}
-          ignore="[data-model-picker]"
+          ignore="[data-model-picker], [data-model-control], [data-model-settings]"
           className="btw-popover-surface flex min-h-0 flex-col font-sans text-sm text-content"
         >
           <div className="flex min-h-12 shrink-0 items-center justify-between gap-4 border-b border-content/10 px-4 py-2.5">
