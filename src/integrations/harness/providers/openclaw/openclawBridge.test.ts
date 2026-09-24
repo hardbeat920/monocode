@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  sent: [] as string[],
   acp: null as { request: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } | null,
   spawn: vi.fn(async () => undefined),
   kill: vi.fn(async () => undefined),
@@ -21,7 +22,8 @@ vi.mock("../../core/acp", () => ({
   AcpClient: class {
     request = vi.fn(async (method: string) => {
       if (method === "initialize") return {};
-      return { sessionId: "openclaw-session" };
+      if (method === "session/new") return { sessionId: "openclaw-session" };
+      return {};
     });
     close = vi.fn();
     respondError = vi.fn(async () => undefined);
@@ -45,5 +47,16 @@ describe("OpenClaw ACP bridge", () => {
       args: ["acp"],
     }, "/repo");
     expect(result.gatewaySessionKey).toBe("acp-bridge:team/main");
+  });
+
+  it("keeps generated session keys namespaced and never exposes credentials", async () => {
+    const result = await startOpenClawAcpBridge({
+      childId: "openclaw#2",
+      cwd: "/repo",
+      gatewayUrl: "wss://gateway.example",
+    });
+    expect(result.gatewaySessionKey).toMatch(/^acp-bridge:/);
+    expect(result.gatewaySessionKey).not.toContain("token");
+    expect(result.gatewaySessionKey).not.toContain("password");
   });
 });
