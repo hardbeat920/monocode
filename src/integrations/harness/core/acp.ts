@@ -61,6 +61,10 @@ export class AcpClient {
     this.rpc.rejectPending(error);
   }
 
+  get isClosed(): boolean {
+    return this.rpc.isClosed;
+  }
+
   request<T>(method: string, params?: unknown, timeoutMs = 0): Promise<T> {
     return this.rpc.request<T>(method, params, timeoutMs);
   }
