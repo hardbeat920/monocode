@@ -437,17 +437,20 @@ pub fn harness_spawn(
     account: Option<HarnessAccount>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
-    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
-    let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
-    if let Some(prev) = prev {
-        terminate(prev.pid);
-    }
-
     if !workdir.is_dir() {
         return Err(format!(
             "Working directory does not exist: {}",
             workdir.display()
         ));
+    }
+    if !is_resolved_or_configured_harness_binary(&command) {
+        return Err("harness_spawn: not a resolved harness CLI".to_string());
+    }
+
+    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
+    let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
+    if let Some(prev) = prev {
+        terminate(prev.pid);
     }
 
     let mut cmd = Command::new(&command);
@@ -919,6 +922,27 @@ fn is_resolved_harness_binary(
     .into_iter()
     .flatten()
     .any(|resolved| resolved == path)
+}
+
+const HARNESS_PROVIDERS: &[&str] = &[
+    "claude",
+    "codex",
+    "cursor",
+    "grok",
+    "opencode",
+    "pi",
+    "omp",
+    "fx",
+    "hermes",
+    "antigravity",
+];
+
+fn is_resolved_or_configured_harness_binary(command: &str) -> bool {
+    is_resolved_harness_binary(command, None, None)
+        || HARNESS_PROVIDERS.iter().any(|provider| {
+            resolve_harness_binary_override(provider, command)
+                .is_ok_and(|path| path == Path::new(command))
+        })
 }
 
 /// One-shot capture of stdout (used for `cursor-agent --list-models`).
@@ -1504,6 +1528,9 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
 }
 
 fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<PathBuf, String> {
+    if provider == "antigravity" && cfg!(windows) {
+        return Err("Antigravity ACP server overrides are not supported on Windows.".into());
+    }
     let names: &[&str] = match provider {
         "claude" => &["claude"],
         "codex" => &["codex"],
@@ -1543,7 +1570,10 @@ fn resolve_configured_harness_binary(
     }
     let path = existing_binary(expand_home(binary_path))
         .ok_or_else(|| format!("Configured {provider} binary is not executable: {binary_path}"))?;
-    if !names.iter().any(|name| binary_name_eq(&path, name)) {
+    if !names
+        .iter()
+        .any(|name| configured_binary_name_eq(&path, name))
+    {
         return Err(format!(
             "Configured path is not a {provider} binary: {binary_path}"
         ));
@@ -2111,6 +2141,16 @@ mod windows_launcher_tests {
         std::fs::remove_file(bare).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }
+}
+
+fn configured_binary_name_eq(path: &Path, expected: &str) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if cfg!(windows) {
+        return binary_name_eq(path, expected);
+    }
+    name == expected || (expected == "agy_acp_server" && name == "agy_acp_server.par")
 }
 
 fn binary_name_eq(path: &Path, expected: &str) -> bool {
@@ -2705,7 +2745,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let codex = dir.join("codex");
         let opencode = dir.join("opencode");
-        for path in [&codex, &opencode] {
+        let decoy = dir.join("codex.sh");
+        for path in [&codex, &opencode, &decoy] {
             std::fs::write(path, b"#!/bin/sh\n").unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -2720,6 +2761,8 @@ mod tests {
             Some("codex"),
             Some(&codex_path)
         ));
+        assert!(is_resolved_or_configured_harness_binary(&codex_path));
+        assert!(!is_resolved_or_configured_harness_binary("/bin/sh"));
         assert!(!is_resolved_harness_binary(
             &opencode.to_string_lossy(),
             Some("codex"),
@@ -2732,6 +2775,7 @@ mod tests {
         )
         .is_err());
         assert!(resolve_harness_binary_override("codex", "codex").is_err());
+        assert!(resolve_harness_binary_override("codex", &decoy.to_string_lossy()).is_err());
 
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -4,6 +4,7 @@ import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  ExternalLink,
   FolderOpen,
   Globe,
   ImagePlus,
@@ -2403,12 +2404,14 @@ function ProviderBinaryControl({
   >();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   const inspect = useCallback(
     async (binaryPath?: string | null) => {
       setWorking(true);
       setInspection(undefined);
       setError(null);
+      setRevealError(null);
       try {
         const next = await inspectHarnessBinary(provider, binaryPath);
         setInspection({
@@ -2491,8 +2494,13 @@ function ProviderBinaryControl({
   return (
     <span ref={root} className="inline-flex align-middle">
       <button
+        ref={trigger}
         type="button"
-        aria-label={`Show ${title} CLI details`}
+        aria-label={
+          restartRequired
+            ? `Show ${title} CLI details, restart required`
+            : `Show ${title} CLI details`
+        }
         aria-expanded={open}
         aria-controls={`${provider}-binary-popover`}
         aria-haspopup="dialog"
@@ -2501,7 +2509,7 @@ function ProviderBinaryControl({
           setOpen((value) => !value);
           setEditing(false);
         }}
-        className={`grid size-5 place-items-center rounded hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent ${
+        className={`grid size-6 place-items-center rounded hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent ${
           restartRequired ? "text-amber-300" : "text-content/35 hover:text-content"
         }`}
       >
@@ -2512,6 +2520,7 @@ function ProviderBinaryControl({
           id={`${provider}-binary-popover`}
           role="dialog"
           aria-label={`${title} CLI details`}
+          aria-busy={working}
           tabIndex={-1}
           anchor={root}
           side="bottom"
@@ -2519,6 +2528,24 @@ function ProviderBinaryControl({
           width={440}
           className="p-3"
           autoFocus
+          onKeyDown={(event) => {
+            if (event.key !== "Tab") return;
+            const focusable = Array.from(
+              event.currentTarget.querySelectorAll<HTMLElement>(
+                'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+              ),
+            );
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (!first || !last) return;
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          }}
           onDismiss={(reason) => dismiss(reason === "escape")}
         >
           <div className="flex items-center justify-between gap-3">
@@ -2530,11 +2557,13 @@ function ProviderBinaryControl({
                 Global path
               </span>
               <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
-                {restartRequired
-                  ? "Restart required"
-                  : overridden
-                    ? "Configured"
-                    : "Auto-detected"}
+                {error
+                  ? "Needs attention"
+                  : restartRequired
+                    ? "Restart required"
+                    : overridden
+                      ? "Configured"
+                      : "Auto-detected"}
               </span>
             </div>
           </div>
@@ -2558,7 +2587,7 @@ function ProviderBinaryControl({
                 className="mt-1.5 h-8 w-full rounded-md border border-content/10 bg-content/[0.04] px-2 font-mono text-[11px] text-content outline-none placeholder:font-sans placeholder:text-content/35 focus:border-accent/45 disabled:opacity-50"
               />
               <p className="mt-1.5 text-[10px] text-content/40">
-                Changes apply after restarting MonoCode.
+                Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.
               </p>
               {error ? (
                 <span
@@ -2584,46 +2613,56 @@ function ProviderBinaryControl({
                     disabled={working}
                     onClick={() => void useAuto()}
                   >
-                    Use auto
+                    Use auto-detected path
                   </SecondaryButton>
                 ) : null}
                 <SecondaryButton type="submit" disabled={working}>
-                  Save
+                  Save path
                 </SecondaryButton>
               </div>
             </form>
           ) : (
             <>
               <div className="mt-2 rounded-md border border-content/10 bg-content/[0.03] px-2.5 py-2">
-                <span className="block break-all font-mono text-[10px] text-content/65">
-                  {inspection?.path ?? "Checking the selected CLI…"}
+                <span className="block max-h-12 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] text-content/65">
+                  {inspection?.path ??
+                    (error ? "CLI could not be resolved" : "Checking the selected CLI…")}
                 </span>
-                <span className="mt-1 block text-[10px] text-content/40">
+                <span className="mt-1 block max-h-10 overflow-y-auto whitespace-pre-wrap break-words text-[10px] text-content/40">
                   {inspection?.version ??
-                    (inspection?.error ? "Version unavailable" : "Checking version…")}
+                    (error ? "Retry to check this CLI" : "Checking version…")}
                 </span>
               </div>
-              {error ? (
-                <span
-                  role="alert"
-                  title={error}
-                  className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
-                >
-                  {error}
-                </span>
-              ) : null}
-              <div className="mt-3 flex justify-end gap-2">
+               {error ? (
+                 <span
+                   role="alert"
+                   title={error}
+                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                 >
+                   {error}
+                 </span>
+               ) : null}
+               {revealError ? (
+                 <span
+                   role="alert"
+                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                 >
+                   Could not open the CLI location: {revealError}
+                 </span>
+               ) : null}
+               <div className="mt-3 flex justify-end gap-2">
                 {error ? (
                   <SecondaryButton
+                    disabled={working}
                     aria-label={`Retry ${title} ${
-                      inspection ? "check" : "auto-detect"
+                      overridden ? "configured path" : "auto-detect"
                     }`}
                     onClick={() =>
                       void inspect(overridden ? draft.trim() || null : null)
                     }
                   >
                     <RefreshCw className="size-3.5" strokeWidth={1.75} />
-                    {inspection ? "Retry check" : "Retry auto-detect"}
+                    {overridden ? "Retry configured path" : "Retry auto-detect"}
                   </SecondaryButton>
                 ) : null}
                 <SecondaryButton
@@ -2632,18 +2671,19 @@ function ProviderBinaryControl({
                   onClick={() => {
                     if (inspection) {
                       void revealPath(inspection.path).catch((cause) => {
-                        setError(
+                        setRevealError(
                           cause instanceof Error ? cause.message : String(cause),
                         );
                       });
                     }
                   }}
                 >
-                  <FolderOpen className="size-3.5" strokeWidth={1.75} />
+                  <ExternalLink className="size-3.5" strokeWidth={1.75} />
                   Open location
                 </SecondaryButton>
                 <SecondaryButton
                   aria-label={`Edit ${title} CLI path`}
+                  disabled={working}
                   onClick={() => setEditing(true)}
                 >
                   <Pencil className="size-3.5" strokeWidth={1.75} />
@@ -2778,6 +2818,7 @@ function ProvidersPage({
       <ProviderAccountsSettings />
 
       <Group
+        id="agent-clis"
         title="Agent CLIs"
         action={
           <Select
@@ -2789,8 +2830,8 @@ function ProvidersPage({
         }
         description={
           project
-            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project.`
-            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project. CLI paths remain global for MonoCode.`
+            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. CLI paths are global for MonoCode and apply to every project."
         }
       >
         {HARNESSES.map((harness) => {

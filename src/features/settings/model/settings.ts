@@ -310,6 +310,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "pacman snake arcade grid fun",
   },
   {
+    id: "agent-clis",
+    section: "providers",
+    label: "Agent CLIs",
+    keywords: "codex opencode cursor grok pi omp fx hermes antigravity binary path",
+  },
+  {
     id: "provider-accounts",
     section: "providers",
     label: "Provider accounts",

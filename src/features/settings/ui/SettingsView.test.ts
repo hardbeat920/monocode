@@ -292,7 +292,7 @@ describe("settings pages", () => {
           await act(async () =>
             container
               .querySelector<HTMLButtonElement>(
-                `[aria-label="Show ${provider} CLI details"]`,
+                `[aria-label^="Show ${provider} CLI details"]`,
               )!
               .click(),
           );
@@ -332,7 +332,7 @@ describe("settings pages", () => {
     expect(document.body.textContent).toContain("Restart required");
     await act(async () => details.click());
     const openCodeDetails = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Show OpenCode CLI details"]',
+      '[aria-label^="Show OpenCode CLI details"]',
     )!;
     await act(async () => openCodeDetails.click());
     expect(document.body.textContent).toContain("/opt/opencode/bin/opencode");
@@ -349,6 +349,12 @@ describe("settings pages", () => {
         localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}",
       ).codex,
     ).toBe("/opt/codex/bin/codex");
+    await act(async () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Cancel",
+      )!.click(),
+    );
+    expect(document.querySelector('[aria-label="Retry Codex configured path"]')).not.toBeNull();
 
     failAutoCodex = true;
     await save("Codex", "");
@@ -595,6 +601,48 @@ describe("settings pages", () => {
         ),
       ).not.toBeNull();
     }
+  });
+
+  it("returns focus to the CLI trigger when the details popover closes", async () => {
+    await render("providers");
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Show Codex CLI details"]',
+    )!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps location failures separate from CLI check failures", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "harness_resolve_codex") return { path: "/auto/codex" };
+      if (command === "harness_exec") return "codex-cli 0.156.1";
+      if (command === "reveal_path") throw new Error("File manager unavailable");
+      return undefined;
+    });
+    await render("providers");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Show Codex CLI details"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Open Codex CLI location"]',
+        )!
+        .click(),
+    );
+    expect(document.body.textContent).toContain(
+      "Could not open the CLI location: File manager unavailable",
+    );
   });
 
   it("only tags rows that search can find", async () => {
