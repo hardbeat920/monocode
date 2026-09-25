@@ -61,6 +61,15 @@ export function InboxProviderMark({
       </svg>
     );
   }
+  if (provider === "asana") {
+    return (
+      <svg viewBox="0 0 24 24" fill="#F06A6A" aria-hidden className={className}>
+        <circle cx="12" cy="7.5" r="5" />
+        <circle cx="5.5" cy="16.5" r="5" />
+        <circle cx="18.5" cy="16.5" r="5" />
+      </svg>
+    );
+  }
   if (provider === "github") {
     return (
       <svg

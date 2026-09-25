@@ -45,6 +45,7 @@ import {
 } from "../model/linkedSessionSeen";
 import { loadHiddenLinearTeamIds } from "../model/linear";
 import { JIRA_CHANGE_EVENT, loadHiddenJiraProjectIds } from "../model/jira";
+import { ASANA_CHANGE_EVENT, loadHiddenAsanaProjectIds } from "../model/asana";
 import type { RecentProject } from "../../projects/model/recents";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import { playCue } from "../../settings/model/sounds";
@@ -223,6 +224,7 @@ export function useInboxActivity(
         search: "",
         linearHiddenTeamIds: loadHiddenLinearTeamIds(),
         jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
+        asanaHiddenProjectIds: loadHiddenAsanaProjectIds(),
       };
       try {
         const listed = await listInboxItems(projects, query, { force });
@@ -350,13 +352,15 @@ export function useInboxActivity(
       if (!document.hidden) void pull(true);
     };
     document.addEventListener("visibilitychange", onVis);
-    const onJiraChange = () => void pull(true);
-    window.addEventListener(JIRA_CHANGE_EVENT, onJiraChange);
+    const onTrackerChange = () => void pull(true);
+    window.addEventListener(JIRA_CHANGE_EVENT, onTrackerChange);
+    window.addEventListener(ASANA_CHANGE_EVENT, onTrackerChange);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener(JIRA_CHANGE_EVENT, onJiraChange);
+      window.removeEventListener(JIRA_CHANGE_EVENT, onTrackerChange);
+      window.removeEventListener(ASANA_CHANGE_EVENT, onTrackerChange);
       stopSelfActivity();
     };
   }, [applyUnseen, cwd, recents, targetKey]);

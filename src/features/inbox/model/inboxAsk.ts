@@ -5,12 +5,16 @@ export type InboxAskContext = {
   key: string;
   title: string;
   url: string;
-  provider: "github" | "linear" | "jira" | "gitlab" | "azuredevops";
+  provider: "github" | "linear" | "jira" | "asana" | "gitlab" | "azuredevops";
   description?: string;
 };
 
 export function inboxAskKey(item: InboxItem): string {
-  if (item.provider === "linear" || item.provider === "jira") {
+  if (
+    item.provider === "linear" ||
+    item.provider === "jira" ||
+    item.provider === "asana"
+  ) {
     return `${item.provider}:${item.id}`;
   }
   // Items without a usable link (e.g. a provider that omitted the URL) must
