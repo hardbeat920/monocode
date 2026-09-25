@@ -2561,6 +2561,7 @@ function ProvidersPage({
               isDefault={isDefault}
               inPicker={inPicker}
               pickerLocked={pickerLocked}
+              showRuntime={!project}
               onDefault={onDefault}
               onModelChange={onModelChange}
               onPickerVisible={(visible) => onPickerVisible(harness, visible)}
@@ -2960,6 +2961,7 @@ function ProviderRow({
   isDefault,
   inPicker,
   pickerLocked = false,
+  showRuntime,
   onDefault,
   onModelChange,
   onPickerVisible,
@@ -2970,6 +2972,8 @@ function ProviderRow({
   inPicker: boolean;
   /** Globally hidden providers cannot be turned on per project. */
   pickerLocked?: boolean;
+  /** Runtime overrides are application-wide, so only Global scope edits them. */
+  showRuntime: boolean;
   onDefault: (harness: HarnessId, model: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onPickerVisible: (visible: boolean) => void;
@@ -3035,26 +3039,30 @@ function ProviderRow({
             />
           </div>
         ) : null}
-        <button
-          type="button"
-          aria-expanded={runtimeOpen}
-          aria-label={`${HARNESS_TITLE[harness]} runtime settings`}
-          onClick={() => setRuntimeOpen((prev) => !prev)}
-          className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors ${
-            runtimeOpen
-              ? "border-content/20 text-content"
-              : "border-content/10 text-content/50 hover:border-content/20 hover:text-content"
-          }`}
-        >
-          <SlidersHorizontal className="size-3.5" strokeWidth={1.75} />
-          Runtime
-          <ChevronDown
-            className={`size-3 transition-transform ${runtimeOpen ? "rotate-180" : ""}`}
-            strokeWidth={2}
-          />
-        </button>
+        {showRuntime ? (
+          <button
+            type="button"
+            aria-expanded={runtimeOpen}
+            aria-label={`${HARNESS_TITLE[harness]} runtime settings`}
+            onClick={() => setRuntimeOpen((prev) => !prev)}
+            className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors ${
+              runtimeOpen
+                ? "border-content/20 text-content"
+                : "border-content/10 text-content/50 hover:border-content/20 hover:text-content"
+            }`}
+          >
+            <SlidersHorizontal className="size-3.5" strokeWidth={1.75} />
+            Runtime
+            <ChevronDown
+              className={`size-3 transition-transform ${runtimeOpen ? "rotate-180" : ""}`}
+              strokeWidth={2}
+            />
+          </button>
+        ) : null}
       </Row>
-      {runtimeOpen ? <ProviderRuntimePanel harness={harness} /> : null}
+      {showRuntime && runtimeOpen ? (
+        <ProviderRuntimePanel harness={harness} />
+      ) : null}
     </>
   );
 }
