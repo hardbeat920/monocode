@@ -24,6 +24,7 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 > - [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
 > - [OpenCode](https://opencode.ai) - `opencode auth login`
 > - [Antigravity](https://antigravity.google/docs/cli-install) (macOS/Linux) - `curl -fsSL https://antigravity.google/cli/install.sh | bash`, then run `agy` once to sign in
+> - [Antigravity](https://antigravity.google/docs/cli-install) (Windows) - install the CLI with `irm https://antigravity.google/cli/install.ps1 | iex`, then run `agy` once to sign in. Download the [official ACP server](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json) for your Windows architecture and extract both executables to `%LOCALAPPDATA%\agy-acp`. The ACP server also requires an authentication method: create `%USERPROFILE%\.gemini\antigravity-acp\settings.json` with `{"auth":{"type":"oauth-personal"}}` for a personal Google account. CLI sign-in alone does not select the ACP method.
 > - [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
 > - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
 > - [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`

@@ -392,7 +392,11 @@ pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
             args: antigravity_args(),
         })
         .ok_or_else(|| {
-            "Antigravity ACP server (agy_acp_server.par) not found. Install Antigravity and run `agy` once in Terminal.".into()
+            if cfg!(windows) {
+                "Antigravity ACP server not found. Extract the official agy_acp_server.exe and localharness_external.exe to %LOCALAPPDATA%\\agy-acp, then run `agy` once in Terminal.".into()
+            } else {
+                "Antigravity ACP server (agy_acp_server.par) not found. Install Antigravity and run `agy` once in Terminal.".into()
+            }
         })
 }
 
@@ -1222,6 +1226,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "fx"
             | "hermes"
             | "agy_acp_server.par"
+            | "agy_acp_server.exe"
             | "pi"
             | "worker-server"
             | "app-server"
@@ -1672,11 +1677,15 @@ fn resolve_hermes() -> Option<PathBuf> {
 }
 
 fn resolve_antigravity() -> Option<PathBuf> {
-    // The .par wrapper is a POSIX self-extracting archive — Antigravity ships
-    // no Windows ACP binary, so report the provider unavailable there instead
-    // of probing paths that can never be executable.
     if cfg!(windows) {
-        return None;
+        let mut candidates = Vec::new();
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(local_app_data).join("agy-acp/agy_acp_server.exe"));
+        }
+        if let Some(from_path) = which_via_login_shell("agy_acp_server.exe") {
+            candidates.push(from_path);
+        }
+        return first_binary(candidates);
     }
     let mut candidates = Vec::new();
     if let Some(home) = dirs_home().map(PathBuf::from) {
