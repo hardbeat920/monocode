@@ -381,6 +381,28 @@ describe("live catalog overlays", () => {
     resetHarnessModelOverlays();
   });
 
+  it("retains a saved Codex model and settings before its catalog loads", () => {
+    resetHarnessModelOverlays();
+    const model = resolveModel("codex", "codex:gpt-5.6-sol");
+    expect(model).toMatchObject({
+      id: "codex:gpt-5.6-sol",
+      harness: "codex",
+      name: "GPT-5.6-Sol",
+      nativeId: "gpt-5.6-sol",
+    });
+    expect(
+      mergeModelSettings(model, {
+        reasoningEffort: "high",
+        serviceTier: "priority",
+      }),
+    ).toEqual({ reasoningEffort: "high", serviceTier: "priority" });
+    expect(resolveModel("codex")).toMatchObject({
+      id: "",
+      harness: "codex",
+      name: "Codex",
+    });
+  });
+
   it("is empty until a CLI catalog replaces the fallback list", () => {
     expect(hasLiveCatalog("pi")).toBe(false);
     setHarnessModels("pi", [

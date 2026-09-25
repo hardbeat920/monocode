@@ -20,6 +20,14 @@ import {
   type SubmissionAcceptance,
 } from "./submissionAcceptance";
 
+const storedValues = new Map<string, string>();
+vi.stubGlobal("localStorage", {
+  clear: () => storedValues.clear(),
+  getItem: (key: string) => storedValues.get(key) ?? null,
+  setItem: (key: string, value: string) => storedValues.set(key, value),
+  removeItem: (key: string) => storedValues.delete(key),
+});
+
 beforeEach(() => {
   localStorage.clear();
   vi.useFakeTimers();
@@ -79,7 +87,7 @@ function setup(reveal = false) {
     setRecents: vi.fn((recents: typeof state.recents) => {
       state.recents = recents;
     }),
-    revealTab: vi.fn((id: string) => {
+    revealTab: vi.fn((id: string, cwd: string) => {
       // Assert the title bar and recents already point at the revealed project.
       expect(
         filterTabsForProject(state.tabs, state.sessions, state.projectCwd).some(
@@ -87,9 +95,37 @@ function setup(reveal = false) {
         ),
       ).toBe(true);
       expect(state.recents[0].path).toBe(request.cwd);
+      expect(cwd).toBe(request.cwd);
       state.activeTabId = id;
     }),
     submit,
+    saveDraft: vi.fn(
+      (
+        id: string,
+        text: string,
+        _attachments: Attachment[],
+        requestId: string,
+      ) => {
+        state.sessions = state.sessions.map((session) =>
+          session.id === id
+            ? {
+                ...session,
+                blocks: [
+                  ...session.blocks,
+                  {
+                    id: "draft-turn",
+                    role: "user" as const,
+                    text,
+                    draft: true,
+                    appRequestId: requestId,
+                  },
+                ],
+              }
+            : session,
+        );
+        return true;
+      },
+    ),
   };
   const queue = [{ id: "quick-session", request }];
   const ack = vi.fn(async () => {
@@ -131,6 +167,45 @@ it("leaves the selected project, recents, and active tab unchanged for backgroun
   expect(workspace.setProjectCwd).not.toHaveBeenCalled();
   expect(workspace.setRecents).not.toHaveBeenCalled();
   expect(workspace.revealTab).not.toHaveBeenCalled();
+});
+
+it("creates a draft-only session without submitting an agent turn", async () => {
+  const { state, request, workspace } = setup();
+  request.draft = true;
+  await acceptQuickLaunch(request, "quick-session", workspace);
+  expect(workspace.submit).not.toHaveBeenCalled();
+  expect(workspace.saveDraft).toHaveBeenCalledWith(
+    "quick-session",
+    request.prompt,
+    [],
+    "quick-session",
+  );
+  expect(
+    state.sessions.find((session) => session.id === "quick-session"),
+  ).toMatchObject({
+    quickLaunchAccepted: true,
+    blocks: [
+      {
+        role: "user",
+        text: request.prompt,
+        draft: true,
+        appRequestId: "quick-session",
+      },
+    ],
+  });
+  await acceptQuickLaunch(request, "quick-session", workspace);
+  expect(workspace.saveDraft).toHaveBeenCalledOnce();
+  state.sessions = state.sessions.map((session) =>
+    session.id === "quick-session"
+      ? {
+          ...session,
+          quickLaunchAccepted: undefined,
+          blocks: session.blocks.map((block) => ({ ...block, draft: false })),
+        }
+      : session,
+  );
+  await acceptQuickLaunch(request, "quick-session", workspace);
+  expect(workspace.saveDraft).toHaveBeenCalledOnce();
 });
 
 it("does not acknowledge or mark accepted while project synchronization is pending", async () => {

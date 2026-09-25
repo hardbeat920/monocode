@@ -36,8 +36,8 @@ export type CodexThreadConfig = {
 
 /**
  * `readOnly` and `workspaceWrite` both default to networkAccess: false, which
- * blocks loopback too. An orchestration lead has to reach the control CLI's
- * socket, so it opts in; every other session keeps the default.
+ * blocks loopback too. An orchestration lead or a /operator-enabled thread
+ * needs the local CLI socket, so its turns enable network access.
  */
 function withNetwork(
   config: CodexThreadConfig,
@@ -267,6 +267,10 @@ export type MappedCodexNotification = {
     error?: string;
   };
   activeTurnId?: string | null;
+  /** Codex refused the turn because the account's usage limit is spent. */
+  usageLimited?: boolean;
+  /** A sparse `account/rateLimits/updated` snapshot. */
+  rateLimits?: Record<string, unknown>;
 };
 
 /**
@@ -396,7 +400,15 @@ export function mapCodexNotification(
       // for every attempt and interrupt any streaming transcript block.
       return { events: [], diagnostic: message };
     }
-    return { events: [{ type: "session.error", message }] };
+    return {
+      events: [{ type: "session.error", message }],
+      ...(isUsageLimitError(errorObj) ? { usageLimited: true } : {}),
+    };
+  }
+
+  if (method === "account/rateLimits/updated") {
+    const rateLimits = asRecord(rec.rateLimits);
+    return { events: [], ...(rateLimits ? { rateLimits } : {}) };
   }
 
   if (method === "configWarning" || method === "warning") {
@@ -506,7 +518,14 @@ function mapTurnTerminal(
     events,
     turnCompleted: { status, ...(error ? { error } : {}) },
     activeTurnId: null,
+    ...(status === "failed" && isUsageLimitError(errorObj)
+      ? { usageLimited: true }
+      : {}),
   };
+}
+
+function isUsageLimitError(error: Record<string, unknown> | null): boolean {
+  return error?.codexErrorInfo === "usageLimitExceeded";
 }
 
 function mapItemLifecycle(

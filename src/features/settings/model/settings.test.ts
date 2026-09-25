@@ -24,6 +24,7 @@ import {
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
@@ -36,6 +37,7 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveQuickComposerShortcut,
   saveTabAnimationsEnabled,
 } from "./settings";
 import { MOD, SHIFT } from "../../../platform/tauri/platform";
@@ -44,6 +46,7 @@ const KEY = "monocode.composerRunner";
 const MODEL_CONTROLS_KEY = "monocode.modelControls";
 const LEGACY_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
 const NOTES_KEY = "monocode.notesEnabled";
+const QUICK_COMPOSER_SHORTCUT_KEY = "monocode.quickComposerShortcut";
 const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
@@ -170,6 +173,24 @@ describe("notes enabled setting", () => {
     expect(loadNotesEnabled()).toBe(false);
     saveNotesEnabled(true);
     expect(loadNotesEnabled()).toBe(true);
+  });
+});
+
+describe("quick composer shortcut setting", () => {
+  beforeEach(mockLocalStorage);
+
+  it("defaults to the existing shortcut and persists a custom binding", () => {
+    expect(loadQuickComposerShortcut()).toBe("Command+Shift+Space");
+    saveQuickComposerShortcut("Command+Option+KeyK");
+    expect(localStorage.getItem(QUICK_COMPOSER_SHORTCUT_KEY)).toBe(
+      "Command+Option+KeyK",
+    );
+    expect(loadQuickComposerShortcut()).toBe("Command+Option+KeyK");
+  });
+
+  it("ignores malformed stored bindings", () => {
+    localStorage.setItem(QUICK_COMPOSER_SHORTCUT_KEY, "Shift+Space");
+    expect(loadQuickComposerShortcut()).toBe("Command+Shift+Space");
   });
 });
 

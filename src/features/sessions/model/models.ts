@@ -353,13 +353,31 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     });
     if (prefix) return prefix;
   }
+  // Codex has no built-in catalog. During startup, retain the saved model
+  // until discovery finishes instead of borrowing another provider's model.
+  if (available.length === 0) {
+    const requested = id?.trim() ?? "";
+    const modelId =
+      requested &&
+      (!requested.includes(":") || requested.startsWith(`${harness}:`))
+        ? requested
+        : "";
+    const nativeId = nativeIdFrom(modelId);
+    return {
+      id: modelId,
+      harness,
+      name: nativeId
+        ? nativeId
+            .replace(/^gpt/i, "GPT")
+            .replace(/-([a-z])/g, (_, letter: string) =>
+              `-${letter.toUpperCase()}`,
+            )
+        : harness.charAt(0).toUpperCase() + harness.slice(1),
+      nativeId,
+    };
+  }
   const fallbackId = defaultModelId(harness);
-  return (
-    (fallbackId ? findModel(fallbackId) : undefined) ??
-    available[0] ??
-    MODELS.find((model) => model.harness === harness) ??
-    MODELS[0]
-  );
+  return (fallbackId ? findModel(fallbackId) : undefined) ?? available[0];
 }
 
 /** Catalog-reported context window for a model id, when known. */
@@ -389,6 +407,7 @@ export function mergeModelSettings(
   model: AgentModel,
   current?: Record<string, string>,
 ): Record<string, string> {
+  if (modelsFor(model.harness).length === 0) return { ...current };
   const next = defaultModelSettings(model);
   if (!current) return next;
   for (const setting of model.settings ?? []) {
@@ -441,6 +460,7 @@ export function preferredModelSettings(
   model: AgentModel,
   current?: Record<string, string>,
 ): Record<string, string> {
+  if (modelsFor(model.harness).length === 0) return { ...current };
   return mergeModelSettings(model, {
     ...current,
     ...loadLastModelSettings(),

@@ -30,11 +30,17 @@ export async function acceptQuickLaunch(
     appendTab: (tab: WorkspaceTab, cwd: string) => void;
     setProjectCwd: (cwd: string) => void;
     setRecents: (recents: RecentProject[]) => void;
-    revealTab: (id: string) => void;
+    revealTab: (id: string, cwd: string) => void;
     submit: (
       sessionId: string,
       text: string,
       attachments: Attachment[],
+    ) => SubmissionAcceptance;
+    saveDraft?: (
+      sessionId: string,
+      text: string,
+      attachments: Attachment[],
+      requestId: string,
     ) => SubmissionAcceptance;
   },
 ): Promise<void> {
@@ -43,6 +49,14 @@ export async function acceptQuickLaunch(
   const existing = workspace
     .getSessions()
     .find((session) => session.id === deliveryId);
+  const previous = existing?.blocks.find(
+    (block) => block.appRequestId === deliveryId,
+  );
+  if (previous) {
+    if (previous.text !== launch.prompt || (!launch.draft && !!previous.draft))
+      throw new Error("Request ID was already used for another session launch");
+    return;
+  }
   if (
     existing?.quickLaunchAccepted ||
     existing?.blocks.some((block) => block.role === "user" && !block.draft)
@@ -69,10 +83,24 @@ export async function acceptQuickLaunch(
       // The title bar filters tabs by this project. Select it before the tab.
       workspace.setProjectCwd(launch.cwd);
       workspace.setRecents(rememberProject(launch.cwd));
-      workspace.revealTab(tab.id);
+      workspace.revealTab(tab.id, launch.cwd);
     }
   }
-  if (!(await workspace.submit(session.id, launch.prompt, attachments))) {
+  if (launch.draft) {
+    if (
+      !workspace.saveDraft ||
+      !(await workspace.saveDraft(
+        session.id,
+        launch.prompt,
+        attachments,
+        deliveryId,
+      ))
+    ) {
+      throw new Error("The workspace could not save the session draft yet.");
+    }
+  } else if (
+    !(await workspace.submit(session.id, launch.prompt, attachments))
+  ) {
     throw new Error("The workspace could not accept the queued session yet.");
   }
   workspace.updateSessions((sessions) =>

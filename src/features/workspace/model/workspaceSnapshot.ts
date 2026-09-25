@@ -343,6 +343,10 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
   return {
     ...session,
     id: stub.id,
+    // A snapshot is a saved choice, not a new conversation. Catalog discovery
+    // and the current picker preferences must not replace its model.
+    model: stub.model || session.model,
+    modelSettings: { ...stub.modelSettings },
     title: stub.title,
     ...(stub.inboxAsk ? { inboxAsk: stub.inboxAsk } : {}),
     ...(stub.providerSessionId

@@ -155,6 +155,11 @@ export function applyHarnessEvent(
       };
     case "status":
       return appendStatus(session, event.text);
+    case "usage.limited":
+      return {
+        ...session,
+        usageLimit: event.resetsAt != null ? { resetsAt: event.resetsAt } : {},
+      };
     case "interjection":
       // A visible boundary the user must not miss, so unlike status it never
       // deduplicates and never reads as turn lifecycle.
@@ -377,6 +382,8 @@ type UserTurnExtra = {
   noteCard?: Block["noteCard"];
   ciContext?: string;
   internal?: boolean;
+  monocode?: boolean;
+  appRequestId?: string;
 };
 
 function userTurnFields(extra?: UserTurnExtra) {
@@ -385,6 +392,8 @@ function userTurnFields(extra?: UserTurnExtra) {
     ...(extra?.noteCard ? { noteCard: extra.noteCard } : {}),
     ...(extra?.ciContext ? { ciContext: extra.ciContext } : {}),
     ...(extra?.internal ? { internal: true } : {}),
+    ...(extra?.monocode ? { monocode: true } : {}),
+    ...(extra?.appRequestId ? { appRequestId: extra.appRequestId } : {}),
   };
 }
 

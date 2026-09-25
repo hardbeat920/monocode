@@ -672,6 +672,7 @@ describe("sidebar orchestration card", () => {
       props.linkedSessionUpdateIds = new Set(["session-1"]);
       const lead = {
         ...props.sessions[0],
+        model: "codex:gpt-5.6-sol",
         pinned,
         linkedWorkItem: {
           kind: "pr" as const,
@@ -723,7 +724,7 @@ describe("sidebar orchestration card", () => {
       // The lead card carries the sidebar's ordinary active treatment.
       expect(card().className).toContain("bg-selection");
       // The lead names its own model, like every agent row beneath it.
-      expect(card().textContent).toContain("Claude Sonnet 5");
+      expect(card().textContent).toContain("GPT-5.6-Sol");
       expect(card().textContent).not.toContain("Orchestrator");
       const orchestrationIcon = card().querySelector<HTMLButtonElement>(
         "[data-orchestration-icon]",

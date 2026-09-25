@@ -16,6 +16,7 @@ import {
 import { INTERRUPT_MESSAGE } from "./inFlight";
 import type { Block, ToolPreview } from "./session";
 import { allModels } from "./models";
+import { monoCodeWorkSummary } from "./monocodeToolCall";
 
 export type ToolCallState = "pending" | "accepted" | "rejected";
 
@@ -846,6 +847,8 @@ function currentWorkKind(steps: Block[]): ActivityWorkKind | undefined {
  * "N notes" clause; a group holding nothing but notes is just that clause.
  */
 export function workSummaryLine(steps: Block[], live = false): string {
+  const appSummary = monoCodeWorkSummary(steps, live);
+  if (appSummary) return appSummary;
   const tally = tallySteps(steps);
   const notes =
     tally.notes === 1
@@ -909,11 +912,15 @@ export type WorkFold = { start: number; end: number };
  * the fold: an answer the harness already showed never folds behind an
  * interjection that arrived after it. A settled turn groups them into the
  * trail itself, where the fold simply spans them.
+ *
+ * The message the agent yielded with, while work it left in the background
+ * was still running, is its answer to the prompt. Whatever a finished task
+ * wakes it up to say afterwards comes below that answer, not in its place.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;
   let answered = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
+  for (let index = yieldedAt(items) - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.type === "activity") {
       if (answered && isFoldableItem(item)) {
@@ -930,6 +937,24 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let start = end;
   while (start > 0 && isFoldableItem(items[start - 1])) start -= 1;
   return { start, end };
+}
+
+/**
+ * Where the fold has to stop: the first group of background rows, which sits
+ * right under the message the agent yielded with. The whole turn when there
+ * is none.
+ */
+function yieldedAt(items: TurnItem[]): number {
+  const index = items.findIndex((item, at) => {
+    const before = items[at - 1];
+    return (
+      item.type === "activity" &&
+      item.blocks.some((block) => !!block.tool?.background) &&
+      before?.type === "block" &&
+      isProseBlock(before.block)
+    );
+  });
+  return index < 0 ? items.length : index;
 }
 
 function isFoldableItem(item: TurnItem): boolean {

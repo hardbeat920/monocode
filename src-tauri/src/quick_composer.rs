@@ -13,6 +13,7 @@ pub mod git_popup;
 pub mod screenshots;
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex, OnceLock,
@@ -32,7 +33,7 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{
-    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
+    GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
 };
 
 use crate::window::{workspace_windows, QUICK_COMPOSER_LABEL};
@@ -51,9 +52,17 @@ const MAX_PROMPT_BYTES: usize = 256 * 1024;
 const LAUNCH: &str = "quick_composer_launch";
 /// The panel refreshes its projects and focuses the prompt on every show.
 const SHOWN: &str = "quick_composer_shown";
+const DEFAULT_SHORTCUT: &str = "Command+Shift+Space";
 
-fn shortcut() -> Shortcut {
-    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space)
+fn parse_shortcut(value: &str) -> Result<Shortcut, String> {
+    let shortcut = Shortcut::from_str(value).map_err(|err| err.to_string())?;
+    if !shortcut
+        .mods
+        .intersects(Modifiers::SUPER | Modifiers::CONTROL)
+    {
+        return Err("Use Command or Control with another key.".into());
+    }
+    Ok(shortcut)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -97,6 +106,7 @@ struct QuickAttachment {
 pub struct QuickComposerState {
     pending: Mutex<delivery::LaunchQueue>,
     capturing: AtomicBool,
+    shortcut: Mutex<Option<Shortcut>>,
 }
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
@@ -173,17 +183,36 @@ fn prepare(app: &AppHandle) -> tauri::Result<()> {
 /// Workspace windows own the setting, so the shortcut is only claimed once
 /// one has read it. Idempotent: every window reports on boot.
 #[tauri::command]
-pub fn quick_composer_set_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+pub fn quick_composer_set_enabled(
+    app: AppHandle,
+    enabled: bool,
+    shortcut: Option<String>,
+) -> Result<(), String> {
+    let next = parse_shortcut(shortcut.as_deref().unwrap_or(DEFAULT_SHORTCUT))?;
     let shortcuts = app.global_shortcut();
-    let registered = shortcuts.is_registered(shortcut());
-    if enabled && !registered {
+    let state = app.state::<QuickComposerState>();
+    let mut current = state.shortcut.lock().map_err(|err| err.to_string())?;
+    if enabled {
+        if *current == Some(next) {
+            return Ok(());
+        }
+        // Claim the replacement first. If the OS rejects it, keep the old
+        // shortcut active so a failed edit cannot strand the composer.
         shortcuts
-            .register(shortcut())
-            .map_err(|err| format!("Could not claim ⌘⇧Space: {err}"))?;
-    } else if !enabled && registered {
+            .register(next)
+            .map_err(|err| format!("Could not claim {next}: {err}"))?;
+        if let Some(previous) = *current {
+            if let Err(err) = shortcuts.unregister(previous) {
+                let _ = shortcuts.unregister(next);
+                return Err(format!("Could not release {previous}: {err}"));
+            }
+        }
+        *current = Some(next);
+    } else if let Some(previous) = *current {
         shortcuts
-            .unregister(shortcut())
+            .unregister(previous)
             .map_err(|err| err.to_string())?;
+        *current = None;
         if let Some(panel) = app.get_webview_window(QUICK_COMPOSER_LABEL) {
             git_popup::dismiss(&app, false);
             let _ = panel.hide();
@@ -642,7 +671,32 @@ fn make_panel(window: &WebviewWindow) {
 
 #[cfg(test)]
 mod tests {
-    use super::{target_or_create, validate_attachments, validate_workspace, QuickLaunch};
+    use super::{
+        parse_shortcut, target_or_create, validate_attachments, validate_workspace, QuickLaunch,
+        DEFAULT_SHORTCUT,
+    };
+    use tauri_plugin_global_shortcut::{Code, Modifiers};
+
+    #[test]
+    fn quick_composer_shortcut_requires_a_non_shift_modifier() {
+        let original = parse_shortcut(DEFAULT_SHORTCUT).unwrap();
+        assert_eq!(original.key, Code::Space);
+        assert_eq!(original.mods, Modifiers::SUPER | Modifiers::SHIFT);
+        let custom = parse_shortcut("Control+Option+KeyK").unwrap();
+        assert_eq!(custom.key, Code::KeyK);
+        assert_eq!(custom.mods, Modifiers::CONTROL | Modifiers::ALT);
+        assert_eq!(
+            parse_shortcut("Command+KeyK").unwrap().mods,
+            Modifiers::SUPER
+        );
+        assert_eq!(
+            parse_shortcut("Control+KeyK").unwrap().mods,
+            Modifiers::CONTROL
+        );
+        assert!(parse_shortcut("Shift+Space").is_err());
+        assert!(parse_shortcut("Option+KeyK").is_err());
+        assert!(parse_shortcut("Command+InvalidKey").is_err());
+    }
 
     #[test]
     fn no_workspace_return_requests_hidden_creation_and_cmd_return_requests_reveal() {

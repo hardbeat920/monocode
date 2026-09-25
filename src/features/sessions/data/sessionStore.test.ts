@@ -1,6 +1,11 @@
 import { appendUser } from "../../../integrations/harness/core/apply";
 import { describe, expect, it } from "vitest";
-import { newSession, type Block, type Session } from "../model/session";
+import {
+  newSession,
+  type Block,
+  type BtwThread,
+  type Session,
+} from "../model/session";
 import {
   isPersistableId,
   persistFingerprint,
@@ -93,6 +98,44 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("keeps the stripped /operator turn marker for later turns", () => {
+    const submitted = appendUser(newSession("codex", "/repo"), "list notes", [], {
+      monocode: true,
+    });
+    expect(sanitizeSessionForPersist(submitted).blocks[0]).toMatchObject({
+      role: "user",
+      text: "list notes",
+      monocode: true,
+    });
+  });
+
+  it("persists the request ID for an agent-sent follow-up", () => {
+    const submitted = appendUser(newSession("codex", "/repo"), "Continue", [], {
+      appRequestId: "app-source-request-1",
+    });
+    expect(sanitizeSessionForPersist(submitted).blocks[0]).toMatchObject({
+      text: "Continue",
+      appRequestId: "app-source-request-1",
+    });
+  });
+
+  it("persists the request ID on an unsent agent-created draft", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      {
+        id: "draft",
+        role: "user",
+        text: "Review later",
+        draft: true,
+        appRequestId: "app-source-draft-1",
+      },
+    ];
+    expect(sanitizeSessionForPersist(session).blocks[0]).toMatchObject({
+      draft: true,
+      appRequestId: "app-source-draft-1",
+    });
+  });
+
   it("keeps an unsent user turn appended to a started thread", () => {
     const session = newSession("codex", "/repo");
     session.blocks = [
@@ -167,6 +210,33 @@ describe("sanitizeSessionForPersist", () => {
       id: "claude:opus-5",
       name: "Claude Opus 5",
     });
+  });
+
+  it("persists a BTW thread's model and provider settings", () => {
+    const session = newSession("codex", "/tmp/project");
+    const thread: BtwThread = {
+      id: "btw-1",
+      sourceEndBlockId: "u1",
+      createdAt: 1,
+      updatedAt: 2,
+      status: "ready",
+      messages: [
+        { id: "m1", role: "user", text: "Why?", createdAt: 1 },
+        { id: "m2", role: "assistant", text: "Because.", createdAt: 2 },
+      ],
+      model: "codex:gpt-5.4",
+      modelSettings: {
+        reasoningEffort: "high",
+        serviceTier: "fast",
+      },
+    };
+    session.blocks = [
+      { id: "u1", role: "user", text: "Explain this", btwThreads: [thread] },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]?.btwThreads).toEqual([
+      thread,
+    ]);
   });
 
   it("persists provider metrics recorded on a user turn", () => {

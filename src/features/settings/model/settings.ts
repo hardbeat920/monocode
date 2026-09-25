@@ -1,4 +1,9 @@
 import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
+import {
+  isQuickComposerShortcut,
+  QUICK_COMPOSER_DEFAULT_SHORTCUT,
+  quickComposerShortcutLabel,
+} from "../../quick-composer/model/quickComposerShortcut";
 import { HARNESSES, type HarnessId } from "../../sessions/model/session";
 import { readFlag, readStringFlag, writeFlag, writeStringFlag } from "./storageFlags";
 
@@ -694,6 +699,7 @@ export function subscribeNotesEnabled(onStoreChange: () => void) {
 }
 
 const QUICK_COMPOSER_ENABLED_KEY = "monocode.quickComposerEnabled";
+const QUICK_COMPOSER_SHORTCUT_KEY = "monocode.quickComposerShortcut";
 
 export const QUICK_COMPOSER_ENABLED_DEFAULT = true;
 
@@ -703,6 +709,26 @@ export function loadQuickComposerEnabled(): boolean {
 
 export function saveQuickComposerEnabled(value: boolean) {
   writeFlag(QUICK_COMPOSER_ENABLED_KEY, value);
+}
+
+export function loadQuickComposerShortcut(): string {
+  try {
+    const value = localStorage.getItem(QUICK_COMPOSER_SHORTCUT_KEY);
+    return value && isQuickComposerShortcut(value)
+      ? value
+      : QUICK_COMPOSER_DEFAULT_SHORTCUT;
+  } catch {
+    return QUICK_COMPOSER_DEFAULT_SHORTCUT;
+  }
+}
+
+export function saveQuickComposerShortcut(value: string) {
+  if (!isQuickComposerShortcut(value)) return;
+  try {
+    localStorage.setItem(QUICK_COMPOSER_SHORTCUT_KEY, value);
+  } catch {
+    // private mode / quota
+  }
 }
 
 const LIVE_AGENTS_ENABLED_KEY = "monocode.liveAgentsEnabled";
@@ -1065,6 +1091,17 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "Editor: Find", keys: `${MOD}F`, when: "editorFocus" },
   { command: "Editor: Replace", keys: `${MOD}${ALT}F`, when: "editorFocus" },
 ];
+
+export function currentKeybindings(): KeybindingRow[] {
+  return KEYBINDINGS.map((row) =>
+    row.command === "App: Quick Composer"
+      ? {
+          ...row,
+          keys: quickComposerShortcutLabel(loadQuickComposerShortcut()),
+        }
+      : row,
+  );
+}
 
 export function filterKeybindings(
   rows: KeybindingRow[],

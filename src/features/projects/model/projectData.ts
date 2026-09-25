@@ -17,6 +17,10 @@ import {
 } from "./projectGroups";
 import { rebaseSessionFolderSettings } from "../../sessions/model/sessionFolders";
 import { clearProjectProviders, rebaseProjectProviders } from "../../sessions/model/projectProviders";
+import {
+  clearProjectSidebarTab,
+  rebaseProjectSidebarTab,
+} from "../../settings/model/projectSidebarTab";
 
 /** Saved chats filed under this project, so the confirm prompt can count them. */
 export async function projectSessionCount(path: string): Promise<number> {
@@ -39,6 +43,7 @@ export async function removeProjectData(path: string): Promise<void> {
   clearTabGroupSettings(key);
   removeProjectGroupAssignment(normalized);
   clearProjectProviders(key);
+  clearProjectSidebarTab(normalized);
 }
 
 /** Move local project settings after the filesystem resolver finds a rename. */
@@ -50,4 +55,5 @@ export function rebaseProjectData(from: string, to: string): void {
   rebaseProjectChatBackgroundSetting(oldKey, newKey);
   rebaseSessionFolderSettings(from, to);
   rebaseProjectProviders(oldKey, newKey);
+  rebaseProjectSidebarTab(from, to);
 }

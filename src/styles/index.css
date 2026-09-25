@@ -573,6 +573,155 @@ html.has-user-accent .user-message-bubble {
   border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
 }
 
+/*
+ * A freshly sent /operator turn lights up once: the bubble blooms with a warm
+ * halo, a golden sheen sweeps across it, and sparkles drift up from a glow at
+ * its base, twinkling as they rise and fading out past the top edge.
+ */
+.monocode-sparkles {
+  --sparkle-color: #fde68a;
+  --sparkle-glow: rgb(251 191 36 / 0.9);
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: monocode-halo 2400ms 150ms ease-out both;
+}
+
+html.theme-light .monocode-sparkles {
+  --sparkle-color: #f59e0b;
+  --sparkle-glow: rgb(217 119 6 / 0.55);
+}
+
+.monocode-sparkles::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgb(254 243 199 / 0.5) 48%,
+    rgb(251 191 36 / 0.35) 52%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  animation: monocode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.monocode-sparkles::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 70% at 50% 100%,
+    rgb(251 191 36 / 0.35),
+    transparent 70%
+  );
+  animation: monocode-ember-glow 2200ms 100ms ease-out both;
+}
+
+.monocode-sparkle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 1;
+  width: 0;
+  animation: monocode-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.monocode-sparkle-glyph {
+  position: absolute;
+  bottom: calc(var(--size) * -1);
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  height: var(--size);
+  color: var(--sparkle-color);
+  filter: drop-shadow(0 0 3px var(--sparkle-glow));
+  animation: monocode-twinkle var(--duration) var(--delay) ease-in-out both;
+}
+
+.monocode-sparkle-ember {
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fffbeb, var(--sparkle-color) 70%);
+}
+
+@keyframes monocode-rise {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(var(--drift), calc(-100% - 6px));
+  }
+}
+
+@keyframes monocode-twinkle {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) rotate(0deg);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1) rotate(calc(var(--spin) * 0.3));
+  }
+  42% {
+    opacity: 0.75;
+    transform: scale(0.65) rotate(calc(var(--spin) * 0.5));
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.1) rotate(calc(var(--spin) * 0.7));
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.3) rotate(var(--spin));
+  }
+}
+
+@keyframes monocode-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 rgb(245 158 11 / 0),
+      0 0 0 0 rgb(245 158 11 / 0);
+  }
+  25% {
+    box-shadow:
+      0 0 0 1px rgb(245 158 11 / 0.55),
+      0 0 24px 3px rgb(245 158 11 / 0.35);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 rgb(245 158 11 / 0),
+      0 0 0 0 rgb(245 158 11 / 0);
+  }
+}
+
+@keyframes monocode-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes monocode-ember-glow {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monocode-sparkles {
+    display: none;
+  }
+}
+
 .edit-last-turn-composer {
   border-style: dashed;
   border-color: color-mix(
@@ -795,10 +944,18 @@ html.is-resizing * {
 }
 
 .composer-toolbar {
+  container: composer-toolbar / inline-size;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
+}
+
+@container composer-toolbar (width < 220px) {
+  [data-access-picker-trigger] > span,
+  [data-access-picker-trigger] > svg:last-child {
+    display: none;
+  }
 }
 
 html.theme-light [data-composer-box] {
@@ -1999,6 +2156,87 @@ html.theme-light .popover-backdrop {
 @media (prefers-reduced-motion: reduce) {
   .popover-open {
     animation: none;
+  }
+}
+
+/* The btw thread borrows the chat transcript's quiet, asymmetric
+   language instead of introducing a second card system. */
+.btw-popover-surface {
+  background: transparent;
+}
+
+.btw-thread-chip {
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-content) 9%, transparent);
+}
+
+.btw-thread-chip:hover {
+  border-color: color-mix(in srgb, var(--color-content) 15%, transparent);
+}
+
+.btw-message {
+  min-width: 0;
+}
+
+.btw-message-assistant {
+  overflow: clip;
+  padding: 0 2px;
+}
+
+.btw-message-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--color-content) 48%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.btw-empty-state {
+  display: flex;
+  min-height: 152px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 20px;
+  border: 1px dashed color-mix(in srgb, var(--color-content) 14%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-content) 3%, transparent);
+  text-align: center;
+}
+
+.btw-empty-state p {
+  margin: 2px 0 0;
+  color: color-mix(in srgb, var(--color-content) 72%, transparent);
+  font-size: 13px;
+}
+
+.btw-empty-state span {
+  max-width: 28ch;
+  color: color-mix(in srgb, var(--color-content) 42%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.btw-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, #f87171 24%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, #f87171 7%, transparent);
+}
+
+@media (max-width: 560px) {
+  [data-btw-popover] .btw-message-assistant {
+    max-width: 100%;
   }
 }
 

@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+mod account_identity;
 mod automations;
 mod azure_devops;
 mod chat_background;
@@ -196,6 +197,10 @@ fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
     window::open_new_window(&app)
 }
 
+fn should_request_quit(code: Option<i32>) -> bool {
+    code.is_some() || cfg!(any(target_os = "linux", target_os = "windows"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
@@ -256,6 +261,7 @@ pub fn run() {
             control::control_attach_worker,
             control::control_authorize_turn,
             control::control_turn_finished,
+            control::app_cli_path,
             default_cwd,
             home_dir,
             notifications::notification_permission,
@@ -412,6 +418,7 @@ pub fn run() {
             harness::harness_sse_close,
             harness::harness_exec,
             harness::provider_account_remove,
+            account_identity::provider_account_identity,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
             pty::pty_spawn,
@@ -539,10 +546,8 @@ pub fn run() {
             api.prevent_exit();
             // Last window destroyed (red button). Stay in the dock on macOS;
             // ⌘Q is a separate menu handler and arrives with an exit code.
-            // Windows has no dock, so the last close is a quit.
-            if code.is_none() {
-                #[cfg(target_os = "windows")]
-                window::request_quit(handle);
+            // Linux and Windows have no dock, so the last close is a quit.
+            if !should_request_quit(code) {
                 return;
             }
             window::request_quit(handle);
@@ -566,4 +571,26 @@ fn reap_harness_children(handle: &tauri::AppHandle) {
 #[cfg(all(debug_assertions, target_os = "macos"))]
 pub fn ensure_macos_dev_bundle() {
     macos::ensure_dev_bundle();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_request_quit;
+
+    #[test]
+    fn explicit_exit_requests_quit() {
+        assert!(should_request_quit(Some(0)));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn last_window_close_requests_quit_without_dock() {
+        assert!(should_request_quit(None));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn last_window_close_stays_alive_with_dock() {
+        assert!(!should_request_quit(None));
+    }
 }

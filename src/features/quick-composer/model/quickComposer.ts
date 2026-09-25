@@ -2,6 +2,7 @@ import { parseQuickAttachments } from "./quickAttachments";
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
 import { invoke } from "@tauri-apps/api/core";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { loadQuickComposerShortcut } from "../../settings/model/settings";
 import { pathKey, projectName, prettyParent } from "../../../shared/lib/paths";
 import {
   loadArchivedProjects,
@@ -52,6 +53,8 @@ export type QuickChoice = { harness: HarnessId; model: string };
 
 export type QuickLaunch = {
   prompt: string;
+  /** Create an unsent user draft instead of starting an agent turn. */
+  draft?: boolean;
   cwd: string;
   harness: HarnessId;
   /** Missing means the harness default, resolved by the workspace. */
@@ -71,9 +74,12 @@ export function quickComposerSupported(): boolean {
   return IS_MAC;
 }
 
-export async function setQuickComposerShortcut(enabled: boolean) {
+export async function setQuickComposerShortcut(
+  enabled: boolean,
+  shortcut = loadQuickComposerShortcut(),
+) {
   if (!quickComposerSupported()) return;
-  await invoke("quick_composer_set_enabled", { enabled });
+  await invoke("quick_composer_set_enabled", { enabled, shortcut });
 }
 
 export function isHarnessId(value: unknown): value is HarnessId {

@@ -366,6 +366,20 @@ describe("appendSteerUser", () => {
   });
 });
 
+describe("usage limits", () => {
+  it("records when a limited turn can resume", () => {
+    const limited = applyHarnessEvent(newSession("codex", "/tmp"), {
+      type: "usage.limited",
+      resetsAt: 5_000,
+    });
+    expect(limited.usageLimit).toEqual({ resetsAt: 5_000 });
+    expect(
+      applyHarnessEvent(newSession("codex", "/tmp"), { type: "usage.limited" })
+        .usageLimit,
+    ).toEqual({});
+  });
+});
+
 describe("status blocks", () => {
   it("keeps one row when the same status repeats", () => {
     let session = appendUser(newSession("claude", "/tmp"), "go");

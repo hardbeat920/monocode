@@ -15,7 +15,11 @@ import {
   generateCursorPrContent,
 } from "./cursorGit";
 import { generateCursorSessionTitle } from "./cursorTitle";
-import { warmupCursorText } from "./cursorText";
+import {
+  runCursorTextPrompt,
+  stopCursorTextPrompt,
+  warmupCursorText,
+} from "./cursorText";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 
 export const cursorAdapter: HarnessAdapter = {
@@ -35,6 +39,8 @@ export const cursorAdapter: HarnessAdapter = {
   generatePrContent: generateCursorPrContent,
   generateBranchName: generateCursorBranchName,
   warmupText: warmupCursorText,
+  runTextPrompt: runCursorTextPrompt,
+  stopTextPrompt: stopCursorTextPrompt,
 };
 
 let registered = false;

@@ -2,8 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   Check,
   Lock,
-  LockOpen,
   Pencil,
+  Shield,
   Sparkles,
 } from "../../../shared/ui/icons";
 import {
@@ -17,7 +17,7 @@ const ICONS = {
   supervised: Lock,
   "auto-accept-edits": Pencil,
   auto: Sparkles,
-  "full-access": LockOpen,
+  "full-access": Shield,
 };
 
 export function QuickPermissionIcon({
@@ -28,7 +28,12 @@ export function QuickPermissionIcon({
   className?: string;
 }) {
   const Icon = ICONS[mode];
-  return <Icon className={className} strokeWidth={1.75} />;
+  return (
+    <Icon
+      className={`${className ?? ""} ${mode === "full-access" ? "text-amber-400/90" : ""}`}
+      strokeWidth={1.75}
+    />
+  );
 }
 
 export function QuickPermissions({
