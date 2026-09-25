@@ -3652,6 +3652,11 @@ function ProviderRow({
           label={`${HARNESS_TITLE[harness]} model`}
           value={current.id}
           onChange={(next) => onModelChange(harness, next)}
+          onOpen={() => {
+            // Built-in fallbacks keep `models` non-empty, so the mount effect
+            // alone never replaces them with the live catalog.
+            if (available) void refreshHarnessCatalogs([harness]);
+          }}
           options={models.map((item) => ({
             value: item.id,
             label: item.name,
@@ -4182,11 +4187,13 @@ function Select({
   value,
   options,
   onChange,
+  onOpen,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
@@ -4212,6 +4219,11 @@ function Select({
       ),
     );
   }, [open, value, options]);
+
+  useEffect(() => {
+    if (open) onOpen?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;

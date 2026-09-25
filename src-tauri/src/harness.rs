@@ -1273,6 +1273,9 @@ const EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["models", "--verbose"],
     &["models", "--json"],
     &["models"],
+    &["service", "status"],
+    &["service", "start"],
+    &["service", "get", "password"],
     &["status", "--json"],
     &["agent", "list"],
 ];
@@ -3767,6 +3770,9 @@ mod exec_allowlist_tests {
         assert!(exec_args_allowed(&args(&["models", "--verbose"])));
         assert!(exec_args_allowed(&args(&["models", "--json"])));
         assert!(exec_args_allowed(&args(&["models"])));
+        assert!(exec_args_allowed(&args(&["service", "status"])));
+        assert!(exec_args_allowed(&args(&["service", "start"])));
+        assert!(exec_args_allowed(&args(&["service", "get", "password"])));
         assert!(exec_args_allowed(&args(&["status", "--json"])));
         assert!(exec_args_allowed(&args(&["agent", "list"])));
     }
