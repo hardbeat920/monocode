@@ -61,6 +61,18 @@ export function isQuickComposerShortcut(value: string): boolean {
   );
 }
 
+const MODIFIER_ORDER = ["Command", "Control", "Option", "Shift"] as const;
+
+/** Normalises modifier order so a stored chord always matches what a key press produces. */
+export function canonicalShortcut(value: string): string | null {
+  if (!isQuickComposerShortcut(value)) return null;
+  const parts = value.split("+");
+  const code = parts.pop() as string;
+  return [...MODIFIER_ORDER.filter((part) => parts.includes(part)), code].join(
+    "+",
+  );
+}
+
 export function shortcutFromKeyEvent(
   event: Pick<KeyboardEvent, "code"> & Modifiers,
 ): string | null {

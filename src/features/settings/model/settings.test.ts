@@ -257,6 +257,34 @@ describe("keybinding overrides", () => {
     ).toThrow("Already used by App: Search");
   });
 
+  it("rejects a shortcut that shadows another command's default", () => {
+    expect(() =>
+      saveKeybindingOverride("App: Search", { shortcut: "Control+KeyP" }),
+    ).toThrow("Already used by App: Go to File");
+    expect(() =>
+      saveKeybindingOverride("Tab: New", { shortcut: "Control+Tab" }),
+    ).toThrow("Already used by Tab: Cycle Next");
+  });
+
+  it("rejects a chord the command cannot use and invalid chords", () => {
+    expect(() =>
+      saveKeybindingOverride("Tab: Activate 1–8", { shortcut: "Control+KeyM" }),
+    ).toThrow("needs a number key");
+    expect(() =>
+      saveKeybindingOverride("App: Search", { shortcut: "KeyK" }),
+    ).toThrow("not a valid shortcut");
+  });
+
+  it("normalises modifier order when reading stored shortcuts", () => {
+    localStorage.setItem(
+      KEYBINDING_OVERRIDES_KEY,
+      JSON.stringify({ "App: Search": { shortcut: "Shift+Command+KeyM" } }),
+    );
+    expect(loadKeybindingOverrides()).toEqual({
+      "App: Search": { shortcut: "Command+Shift+KeyM" },
+    });
+  });
+
   it("ignores malformed, unknown, and invalid stored overrides", () => {
     localStorage.setItem(
       KEYBINDING_OVERRIDES_KEY,

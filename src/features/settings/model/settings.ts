@@ -6,6 +6,7 @@ import {
   SHIFT,
 } from "../../../platform/tauri/platform";
 import {
+  canonicalShortcut,
   isQuickComposerShortcut,
   QUICK_COMPOSER_DEFAULT_SHORTCUT,
   quickComposerShortcutLabel,
@@ -985,7 +986,7 @@ export const KEYBINDINGS: KeybindingRow[] = [
 ];
 
 const KEYBINDING_OVERRIDES_KEY = "monocode.keybindingOverrides";
-export const KEYBINDINGS_CHANGE_EVENT = "monocode:keybindings-change";
+const KEYBINDINGS_CHANGE_EVENT = "monocode:keybindings-change";
 
 export type KeybindingOverride = {
   disabled?: boolean;
@@ -994,8 +995,75 @@ export type KeybindingOverride = {
 
 export type KeybindingOverrides = Record<string, KeybindingOverride>;
 
-function validKeybindingCommands(): Set<string> {
-  return new Set(KEYBINDINGS.map((row) => row.command));
+const VALID_COMMANDS = new Set(KEYBINDINGS.map((row) => row.command));
+
+const KEY_CODES: Record<string, string> = {
+  " ": "Space",
+  Enter: "Enter",
+  Space: "Space",
+  Tab: "Tab",
+  "`": "Backquote",
+  "[": "BracketLeft",
+  "]": "BracketRight",
+  ",": "Comma",
+  ".": "Period",
+  "+": "Equal",
+  "-": "Minus",
+  "\\": "Backslash",
+  "↑": "ArrowUp",
+  "↓": "ArrowDown",
+  "←": "ArrowLeft",
+  "→": "ArrowRight",
+};
+
+const DISPLAY_MODIFIERS: [string, string][] = IS_MAC
+  ? [
+      ["⌘", "Command"],
+      ["⌃", "Control"],
+      ["⌥", "Option"],
+      ["⇧", "Shift"],
+    ]
+  : [
+      ["Ctrl+", "Control"],
+      ["Alt+", "Option"],
+      ["Shift+", "Shift"],
+    ];
+
+/**
+ * The stored form of a row's documented default, so a recorded chord can be
+ * checked against every other command and not only against other overrides.
+ * Returns null for grouped rows that document a range rather than one chord.
+ */
+function defaultShortcutFor(command: string): string | null {
+  const row = KEYBINDINGS.find((entry) => entry.command === command);
+  if (!row || row.keys.includes("…")) return null;
+  let rest = row.keys;
+  const modifiers: string[] = [];
+  for (const [display, modifier] of DISPLAY_MODIFIERS) {
+    if (rest.startsWith(display)) {
+      modifiers.push(modifier);
+      rest = rest.slice(display.length);
+    }
+  }
+  const code = /^[A-Za-z]$/.test(rest)
+    ? `Key${rest.toUpperCase()}`
+    : /^[0-9]$/.test(rest)
+      ? `Digit${rest}`
+      : (KEY_CODES[rest] ??
+        (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(rest) ? rest : null));
+  if (!code) return null;
+  return canonicalShortcut(
+    modifiers.length ? [...modifiers, code].join("+") : code,
+  );
+}
+
+function validateShortcut(command: string, shortcut: string): string {
+  const canonical = canonicalShortcut(shortcut);
+  if (!canonical) throw new Error("That combination is not a valid shortcut");
+  if (command === "Tab: Activate 1–8" && !/Digit[1-8]$/.test(canonical)) {
+    throw new Error("Tab: Activate 1–8 needs a number key from 1 to 8");
+  }
+  return canonical;
 }
 
 export function loadKeybindingOverrides(): KeybindingOverrides {
@@ -1004,19 +1072,17 @@ export function loadKeybindingOverrides(): KeybindingOverrides {
       localStorage.getItem(KEYBINDING_OVERRIDES_KEY) ?? "{}",
     );
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    const commands = validKeybindingCommands();
     const next: KeybindingOverrides = {};
     for (const [command, entry] of Object.entries(
       value as Record<string, unknown>,
     )) {
-      if (!commands.has(command) || !entry || typeof entry !== "object")
+      if (!VALID_COMMANDS.has(command) || !entry || typeof entry !== "object")
         continue;
       const override = entry as { disabled?: unknown; shortcut?: unknown };
       const disabled = override.disabled === true;
       const shortcut =
-        typeof override.shortcut === "string" &&
-        isQuickComposerShortcut(override.shortcut)
-          ? override.shortcut
+        typeof override.shortcut === "string"
+          ? (canonicalShortcut(override.shortcut) ?? undefined)
           : undefined;
       if (shortcut) next[command] = { shortcut };
       else if (disabled) next[command] = { disabled: true };
@@ -1034,12 +1100,17 @@ export function saveKeybindingOverride(
   const next = loadKeybindingOverrides();
   if (override.disabled) next[command] = { disabled: true };
   else if (override.shortcut) {
-    const conflict = Object.entries(next).find(
-      ([other, value]) =>
-        other !== command && value.shortcut === override.shortcut,
-    );
+    const shortcut = validateShortcut(command, override.shortcut);
+    const conflict = [
+      ...Object.entries(next).map(
+        ([other, value]) => [other, value.shortcut] as const,
+      ),
+      ...KEYBINDINGS.map(
+        (row) => [row.command, defaultShortcutFor(row.command)] as const,
+      ),
+    ].find(([other, existing]) => other !== command && existing === shortcut);
     if (conflict) throw new Error(`Already used by ${conflict[0]}`);
-    next[command] = { shortcut: override.shortcut };
+    next[command] = { shortcut };
   } else delete next[command];
   try {
     if (Object.keys(next).length) {
