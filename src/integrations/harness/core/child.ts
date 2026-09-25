@@ -328,6 +328,14 @@ export function resolveAntigravityBinary(): Promise<{
   return invoke("harness_resolve_antigravity");
 }
 
+export function antigravityLaunchArgs(): Promise<string[]> {
+  return invoke("harness_antigravity_args");
+}
+
+export function resolveBinaryOverride(path: string): Promise<string> {
+  return invoke("harness_resolve_override", { path });
+}
+
 export function freeHarnessPort(): Promise<number> {
   return invoke("harness_free_port");
 }

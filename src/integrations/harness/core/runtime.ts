@@ -1,4 +1,5 @@
 import type { HarnessId } from "../../../features/sessions/model/session";
+import { resolveBinaryOverride } from "./child";
 import {
   loadHarnessRuntime,
   type HarnessRuntimeSettings,
@@ -67,10 +68,11 @@ export async function resolveHarnessBinary<T extends { path: string }>(
 ): Promise<{ path: string } & Partial<T>> {
   const override = harnessRuntimeBinaryPath(loadHarnessRuntime(harness));
   if (!override) return resolveDefault();
+  const path = await resolveBinaryOverride(override);
   try {
     const resolved = await resolveDefault();
-    return { ...resolved, path: override };
+    return { ...resolved, path };
   } catch {
-    return { path: override } as { path: string } & Partial<T>;
+    return { path } as { path: string } & Partial<T>;
   }
 }

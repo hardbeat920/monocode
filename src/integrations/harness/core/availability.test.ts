@@ -16,6 +16,10 @@ vi.mock("./child", () => ({
   resolveOmpBinary: async () => ({ path: "/fake/omp" }),
   resolveOpenCodeBinary: async () => ({ path: "/fake/opencode" }),
   resolvePiBinary: async () => ({ path: "/fake/pi" }),
+  resolveBinaryOverride: async (path: string) => {
+    if (path === "/missing/claude") throw new Error("not executable");
+    return path;
+  },
 }));
 vi.mock("./registry", () => ({ isLiveHarness: () => true }));
 
@@ -53,5 +57,16 @@ describe("probeHarnessAvailability", () => {
     });
     await probeHarnessAvailability({ force: true });
     expect(isHarnessAvailable("claude")).toBe(true);
+  });
+
+  it("marks a harness unavailable when its binary-path override isn't executable", async () => {
+    mock.resolveClaudeBinary.mockResolvedValue({ path: "/usr/local/bin/claude" });
+    saveHarnessRuntime("claude", {
+      binaryPath: "/missing/claude",
+      launchArgs: "",
+      env: [],
+    });
+    await probeHarnessAvailability({ force: true });
+    expect(isHarnessAvailable("claude")).toBe(false);
   });
 });

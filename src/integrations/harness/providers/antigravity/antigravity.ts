@@ -4,6 +4,7 @@ import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import {
   killChild,
+  antigravityLaunchArgs,
   resolveAntigravityBinary,
   spawnChild,
   unwatchChild,
@@ -398,7 +399,10 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     resolveAntigravityBinary,
   );
   const path = resolved.path;
-  const args = [...(resolved.args ?? []), ...harnessRuntimeExtraArgs(runtime)];
+  const args = [
+    ...(resolved.args ?? (await antigravityLaunchArgs())),
+    ...harnessRuntimeExtraArgs(runtime),
+  ];
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(childKey, handlers);
   const pendingSetup = { acp, childKey };

@@ -3,6 +3,7 @@ import { setHarnessModels } from "../../../../features/sessions/model/models";
 import { AcpClient } from "../../core/acp";
 import {
   killChild,
+  antigravityLaunchArgs,
   resolveAntigravityBinary,
   spawnChild,
   unwatchChild,
@@ -38,7 +39,7 @@ async function discoverModels() {
     resolveAntigravityBinary,
   );
   const { path } = resolved;
-  const args = resolved.args ?? [];
+  const args = resolved.args ?? (await antigravityLaunchArgs());
   const env = harnessRuntimeEnv(loadHarnessRuntime("antigravity"));
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {

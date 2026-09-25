@@ -396,6 +396,30 @@ pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
         })
 }
 
+/// The platform launch args alone, for a binary-path override that bypasses
+/// `harness_resolve_antigravity`.
+#[tauri::command]
+pub fn harness_antigravity_args() -> Vec<String> {
+    antigravity_args()
+}
+
+/// Validates a user-set binary override the same way the default resolvers
+/// validate their candidates: a path must name an executable file, and a bare
+/// name must resolve on the GUI search path.
+#[tauri::command(async)]
+pub fn harness_resolve_override(path: String) -> Result<String, String> {
+    let trimmed = path.trim();
+    let expanded = expand_home(trimmed);
+    let resolved = if expanded.components().count() > 1 {
+        existing_binary(expanded)
+    } else {
+        resolve_gui_binary(trimmed)
+    };
+    resolved
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("Binary override is not an executable file: {trimmed}"))
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   saveHarnessRuntime,
   type HarnessRuntimeSettings,
@@ -10,6 +10,13 @@ import {
   harnessRuntimeExtraArgs,
   resolveHarnessBinary,
 } from "./runtime";
+
+vi.mock("./child", () => ({
+  resolveBinaryOverride: async (path: string) => {
+    if (path === "/missing/claude") throw new Error("not executable");
+    return path;
+  },
+}));
 
 beforeEach(() => {
   localStorage.clear();
@@ -129,5 +136,16 @@ describe("resolveHarnessBinary", () => {
         throw new Error("not found");
       }),
     ).rejects.toThrow("not found");
+  });
+
+  it("rejects an override that isn't an executable", async () => {
+    saveHarnessRuntime("claude", {
+      binaryPath: "/missing/claude",
+      launchArgs: "",
+      env: [],
+    });
+    await expect(
+      resolveHarnessBinary("claude", async () => ({ path: "/usr/local/bin/claude" })),
+    ).rejects.toThrow("not executable");
   });
 });
