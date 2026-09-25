@@ -1,4 +1,5 @@
 import { isEditTool } from "../../../integrations/harness/core/preview";
+import { compactCiRepairContext } from "../../inbox/model/ciRepair";
 import { limitSection } from "../../../shared/lib/jsonText";
 import { displayPath } from "../../../shared/lib/paths";
 import {
@@ -204,7 +205,7 @@ export function userMessagesAfterHandoff(session: Session): string[] {
   return session.blocks
     .slice(start + 1)
     .filter((block) => block.role === "user")
-    .map((block) => block.text.trim())
+    .map((block) => (block.ciContext || block.text).trim())
     .filter(Boolean);
 }
 
@@ -216,13 +217,15 @@ export function consumeHandoff(session: Session): Session {
 
 export function chooseHandoffBrief(
   agentText: string,
-  fallback: string,
+  session: Session,
+  request?: string,
 ): string {
   const agent = stripGoalSections(agentText);
-  if (agent.length >= MIN_AGENT_BRIEF) {
-    return limitSection(agent, BRIEF_LIMIT);
-  }
-  return limitSection(stripGoalSections(fallback), BRIEF_LIMIT);
+  const fallback = handoffParts(session, request, session.cwd);
+  return formatHandoffBrief(
+    agent.length >= MIN_AGENT_BRIEF ? agent : stripGoalSections(fallback.brief),
+    fallback.ciContext,
+  );
 }
 
 export function hasSessionEdits(session: Session): boolean {
@@ -268,8 +271,17 @@ export function buildDeterministicHandoff(
   request?: string,
   cwd = session.cwd,
 ): string {
+  const { brief, ciContext } = handoffParts(session, request, cwd);
+  return formatHandoffBrief(brief, ciContext);
+}
+
+function handoffParts(
+  session: Session,
+  request: string | undefined,
+  cwd: string,
+): { brief: string; ciContext: string } {
   const current = request?.trim() ?? "";
-  const users: string[] = [];
+  const users: Block[] = [];
   let lastAssistant = "";
   let lastTasks = "";
   let lastPlan = "";
@@ -278,8 +290,7 @@ export function buildDeterministicHandoff(
   for (const block of session.blocks) {
     if (block.role === "handoff" || block.role === "reasoning") continue;
     if (block.role === "user") {
-      const text = block.text.trim();
-      if (text) users.push(text);
+      users.push(block);
       continue;
     }
     if (block.role === "assistant") {
@@ -313,11 +324,14 @@ export function buildDeterministicHandoff(
   }
 
   const priorAll =
-    current && users[users.length - 1] === current
+    current && users[users.length - 1]?.text.trim() === current
       ? users.slice(0, -1)
       : users;
-  const omitted = Math.max(0, priorAll.length - MAX_PRIOR_USERS);
-  const prior = priorAll.slice(-MAX_PRIOR_USERS);
+  // The new request is sent separately and must not erase the prior turn's CI data.
+  const ciContext = priorAll[priorAll.length - 1]?.ciContext ?? "";
+  const priorTexts = priorAll.map((block) => block.text.trim()).filter(Boolean);
+  const omitted = Math.max(0, priorTexts.length - MAX_PRIOR_USERS);
+  const prior = priorTexts.slice(-MAX_PRIOR_USERS);
 
   const sections: string[] = [];
   if (omitted > 0 || prior.length > 0 || lastAssistant) {
@@ -349,7 +363,21 @@ export function buildDeterministicHandoff(
     sections.push(`## Current tasks\n${limitSection(lastTasks, PLAN_LIMIT)}`);
   }
 
-  return limitSection(sections.join("\n\n").trim(), BRIEF_LIMIT);
+  return { brief: sections.join("\n\n").trim(), ciContext };
+}
+
+function formatHandoffBrief(brief: string, ciContext: string): string {
+  const recap = limitSection(
+    brief,
+    ciContext ? BRIEF_LIMIT - 400 : BRIEF_LIMIT,
+  );
+  if (!ciContext) return recap;
+  const header = `${recap ? "\n\n" : ""}## CI context\n`;
+  // The budget is soft: only evidence may be cut, never CI instructions or labels.
+  return `${recap}${header}${compactCiRepairContext(
+    ciContext,
+    Math.max(0, BRIEF_LIMIT - recap.length - header.length),
+  )}`;
 }
 
 export function wrapHandoffPrompt(

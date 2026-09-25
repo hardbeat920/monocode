@@ -44,6 +44,7 @@ export function applyHarnessEvent(
         preview: event.preview,
         streaming: true,
         agentModel: event.agentModel,
+        ...(event.background ? { background: true } : {}),
       });
     case "tool.updated":
       return upsertTool(session, {
@@ -109,6 +110,13 @@ export function applyHarnessEvent(
       return mergeTurnMetrics(session, event);
     case "tasks.updated":
       return upsertTaskList(session, event);
+    case "background.updated":
+      if (event.tasks.length === 0) {
+        if (!session.backgroundTasks) return session;
+        const { backgroundTasks: _cleared, ...rest } = session;
+        return rest;
+      }
+      return { ...session, backgroundTasks: event.tasks };
     case "plan":
       return upsertPlan(session, event);
     case "session.error":
@@ -147,6 +155,11 @@ export function applyHarnessEvent(
       };
     case "status":
       return appendStatus(session, event.text);
+    case "usage.limited":
+      return {
+        ...session,
+        usageLimit: event.resetsAt != null ? { resetsAt: event.resetsAt } : {},
+      };
     case "interjection":
       // A visible boundary the user must not miss, so unlike status it never
       // deduplicates and never reads as turn lifecycle.
@@ -367,14 +380,20 @@ function lastMatchingBlock(
 type UserTurnExtra = {
   secondOpinion?: Block["secondOpinion"];
   noteCard?: Block["noteCard"];
+  ciContext?: string;
   internal?: boolean;
+  monocode?: boolean;
+  appRequestId?: string;
 };
 
 function userTurnFields(extra?: UserTurnExtra) {
   return {
     ...(extra?.secondOpinion ? { secondOpinion: extra.secondOpinion } : {}),
     ...(extra?.noteCard ? { noteCard: extra.noteCard } : {}),
+    ...(extra?.ciContext ? { ciContext: extra.ciContext } : {}),
     ...(extra?.internal ? { internal: true } : {}),
+    ...(extra?.monocode ? { monocode: true } : {}),
+    ...(extra?.appRequestId ? { appRequestId: extra.appRequestId } : {}),
   };
 }
 
@@ -435,7 +454,8 @@ export function appendSteerUser(
 }
 
 export function stopStreaming(session: Session): Session {
-  const settled = settlePendingApprovals(session);
+  const { backgroundTasks: _cleared, ...settled } =
+    settlePendingApprovals(session);
   return {
     ...settled,
     busy: false,
@@ -671,10 +691,10 @@ function patchStreaming(
   )
     index--;
   const last = session.blocks[index];
-  if (
-    last?.role === role &&
-    (index === session.blocks.length - 1 || last.streaming)
-  ) {
+  // A completion closes one provider message. The next delta is a new message
+  // even when no tool or status row landed between them; joining the two can
+  // turn separate Markdown blocks into text such as `commitConnect`.
+  if (last?.role === role && last.streaming) {
     const nextText = joinStreamText(last.text, text);
     if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
@@ -793,6 +813,7 @@ function upsertTool(
     preview?: ToolPreview;
     streaming: boolean;
     agentModel?: string;
+    background?: boolean;
   },
 ): Session {
   const index = findToolIndex(session, patch);
@@ -820,6 +841,7 @@ function upsertTool(
         status: patch.status,
         ...(detail ? { detail } : {}),
         ...(preview ? { preview } : {}),
+        ...(patch.background ? { background: true } : {}),
       },
     });
   }
@@ -875,6 +897,7 @@ function upsertTool(
       status,
       ...(detail ? { detail } : {}),
       ...(preview ? { preview } : {}),
+      ...(prev.tool?.background ? { background: true } : {}),
     },
   };
   return { ...session, blocks };

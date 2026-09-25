@@ -1,5 +1,10 @@
 import type { HarnessId } from "./session";
 import { HARNESSES } from "./session";
+import { loadProjectProviderSettings } from "./projectProviders";
+import {
+  hasProbedHarnessAvailability,
+  isHarnessAvailable,
+} from "../../../integrations/harness/core/availabilityState";
 
 export type ModelSettingChoice = {
   value: string;
@@ -348,13 +353,31 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     });
     if (prefix) return prefix;
   }
+  // Codex has no built-in catalog. During startup, retain the saved model
+  // until discovery finishes instead of borrowing another provider's model.
+  if (available.length === 0) {
+    const requested = id?.trim() ?? "";
+    const modelId =
+      requested &&
+      (!requested.includes(":") || requested.startsWith(`${harness}:`))
+        ? requested
+        : "";
+    const nativeId = nativeIdFrom(modelId);
+    return {
+      id: modelId,
+      harness,
+      name: nativeId
+        ? nativeId
+            .replace(/^gpt/i, "GPT")
+            .replace(/-([a-z])/g, (_, letter: string) =>
+              `-${letter.toUpperCase()}`,
+            )
+        : harness.charAt(0).toUpperCase() + harness.slice(1),
+      nativeId,
+    };
+  }
   const fallbackId = defaultModelId(harness);
-  return (
-    (fallbackId ? findModel(fallbackId) : undefined) ??
-    available[0] ??
-    MODELS.find((model) => model.harness === harness) ??
-    MODELS[0]
-  );
+  return (fallbackId ? findModel(fallbackId) : undefined) ?? available[0];
 }
 
 /** Catalog-reported context window for a model id, when known. */
@@ -384,6 +407,7 @@ export function mergeModelSettings(
   model: AgentModel,
   current?: Record<string, string>,
 ): Record<string, string> {
+  if (modelsFor(model.harness).length === 0) return { ...current };
   const next = defaultModelSettings(model);
   if (!current) return next;
   for (const setting of model.settings ?? []) {
@@ -436,6 +460,7 @@ export function preferredModelSettings(
   model: AgentModel,
   current?: Record<string, string>,
 ): Record<string, string> {
+  if (modelsFor(model.harness).length === 0) return { ...current };
   return mergeModelSettings(model, {
     ...current,
     ...loadLastModelSettings(),
@@ -658,11 +683,40 @@ export function preferredModelId(harness: HarnessId): string {
   return defaultModelId(harness);
 }
 
+/**
+ * `preferred` unless the project hides it, in which case the first provider the
+ * project still allows. Falls back to `preferred` when a project has hidden
+ * everything, so a conversation always has a provider.
+ */
+export function firstEnabledHarness(
+  cwd: string | undefined,
+  preferred: HarnessId,
+): HarnessId {
+  const hidden = new Set(loadProjectProviderSettings(cwd).hidden ?? []);
+  const enabled = (id: HarnessId) =>
+    !hidden.has(id) &&
+    showProviderInModelPicker(
+      id,
+      isHarnessAvailable(id),
+      hasProbedHarnessAvailability(),
+    );
+  if (enabled(preferred)) return preferred;
+  return HARNESSES.find(enabled) ?? preferred;
+}
+
 /** Provider + model new conversations should start with. */
-export function defaultSessionChoice(): LastModelChoice {
+export function defaultSessionChoice(cwd?: string): LastModelChoice {
+  const project = loadProjectProviderSettings(cwd);
   const last = loadLastModelChoice();
-  const harness = last?.harness ?? "cursor";
-  return { harness, model: preferredModelId(harness) };
+  const harness = firstEnabledHarness(
+    cwd,
+    project.defaultHarness ?? last?.harness ?? "cursor",
+  );
+  const model =
+    project.models?.[harness] ??
+    (project.defaultHarness === harness ? project.defaultModel : undefined) ??
+    preferredModelId(harness);
+  return { harness, model };
 }
 
 export function loadLastModelChoice(): LastModelChoice | null {

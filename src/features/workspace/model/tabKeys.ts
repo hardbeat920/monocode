@@ -194,7 +194,9 @@ export function focusedBusyAgentSessionId(
 export function deferUnhandledEscape(
   e: EscapeKeyEvent,
   run: () => void,
-  defer: (callback: () => void) => void = queueMicrotask,
+  // A microtask can run between window keydown listeners, before a later
+  // surface (such as Settings) has prevented the same Escape event.
+  defer: (callback: () => void) => void = (callback) => setTimeout(callback, 0),
 ): void {
   if (!isPlainEscape(e) || e.defaultPrevented) return;
   defer(() => {

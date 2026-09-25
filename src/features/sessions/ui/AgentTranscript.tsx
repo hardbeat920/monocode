@@ -30,18 +30,18 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AttachmentChip } from "./AttachmentChip";
+import { MonocodeSparkles } from "./MonocodeSparkles";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
 import { PlanPreview } from "./PlanPreview";
 import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPreview";
 import { TaskListPreview } from "./TaskListPreview";
-import {
-  HandoffButton,
-  SecondOpinionButton,
-} from "./SecondOpinionButton";
+import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui";
+import { BtwPopover, type BtwOpenRequest } from "./BtwPopover";
+
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
@@ -61,8 +61,8 @@ import type { Attachment } from "../model/session";
 import { visibleUserPrompt } from "../../orchestration/model/orchestration";
 import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
-import { displayPath, resolveWorkspacePath } from "../../../shared/lib/paths";
 import { resolveModel } from "../model/models";
+import { btwOpenTargetTurnId, btwSurfaceHarness } from "../model/btw";
 import { harnessForTurn } from "../model/secondOpinion";
 import { Shimmer } from "../../../shared/ui/Shimmer";
 import {
@@ -91,7 +91,6 @@ import {
   activityPhaseTitle,
   activityStillRunning,
   buildActivityPhases,
-  editVerb,
   firstFoldableIndex,
   foldableWork,
   foldedBlocks,
@@ -106,6 +105,7 @@ import {
   needsApproval,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  resolveToolCallDisplay,
   subagentBrief,
   subagentModelName,
   subagentName,
@@ -121,6 +121,15 @@ import {
   type TurnItem,
 } from "../model/transcriptActivity";
 import { lastUserTurnBlock } from "../model/editLastTurn";
+import {
+  monoCodeToolCall,
+  monoCodeWorkSummary,
+  type MonoCodeToolCall,
+} from "../model/monocodeToolCall";
+import {
+  isOperatorUserTurn,
+  operatorUserPrompt,
+} from "../model/operatorCommand";
 import {
   clearTranscriptHighlights,
   paintTranscriptHighlights,
@@ -156,6 +165,8 @@ type Props = {
   model?: string;
   modelSettings?: Record<string, string>;
   pendingQuestion?: boolean;
+  /** Work the agent left running when it yielded; the turn waits on it. */
+  backgroundTasks?: string[];
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
@@ -168,9 +179,28 @@ type Props = {
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
   onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
   onHandoff?: (target: ModelTarget, turn: Block[]) => void;
+  onBtwSubmit?: (
+    threadId: string,
+    messageId: string,
+    text: string,
+    turn: Block[],
+    model?: string,
+    modelSettings?: Record<string, string>,
+  ) => void;
+  onBtwRetry?: (threadId: string, turn: Block[]) => void;
+  onBtwDelete?: (threadId: string, turn: Block[]) => void;
+  onBtwModelChange?: (
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+    turn: Block[],
+  ) => void;
+  btwOpenRequest?: BtwOpenRequest | null;
+  onBtwOpenRequestHandled?: (requestId: number) => void;
   onEditLastTurn?: () => void;
   editingLastTurn?: boolean;
   onJumpToBottomChange?: (show: boolean) => void;
+
   onJumpToBottomReady?: (jump: () => void) => void;
   /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
   onRevealReady?: (reveal: (blockId: string) => boolean) => void;
@@ -196,6 +226,7 @@ function AgentTranscriptComponent({
   model,
   modelSettings,
   pendingQuestion = false,
+  backgroundTasks,
   onApproval,
   onAddToChat,
   onSaveNote,
@@ -208,6 +239,12 @@ function AgentTranscriptComponent({
   onBuildPlan,
   onSecondOpinion,
   onHandoff,
+  onBtwSubmit,
+  onBtwRetry,
+  onBtwDelete,
+  onBtwModelChange,
+  btwOpenRequest,
+  onBtwOpenRequestHandled,
   onEditLastTurn,
   editingLastTurn = false,
   onJumpToBottomChange,
@@ -215,6 +252,7 @@ function AgentTranscriptComponent({
   onRevealReady,
   onNavigateReady,
   latestTurnAccessory,
+
   visible = true,
   parked = false,
   onScrollerChange,
@@ -257,7 +295,7 @@ function AgentTranscriptComponent({
   }, []);
   // Stretch the last turn after a send while this tab stays open. Closing
   // the tab is a new visit: the remount uses the true transcript height so
-  // the latest reply sits on the composer instead of a hole of empty space.
+  // the latest reply sits near the composer instead of a hole of empty space.
   const [anchorTurn, setAnchorTurn] = useState(!!busy);
   // Parking detaches the scroller, which drops its scroll offset.
   const restoreScroll = useRef(false);
@@ -447,6 +485,14 @@ function AgentTranscriptComponent({
   }, [scrollerEl, setShowJump, visible]);
 
   const turns = groupTurns(blocks, managed);
+  const btwOpenTurnId =
+    btwOpenRequest && harness
+      ? btwOpenTargetTurnId(turns, blocks, harness, managed)
+      : undefined;
+  useEffect(() => {
+    if (!btwOpenRequest || btwOpenTurnId) return;
+    onBtwOpenRequestHandled?.(btwOpenRequest.id);
+  }, [btwOpenRequest, btwOpenTurnId, onBtwOpenRequestHandled]);
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
   const turnsRef = useRef(turns);
@@ -618,7 +664,7 @@ function AgentTranscriptComponent({
       ref={setScroller}
       className="agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5"
     >
-      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-1">
+      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-8">
         {firstVisibleTurn > 0 ? (
           <div className="flex justify-center px-4 py-3">
             <button
@@ -664,6 +710,10 @@ function AgentTranscriptComponent({
           const turnHarness = harness
             ? (turnModel?.harness ?? harnessForTurn(blocks, turn, harness))
             : undefined;
+          const btwHarness =
+            harness != null
+              ? btwSurfaceHarness(blocks, turn, harness, userBlock?.btwThreads)
+              : undefined;
           // Work the turn has already answered for folds away behind one line,
           // leaving the prompt and the answer to it.
           const turnId = turn[0].id;
@@ -690,6 +740,7 @@ function AgentTranscriptComponent({
                     ? "Waiting for answers"
                     : undefined
               }
+              background={backgroundTasks}
               modelName={turnModelName}
             />
           ) : durationMs != null ? (
@@ -922,6 +973,7 @@ function AgentTranscriptComponent({
                     startedAt != null ? startedAt + durationMs : undefined
                   }
                   copyText={turnCopyText(turn)}
+                  cwd={cwd}
                   onSaveNote={onSaveNote}
                   harness={turnHarness}
                   fromHarness={turnHarness}
@@ -933,6 +985,57 @@ function AgentTranscriptComponent({
                   onHandoff={
                     onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
+                  model={turnModel?.id ?? model}
+                  modelSettings={modelSettings}
+                  btwThreads={userBlock?.btwThreads}
+                  visible={visible}
+                  btwHarness={btwHarness}
+                  onBtwSubmit={
+                    btwHarness && onBtwSubmit
+                      ? (
+                          threadId,
+                          messageId,
+                          text,
+                          nextModel,
+                          nextModelSettings,
+                        ) =>
+                          onBtwSubmit(
+                            threadId,
+                            messageId,
+                            text,
+                            turn,
+                            nextModel,
+                            nextModelSettings,
+                          )
+                      : undefined
+                  }
+                  onBtwRetry={
+                    btwHarness && onBtwRetry
+                      ? (threadId) => onBtwRetry(threadId, turn)
+                      : undefined
+                  }
+                  onBtwDelete={
+                    btwHarness && onBtwDelete
+                      ? (threadId) => onBtwDelete(threadId, turn)
+                      : undefined
+                  }
+                  onBtwModelChange={
+                    btwHarness && onBtwModelChange
+                      ? (threadId, nextModel, nextModelSettings) =>
+                          onBtwModelChange(
+                            threadId,
+                            nextModel,
+                            nextModelSettings,
+                            turn,
+                          )
+                      : undefined
+                  }
+                  btwOpenRequest={
+                    btwOpenTurnId === turnId ? btwOpenRequest : undefined
+                  }
+                  onBtwOpenRequestHandled={onBtwOpenRequestHandled}
+                  onOpenFile={onOpenFile}
+                  onOpenDiff={onOpenDiff}
                 />
               ) : null}
             </div>
@@ -951,6 +1054,117 @@ function AgentTranscriptComponent({
   );
 }
 
+export type TurnResponseViewProps = {
+  blocks: Block[];
+  live?: boolean;
+  cwd?: string;
+  userMessageId: string;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+};
+
+/** Compact harness activity view reused by BTW side conversations. */
+function TurnResponseViewComponent({
+  blocks,
+  live = false,
+  cwd,
+  userMessageId,
+  onOpenFile,
+  onOpenDiff,
+}: TurnResponseViewProps) {
+  const transcriptLayout = useTranscriptLayout();
+  const turn = useMemo(
+    () => [{ id: userMessageId, role: "user" as const, text: "" }, ...blocks],
+    [blocks, userMessageId],
+  );
+  const settled = !live;
+  const items = useMemo(
+    () =>
+      groupTurnItems(
+        turn.filter((block) => !block.orchestration),
+        { settled },
+      ),
+    [turn, settled],
+  );
+  const initialThinkingAt = initialThinkingIndex(items);
+  const foldedAt = lastActivityIndex(items);
+  const workStillRunning = activityStillRunning(turn);
+  const answering =
+    foldedAt >= 0 &&
+    items
+      .slice(foldedAt + 1)
+      .some((item) => item.type === "block" && isProseBlock(item.block));
+
+  if (blocks.length === 0 && live) {
+    return <InitialThinking live embedded />;
+  }
+  if (blocks.length === 0) return null;
+
+  return (
+    <div className="btw-turn-response min-w-0 font-mono text-[13px] leading-5">
+      {items.map((item, itemIndex) => {
+        if (item.type === "subagents") {
+          return (
+            <SubagentStack
+              key={item.blocks[0].id}
+              blocks={item.blocks}
+              cwd={cwd}
+              live={live}
+              embedded
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+          );
+        }
+        if (item.type === "activity") {
+          if (itemIndex === initialThinkingAt) {
+            return (
+              <InitialThinking
+                key={`thinking-${item.blocks[0].id}`}
+                live={live}
+                embedded
+              />
+            );
+          }
+          return (
+            <ActivityPhases
+              key={item.blocks[0].id}
+              blocks={item.blocks}
+              cwd={cwd}
+              done={
+                !live ||
+                itemIndex < foldedAt ||
+                (answering && !workStillRunning)
+              }
+              padded={false}
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+          );
+        }
+        if (item.type === "block") {
+          if (item.block.role === "user") return null;
+          return (
+            <TranscriptBlock
+              key={item.block.id}
+              block={item.block}
+              layout={transcriptLayout}
+              stickyIndex={0}
+              embedded
+              cwd={cwd}
+              onOpenFile={onOpenFile}
+              onOpenDiff={onOpenDiff}
+            />
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+export const TurnResponseView = memo(TurnResponseViewComponent);
+
 // Keep hidden panes' local state, and catch up with current props on activation.
 export const AgentTranscript = memo(
   AgentTranscriptComponent,
@@ -958,9 +1172,17 @@ export const AgentTranscript = memo(
 );
 
 /** Placeholder for private reasoning before the first assistant text arrives. */
-function InitialThinking({ live }: { live: boolean }) {
+function InitialThinking({
+  live,
+  embedded = false,
+}: {
+  live: boolean;
+  embedded?: boolean;
+}) {
   return (
-    <div className="min-w-0 px-4 pt-3 pb-1 font-sans text-sm text-content/50">
+    <div
+      className={`min-w-0 pt-3 pb-1 font-sans text-sm text-content/50 ${embedded ? "" : "px-4"}`}
+    >
       {live ? <Shimmer duration={1.6}>Thinking…</Shimmer> : "Thinking…"}
     </div>
   );
@@ -976,22 +1198,41 @@ function LiveFoldTitle({
   startedAt,
   paused,
   waitingLabel,
+  background,
   modelName,
 }: {
   startedAt?: number;
   paused: boolean;
   waitingLabel?: string;
+  background?: string[];
   modelName?: string;
 }) {
   const elapsedMs = useElapsedFrom(startedAt, paused);
+  // Yielding with a command still going is not the end of the turn. The clock
+  // keeps running and the line says what it is waiting on.
   const text = paused
     ? (waitingLabel ?? "Waiting for approval")
-    : formatWorkingDuration(elapsedMs, modelName);
-  return (
+    : background?.length
+      ? `${formatWorkingDuration(elapsedMs, modelName)} · ${backgroundLabel(background)}`
+      : formatWorkingDuration(elapsedMs, modelName);
+  const shimmer = (
     <Shimmer className="min-w-0 truncate font-sans text-sm" duration={1}>
       {text}
     </Shimmer>
   );
+  return background?.length ? (
+    <span className="flex min-w-0" title={background.join("\n")}>
+      {shimmer}
+    </span>
+  ) : (
+    shimmer
+  );
+}
+
+function backgroundLabel(tasks: string[]): string {
+  return tasks.length === 1
+    ? "running in background"
+    : `${tasks.length} tasks running in background`;
 }
 
 /**
@@ -1004,6 +1245,8 @@ function TurnDuration({
   metrics,
   labelHidden = false,
   modelName,
+  model,
+  modelSettings,
   harness,
   completedAt,
   copyText: output,
@@ -1011,12 +1254,26 @@ function TurnDuration({
   fromHarness,
   onSecondOpinion,
   onHandoff,
+  btwHarness,
+  btwThreads,
+  visible,
+  cwd,
+  onBtwSubmit,
+  onBtwRetry,
+  onBtwDelete,
+  onBtwModelChange,
+  btwOpenRequest,
+  onBtwOpenRequestHandled,
+  onOpenFile,
+  onOpenDiff,
 }: {
   elapsedMs: number | null;
   metrics?: TurnMetrics;
   /** True when the fold line above already keeps the time for this turn. */
   labelHidden?: boolean;
   modelName?: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
   harness?: HarnessId;
   completedAt?: number;
   copyText?: string;
@@ -1024,20 +1281,78 @@ function TurnDuration({
   fromHarness?: HarnessId;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
+  btwHarness?: HarnessId;
+  btwThreads?: Block["btwThreads"];
+  visible?: boolean;
+  cwd?: string;
+  onBtwSubmit?: (
+    threadId: string,
+    messageId: string,
+    text: string,
+    model?: string,
+    modelSettings?: Record<string, string>,
+  ) => void;
+  onBtwRetry?: (threadId: string) => void;
+  onBtwDelete?: (threadId: string) => void;
+  onBtwModelChange?: (
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+  ) => void;
+  btwOpenRequest?: BtwOpenRequest | null;
+  onBtwOpenRequestHandled?: (requestId: number) => void;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
 }) {
   const label = formatWorkingDuration(elapsedMs, modelName, true);
+  const hasBtw = !!(btwHarness && onBtwSubmit && onBtwRetry);
   const dot = (
     <span
       aria-hidden
       className="size-[3px] shrink-0 rounded-full bg-content/25"
     />
   );
+  const metricsBadge = (
+    <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
+  );
+  const labelDetails = labelHidden ? null : (
+    <span
+      className={`flex min-w-0 items-center gap-2.5 ${hasBtw ? "ml-1.5" : ""}`}
+    >
+      {dot}
+      <span className="flex min-w-0 items-center gap-1.5">
+        {harness ? (
+          <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+        ) : null}
+        <span className="min-w-0 truncate" title={label}>
+          {label}
+        </span>
+      </span>
+    </span>
+  );
+  const timeDetails =
+    completedAt != null ? (
+      <span
+        className={`${hasBtw ? "ml-1.5" : "ml-auto"} flex shrink-0 items-center gap-2.5`}
+      >
+        {dot}
+        <span className="shrink-0 text-content/35">
+          {formatClockTime(completedAt)}
+        </span>
+      </span>
+    ) : null;
   return (
     <div
       aria-label={label}
-      className="flex min-w-0 items-center gap-2.5 px-4 pt-1 pb-3 font-sans text-sm text-content/40"
+      className="flex w-full min-w-0 max-w-full items-center gap-2.5 overflow-hidden px-4 pt-1 pb-3 font-sans text-sm text-content/40"
     >
-      <span className="flex shrink-0 items-center gap-1">
+      <span
+        className={
+          hasBtw
+            ? "flex w-full min-w-0 items-center gap-1"
+            : "flex shrink-0 items-center gap-1"
+        }
+      >
         {output ? (
           <>
             <CopyTurnButton text={output} />
@@ -1054,31 +1369,33 @@ function TurnDuration({
         {fromHarness && onSecondOpinion ? (
           <SecondOpinionButton from={fromHarness} onPick={onSecondOpinion} />
         ) : null}
-        <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
+        {btwHarness && onBtwSubmit && onBtwRetry ? (
+          <BtwPopover
+            harness={btwHarness}
+            cwd={cwd}
+            model={model}
+            modelSettings={modelSettings}
+            threads={btwThreads}
+            visible={visible}
+            onSubmit={onBtwSubmit}
+            onRetry={onBtwRetry}
+            onDelete={onBtwDelete}
+            onModelChange={onBtwModelChange}
+            openRequest={btwOpenRequest}
+            onOpenRequestHandled={onBtwOpenRequestHandled}
+            onOpenFile={onOpenFile}
+            onOpenDiff={onOpenDiff}
+          >
+            {metricsBadge}
+            {labelDetails}
+            {timeDetails}
+          </BtwPopover>
+        ) : (
+          metricsBadge
+        )}
       </span>
-
-      {labelHidden ? null : (
-        <>
-          {dot}
-          <span className="flex min-w-0 items-center gap-1.5">
-            {harness ? (
-              <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-            ) : null}
-            <span className="min-w-0 truncate" title={label}>
-              {label}
-            </span>
-          </span>
-        </>
-      )}
-
-      {completedAt != null ? (
-        <>
-          {dot}
-          <span className="shrink-0 text-content/35">
-            {formatClockTime(completedAt)}
-          </span>
-        </>
-      ) : null}
+      {hasBtw ? null : labelDetails}
+      {hasBtw ? null : timeDetails}
     </div>
   );
 }
@@ -1127,7 +1444,7 @@ function TurnMetricsBadge({
   return (
     <div
       ref={root}
-      className="relative shrink-0 pl-1"
+      className="relative shrink-0"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
@@ -1138,9 +1455,9 @@ function TurnMetricsBadge({
         tabIndex={0}
         aria-label={`Turn metrics: ${label}`}
         title="Turn metrics"
-        className="grid rounded-sm p-1 outline-none hover:text-content focus-visible:ring-1 focus-visible:ring-accent"
+        className="grid rounded-md p-1 text-content/40 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
       >
-        <ChartBreakoutSquare className="size-3.5" strokeWidth={1.6} />
+        <ChartBreakoutSquare className="size-3.5" strokeWidth={1.75} />
       </span>
       {hovered ? (
         <Popover
@@ -1345,6 +1662,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   layout,
   stickyIndex,
   underLine = false,
+  embedded = false,
   cwd,
   onApproval,
   onSaveNote,
@@ -1366,6 +1684,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   stickyIndex: number;
   /** True when something already sits directly above this in the turn. */
   underLine?: boolean;
+  /** True when the parent surface already provides the horizontal gutter. */
+  embedded?: boolean;
   cwd?: string;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
@@ -1403,6 +1723,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       <ToolCall
         block={block}
         cwd={cwd}
+        embedded={embedded}
         onApproval={onApproval}
         onOpenFile={onOpenFile}
         onOpenDiff={onOpenDiff}
@@ -1417,7 +1738,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   if (block.role === "tasks") {
     if (!block.taskList?.items.length) return null;
     return (
-      <div className="px-4 py-1">
+      <div className={embedded ? "py-1" : "px-4 py-1"}>
         <TaskListPreview
           items={block.taskList.items}
           explanation={block.taskList.explanation}
@@ -1431,13 +1752,13 @@ const TranscriptBlock = memo(function TranscriptBlock({
     const legacyTasks = legacyTaskListFromText(block.text);
     if (legacyTasks) {
       return (
-        <div className="px-4 py-1">
+        <div className={embedded ? "py-1" : "px-4 py-1"}>
           <TaskListPreview items={legacyTasks} />
         </div>
       );
     }
     return (
-      <div className="px-4 py-1">
+      <div className={embedded ? "py-1" : "px-4 py-1"}>
         <PlanPreview
           text={block.text}
           streaming={block.streaming}
@@ -1460,6 +1781,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       <ToolCall
         block={block}
         cwd={cwd}
+        embedded={embedded}
         onApproval={onApproval}
         onOpenFile={onOpenFile}
         onOpenDiff={onOpenDiff}
@@ -1476,7 +1798,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       return <InterjectionDivider block={block} />;
     }
     return (
-      <div className="px-4 py-2 text-content/50">
+      <div className={`${embedded ? "" : "px-4"} py-2 text-content/50`}>
         <pre className="min-w-0 whitespace-pre-wrap break-words">
           {block.text}
         </pre>
@@ -1489,7 +1811,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   return (
     <div
       data-selectable-agent-response={block.streaming ? undefined : block.id}
-      className={`min-w-0 px-4 pb-1 text-content ${underLine ? "pt-1" : "pt-3"}`}
+      className={`min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
     >
       <AgentMarkdown
         text={block.text}
@@ -1528,8 +1850,11 @@ function UserMessageBlock({
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
+  const monocode = isOperatorUserTurn(block);
   const text =
-    card && card.kind !== "handoff" ? "" : visibleUserPrompt(block.text);
+    card && card.kind !== "handoff"
+      ? ""
+      : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text);
   const messageLink = text ? parseUserMessageLink(text) : null;
   const displayText = messageLink
     ? `${messageLink.beforeText}${messageLink.afterText}`
@@ -1540,7 +1865,8 @@ function UserMessageBlock({
     !block.draft &&
     !block.attachments?.length &&
     !card &&
-    !note;
+    !note &&
+    !block.ciContext;
 
   // Only the chat layout rounds a single line; the document layout always uses
   // the square corners, so it never needs the measurement at all.
@@ -1599,13 +1925,12 @@ function UserMessageBlock({
       >
         <div
           data-draft={block.draft ? "true" : undefined}
+          data-monocode={monocode ? "true" : undefined}
           className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color] duration-200 ${
             block.draft
               ? "border border-dashed border-content/30 bg-content/4"
               : "bg-content/10"
-          } ${
-            editing ? "edit-last-turn-bubble" : ""
-          } ${
+          } ${editing ? "edit-last-turn-bubble" : ""} ${
             chat
               ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
               : "rounded-lg border border-content/10"
@@ -1664,6 +1989,23 @@ function UserMessageBlock({
               {expanded ? "Show less" : "Show more"}
             </button>
           ) : null}
+          {block.ciContext ? (
+            <details
+              className="group/ci mt-2 min-w-0 border-t border-content/10 pt-2"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
+                <span>CI context</span>
+              </summary>
+              <p className="mt-2 text-xs text-content/50">
+                CI instructions and failure details included with this request.
+              </p>
+              <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
+                {block.ciContext}
+              </pre>
+            </details>
+          ) : null}
           {block.draft ? (
             <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
               <span className="flex items-center gap-1.5 text-xs text-content/50">
@@ -1693,6 +2035,9 @@ function UserMessageBlock({
                 </button>
               </span>
             </div>
+          ) : null}
+          {monocode ? (
+            <MonocodeSparkles blockId={block.id} startedAt={block.startedAt} />
           ) : null}
         </div>
         {text ||
@@ -2044,6 +2389,7 @@ function ActivityPhaseGroup({
   }, [phase.steps]);
   const turnFor = useStepQueue();
   const title = activityPhaseTitle(phase, active);
+  const monoCodePhase = !!monoCodeWorkSummary(phase.steps, active);
   // Opening a group on purpose is also how you read the line that titled it,
   // whole. The auto-open while it runs is a live view, not a reading one, and
   // a one-line note the header already shows in full has nothing to add.
@@ -2058,7 +2404,9 @@ function ActivityPhaseGroup({
   if (!phase.headline && phase.steps.length === 1) {
     return (
       <div className="flex min-w-0 items-start gap-1.5">
-        <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        {monoCodePhase ? null : (
+          <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        )}
         <div className="min-w-0 flex-1">
           <ActivityRow
             block={phase.steps[0]}
@@ -2111,10 +2459,14 @@ function ActivityPhaseGroup({
          * between them leaves both half-drawn on top of each other.
          */}
         <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-          <ActivityPhaseIcon
-            kind={phase.kind}
-            className="group-hover:opacity-0"
-          />
+          {monoCodePhase ? (
+            <MonoCodeMark className="size-3.5 group-hover:opacity-0" />
+          ) : (
+            <ActivityPhaseIcon
+              kind={phase.kind}
+              className="group-hover:opacity-0"
+            />
+          )}
           <ChevronRight
             className={`absolute size-3.5 text-content/45 opacity-0 transition-transform duration-200 group-hover:opacity-100 ${
               open ? "rotate-90" : ""
@@ -2270,17 +2622,19 @@ function SubagentStack({
   blocks,
   cwd,
   live = false,
+  embedded = false,
   onOpenFile,
   onOpenDiff,
 }: {
   blocks: Block[];
   cwd?: string;
   live?: boolean;
+  embedded?: boolean;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-col px-4">
+    <div className={`flex min-w-0 flex-col ${embedded ? "" : "px-4"}`}>
       {blocks.map((block) => (
         <SubagentRow
           key={block.id}
@@ -2887,6 +3241,16 @@ function ActivityToolRow({
   onOpenDiff?: (path: string) => void;
 }) {
   const [errorOpen, setErrorOpen] = useState(false);
+  const appCall = monoCodeToolCall(block);
+  if (appCall) {
+    return (
+      <MonoCodeCallRow
+        block={block}
+        call={appCall}
+        onApproval={onApproval}
+      />
+    );
+  }
   const label = toolCallLabel(block, cwd);
   const state = toolCallState(block);
   const pending = needsApproval(block);
@@ -2953,6 +3317,86 @@ function ActivityToolRow({
           {errorDetail}
         </pre>
       ) : null}
+    </div>
+  );
+}
+
+function MonoCodeMark({ className = "size-4" }: { className?: string }) {
+  return <img src="/monocode.png" alt="" className={`shrink-0 ${className}`} />;
+}
+
+/** MonoCode commands read like the other activity rows; failures expose their output. */
+function MonoCodeCallRow({
+  block,
+  call,
+  onApproval,
+}: {
+  block: Block;
+  call: MonoCodeToolCall;
+  onApproval?: (requestId: number, decision: ApprovalDecision) => void;
+}) {
+  const state = toolCallState(block);
+  const output = block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
+  const [errorOpen, setErrorOpen] = useState(false);
+  const hasError = state === "rejected" && !!output;
+  const pendingApproval = needsApproval(block);
+  const command = `monocode app ${call.action}`;
+  const verb = pendingApproval
+    ? "Run"
+    : state === "pending"
+      ? "Running"
+      : "Ran";
+  const summary = (
+    <>
+      <span
+        className={`shrink-0 font-sans text-sm ${state === "rejected" ? "text-red-400" : "text-content/50"}`}
+      >
+        {verb}
+      </span>
+      <span
+        className={`flex min-w-0 max-w-full items-center gap-1 rounded bg-content/6 px-1 font-mono text-[13px] ${state === "rejected" ? "text-red-400" : "text-content/70"}`}
+        title={command}
+      >
+        <MonoCodeMark className="size-3.5" />
+        <span className="min-w-0 truncate">{command}</span>
+      </span>
+      <ToolCallStatusIcon state={state} />
+      {hasError ? (
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+          strokeWidth={1.75}
+        />
+      ) : null}
+    </>
+  );
+  return (
+    <div data-monocode-tool-call={call.action} className="min-w-0">
+      {hasError ? (
+        <button
+          type="button"
+          aria-expanded={errorOpen}
+          aria-label={`${errorOpen ? "Hide" : "Show"} error details for MonoCode: ${call.label}`}
+          onClick={() => setErrorOpen((value) => !value)}
+          className="flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
+        >
+          {summary}
+        </button>
+      ) : (
+        <div className="flex min-w-0 items-center gap-1.5 py-1">
+          {summary}
+        </div>
+      )}
+      {errorOpen && hasError ? (
+        <pre className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
+          {output}
+        </pre>
+      ) : null}
+      {pendingApproval ? (
+        <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all py-1 pl-5 font-mono text-[12px] leading-5 text-content/70">
+          {call.command}
+        </pre>
+      ) : null}
+      <ApprovalControls block={block} onApproval={onApproval} />
     </div>
   );
 }
@@ -3090,6 +3534,19 @@ function ToolCall({
 
   const frame = embedded ? "py-0.5" : "px-4 py-1";
 
+  const appCall = monoCodeToolCall(block);
+  if (appCall) {
+    return (
+      <div className={frame}>
+        <MonoCodeCallRow
+          block={block}
+          call={appCall}
+          onApproval={onApproval}
+        />
+      </div>
+    );
+  }
+
   if (editTool) {
     return (
       <div className={frame}>
@@ -3191,40 +3648,8 @@ function ToolCallSummary({
   failed?: boolean;
   status?: ToolCallState;
 }) {
-  const parts = label.match(/^(Read|Find|Skill|List|Edit|Write)\s+(.+)$/);
-  // A write preview carries the path itself, so edits get the same verb + file
-  // chip as reads rather than falling through to a raw label.
-  const writeTarget =
-    preview?.kind === "write"
-      ? preview.path
-        ? displayPath(preview.path, cwd)
-        : preview.fileName
-      : undefined;
-  const action =
-    parts?.[1] ??
-    (writeTarget ? editVerb(label) : undefined) ??
-    (/^read$/i.test(label.trim()) && (preview?.path || preview?.fileName)
-      ? "Read"
-      : /^find$/i.test(label.trim()) && preview?.query
-        ? "Find"
-        : /^list$/i.test(label.trim()) && (preview?.path || preview?.fileName)
-          ? "List"
-          : /^skill$/i.test(label.trim())
-            ? "Skill"
-            : undefined);
-  const target =
-    parts?.[2] ??
-    writeTarget ??
-    (action === "Read" ||
-    action === "List" ||
-    action === "Edit" ||
-    action === "Write"
-      ? preview?.path
-        ? displayPath(preview.path, cwd)
-        : preview?.fileName
-      : action === "Find"
-        ? preview?.query
-        : undefined);
+  const { action, target, fileName, filePath, isFile, previewMatchesFile } =
+    resolveToolCallDisplay(label, preview, cwd);
   if (!action || !target) {
     return (
       <span
@@ -3236,16 +3661,6 @@ function ToolCallSummary({
       </span>
     );
   }
-  const isFile = action !== "Find" && action !== "Skill";
-  const fileName =
-    preview?.fileName ||
-    target
-      .replace(/[/\\]+$/, "")
-      .split(/[/\\]/)
-      .filter(Boolean)
-      .pop() ||
-    "file";
-  const filePath = resolveWorkspacePath(preview?.path || target, cwd);
   const openFile =
     action === "Edit" || action === "Write"
       ? (onOpenDiff ?? onOpenFile)
@@ -3254,6 +3669,7 @@ function ToolCallSummary({
   const canPreview =
     interactive &&
     preview?.kind === "write" &&
+    previewMatchesFile &&
     (preview.contentOnly ||
       preview.lines?.some((line) => line.kind !== "context"));
   const actionTone = failed ? "text-red-400" : "text-content/50";
@@ -3294,7 +3710,7 @@ function ToolCallSummary({
                 ? `max-w-full bg-content/6 hover:bg-content/10 ${targetTone}`
                 : `flex-1 hover:underline ${targetTone}`
             }`}
-            title={preview?.path || target}
+            title={target}
             onClick={(event) => {
               event.stopPropagation();
               openFile?.(filePath);
@@ -3310,7 +3726,7 @@ function ToolCallSummary({
                 ? `max-w-full bg-content/6 ${targetTone}`
                 : `flex-1 ${targetTone}`
             }`}
-            title={preview?.path || target}
+            title={target}
           >
             <FileTypeIcon name={fileName} isDir={action === "List"} />
             <span className="min-w-0 truncate">{target}</span>

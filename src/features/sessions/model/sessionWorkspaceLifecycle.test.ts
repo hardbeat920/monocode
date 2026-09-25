@@ -199,7 +199,10 @@ describe("removeSessionFromWorkspace", () => {
         sizes: [0.5, 0.5],
       },
     };
-    const withFiles = [own, other, readme].reduce(openEditorTab, shared);
+    const withFiles = [own, other, readme].reduce(
+      (tab, file) => openEditorTab(tab, file, { pin: true }),
+      shared,
+    );
     const result = remove({
       tabs: [withFiles],
       sessions: [session("s1"), session("s2")],

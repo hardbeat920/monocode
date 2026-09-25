@@ -28,6 +28,14 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
+vi.mock("../../../integrations/harness/core/availability", () => ({
+  isHarnessAvailable: (id: string) => id === "claude" || id === "cursor",
+  hasProbedHarnessAvailability: () => true,
+  getHarnessAvailabilitySnapshot: () => 0,
+  subscribeHarnessAvailability: () => () => {},
+  probeHarnessAvailability: async () => {},
+  harnessUnavailableHint: () => "",
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -127,6 +135,37 @@ describe("settings pages", () => {
     expect(container.textContent).toContain(
       "Rebuilds the artwork with a dithered color palette.",
     );
+  });
+
+  it("previews and restores Haze with the existing empty-chat visibility", async () => {
+    localStorage.setItem("monocode.chatBackgroundPath", "/background.png");
+    localStorage.setItem("monocode.chatBackgroundEmptyOpacity", "0.4");
+    await render("appearance");
+
+    const option = container.querySelector<HTMLButtonElement>(
+      "#new-thread-background-effect-gradient-blur",
+    )!;
+    expect(option.textContent).toBe("Haze");
+    await act(async () => option.click());
+
+    const preview = container.querySelector<HTMLElement>(
+      ".gradient-blur-background",
+    )!;
+    expect(option.getAttribute("aria-checked")).toBe("true");
+    expect(preview.style.opacity).toBe("0.4");
+    expect(preview.querySelectorAll("span")).toHaveLength(2);
+    expect(localStorage.getItem("monocode.newThreadBackgroundEffect")).toBe(
+      "gradient-blur",
+    );
+
+    await render("providers");
+    await render("appearance");
+    expect(
+      container
+        .querySelector("#new-thread-background-effect-gradient-blur")
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(container.querySelector(".gradient-blur-background")).not.toBeNull();
   });
 
   it("manages named accounts independently for each supported provider", async () => {
@@ -325,7 +364,7 @@ describe("settings pages", () => {
     expect(localStorage.getItem("monocode.tabAnimationsEnabled")).toBe("1");
   });
 
-  it("lets users opt into the compact project rail", async () => {
+  it("defaults to the icon rail and lets users hide it", async () => {
     await render("appearance");
     let control = container.querySelector<HTMLElement>(
       '[role="radiogroup"][aria-label="Collapsed project rail"]',
@@ -334,14 +373,14 @@ describe("settings pages", () => {
       control.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
     );
 
-    expect(iconRail?.getAttribute("aria-checked")).toBe("false");
-    expect(hidden?.getAttribute("aria-checked")).toBe("true");
-
-    await act(async () => iconRail?.click());
-
     expect(iconRail?.getAttribute("aria-checked")).toBe("true");
+    expect(hidden?.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => hidden?.click());
+
+    expect(hidden?.getAttribute("aria-checked")).toBe("true");
     expect(localStorage.getItem("monocode.collapsedProjectRailMode")).toBe(
-      "compact",
+      "hidden",
     );
 
     await act(async () => root.unmount());
@@ -354,8 +393,8 @@ describe("settings pages", () => {
     [iconRail, hidden] = Array.from(
       control.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
     );
-    expect(iconRail?.getAttribute("aria-checked")).toBe("true");
-    expect(hidden?.getAttribute("aria-checked")).toBe("false");
+    expect(iconRail?.getAttribute("aria-checked")).toBe("false");
+    expect(hidden?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("reports collapsed project rail changes to the app shell", async () => {
@@ -500,5 +539,61 @@ describe("settings search", () => {
     expect(onSelectSection).not.toHaveBeenCalled();
     const row = container.querySelector('[data-setting-id="sounds"]')!;
     expect(row.className).toContain("bg-accent/10");
+  });
+});
+
+describe("providers scope inheritance", () => {
+  async function selectScope(label: string) {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label^="Provider defaults scope"]',
+    )!;
+    await act(async () => trigger.click());
+    const option = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((node) => node.textContent?.trim() === label);
+    expect(option).toBeTruthy();
+    await act(async () => option!.click());
+  }
+
+  it("inherits the global default provider and picker visibility in project scope", async () => {
+    localStorage.setItem(
+      "monocode.lastModel",
+      JSON.stringify({ harness: "claude", model: "claude:opus-5" }),
+    );
+    localStorage.setItem(
+      "monocode.hiddenPickerProviders",
+      JSON.stringify(["cursor"]),
+    );
+    await render("providers");
+
+    await selectScope("repo");
+
+    // A project with no overrides shows the inherited global default provider.
+    const claudeRow = container
+      .querySelector('[aria-label^="Claude Code model"]')!
+      .closest(".settings-row")!;
+    const claudeDefault = Array.from(
+      claudeRow.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((node) => node.textContent?.trim() === "Default");
+    expect(claudeDefault).toBeTruthy();
+
+    // Picker visibility also inherits the global setting.
+    expect(
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Show Claude Code in the model picker"]',
+        )!
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    const cursorToggle = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Show Cursor in the model picker"]',
+    )!;
+    expect(cursorToggle.getAttribute("aria-checked")).toBe("false");
+    // Global precedence: the project toggle cannot turn a globally hidden
+    // provider back on, so it is locked and explained.
+    expect(cursorToggle.hasAttribute("disabled")).toBe(true);
+    expect(
+      cursorToggle.closest(".settings-row")?.textContent,
+    ).toContain("Hidden globally");
   });
 });

@@ -32,6 +32,8 @@ type Props = {
   onDismiss?: () => void;
   onChange?: () => void;
   onClose?: () => void;
+  onOpenChange?: (open: boolean) => void;
+  popoverSide?: "top" | "bottom";
 };
 
 const MENU_WIDTH = 280;
@@ -56,6 +58,8 @@ export function BranchPicker({
   onDismiss,
   onChange,
   onClose,
+  onOpenChange,
+  popoverSide = "top",
 }: Props) {
   const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState("");
@@ -74,6 +78,12 @@ export function BranchPicker({
   onCloseRef.current = onClose;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+
+  const surfaceOpen = open || creating || blocked !== null;
+  useEffect(() => {
+    onOpenChange?.(surfaceOpen);
+  }, [surfaceOpen, onOpenChange]);
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
 
   const inProject = Boolean(cwd) && cwd !== "~";
   const { branches: projectBranches, settled: branchesSettled } =
@@ -282,7 +292,7 @@ export function BranchPicker({
   const interactive = enabled && !awaitingBranch && !missingGit;
 
   return (
-    <div ref={root} className="relative flex min-w-0 shrink-0">
+    <div ref={root} className="relative flex min-w-0 shrink">
       <GitPickerTrigger
         title={title}
         aria-label={
@@ -352,7 +362,7 @@ export function BranchPicker({
       {open ? (
         <Popover
           anchor={root}
-          side="top"
+          side={popoverSide}
           width={MENU_WIDTH}
           minHeight={MENU_MIN_HEIGHT}
           maxHeight={MENU_MAX_HEIGHT}

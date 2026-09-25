@@ -36,6 +36,8 @@ type Props = {
   onSelectFile: (fileId: string) => void;
   onCloseFile: (fileId: string) => void;
   onCloseOtherFiles: (fileId: string) => void;
+  /** Double-click makes a preview tab permanent. */
+  onPinFile?: (fileId: string) => void;
   onReorder: (ids: string[]) => void;
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
   label?: string;
@@ -183,6 +185,7 @@ export function SurfaceTabs({
   onSelectFile,
   onCloseFile,
   onCloseOtherFiles,
+  onPinFile,
   onReorder,
   onPaneDragStart,
   label = "Open files",
@@ -349,6 +352,7 @@ export function SurfaceTabs({
                 if (sortable.consumeClick()) return;
                 onSelectFile(file.id);
               }}
+              onDoubleClick={() => onPinFile?.(file.id)}
               className={`relative flex h-7.5 min-w-0 flex-1 cursor-default items-center gap-1.5 self-center rounded-md px-2 pr-7 text-left text-[13px] ${
                 active
                   ? "bg-selection text-content"
@@ -362,7 +366,7 @@ export function SurfaceTabs({
                   harness={agent.harness}
                   className="size-3.5 shrink-0"
                 />
-              ) : changes || commit ? (
+              ) : changes || commit || review ? (
                 <GitCompare
                   className="size-3.5 shrink-0"
                   strokeWidth={1.75}
@@ -371,7 +375,7 @@ export function SurfaceTabs({
                 <FileTypeIcon name={iconName} isDir={false} size={14} />
               )}
               <span
-                className={`min-w-0 flex-1 truncate ${review ? "italic" : ""} ${
+                className={`min-w-0 flex-1 truncate ${file.preview ? "italic" : ""} ${
                   errors
                     ? active
                       ? "text-red-400"

@@ -78,6 +78,8 @@ type InFlightTool = {
   input: Record<string, unknown>;
   partialJson: string;
   title: string;
+  /** Set on `tool_execution_end`; later progress updates are stale. */
+  finished?: boolean;
 };
 
 type Live = {
@@ -913,7 +915,9 @@ function handleFrame(
   const execUpdate = toolExecutionUpdateFromEvent(rec);
   if (execUpdate) {
     const tool = live.toolsById.get(execUpdate.id);
-    if (tool) {
+    // omp can deliver an update after the tool's end (omp#12875, steer during
+    // bash); replaying it would flip the finished card back to "running".
+    if (tool && !tool.finished) {
       if (Object.keys(execUpdate.input).length > 0) {
         tool.input = mergeToolInput(tool.input, execUpdate.input);
         tool.title = toolTitle(tool.name, tool.input);
@@ -937,6 +941,7 @@ function handleFrame(
   if (execEnd) {
     const tool = live.toolsById.get(execEnd.id);
     if (tool) {
+      tool.finished = true;
       live.onEvent({
         type: "tool.updated",
         callId: tool.id,

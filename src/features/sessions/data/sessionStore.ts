@@ -3,12 +3,20 @@ import { recoverCursorSubagents } from "../../../integrations/harness/providers/
 import { persistableAttachment } from "../model/attachments";
 import type { ContextUsage } from "../model/contextUsage";
 import { normalizeProjectPath } from "../../projects/model/recents";
-import { ompActiveAssistantTexts, ompSessionInterjections } from "../../../platform/tauri/fs";
-import { backfillOmpInterjections, ompStatusSplitTexts } from "../model/ompInterjections";
+import {
+  ompActiveAssistantTexts,
+  ompSessionInterjections,
+} from "../../../platform/tauri/fs";
+import {
+  backfillOmpInterjections,
+  ompStatusSplitTexts,
+} from "../model/ompInterjections";
 import type {
   AgentRunMeta,
   AgentStep,
   Block,
+  BtwMessage,
+  BtwThread,
   HarnessId,
   HandoffMeta,
   HandoffStatus,
@@ -22,7 +30,9 @@ import type {
   TurnModel,
   TurnMetrics,
 } from "../model/session";
+
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
+
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
@@ -476,7 +486,10 @@ export async function loadWorkspaceSnapshot(): Promise<unknown | null> {
   return raw ?? null;
 }
 
-function sanitizeBlock(block: Block): Block | null {
+function sanitizeBlock(
+  block: Block,
+  options?: { hydrate?: boolean },
+): Block | null {
   const next: Block = {
     id: block.id,
     role: block.role,
@@ -490,6 +503,13 @@ function sanitizeBlock(block: Block): Block | null {
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
   if (block.role === "user" && block.draft) next.draft = true;
+  if (block.role === "user" && block.monocode) next.monocode = true;
+  if (
+    block.role === "user" &&
+    typeof block.appRequestId === "string" &&
+    /^[A-Za-z0-9_-]{1,512}$/.test(block.appRequestId)
+  )
+    next.appRequestId = block.appRequestId;
   if (
     block.role === "user" &&
     typeof block.providerTurnId === "string" &&
@@ -534,8 +554,22 @@ function sanitizeBlock(block: Block): Block | null {
   else if (block.role === "handoff") return null;
   const secondOpinion = sanitizeSecondOpinion(block.secondOpinion);
   if (secondOpinion) next.secondOpinion = secondOpinion;
+  if (block.role === "user") {
+    const btwThreads = sanitizeBtwThreads(
+      block.btwThreads,
+      options?.hydrate === true,
+    );
+    if (btwThreads) next.btwThreads = btwThreads;
+  }
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  if (
+    block.role === "user" &&
+    typeof block.ciContext === "string" &&
+    block.ciContext
+  ) {
+    next.ciContext = block.ciContext;
+  }
   // Interjection chrome survives restarts only on system blocks; a malformed
   // payload keeps the ordinary system row rather than losing its body.
   if (block.role === "system") {
@@ -546,6 +580,135 @@ function sanitizeBlock(block: Block): Block | null {
     }
   }
   return next;
+}
+
+function sanitizeNestedId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  if (!id || id.length > 256 || /[\u0000-\u001f]/.test(id)) return undefined;
+  return id;
+}
+function sanitizeStringRecord(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const safeKey = sanitizeNestedId(key);
+    const safeValue = sanitizeNestedId(raw);
+    if (safeKey && safeValue) next[safeKey] = safeValue;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function sanitizeTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function sanitizeBtwMessage(value: unknown): BtwMessage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const id = sanitizeNestedId(record.id);
+  const text = typeof record.text === "string" ? record.text : undefined;
+  const createdAt = sanitizeTimestamp(record.createdAt);
+  const role =
+    record.role === "user" || record.role === "assistant"
+      ? record.role
+      : undefined;
+  if (!id || text == null || createdAt == null || !role) return undefined;
+  const blocks = Array.isArray(record.blocks)
+    ? record.blocks.flatMap((block) => {
+        const next = sanitizeBlock(block as Block);
+        return next ? [next] : [];
+      })
+    : [];
+  return {
+    id,
+    role,
+    text,
+    createdAt,
+    ...(blocks.length > 0 ? { blocks } : {}),
+  };
+}
+
+function sanitizeBtwThreads(
+  value: unknown,
+  hydrate: boolean,
+): BtwThread[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const threads = value.flatMap((entry): BtwThread[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeNestedId(record.id);
+    const sourceEndBlockId = sanitizeNestedId(record.sourceEndBlockId);
+    const createdAt = sanitizeTimestamp(record.createdAt);
+    const updatedAt = sanitizeTimestamp(record.updatedAt);
+    const status =
+      record.status === "running" ||
+      record.status === "ready" ||
+      record.status === "error"
+        ? record.status
+        : undefined;
+    const messages = Array.isArray(record.messages)
+      ? record.messages.flatMap((message) => {
+          const next = sanitizeBtwMessage(message);
+          return next ? [next] : [];
+        })
+      : [];
+    if (
+      !id ||
+      !sourceEndBlockId ||
+      createdAt == null ||
+      updatedAt == null ||
+      !status ||
+      messages.length === 0
+    ) {
+      return [];
+    }
+    const error = typeof record.error === "string" ? record.error.trim() : "";
+    const model = typeof record.model === "string" ? record.model.trim() : "";
+    const harness =
+      typeof record.harness === "string" &&
+      record.harness.trim() &&
+      HARNESSES.includes(record.harness as HarnessId)
+        ? (record.harness as HarnessId)
+        : undefined;
+    const modelSettings = sanitizeStringRecord(record.modelSettings);
+    const providerThreadId = sanitizeNestedId(record.providerThreadId);
+    const interrupted = hydrate && status === "running";
+    return [
+      {
+        id,
+        sourceEndBlockId,
+        createdAt,
+        updatedAt,
+        status: interrupted ? "error" : status,
+        messages,
+        ...(harness ? { harness } : {}),
+        ...(model ? { model } : {}),
+        ...(modelSettings ? { modelSettings } : {}),
+        ...(providerThreadId ? { providerThreadId } : {}),
+        ...(interrupted
+          ? {
+              error:
+                error ||
+                "This by-the-way request was interrupted before reload.",
+            }
+          : error
+            ? { error }
+            : {}),
+      },
+    ];
+  });
+  return threads.length > 0 ? threads : undefined;
 }
 
 function sanitizeTurnMetrics(value: unknown): TurnMetrics | undefined {
@@ -762,7 +925,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 function recordToSession(record: SessionRecord): Session {
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
-        .map(sanitizeBlock)
+        .map((block) => sanitizeBlock(block, { hydrate: true }))
         .filter((block): block is Block => block != null)
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);

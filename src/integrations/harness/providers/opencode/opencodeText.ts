@@ -1,4 +1,6 @@
 import { modelsFor } from "../../../../features/sessions/model/models";
+import type { TurnIntent } from "../../../../features/sessions/model/session";
+import { abortTextPromptRace } from "../../core/abortTextPrompt";
 import {
   execChild,
   freeHarnessPort,
@@ -26,6 +28,8 @@ type LiveText = {
   sessionId: string;
   cwd: string;
   model: { providerID: string; modelID: string };
+  modelSettingsKey: string;
+  modelSettings?: Record<string, string>;
 };
 
 let live: LiveText | null = null;
@@ -38,9 +42,11 @@ export async function stopOpenCodeTextPrompt(): Promise<void> {
 
 export function warmupOpenCodeText(cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
-  const run = turns.catch(() => undefined).then(async () => {
-    await ensureLive(cwd);
-  });
+  const run = turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(cwd);
+    });
   turns = run.then(
     () => undefined,
     () => undefined,
@@ -50,8 +56,12 @@ export function warmupOpenCodeText(cwd: string): Promise<void> {
 
 export async function runOpenCodeTextPrompt(input: {
   cwd: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
   turns = run.then(
@@ -63,17 +73,29 @@ export async function runOpenCodeTextPrompt(input: {
 
 async function promptOnLive(input: {
   cwd: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd);
+  const session = await ensureLive(input.cwd, input.model, input.modelSettings);
+  const abort = abortTextPromptRace(input.signal, () =>
+    session.client.abortSession(session.sessionId),
+  );
   try {
-    const result = await session.client.prompt({
-      sessionID: session.sessionId,
-      model: session.model,
-      parts: [{ type: "text", text: input.prompt }],
-      timeoutMs: input.timeoutMs ?? REQUEST_TIMEOUT_MS,
-    });
+    const result = await Promise.race([
+      session.client.prompt({
+        sessionID: session.sessionId,
+        model: session.model,
+        agent: openCodeTextAgent(input.intent, session.modelSettings),
+        variant: session.modelSettings?.variant,
+        parts: [{ type: "text", text: input.prompt }],
+        timeoutMs: input.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      }),
+      ...(abort.promise ? [abort.promise] : []),
+    ]);
     const error = result.info?.error;
     if (error) {
       throw new Error(
@@ -86,20 +108,33 @@ async function promptOnLive(input: {
     if (!text) throw new Error("OpenCode returned empty output.");
     return text;
   } finally {
+    abort.detach();
     await dropLive();
   }
 }
 
-async function ensureLive(cwd: string): Promise<LiveText> {
-  const model = pickTextModel();
-  if (live && live.cwd === cwd && sameModel(live.model, model)) return live;
+async function ensureLive(
+  cwd: string,
+  requestedModel?: string,
+  modelSettings?: Record<string, string>,
+): Promise<LiveText> {
+  const model = pickTextModel(requestedModel);
+  const settingsKey = modelSettingsKey(modelSettings);
+  if (
+    live &&
+    live.cwd === cwd &&
+    sameModel(live.model, model) &&
+    live.modelSettingsKey === settingsKey
+  )
+    return live;
   if (live) await dropLive();
-  return startLive(cwd, model);
+  return startLive(cwd, model, modelSettings);
 }
 
 async function startLive(
   cwd: string,
   model: { providerID: string; modelID: string },
+  modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
   const { path } = await resolveOpenCodeBinary();
   const versionOut = await execChild(path, ["--version"], cwd).catch(() => "");
@@ -150,7 +185,14 @@ async function startLive(
     const created = await client.createSession({
       permission: [{ permission: "*", pattern: "*", action: "deny" }],
     });
-    live = { client, sessionId: created.id, cwd, model };
+    live = {
+      client,
+      sessionId: created.id,
+      cwd,
+      model,
+      modelSettingsKey: modelSettingsKey(modelSettings),
+      modelSettings,
+    };
     return live;
   } catch (error) {
     await dropLive();
@@ -169,7 +211,19 @@ async function dropLive(): Promise<void> {
   await killChild(TEXT_CHILD_ID).catch(() => undefined);
 }
 
-function pickTextModel(): { providerID: string; modelID: string } {
+function pickTextModel(requested?: string): {
+  providerID: string;
+  modelID: string;
+} {
+  const selected = requested?.trim();
+  if (selected) {
+    const modelSlug = selected.startsWith("opencode:")
+      ? selected.slice("opencode:".length)
+      : selected;
+    const parsedSelected = parseOpenCodeModelSlug(modelSlug);
+    if (parsedSelected) return parsedSelected;
+    if (modelSlug) return { providerID: "opencode", modelID: modelSlug };
+  }
   const models = modelsFor("opencode");
   for (const model of models) {
     const parsed = parseOpenCodeModelSlug(model.nativeId ?? model.id);
@@ -183,6 +237,23 @@ function sameModel(
   right: { providerID: string; modelID: string },
 ): boolean {
   return left.providerID === right.providerID && left.modelID === right.modelID;
+}
+
+function modelSettingsKey(settings?: Record<string, string>): string {
+  return JSON.stringify({
+    agent: settings?.agent,
+    variant: settings?.variant,
+  });
+}
+
+function openCodeTextAgent(
+  intent: TurnIntent | undefined,
+  settings?: Record<string, string>,
+): string | undefined {
+  if (intent === "plan") return "plan";
+  if (intent === "build") return "build";
+  const configured = settings?.agent?.trim();
+  return configured || "build";
 }
 
 export function getOpenCodeTextResponse(parts: unknown[] | undefined): string {

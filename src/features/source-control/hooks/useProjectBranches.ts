@@ -66,6 +66,12 @@ function publish(entry: Entry, branches: GitBranches | null) {
   for (const listener of entry.listeners) listener();
 }
 
+/** Carry an already loaded snapshot into a separate picker webview before
+ * mounting its controls. Subscribing still revalidates against Git. */
+export function seedProjectBranches(cwd: string, branches: GitBranches) {
+  if (cwd && cwd !== "~") publish(entryFor(cwd), branches);
+}
+
 async function load(entry: Entry, force = false) {
   if (entry.inFlight || (!force && document.hidden)) return;
   entry.inFlight = true;

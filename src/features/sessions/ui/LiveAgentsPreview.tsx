@@ -23,6 +23,7 @@ type Props = {
   agents: LiveAgent[];
   activeSessionId?: string;
   onSelect?: (sessionId: string) => void;
+  bottomSpacing?: boolean;
   groupLabels?: Record<string, string>;
   groupColors?: Record<string, number>;
   groupCustomColors?: Record<string, string>;
@@ -33,6 +34,7 @@ export function LiveAgentsPreview({
   agents,
   activeSessionId,
   onSelect,
+  bottomSpacing = false,
   groupLabels: groupLabelsProp,
   groupColors: groupColorsProp,
   groupCustomColors: groupCustomColorsProp,
@@ -68,7 +70,7 @@ export function LiveAgentsPreview({
   return (
     <section
       aria-label="Working agents"
-      className="shrink-0 px-2"
+      className={`shrink-0 px-2 ${bottomSpacing ? "pb-2" : ""}`}
       data-live-agents-preview="full"
     >
       <span className="sr-only" aria-live="polite" aria-atomic="true">

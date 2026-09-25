@@ -4,6 +4,7 @@ import {
   coerceModelPickerTab,
   defaultModelId,
   defaultSessionChoice,
+  firstEnabledHarness,
   hasLiveCatalog,
   isPickerProviderVisible,
   loadDefaultModels,
@@ -28,6 +29,10 @@ import {
   stepModelPickerTab,
   type AgentModel,
 } from "./models";
+import {
+  setProjectDefaultProvider,
+  setProjectProviderHidden,
+} from "./projectProviders";
 
 const opus: AgentModel = {
   id: "claude:opus-5",
@@ -110,9 +115,9 @@ describe("model settings memory", () => {
   });
 
   it("keeps valid current values when merging onto a model", () => {
-    expect(
-      mergeModelSettings(opus, { effort: "xhigh", fast: "true" }),
-    ).toEqual({ effort: "xhigh", fast: "true" });
+    expect(mergeModelSettings(opus, { effort: "xhigh", fast: "true" })).toEqual(
+      { effort: "xhigh", fast: "true" },
+    );
   });
 
   it("drops values the new model does not support", () => {
@@ -149,7 +154,9 @@ describe("model settings memory", () => {
 
   it("applies stored preferences over a session's current values", () => {
     saveLastModelSettings({ effort: "xhigh", fast: "true" });
-    expect(preferredModelSettings(opus, { effort: "high", fast: "false" })).toEqual({
+    expect(
+      preferredModelSettings(opus, { effort: "high", fast: "false" }),
+    ).toEqual({
       effort: "xhigh",
       fast: "true",
     });
@@ -254,6 +261,38 @@ describe("provider defaults", () => {
     });
   });
 
+  it("swaps a hidden default provider for the first enabled one", () => {
+    saveLastModelChoice("claude", "claude:opus-5");
+    setProjectProviderHidden("/repo/a", "claude", true);
+    expect(defaultSessionChoice("/repo/a")).toEqual({
+      harness: "codex",
+      model: defaultModelId("codex"),
+    });
+    expect(defaultSessionChoice("/repo/b")).toEqual({
+      harness: "claude",
+      model: "claude:opus-5",
+    });
+  });
+
+  it("uses a project's own provider and model when set", () => {
+    saveLastModelChoice("claude", "claude:opus-5");
+    setProjectDefaultProvider("/repo/a", "cursor", "cursor:composer-2.5");
+    expect(defaultSessionChoice("/repo/a")).toEqual({
+      harness: "cursor",
+      model: "cursor:composer-2.5",
+    });
+    expect(defaultSessionChoice("/repo/b")).toEqual({
+      harness: "claude",
+      model: "claude:opus-5",
+    });
+  });
+
+  it("keeps a provider the project still allows", () => {
+    setProjectProviderHidden("/repo/a", "cursor", true);
+    expect(firstEnabledHarness("/repo/a", "claude")).toBe("claude");
+    expect(firstEnabledHarness("/repo/a", "cursor")).toBe("claude");
+  });
+
   it("keeps the six most recently used unique models", () => {
     saveRecentModelChoice("claude", "claude:opus-5");
     saveRecentModelChoice("cursor", "cursor:composer-2.5");
@@ -340,6 +379,28 @@ describe("picker provider visibility", () => {
 describe("live catalog overlays", () => {
   afterEach(() => {
     resetHarnessModelOverlays();
+  });
+
+  it("retains a saved Codex model and settings before its catalog loads", () => {
+    resetHarnessModelOverlays();
+    const model = resolveModel("codex", "codex:gpt-5.6-sol");
+    expect(model).toMatchObject({
+      id: "codex:gpt-5.6-sol",
+      harness: "codex",
+      name: "GPT-5.6-Sol",
+      nativeId: "gpt-5.6-sol",
+    });
+    expect(
+      mergeModelSettings(model, {
+        reasoningEffort: "high",
+        serviceTier: "priority",
+      }),
+    ).toEqual({ reasoningEffort: "high", serviceTier: "priority" });
+    expect(resolveModel("codex")).toMatchObject({
+      id: "",
+      harness: "codex",
+      name: "Codex",
+    });
   });
 
   it("is empty until a CLI catalog replaces the fallback list", () => {

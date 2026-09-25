@@ -126,7 +126,7 @@ export function WorktreePicker({
       />
     );
   return (
-    <div ref={anchor} className="relative flex min-w-0 shrink-0">
+    <div ref={anchor} className="relative flex min-w-0 shrink">
       <GitPickerTrigger
         disabled={
           !enabled || (!worktreeRemoved && !branches?.current && !inWorktree)

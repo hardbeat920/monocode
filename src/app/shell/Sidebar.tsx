@@ -30,9 +30,11 @@ import {
   memo,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -136,6 +138,7 @@ import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
 import { ProjectSearch } from "../../features/projects/ui/ProjectSearch";
 import { Popover } from "../../shared/ui/Popover";
 import { SearchableProjectPicker } from "../../features/projects/ui/SearchableProjectPicker";
+import { useProjectMenu } from "./useProjectMenu";
 import { SessionFiltersMenu } from "../../features/sessions/ui/SessionFiltersMenu";
 import { LinkSessionWorkItemDialog } from "../../features/sessions/ui/LinkSessionWorkItemDialog";
 import { sessionReminderPresets } from "../../features/sessions/ui/sessionReminderPresets";
@@ -238,9 +241,9 @@ type Props = {
   canGoForward?: boolean;
   onGoBack?: () => void;
   onGoForward?: () => void;
-  onOpenDiff?: (path: string, kind?: GitFileDiffKind) => void;
+  onOpenDiff?: (path: string, kind?: GitFileDiffKind, pin?: boolean) => void;
   onOpenAllChanges?: () => void;
-  onOpenCommit?: (commit: GitHistoryCommit) => void;
+  onOpenCommit?: (commit: GitHistoryCommit, pin?: boolean) => void;
   selectedDiffPath?: string;
   selectedDiffKind?: GitFileDiffKind;
   selectedCommitSha?: string;
@@ -579,16 +582,108 @@ function SidebarComponent({
   const showSidebarFooter = !projectRailOpen;
   // A blank session has no project to browse, so the shell stands alone until
   // one is picked — whether or not the rail is open.
-  const sidebarVisible =
-    open &&
+  const sidebarAvailable =
     !searchActive &&
     !inboxActive &&
     !notesActive &&
     !automationsActive &&
     !settingsOpen &&
     inProject;
-  const gitStatuses = useGitFileStatuses(gitRoot, open && tab === "files");
-  const changeStats = useProjectDiffStats(gitRoot, open);
+  const sidebarVisible = open && sidebarAvailable;
+  // With the sidebar collapsed beside the compact rail, its tab shortcuts
+  // open the sidebar temporarily until the user clicks away.
+  const drawerMode = compactRailVisible && !open;
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerVisible = drawerMode && drawerOpen && sidebarAvailable;
+  // A dismissed drawer stays mounted while it slides shut. Anything that takes
+  // its place (the pinned sidebar, another view) drops it at once.
+  const [drawerMounted, setDrawerMounted] = useState(false);
+  const drawerClosing =
+    drawerMounted && !drawerVisible && drawerMode && sidebarAvailable;
+  const drawerRendered = drawerVisible || drawerClosing;
+  const drawerAnimation = useRef<Animation | null>(null);
+  const panelOpen = open || drawerVisible;
+  const gitStatuses = useGitFileStatuses(gitRoot, panelOpen && tab === "files");
+  const changeStats = useProjectDiffStats(gitRoot, panelOpen);
+
+  useEffect(() => {
+    if (!drawerMode || !sidebarAvailable) setDrawerOpen(false);
+  }, [drawerMode, sidebarAvailable]);
+
+  useEffect(() => {
+    if (drawerVisible) setDrawerMounted(true);
+    else if (!drawerClosing) setDrawerMounted(false);
+  }, [drawerVisible, drawerClosing]);
+
+  // Grow the drawer's width so the workspace is pushed along with it. A
+  // reversal mid-slide starts from wherever the width currently is.
+  useLayoutEffect(() => {
+    const drawer = drawerRef.current;
+    if (!drawerRendered || !drawer) {
+      drawerAnimation.current = null;
+      return;
+    }
+    const full =
+      drawer.firstElementChild instanceof HTMLElement
+        ? drawer.firstElementChild.offsetWidth
+        : 0;
+    const from = drawerAnimation.current
+      ? drawer.getBoundingClientRect().width
+      : drawerClosing
+        ? full
+        : 0;
+    drawerAnimation.current?.cancel();
+    drawerAnimation.current = null;
+    const reduceMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    if (typeof drawer.animate !== "function" || reduceMotion) {
+      if (drawerClosing) setDrawerMounted(false);
+      return;
+    }
+    const animation = drawer.animate(
+      [{ width: `${from}px` }, { width: `${drawerClosing ? 0 : full}px` }],
+      drawerClosing
+        ? {
+            duration: 160,
+            easing: "cubic-bezier(0.4, 0, 1, 1)",
+            fill: "forwards",
+          }
+        : { duration: 200, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+    );
+    drawerAnimation.current = animation;
+    animation.onfinish = () => {
+      if (drawerAnimation.current !== animation) return;
+      drawerAnimation.current = null;
+      if (drawerClosing) setDrawerMounted(false);
+    };
+  }, [drawerRendered, drawerClosing]);
+
+  useEffect(() => {
+    if (!drawerVisible) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      setDrawerOpen(false);
+    };
+    // The rail's own shortcuts toggle the drawer, and menus opened from it
+    // stay usable; anything else dismisses it.
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      const el = target instanceof Element ? target : null;
+      if (drawerRef.current?.contains(el)) return;
+      if (el?.closest("[data-compact-project-rail],[data-popover-side]")) {
+        return;
+      }
+      setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [drawerVisible]);
 
   useEffect(() => {
     setSessionListLimit(LIST_PAGE_SIZE);
@@ -1074,6 +1169,7 @@ function SidebarComponent({
       return;
     }
     setSelectedSessionIds(new Set());
+    setDrawerOpen(false);
     onSelectSession(sessionId);
   };
 
@@ -1215,6 +1311,13 @@ function SidebarComponent({
     onTabChange(itemId);
   };
 
+  const onCompactTabPick = (itemId: SidebarTab) => {
+    if (drawerMode) {
+      setDrawerOpen(!(drawerVisible && tab === itemId));
+    }
+    onTabChange(itemId);
+  };
+
   const changeAdditions = changeStats?.additions ?? 0;
   const changeDeletions = changeStats?.deletions ?? 0;
   const hasChanges = (changeStats?.files ?? 0) > 0;
@@ -1319,6 +1422,7 @@ function SidebarComponent({
               busy={projectPathBusy(busyProjectPaths, cwd)}
               onSelectProject={onSelectProject}
               onOpenProject={onOpenProject}
+              onRemoveProject={onRemoveProject}
               onNew={onNew}
               onSearch={onSearch}
               onOpenInbox={onOpenInbox}
@@ -1368,7 +1472,7 @@ function SidebarComponent({
                 onFileDeleted={onFileDeleted}
                 onSearch={onOpenFilesSearch}
                 gitStatuses={gitStatuses}
-                sourceControlActive={open && tab === "changes"}
+                sourceControlActive={panelOpen && tab === "changes"}
                 onShowSourceControl={onShowSourceControl}
               />
             </div>
@@ -1684,7 +1788,7 @@ function SidebarComponent({
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <SourceControl
               cwd={gitRoot}
-              enabled={open}
+              enabled={panelOpen}
               textHarness={textHarness}
               selectedPath={selectedDiffPath}
               selectedKind={selectedDiffKind}
@@ -1704,13 +1808,14 @@ function SidebarComponent({
               agents={liveAgents}
               activeSessionId={activeSessionId}
               onSelect={onSelectAgent}
+              bottomSpacing={compactRailVisible}
             />
             <SidebarUpdateFooter
               update={updateNotice}
               onOpenWhatsNew={onOpenWhatsNew}
               onDismissUpdate={onDismissUpdate}
             />
-            <div className="flex shrink-0 flex-col gap-px p-2">
+            <div className="flex shrink-0 flex-col gap-px p-2 empty:hidden">
               <GithubStarPrompt />
               {!compactProjectRail ? (
                 <RailAction
@@ -1811,12 +1916,14 @@ function SidebarComponent({
           busy={projectPathBusy(busyProjectPaths, cwd)}
           tabs={visibleTabs}
           activeTab={tab}
+          tabShown={panelOpen}
           changesLabel={changesLabel}
           hasChanges={hasChanges}
           inboxUnseen={inboxUnseen}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
-          onTabChange={onTabPick}
+          onRemoveProject={onRemoveProject}
+          onTabChange={onCompactTabPick}
           onSearch={onSearch}
           searchActive={searchActive}
           onOpenInbox={onOpenInbox}
@@ -1870,11 +1977,52 @@ function SidebarComponent({
         />
       ) : null}
       {sidebarVisible ? sidebarContent : null}
+      {drawerRendered ? (
+        // Pinned to the right edge, so the sidebar slides in as the width grows.
+        <div
+          ref={drawerRef}
+          data-sidebar-drawer={drawerClosing ? "closing" : "open"}
+          inert={drawerClosing || undefined}
+          className={`flex shrink-0 justify-end overflow-hidden ${
+            drawerClosing ? "pointer-events-none" : ""
+          }`}
+        >
+          {sidebarContent}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export const Sidebar = memo(SidebarComponent);
+
+/** Project picker whose rows open the shared project context menu. */
+function SearchableProjectPickerWithMenu({
+  onRemoveProject,
+  onOpenNotificationSettings,
+  ...pickerProps
+}: Omit<
+  ComponentProps<typeof SearchableProjectPicker>,
+  "onProjectContextMenu" | "projectMenuActive"
+> & {
+  onRemoveProject?: Props["onRemoveProject"];
+  onOpenNotificationSettings?: (projectPath?: string) => void;
+}) {
+  const projectMenu = useProjectMenu({
+    onRemoveProject,
+    onOpenNotificationSettings,
+  });
+  return (
+    <>
+      <SearchableProjectPicker
+        {...pickerProps}
+        onProjectContextMenu={projectMenu.open}
+        projectMenuActive={projectMenu.isActive}
+      />
+      {projectMenu.element}
+    </>
+  );
+}
 
 function SidebarProjectPicker({
   cwd,
@@ -1882,6 +2030,7 @@ function SidebarProjectPicker({
   busy,
   onSelectProject,
   onOpenProject,
+  onRemoveProject,
   onNew,
   onSearch,
   onOpenInbox,
@@ -1899,6 +2048,7 @@ function SidebarProjectPicker({
   busy: boolean;
   onSelectProject: (path: string) => void;
   onOpenProject?: () => void;
+  onRemoveProject?: Props["onRemoveProject"];
   onNew?: () => string | void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
@@ -1920,13 +2070,15 @@ function SidebarProjectPicker({
       className="flex h-9 items-center gap-0.5 border-b border-stroke px-2"
       data-tauri-drag-region="deep"
     >
-      <SearchableProjectPicker
+      <SearchableProjectPickerWithMenu
         cwd={cwd}
         recents={recents}
         busy={busy}
         className="flex-1"
         onSelectProject={onSelectProject}
         onOpenProject={onOpenProject}
+        onRemoveProject={onRemoveProject}
+        onOpenNotificationSettings={onOpenNotificationSettings}
       />
       <div className="ml-auto flex items-center">
         {onNew ? (
@@ -2003,11 +2155,13 @@ function CompactProjectRail({
   busy,
   tabs,
   activeTab,
+  tabShown,
   changesLabel,
   hasChanges,
   inboxUnseen,
   onSelectProject,
   onOpenProject,
+  onRemoveProject,
   onTabChange,
   onSearch,
   searchActive,
@@ -2028,17 +2182,19 @@ function CompactProjectRail({
   busy: boolean;
   tabs: SidebarTab[];
   activeTab: SidebarTab;
+  tabShown: boolean;
   changesLabel: string;
   hasChanges: boolean;
   inboxUnseen: boolean;
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
+  onRemoveProject?: Props["onRemoveProject"];
   onTabChange: (tab: SidebarTab) => void;
   onSearch?: () => void;
   searchActive: boolean;
   onOpenInbox?: () => void;
   inboxActive: boolean;
-  onOpenNotificationSettings?: () => void;
+  onOpenNotificationSettings?: (projectPath?: string) => void;
   onOpenNotes?: () => void;
   notesActive: boolean;
   onOpenAutomations?: () => void;
@@ -2090,7 +2246,7 @@ function CompactProjectRail({
           onClick={onTogglePanel}
         />
         {onSelectProject ? (
-          <SearchableProjectPicker
+          <SearchableProjectPickerWithMenu
             cwd={cwd}
             recents={recents}
             busy={busy}
@@ -2098,6 +2254,8 @@ function CompactProjectRail({
             className="w-full justify-center"
             onSelectProject={onSelectProject}
             onOpenProject={onOpenProject}
+            onRemoveProject={onRemoveProject}
+            onOpenNotificationSettings={onOpenNotificationSettings}
           />
         ) : null}
         <div
@@ -2112,7 +2270,7 @@ function CompactProjectRail({
               tab
               label={itemId === "changes" ? changesLabel : TAB_LABELS[itemId]}
               icon={COMPACT_TAB_ICONS[itemId]}
-              active={workspaceActive && activeTab === itemId}
+              active={workspaceActive && tabShown && activeTab === itemId}
               dot={itemId === "changes" && hasChanges}
               onClick={() => openWorkspaceTab(itemId)}
             />

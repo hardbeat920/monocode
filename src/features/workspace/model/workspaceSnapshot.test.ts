@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { INTERRUPT_MESSAGE } from "../../sessions/model/inFlight";
+import { appendUser } from "../../../integrations/harness/core/apply";
+import {
+  CONTINUE_PROMPT,
+  INTERRUPT_MESSAGE,
+  canAutoContinue,
+} from "../../sessions/model/inFlight";
 import {
   leaf,
   leafIds,
@@ -355,6 +360,30 @@ describe("collectWorkspaceSnapshot", () => {
     ]);
     expect(snapshot.projectTerminals[0]?.pane.files[0]?.id).toBe(term.id);
   });
+
+  it("stores the last dock side for new projects", () => {
+    const term = newTerminalFile("/tmp/a", "zsh");
+    const dock = createProjectTerminal("/tmp/a", term);
+    const snapshot = collectWorkspaceSnapshot(
+      [{ ...newTab("s1"), id: "t1" }],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+      [dock],
+      "right",
+    );
+    expect(snapshot.lastDockSide).toBe("right");
+    expect(
+      collectWorkspaceSnapshot(
+        [{ ...newTab("s1"), id: "t1" }],
+        [],
+        "t1",
+        "/tmp/a",
+        new Map(),
+      ).lastDockSide,
+    ).toBeUndefined();
+  });
 });
 
 describe("parseWorkspaceSnapshot", () => {
@@ -364,6 +393,26 @@ describe("parseWorkspaceSnapshot", () => {
     expect(
       parseWorkspaceSnapshot({ tabs: [{}], activeTabId: "t1" }),
     ).toBeNull();
+  });
+
+  it("keeps a valid last dock side and drops an invalid one", () => {
+    const term = newTerminalFile("/tmp/a", "zsh");
+    const snapshot = collectWorkspaceSnapshot(
+      [{ ...newTab("s1"), id: "t1" }],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+      [createProjectTerminal("/tmp/a", term)],
+      "right",
+    );
+    const raw = JSON.parse(JSON.stringify(snapshot)) as Record<
+      string,
+      unknown
+    >;
+    expect(parseWorkspaceSnapshot(raw)?.lastDockSide).toBe("right");
+    raw.lastDockSide = "diagonal";
+    expect(parseWorkspaceSnapshot(raw)?.lastDockSide).toBeUndefined();
   });
 
   it("drops unknown fields and repairs a missing active tab", () => {
@@ -517,6 +566,38 @@ describe("hydrateWorkspaceSnapshot", () => {
     ).toBe(true);
   });
 
+  it("continues a Codex snapshot with its saved model and settings before discovery", () => {
+    const session: Session = {
+      ...chat("s1", "/tmp/a"),
+      harness: "codex",
+      model: "codex:gpt-5.6-sol",
+      modelSettings: { reasoningEffort: "high", serviceTier: "priority" },
+    };
+    const tab = newTab(session.id);
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [session],
+      tab.id,
+      session.cwd,
+      new Map(),
+    );
+    const restored = hydrateWorkspaceSnapshot(
+      snapshot,
+      new Map(),
+      new Set([session.id]),
+    )?.sessions[0];
+    expect(restored).toBeDefined();
+    expect(restored?.model).toBe("codex:gpt-5.6-sol");
+    expect(restored?.modelSettings).toEqual(session.modelSettings);
+    expect(canAutoContinue(restored!)).toBe(true);
+    const continued = appendUser(restored!, CONTINUE_PROMPT);
+    expect(continued.blocks.at(-1)?.turnModel).toEqual({
+      harness: "codex",
+      id: "codex:gpt-5.6-sol",
+      name: "GPT-5.6-Sol",
+    });
+  });
+
   it("keeps terminal-only tabs", () => {
     const term = newTerminalFile("/tmp/a");
     const tab = {
@@ -569,5 +650,20 @@ describe("hydrateWorkspaceSnapshot", () => {
     expect(
       workspace?.projectTerminals?.[0]?.pane.files[0]?.foreground,
     ).toBeUndefined();
+  });
+
+  it("restores the last dock side", () => {
+    const term = newTerminalFile("/tmp/a", "zsh");
+    const snapshot = collectWorkspaceSnapshot(
+      [{ ...newTab("s1"), id: "t1" }],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+      [createProjectTerminal("/tmp/a", term)],
+      "left",
+    );
+    const workspace = hydrateWorkspaceSnapshot(snapshot, new Map());
+    expect(workspace?.lastDockSide).toBe("left");
   });
 });

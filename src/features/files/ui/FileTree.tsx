@@ -1205,6 +1205,11 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
           title={entry.path}
           aria-expanded={entry.isDir ? open : undefined}
           onClick={onClick}
+          onDoubleClick={() => {
+            if (!entry.isDir) {
+              onOpenFile(entry.path, undefined, { exact: true, pin: true });
+            }
+          }}
           onPointerDown={(event) => {
             if (!entry.isDir) onFilePointerDown(entry.path, event);
           }}

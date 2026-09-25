@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   adjacentItemId,
   deferUnhandledEscape,
@@ -299,6 +299,25 @@ describe("focusedBusyAgentSessionId", () => {
 describe("deferUnhandledEscape", () => {
   const escape = (partial: Partial<KeyboardEvent> = {}) =>
     key({ key: "Escape", ...partial });
+
+  it("waits for later keydown handlers before stopping the session", async () => {
+    vi.useFakeTimers();
+    try {
+      const event = escape() as KeyboardEvent & { defaultPrevented: boolean };
+      const stop = vi.fn();
+      deferUnhandledEscape(event, stop);
+
+      // Browsers can flush microtasks between listeners on the same target.
+      await Promise.resolve();
+      expect(stop).not.toHaveBeenCalled();
+
+      Object.defineProperty(event, "defaultPrevented", { value: true });
+      vi.runAllTimers();
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("runs after the keydown dispatch when Escape stays unhandled", () => {
     let deferred: (() => void) | undefined;

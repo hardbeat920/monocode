@@ -629,6 +629,40 @@ describe("mapCodexNotification", () => {
     });
   });
 
+  it("flags turns that failed on a spent usage limit", () => {
+    const mapped = mapCodexNotification("turn/completed", {
+      turn: {
+        id: "turn_1",
+        status: "failed",
+        error: {
+          message: "You've hit your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+      },
+    });
+    expect(mapped.usageLimited).toBe(true);
+    expect(
+      mapCodexNotification("turn/completed", {
+        turn: {
+          id: "turn_1",
+          status: "failed",
+          error: { message: "overloaded", codexErrorInfo: "serverOverloaded" },
+        },
+      }).usageLimited,
+    ).toBeUndefined();
+  });
+
+  it("passes rate-limit snapshots through", () => {
+    const rateLimits = {
+      limitId: "codex",
+      primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_900 },
+      secondary: null,
+    };
+    expect(
+      mapCodexNotification("account/rateLimits/updated", { rateLimits }),
+    ).toEqual({ events: [], rateLimits });
+  });
+
   it("does not silently complete a failed turn with no error payload", () => {
     const mapped = mapCodexNotification("turn/completed", {
       turn: { id: "turn_1", status: "failed" },

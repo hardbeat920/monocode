@@ -89,7 +89,7 @@ import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
 import { LAYER } from "../../../shared/lib/layers";
 import { LINEAR_CHANGE_EVENT, linearConnected } from "../../inbox/model/linear";
 import { JIRA_CHANGE_EVENT, jiraConnected } from "../../inbox/model/jira";
-import { defaultSessionChoice, modelsFor, resolveModel } from "../../sessions/model/models";
+import { defaultSessionChoice, firstEnabledHarness, modelsFor, preferredModelId, resolveModel } from "../../sessions/model/models";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
@@ -258,14 +258,18 @@ function AutomationsContent({
   const selected = automations.find((entry) => entry.id === selectedId) ?? null;
 
   const defaultDraftTarget = () => {
-    const preferred = defaultSessionChoice();
-    const harness = selected?.harness ?? preferred.harness;
-    const model =
-      (selected?.harness === harness ? selected.model : undefined) ??
-      modelsFor(harness)[0]?.id ??
-      preferred.model;
     const project =
       cwd && looksLikeProject(cwd) ? cwd : (recents[0]?.path ?? "~");
+    const preferred = defaultSessionChoice(project);
+    const harness = firstEnabledHarness(
+      project,
+      selected?.harness ?? preferred.harness,
+    );
+    const model =
+      (selected?.harness === harness ? selected.model : undefined) ??
+      (preferred.harness === harness ? preferred.model : undefined) ??
+      modelsFor(harness)[0]?.id ??
+      preferredModelId(harness);
     return { project, harness, model };
   };
 
@@ -1325,6 +1329,7 @@ function AutomationEditor({
                         harness={draft.harness}
                         model={draft.model}
                         values={draft.modelSettings}
+                        project={draft.cwd}
                         hideSettings={controlsBeside}
                         onChange={(harness, model) =>
                           onChange({ ...draft, harness, model })

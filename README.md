@@ -41,6 +41,17 @@ Windows (x86_64): download the NSIS installer from [GitHub Releases](https://git
 
 This is very early and you should expect bugs.
 
+### Agent access to MonoCode
+
+Type `/operator` at the start of a composer message to enable MonoCode access in that thread. For example, `/operator start two Codex sessions: one to inspect the API and one to review the UI`, or `/operator list my notes`. The slash picker also offers this command. The transcript shows only the request text in a translucent amber bubble; MonoCode removes the command from the request sent to the agent and supplies the local `app` CLI path and instructions on that turn. Later turns in the same thread can use the CLI without repeating `/operator`; other threads receive no CLI instructions or app access. The CLI can act only during an active agent turn. The agent can run the shown `app --help` command for the exact JSON input fields.
+
+- `models.list` shows available providers, models, settings, and permission modes.
+- `sessions.start` opens a tab in the current project with a prompt. By default it submits the prompt; set `draft: true` to save it unsent without starting an agent turn. It accepts a provider, model, effort or other model settings, permission mode, and current checkout or new worktree choice. Omit `runtimeMode` to inherit the calling session's permission mode, or set it explicitly to override. It returns the new session ID as soon as the tab and prompt are accepted, so the agent can move it into a folder immediately.
+- `sessions.list` shows project sessions. `sessions.read` returns up to three recent user/assistant exchanges, with a cursor for older exchanges and a per-message character cap. `sessions.send` submits a follow-up to an idle session, while `sessions.draft` saves an unsent message for the user to review. `folders.list` and `folders.move` organize project sessions in sidebar folders, including a new folder.
+- `notes.list` returns titles and short previews; `notes.read` returns one full note by ID.
+
+Orchestration workers keep their existing scoped `control` workflow and do not receive this app access.
+
 Small, focused pull requests are welcome. Anything large is worth an issue first - see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Build from source

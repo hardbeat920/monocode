@@ -4,6 +4,7 @@ import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  Globe,
   ImagePlus,
   Loader,
   Pencil,
@@ -36,6 +37,7 @@ import {
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { JiraSettings } from "./JiraSettings";
+import { GradientBlurBackground } from "./GradientBlurBackground";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -144,9 +146,10 @@ import { refreshHarnessCatalogs } from "../../../integrations/harness/core/regis
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
+  firstEnabledHarness,
   getModelSnapshot,
-  isPickerProviderVisible,
   loadDefaultModels,
+  loadHiddenPickerProviders,
   loadLastModelChoice,
   modelsFor,
   resolveModel,
@@ -155,7 +158,12 @@ import {
   savePickerProviderVisible,
   subscribeModels,
 } from "../../sessions/model/models";
-import { prettyCwd, projectKey, projectName } from "../../../shared/lib/paths";
+import {
+  pathKey,
+  prettyCwd,
+  projectKey,
+  projectName,
+} from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
@@ -171,6 +179,14 @@ import {
   type HarnessId,
 } from "../../sessions/model/session";
 import {
+  loadProjectProviderSettings,
+  projectProvidersRevision,
+  setProjectDefaultModel,
+  setProjectDefaultProvider,
+  setProjectProviderHidden,
+  subscribeProjectProviders,
+} from "../../sessions/model/projectProviders";
+import {
   newProviderAccount,
   providerAccounts,
   PROVIDER_ACCOUNT_PROVIDERS,
@@ -182,6 +198,12 @@ import {
   type ProviderAccountProvider,
 } from "../../providers/model/providerAccounts";
 import { removeProviderAccountCredentials } from "../../providers/model/providerAccountCredentials";
+import {
+  identityKey,
+  identityOrganizationTag,
+  identitySubtitle,
+  useProviderAccountIdentities,
+} from "../../providers/model/providerAccountIdentity";
 import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
@@ -214,12 +236,21 @@ import {
   type LinearTeam,
 } from "../../inbox/model/linear";
 import {
+  loadTabGroupColors,
+  loadTabGroupCustomColors,
   loadTabGroupLabels,
+  loadTabGroupMascots,
+  resolveTabGroupColor,
   resolveTabGroupLabel,
+  resolveTabGroupLogo,
+  resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
+import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
+import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
+import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import {
   filterKeybindings,
-  KEYBINDINGS,
+  currentKeybindings,
   loadClaudeHooks,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
@@ -227,10 +258,13 @@ import {
   loadDiffViewer,
   loadFileTabMode,
   loadFollowUpBehavior,
+  loadFormatOnSave,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
+  loadQuickComposerEnabled,
+  loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
   saveClaudeHooks,
   saveCloseToTray,
@@ -239,10 +273,13 @@ import {
   saveDiffViewer,
   saveFileTabMode,
   saveFollowUpBehavior,
+  saveFormatOnSave,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
+  saveQuickComposerEnabled,
+  saveQuickComposerShortcut,
   saveTabAnimationsEnabled,
   searchSettings,
   settingsSectionDescription,
@@ -257,6 +294,13 @@ import {
   type SettingsSectionId,
 } from "../model/settings";
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../model/sounds";
+import { setQuickComposerShortcut } from "../../quick-composer/model/quickComposer";
+import {
+  QUICK_COMPOSER_DEFAULT_SHORTCUT,
+  quickComposerShortcutLabel,
+  quickComposerShortcutPreview,
+  shortcutFromKeyEvent,
+} from "../../quick-composer/model/quickComposerShortcut";
 import {
   cachedNotificationPermission,
   loadNotificationsEnabled,
@@ -463,7 +507,9 @@ export function SettingsView({
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
-              {section === "providers" ? <ProvidersPage /> : null}
+              {section === "providers" ? (
+                <ProvidersPage cwd={cwd} recents={recents} />
+              ) : null}
               {section === "worktrees" ? (
                 <WorktreesPage
                   cwd={cwd}
@@ -643,6 +689,12 @@ function GeneralPage({
     loadTabAnimationsEnabled,
   );
   const [closeToTray, setCloseToTray] = useState(loadCloseToTray);
+  const [quickComposerEnabled, setQuickComposerEnabled] = useState(
+    loadQuickComposerEnabled,
+  );
+  const [quickComposerError, setQuickComposerError] = useState<string | null>(
+    null,
+  );
 
   // The user may flip the switch in System Settings and come back: re-read
   // the OS state whenever the window regains focus while the toggle is on.
@@ -671,6 +723,17 @@ function GeneralPage({
   const onNotesEnabled = (next: boolean) => {
     saveNotesEnabled(next);
     setNotesEnabled(next);
+  };
+
+  const onQuickComposerEnabled = (next: boolean) => {
+    saveQuickComposerEnabled(next);
+    setQuickComposerEnabled(next);
+    setQuickComposerError(null);
+    void setQuickComposerShortcut(next).catch((error: unknown) => {
+      // Another app already owns the combination. Leave the switch where the
+      // user put it so the next launch tries again, but say why it is dead.
+      setQuickComposerError(String(error));
+    });
   };
 
   const onLiveAgentsEnabled = (next: boolean) => {
@@ -768,6 +831,24 @@ function GeneralPage({
         >
           <Toggle label="Notes" on={notesEnabled} onChange={onNotesEnabled} />
         </Row>
+        {IS_MAC && (
+          <Row
+            id="quick-composer"
+            label="Quick composer"
+            description={`Press ${quickComposerShortcutLabel(loadQuickComposerShortcut())} in any app to float a prompt over it and start a session without switching to MonoCode. Change the shortcut in Keybindings. Return starts it in the background; ⌘Return starts it and brings the session forward.`}
+          >
+            {quickComposerError ? (
+              <span className="text-[12px] text-content/45">
+                {quickComposerError}
+              </span>
+            ) : null}
+            <Toggle
+              label="Quick composer"
+              on={quickComposerEnabled}
+              onChange={onQuickComposerEnabled}
+            />
+          </Row>
+        )}
         <Row
           id="working-agents"
           label="Working agents"
@@ -811,6 +892,7 @@ function ChatPage() {
   const [modelControls, setModelControls] =
     useState<ModelControls>(loadModelControls);
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
+  const [formatOnSave, setFormatOnSave] = useState(loadFormatOnSave);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
     loadGridArcadeEnabled,
@@ -849,6 +931,11 @@ function ChatPage() {
   const onDiffViewer = (next: DiffViewer) => {
     saveDiffViewer(next);
     setDiffViewer(next);
+  };
+
+  const onFormatOnSave = (next: boolean) => {
+    saveFormatOnSave(next);
+    setFormatOnSave(next);
   };
 
   const onComposerRunner = (next: boolean) => {
@@ -927,6 +1014,23 @@ function ChatPage() {
               { value: "beside", label: "Beside" },
             ]}
             onChange={onModelControls}
+          />
+        </Row>
+      </Group>
+
+      <Group
+        title="Editor"
+        description="What happens when you save a file in the workspace editor."
+      >
+        <Row
+          id="format-on-save"
+          label="Format on save"
+          description="Run Prettier on supported files before writing. Off keeps the text you typed, including quote style."
+        >
+          <Toggle
+            label="Format on save"
+            on={formatOnSave}
+            onChange={onFormatOnSave}
           />
         </Row>
       </Group>
@@ -2105,15 +2209,24 @@ function ChatBackgroundCard({
       <div className="border-b border-content/5 p-4 last:border-b-0">
         <div className="overflow-hidden rounded-lg border border-content/10">
           {hasImage ? (
-            <div className="relative h-36">
-              <div
-                aria-hidden
-                className="size-full bg-cover bg-center bg-no-repeat"
-                style={{
-                  backgroundImage: "var(--chat-background-image)",
-                  opacity: appearance.chatBackgroundEmptyOpacity,
-                }}
-              />
+            <div
+              className={`relative h-36 ${appearance.newThreadBackgroundEffect === "gradient-blur" ? "bg-background-base" : ""}`}
+            >
+              {appearance.newThreadBackgroundEffect === "gradient-blur" ? (
+                <GradientBlurBackground
+                  className="gradient-blur-preview absolute inset-0"
+                  style={{ opacity: appearance.chatBackgroundEmptyOpacity }}
+                />
+              ) : (
+                <div
+                  aria-hidden
+                  className="size-full bg-cover bg-center bg-no-repeat"
+                  style={{
+                    backgroundImage: "var(--chat-background-image)",
+                    opacity: appearance.chatBackgroundEmptyOpacity,
+                  }}
+                />
+              )}
               <span className="pointer-events-none absolute bottom-2 left-2 text-[11px] text-content/40">
                 Empty chat preview at {emptyVisibility}%
               </span>
@@ -2227,14 +2340,173 @@ function ChatBackgroundCard({
   );
 }
 
+type ShortcutModifier = "metaKey" | "ctrlKey" | "altKey" | "shiftKey";
+
+function shortcutModifier(event: KeyboardEvent): ShortcutModifier | null {
+  if (event.key === "Meta" || event.code.startsWith("Meta")) return "metaKey";
+  if (event.key === "Control" || event.code.startsWith("Control"))
+    return "ctrlKey";
+  if (event.key === "Alt" || event.code.startsWith("Alt")) return "altKey";
+  if (event.key === "Shift" || event.code.startsWith("Shift"))
+    return "shiftKey";
+  return null;
+}
+
+function QuickComposerShortcutEditor({
+  shortcut,
+  onChange,
+}: {
+  shortcut: string;
+  onChange: (shortcut: string) => void;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState("");
+  const held = useRef({
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+  });
+
+  const beginRecording = () => {
+    held.current = {
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    };
+    setPreview("");
+    setError(null);
+    setRecording(true);
+  };
+
+  const apply = useCallback(
+    async (next: string) => {
+      setRecording(false);
+      setBusy(true);
+      setError(null);
+      try {
+        if (loadQuickComposerEnabled())
+          await setQuickComposerShortcut(true, next);
+        saveQuickComposerShortcut(next);
+        onChange(next);
+      } catch (reason) {
+        setError(String(reason));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onChange],
+  );
+
+  useEffect(() => {
+    if (!recording) return;
+    // Capture even when WebKit leaves focus elsewhere after a mouse click.
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.code === "Escape") {
+        setRecording(false);
+        setError(null);
+        return;
+      }
+      const modifier = shortcutModifier(event);
+      if (modifier) held.current[modifier] = true;
+      const modifiers = {
+        metaKey: event.metaKey || held.current.metaKey,
+        ctrlKey: event.ctrlKey || held.current.ctrlKey,
+        altKey: event.altKey || held.current.altKey,
+        shiftKey: event.shiftKey || held.current.shiftKey,
+      };
+      setPreview(
+        quickComposerShortcutPreview(
+          modifiers,
+          modifier ? undefined : event.code,
+          event.key,
+        ),
+      );
+      if (modifier) return;
+      const next = shortcutFromKeyEvent({ ...modifiers, code: event.code });
+      if (next) void apply(next);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      const modifier = shortcutModifier(event);
+      if (!modifier) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      held.current[modifier] = false;
+      const modifiers = {
+        metaKey: event.metaKey || held.current.metaKey,
+        ctrlKey: event.ctrlKey || held.current.ctrlKey,
+        altKey: event.altKey || held.current.altKey,
+        shiftKey: event.shiftKey || held.current.shiftKey,
+      };
+      modifiers[modifier] = false;
+      setPreview(quickComposerShortcutPreview(modifiers));
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
+  }, [apply, recording]);
+
+  return (
+    <div className="w-40 shrink-0">
+      <div className="flex items-center gap-1">
+        <input
+          type="text"
+          readOnly
+          aria-label="Change quick composer shortcut"
+          data-shortcut-recorder-active={recording ? "true" : undefined}
+          disabled={busy}
+          value={
+            recording || busy
+              ? preview || "Press keys…"
+              : quickComposerShortcutLabel(shortcut)
+          }
+          onFocus={beginRecording}
+          onClick={beginRecording}
+          onBlur={() => setRecording(false)}
+          className="h-6 w-24 shrink-0 rounded-md border border-content/15 bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none text-content/80 outline-none hover:bg-content/10 focus:border-accent disabled:opacity-50"
+        />
+        {shortcut !== QUICK_COMPOSER_DEFAULT_SHORTCUT ? (
+          <button
+            type="button"
+            aria-label="Reset quick composer shortcut"
+            disabled={busy}
+            onClick={() => void apply(QUICK_COMPOSER_DEFAULT_SHORTCUT)}
+            className="rounded-md px-1 py-1 text-content/45 hover:bg-content/10 hover:text-content disabled:opacity-50"
+          >
+            <RotateCcw className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+      {recording ? (
+        <p className="mt-1 text-[11px] text-content/45" aria-live="polite">
+          ⌘ or ⌃ + one key · Esc to cancel
+        </p>
+      ) : null}
+      {error ? <p className="mt-1 text-[11px] text-red-500">{error}</p> : null}
+    </div>
+  );
+}
+
 function KeybindingsPage() {
   const [query, setQuery] = useState("");
-  const rows = useMemo(() => filterKeybindings(KEYBINDINGS, query), [query]);
+  const [quickShortcut, setQuickShortcut] = useState(loadQuickComposerShortcut);
+  const rows = useMemo(
+    () => filterKeybindings(currentKeybindings(), query),
+    [query, quickShortcut],
+  );
 
   return (
     <Group
       title="Shortcuts"
-      description="Bindings come from the app menu and the workspace key handler; they aren’t customizable yet."
+      description="Bindings come from the app menu and the workspace key handler. Click the Quick Composer binding to change its global shortcut."
       action={
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
@@ -2267,13 +2539,20 @@ function KeybindingsPage() {
       ) : (
         rows.map((row) => (
           <div
-            key={`${row.command}-${row.keys}`}
+            key={row.command}
             className="flex items-center border-b border-content/5 px-4 py-2 text-[12px] last:border-b-0"
           >
             <span className="min-w-0 flex-1 truncate">{row.command}</span>
-            <span className="w-40 shrink-0 font-mono text-[12px] text-content/80">
-              {row.keys}
-            </span>
+            {row.command === "App: Quick Composer" ? (
+              <QuickComposerShortcutEditor
+                shortcut={quickShortcut}
+                onChange={setQuickShortcut}
+              />
+            ) : (
+              <span className="w-40 shrink-0 font-mono text-[12px] text-content/80">
+                {row.keys}
+              </span>
+            )}
             <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
               {row.when}
             </span>
@@ -2284,20 +2563,81 @@ function KeybindingsPage() {
   );
 }
 
-function ProvidersPage() {
+const GLOBAL_PROVIDER_SCOPE = "global";
+
+function ProvidersPage({
+  cwd,
+  recents,
+}: {
+  cwd?: string;
+  recents?: RecentProject[];
+}) {
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
   useSyncExternalStore(
     subscribeHarnessAvailability,
     getHarnessAvailabilitySnapshot,
     getHarnessAvailabilitySnapshot,
   );
+  const providersRevision = useSyncExternalStore(
+    subscribeProjectProviders,
+    projectProvidersRevision,
+    projectProvidersRevision,
+  );
+  void providersRevision;
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
+  const [hiddenGlobally, setHiddenGlobally] = useState(loadHiddenPickerProviders);
+
+  const scopeOptions = useMemo(() => {
+    const options: { value: string; label: string; icon?: ReactNode }[] = [
+      {
+        value: GLOBAL_PROVIDER_SCOPE,
+        label: "Global",
+        icon: (
+          <Globe
+            className="size-3.5 shrink-0 text-content/60"
+            strokeWidth={1.75}
+          />
+        ),
+      },
+    ];
+    const seen = new Set<string>();
+    for (const path of [cwd, ...(recents ?? []).map((entry) => entry.path)]) {
+      if (!path || !looksLikeProject(path)) continue;
+      const key = pathKey(path);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({
+        value: path,
+        label: projectName(path),
+        icon: <ProjectScopeIcon path={path} />,
+      });
+    }
+    return options;
+  }, [cwd, recents]);
+
+  const project = scope === GLOBAL_PROVIDER_SCOPE ? null : scope;
+  const projectSettings = project ? loadProjectProviderSettings(project) : {};
+  // A project without overrides inherits the global default provider, the same
+  // way `defaultSessionChoice` resolves it for new conversations.
+  const effectiveDefaultHarness = project
+    ? firstEnabledHarness(
+        project,
+        projectSettings.defaultHarness ?? choice?.harness ?? "cursor",
+      )
+    : (choice?.harness ?? null);
 
   useEffect(() => {
     void probeHarnessAvailability();
   }, []);
+
+  useEffect(() => {
+    if (!scopeOptions.some((option) => option.value === scope)) {
+      setScope(GLOBAL_PROVIDER_SCOPE);
+    }
+  }, [scope, scopeOptions]);
 
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
@@ -2305,6 +2645,10 @@ function ProvidersPage() {
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
+    if (project) {
+      setProjectDefaultModel(project, harness, model);
+      return;
+    }
     saveDefaultModel(harness, model);
     setDefaultModels((prev) => ({ ...prev, [harness]: model }));
     if (choice?.harness === harness) {
@@ -2314,9 +2658,26 @@ function ProvidersPage() {
   };
 
   const onDefault = (harness: HarnessId, model: string) => {
+    if (project) {
+      setProjectDefaultProvider(project, harness, model);
+      return;
+    }
     saveLastModelChoice(harness, model);
     setDefaultModels((prev) => ({ ...prev, [harness]: model }));
     setChoice({ harness, model });
+  };
+
+  const onPickerVisible = (harness: HarnessId, visible: boolean) => {
+    if (project) {
+      setProjectProviderHidden(project, harness, !visible);
+      return;
+    }
+    savePickerProviderVisible(harness, visible);
+    setHiddenGlobally((prev) =>
+      visible
+        ? prev.filter((id) => id !== harness)
+        : [...new Set([...prev, harness])],
+    );
   };
 
   return (
@@ -2325,23 +2686,59 @@ function ProvidersPage() {
 
       <Group
         title="Agent CLIs"
-        description="A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+        action={
+          <Select
+            label="Provider defaults scope"
+            value={scope}
+            options={scopeOptions}
+            onChange={setScope}
+          />
+        }
+        description={
+          project
+            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project.`
+            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+        }
       >
-        {HARNESSES.map((harness) => (
-          <ProviderRow
-            key={harness}
-            harness={harness}
-            selectedModel={
+        {HARNESSES.map((harness) => {
+          const inPicker = project
+            ? !(projectSettings.hidden ?? []).includes(harness) &&
+              !hiddenGlobally.includes(harness)
+            : !hiddenGlobally.includes(harness);
+          // A globally hidden provider stays out of every project's picker, so
+          // the project toggle is shown locked rather than appearing to work.
+          const pickerLocked =
+            project != null && hiddenGlobally.includes(harness);
+          const selectedModel = project
+            ? (projectSettings.models?.[harness] ??
+              (projectSettings.defaultHarness === harness
+                ? projectSettings.defaultModel
+                : undefined) ??
               defaultModels[harness] ??
               (choice?.harness === harness
                 ? choice.model
-                : defaultModelId(harness))
-            }
-            isDefault={choice?.harness === harness}
-            onDefault={onDefault}
-            onModelChange={onModelChange}
-          />
-        ))}
+                : defaultModelId(harness)))
+            : (defaultModels[harness] ??
+              (choice?.harness === harness
+                ? choice.model
+                : defaultModelId(harness)));
+          const isDefault = project
+            ? effectiveDefaultHarness === harness
+            : choice?.harness === harness;
+          return (
+            <ProviderRow
+              key={harness}
+              harness={harness}
+              selectedModel={selectedModel}
+              isDefault={isDefault}
+              inPicker={inPicker}
+              pickerLocked={pickerLocked}
+              onDefault={onDefault}
+              onModelChange={onModelChange}
+              onPickerVisible={(visible) => onPickerVisible(harness, visible)}
+            />
+          );
+        })}
       </Group>
 
       <Group title="Advanced">
@@ -2368,7 +2765,7 @@ type AccountEditor = {
 };
 
 function ProviderAccountsSettings() {
-  const [, setVersion] = useState(0);
+  const [version, setVersion] = useState(0);
   const [editor, setEditor] = useState<AccountEditor | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2455,6 +2852,11 @@ function ProviderAccountsSettings() {
     }
   };
 
+  const identities = useProviderAccountIdentities(
+    PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
+    version,
+  );
+
   return (
     <Group
       id="provider-accounts"
@@ -2500,6 +2902,8 @@ function ProviderAccountsSettings() {
                   editor?.provider === provider &&
                   editor.accountId === account.id;
                 const removing = working === `remove:${provider}:${account.id}`;
+                const identity = identities[identityKey(account)];
+                const orgTag = identityOrganizationTag(identity);
                 return editing ? (
                   <ProviderAccountEditor
                     key={account.id}
@@ -2519,13 +2923,21 @@ function ProviderAccountsSettings() {
                     className="flex h-12 items-center gap-3 border-b border-content/5 px-4 py-2 last:border-b-0"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[12px] text-content/85">
-                        {account.label}
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-[12px] text-content/85">
+                          {account.label}
+                        </span>
+                        {orgTag ? (
+                          <span className="max-w-[8rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
+                            {orgTag}
+                          </span>
+                        ) : null}
                       </div>
-                      <div className="mt-0.5 text-[10px] text-content/35">
-                        {account.isDefault
-                          ? "Provider CLI profile"
-                          : "Isolated profile"}
+                      <div className="mt-0.5 truncate text-[10px] text-content/35">
+                        {identitySubtitle(identity) ??
+                          (account.isDefault
+                            ? "Provider CLI profile"
+                            : "Isolated profile")}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
@@ -2655,36 +3067,63 @@ function ProviderAccountEditor({
   );
 }
 
+/** The icon the project rail shows: custom logo, else the project mascot. */
+function ProjectScopeIcon({ path }: { path: string }) {
+  const logos = useTabGroupLogos();
+  const [colors] = useState(loadTabGroupColors);
+  const [customColors] = useState(loadTabGroupCustomColors);
+  const [mascots] = useState(loadTabGroupMascots);
+  const key = projectKey(path);
+  const name = projectName(path);
+  const logoPath = resolveTabGroupLogo(key, logos);
+  if (logoPath) {
+    return (
+      <ProjectLogoIcon
+        path={logoPath}
+        className="size-4 rounded-sm"
+        imageClassName="size-4"
+      />
+    );
+  }
+  return (
+    <ProjectMascot
+      project={name}
+      color={resolveTabGroupColor(key, colors, customColors, name)}
+      name={resolveTabGroupMascot(key, mascots)}
+      className="size-3.5"
+    />
+  );
+}
+
 function ProviderRow({
   harness,
   selectedModel,
   isDefault,
+  inPicker,
+  pickerLocked = false,
   onDefault,
   onModelChange,
+  onPickerVisible,
 }: {
   harness: HarnessId;
   selectedModel: string;
   isDefault: boolean;
+  inPicker: boolean;
+  /** Globally hidden providers cannot be turned on per project. */
+  pickerLocked?: boolean;
   onDefault: (harness: HarnessId, model: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
+  onPickerVisible: (visible: boolean) => void;
 }) {
   const models = modelsFor(harness);
   const available = isHarnessAvailable(harness);
   const current =
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
-  const [inPicker, setInPicker] = useState(() =>
-    isPickerProviderVisible(harness),
-  );
 
   useEffect(() => {
     if (!available || models.length > 0) return;
     void refreshHarnessCatalogs([harness]);
   }, [available, harness, models.length]);
-
-  const onPickerVisible = (visible: boolean) => {
-    savePickerProviderVisible(harness, visible);
-    setInPicker(visible);
-  };
 
   return (
     <Row
@@ -2732,11 +3171,14 @@ function ProviderRow({
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">Show in picker</span>
+          <span className="text-[12px] text-content/50">
+            {pickerLocked ? "Hidden globally" : "Show in picker"}
+          </span>
           <Toggle
             label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
             on={inPicker}
             onChange={onPickerVisible}
+            disabled={pickerLocked}
           />
         </div>
       ) : null}
@@ -3249,7 +3691,7 @@ function Select({
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
   onOpen?: () => void;
 }) {
@@ -3340,8 +3782,15 @@ function Select({
         onClick={() => setOpen((prev) => !prev)}
         className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20"
       >
-        <span className="min-w-0 flex-1 truncate">
-          {selected ? selected.label : value}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {selected?.icon ? (
+            <span className="grid size-4 shrink-0 place-items-center">
+              {selected.icon}
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate">
+            {selected ? selected.label : value}
+          </span>
         </span>
         <ChevronDown
           className={`size-3.5 shrink-0 text-content/50 transition-transform ${open ? "rotate-180" : ""}`}
@@ -3388,6 +3837,11 @@ function Select({
                     : "text-content hover:bg-content/5"
                 }`}
               >
+                {option.icon ? (
+                  <span className="grid size-4 shrink-0 place-items-center">
+                    {option.icon}
+                  </span>
+                ) : null}
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
                 {isSelected ? (
                   <Check className="size-3.5 shrink-0" strokeWidth={2.25} />

@@ -119,11 +119,11 @@ export function ProjectSearch({
   const matchCount = matches.length;
   const fileCount = groups.length;
 
-  const openMatch = (match: ProjectSearchMatch) => {
+  const openMatch = (match: ProjectSearchMatch, pin = false) => {
     onOpenFile(
       match.path,
       { line: match.line, column: match.column },
-      { exact: true },
+      { exact: true, pin },
     );
   };
 
@@ -257,6 +257,7 @@ export function ProjectSearch({
                   <button
                     type="button"
                     onClick={() => openMatch(match)}
+                    onDoubleClick={() => openMatch(match, true)}
                     className="flex w-full items-start gap-2 px-2 py-1 text-left hover:bg-content/5"
                   >
                     <span className="w-7 shrink-0 pt-px text-right font-mono text-[11px] text-content/35 tabular-nums">

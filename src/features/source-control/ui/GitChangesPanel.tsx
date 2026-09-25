@@ -102,9 +102,9 @@ type Props = {
   selectedPath?: string;
   selectedKind?: GitFileDiffKind;
   selectedSha?: string;
-  onOpenFile: (path: string, kind: GitFileDiffKind) => void;
+  onOpenFile: (path: string, kind: GitFileDiffKind, pin?: boolean) => void;
   onOpenAllChanges: () => void;
-  onOpenCommit: (commit: GitHistoryCommit) => void;
+  onOpenCommit: (commit: GitHistoryCommit, pin?: boolean) => void;
 };
 
 export function GitChangesPanel({
@@ -346,7 +346,7 @@ function ChangedFiles({
   fill: boolean;
   busy: string | null;
   setBusy: (value: string | null) => void;
-  onOpenFile: (path: string, kind: GitFileDiffKind) => void;
+  onOpenFile: (path: string, kind: GitFileDiffKind, pin?: boolean) => void;
   onOpenAllChanges: () => void;
   onMutated: (paths?: string[]) => void;
 }) {
@@ -1156,7 +1156,7 @@ type ChangeRowProps = {
   selected?: string;
   selectedKind?: GitFileDiffKind;
   busy: string | null;
-  onOpenFile: (path: string, kind: GitFileDiffKind) => void;
+  onOpenFile: (path: string, kind: GitFileDiffKind, pin?: boolean) => void;
   onAction: (
     file: GitChangedFile,
     action: "stage" | "unstage" | "discard",
@@ -1359,7 +1359,7 @@ function ChangeRow({
   kind: GitFileDiffKind;
   /** Set in tree view: nesting level, and the folder path moves to the tree. */
   depth?: number;
-  onOpenFile: (path: string, kind: GitFileDiffKind) => void;
+  onOpenFile: (path: string, kind: GitFileDiffKind, pin?: boolean) => void;
   onAction: (
     file: GitChangedFile,
     action: "stage" | "unstage" | "discard",
@@ -1386,6 +1386,9 @@ function ChangeRow({
           title={file.relative}
           onClick={() => {
             if (canOpen) onOpenFile(file.path, kind);
+          }}
+          onDoubleClick={() => {
+            if (canOpen) onOpenFile(file.path, kind, true);
           }}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >

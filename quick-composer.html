@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" class="quick-composer">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MonoCode</title>
+    <style>
+      /* The window is clear; the card draws the only surface. */
+      html.quick-composer,
+      html.quick-composer body,
+      html.quick-composer #root {
+        background: transparent !important;
+        /* Content can grow before the native window does. Never let focus or
+           selection scroll the prompt out of view during that resize. */
+        overflow: clip;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/features/quick-composer/main.tsx"></script>
+  </body>
+</html>

@@ -18,6 +18,21 @@ function chat(blocks: Block[]) {
 }
 
 describe("editLastTurn", () => {
+  it("blocks editing CI repair requests whose context is absent from the composer", () => {
+    const session = chat([
+      {
+        id: "repair",
+        role: "user",
+        text: "Fix 1 failed CI check for acme/web PR #42.",
+        ciContext: "Checked commit: abc123\nRun tests: expected 200, received 500",
+      },
+      { id: "reply", role: "assistant", text: "Fixed the failing check." },
+    ]);
+
+    expect(canEditLastTurn(session)).toBe(false);
+    expect(prepareEditedResend(session)).toBeNull();
+  });
+
   it("finds the latest user turn", () => {
     const blocks: Block[] = [
       { id: "u1", role: "user", text: "first" },
@@ -79,6 +94,14 @@ describe("editLastTurn", () => {
       text: "hello",
       attachments: [],
     });
+  });
+
+  it("restores /operator when editing an activation turn", () => {
+    const session = chat([
+      { id: "u1", role: "user", text: "list notes", monocode: true },
+      { id: "a1", role: "assistant", text: "Here they are." },
+    ]);
+    expect(lastTurnRecall(session)?.text).toBe("/operator list notes");
   });
 
   it("allows edit on idle pi sessions without queued follow-ups", () => {

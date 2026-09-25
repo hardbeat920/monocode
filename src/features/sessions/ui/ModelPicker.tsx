@@ -37,6 +37,11 @@ import {
   type ModelSetting,
 } from "../model/models";
 import {
+  isProviderHidden,
+  projectProvidersRevision,
+  subscribeProjectProviders,
+} from "../model/projectProviders";
+import {
   harnessUnavailableHint,
   hasProbedHarnessAvailability,
   isHarnessAvailable,
@@ -56,8 +61,12 @@ type Props = {
   harness: HarnessId;
   model: string;
   values: Record<string, string>;
+  /** Project whose disabled providers are hidden from the picker. */
+  project?: string;
   /** Hide option rows from the menu when they render as pills beside the picker. */
   hideSettings?: boolean;
+  /** Limit provider tabs for surfaces that only support one harness. */
+  allowedHarnesses?: readonly HarnessId[];
   hotkeys?: boolean;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
@@ -208,7 +217,9 @@ export function ModelPicker({
   harness,
   model,
   values,
+  project,
   hideSettings = false,
+  allowedHarnesses,
   hotkeys = false,
   onChange,
   onSettingsChange,
@@ -228,6 +239,11 @@ export function ModelPicker({
     subscribePickerVisibility,
     getPickerVisibilitySnapshot,
     getPickerVisibilitySnapshot,
+  );
+  const projectVersion = useSyncExternalStore(
+    subscribeProjectProviders,
+    projectProvidersRevision,
+    projectProvidersRevision,
   );
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ModelPickerTab>(harness);
@@ -285,18 +301,27 @@ export function ModelPicker({
   ]
     .filter(Boolean)
     .join(" · ");
-
   const pickerHarnesses = useMemo(() => {
     void availabilityVersion;
     void visibilityVersion;
-    return HARNESSES.filter((id) =>
-      showProviderInModelPicker(
-        id,
-        isHarnessAvailable(id),
-        hasProbedHarnessAvailability(),
-      ),
+    void projectVersion;
+    return HARNESSES.filter(
+      (id) =>
+        (!allowedHarnesses || allowedHarnesses.includes(id)) &&
+        !isProviderHidden(project, id) &&
+        showProviderInModelPicker(
+          id,
+          isHarnessAvailable(id),
+          hasProbedHarnessAvailability(),
+        ),
     );
-  }, [availabilityVersion, visibilityVersion]);
+  }, [
+    allowedHarnesses,
+    availabilityVersion,
+    visibilityVersion,
+    projectVersion,
+    project,
+  ]);
   const providerKey = pickerHarnesses.join(",");
   const visibleTab = coerceModelPickerTab(tab, (id) =>
     pickerHarnesses.includes(id),

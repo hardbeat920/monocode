@@ -86,6 +86,8 @@ describe("Composer question focus", () => {
     busy = false,
     focusToken = 0,
     initialDraft?: string,
+    onBtwCommand?: (text: string) => boolean | void,
+    onSubmit: (text: string, attachments: Attachment[]) => void = () => {},
   ) {
     await act(async () =>
       root.render(
@@ -103,7 +105,8 @@ describe("Composer question focus", () => {
           onCwdChange: () => {},
           onModelChange: () => {},
           onRuntimeModeChange: () => {},
-          onSubmit: () => {},
+          onSubmit,
+          onBtwCommand,
           question: currentQuestion,
           onQuestionReply,
           busy,
@@ -111,6 +114,94 @@ describe("Composer question focus", () => {
       ),
     );
   }
+
+  it.each([
+    ["/btw", ""],
+    ["/btw some text here...", "some text here..."],
+  ])("routes %s to BTW instead of the main submit", async (draft, text) => {
+    const onBtwCommand = vi.fn(() => true);
+    const onSubmit = vi.fn();
+    await renderComposer(
+      undefined,
+      vi.fn(),
+      false,
+      0,
+      draft,
+      onBtwCommand,
+      onSubmit,
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(onBtwCommand).toHaveBeenCalledWith(text);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+  });
+
+  it("keeps the draft when onBtwCommand rejects the command", async () => {
+    const onBtwCommand = vi.fn(() => false);
+    const onSubmit = vi.fn();
+    await renderComposer(
+      undefined,
+      vi.fn(),
+      false,
+      0,
+      "/btw",
+      onBtwCommand,
+      onSubmit,
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(onBtwCommand).toHaveBeenCalledWith("");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("/btw");
+  });
+
+  it("clears the draft when the reset token advances", async () => {
+    const onDraftChange = vi.fn();
+    const props = {
+      focused: true,
+      harness: "claude" as const,
+      model: "claude-sonnet",
+      runtimeMode: "supervised" as const,
+      executionCwd: "/repo",
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      initialDraft: "something here...",
+      draftResetToken: 1,
+      onDraftChange,
+      onFocus: vi.fn(),
+      onCwdChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onRuntimeModeChange: vi.fn(),
+      onSubmit: vi.fn(),
+    };
+    await act(async () => root.render(createElement(Composer, props)));
+    expect(container.querySelector("textarea")?.value).toBe(
+      "something here...",
+    );
+
+    await act(async () =>
+      root.render(createElement(Composer, { ...props, draftResetToken: 2 })),
+    );
+    expect(container.querySelector("textarea")?.value).toBe("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("");
+  });
 
   it("keeps drafts and blocks sending until a working copy is selected", async () => {
     const onSubmit = vi.fn();
@@ -170,6 +261,127 @@ describe("Composer question focus", () => {
     expect(textarea.selectionEnd).toBe(initialDraft.length);
   });
 
+  it("offers /operator in the slash picker and submits it as a local command", async () => {
+    const onSubmit = vi.fn(() => true);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "/operator",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(new Event("input", { bubbles: true })),
+    );
+    const command = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((button) => button.textContent?.includes("/operator"));
+    expect(command).toBeDefined();
+    await act(async () => command!.click());
+    expect(textarea.value).toBe("/operator ");
+    await act(async () => {
+      textarea.value += "list my notes";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
+    );
+    expect(onSubmit).toHaveBeenCalledWith("/operator list my notes", [], {
+      intent: "default",
+    });
+  });
+
+  it("offers Operator above Orchestrator and sends the /operator command", async () => {
+    const onSubmit = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "List my notes",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Add files or choose a mode"]',
+        )!
+        .click(),
+    );
+    const options = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        "[data-composer-plus] button",
+      ),
+    );
+    const operator = options.find((button) =>
+      button.textContent?.includes("Operator"),
+    )!;
+    expect(operator).toBeDefined();
+    expect(options.indexOf(operator)).toBeLessThan(
+      options.findIndex((button) =>
+        button.textContent?.includes("Orchestrator"),
+      ),
+    );
+    await act(async () => operator.click());
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.value).toBe("List my notes");
+    expect(
+      container.querySelector('[aria-label="Turn off Operator"]'),
+    ).not.toBeNull();
+
+    const send = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Send"]',
+    )!;
+    await act(async () => send.click());
+    expect(onSubmit).toHaveBeenLastCalledWith("/operator List my notes", [], {
+      intent: "default",
+    });
+    expect(textarea.value).toBe("List my notes");
+    expect(
+      container.querySelector('[aria-label="Turn off Operator"]'),
+    ).not.toBeNull();
+
+    await act(async () => {
+      textarea.value = "/operator List my notes";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      send.click();
+    });
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    expect(onSubmit).toHaveBeenLastCalledWith("/operator List my notes", [], {
+      intent: "default",
+    });
+    expect(textarea.value).toBe("");
+    expect(
+      container.querySelector('[aria-label="Turn off Operator"]'),
+    ).toBeNull();
+  });
+
   it("clears the parent draft before submit so a remounting composer stays empty", async () => {
     let parentDraft = "Ship the empty-state fix";
     const onDraftChange = vi.fn((text: string) => {
@@ -212,7 +424,9 @@ describe("Composer question focus", () => {
     const textarea = container.querySelector("textarea")!;
     expect(textarea.value).toBe("Ship the empty-state fix");
     await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
     );
 
     expect(onSubmit).toHaveBeenCalledWith("Ship the empty-state fix", [], {
@@ -251,7 +465,9 @@ describe("Composer question focus", () => {
 
     const textarea = container.querySelector("textarea")!;
     await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
     );
 
     expect(textarea.value).toBe("Blocked while orchestration is paused");
@@ -262,11 +478,7 @@ describe("Composer question focus", () => {
     let recallLastTurn: (() => void) | undefined;
     let rejectResend: ComposerTurnOptions["onResendRejected"];
     const onSubmit = vi.fn(
-      (
-        _text: string,
-        _files: Attachment[],
-        options?: ComposerTurnOptions,
-      ) => {
+      (_text: string, _files: Attachment[], options?: ComposerTurnOptions) => {
         rejectResend = options?.onResendRejected;
         return true;
       },
@@ -301,7 +513,9 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe("Original prompt");
 
     await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
     );
     await act(async () => {
       textarea.value = "New prompt";
@@ -316,11 +530,7 @@ describe("Composer question focus", () => {
     let recallLastTurn: (() => void) | undefined;
     let rejectResend: ComposerTurnOptions["onResendRejected"];
     const onSubmit = vi.fn(
-      (
-        _text: string,
-        _files: Attachment[],
-        options?: ComposerTurnOptions,
-      ) => {
+      (_text: string, _files: Attachment[], options?: ComposerTurnOptions) => {
         rejectResend = options?.onResendRejected;
         return true;
       },
@@ -352,14 +562,18 @@ describe("Composer question focus", () => {
 
     await act(async () => recallLastTurn?.());
     await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
     );
     await act(async () => rejectResend?.({ providerRewound: true }));
 
     const textarea = container.querySelector("textarea")!;
     expect(textarea.value).toBe("Edited prompt");
     await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
     );
 
     expect(onSubmit).toHaveBeenCalledTimes(2);
@@ -381,11 +595,7 @@ describe("Composer question focus", () => {
       previewUrl: "blob:borrowed",
     };
     const onSubmit = vi.fn(
-      (
-        _text: string,
-        _files: Attachment[],
-        options?: ComposerTurnOptions,
-      ) => {
+      (_text: string, _files: Attachment[], options?: ComposerTurnOptions) => {
         rejectResend = options?.onResendRejected;
         return true;
       },
@@ -440,7 +650,9 @@ describe("Composer question focus", () => {
     });
 
     await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
     );
     await act(async () => rejectResend?.({ providerRewound: false }));
     await act(async () =>

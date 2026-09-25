@@ -1,5 +1,6 @@
+import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import { Loader, WandSparkles } from "../../../shared/ui/icons";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { generateCommitMessage } from "../../../integrations/harness";
 import { LAYER } from "../../../shared/lib/layers";
@@ -28,6 +29,7 @@ export function SwitchBranchDialog({
   onCommit,
   onCancel,
 }: Props) {
+  const host = useContext(NativePopupHost);
   const [message, setMessage] = useState("");
   const [generating, setGenerating] = useState(false);
   const messageRef = useRef<HTMLTextAreaElement>(null);
@@ -70,7 +72,10 @@ export function SwitchBranchDialog({
   };
 
   return createPortal(
-    <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
+    <div
+      className={host ? "relative" : "fixed inset-0"}
+      style={{ zIndex: LAYER.dialog }}
+    >
       <div
         className="absolute inset-0 bg-black/30"
         onMouseDown={() => {
@@ -83,7 +88,7 @@ export function SwitchBranchDialog({
         aria-busy={Boolean(busy) || generating}
         aria-label={creating ? `Create ${branch}` : `Switch to ${branch}`}
         onMouseDown={(event) => event.stopPropagation()}
-        className="absolute left-1/2 top-[22%] flex w-[min(420px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-3 rounded-lg border border-content/10 bg-content/5 p-4 shadow-xl backdrop-blur-xl"
+        className={`${host ? "relative w-full" : "absolute left-1/2 top-[22%] w-[min(420px,calc(100vw-24px))] -translate-x-1/2"} flex flex-col gap-3 rounded-lg border border-content/10 bg-content/5 p-4 shadow-xl backdrop-blur-xl`}
       >
         <div className="flex flex-col gap-1">
           <h2 className="text-[13px] font-medium leading-tight text-content">
@@ -173,6 +178,6 @@ export function SwitchBranchDialog({
         </div>
       </div>
     </div>,
-    document.body,
+    host ?? document.body,
   );
 }

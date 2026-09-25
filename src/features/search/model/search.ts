@@ -37,6 +37,8 @@ export type EditorNavigationTarget = EditorNavigation & {
 export type FileOpenOptions = {
   /** The caller obtained this concrete path from the filesystem or file index. */
   exact?: boolean;
+  /** Open as a permanent tab instead of the pane's preview tab. */
+  pin?: boolean;
 };
 
 export type OpenFileFn = (

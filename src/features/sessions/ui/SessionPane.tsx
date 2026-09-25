@@ -44,6 +44,12 @@ import {
   type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../model/session";
+import {
+  sessionHasBtwEligibleTurn,
+  sessionHasBtwThreads,
+  supportsBtwHarness,
+} from "../model/btw";
+import type { BtwOpenRequest } from "./BtwPopover";
 import { AgentTranscript } from "./AgentTranscript";
 import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
 import { TranscriptFind } from "./TranscriptFind";
@@ -81,8 +87,10 @@ import {
   subscribeProjectChatBackground,
 } from "../../projects/model/projectChatBackground";
 import { useProjectBackgroundEffect } from "../../projects/ui/useProjectBackgroundEffect";
+import { GradientBlurBackground } from "../../settings/ui/GradientBlurBackground";
 import {
   loadChatBackgroundPath,
+  loadNewThreadBackgroundEffect,
   subscribeChatBackgroundPath,
 } from "../../settings/model/appearance";
 import type { SessionFolderTarget } from "../model/sessionFolders";
@@ -144,6 +152,9 @@ type Props = {
   onQueuedMessageEditingChange: (sessionId: string, messageId?: string) => void;
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
+  onUsageLimitResume: (sessionId: string) => void;
+  onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
+  onUsageLimitDismiss: (sessionId: string) => void;
   onInboxCardDismiss?: (sessionId: string) => void;
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
@@ -179,7 +190,26 @@ type Props = {
     turn: Block[],
   ) => void;
   onHandoff?: (sessionId: string, target: ModelTarget, turn: Block[]) => void;
+  onBtwSubmit?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    messageId: string,
+    text: string,
+    model?: string,
+    modelSettings?: Record<string, string>,
+  ) => void;
+  onBtwRetry?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwDelete?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwModelChange?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+  ) => void;
   onNewTerminal: (sessionId: string) => void;
+
   onPaneDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
   /** Keeps this transcript mounted after the pane closes. */
   transcriptPool?: TranscriptPool;
@@ -218,6 +248,9 @@ export const SessionPane = memo(function SessionPane({
   onQueuedMessageEditingChange,
   onSteerQueuedMessage,
   onResumeQueue,
+  onUsageLimitResume,
+  onUsageLimitResumeAtReset,
+  onUsageLimitDismiss,
   onInboxCardDismiss,
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
@@ -234,6 +267,10 @@ export const SessionPane = memo(function SessionPane({
   onBuildPlan,
   onSecondOpinion,
   onHandoff,
+  onBtwSubmit,
+  onBtwRetry,
+  onBtwDelete,
+  onBtwModelChange,
   onNewTerminal,
   onPaneDragStart,
   transcriptPool,
@@ -263,6 +300,11 @@ export const SessionPane = memo(function SessionPane({
     subscribeChatBackgroundPath,
     loadChatBackgroundPath,
     loadChatBackgroundPath,
+  );
+  const globalBackgroundEffect = useSyncExternalStore(
+    subscribeChatBackgroundPath,
+    loadNewThreadBackgroundEffect,
+    loadNewThreadBackgroundEffect,
   );
   const projectBackground = loadProjectChatBackgroundSettings(
     projectKey(session.cwd),
@@ -333,6 +375,45 @@ export const SessionPane = memo(function SessionPane({
       void orchestrator.hydrate(session.id).catch(console.error);
   }, [session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
+  const btwRequestId = useRef(0);
+  const [btwOpenRequest, setBtwOpenRequest] = useState<BtwOpenRequest | null>(
+    null,
+  );
+  const btwEnabled =
+    supportsBtwHarness(session.harness) || sessionHasBtwThreads(session.blocks);
+  const onBtwCommand = useCallback(
+    (text: string) => {
+      if (
+        managed ||
+        session.inboxAsk ||
+        session.worktreeRemoved ||
+        !onBtwSubmit ||
+        !onBtwRetry ||
+        !btwEnabled ||
+        !sessionHasBtwEligibleTurn(session.blocks, session.harness, managed)
+      ) {
+        return false;
+      }
+      const id = ++btwRequestId.current;
+      setBtwOpenRequest({ id, text });
+      return true;
+    },
+    [
+      btwEnabled,
+      managed,
+      onBtwRetry,
+      onBtwSubmit,
+      session.blocks,
+      session.harness,
+      session.inboxAsk,
+      session.worktreeRemoved,
+    ],
+  );
+  const onBtwOpenRequestHandled = useCallback((requestId: number) => {
+    setBtwOpenRequest((current) =>
+      current?.id === requestId ? null : current,
+    );
+  }, []);
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;
   }, []);
@@ -530,6 +611,7 @@ export const SessionPane = memo(function SessionPane({
         if (!dockComposer) composerDockMotion.captureLaunch();
         return onSubmit(session.id, text, attachments, options);
       }}
+      onBtwCommand={onBtwCommand}
       onStop={() => onStop(session.id)}
       onCompactContext={() => onCompactContext(session.id)}
       onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
@@ -548,6 +630,12 @@ export const SessionPane = memo(function SessionPane({
         onSteerQueuedMessage(session.id, messageId)
       }
       onResumeQueue={() => onResumeQueue(session.id)}
+      usageLimit={session.usageLimit}
+      onUsageLimitResume={() => onUsageLimitResume(session.id)}
+      onUsageLimitResumeAtReset={(enabled) =>
+        onUsageLimitResumeAtReset(session.id, enabled)
+      }
+      onUsageLimitDismiss={() => onUsageLimitDismiss(session.id)}
       onOpenFile={onOpenFile}
       busy={!!session.busy}
       editLastTurnSupported={editLastTurnSupported}
@@ -564,11 +652,18 @@ export const SessionPane = memo(function SessionPane({
       data-session-drop={session.id}
       data-session-empty={isEmpty}
       data-project-chat-background={!!projectBackground}
+      data-project-background-effect={projectBackground?.effect}
       data-project-background-scope={projectBackground?.scope}
       style={projectBackgroundStyle}
       className="chat-pane-background relative isolate flex h-full min-h-0 min-w-0 flex-1 flex-col"
       onMouseDown={() => onFocus(session.id)}
     >
+      {projectBackground?.effect === "gradient-blur" ||
+      (!projectBackground &&
+        globalBackgroundPath &&
+        globalBackgroundEffect === "gradient-blur") ? (
+        <GradientBlurBackground />
+      ) : null}
       {modelWelcome && visible ? (
         modelWelcome.kind === "astra" ? (
           <AstraWelcome key={modelWelcome.run} onDone={dismissModelWelcome} />
@@ -694,6 +789,7 @@ export const SessionPane = memo(function SessionPane({
                   model={session.model}
                   modelSettings={session.modelSettings}
                   pendingQuestion={!!session.pendingQuestion}
+                  backgroundTasks={session.backgroundTasks}
                   onApproval={session.worktreeRemoved ? undefined : approve}
                   onAddToChat={addSelectionToChat}
                   onSaveNote={notesEnabled ? saveNote : undefined}
@@ -704,7 +800,12 @@ export const SessionPane = memo(function SessionPane({
                             session.id,
                             block.text,
                             block.attachments ?? [],
-                            { draftBlockId: block.id },
+                            {
+                              draftBlockId: block.id,
+                              ...(block.appRequestId
+                                ? { appRequestId: block.appRequestId }
+                                : {}),
+                            },
                           )
                       : undefined
                   }
@@ -733,6 +834,62 @@ export const SessionPane = memo(function SessionPane({
                       ? (target, turn) => onHandoff(session.id, target, turn)
                       : undefined
                   }
+                  onBtwSubmit={
+                    !managed &&
+                    btwEnabled &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwSubmit
+                      ? (threadId, messageId, text, turn, model, modelSettings) =>
+                          onBtwSubmit(
+                            session.id,
+                            turn,
+                            threadId,
+                            messageId,
+                            text,
+                            model,
+                            modelSettings,
+                          )
+                      : undefined
+                  }
+                  onBtwRetry={
+                    !managed &&
+                    btwEnabled &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwRetry
+                      ? (threadId, turn) =>
+                          onBtwRetry(session.id, turn, threadId)
+                      : undefined
+                  }
+                  onBtwDelete={
+                    !managed &&
+                    btwEnabled &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwDelete
+                      ? (threadId, turn) =>
+                          onBtwDelete(session.id, turn, threadId)
+                      : undefined
+                  }
+                  onBtwModelChange={
+                    !managed &&
+                    btwEnabled &&
+                    !session.inboxAsk &&
+                    !session.worktreeRemoved &&
+                    onBtwModelChange
+                      ? (threadId, model, modelSettings, turn) =>
+                          onBtwModelChange(
+                            session.id,
+                            turn,
+                            threadId,
+                            model,
+                            modelSettings,
+                          )
+                      : undefined
+                  }
+                  btwOpenRequest={btwOpenRequest}
+                  onBtwOpenRequestHandled={onBtwOpenRequestHandled}
                   onJumpToBottomChange={setShowJumpToBottom}
                   onJumpToBottomReady={onJumpToBottomReady}
                   onRevealReady={onRevealReady}

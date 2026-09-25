@@ -1,4 +1,9 @@
 import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
+import {
+  isQuickComposerShortcut,
+  QUICK_COMPOSER_DEFAULT_SHORTCUT,
+  quickComposerShortcutLabel,
+} from "../../quick-composer/model/quickComposerShortcut";
 import { readFlag, writeFlag } from "./storageFlags";
 
 const SECTION_KEY = "monocode.settingsSection";
@@ -63,8 +68,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "agents",
     label: "Chat",
     description:
-      "How transcripts read, what the composer does with a follow-up, and how diffs open.",
-    keywords: "transcript composer prompt message diff review layout",
+      "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open.",
+    keywords: "transcript composer prompt message diff review layout format save editor",
   },
   {
     id: "providers",
@@ -160,6 +165,16 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     label: "Notes",
     keywords: "notebook markdown rail scratchpad",
   },
+  ...(IS_MAC
+    ? [
+        {
+          id: "quick-composer",
+          section: "general" as const,
+          label: "Quick composer",
+          keywords: "spotlight global shortcut hotkey floating prompt anywhere",
+        },
+      ]
+    : []),
   {
     id: "working-agents",
     section: "general",
@@ -290,6 +305,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "chat",
     label: "Composer mascot",
     keywords: "runner animation coin fun",
+  },
+  {
+    id: "format-on-save",
+    section: "chat",
+    label: "Format on save",
+    keywords: "prettier quotes editor save format",
   },
   {
     id: "diff-view",
@@ -539,7 +560,7 @@ export function saveTabAnimationsEnabled(value: boolean) {
 export type CollapsedProjectRailMode = "compact" | "hidden";
 
 export const COLLAPSED_PROJECT_RAIL_MODE_DEFAULT: CollapsedProjectRailMode =
-  "hidden";
+  "compact";
 
 export const COLLAPSED_PROJECT_RAIL_MODE_CHANGE_EVENT =
   "monocode:collapsed-project-rail-mode-change";
@@ -669,6 +690,39 @@ export function subscribeNotesEnabled(onStoreChange: () => void) {
     window.removeEventListener(NOTES_ENABLED_CHANGE_EVENT, onStoreChange);
 }
 
+const QUICK_COMPOSER_ENABLED_KEY = "monocode.quickComposerEnabled";
+const QUICK_COMPOSER_SHORTCUT_KEY = "monocode.quickComposerShortcut";
+
+export const QUICK_COMPOSER_ENABLED_DEFAULT = true;
+
+export function loadQuickComposerEnabled(): boolean {
+  return readFlag(QUICK_COMPOSER_ENABLED_KEY) ?? QUICK_COMPOSER_ENABLED_DEFAULT;
+}
+
+export function saveQuickComposerEnabled(value: boolean) {
+  writeFlag(QUICK_COMPOSER_ENABLED_KEY, value);
+}
+
+export function loadQuickComposerShortcut(): string {
+  try {
+    const value = localStorage.getItem(QUICK_COMPOSER_SHORTCUT_KEY);
+    return value && isQuickComposerShortcut(value)
+      ? value
+      : QUICK_COMPOSER_DEFAULT_SHORTCUT;
+  } catch {
+    return QUICK_COMPOSER_DEFAULT_SHORTCUT;
+  }
+}
+
+export function saveQuickComposerShortcut(value: string) {
+  if (!isQuickComposerShortcut(value)) return;
+  try {
+    localStorage.setItem(QUICK_COMPOSER_SHORTCUT_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+}
+
 const LIVE_AGENTS_ENABLED_KEY = "monocode.liveAgentsEnabled";
 
 export const LIVE_AGENTS_ENABLED_DEFAULT = true;
@@ -783,6 +837,18 @@ export function subscribeDiffViewer(onStoreChange: () => void) {
     window.removeEventListener(DIFF_VIEWER_CHANGE_EVENT, onStoreChange);
 }
 
+const FORMAT_ON_SAVE_KEY = "monocode.formatOnSave";
+
+export const FORMAT_ON_SAVE_DEFAULT = true;
+
+export function loadFormatOnSave(): boolean {
+  return readFlag(FORMAT_ON_SAVE_KEY) ?? FORMAT_ON_SAVE_DEFAULT;
+}
+
+export function saveFormatOnSave(value: boolean) {
+  writeFlag(FORMAT_ON_SAVE_KEY, value);
+}
+
 const CLAUDE_HOOKS_KEY = "monocode.claudeHooks";
 
 export const CLAUDE_HOOKS_DEFAULT = true;
@@ -815,6 +881,15 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "App: Find in Files", keys: `${MOD}${SHIFT}F`, when: "Always" },
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
+  ...(IS_MAC
+    ? [
+        {
+          command: "App: Quick Composer",
+          keys: `${MOD}${SHIFT}Space`,
+          when: "Anywhere",
+        },
+      ]
+    : []),
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
   {
     command: "App: Toggle Session Sidebar",
@@ -898,6 +973,17 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "Editor: Find", keys: `${MOD}F`, when: "editorFocus" },
   { command: "Editor: Replace", keys: `${MOD}${ALT}F`, when: "editorFocus" },
 ];
+
+export function currentKeybindings(): KeybindingRow[] {
+  return KEYBINDINGS.map((row) =>
+    row.command === "App: Quick Composer"
+      ? {
+          ...row,
+          keys: quickComposerShortcutLabel(loadQuickComposerShortcut()),
+        }
+      : row,
+  );
+}
 
 export function filterKeybindings(
   rows: KeybindingRow[],

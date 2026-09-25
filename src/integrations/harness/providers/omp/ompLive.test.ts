@@ -210,6 +210,66 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
     },
   );
 
+  it.each([["pi", sendPiTurn], ["omp", sendOmpTurn]] as const)(
+    "keeps a %s tool finished when a progress update arrives after its end",
+    async (flavor, send) => {
+      const sessionId = `${flavor}-late-update`;
+      const turn = send({
+        ...input(sessionId, "Run it"),
+        model: `${flavor}:default`,
+      });
+      await vi.waitFor(() =>
+        expect(
+          transport.requests.some(
+            (r) => r.sessionId === sessionId && r.command.type === "prompt",
+          ),
+        ).toBe(true),
+      );
+      const text = (value: string) => ({
+        content: [{ type: "text", text: value }],
+      });
+      const update = {
+        type: "tool_execution_update",
+        toolCallId: "sh",
+        partialResult: text("building"),
+      };
+      try {
+        frame(sessionId, {
+          type: "tool_execution_start",
+          toolCallId: "sh",
+          toolName: "bash",
+          args: { command: "make" },
+        });
+        frame(sessionId, update);
+        frame(sessionId, {
+          type: "tool_execution_end",
+          toolCallId: "sh",
+          result: text("built"),
+          isError: false,
+        });
+        // omp#12875: steering during bash can deliver an update after the end.
+        frame(sessionId, update);
+        const row = events
+          .reduce(applyHarnessEvent, newSession(flavor, "/repo"))
+          .blocks.find((block) => block.tool?.callId === "sh");
+        expect(row?.tool).toMatchObject({
+          status: "completed",
+          detail: "built",
+        });
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "tool.updated",
+            status: "running",
+            detail: "building",
+          }),
+        );
+      } finally {
+        frame(sessionId, { type: "agent_end" });
+        await turn;
+      }
+    },
+  );
+
   it.each([
     ["pi", sendPiTurn, steerPiTurn],
     ["omp", sendOmpTurn, steerOmpTurn],

@@ -32,6 +32,7 @@ import Comment01Icon from "@hugeicons/core-free-icons/Comment01Icon";
 import CommentAdd01Icon from "@hugeicons/core-free-icons/CommentAdd01Icon";
 import ComputerTerminal01Icon from "@hugeicons/core-free-icons/ComputerTerminal01Icon";
 import Copy01Icon from "@hugeicons/core-free-icons/Copy01Icon";
+import CursorMagicSelection04Icon from "@hugeicons/core-free-icons/CursorMagicSelection04Icon";
 import Delete02Icon from "@hugeicons/core-free-icons/Delete02Icon";
 import DragDropVerticalIcon from "@hugeicons/core-free-icons/DragDropVerticalIcon";
 import File01Icon from "@hugeicons/core-free-icons/File01Icon";
@@ -52,6 +53,7 @@ import GitMergeIcon from "@hugeicons/core-free-icons/GitMergeIcon";
 import GitPullRequestClosedIcon from "@hugeicons/core-free-icons/GitPullRequestClosedIcon";
 import GitPullRequestDraftIcon from "@hugeicons/core-free-icons/GitPullRequestDraftIcon";
 import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
+import GlobeIcon from "@hugeicons/core-free-icons/GlobeIcon";
 import HelpCircleIcon from "@hugeicons/core-free-icons/HelpCircleIcon";
 import ImageAdd01Icon from "@hugeicons/core-free-icons/ImageAdd01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
@@ -84,11 +86,11 @@ import RotateCcwIcon from "@hugeicons/core-free-icons/RotateCcwIcon";
 import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
 import Settings01Icon from "@hugeicons/core-free-icons/Settings01Icon";
 import Share02Icon from "@hugeicons/core-free-icons/Share02Icon";
+import ShieldAlertIcon from "@hugeicons/core-free-icons/ShieldAlertIcon";
 import SidebarRight01Icon from "@hugeicons/core-free-icons/SidebarRight01Icon";
 import SparklesIcon from "@hugeicons/core-free-icons/SparklesIcon";
 import SquareIcon from "@hugeicons/core-free-icons/SquareIcon";
 import SquareLock02Icon from "@hugeicons/core-free-icons/SquareLock02Icon";
-import SquareUnlock01Icon from "@hugeicons/core-free-icons/SquareUnlock01Icon";
 import StarIcon from "@hugeicons/core-free-icons/StarIcon";
 import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import TickDouble02Icon from "@hugeicons/core-free-icons/TickDouble02Icon";
@@ -174,6 +176,10 @@ export const CircleX = wrap(CancelCircleIcon, "CircleX");
 export const CloudUpload = wrap(CloudUploadIcon, "CloudUpload");
 export const Clock = wrap(Clock01Icon, "Clock");
 export const Copy = wrap(Copy01Icon, "Copy");
+export const CursorMagicSelection = wrap(
+  CursorMagicSelection04Icon,
+  "CursorMagicSelection",
+);
 export const ExternalLink = wrap(LinkSquare02Icon, "ExternalLink");
 export const File = wrap(File01Icon, "File");
 export const FileDiff = wrap(FileDiffIcon, "FileDiff");
@@ -204,6 +210,7 @@ export const GitPullRequestDraft = wrap(
   "GitPullRequestDraft",
 );
 export const GripVertical = wrap(DragDropVerticalIcon, "GripVertical");
+export const Globe = wrap(GlobeIcon, "Globe");
 export const ImagePlus = wrap(ImageAdd01Icon, "ImagePlus");
 export const Inbox = wrap(InboxIcon, "Inbox");
 export const BellOff = wrap(NotificationOff01Icon, "BellOff");
@@ -214,7 +221,6 @@ export const ListFilter = wrap(FilterIcon, "ListFilter");
 export const Loader = wrap(Loading03Icon, "Loader");
 export const LoaderCircle = wrap(Loading03Icon, "LoaderCircle");
 export const Lock = wrap(SquareLock02Icon, "Lock");
-export const LockOpen = wrap(SquareUnlock01Icon, "LockOpen");
 export const Maximize2 = wrap(ArrowExpand01Icon, "Maximize2");
 export const MessageMultiple = wrap(MessageMultiple01Icon, "MessageMultiple");
 export const MessageSquare = wrap(Comment01Icon, "MessageSquare");
@@ -241,6 +247,7 @@ export const RotateCcw = wrap(RotateCcwIcon, "RotateCcw");
 export const Search = wrap(Search01Icon, "Search");
 export const Settings = wrap(Settings01Icon, "Settings");
 export const Share = wrap(Share02Icon, "Share");
+export const Shield = wrap(ShieldAlertIcon, "Shield");
 export const SlidersHorizontal = wrap(
   PreferenceHorizontalIcon,
   "SlidersHorizontal",

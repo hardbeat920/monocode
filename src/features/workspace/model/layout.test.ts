@@ -31,13 +31,102 @@ import {
   openCommitTab,
   openEditorTab,
   openSessionChangesTab,
+  pinEditorFile,
+  openWorkspaceFile,
   openTerminalTab,
   paneEdgeFromPoint,
   placePane,
   splitPane,
   splitSizesAtBoundary,
   updateTerminalTab,
+  type WorkspaceTab,
 } from "./layout";
+
+describe("preview tabs", () => {
+  const paths = (tab: WorkspaceTab) =>
+    tab.editorPanes[0]?.files.map((file) => [file.path, !!file.preview]);
+
+  it("replaces the pane's preview in place and keeps permanent tabs", () => {
+    let tab = openEditorTab(newTab("s"), newFileTab("/r/a.ts", "/r"), {
+      pin: true,
+    });
+    tab = openEditorTab(tab, newFileTab("/r/b.ts", "/r"));
+    tab = openEditorTab(tab, newFileTab("/r/c.ts", "/r", true));
+    tab = openEditorTab(
+      tab,
+      newCommitTab("/r", { sha: "1", shortSha: "1", subject: "x" }),
+    );
+    expect(paths(tab)).toEqual([
+      ["/r/a.ts", false],
+      ["commit:1", true],
+    ]);
+    expect(tab.editorPanes[0]?.activeFileId).toBe(
+      tab.editorPanes[0]?.files[1]?.id,
+    );
+  });
+
+  it("promotes an open preview when reopened pinned, and pinEditorFile does the same", () => {
+    let tab = openEditorTab(newTab("s"), newFileTab("/r/a.ts", "/r"));
+    tab = openEditorTab(tab, newFileTab("/r/a.ts", "/r"), { pin: true });
+    tab = openEditorTab(tab, newFileTab("/r/b.ts", "/r"));
+    expect(paths(tab)).toEqual([
+      ["/r/a.ts", false],
+      ["/r/b.ts", true],
+    ]);
+    const previewId = tab.editorPanes[0]!.files[1]!.id;
+    tab = pinEditorFile(tab, previewId);
+    tab = openEditorTab(tab, newFileTab("/r/c.ts", "/r"));
+    expect(paths(tab)?.map(([path]) => path)).toEqual([
+      "/r/a.ts",
+      "/r/b.ts",
+      "/r/c.ts",
+    ]);
+    expect(pinEditorFile(tab, previewId)).toBe(tab);
+  });
+
+  it("never makes plans or Changes reviews previews", () => {
+    let tab = openEditorTab(newTab("s"), newPlanTab("s", "p", "Plan", "/r"));
+    tab = openChangesTab(tab, "/r");
+    tab = openEditorTab(tab, newFileTab("/r/a.ts", "/r"));
+    expect(paths(tab)?.map(([, preview]) => preview)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it("workspace mode: back-to-back opens share one preview per project", () => {
+    const append = (tabs: WorkspaceTab[], tab: WorkspaceTab) => [
+      ...tabs,
+      tab,
+    ];
+    const open = (
+      tabs: WorkspaceTab[],
+      path: string,
+      cwd: string,
+      pin = false,
+    ) => {
+      const file = newFileTab(path, cwd);
+      const created = newEditorWorkspaceTab(
+        pin ? file : { ...file, preview: true },
+      );
+      return openWorkspaceFile(tabs, file, created, append, pin).tabs;
+    };
+    // Each open reads the previous result, as chained state updaters do.
+    let tabs = open([newTab("s")], "/r/a.ts", "/r");
+    tabs = open(tabs, "/r/b.ts", "/r");
+    tabs = open(tabs, "/other/c.ts", "/other");
+    const files = () =>
+      tabs
+        .slice(1)
+        .map((tab) => tab.editorPanes[0]?.files.map((file) => file.path));
+    expect(files()).toEqual([["/r/b.ts"], ["/other/c.ts"]]);
+
+    tabs = open(tabs, "/r/d.ts", "/r", true);
+    tabs = open(tabs, "/r/e.ts", "/r");
+    expect(files()).toEqual([["/r/e.ts"], ["/other/c.ts"], ["/r/d.ts"]]);
+  });
+});
 
 describe("splitSizesAtBoundary", () => {
   it("moves only the adjacent panes and preserves their total", () => {
@@ -130,6 +219,8 @@ describe("openSessionChangesTab", () => {
       cwd,
       "session-a",
       "/repo/a.ts",
+      undefined,
+      true,
     );
     const focused = openSessionChangesTab(
       first,
@@ -158,7 +249,7 @@ describe("openChangesTab", () => {
   it("keeps Changes and per-file reviews independent across worktrees", () => {
     const main = openChangesTab(newTab("session-a"), "/repo");
     const mainReview = newFileTab("/repo/a.ts", "/repo", true);
-    const withReview = openEditorTab(main, mainReview);
+    const withReview = openEditorTab(main, mainReview, { pin: true });
     const worktree = openChangesTab(
       withReview,
       "/repo-worktrees/feature",
@@ -332,7 +423,7 @@ describe("openTerminalTab", () => {
 describe("closeLeaf", () => {
   it("keeps a file pane when the last chat is closed", () => {
     const file = newFileTab("/repo/App.tsx", "/repo");
-    const tab = openEditorTab(newTab("session-a"), file);
+    const tab = openEditorTab(newTab("session-a"), file, { pin: true });
     const next = closeLeaf(tab, "session-a");
     expect(next).not.toBeNull();
     expect(layoutLeaves(next!.layout).map((pane) => pane.id)).toEqual([

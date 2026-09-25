@@ -1,4 +1,4 @@
-import type { ContextUsage } from "./contextUsage";
+import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
 import type { InboxComposerCard } from "../../inbox/model/githubTasks";
@@ -8,10 +8,12 @@ import type { OrchestrationProposal } from "../../orchestration/model/orchestrat
 import type { LinkedWorkItemUpdateCard } from "../../inbox/model/linkedWorkItemActivity";
 import {
   defaultSessionChoice,
+  firstEnabledHarness,
   preferredModelId,
   preferredModelSettings,
   resolveModel,
 } from "./models";
+import { loadProjectProviderSettings } from "./projectProviders";
 
 export type HarnessId =
   | "claude"
@@ -110,6 +112,39 @@ export type HandoffMeta = {
   status: HandoffStatus;
   /** Inject this brief into prompts to `to` until that harness accepts a turn. */
   pending?: boolean;
+};
+
+/** One persisted question/answer in a completed turn's side conversation. */
+export type BtwMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: number;
+  /** Rich harness activity for assistant replies, when available. */
+  blocks?: Block[];
+};
+
+export type BtwThreadStatus = "running" | "ready" | "error";
+
+/** Independent, read-only "by the way" conversation anchored to a turn. */
+export type BtwThread = {
+  id: string;
+  sourceEndBlockId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: BtwThreadStatus;
+  messages: BtwMessage[];
+  /** Provider that answered this side thread. */
+  harness?: HarnessId;
+  /** Selected harness model for this side thread; absent means session default. */
+  model?: string;
+  /** Provider settings selected for this side thread's model. */
+  modelSettings?: Record<string, string>;
+  /** Provider-specific side-thread id when the text runner supports resume. */
+  providerThreadId?: string;
+  error?: string;
+  /** Live harness blocks for the in-flight reply; not persisted. */
+  pendingBlocks?: Block[];
 };
 
 /** Compact transcript card for a second-opinion or split-pane handoff turn. */
@@ -214,6 +249,14 @@ export type QueuedMessage = {
 
 export type MessageQueueStatus = "active" | "paused" | "resuming";
 
+/** The provider stopped the last turn at a usage limit. */
+export type UsageLimit = {
+  /** Epoch ms when the provider's window resets, once known. */
+  resetsAt?: number;
+  /** Send a continue turn once the window resets. */
+  resumeAtReset?: boolean;
+};
+
 /** Provider/model provenance captured when a user turn is submitted. */
 export type TurnModel = {
   harness: HarnessId;
@@ -247,6 +290,10 @@ export type Block = {
   providerTurnId?: string;
   /** User turn saved to the session but not submitted to the harness yet. */
   draft?: boolean;
+  /** This user turn activated MonoCode app access for its thread. */
+  monocode?: boolean;
+  /** Stable CLI request that submitted this turn, for safe retries. */
+  appRequestId?: string;
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;
   tool?: {
@@ -256,6 +303,8 @@ export type Block = {
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    /** Left running by the agent when it yielded; the turn waits on it. */
+    background?: boolean;
   };
   approval?: {
     requestId: number;
@@ -276,8 +325,11 @@ export type Block = {
   internal?: boolean;
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
-  /** Note chip shown on this user turn. Body is not stored; the harness already received it. */
+  /** Independent read-only side conversations anchored to this user turn. */
+  btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
+  /** Exact CI repair instructions and evidence supplied with this user turn. */
+  ciContext?: string;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
   interjection?: InterjectionMeta;
   /**
@@ -318,12 +370,15 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
   supervised: "Ask before commands and file changes.",
   "auto-accept-edits": "Auto-approve edits, ask before other actions.",
   auto: "An AI reviewer can approve or deny actions.",
-  "full-access": "Allow commands and edits without prompts.",
+  "full-access":
+    "Allow commands, edits, and supported MCP confirmations in non-plan turns without prompts.",
 };
 
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
+  /** Receipt for an acknowledged floating-composer handoff. */
+  quickLaunchAccepted?: boolean;
   /** Internal worker: displayed in its lead's panel rather than a workspace tab. */
   orchestrationLeadId?: string;
   /** Temporary Inbox conversation: shares the runtime, never saved as a session. */
@@ -339,12 +394,19 @@ export type Session = {
   blocks: Block[];
   /** True while a harness turn is in flight. */
   busy?: boolean;
+  /**
+   * What the live turn is waiting on after the agent yielded with work still
+   * running in the background. In-memory only.
+   */
+  backgroundTasks?: string[];
   /** Follow-ups waiting for current turn. In-memory only. */
   queuedMessages?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
   queueStatus?: MessageQueueStatus;
   /** Prevent auto-dispatch while this queued row is being edited. In-memory only. */
   editingQueuedMessageId?: string;
+  /** Last turn hit a provider usage limit; cleared by the next send. In-memory only. */
+  usageLimit?: UsageLimit;
   /** Provider-side conversation id (Cursor ACP session id). */
   providerSessionId?: string;
   /** Named local credential profile used by Claude or Codex. */
@@ -453,12 +515,93 @@ export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
 ): Session {
-  const choice = defaultSessionChoice();
+  const choice = defaultSessionChoice(cwd);
   return newSession(choice.harness, cwd, choice.model, runtimeMode);
 }
 
+/**
+ * Provider and model a seeded session should use in `cwd`. The project's own
+ * default provider and model win over the seed; when the project has neither,
+ * the seed's provider and model are carried. A provider the project hides is
+ * swapped for its first enabled one.
+ */
+function projectSessionChoice(
+  seed: Pick<Session, "harness" | "model"> | undefined,
+  cwd: string,
+): { harness: HarnessId; model?: string } {
+  const project = loadProjectProviderSettings(cwd);
+  const seedHarness = seed?.harness ?? "claude";
+  const harness = firstEnabledHarness(
+    cwd,
+    project.defaultHarness ?? seedHarness,
+  );
+  const model =
+    project.models?.[harness] ??
+    (project.defaultHarness === harness ? project.defaultModel : undefined) ??
+    (project.defaultHarness == null && harness === seedHarness
+      ? seed?.model
+      : undefined);
+  return { harness, model };
+}
+
+/**
+ * New conversation for a project. The project's default provider and model win
+ * over the seed's; a provider the project has hidden is swapped for its first
+ * enabled one.
+ */
+export function newSessionForProject(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
+  const { harness, model } = projectSessionChoice(seed, cwd);
+  const carriesSeed =
+    model != null && model === seed?.model && harness === seed?.harness;
+  return newSession(
+    harness,
+    cwd,
+    model,
+    seed?.runtimeMode,
+    carriesSeed ? seed?.modelSettings : undefined,
+  );
+}
+
+/**
+ * Retarget an existing session (typically a blank one) to a project, adopting
+ * that project's provider defaults while keeping its id, blocks and composer
+ * seed.
+ */
+export function retargetSessionToProject(
+  session: Session,
+  cwd: string,
+): Session {
+  const { harness, model } = projectSessionChoice(session, cwd);
+  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const carriesSeed =
+    model != null && model === session.model && harness === session.harness;
+  return {
+    ...session,
+    cwd,
+    harness,
+    model: resolved.id,
+    modelSettings: preferredModelSettings(
+      resolved,
+      carriesSeed ? session.modelSettings : undefined,
+    ),
+    title: HARNESS_LABEL[harness],
+    ...(harness === session.harness
+      ? {}
+      : { providerSessionId: undefined, providerAccountId: undefined }),
+    ...(resolved.id === session.model
+      ? {}
+      : { context: dropContextWindow(session.context) }),
+  };
+}
+
 /** New conversation carrying another session's harness, model and settings. */
-export function newSessionLike(seed: Session | undefined, cwd: string): Session {
+export function newSessionLike(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
   return newSession(
     seed?.harness ?? "claude",
     cwd,

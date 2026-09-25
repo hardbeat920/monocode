@@ -25,6 +25,132 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("shows a /operator request without the command in its amber bubble", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "list my notes", monocode: true },
+    ]);
+    expect(markup).toContain('data-monocode="true"');
+    expect(markup).toContain("list my notes");
+    expect(markup).not.toContain("/operator");
+
+    const legacy = render([
+      { id: "old", role: "user", text: "/monocode list my notes" },
+    ]);
+    expect(legacy).toContain('data-monocode="true"');
+    expect(legacy).not.toContain("/monocode");
+  });
+
+  it("shows MonoCode CLI actions instead of their long shell commands", () => {
+    const command =
+      "/repo/target/debug/MonoCode.app/Contents/MacOS/monocode";
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "/monocode list my notes" },
+        {
+          id: "help",
+          role: "tool",
+          text: `${command} app --help`,
+          tool: { kind: "shell", status: "completed" },
+        },
+        {
+          id: "notes",
+          role: "tool",
+          text: `${command} app notes.list --json '{}'`,
+          tool: { kind: "shell", status: "in_progress" },
+        },
+      ],
+      true,
+    );
+    expect(markup).toContain("Using MonoCode");
+    expect(markup).toContain('data-monocode-tool-call="--help"');
+    expect(markup).toContain('data-monocode-tool-call="notes.list"');
+    expect(markup).toContain("monocode app --help");
+    expect(markup).toContain("monocode app notes.list");
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("Running");
+    expect(markup).not.toContain("Contents/MacOS/monocode");
+    expect(markup).not.toContain("Show error details for MonoCode");
+  });
+
+  it("shows the full command before approving a MonoCode CLI call", () => {
+    const command = "monocode app sessions.send --json '{\"prompt\":\"private-marker\"}'";
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [
+          { id: "user", role: "user", text: "Send a follow-up" },
+          {
+            id: "call",
+            role: "tool",
+            text: command,
+            tool: { kind: "shell", status: "pending" },
+            approval: { requestId: 1 },
+          },
+        ],
+        busy: true,
+        onApproval: () => {},
+      }),
+    );
+    expect(markup).toContain('data-monocode-tool-call="sessions.send"');
+    expect(markup).toContain("private-marker");
+    expect(markup).toContain("Allow</button>");
+
+    const compound = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [
+          { id: "user", role: "user", text: "List notes" },
+          {
+            id: "call",
+            role: "tool",
+            text: "monocode app notes.list && echo extra",
+            tool: { kind: "shell", status: "pending" },
+            approval: { requestId: 2 },
+          },
+        ],
+        busy: true,
+        onApproval: () => {},
+      }),
+    );
+    expect(compound).not.toContain("data-monocode-tool-call");
+    expect(compound).toContain("echo extra");
+    expect(compound).toContain("Allow</button>");
+  });
+
+  it("keeps a failed MonoCode call compact until its error is opened", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "/monocode list notes" },
+      {
+        id: "notes",
+        role: "tool",
+        text: "monocode app notes.list",
+        tool: { kind: "shell", status: "failed", detail: "Connection refused" },
+      },
+    ]);
+    expect(markup).toContain('data-monocode-tool-call="notes.list"');
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("monocode app notes.list");
+    expect(markup).toContain("Show error details for MonoCode: List notes");
+    expect(markup).not.toContain("Connection refused");
+  });
+
+  it("offers the saved CI context in a collapsed disclosure beside the short request", () => {
+    const markup = render([
+      {
+        id: "ci-repair",
+        role: "user",
+        text: "Fix 1 failed CI check for acme/web PR #42.",
+        ciContext:
+          "Checked commit: abc123\n\nRun tests: expected <main>, received <script>",
+      },
+    ]);
+    expect(markup).toContain("Fix 1 failed CI check for acme/web PR #42.");
+    expect(markup).toMatch(/<details\b[^>]*>/);
+    expect(markup).not.toMatch(/<details\b[^>]*\bopen[\s=>]/);
+    expect(markup).toContain("CI context</span>");
+    expect(markup).toContain(
+      "Checked commit: abc123\n\nRun tests: expected &lt;main&gt;, received &lt;script&gt;",
+    );
+  });
+
   it("hides provider authentication errors handled by the sign-in modal", () => {
     const markup = renderToStaticMarkup(
       createElement(AgentTranscript, {

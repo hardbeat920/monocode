@@ -7,6 +7,7 @@ import {
   prettyCwd,
   projectName,
   rebasePath,
+  setHomeDir,
   slash,
   resolveWorkspaceFileReference,
   resolveWorkspacePath,
@@ -105,6 +106,63 @@ describe("workspace file references", () => {
     expect(resolveWorkspacePath("//server/share/file.md", "C:/repo")).toBe(
       "//server/share/file.md",
     );
+  });
+
+  it("expands a leading ~/ to the home directory recognised in cwd, not a path relative to cwd", () => {
+    expect(
+      resolveWorkspacePath(
+        "~/.codex/skills/zuse/SKILL.md",
+        "/Users/dev/project",
+      ),
+    ).toBe("/Users/dev/.codex/skills/zuse/SKILL.md");
+    expect(resolveWorkspacePath("~", "/Users/dev/project")).toBe(
+      "/Users/dev",
+    );
+    expect(
+      resolveWorkspacePath("~/skills/SKILL.md", "C:/Users/dev/project"),
+    ).toBe("C:/Users/dev/skills/SKILL.md");
+  });
+
+  it("recognises a Windows home directory regardless of the Users segment's case", () => {
+    // A cwd like "C:/users/dev/project" (lowercase "users") is just as valid
+    // a Windows home shape as "C:/Users/dev/project" - the OS itself is not
+    // case-sensitive here, so cwd-based inference should not be either.
+    expect(
+      resolveWorkspacePath("~/notes.md", "c:/users/dev/project"),
+    ).toBe("c:/users/dev/notes.md");
+  });
+
+  it("leaves a ~/ reference unresolved when cwd has no recognisable home directory", () => {
+    expect(
+      resolveWorkspacePath("~/.codex/skills/zuse/SKILL.md", "/data/project"),
+    ).toBeUndefined();
+    expect(
+      resolveWorkspacePath("~/.codex/skills/zuse/SKILL.md", undefined),
+    ).toBeUndefined();
+  });
+
+  it("prefers a primed real home directory over inferring one from cwd", () => {
+    setHomeDir("/opt/ci-runner-home");
+    try {
+      expect(
+        resolveWorkspacePath("~/.codex/skills/zuse/SKILL.md", "/data/project"),
+      ).toBe("/opt/ci-runner-home/.codex/skills/zuse/SKILL.md");
+      // Wins even when cwd itself would resolve to a different home - it is
+      // the real OS home directory, not a guess.
+      expect(
+        resolveWorkspacePath("~/notes.md", "/Users/dev/project"),
+      ).toBe("/opt/ci-runner-home/notes.md");
+    } finally {
+      setHomeDir(undefined);
+    }
+  });
+
+  it("falls back to cwd inference once the primed home directory is cleared", () => {
+    setHomeDir("/opt/ci-runner-home");
+    setHomeDir(undefined);
+    expect(
+      resolveWorkspacePath("~/.codex/skills/zuse/SKILL.md", "/data/project"),
+    ).toBeUndefined();
   });
 });
 

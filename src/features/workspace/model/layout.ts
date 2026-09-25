@@ -6,6 +6,7 @@ import {
   type TerminalMetaPatch,
 } from "../../terminal/model/terminalTab";
 import type { HarnessId } from "../../sessions/model/session";
+import { pathKey } from "../../../shared/lib/paths";
 
 /**
  * Split tree for a tab. Same-direction splits share a group so
@@ -76,6 +77,8 @@ export type FilePaneTab = {
   terminal?: boolean;
   /** Foreground command when it isn't the shell. Live only — not persisted. */
   foreground?: string;
+  /** Temporary tab: the next preview open in its pane replaces it. */
+  preview?: boolean;
 };
 
 export type EditorPane = {
@@ -240,6 +243,58 @@ export function newEditorWorkspaceTab(file: FilePaneTab): WorkspaceTab {
     focusedId: pane.id,
     editorPanes: [pane],
     terminalPanes: [],
+  };
+}
+
+/** The file of a top-level tab that holds nothing but one preview file. */
+export function previewWorkspaceFile(
+  tab: WorkspaceTab,
+): FilePaneTab | undefined {
+  const [pane] = tab.editorPanes;
+  if (
+    tab.layout.type !== "leaf" ||
+    tab.layout.id !== pane?.id ||
+    tab.editorPanes.length !== 1 ||
+    (tab.terminalPanes ?? []).length > 0 ||
+    pane.files.length !== 1
+  ) {
+    return undefined;
+  }
+  return pane.files[0].preview ? pane.files[0] : undefined;
+}
+
+/**
+ * Workspace file-tab mode: focus the tab already showing `file`, else reuse
+ * the project's preview tab, else insert `created`. Pure over `tabs` so it
+ * runs inside a state updater and sees opens that have not rendered yet.
+ */
+export function openWorkspaceFile(
+  tabs: WorkspaceTab[],
+  file: FilePaneTab,
+  created: WorkspaceTab,
+  insert: (tabs: WorkspaceTab[], tab: WorkspaceTab) => WorkspaceTab[],
+  pin = false,
+): { tabs: WorkspaceTab[]; tabId: string; paneId?: string } {
+  const key = editorTabKey(file);
+  const project = pathKey(file.projectCwd ?? file.cwd);
+  const existing = tabs
+    .flatMap((tab) => tab.editorPanes.map((pane) => ({ tab, pane })))
+    .find(({ pane }) => pane.files.some((open) => editorTabKey(open) === key));
+  const hit =
+    existing?.tab ??
+    (pin
+      ? undefined
+      : tabs.find((tab) => {
+          const open = previewWorkspaceFile(tab);
+          return !!open && pathKey(open.projectCwd ?? open.cwd) === project;
+        }));
+  if (!hit) return { tabs: insert(tabs, created), tabId: created.id };
+  return {
+    tabs: tabs.map((tab) =>
+      tab === hit ? openEditorTab(tab, file, { pin }) : tab,
+    ),
+    tabId: hit.id,
+    paneId: existing?.pane.id ?? hit.editorPanes[0].id,
   };
 }
 
@@ -481,7 +536,43 @@ export function newEditorPane(file: FilePaneTab): EditorPane {
 export type OpenEditorTabOptions = {
   /** Which side of the focused non-editor pane receives a new editor pane. */
   split?: "left" | "right";
+  /** Open (or promote an existing tab) as permanent instead of preview. */
+  pin?: boolean;
 };
+
+/** Tabs opened by browsing lists: files, per-file diffs, commits, session diffs. */
+export function isPreviewableTab(file: FilePaneTab): boolean {
+  return (
+    !file.terminal &&
+    !file.agent &&
+    !file.plan &&
+    !file.releaseNotes &&
+    !file.changes
+  );
+}
+
+function withoutPreview(file: FilePaneTab): FilePaneTab {
+  if (!file.preview) return file;
+  const { preview: _preview, ...rest } = file;
+  return rest;
+}
+
+/** Make a preview tab permanent. Returns `tab` unchanged when nothing matched. */
+export function pinEditorFile(tab: WorkspaceTab, fileId: string): WorkspaceTab {
+  let changed = false;
+  const editorPanes = tab.editorPanes.map((pane) => {
+    const file = pane.files.find((entry) => entry.id === fileId);
+    if (!file?.preview) return pane;
+    changed = true;
+    return {
+      ...pane,
+      files: pane.files.map((entry) =>
+        entry === file ? withoutPreview(entry) : entry,
+      ),
+    };
+  });
+  return changed ? { ...tab, editorPanes } : tab;
+}
 
 /** Focus an existing editor tab, or open it in the focused editor pane / a new split. */
 export function openEditorTab(
@@ -506,15 +597,36 @@ export function openEditorTab(
       diffFocused: false,
       editorPanes: tab.editorPanes.map((pane) =>
         pane.id === existingPane.id
-          ? { ...pane, activeFileId: existingFile.id }
+          ? {
+              ...pane,
+              files: options.pin
+                ? pane.files.map((entry) =>
+                    entry === existingFile ? withoutPreview(entry) : entry,
+                  )
+                : pane.files,
+              activeFileId: existingFile.id,
+            }
           : pane,
       ),
     };
   }
 
+  file =
+    isPreviewableTab(file) && !options.pin
+      ? { ...file, preview: true }
+      : withoutPreview(file);
   const focusedPane = tab.editorPanes.find((pane) => pane.id === tab.focusedId);
   const targetPane = focusedPane ?? tab.editorPanes[0];
   if (targetPane) {
+    const previewIndex = file.preview
+      ? targetPane.files.findIndex((entry) => entry.preview)
+      : -1;
+    const files =
+      previewIndex >= 0
+        ? targetPane.files.map((entry, index) =>
+            index === previewIndex ? file : entry,
+          )
+        : [...targetPane.files, file];
     return {
       ...tab,
       focusedId: targetPane.id,
@@ -523,7 +635,7 @@ export function openEditorTab(
         pane.id === targetPane.id
           ? {
               ...pane,
-              files: [...pane.files, file],
+              files,
               activeFileId: file.id,
             }
           : pane,
@@ -612,6 +724,7 @@ export function openSessionChangesTab(
   sessionId: string,
   focusPath?: string,
   projectCwd?: string,
+  pin = false,
 ): WorkspaceTab {
   const next = newSessionChangesTab(cwd, sessionId, focusPath, projectCwd);
   const key = editorTabKey(next);
@@ -621,9 +734,12 @@ export function openSessionChangesTab(
   const existingFile = existingPane?.files.find(
     (file) => editorTabKey(file) === key,
   );
-  if (!existingPane || !existingFile) return openEditorTab(tab, next);
+  if (!existingPane || !existingFile) return openEditorTab(tab, next, { pin });
 
-  const updated = focusPath ? { ...existingFile, path: focusPath } : existingFile;
+  const focused = focusPath
+    ? { ...existingFile, path: focusPath }
+    : existingFile;
+  const updated = pin ? withoutPreview(focused) : focused;
   return {
     ...tab,
     focusedId: existingPane.id,
@@ -648,8 +764,9 @@ export function openCommitTab(
   cwd: string,
   commit: CommitTabSource,
   projectCwd?: string,
+  pin = false,
 ): WorkspaceTab {
-  return openEditorTab(tab, newCommitTab(cwd, commit, projectCwd));
+  return openEditorTab(tab, newCommitTab(cwd, commit, projectCwd), { pin });
 }
 
 function dropPerFileReviewTabs(files: FilePaneTab[], cwd: string): FilePaneTab[] {

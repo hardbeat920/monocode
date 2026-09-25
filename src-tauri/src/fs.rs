@@ -1378,6 +1378,176 @@ pub async fn git_github_pr_diff(
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPrCheck {
+    pub name: String,
+    pub workflow: String,
+    pub state: String,
+    pub url: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPrChecks {
+    pub head_oid: String,
+    pub checks: Vec<GitHubPrCheck>,
+}
+
+/// CI checks for one pull request, targeted explicitly by `repo` and `number` via `gh`.
+#[tauri::command]
+pub async fn git_github_pr_checks(
+    cwd: String,
+    repo: String,
+    number: i64,
+) -> Result<GitHubPrChecks, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_github_pr_checks_for(&expand_home(&cwd), &repo, number)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubCheckDetails {
+    steps: Vec<GitHubCheckStep>,
+    annotations: Vec<GitHubCheckAnnotation>,
+    notice: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct GitHubCheckStep {
+    name: String,
+    state: String,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct GitHubCheckAnnotation {
+    #[serde(default)]
+    path: String,
+    #[serde(default, rename(deserialize = "start_line"))]
+    line: u64,
+    #[serde(default)]
+    message: String,
+    #[serde(default, rename(deserialize = "annotation_level"))]
+    level: String,
+}
+
+#[tauri::command]
+pub async fn git_github_check_details(
+    cwd: String,
+    repo: String,
+    job_id: String,
+) -> Result<GitHubCheckDetails, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        github_check_details_with(&repo, &job_id, |endpoint| {
+            gh_checked(
+                &expand_home(&cwd),
+                &["api", "--hostname", "github.com", endpoint],
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn github_check_details_with(
+    repo: &str,
+    job_id: &str,
+    mut fetch: impl FnMut(&str) -> Result<String, String>,
+) -> Result<GitHubCheckDetails, String> {
+    let (owner, name) = split_github_repo(repo)?;
+    // Only repository slugs and numeric IDs can enter API paths.
+    if [&owner, &name].iter().any(|part| {
+        matches!(part.as_str(), "." | "..")
+            || !part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    }) || job_id.parse::<u64>().ok().filter(|id| *id > 0).is_none()
+        || !job_id.bytes().all(|c| c.is_ascii_digit())
+    {
+        return Err("Invalid GitHub repository or job ID".into());
+    }
+    #[derive(Deserialize)]
+    struct Step {
+        name: String,
+        status: String,
+        conclusion: Option<String>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Job {
+        id: u64,
+        #[serde(default)]
+        steps: Vec<Step>,
+        check_run_url: Option<String>,
+    }
+    let prefix = format!("repos/{owner}/{name}");
+    let json = fetch(&format!("{prefix}/actions/jobs/{job_id}"))?;
+    let job: Job = serde_json::from_str(&json).map_err(|error| error.to_string())?;
+    if job.id.to_string() != job_id {
+        return Err("GitHub returned a different job".into());
+    }
+    let mut details = GitHubCheckDetails {
+        steps: job
+            .steps
+            .into_iter()
+            .map(|step| GitHubCheckStep {
+                name: step.name,
+                state: github_check_state(
+                    &step.status,
+                    step.conclusion.as_deref().unwrap_or_default(),
+                ),
+                started_at: step.started_at,
+                completed_at: step.completed_at,
+            })
+            .collect(),
+        annotations: vec![],
+        notice: None,
+    };
+    let check_prefix = format!("https://api.github.com/{prefix}/check-runs/");
+    let check_id = job
+        .check_run_url
+        .as_deref()
+        .and_then(|value| value.strip_prefix(&check_prefix))
+        .filter(|value| !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit()));
+    if let Some(check_id) = check_id {
+        let annotations = fetch(&format!(
+            "{prefix}/check-runs/{check_id}/annotations?per_page=100"
+        ))
+        .and_then(|json| {
+            serde_json::from_str::<Vec<GitHubCheckAnnotation>>(&json)
+                .map_err(|error| error.to_string())
+        });
+        match annotations {
+            Ok(annotations) => {
+                if annotations.len() == 100 {
+                    details.notice = Some(
+                        "Showing the first 100 annotations. View the full log on GitHub for more."
+                            .into(),
+                    );
+                }
+                details.annotations = annotations;
+            }
+            Err(_) => {
+                details.notice =
+                    Some("Could not load error annotations. View the full log on GitHub.".into())
+            }
+        }
+    } else {
+        details.notice =
+            Some("Error annotations are unavailable. View the full log on GitHub.".into());
+    }
+    Ok(details)
+}
+
 #[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranches {
@@ -3269,6 +3439,140 @@ fn parse_github_pr_oids(json: &str) -> Result<(String, String), String> {
     Ok((base.to_string(), head.to_string()))
 }
 
+fn git_github_pr_checks_for(
+    root: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<GitHubPrChecks, String> {
+    let args = github_pr_checks_args(repo, number)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let json = gh_checked(root, &refs)?;
+    parse_github_pr_checks(&json)
+}
+
+fn github_pr_checks_args(repo: &str, number: i64) -> Result<Vec<String>, String> {
+    if number <= 0 {
+        return Err("GitHub pull request number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let repo = format!("{owner}/{name}");
+    let number = number.to_string();
+    Ok(vec![
+        "pr".into(),
+        "view".into(),
+        number,
+        "--repo".into(),
+        repo,
+        "--json".into(),
+        "headRefOid,statusCheckRollup".into(),
+    ])
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitHubStatusCheckRow {
+    #[serde(default, rename = "__typename")]
+    typename: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    context: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    workflow_name: String,
+    #[serde(default)]
+    details_url: Option<String>,
+    #[serde(default)]
+    target_url: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    completed_at: Option<String>,
+}
+
+fn parse_github_pr_checks(json: &str) -> Result<GitHubPrChecks, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Row {
+        #[serde(default)]
+        head_ref_oid: String,
+        #[serde(default)]
+        status_check_rollup: Option<Vec<GitHubStatusCheckRow>>,
+    }
+    let row: Row = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let head_oid = row.head_ref_oid.trim().to_string();
+    if head_oid.is_empty() {
+        return Err("Pull request is missing head commit".into());
+    }
+    Ok(GitHubPrChecks {
+        head_oid,
+        checks: row
+            .status_check_rollup
+            .unwrap_or_default()
+            .into_iter()
+            .map(github_pr_check_from_row)
+            .collect(),
+    })
+}
+
+fn github_pr_check_from_row(row: GitHubStatusCheckRow) -> GitHubPrCheck {
+    let is_status_context = if row.typename.is_empty() {
+        !row.context.is_empty()
+    } else {
+        row.typename.eq_ignore_ascii_case("StatusContext")
+    };
+    if is_status_context {
+        return GitHubPrCheck {
+            name: row.context,
+            workflow: String::new(),
+            state: github_check_conclusion_state(&row.state),
+            url: row.target_url.filter(|url| !url.trim().is_empty()),
+            started_at: row.created_at,
+            completed_at: None,
+        };
+    }
+    GitHubPrCheck {
+        name: row.name,
+        workflow: row.workflow_name,
+        state: github_check_state(&row.status, row.conclusion.as_deref().unwrap_or_default()),
+        url: row.details_url.filter(|url| !url.trim().is_empty()),
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+    }
+}
+
+/// An unfinished CheckRun reports its execution state instead of a stale
+/// conclusion. Only a completed or entirely missing status trusts the
+/// conclusion; any other nonempty status stays unknown.
+fn github_check_state(status: &str, conclusion: &str) -> String {
+    match status.trim().to_ascii_uppercase().as_str() {
+        "QUEUED" | "IN_PROGRESS" | "PENDING" | "WAITING" | "REQUESTED" => {
+            return "pending".into();
+        }
+        "COMPLETED" | "" => return github_check_conclusion_state(conclusion),
+        _ => {}
+    }
+    "unknown".into()
+}
+
+fn github_check_conclusion_state(value: &str) -> String {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "SUCCESS" => "pass".into(),
+        "FAILURE" | "ERROR" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "fail".into(),
+        "QUEUED" | "IN_PROGRESS" | "PENDING" | "WAITING" | "REQUESTED" => "pending".into(),
+        "NEUTRAL" | "SKIPPED" => "skipping".into(),
+        "CANCELLED" => "cancel".into(),
+        _ => "unknown".into(),
+    }
+}
+
 fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<(String, bool), String> {
     ensure_git_commit(root, base)?;
     ensure_git_commit(root, head)?;
@@ -3281,7 +3585,8 @@ fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<(String,
             "diff",
             "--no-color",
             "--no-ext-diff",
-            "--default-prefix",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
             &context,
             &three_dot,
         ],
@@ -6983,6 +7288,248 @@ mod tests {
         assert_eq!(
             parse_github_pr_oids(json).unwrap(),
             ("aaa111".into(), "bbb222".into())
+        );
+    }
+
+    #[test]
+    fn github_status_context_keeps_its_report_time() {
+        let checks = parse_github_pr_checks(
+            r#"{
+            "headRefOid": "abc",
+            "statusCheckRollup": [{
+                "__typename": "StatusContext", "context": "External tests",
+                "state": "SUCCESS", "createdAt": "2030-01-01T10:00:00Z",
+                "targetUrl": "https://ci.example/project/web"
+            }]
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            checks.checks[0].started_at.as_deref(),
+            Some("2030-01-01T10:00:00Z")
+        );
+    }
+
+    #[test]
+    fn github_pr_checks_args_target_repo_and_number() {
+        assert_eq!(
+            github_pr_checks_args("acme/web", 42).unwrap(),
+            [
+                "pr",
+                "view",
+                "42",
+                "--repo",
+                "acme/web",
+                "--json",
+                "headRefOid,statusCheckRollup"
+            ]
+        );
+        assert!(github_pr_checks_args("acme/web", 0).is_err());
+        assert!(github_pr_checks_args("invalid", 42).is_err());
+    }
+
+    #[test]
+    fn github_check_details_reads_steps_and_failure_annotations() {
+        let details = github_check_details_with("acme/web", "123", |path| {
+            match path {
+                "repos/acme/web/actions/jobs/123" => Ok(r#"{
+                    "id":123, "status":"completed", "conclusion":"failure",
+                    "check_run_url":"https://api.github.com/repos/acme/web/check-runs/456",
+                    "steps":[
+                        {"name":"Install","status":"completed","conclusion":"success"},
+                        {"name":"Run tests","status":"completed","conclusion":"failure",
+                         "started_at":"2030-01-01T10:00:00Z","completed_at":"2030-01-01T10:00:12Z"}
+                    ]
+                }"#.into()),
+                "repos/acme/web/check-runs/456/annotations?per_page=100" => Ok(r#"[
+                    {"path":"src/app.test.ts","start_line":42,"message":"Expected 2, received 1","annotation_level":"failure"}
+                ]"#.into()),
+                _ => panic!("Unexpected request: {path}"),
+            }
+        }).unwrap();
+        assert_eq!(details.steps[0].state, "pass");
+        assert_eq!(details.steps[1].state, "fail");
+        assert_eq!(details.steps[1].name, "Run tests");
+        assert_eq!(details.annotations[0].message, "Expected 2, received 1");
+        assert_eq!(details.annotations[0].line, 42);
+        assert!(details.notice.is_none());
+    }
+
+    #[test]
+    fn parse_github_pr_checks_maps_check_run_states() {
+        let json = r#"{
+            "headRefOid": "abc123",
+            "statusCheckRollup": [
+                {
+                    "__typename": "CheckRun",
+                    "name": "build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "workflowName": "CI",
+                    "detailsUrl": "https://github.com/acme/web/actions/runs/1",
+                    "startedAt": "2026-09-16T10:00:00Z",
+                    "completedAt": "2026-09-16T10:05:00Z"
+                },
+                {
+                    "__typename": "CheckRun",
+                    "name": "e2e",
+                    "status": "IN_PROGRESS",
+                    "conclusion": "FAILURE",
+                    "workflowName": "E2E",
+                    "detailsUrl": "https://github.com/acme/web/actions/runs/2",
+                    "startedAt": "2026-09-16T11:00:00Z"
+                },
+                {
+                    "__typename": "CheckRun",
+                    "name": "scan",
+                    "status": "COMPLETED",
+                    "conclusion": "ACTION_REQUIRED"
+                }
+            ]
+        }"#;
+        let checks = parse_github_pr_checks(json).unwrap();
+        assert_eq!(checks.head_oid, "abc123");
+        assert_eq!(checks.checks.len(), 3);
+        let build = &checks.checks[0];
+        assert_eq!(build.name, "build");
+        assert_eq!(build.state, "pass");
+        assert_eq!(build.workflow, "CI");
+        assert_eq!(
+            build.url.as_deref(),
+            Some("https://github.com/acme/web/actions/runs/1")
+        );
+        assert_eq!(build.started_at.as_deref(), Some("2026-09-16T10:00:00Z"));
+        assert_eq!(build.completed_at.as_deref(), Some("2026-09-16T10:05:00Z"));
+        let e2e = &checks.checks[1];
+        assert_eq!(e2e.state, "pending");
+        assert_eq!(e2e.completed_at, None);
+        assert_eq!(checks.checks[2].state, "fail");
+    }
+
+    #[test]
+    fn parse_github_pr_checks_maps_status_context_states() {
+        let json = r#"{
+            "headRefOid": "abc123",
+            "statusCheckRollup": [
+                {
+                    "__typename": "StatusContext",
+                    "context": "ci/lab",
+                    "state": "SUCCESS",
+                    "targetUrl": "https://ci.example.com/1"
+                },
+                {
+                    "__typename": "StatusContext",
+                    "context": "security/scan",
+                    "state": "FAILURE",
+                    "targetUrl": "https://ci.example.com/2"
+                },
+                {
+                    "__typename": "StatusContext",
+                    "context": "legacy/status",
+                    "state": "PENDING"
+                }
+            ]
+        }"#;
+        let checks = parse_github_pr_checks(json).unwrap();
+        let lab = &checks.checks[0];
+        assert_eq!(lab.name, "ci/lab");
+        assert_eq!(lab.state, "pass");
+        assert_eq!(lab.workflow, "");
+        assert_eq!(lab.url.as_deref(), Some("https://ci.example.com/1"));
+        assert_eq!(lab.started_at, None);
+        assert_eq!(lab.completed_at, None);
+        assert_eq!(checks.checks[1].state, "fail");
+        let legacy = &checks.checks[2];
+        assert_eq!(legacy.state, "pending");
+        assert_eq!(legacy.url, None);
+    }
+
+    #[test]
+    fn parse_github_pr_checks_combines_rollup_states_and_unknown_values() {
+        let json = r#"{
+            "headRefOid": "abc123",
+            "statusCheckRollup": [
+                {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SKIPPED"},
+                {"__typename": "CheckRun", "name": "announce", "status": "COMPLETED", "conclusion": "CANCELLED"},
+                {"__typename": "CheckRun", "name": "unit", "status": "COMPLETED", "conclusion": "TIMED_OUT"},
+                {"__typename": "CheckRun", "name": "stale", "status": "COMPLETED", "conclusion": "STALE"},
+                {"__typename": "StatusContext", "context": "deploy/expected", "state": "EXPECTED"},
+                {"__typename": "CheckRun", "name": "plan", "status": "QUEUED", "conclusion": "SUCCESS"}
+            ]
+        }"#;
+        let checks = parse_github_pr_checks(json).unwrap();
+        let states: Vec<&str> = checks.checks.iter().map(|c| c.state.as_str()).collect();
+        assert_eq!(
+            states,
+            ["skipping", "cancel", "fail", "unknown", "unknown", "pending"]
+        );
+    }
+
+    #[test]
+    fn parse_github_pr_checks_unknown_status_never_trusts_conclusion() {
+        let json = r#"{
+            "headRefOid": "abc123",
+            "statusCheckRollup": [
+                {
+                    "__typename": "CheckRun",
+                    "name": "mystery",
+                    "status": "RUNNING",
+                    "conclusion": "SUCCESS"
+                },
+                {"__typename": "CheckRun", "name": "done", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "legacy", "conclusion": "SUCCESS"}
+            ]
+        }"#;
+        let checks = parse_github_pr_checks(json).unwrap();
+        assert_eq!(checks.checks[0].state, "unknown");
+        assert_eq!(checks.checks[1].state, "pass");
+        assert_eq!(checks.checks[2].state, "pass");
+    }
+
+    #[test]
+    fn parse_github_pr_checks_treats_missing_rollup_as_empty() {
+        let checks = parse_github_pr_checks(r#"{"headRefOid": "abc123"}"#).unwrap();
+        assert_eq!(checks.head_oid, "abc123");
+        assert!(checks.checks.is_empty());
+        let null_checks =
+            parse_github_pr_checks(r#"{"headRefOid": "abc123", "statusCheckRollup": null}"#)
+                .unwrap();
+        assert!(null_checks.checks.is_empty());
+    }
+
+    #[test]
+    fn parse_github_pr_checks_fills_missing_check_data() {
+        let json = r#"{
+            "headRefOid": "abc123",
+            "statusCheckRollup": [
+                {"__typename": "CheckRun", "status": "COMPLETED"},
+                {"__typename": "CheckRun", "name": "legacy", "conclusion": "SUCCESS"},
+                {"context": "fallback/status", "state": "SUCCESS"}
+            ]
+        }"#;
+        let checks = parse_github_pr_checks(json).unwrap();
+        let bare = &checks.checks[0];
+        assert_eq!(bare.name, "");
+        assert_eq!(bare.workflow, "");
+        assert_eq!(bare.state, "unknown");
+        assert_eq!(bare.url, None);
+        assert_eq!(bare.started_at, None);
+        assert_eq!(bare.completed_at, None);
+        assert_eq!(checks.checks[1].state, "pass");
+        let fallback = &checks.checks[2];
+        assert_eq!(fallback.name, "fallback/status");
+        assert_eq!(fallback.state, "pass");
+        assert_eq!(fallback.workflow, "");
+    }
+
+    #[test]
+    fn parse_github_pr_checks_rejects_invalid_responses() {
+        assert!(parse_github_pr_checks("not json").is_err());
+        assert!(parse_github_pr_checks(r#"{"statusCheckRollup": []}"#).is_err());
+        assert!(parse_github_pr_checks(r#"{"headRefOid": "", "statusCheckRollup": []}"#).is_err());
+        assert!(
+            parse_github_pr_checks(r#"{"headRefOid": "abc", "statusCheckRollup": ["nope"]}"#)
+                .is_err()
         );
     }
 
