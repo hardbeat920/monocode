@@ -9651,7 +9651,9 @@ export default function App({
       // bindings that the workspace would normally handle in capture phase.
       if (document.querySelector('[data-shortcut-recorder-active="true"]'))
         return;
-      const customCommand = matchCustomKeybinding(e);
+      // A rebound chord skips tabCommand, so it needs the same composition
+      // guard the default path gets there.
+      const customCommand = e.isComposing ? null : matchCustomKeybinding(e);
       const pressed = (command: string, defaultMatch: boolean) =>
         keybindingPressed(command, e, defaultMatch);
       // Browser-standard UI zoom. Runs before tabCommand, even in inputs and
@@ -9694,6 +9696,7 @@ export default function App({
         : tabCommand(e);
       if (cmd && pressed(tabCommandKeybinding(cmd), !customCommand)) {
         if (cmd === "archive-session") {
+          if (e.repeat) return;
           actions.current.onArchiveFocusedSession(e);
           return;
         }
