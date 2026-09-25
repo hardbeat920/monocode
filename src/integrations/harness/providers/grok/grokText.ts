@@ -8,9 +8,11 @@ import {
 } from "../../core/child";
 import {
   grokAuthMethodId,
+  grokEffort,
   grokTextSpawnArgs,
   TEXT_MODEL,
 } from "./grokProtocol";
+import { abortTextPromptRace } from "../../core/abortTextPrompt";
 import { mergeStream } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-grok-text";
@@ -25,6 +27,8 @@ const CLIENT_CAPABILITIES = {
 type LiveText = {
   acp: AcpClient;
   cwd: string;
+  model: string;
+  settingsKey: string;
   acpSessionId: string;
   collecting: boolean;
   output: string;
@@ -44,9 +48,11 @@ export async function stopGrokTextPrompt(childId?: string): Promise<void> {
 
 export function warmupGrokText(cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
-  const run = turns.catch(() => undefined).then(async () => {
-    await ensureLive(cwd);
-  });
+  const run = turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(cwd);
+    });
   turns = run.then(
     () => undefined,
     () => undefined,
@@ -56,8 +62,11 @@ export function warmupGrokText(cwd: string): Promise<void> {
 
 export async function runGrokTextPrompt(input: {
   cwd: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
-  timeoutMs: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
   turns = run.then(
@@ -69,21 +78,32 @@ export async function runGrokTextPrompt(input: {
 
 async function promptOnLive(input: {
   cwd: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
-  timeoutMs: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const session = await ensureLive(input.cwd);
+  const session = await ensureLive(input.cwd, input.model, input.modelSettings);
   session.output = "";
   session.collecting = true;
+  const abort = abortTextPromptRace(input.signal, () =>
+    session.acp.notify("session/cancel", {
+      sessionId: session.acpSessionId,
+    }),
+  );
   try {
-    await session.acp.request(
-      "session/prompt",
-      {
-        sessionId: session.acpSessionId,
-        prompt: [{ type: "text", text: input.prompt }],
-      },
-      input.timeoutMs,
-    );
+    await Promise.race([
+      session.acp.request(
+        "session/prompt",
+        {
+          sessionId: session.acpSessionId,
+          prompt: [{ type: "text", text: input.prompt }],
+        },
+        input.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      ),
+      ...(abort.promise ? [abort.promise] : []),
+    ]);
     return session.output;
   } catch (error) {
     await session.acp
@@ -92,32 +112,49 @@ async function promptOnLive(input: {
     if (session.closed) await dropLive();
     throw error;
   } finally {
+    abort.detach();
     session.collecting = false;
     await dropLive();
   }
 }
 
-async function ensureLive(cwd: string): Promise<LiveText> {
+async function ensureLive(
+  cwd: string,
+  requestedModel?: string,
+  modelSettings?: Record<string, string>,
+): Promise<LiveText> {
+  const model = requestedModel?.trim() || TEXT_MODEL;
+  const settingsKey = modelSettingsKey(modelSettings);
   if (live && !live.closed) {
-    if (live.cwd === cwd) return live;
+    if (
+      live.cwd === cwd &&
+      live.model === model &&
+      live.settingsKey === settingsKey
+    )
+      return live;
     try {
-      await openSession(live, cwd);
+      await openSession(live, cwd, model, modelSettings);
       return live;
     } catch {
       await dropLive();
     }
   }
-  return startLive(cwd);
+  return startLive(cwd, model, modelSettings);
 }
 
-async function startLive(cwd: string): Promise<LiveText> {
+async function startLive(
+  cwd: string,
+  model = TEXT_MODEL,
+  modelSettings?: Record<string, string>,
+): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveGrokBinary();
   const acpRef: { session: LiveText | null } = { session: null };
   const acp = new AcpClient(TEXT_CHILD_ID, {
     onNotification: (method, params) => {
       const session = acpRef.session;
-      if (!session || method !== "session/update" || !session.collecting) return;
+      if (!session || method !== "session/update" || !session.collecting)
+        return;
       session.output = mergeStream(session.output, textFromUpdate(params));
     },
     onRequest: (id, method, params) => {
@@ -127,6 +164,8 @@ async function startLive(cwd: string): Promise<LiveText> {
   const session: LiveText = {
     acp,
     cwd,
+    model,
+    settingsKey: modelSettingsKey(modelSettings),
     acpSessionId: "",
     collecting: false,
     output: "",
@@ -165,7 +204,7 @@ async function startLive(cwd: string): Promise<LiveText> {
         )
         .catch(() => undefined);
     }
-    await openSession(session, cwd);
+    await openSession(session, cwd, model, modelSettings);
     live = session;
     return session;
   } catch (error) {
@@ -177,7 +216,12 @@ async function startLive(cwd: string): Promise<LiveText> {
   }
 }
 
-async function openSession(session: LiveText, cwd: string): Promise<void> {
+async function openSession(
+  session: LiveText,
+  cwd: string,
+  model: string,
+  modelSettings?: Record<string, string>,
+): Promise<void> {
   const setup = await session.acp.request<{ sessionId?: string }>(
     "session/new",
     { cwd, mcpServers: [] },
@@ -189,19 +233,24 @@ async function openSession(session: LiveText, cwd: string): Promise<void> {
   await session.acp
     .request(
       "session/set_model",
-      { sessionId: acpSessionId, modelId: TEXT_MODEL },
+      { sessionId: acpSessionId, modelId: model },
       REQUEST_TIMEOUT_MS,
     )
     .catch(() => undefined);
   await session.acp
     .request(
       "session/set_mode",
-      { sessionId: acpSessionId, modeId: "low" },
+      {
+        sessionId: acpSessionId,
+        modeId: grokEffort(modelSettings) ?? "low",
+      },
       REQUEST_TIMEOUT_MS,
     )
     .catch(() => undefined);
 
   session.cwd = cwd;
+  session.model = model;
+  session.settingsKey = modelSettingsKey(modelSettings);
   session.acpSessionId = acpSessionId;
 }
 
@@ -236,9 +285,7 @@ async function handleTextRequest(
     method === "_x.ai/ask_user_question" ||
     method === "x.ai/ask_user_question"
   ) {
-    await acp
-      .respond(id, { outcome: "skip_interview" })
-      .catch(() => undefined);
+    await acp.respond(id, { outcome: "skip_interview" }).catch(() => undefined);
     return;
   }
   await acp.respond(id, {}).catch(() => undefined);
@@ -287,4 +334,8 @@ function textFromContent(content: unknown): string {
     return content.map((item) => textFromContent(item)).join("");
   }
   return "";
+}
+
+function modelSettingsKey(settings?: Record<string, string>): string {
+  return JSON.stringify({ effort: grokEffort(settings) ?? "low" });
 }

@@ -150,6 +150,18 @@ describe("buildClaudeSpawnArgs", () => {
     expect(args).not.toContain("--permission-prompt-tool");
   });
 
+  it("locks isolated read-only prompts to plan mode", () => {
+    const args = buildClaudeSpawnArgs({
+      isolated: true,
+      permissionMode: "plan",
+      maxTurns: 1,
+      model: "claude-haiku-4-5",
+    });
+    expect(args).toEqual(
+      expect.arrayContaining(["--permission-mode", "plan", "--max-turns", "1"]),
+    );
+  });
+
   it("adds bypass flag for full-access", () => {
     const args = buildClaudeSpawnArgs({
       permissionMode: "bypassPermissions",

@@ -114,6 +114,39 @@ export type HandoffMeta = {
   pending?: boolean;
 };
 
+/** One persisted question/answer in a completed turn's side conversation. */
+export type BtwMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: number;
+  /** Rich harness activity for assistant replies, when available. */
+  blocks?: Block[];
+};
+
+export type BtwThreadStatus = "running" | "ready" | "error";
+
+/** Independent, read-only "by the way" conversation anchored to a turn. */
+export type BtwThread = {
+  id: string;
+  sourceEndBlockId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: BtwThreadStatus;
+  messages: BtwMessage[];
+  /** Provider that answered this side thread. */
+  harness?: HarnessId;
+  /** Selected harness model for this side thread; absent means session default. */
+  model?: string;
+  /** Provider settings selected for this side thread's model. */
+  modelSettings?: Record<string, string>;
+  /** Provider-specific side-thread id when the text runner supports resume. */
+  providerThreadId?: string;
+  error?: string;
+  /** Live harness blocks for the in-flight reply; not persisted. */
+  pendingBlocks?: Block[];
+};
+
 /** Compact transcript card for a second-opinion or split-pane handoff turn. */
 export type SecondOpinionMeta = {
   from: HarnessId;
@@ -284,7 +317,8 @@ export type Block = {
   internal?: boolean;
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
-  /** Note chip shown on this user turn. Body is not stored; the harness already received it. */
+  /** Independent read-only side conversations anchored to this user turn. */
+  btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
   /** Exact CI repair instructions and evidence supplied with this user turn. */
   ciContext?: string;
@@ -554,7 +588,10 @@ export function retargetSessionToProject(
 }
 
 /** New conversation carrying another session's harness, model and settings. */
-export function newSessionLike(seed: Session | undefined, cwd: string): Session {
+export function newSessionLike(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
   return newSession(
     seed?.harness ?? "claude",
     cwd,

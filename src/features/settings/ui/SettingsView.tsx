@@ -199,6 +199,12 @@ import {
 } from "../../providers/model/providerAccounts";
 import { removeProviderAccountCredentials } from "../../providers/model/providerAccountCredentials";
 import {
+  identityKey,
+  identityOrganizationTag,
+  identitySubtitle,
+  useProviderAccountIdentities,
+} from "../../providers/model/providerAccountIdentity";
+import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
 } from "../../sessions/model/sessionFilters";
@@ -2585,7 +2591,7 @@ type AccountEditor = {
 };
 
 function ProviderAccountsSettings() {
-  const [, setVersion] = useState(0);
+  const [version, setVersion] = useState(0);
   const [editor, setEditor] = useState<AccountEditor | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2672,6 +2678,11 @@ function ProviderAccountsSettings() {
     }
   };
 
+  const identities = useProviderAccountIdentities(
+    PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
+    version,
+  );
+
   return (
     <Group
       id="provider-accounts"
@@ -2717,6 +2728,8 @@ function ProviderAccountsSettings() {
                   editor?.provider === provider &&
                   editor.accountId === account.id;
                 const removing = working === `remove:${provider}:${account.id}`;
+                const identity = identities[identityKey(account)];
+                const orgTag = identityOrganizationTag(identity);
                 return editing ? (
                   <ProviderAccountEditor
                     key={account.id}
@@ -2736,13 +2749,21 @@ function ProviderAccountsSettings() {
                     className="flex h-12 items-center gap-3 border-b border-content/5 px-4 py-2 last:border-b-0"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[12px] text-content/85">
-                        {account.label}
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-[12px] text-content/85">
+                          {account.label}
+                        </span>
+                        {orgTag ? (
+                          <span className="max-w-[8rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
+                            {orgTag}
+                          </span>
+                        ) : null}
                       </div>
-                      <div className="mt-0.5 text-[10px] text-content/35">
-                        {account.isDefault
-                          ? "Provider CLI profile"
-                          : "Isolated profile"}
+                      <div className="mt-0.5 truncate text-[10px] text-content/35">
+                        {identitySubtitle(identity) ??
+                          (account.isDefault
+                            ? "Provider CLI profile"
+                            : "Isolated profile")}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">

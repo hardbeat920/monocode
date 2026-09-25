@@ -67,7 +67,10 @@ import {
   type InboxComposerCard,
 } from "../../inbox/model/githubTasks";
 import type { HandoffComposerCard } from "../model/handoff";
-import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
+import {
+  looksLikeProject,
+  type RecentProject,
+} from "../../projects/model/recents";
 import type {
   Attachment,
   HarnessId,
@@ -144,6 +147,11 @@ import {
   consumeMonocodeCommand,
   MONOCODE_COMMAND,
 } from "../model/monocodeCommand";
+import {
+  BTW_COMMAND,
+  consumeBtwCommand,
+  supportsBtwHarness,
+} from "../model/btw";
 import { COMPACT_COMMAND, isCompactCommand } from "../model/compact";
 import {
   consumeSessionFolderCommand,
@@ -165,6 +173,11 @@ type Props = {
   /** Bump to force a refocus even when `focused` was already true (e.g. window regains OS focus). */
   focusToken?: number;
   shell?: boolean;
+  compact?: boolean;
+  placeholder?: string;
+  inputAriaLabel?: string;
+  disabled?: boolean;
+  allowedModelHarnesses?: readonly HarnessId[];
   harness: HarnessId;
   model: string;
   modelSettings?: Record<string, string>;
@@ -181,6 +194,7 @@ type Props = {
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
   initialDraft?: string;
+  draftResetToken?: number;
   inboxCard?: InboxComposerCard;
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
@@ -217,6 +231,7 @@ type Props = {
     attachments: Attachment[],
     options?: ComposerTurnOptions,
   ) => boolean | void;
+  onBtwCommand?: (text: string) => boolean | void;
   canSaveDraft?: boolean;
   onSaveDraft?: (text: string, attachments: Attachment[]) => boolean | void;
   onStop?: () => void;
@@ -437,8 +452,13 @@ export function Composer({
   focusToken,
   hotkeys = false,
   shell = false,
+  compact = false,
+  placeholder,
+  inputAriaLabel,
+  disabled = false,
   harness,
   model,
+  allowedModelHarnesses,
   modelSettings = {},
   runtimeMode,
   cwd = "~",
@@ -453,6 +473,7 @@ export function Composer({
   compactSupported = false,
   quoteRequest,
   initialDraft,
+  draftResetToken,
   inboxCard,
   noteCard,
   handoffCard,
@@ -479,6 +500,7 @@ export function Composer({
   onRuntimeModeChange,
   onQuoteRequestConsumed,
   onInboxCardDismiss,
+  onBtwCommand,
   onNoteCardDismiss,
   onHandoffCardDismiss,
   onQuestionReply,
@@ -509,6 +531,7 @@ export function Composer({
   const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
+  const draftResetTokenRef = useRef(draftResetToken);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
@@ -612,16 +635,18 @@ export function Composer({
       MONOCODE_COMMAND,
       PLAN_COMMAND,
       COMPACT_COMMAND,
+      ...(supportsBtwHarness(harness) ? [BTW_COMMAND] : []),
       ...skills.filter(
         (skill) =>
           skill.name !== MONOCODE_COMMAND.name &&
           (skill.kind === "native" ||
             (skill.name !== PLAN_COMMAND.name &&
               skill.name !== COMPACT_COMMAND.name &&
-              skill.name !== SESSION_FOLDER_COMMAND.name)),
+              skill.name !== SESSION_FOLDER_COMMAND.name &&
+              skill.name !== BTW_COMMAND.name)),
       ),
     ],
-    [skills],
+    [harness, skills],
   );
   const skillLimit = hasNativeCommands(harness)
     ? Number.POSITIVE_INFINITY
@@ -833,6 +858,33 @@ export function Composer({
   useEffect(() => {
     onDraftChange?.(draft);
   }, [draft, onDraftChange]);
+  useEffect(() => {
+    if (
+      draftResetToken == null ||
+      draftResetTokenRef.current === draftResetToken
+    ) {
+      return;
+    }
+    draftResetTokenRef.current = draftResetToken;
+    draftRevisionRef.current += 1;
+    if (ref.current) {
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+    }
+    setDraft("");
+    onDraftChange?.("");
+    setDraftSelected(false);
+    setPlanSelected(false);
+    setOrchestrationSelected(false);
+    setSessionFolderSelected(false);
+    setSessionFolderOpen(false);
+    setPlusOpen(false);
+    setSlash(null);
+    setMention(null);
+    setCreatingSkill(false);
+    setCreateError(null);
+    syncHasValue("", attachmentsRef.current);
+  }, [draftResetToken, onDraftChange, syncHasValue]);
 
   const syncHighlightScroll = useCallback((el: HTMLTextAreaElement) => {
     const highlight = highlightRef.current;
@@ -978,7 +1030,7 @@ export function Composer({
   );
 
   useEffect(() => {
-    if (!focused) return;
+    if (!focused || disabled) return;
 
     const composer = ref.current?.closest("[data-composer]");
     const activeComposer = document.activeElement?.closest("[data-composer]");
@@ -1007,10 +1059,10 @@ export function Composer({
     )
       return;
     ref.current?.focus();
-  }, [focused, question, busy, focusToken]);
+  }, [disabled, focused, question, busy, focusToken]);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || disabled) {
       setFileDrag(false);
       return;
     }
@@ -1234,7 +1286,7 @@ export function Composer({
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
   const submit = (value: string) => {
-    if (worktreeRemoved) return;
+    if (disabled || worktreeRemoved) return;
     if (draftSelected && onSaveDraft) {
       const files = attachments;
       if (!value.trim() && files.length === 0) return;
@@ -1255,6 +1307,31 @@ export function Composer({
       return;
     }
     const folderCommand = consumeSessionFolderCommand(value);
+    const btwCommand = consumeBtwCommand(value);
+    if (
+      btwCommand.matched &&
+      onBtwCommand &&
+      attachments.length === 0 &&
+      !inboxCard &&
+      !noteCard &&
+      !handoffCard
+    ) {
+      const accepted = onBtwCommand(btwCommand.text);
+      if (accepted === false) return;
+      if (ref.current) {
+        ref.current.value = "";
+        ref.current.style.height = "auto";
+      }
+      setDraft("");
+      onDraftChange?.("");
+      setPlusOpen(false);
+      setSlash(null);
+      setMention(null);
+      setCreatingSkill(false);
+      setCreateError(null);
+      syncHasValue("", []);
+      return;
+    }
     if (folderCommand.matched && onPlaceInFolder && !sessionFolderSelected) {
       openSessionFolderPicker();
       return;
@@ -1349,8 +1426,18 @@ export function Composer({
     syncHasValue("", []);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (disabled) return;
     if (isImeComposition(e.nativeEvent)) return;
     if (creatingSkill) return;
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey &&
+      consumeBtwCommand(e.currentTarget.value).matched
+    ) {
+      e.preventDefault();
+      submit(e.currentTarget.value);
+      return;
+    }
 
     if (
       e.key === " " &&
@@ -1476,6 +1563,7 @@ export function Composer({
   };
 
   const onComposerKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     if (
       !draftWorkspace ||
       !onWorkspaceModeChange ||
@@ -1532,9 +1620,9 @@ export function Composer({
   return (
     <div
       data-composer
-      className={`relative shrink-0 ${shell ? "" : "p-1.5 pt-0"}`}
-      onMouseDown={onFocus}
-      onKeyDownCapture={onComposerKeyDown}
+      className={`relative shrink-0 ${shell || compact ? "" : "p-1.5 pt-0"}`}
+      onMouseDown={disabled ? undefined : onFocus}
+      onKeyDownCapture={disabled ? undefined : onComposerKeyDown}
     >
       {question && onQuestionReply ? (
         <QuestionForm
@@ -1678,7 +1766,7 @@ export function Composer({
             </div>
           ) : null}
           {hideTopBar ? null : (
-            <div className="flex min-w-0 items-center gap-2.5 px-3 pt-2.5">
+            <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
               {hideProjectPicker ? null : (
                 <CwdPicker
                   cwd={cwd}
@@ -1812,10 +1900,13 @@ export function Composer({
                       ? "Add a message, or send…"
                       : handoffCard
                         ? "Add context, or send to continue…"
-                        : shell
-                          ? "Ask, build, / for commands, @ for references... "
-                          : "Ask, build, / for commands, @ for references... "
+                        : (placeholder ??
+                          (shell
+                            ? "Ask, build, / for commands, @ for references... "
+                            : "Ask, build, / for commands, @ for references... "))
               }
+              aria-label={inputAriaLabel}
+              disabled={disabled}
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
@@ -1844,7 +1935,10 @@ export function Composer({
           </div>
 
           <div className="flex items-center gap-1 px-2 pb-2">
-            <div ref={plusRef} className="relative shrink-0">
+            <div
+              ref={plusRef}
+              className={compact ? "hidden" : "relative shrink-0"}
+            >
               <ToolButton
                 label="Add files or choose a mode"
                 active={plusOpen}
@@ -1997,7 +2091,7 @@ export function Composer({
                 </Popover>
               ) : null}
             </div>
-            {monoSelected ? (
+            {!compact && monoSelected ? (
               <button
                 type="button"
                 title="Turn off Operator"
@@ -2014,7 +2108,7 @@ export function Composer({
                 <X className="size-3" />
               </button>
             ) : null}
-            {orchestrationSelected && (
+            {!compact && orchestrationSelected && (
               <button
                 type="button"
                 title="Turn off Orchestrator mode"
@@ -2031,7 +2125,7 @@ export function Composer({
                 <X className="size-3" />
               </button>
             )}
-            {planSelected ? (
+            {!compact && planSelected ? (
               <button
                 type="button"
                 title="Turn off Plan mode"
@@ -2047,7 +2141,7 @@ export function Composer({
                 <X className="size-3" />
               </button>
             ) : null}
-            {draftSelected ? (
+            {!compact && draftSelected ? (
               <button
                 type="button"
                 title="Turn off Draft mode"
@@ -2084,6 +2178,7 @@ export function Composer({
                   harness={harness}
                   model={model}
                   values={modelSettings}
+                  allowedHarnesses={allowedModelHarnesses}
                   project={cwd}
                   hideSettings={controlsBeside}
                   hotkeys={hotkeys && enabled}
@@ -2104,7 +2199,7 @@ export function Composer({
                     onClose={() => ref.current?.focus()}
                   />
                 ) : null}
-                {harness !== "fx" ? (
+                {!compact && harness !== "fx" ? (
                   <AccessPicker
                     value={runtimeMode}
                     busy={busy}
@@ -2131,6 +2226,7 @@ export function Composer({
             <div className="flex shrink-0 items-center gap-1">
               <ComposerAction
                 busy={busy}
+                disabled={disabled}
                 hasValue={hasValue && !worktreeRemoved}
                 label={draftSelected ? "Save draft" : "Send"}
                 onSend={() => submit(ref.current?.value ?? "")}
@@ -2222,17 +2318,32 @@ function MentionRuns({
 
 export function ComposerAction({
   busy,
+  disabled = false,
   hasValue,
   label = "Send",
   onSend,
   onStop,
 }: {
   busy: boolean;
+  disabled?: boolean;
   hasValue: boolean;
   label?: string;
   onSend: () => void;
   onStop: () => void;
 }) {
+  if (disabled) {
+    return (
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        disabled
+        className="composer-send primary-action grid size-6.5 place-items-center rounded-md disabled:cursor-default"
+      >
+        <ArrowUp className="size-3.5" strokeWidth={2.25} />
+      </button>
+    );
+  }
   if (busy) {
     return hasValue ? (
       <button
