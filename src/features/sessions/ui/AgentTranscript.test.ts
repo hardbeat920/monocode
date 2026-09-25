@@ -72,6 +72,49 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).not.toContain("Show error details for MonoCode");
   });
 
+  it("shows the full command before approving a MonoCode CLI call", () => {
+    const command = "monocode app sessions.send --json '{\"prompt\":\"private-marker\"}'";
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [
+          { id: "user", role: "user", text: "Send a follow-up" },
+          {
+            id: "call",
+            role: "tool",
+            text: command,
+            tool: { kind: "shell", status: "pending" },
+            approval: { requestId: 1 },
+          },
+        ],
+        busy: true,
+        onApproval: () => {},
+      }),
+    );
+    expect(markup).toContain('data-monocode-tool-call="sessions.send"');
+    expect(markup).toContain("private-marker");
+    expect(markup).toContain("Allow</button>");
+
+    const compound = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [
+          { id: "user", role: "user", text: "List notes" },
+          {
+            id: "call",
+            role: "tool",
+            text: "monocode app notes.list && echo extra",
+            tool: { kind: "shell", status: "pending" },
+            approval: { requestId: 2 },
+          },
+        ],
+        busy: true,
+        onApproval: () => {},
+      }),
+    );
+    expect(compound).not.toContain("data-monocode-tool-call");
+    expect(compound).toContain("echo extra");
+    expect(compound).toContain("Allow</button>");
+  });
+
   it("keeps a failed MonoCode call compact until its error is opened", () => {
     const markup = render([
       { id: "user", role: "user", text: "/monocode list notes" },

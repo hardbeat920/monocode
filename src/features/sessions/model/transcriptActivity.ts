@@ -949,7 +949,7 @@ function yieldedAt(items: TurnItem[]): number {
     const before = items[at - 1];
     return (
       item.type === "activity" &&
-      !!item.blocks[0]?.tool?.background &&
+      item.blocks.some((block) => !!block.tool?.background) &&
       before?.type === "block" &&
       isProseBlock(before.block)
     );

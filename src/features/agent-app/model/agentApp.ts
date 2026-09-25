@@ -22,6 +22,7 @@ import {
 } from "../../sessions/model/sessionFolders";
 import type { Note } from "../../notes";
 import type { QuickLaunch } from "../../quick-composer/model/quickComposer";
+import { consumeMonocodeCommand } from "../../sessions/model/monocodeCommand";
 import { sessionConversationPage } from "./sessionConversation";
 
 export type AppSessionListing = {
@@ -94,6 +95,13 @@ function requiredString(value: unknown, name: string, max = 30_000): string {
   return value.trim();
 }
 
+function agentPrompt(value: unknown): string {
+  const prompt = requiredString(value, "prompt", 240_000);
+  if (consumeMonocodeCommand(prompt).matched)
+    throw new Error("App calls cannot enable /mono in another session");
+  return prompt;
+}
+
 function optionalString(
   value: unknown,
   name: string,
@@ -138,7 +146,7 @@ function startLaunch(
   input: Record<string, unknown>,
 ): QuickLaunch {
   const cwd = requireProject(source);
-  const prompt = requiredString(input.prompt, "prompt", 240_000);
+  const prompt = agentPrompt(input.prompt);
   const draft = input.draft ?? false;
   if (typeof draft !== "boolean") throw new Error("draft must be a boolean");
   const harness = input.harness ?? source.harness;
@@ -263,7 +271,7 @@ export async function handleAgentApp(
     }
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
-      const prompt = requiredString(input.prompt, "prompt", 240_000);
+      const prompt = agentPrompt(input.prompt);
       if (id === source.id)
         throw new Error(
           "Use the current conversation to continue this session",
@@ -280,7 +288,7 @@ export async function handleAgentApp(
     }
     case "sessions.draft": {
       const id = requiredString(input.sessionId, "sessionId", 256);
-      const prompt = requiredString(input.prompt, "prompt", 240_000);
+      const prompt = agentPrompt(input.prompt);
       if (id === source.id)
         throw new Error("Use the composer to save a draft in this session");
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))

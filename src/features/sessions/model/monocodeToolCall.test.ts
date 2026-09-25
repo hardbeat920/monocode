@@ -22,6 +22,11 @@ describe("MonoCode CLI tool calls", () => {
         ),
       )?.label,
     ).toBe("Move a session");
+    expect(
+      monoCodeToolCall(
+        shell('"C:\\Program Files\\MonoCode\\monocode.exe" app notes.list'),
+      )?.label,
+    ).toBe("List notes");
     expect(monoCodeToolCall(shell("monocode app --help"))?.label).toBe(
       "View CLI commands",
     );
@@ -67,6 +72,38 @@ describe("MonoCode CLI tool calls", () => {
         text: "monocode app notes.list",
       }),
     ).toBeUndefined();
+  });
+
+  it("does not compact compound shell commands or hide a longer shell preview", () => {
+    for (const command of [
+      "monocode app notes.list && echo extra",
+      "monocode app notes.list; echo extra",
+      "monocode app notes.list | cat",
+      "monocode app notes.list\necho extra",
+      "monocode app notes.list --json \"$(echo extra)\"",
+    ]) {
+      expect(monoCodeToolCall(shell(command))).toBeUndefined();
+    }
+    expect(
+      monoCodeToolCall({
+        id: "short-title",
+        role: "tool",
+        text: "monocode app notes.list",
+        tool: {
+          kind: "shell",
+          title: "monocode app notes.list",
+          preview: {
+            kind: "shell",
+            title: "monocode app notes.list && echo extra",
+          },
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      monoCodeToolCall(
+        shell("monocode app sessions.send --json '{\"prompt\":\"a; b\"}'"),
+      )?.command,
+    ).toBe("monocode app sessions.send --json '{\"prompt\":\"a; b\"}'");
   });
 
   it("names a group only when all its tool calls use MonoCode", () => {

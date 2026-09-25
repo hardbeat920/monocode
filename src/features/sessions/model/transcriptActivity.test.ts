@@ -987,6 +987,31 @@ describe("the settled work trail", () => {
     ]);
   });
 
+  it("keeps a yielded answer visible when status precedes the background tool", () => {
+    const items = groupTurnItems(
+      [
+        shell("before"),
+        { id: "answer", role: "assistant", text: "The initial answer." },
+        status("after-yield"),
+        {
+          ...shell("background"),
+          tool: { kind: "shell", background: true, status: "completed" },
+        },
+        { id: "late", role: "assistant", text: "The follow-up." },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "before",
+    ]);
+    expect(items.slice(fold.end + 1).map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+    ]);
+  });
+
   it("lets the settled fold reach across an interjection that stops it live", () => {
     const turn = [
       { id: "u", role: "user", text: "go" },

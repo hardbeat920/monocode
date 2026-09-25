@@ -3049,8 +3049,9 @@ function MonoCodeCallRow({
   const output = block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
   const [errorOpen, setErrorOpen] = useState(false);
   const hasError = state === "rejected" && !!output;
+  const pendingApproval = needsApproval(block);
   const command = `monocode app ${call.action}`;
-  const verb = needsApproval(block)
+  const verb = pendingApproval
     ? "Run"
     : state === "pending"
       ? "Running"
@@ -3098,6 +3099,11 @@ function MonoCodeCallRow({
       {errorOpen && hasError ? (
         <pre className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
           {output}
+        </pre>
+      ) : null}
+      {pendingApproval ? (
+        <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all py-1 pl-5 font-mono text-[12px] leading-5 text-content/70">
+          {call.command}
         </pre>
       ) : null}
       <ApprovalControls block={block} onApproval={onApproval} />
