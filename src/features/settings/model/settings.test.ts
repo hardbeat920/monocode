@@ -18,12 +18,15 @@ import {
   loadCollapsedProjectRailMode,
   loadModelControls,
   loadDiffViewer,
+  loadKeybindingOverrides,
   loadFormatOnSave,
   loadFileTabMode,
   loadFollowUpBehavior,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  keybindingPressed,
+  matchCustomKeybinding,
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
   NOTES_ENABLED_DEFAULT,
@@ -37,6 +40,7 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveKeybindingOverride,
   saveQuickComposerShortcut,
   saveTabAnimationsEnabled,
 } from "./settings";
@@ -46,6 +50,7 @@ const KEY = "monocode.composerRunner";
 const MODEL_CONTROLS_KEY = "monocode.modelControls";
 const LEGACY_EFFORT_VISIBLE_KEY = "monocode.composerEffortVisible";
 const NOTES_KEY = "monocode.notesEnabled";
+const KEYBINDING_OVERRIDES_KEY = "monocode.keybindingOverrides";
 const QUICK_COMPOSER_SHORTCUT_KEY = "monocode.quickComposerShortcut";
 const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
@@ -173,6 +178,83 @@ describe("notes enabled setting", () => {
     expect(loadNotesEnabled()).toBe(false);
     saveNotesEnabled(true);
     expect(loadNotesEnabled()).toBe(true);
+  });
+});
+
+describe("keybinding overrides", () => {
+  beforeEach(mockLocalStorage);
+
+  const key = (
+    code: string,
+    modifiers: Partial<{
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    }> = {},
+  ) => ({
+    code,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...modifiers,
+  });
+
+  it("persists a custom shortcut and matches only that combination", () => {
+    saveKeybindingOverride("App: Search", { shortcut: "Command+Shift+KeyM" });
+    expect(localStorage.getItem(KEYBINDING_OVERRIDES_KEY)).toBe(
+      '{"App: Search":{"shortcut":"Command+Shift+KeyM"}}',
+    );
+    expect(
+      keybindingPressed(
+        "App: Search",
+        key("KeyM", { metaKey: true, shiftKey: true }),
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      keybindingPressed("App: Search", key("KeyK", { metaKey: true }), true),
+    ).toBe(false);
+    expect(
+      matchCustomKeybinding(key("KeyM", { metaKey: true, shiftKey: true })),
+    ).toBe("App: Search");
+
+    saveKeybindingOverride("App: Search", {});
+    expect(localStorage.getItem(KEYBINDING_OVERRIDES_KEY)).toBeNull();
+  });
+
+  it("disables a shortcut and restores the default", () => {
+    saveKeybindingOverride("App: Search", { disabled: true });
+    expect(loadKeybindingOverrides()).toEqual({
+      "App: Search": { disabled: true },
+    });
+    expect(
+      keybindingPressed("App: Search", key("KeyK", { metaKey: true }), true),
+    ).toBe(false);
+  });
+
+  it("rejects a shortcut already used by another command", () => {
+    saveKeybindingOverride("App: Search", { shortcut: "Command+KeyY" });
+    expect(() =>
+      saveKeybindingOverride("App: Go to File", { shortcut: "Command+KeyY" }),
+    ).toThrow("Already used by App: Search");
+  });
+
+  it("ignores malformed, unknown, and invalid stored overrides", () => {
+    localStorage.setItem(
+      KEYBINDING_OVERRIDES_KEY,
+      JSON.stringify({
+        "Unknown: Command": { disabled: true },
+        "App: Search": { shortcut: "KeyK" },
+        "Tab: New": { shortcut: "Command+KeyT" },
+      }),
+    );
+    expect(loadKeybindingOverrides()).toEqual({
+      "Tab: New": { shortcut: "Command+KeyT" },
+    });
+    localStorage.setItem(KEYBINDING_OVERRIDES_KEY, "not-json");
+    expect(loadKeybindingOverrides()).toEqual({});
   });
 });
 

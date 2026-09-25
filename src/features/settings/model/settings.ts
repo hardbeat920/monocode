@@ -1,8 +1,15 @@
-import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
+import {
+  ALT,
+  IS_MAC,
+  IS_WIN,
+  MOD,
+  SHIFT,
+} from "../../../platform/tauri/platform";
 import {
   isQuickComposerShortcut,
   QUICK_COMPOSER_DEFAULT_SHORTCUT,
   quickComposerShortcutLabel,
+  shortcutFromKeyEvent,
 } from "../../quick-composer/model/quickComposerShortcut";
 import { readFlag, writeFlag } from "./storageFlags";
 
@@ -69,7 +76,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "Chat",
     description:
       "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open.",
-    keywords: "transcript composer prompt message diff review layout format save editor",
+    keywords:
+      "transcript composer prompt message diff review layout format save editor",
   },
   {
     id: "providers",
@@ -94,7 +102,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "Inbox",
     description:
       "Manage Inbox services and notification preferences for each project.",
-    keywords: "github gitlab linear jira atlassian azure devops connect token integration",
+    keywords:
+      "github gitlab linear jira atlassian azure devops connect token integration",
   },
   {
     id: "archive",
@@ -875,6 +884,7 @@ export type KeybindingRow = {
  * focused surface handlers such as the draft composer workspace toggle.
  */
 export const KEYBINDINGS: KeybindingRow[] = [
+  { command: "App: Settings", keys: `${MOD},`, when: "Always" },
   { command: "App: Search", keys: `${MOD}K`, when: "Always" },
   { command: "App: Go to File", keys: `${MOD}P`, when: "Always" },
   { command: "App: Command Palette", keys: `${MOD}${SHIFT}P`, when: "Always" },
@@ -974,15 +984,151 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "Editor: Replace", keys: `${MOD}${ALT}F`, when: "editorFocus" },
 ];
 
+const KEYBINDING_OVERRIDES_KEY = "monocode.keybindingOverrides";
+export const KEYBINDINGS_CHANGE_EVENT = "monocode:keybindings-change";
+
+export type KeybindingOverride = {
+  disabled?: boolean;
+  shortcut?: string;
+};
+
+export type KeybindingOverrides = Record<string, KeybindingOverride>;
+
+function validKeybindingCommands(): Set<string> {
+  return new Set(KEYBINDINGS.map((row) => row.command));
+}
+
+export function loadKeybindingOverrides(): KeybindingOverrides {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(KEYBINDING_OVERRIDES_KEY) ?? "{}",
+    );
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const commands = validKeybindingCommands();
+    const next: KeybindingOverrides = {};
+    for (const [command, entry] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      if (!commands.has(command) || !entry || typeof entry !== "object")
+        continue;
+      const override = entry as { disabled?: unknown; shortcut?: unknown };
+      const disabled = override.disabled === true;
+      const shortcut =
+        typeof override.shortcut === "string" &&
+        isQuickComposerShortcut(override.shortcut)
+          ? override.shortcut
+          : undefined;
+      if (shortcut) next[command] = { shortcut };
+      else if (disabled) next[command] = { disabled: true };
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+export function saveKeybindingOverride(
+  command: string,
+  override: KeybindingOverride,
+): KeybindingOverrides {
+  const next = loadKeybindingOverrides();
+  if (override.disabled) next[command] = { disabled: true };
+  else if (override.shortcut) {
+    const conflict = Object.entries(next).find(
+      ([other, value]) =>
+        other !== command && value.shortcut === override.shortcut,
+    );
+    if (conflict) throw new Error(`Already used by ${conflict[0]}`);
+    next[command] = { shortcut: override.shortcut };
+  } else delete next[command];
+  try {
+    if (Object.keys(next).length) {
+      localStorage.setItem(KEYBINDING_OVERRIDES_KEY, JSON.stringify(next));
+    } else {
+      localStorage.removeItem(KEYBINDING_OVERRIDES_KEY);
+    }
+  } catch {}
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(KEYBINDINGS_CHANGE_EVENT));
+  }
+  return next;
+}
+
+export function shortcutMatches(
+  shortcut: string,
+  event: Pick<KeyboardEvent, "code"> &
+    Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+): boolean {
+  return shortcutFromKeyEvent({ ...event, code: event.code }) === shortcut;
+}
+
+export function matchCustomKeybinding(
+  event: Parameters<typeof shortcutMatches>[1],
+): string | null {
+  for (const [command, override] of Object.entries(loadKeybindingOverrides())) {
+    if (override.shortcut && shortcutMatches(override.shortcut, event)) {
+      return command;
+    }
+  }
+  return null;
+}
+
+export function keybindingPressed(
+  command: string,
+  event: Parameters<typeof shortcutMatches>[1],
+  defaultMatch: boolean,
+): boolean {
+  const override = loadKeybindingOverrides()[command];
+  if (override?.disabled) return false;
+  if (override?.shortcut) return shortcutMatches(override.shortcut, event);
+  return defaultMatch;
+}
+
+export function keybindingShortcutLabel(
+  command: string,
+  fallback: string,
+): string | null {
+  const override = loadKeybindingOverrides()[command];
+  if (override?.disabled) return null;
+  return override?.shortcut
+    ? quickComposerShortcutLabel(override.shortcut)
+    : fallback;
+}
+
+export function subscribeKeybindings(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === KEYBINDING_OVERRIDES_KEY) onStoreChange();
+  };
+  window.addEventListener(KEYBINDINGS_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(KEYBINDINGS_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
 export function currentKeybindings(): KeybindingRow[] {
-  return KEYBINDINGS.map((row) =>
-    row.command === "App: Quick Composer"
-      ? {
-          ...row,
-          keys: quickComposerShortcutLabel(loadQuickComposerShortcut()),
-        }
-      : row,
-  );
+  const overrides = loadKeybindingOverrides();
+  return KEYBINDINGS.map((row) => {
+    if (row.command === "App: Quick Composer") {
+      return {
+        ...row,
+        keys: loadQuickComposerEnabled()
+          ? quickComposerShortcutLabel(loadQuickComposerShortcut())
+          : "Disabled",
+      };
+    }
+    const override = overrides[row.command];
+    return {
+      ...row,
+      keys: override?.disabled
+        ? "Disabled"
+        : override?.shortcut
+          ? quickComposerShortcutLabel(override.shortcut)
+          : row.keys,
+    };
+  });
 }
 
 export function filterKeybindings(
