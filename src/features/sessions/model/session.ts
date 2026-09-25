@@ -19,6 +19,7 @@ export type HarnessId =
   | "claude"
   | "codex"
   | "cursor"
+  | "devin"
   | "grok"
   | "opencode"
   | "pi"
@@ -31,6 +32,7 @@ export const HARNESSES: HarnessId[] = [
   "claude",
   "codex",
   "cursor",
+  "devin",
   "grok",
   "opencode",
   "pi",
@@ -333,7 +335,7 @@ export type Block = {
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
   interjection?: InterjectionMeta;
   /**
-   * A system row the reader must not miss — an error or an interruption —
+   * A system row the reader must not miss ? an error or an interruption ?
    * rather than turn chrome like a status ping. Never folds into the trail.
    */
   notice?: "error" | "interrupt";
@@ -463,6 +465,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   claude: "claude",
   codex: "codex",
   cursor: "cursor",
+  devin: "devin",
   grok: "grok",
   opencode: "opencode",
   pi: "pi",
@@ -476,6 +479,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   claude: "Claude Code",
   codex: "Codex",
   cursor: "Cursor",
+  devin: "Devin",
   grok: "Grok Build",
   opencode: "OpenCode",
   pi: "Pi",
@@ -629,14 +633,14 @@ export function titleFromPrompt(
   const seed = line || fromFiles;
   if (!seed) return HARNESS_LABEL[harness];
   const max = 72;
-  const short = seed.length > max ? `${seed.slice(0, max - 1)}…` : seed;
+  const short = seed.length > max ? `${seed.slice(0, max - 1)}?` : seed;
   return formatSessionTitle(harness, short);
 }
 
 export function formatSessionTitle(harness: HarnessId, title: string): string {
   const trimmed = title.trim();
   if (!trimmed) return HARNESS_LABEL[harness];
-  return `${HARNESS_LABEL[harness]} · ${trimmed}`;
+  return `${HARNESS_LABEL[harness]} ? ${trimmed}`;
 }
 
 /** True when the stored title is still a placeholder the LLM may replace. */
@@ -698,7 +702,7 @@ export function removeSessionDraft(
 
 /** Title without the harness prefix stored for the tab strip. */
 export function sessionDisplayTitle(title: string, harness: HarnessId): string {
-  const prefix = `${HARNESS_LABEL[harness]} · `;
+  const prefix = `${HARNESS_LABEL[harness]} ? `;
   if (title.startsWith(prefix)) return title.slice(prefix.length);
   if (title === HARNESS_LABEL[harness] || title === HARNESS_TITLE[harness]) {
     return "New session";

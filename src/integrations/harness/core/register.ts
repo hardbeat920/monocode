@@ -1,6 +1,7 @@
 import { ensureClaudeRegistered } from "../providers/claude/claudeAdapter";
 import { ensureCodexRegistered } from "../providers/codex/codexAdapter";
 import { ensureCursorRegistered } from "../providers/cursor/cursorAdapter";
+import { ensureDevinRegistered } from "../providers/devin/devinAdapter";
 import { ensureFxRegistered } from "../providers/fx/fxAdapter";
 import { ensureGrokRegistered } from "../providers/grok/grokAdapter";
 import { ensureHermesRegistered } from "../providers/hermes/hermesAdapter";
@@ -13,6 +14,7 @@ import { ensureAntigravityRegistered } from "../providers/antigravity/antigravit
 export function registerBuiltinHarnesses(): void {
   ensureClaudeRegistered();
   ensureCursorRegistered();
+  ensureDevinRegistered();
   ensureCodexRegistered();
   ensureGrokRegistered();
   ensureOpenCodeRegistered();

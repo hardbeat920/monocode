@@ -11,6 +11,7 @@ let availability: HarnessAvailability = {
   claude: false,
   codex: false,
   cursor: false,
+  devin: false,
   grok: false,
   opencode: false,
   pi: false,

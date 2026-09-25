@@ -38,6 +38,7 @@ const LOGIN_RESOLVERS: Partial<
   claude: () => child.resolveClaudeBinary(),
   codex: () => child.resolveCodexBinary(),
   cursor: () => child.resolveCursorBinary(),
+  devin: () => child.resolveDevinBinary(),
   grok: () => child.resolveGrokBinary(),
   fx: () => child.resolveFxBinary(),
 };
@@ -154,7 +155,7 @@ function safeLoginDetail(value: string): string {
     .replace(/https?:\/\/\S+/gi, "sign-in link")
     .replace(/\s+/g, " ")
     .trim();
-  return text.length > 240 ? `${text.slice(0, 237)}…` : text;
+  return text.length > 240 ? `${text.slice(0, 237)}?` : text;
 }
 
 /** Test seam. */
