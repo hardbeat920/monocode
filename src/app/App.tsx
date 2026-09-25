@@ -9642,7 +9642,7 @@ export default function App({
     if (!IS_MAC) return;
     void invoke("keybindings_set_overrides", {
       overrides: loadKeybindingOverrides(),
-    }).catch(() => {});
+    }).catch(console.error);
   }, []);
 
   useEffect(() => {

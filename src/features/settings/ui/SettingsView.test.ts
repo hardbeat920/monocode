@@ -557,6 +557,35 @@ describe("settings search", () => {
     expect(input.value).toBe("Ctrl+Shift+M");
   });
 
+  it("surfaces a storage failure instead of silently dropping the change", async () => {
+    await render("keybindings");
+    (
+      localStorage as unknown as {
+        setItem: (key: string, value: string) => void;
+      }
+    ).setItem = () => {
+      throw new Error("quota exceeded");
+    };
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Change App: Search shortcut"]',
+    )!;
+    await act(async () => input.click());
+    await act(async () =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyY",
+          key: "y",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+
+    expect(container.textContent).toContain("Could not save shortcuts");
+  });
+
   it("records an Alt shortcut on a keybinding row", async () => {
     await render("keybindings");
     const input = container.querySelector<HTMLInputElement>(

@@ -1132,7 +1132,9 @@ export function saveKeybindingOverride(
     } else {
       localStorage.removeItem(KEYBINDING_OVERRIDES_KEY);
     }
-  } catch {}
+  } catch {
+    throw new Error("Could not save shortcuts");
+  }
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(KEYBINDINGS_CHANGE_EVENT));
   }

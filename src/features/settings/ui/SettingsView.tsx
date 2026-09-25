@@ -2554,7 +2554,10 @@ function KeybindingShortcutEditor({
   command: string;
   display: string | null;
   modified: boolean;
-  onSave: (command: string, override: KeybindingOverride) => void;
+  onSave: (
+    command: string,
+    override: KeybindingOverride,
+  ) => void | Promise<void>;
 }) {
   return (
     <ShortcutEditor
@@ -2580,13 +2583,9 @@ function KeybindingsPage() {
     [query, overrides],
   );
 
-  const save = (command: string, override: KeybindingOverride) => {
+  const save = async (command: string, override: KeybindingOverride) => {
     const next = saveKeybindingOverride(command, override);
-    if (IS_MAC) {
-      void invoke("keybindings_set_overrides", { overrides: next }).catch(
-        () => {},
-      );
-    }
+    if (IS_MAC) await invoke("keybindings_set_overrides", { overrides: next });
   };
 
   return (
