@@ -108,7 +108,7 @@ export function UsageProviderChip({
   const activeAccountLabel = activeAccount?.label ?? "Removed account";
   const identities = useProviderAccountIdentities(
     accounts,
-    `${open}:${limits.updatedAt}`,
+    `${open}:${limits.updatedAt}:${reconnectState}`,
   );
   const activeIdentity = activeAccount
     ? identities[identityKey(activeAccount)]
