@@ -17,7 +17,15 @@ import {
 } from "../../../integrations/harness/core/child";
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { JsonRpcClient } from "../../../integrations/harness/core/jsonRpc";
-import { loadEffectiveClaudeConfigDir } from "../../settings/model/settings";
+import {
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../../integrations/harness/core/runtime";
+import {
+  loadEffectiveClaudeConfigDir,
+  loadHarnessRuntime,
+} from "../../settings/model/settings";
 
 const USAGE_CHILD_ID = "monocode-codex-usage";
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -121,7 +129,7 @@ export async function fetchCodexRateLimits(
 ): Promise<ProviderRateLimits> {
   let path: string;
   try {
-    path = (await resolveCodexBinary()).path;
+    path = (await resolveHarnessBinary("codex", resolveCodexBinary)).path;
   } catch {
     return unavailableRateLimits("codex", "Codex CLI not found");
   }
@@ -162,7 +170,7 @@ export async function consumeCodexRateLimitResetCredit(
   creditId?: string,
   accountId = "default",
 ): Promise<CodexRateLimitResetOutcome> {
-  const path = (await resolveCodexBinary()).path;
+  const path = (await resolveHarnessBinary("codex", resolveCodexBinary)).path;
   const cwd = await homeDir();
   const result = await requestCodexAccount<unknown>(
     path,
@@ -218,10 +226,15 @@ async function requestCodexAccount<T>(
   );
 
   try {
-    await spawnChild(USAGE_CHILD_ID, path, ["app-server"], cwd, {
-      provider: "codex",
-      id: accountId,
-    });
+    const runtime = loadHarnessRuntime("codex");
+    await spawnChild(
+      USAGE_CHILD_ID,
+      path,
+      ["app-server", ...harnessRuntimeExtraArgs(runtime)],
+      cwd,
+      { provider: "codex", id: accountId },
+      harnessRuntimeEnv(runtime),
+    );
     return await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {
