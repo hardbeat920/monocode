@@ -2711,9 +2711,12 @@ function ProviderRow({
           value={current.id}
           onChange={(next) => onModelChange(harness, next)}
           onOpen={() => {
-            // Built-in fallbacks keep `models` non-empty, so the mount effect
-            // alone never replaces them with the live catalog.
-            if (available) void refreshHarnessCatalogs([harness]);
+            // Opening the dropdown is an explicit refresh: fallbacks keep
+            // `models` non-empty, and routine refreshes skip once a live
+            // catalog exists, so force this one past that skip.
+            if (available) {
+              void refreshHarnessCatalogs([harness], { force: true });
+            }
           }}
           options={models.map((item) => ({
             value: item.id,

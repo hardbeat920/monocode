@@ -95,16 +95,16 @@ async function discoverOpenCodeV2Models(
   cwd: string,
 ): Promise<AgentModel[]> {
   const service = await resolveOpenCodeV2Service(path, cwd);
-  const client = new OpenCodeClient(
-    service.url,
-    "",
-    "v2",
-    service.password,
-  );
+  // Catalog requests stay on the server's default location: location-scoped
+  // requests return an empty model snapshot for some projects on 2.x and a
+  // 500 for directories the server has not registered.
+  const client = new OpenCodeClient(service.url, "", "v2", service.password);
   const [rawModels, rawProviders, rawAgents] = await Promise.all([
     client.listModels(),
     client.listProviders(),
-    client.listAgents(),
+    // Agent discovery is optional, as in the v1 path: its failure must not
+    // lose models and providers.
+    client.listAgents().catch(() => []),
   ]);
   return flattenOpenCodeModels(
     parseV2Catalog(rawModels, rawProviders),
@@ -135,7 +135,13 @@ export function parseV2Catalog(
     const model = asRecord(value);
     if (!model) continue;
     const providerID = stringField(model, "providerID");
-    const modelID = stringField(model, "modelID") ?? stringField(model, "id");
+    // `id` is the selectable name and can be an alias that differs from the
+    // upstream `modelID` (e.g. id "openai/coding", modelID "gpt-5.2").
+    const rawId = stringField(model, "id") ?? stringField(model, "modelID");
+    const modelID =
+      providerID && rawId?.startsWith(`${providerID}/`)
+        ? rawId.slice(providerID.length + 1)
+        : rawId;
     if (!providerID || !modelID || model?.enabled === false) continue;
     let provider = providers.get(providerID);
     if (!provider) {
