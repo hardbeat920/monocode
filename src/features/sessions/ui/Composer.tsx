@@ -1787,7 +1787,6 @@ export function Composer({
           ) : null}
           {hideTopBar ? null : (
             <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
-              {machineControl}
               {hideProjectPicker ? null : (
                 <CwdPicker
                   cwd={cwd}
@@ -2266,6 +2265,9 @@ export function Composer({
           />
         ) : null}
       </div>
+      {machineControl ? (
+        <div className="mt-2 flex justify-end px-1">{machineControl}</div>
+      ) : null}
     </div>
   );
 }
