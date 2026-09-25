@@ -155,6 +155,7 @@ import {
   supportsBtwHarness,
 } from "../model/btw";
 import { COMPACT_COMMAND, isCompactCommand } from "../model/compact";
+import { RESUME_COMMAND } from "../model/resumeCommand";
 import {
   consumeSessionFolderCommand,
   isSessionFolderCommand,
@@ -240,6 +241,8 @@ type Props = {
   onStop?: () => void;
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
+  /** Open the picker of conversations Claude Code stored for this project. */
+  onResumeProviderSession?: () => void;
   onDeleteQueuedMessage?: (messageId: string) => void;
   onEditQueuedMessage?: (messageId: string, text: string) => void;
   onQueuedMessageEditingChange?: (messageId?: string) => void;
@@ -518,6 +521,7 @@ export function Composer({
   onStop,
   onCompactContext,
   onPlaceInFolder,
+  onResumeProviderSession,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   onQueuedMessageEditingChange,
@@ -646,6 +650,11 @@ export function Composer({
       PLAN_COMMAND,
       COMPACT_COMMAND,
       ...(supportsBtwHarness(harness) ? [BTW_COMMAND] : []),
+      // Reading and replaying stored conversations is written against Claude
+      // Code's own on-disk format, so the command only exists where it works.
+      ...(harness === "claude" && onResumeProviderSession
+        ? [RESUME_COMMAND]
+        : []),
       ...skills.filter(
         (skill) =>
           ![OPERATOR_COMMAND.name, "mono", "monocode"].includes(skill.name) &&
@@ -653,10 +662,11 @@ export function Composer({
             (skill.name !== PLAN_COMMAND.name &&
               skill.name !== COMPACT_COMMAND.name &&
               skill.name !== SESSION_FOLDER_COMMAND.name &&
+              skill.name !== RESUME_COMMAND.name &&
               skill.name !== BTW_COMMAND.name)),
       ),
     ],
-    [harness, skills],
+    [harness, onResumeProviderSession, skills],
   );
   const skillLimit = hasNativeCommands(harness)
     ? Number.POSITIVE_INFINITY
@@ -988,6 +998,26 @@ export function Composer({
         openSessionFolderPicker();
         return;
       }
+      const resumeCommand =
+        skill.kind === "builtin" &&
+        skill.name === RESUME_COMMAND.name &&
+        !!onResumeProviderSession;
+      if (resumeCommand) {
+        // Picking a conversation loads a transcript; it is not a prompt, so the
+        // command leaves no text behind in the composer.
+        const cleared = `${el.value.slice(0, token.start)}${el.value
+          .slice(token.end)
+          .replace(/^\s/, "")}`;
+        el.value = cleared;
+        resizeComposer(el);
+        el.setSelectionRange(token.start, token.start);
+        setDraft(cleared);
+        syncHasValue(cleared, attachmentsRef.current);
+        setSlash(null);
+        setCreatingSkill(false);
+        onResumeProviderSession();
+        return;
+      }
       const next = planCommand
         ? `${el.value.slice(0, token.start)}${el.value
             .slice(token.end)
@@ -1011,7 +1041,12 @@ export function Composer({
       }
       el.focus();
     },
-    [onPlaceInFolder, openSessionFolderPicker, syncHasValue],
+    [
+      onPlaceInFolder,
+      onResumeProviderSession,
+      openSessionFolderPicker,
+      syncHasValue,
+    ],
   );
 
   const pickMention = useCallback(

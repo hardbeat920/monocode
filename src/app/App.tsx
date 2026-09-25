@@ -63,6 +63,12 @@ import {
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
+import { ClaudeSessionPicker } from "../features/sessions/ui/ClaudeSessionPicker";
+import { buildImportedSession } from "../features/sessions/model/claudeSessionImport";
+import {
+  readTextFile,
+  type ClaudeSessionSummary,
+} from "../platform/tauri/fs";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { MenuBar } from "./shell/MenuBar";
@@ -5031,6 +5037,58 @@ export default function App({
     const path = await pickFolder();
     if (path) onSelectProject(path);
   }, [onSelectProject]);
+
+  const [resumePickerFor, setResumePickerFor] = useState<{
+    sessionId: string;
+    cwd: string;
+  } | null>(null);
+
+  const onResumeProviderSession = useCallback((sessionId: string) => {
+    const source = sessionsRef.current.find(
+      (session) => session.id === sessionId,
+    );
+    if (!source) return;
+    setResumePickerFor({ sessionId, cwd: source.cwd });
+  }, []);
+
+  /**
+   * Load a conversation Claude Code recorded into the thread the command was
+   * run from, and bind it so the next turn continues that conversation rather
+   * than starting a new one.
+   */
+  const importClaudeConversation = useCallback(
+    async (
+      target: { sessionId: string; cwd: string },
+      summary: ClaudeSessionSummary,
+    ) => {
+      const source = sessionsRef.current.find(
+        (session) => session.id === target.sessionId,
+      );
+      if (!source) return;
+      const transcript = await readTextFile(summary.path).catch(() => null);
+      if (transcript === null) return;
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === target.sessionId
+            ? buildImportedSession({
+                base: session,
+                transcript,
+                providerSessionId: summary.id,
+                providerAccountId: session.providerAccountId,
+              })
+            : session,
+        ),
+      );
+      bindHarnessSession(
+        "claude",
+        target.sessionId,
+        summary.id,
+        target.cwd,
+        source.providerAccountId,
+      );
+    },
+    [],
+  );
 
   const onPlaceSessionInFolder = useCallback(
     (sessionId: string, target: SessionFolderTarget) => {
@@ -10018,6 +10076,7 @@ export default function App({
     onStop,
     onCompactContext,
     onPlaceSessionInFolder,
+    onResumeProviderSession,
     onDeleteQueuedMessage,
     onEditQueuedMessage,
     onQueuedMessageEditingChange,
@@ -10588,6 +10647,16 @@ export default function App({
             onOpenSettings={() => openSettings("general", "notifications")}
             onHeightChange={setReminderNoticesHeight}
           />
+          {resumePickerFor ? (
+            <ClaudeSessionPicker
+              cwd={resumePickerFor.cwd}
+              onClose={() => setResumePickerFor(null)}
+              onPick={(summary) => {
+                void importClaudeConversation(resumePickerFor, summary);
+                setResumePickerFor(null);
+              }}
+            />
+          ) : null}
           {whatsNewVersion ? (
             <WhatsNewDialog
               version={whatsNewVersion}

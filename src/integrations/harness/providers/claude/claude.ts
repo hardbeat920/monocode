@@ -371,6 +371,173 @@ export function bindClaudeSession(
   resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
 }
 
+/**
+ * Records in a stored session file that carry conversation content. The rest —
+ * modes, file snapshots, queue operations, generated titles — is bookkeeping
+ * the transcript never showed in the first place.
+ */
+function isReplayableRecord(rec: Record<string, unknown>): boolean {
+  const type = rec.type;
+  if (type !== "user" && type !== "assistant") return false;
+  // Subagent traffic is already represented by the Agent tool row on the
+  // parent message; replaying it too would duplicate the work inline.
+  return rec.isSidechain !== true;
+}
+
+/**
+ * Rebuild a thread's transcript from a conversation Claude stored on disk.
+ *
+ * The stored records are the same shape as the ones the live process streams,
+ * so they go through `handleLine` unchanged and produce the same events —
+ * including tool rows and subagent steps. Passing the MonoCode thread id also
+ * makes `handleLine` record the resume binding and emit `session.providerBound`
+ * on its own, so an imported thread continues the real conversation on its next
+ * turn without a separate bind step.
+ */
+/**
+ * The prompt a person typed, or nothing when this record is a tool result
+ * wearing the user role — those are answers to the agent's own calls and are
+ * replayed through `handleLine` onto their tool rows instead.
+ */
+function userPromptText(rec: Record<string, unknown>): string | undefined {
+  const message = rec.message as Record<string, unknown> | undefined;
+  const content = message?.content;
+  if (typeof content === "string") return content.trim() || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const blocks = content as Array<Record<string, unknown>>;
+  if (blocks.some((block) => block?.type === "tool_result")) return undefined;
+  const text = blocks
+    .filter((block) => block?.type === "text")
+    .map((block) => (typeof block.text === "string" ? block.text : ""))
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+export function replayClaudeSession(input: {
+  sessionId: string;
+  cwd: string;
+  providerAccountId?: string;
+  runtimeMode: RuntimeMode;
+  transcript: string;
+  onEvent: (event: HarnessEvent) => void;
+  /** A prompt someone typed. These are blocks, not events, so the caller adds
+   * them to the transcript itself. */
+  onPrompt: (text: string, at?: number) => void;
+}): void {
+  // Two things can leave a reply open. `handleLine` holds its own boundary for
+  // a message carrying text, but a later tool-only record overwrites it; and
+  // live the final reply is closed by the turn's `result` message, which a
+  // stored conversation has no equivalent of. Watching what was actually
+  // emitted covers both without closing the same message twice.
+  let openReply = false;
+  const emit = (event: HarnessEvent) => {
+    if (event.type === "message.delta") openReply = true;
+    if (event.type === "message.completed") openReply = false;
+    input.onEvent(event);
+  };
+
+  const live = newLiveState({
+    cwd: input.cwd,
+    claudeSessionId: "",
+    providerAccountId: input.providerAccountId,
+    runtimeMode: input.runtimeMode,
+    planning: false,
+    settingsKey: "",
+    onEvent: emit,
+  });
+  live.initialized = true;
+
+  const finishReply = () => {
+    closePendingAssistantMessage(live);
+    if (openReply) emit({ type: "message.completed" });
+  };
+
+  for (const line of input.transcript.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let rec: Record<string, unknown>;
+    try {
+      rec = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (!isReplayableRecord(rec)) continue;
+
+    const prompt = rec.type === "user" ? userPromptText(rec) : undefined;
+    if (prompt) {
+      // End the reply this prompt follows, so the turns stay separate blocks.
+      finishReply();
+      input.onPrompt(prompt, timestampOf(rec));
+      continue;
+    }
+
+    handleLine(input.sessionId, live, trimmed);
+  }
+  finishReply();
+}
+
+function timestampOf(rec: Record<string, unknown>): number | undefined {
+  const raw = rec.timestamp;
+  if (typeof raw !== "string") return undefined;
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+/**
+ * Every field of a fresh `Live`. Shared so that replaying a stored transcript
+ * runs against exactly the same state the live stream builds, rather than a
+ * second copy that drifts as the streaming path grows.
+ */
+function newLiveState(input: {
+  cwd: string;
+  claudeSessionId: string;
+  providerAccountId?: string;
+  runtimeMode: RuntimeMode;
+  planning: boolean;
+  settingsKey: string;
+  onEvent: (event: HarnessEvent) => void;
+}): Live {
+  return {
+    cwd: input.cwd,
+    claudeSessionId: input.claudeSessionId,
+    providerAccountId: input.providerAccountId,
+    runtimeMode: input.runtimeMode,
+    planning: input.planning,
+    settingsKey: input.settingsKey,
+    onEvent: input.onEvent,
+    approvals: new Map(),
+    questions: new Map(),
+    visibleQuestionId: null,
+    nextApprovalUiId: 1,
+    nextControlId: 1,
+    toolsByIndex: new Map(),
+    toolsById: new Map(),
+    agentTasks: new Map(),
+    backgroundTasks: new Map(),
+    backgroundRows: new Map(),
+    awaitingResume: null,
+    backgroundKey: "",
+    taskNotes: [],
+    turnResultSeen: false,
+    usageLimit: null,
+    cancelled: false,
+    muteUpdates: false,
+    turns: Promise.resolve(),
+    turnDone: null,
+    turnFailed: null,
+    turnEndPending: false,
+    activeTurn: false,
+    initDone: null,
+    initialized: false,
+    emittedAssistant: "",
+    emittedReasoning: "",
+    pendingAssistantBoundary: false,
+    manualCompaction: false,
+    compactionConfirmed: false,
+  };
+}
+
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const settingsKey = settingsKeyFor(input);
   const planning = input.intent === "plan";
@@ -416,7 +583,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     claudeSessionId,
   );
 
-  const live: Live = {
+  const live: Live = newLiveState({
     cwd: input.cwd,
     claudeSessionId,
     providerAccountId: input.providerAccountId,
@@ -424,36 +591,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     planning,
     settingsKey,
     onEvent: input.onEvent,
-    approvals: new Map(),
-    questions: new Map(),
-    visibleQuestionId: null,
-    nextApprovalUiId: 1,
-    nextControlId: 1,
-    toolsByIndex: new Map(),
-    toolsById: new Map(),
-    agentTasks: new Map(),
-    backgroundTasks: new Map(),
-    backgroundRows: new Map(),
-    awaitingResume: null,
-    backgroundKey: "",
-    taskNotes: [],
-    turnResultSeen: false,
-    usageLimit: null,
-    cancelled: false,
-    muteUpdates: false,
-    turns: Promise.resolve(),
-    turnDone: null,
-    turnFailed: null,
-    turnEndPending: false,
-    activeTurn: false,
-    initDone: null,
-    initialized: false,
-    emittedAssistant: "",
-    emittedReasoning: "",
-    pendingAssistantBoundary: false,
-    manualCompaction: false,
-    compactionConfirmed: false,
-  };
+  });
   liveRef.current = live;
 
   watchChild(
