@@ -56,6 +56,7 @@ import { LAYER } from "../../../shared/lib/layers";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
 import { MOD } from "../../../platform/tauri/platform";
+import { keybindingPressed } from "../../settings/model/settings";
 
 type Props = {
   harness: HarnessId;
@@ -452,12 +453,14 @@ export function ModelPicker({
     const onKey = (event: KeyboardEvent) => {
       if (event.isComposing) return;
       const mod = event.metaKey || event.ctrlKey;
-      if (
-        hotkeys &&
+      const defaultSwitch =
         mod &&
         !event.altKey &&
         !event.shiftKey &&
-        (event.key === "." || event.code === "Period")
+        (event.key === "." || event.code === "Period");
+      if (
+        hotkeys &&
+        keybindingPressed("App: Switch Model", event, defaultSwitch)
       ) {
         if (!openRef.current && inBlockingUi(event.target)) return;
         event.preventDefault();

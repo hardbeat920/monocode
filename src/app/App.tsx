@@ -466,6 +466,8 @@ import {
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
+  tabCommandForKeybinding,
+  tabCommandKeybinding,
 } from "../features/workspace/model/tabKeys";
 import {
   canTabVisitBack,
@@ -562,7 +564,10 @@ import {
   loadNotesEnabled,
   loadDiffViewer,
   loadFollowUpBehavior,
+  loadKeybindingOverrides,
   loadSettingsSection,
+  keybindingPressed,
+  matchCustomKeybinding,
   saveSettingsSection,
   subscribeLiveAgentsEnabled,
   subscribeNotesEnabled,
@@ -9634,16 +9639,41 @@ export default function App({
   }, []);
 
   useEffect(() => {
+    if (!IS_MAC) return;
+    void invoke("keybindings_set_overrides", {
+      overrides: loadKeybindingOverrides(),
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The Quick Composer recorder owns the next key combination, including
       // bindings that the workspace would normally handle in capture phase.
       if (document.querySelector('[data-shortcut-recorder-active="true"]'))
         return;
-      // Browser-standard UI zoom. Runs before tabCommand and always applies —
-      // even in inputs and the terminal — so Ctrl/Cmd + - 0 behave like a browser.
+      const customCommand = matchCustomKeybinding(e);
+      const pressed = (command: string, defaultMatch: boolean) =>
+        keybindingPressed(command, e, defaultMatch);
+      // Browser-standard UI zoom. Runs before tabCommand, even in inputs and
+      // the terminal, so Ctrl/Cmd + - 0 behave like a browser.
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.isComposing) {
-        const zoom = uiScaleCommand(e);
-        if (zoom) {
+        const defaultZoom = uiScaleCommand(e);
+        const zoom = customCommand
+          ? {
+              "View: Zoom In": "zoom-in",
+              "View: Zoom Out": "zoom-out",
+              "View: Reset Zoom": "zoom-reset",
+            }[customCommand]
+          : defaultZoom;
+        const binding =
+          zoom === "zoom-in"
+            ? "View: Zoom In"
+            : zoom === "zoom-out"
+              ? "View: Zoom Out"
+              : zoom === "zoom-reset"
+                ? "View: Reset Zoom"
+                : null;
+        if (binding && pressed(binding, zoom === defaultZoom)) {
           e.preventDefault();
           e.stopPropagation();
           if (zoom === "zoom-in") {
@@ -9659,8 +9689,10 @@ export default function App({
           return;
         }
       }
-      const cmd = tabCommand(e);
-      if (cmd) {
+      const cmd = customCommand
+        ? tabCommandForKeybinding(customCommand, e)
+        : tabCommand(e);
+      if (cmd && pressed(tabCommandKeybinding(cmd), !customCommand)) {
         if (cmd === "archive-session") {
           actions.current.onArchiveFocusedSession(e);
           return;
@@ -9734,6 +9766,8 @@ export default function App({
         else if (cmd === "close") run("close", a.onClosePane);
         else if (cmd === "next") run("next", a.onNext);
         else if (cmd === "prev") run("prev", a.onPrev);
+        else if (cmd === "cycle-next") run("next", a.onNext);
+        else if (cmd === "cycle-prev") run("prev", a.onPrev);
         else if (cmd === "back") run("back", a.onVisitBack);
         else if (cmd === "forward") run("forward", a.onVisitForward);
         else if (cmd === "split-right")
@@ -9778,37 +9812,97 @@ export default function App({
         return;
       }
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "b") {
+      if (
+        mod &&
+        !e.altKey &&
+        e.shiftKey &&
+        e.key.toLowerCase() === "n" &&
+        pressed("App: New Window", true)
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        run("new_window", () => void invoke("open_new_window"));
+        return;
+      }
+      if (
+        mod &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "o" &&
+        pressed("App: Open Project", true)
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        run("open_project", () => void actions.current.pickProject());
+        return;
+      }
+      if (
+        mod &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "b" &&
+        pressed("App: Toggle Sidebar", true)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         run("toggle_sidebar", actions.current.onToggleSidebar);
         return;
       }
-      if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b") {
+      if (
+        mod &&
+        !e.altKey &&
+        e.shiftKey &&
+        e.key.toLowerCase() === "b" &&
+        pressed("App: Toggle Session Sidebar", true)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         run("toggle_session_sidebar", actions.current.onToggleSessionSidebar);
         return;
       }
-      if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+      if (
+        mod &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "p" &&
+        pressed("App: Go to File", true)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         run("go_to_file", actions.current.onGoToFile);
         return;
       }
-      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+      if (
+        mod &&
+        e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "p" &&
+        pressed("App: Command Palette", true)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         run("open_command_palette", actions.current.onOpenCommandPalette);
         return;
       }
-      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+      if (
+        mod &&
+        e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "r" &&
+        pressed("View: Reload", true)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         run("reload", actions.current.onReload);
         return;
       }
-      if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      if (
+        mod &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "k" &&
+        pressed("App: Search", true)
+      ) {
         const target = e.target instanceof Element ? e.target : null;
         if (target?.closest(".monocode-terminal") && e.ctrlKey && !e.metaKey) {
           return;
@@ -9818,13 +9912,25 @@ export default function App({
         run("open_search", actions.current.onOpenSearch);
         return;
       }
-      if (mod && !e.altKey && !e.shiftKey && e.key === ",") {
+      if (
+        mod &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key === "," &&
+        pressed("App: Settings", true)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         run("open_settings", () => actions.current.openSettings());
         return;
       }
-      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+      if (
+        mod &&
+        e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "f" &&
+        pressed("App: Find in Files", true)
+      ) {
         e.preventDefault();
         e.stopPropagation();
         run("find_in_project", actions.current.onFindInProject);

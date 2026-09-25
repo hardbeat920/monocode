@@ -9,6 +9,7 @@ import {
 } from "react";
 import { ALT, MOD, SHIFT } from "../../../platform/tauri/platform";
 import { ChevronDown, ChevronUp, X } from "../../../shared/ui/icons";
+import { keybindingPressed } from "../../settings/model/settings";
 
 const MATCH_CAP = 999;
 const MATCH_HIGHLIGHT = "monocode-file-preview-search-match";
@@ -89,7 +90,12 @@ export function handleFilePreviewFindKey(event: KeyboardEvent): boolean {
 
   const mod = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
-  if (mod && !event.altKey && !event.shiftKey && key === "f") {
+  const defaultFind = mod && !event.altKey && !event.shiftKey && key === "f";
+  if (defaultFind && !keybindingPressed("Editor: Find", event, true)) {
+    event.preventDefault();
+    return true;
+  }
+  if (keybindingPressed("Editor: Find", event, defaultFind)) {
     event.preventDefault();
     controller.open();
     return true;
