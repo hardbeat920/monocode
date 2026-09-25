@@ -192,6 +192,7 @@ type Props = {
   hideProjectPicker?: boolean;
   hideBranchPicker?: boolean;
   hideTopBar?: boolean;
+  machineControl?: ReactNode;
   context?: ContextUsage;
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
@@ -475,6 +476,7 @@ export function Composer({
   hideProjectPicker = false,
   hideBranchPicker = false,
   hideTopBar = false,
+  machineControl,
   context,
   compactSupported = false,
   quoteRequest,
@@ -1785,6 +1787,7 @@ export function Composer({
           ) : null}
           {hideTopBar ? null : (
             <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
+              {machineControl}
               {hideProjectPicker ? null : (
                 <CwdPicker
                   cwd={cwd}

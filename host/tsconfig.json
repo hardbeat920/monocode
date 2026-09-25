@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"],
+    "composite": false
+  },
+  "include": ["./**/*.ts", "../src/vite-env.d.ts"],
+  "exclude": ["./**/*.test.ts"],
+  "references": []
+}

@@ -1,5 +1,34 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
+
+/** Process I/O is supplied by the desktop or a headless host. Provider
+ * protocols never need to know which process owns their children. */
+export interface ChildBackend {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  listen<T>(
+    event: string,
+    handler: (event: { payload: T }) => void,
+  ): Promise<UnlistenFn>;
+}
+
+let backend: ChildBackend | undefined;
+
+export function configureChildBackend(next: ChildBackend): void {
+  if (bridge || users)
+    throw new Error("Configure the child backend before starting the bridge");
+  backend = next;
+}
+
+function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  return backend ? backend.invoke<T>(command, args) : tauriInvoke<T>(command, args);
+}
+
+function listen<T>(
+  event: string,
+  handler: (event: { payload: T }) => void,
+): Promise<UnlistenFn> {
+  return backend ? backend.listen(event, handler) : tauriListen(event, handler);
+}
 
 type LinePayload = { sessionId: string; line: string };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };

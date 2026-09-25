@@ -30,9 +30,12 @@ mod pty;
 mod quick_composer;
 mod rate_limits;
 mod reminders;
+mod remote;
+mod remote_ssh;
 mod search;
 mod session_store;
 mod skills;
+pub mod ssh_askpass;
 #[cfg(target_os = "windows")]
 mod tray;
 mod window;
@@ -220,6 +223,7 @@ pub fn run() {
         )
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
+        .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
@@ -251,6 +255,15 @@ pub fn run() {
             menu::dispatch(app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
+            remote::remote_machines,
+            remote::remote_connect,
+            remote::remote_disconnect,
+            remote::remote_request,
+            remote::remote_ssh_begin,
+            remote::remote_ssh_reconnect,
+            remote::remote_ssh_poll,
+            remote::remote_ssh_answer,
+            remote::remote_ssh_cancel,
             control::control_enable,
             control::control_disable,
             control::control_reply,
@@ -551,6 +564,7 @@ pub fn run() {
             window::request_quit(handle);
         }
         tauri::RunEvent::Exit => {
+            handle.state::<remote::RemoteConnections>().shutdown();
             reap_harness_children(handle);
         }
         _ => {}
