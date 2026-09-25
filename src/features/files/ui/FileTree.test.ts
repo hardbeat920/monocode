@@ -81,6 +81,12 @@ function pressPaste(el: HTMLElement) {
   });
 }
 
+function press(el: HTMLElement, init: KeyboardEventInit) {
+  return act(async () => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+  });
+}
+
 function nativeDrop(paths: string[]) {
   return act(async () => {
     dragDrop.handler!({
@@ -250,6 +256,16 @@ describe("FileTree accepts files from outside the tree", () => {
     ]);
   });
 
+  it("pastes on a non-Latin layout", async () => {
+    clipboardFiles.push("/Users/me/Desktop/a.txt");
+    saveSelected(cwd, `${cwd}/docs`);
+    await act(async () => render());
+    await press(row("docs"), { key: "м", code: "KeyV", metaKey: true });
+    expect(copied).toEqual([
+      { from: "/Users/me/Desktop/a.txt", destParent: `${cwd}/docs` },
+    ]);
+  });
+
   it("does nothing on paste when the clipboard holds no files", async () => {
     saveSelected(cwd, `${cwd}/docs`);
     await act(async () => render());
@@ -299,20 +315,36 @@ describe("FileTree accepts files from outside the tree", () => {
 });
 
 describe("FileTree copies paths", () => {
-  it("copies the selected path on Mod+Shift+C", async () => {
+  beforeEach(async () => {
     saveSelected(cwd, `${cwd}/first.ts`);
+    await navigator.clipboard.writeText("before");
     await act(async () => render());
-    await act(async () => {
-      row("first.ts").dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "C",
-          metaKey: true,
-          shiftKey: true,
-          bubbles: true,
-        }),
-      );
+  });
+
+  it("copies the selected path on Mod+Shift+C", async () => {
+    await press(row("first.ts"), { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("copies the selected path on a non-Latin layout", async () => {
+    await press(row("first.ts"), {
+      key: "С",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
     });
     expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("matches the typed Latin letter, not the physical key", async () => {
+    // Dvorak types "j" on the physical C key.
+    await press(row("first.ts"), {
+      key: "J",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(await navigator.clipboard.readText()).toBe("before");
   });
 });
 

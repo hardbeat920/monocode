@@ -164,6 +164,13 @@ async function copyText(text: string) {
   }
 }
 
+/** Non-Latin layouts put the local letter in `key`, so fall back to the physical key. */
+function shortcutLetter(e: ReactKeyboardEvent): string {
+  const key = e.key.toLowerCase();
+  if (/^[a-z]$/.test(key)) return key;
+  return /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : key;
+}
+
 function explorerItems(
   target: MenuTarget,
   clip: Clip | null,
@@ -720,7 +727,7 @@ export const FileTree = memo(function FileTree({
     const isRoot = path === cwd;
     const isDir = isDirAt(cwd, path);
     const mod = e.metaKey || e.ctrlKey;
-    const key = e.key.toLowerCase();
+    const key = shortcutLetter(e);
     if (mod && !e.altKey && e.shiftKey && key === "c") {
       e.preventDefault();
       void copyText(path);
