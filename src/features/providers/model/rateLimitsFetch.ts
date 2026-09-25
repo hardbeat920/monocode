@@ -184,7 +184,26 @@ export async function consumeCodexRateLimitResetCredit(
   throw new Error("Codex returned an unknown reset result");
 }
 
-async function requestCodexAccount<T>(
+// Every probe reuses USAGE_CHILD_ID and kills whatever holds it first, so
+// probes for different accounts (footer, Settings, account picker) must not
+// overlap or they terminate each other.
+let codexUsageQueue: Promise<unknown> = Promise.resolve();
+
+function requestCodexAccount<T>(
+  path: string,
+  cwd: string,
+  method: string,
+  params: unknown,
+  accountId: string,
+): Promise<T> {
+  const run = codexUsageQueue.then(() =>
+    runCodexAccountRequest<T>(path, cwd, method, params, accountId),
+  );
+  codexUsageQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function runCodexAccountRequest<T>(
   path: string,
   cwd: string,
   method: string,

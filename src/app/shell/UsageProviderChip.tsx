@@ -29,7 +29,17 @@ import {
   ProviderSignInPanel,
   type ProviderSignInState,
 } from "../../features/sessions/ui/ProviderSignInPanel";
-import type { ProviderAccount } from "../../features/providers/model/providerAccounts";
+import {
+  supportsProviderAccounts,
+  type ProviderAccount,
+} from "../../features/providers/model/providerAccounts";
+import {
+  AccountStatusLabel,
+  accountHeadroom,
+  accountStatus,
+  accountUsageKey,
+  useProviderAccountUsage,
+} from "../../features/providers/ui/ProviderAccountUsage";
 import {
   identityKey,
   identityOrganizationTag,
@@ -114,6 +124,27 @@ export function UsageProviderChip({
     ? identities[identityKey(activeAccount)]
     : null;
   const activeSubtitle = identitySubtitle(activeIdentity);
+  const accountProvider = supportsProviderAccounts(limits.provider)
+    ? limits.provider
+    : undefined;
+  const otherAccounts = accounts.filter((account) => account.id !== accountId);
+  const accountUsage = useProviderAccountUsage(
+    accounts.map((account) => account.id).join("|"),
+    {
+      provider: accountProvider,
+      enabled: open && Boolean(accountProvider) && otherAccounts.length > 0,
+    },
+  );
+  // The footer's own snapshot is fresher for the active account.
+  const usageFor = (account: ProviderAccount) =>
+    account.id === accountId
+      ? limits
+      : accountUsage.usage[accountUsageKey(account)];
+  const activeStatus = accountStatus(limits, now);
+  const suggestion =
+    activeStatus.tone === "exhausted" || activeStatus.tone === "low"
+      ? bestAlternative(otherAccounts, usageFor, now)
+      : null;
   const mascotProject = project ? projectName(project) : providerLabel;
   const appearanceKey = project ? projectKey(project) : mascotProject;
   const mascotName = resolveTabGroupMascot(
@@ -237,7 +268,7 @@ export function UsageProviderChip({
           side="top"
           align="start"
           gap={7}
-          width={300}
+          width={accountView === "accounts" ? 340 : 300}
           maxHeight={460}
           autoFocus
           onDismiss={dismiss}
@@ -252,6 +283,8 @@ export function UsageProviderChip({
               accounts={accounts}
               identities={identities}
               accountId={accountId ?? ""}
+              usageFor={usageFor}
+              now={now}
               onBack={() => setAccountView("usage")}
               onAdd={() => setAccountView("add")}
               onManage={
@@ -358,6 +391,19 @@ export function UsageProviderChip({
                 <EmptyUsageState limits={limits} loading={loading} />
               )}
 
+              {suggestion && onSelectAccount ? (
+                <SwitchSuggestion
+                  account={suggestion}
+                  limits={usageFor(suggestion)}
+                  exhausted={activeStatus.tone === "exhausted"}
+                  now={now}
+                  onSwitch={() => {
+                    onSelectAccount(suggestion.id);
+                    setOpen(false);
+                  }}
+                />
+              ) : null}
+
               {limits.provider === "codex" ? (
                 <BankedResets
                   limits={limits}
@@ -420,6 +466,8 @@ function ProviderAccountPicker({
   accounts,
   identities,
   accountId,
+  usageFor,
+  now,
   onBack,
   onAdd,
   onManage,
@@ -429,11 +477,14 @@ function ProviderAccountPicker({
   accounts: ProviderAccount[];
   identities: Record<string, ProviderAccountIdentity | null>;
   accountId: string;
+  usageFor: (account: ProviderAccount) => ProviderRateLimits | undefined;
+  now: number;
   onBack: () => void;
   onAdd: () => void;
   onManage?: () => void;
   onSelect: (accountId: string) => void;
 }) {
+  const statusId = useId();
   return (
     <div>
       <div className="flex h-7 items-center gap-1">
@@ -456,33 +507,50 @@ function ProviderAccountPicker({
           const identity = identities[identityKey(account)];
           const orgTag = identityOrganizationTag(identity);
           const subtitle = identitySubtitle(identity);
+          const usage = usageFor(account);
           return (
             <button
               key={account.id}
               type="button"
               role="option"
               aria-selected={selected}
-              className={`flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[11px] ring-1 ring-inset transition-colors ${
+              aria-label={account.label}
+              aria-describedby={`${statusId}-${account.id}`}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] ring-1 ring-inset transition-colors ${
                 selected
                   ? "bg-accent/10 text-content ring-accent/20"
                   : "bg-content/[0.035] text-content/70 ring-content/[0.06] hover:bg-content/[0.075] hover:text-content"
               }`}
               onClick={() => onSelect(account.id)}
             >
-              <span className="min-w-0 flex-1 py-1.5">
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate">{account.label}</span>
+              <span className="min-w-0 flex-1 py-0.5">
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="shrink-0 truncate">{account.label}</span>
+                  {subtitle ? (
+                    <span
+                      className="min-w-0 truncate text-[10px] text-content/35"
+                      title={subtitle}
+                    >
+                      {subtitle}
+                    </span>
+                  ) : null}
                   {orgTag ? (
-                    <span className="max-w-[8rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
+                    <span className="max-w-[6rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
                       {orgTag}
                     </span>
                   ) : null}
                 </span>
-                {subtitle ? (
-                  <span className="mt-0.5 block truncate text-[9px] text-content/40">
-                    {subtitle}
-                  </span>
-                ) : null}
+                <span
+                  id={`${statusId}-${account.id}`}
+                  className="mt-1 flex min-w-0 items-center gap-2 text-[10px]"
+                >
+                  <AccountStatusLabel
+                    status={accountStatus(usage, now)}
+                    className="min-w-0"
+                  />
+                  <span className="min-w-2 flex-1" />
+                  <UsageSummary limits={usage} />
+                </span>
               </span>
               {selected ? (
                 <Check
@@ -515,6 +583,77 @@ function ProviderAccountPicker({
         </button>
       ) : null}
     </div>
+  );
+}
+
+/** "5h 4% · wk 30%", the same compact form as the footer chip. */
+function UsageSummary({ limits }: { limits: ProviderRateLimits | undefined }) {
+  const windows = limits ? usageWindows(limits) : [];
+  if (windows.length === 0) return null;
+  return (
+    <span className="shrink-0 text-[10px] tabular-nums text-content/40">
+      {windows.map((entry, index) => (
+        <span key={entry.key}>
+          {index > 0 ? <span className="text-content/20"> · </span> : null}
+          {formatWindowLabel(entry.window.windowMinutes)}{" "}
+          <span className={entry.window.usedPercent >= 100 ? "text-red-400" : ""}>
+            {formatUsagePercent(entry.window.usedPercent)}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function bestAlternative(
+  accounts: ProviderAccount[],
+  usageFor: (account: ProviderAccount) => ProviderRateLimits | undefined,
+  now: number,
+): ProviderAccount | null {
+  let best: { account: ProviderAccount; headroom: number } | null = null;
+  for (const account of accounts) {
+    const headroom = accountHeadroom(usageFor(account), now);
+    if (headroom == null || headroom <= 20) continue;
+    if (!best || headroom > best.headroom) best = { account, headroom };
+  }
+  return best?.account ?? null;
+}
+
+function SwitchSuggestion({
+  account,
+  limits,
+  exhausted,
+  now,
+  onSwitch,
+}: {
+  account: ProviderAccount;
+  limits: ProviderRateLimits | undefined;
+  exhausted: boolean;
+  now: number;
+  onSwitch: () => void;
+}) {
+  return (
+    <section className="mt-2 flex items-center gap-2.5 rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] leading-4 text-content/45">
+          {exhausted ? "Out of usage" : "Running low"} · switch to
+        </p>
+        <p className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px]">
+          <span className="min-w-0 truncate font-medium">{account.label}</span>
+          <AccountStatusLabel
+            status={accountStatus(limits, now)}
+            className="text-[10px]"
+          />
+        </p>
+      </div>
+      <button
+        type="button"
+        className="h-7 shrink-0 rounded-md bg-content px-2.5 text-[11px] font-medium text-background-base transition-transform duration-150 hover:bg-content/85 active:scale-[0.97]"
+        onClick={onSwitch}
+      >
+        Switch
+      </button>
+    </section>
   );
 }
 

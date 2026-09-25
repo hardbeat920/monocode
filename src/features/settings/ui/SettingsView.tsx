@@ -224,6 +224,14 @@ import {
   useProviderAccountIdentities,
 } from "../../providers/model/providerAccountIdentity";
 import {
+  AccountStatusLabel,
+  AccountUsageMeters,
+  AccountUsageRefresh,
+  accountStatus,
+  accountUsageKey,
+  useProviderAccountUsage,
+} from "../../providers/ui/ProviderAccountUsage";
+import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
 } from "../../sessions/model/sessionFilters";
@@ -3326,12 +3334,14 @@ function ProviderAccountsSettings() {
     PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
     version,
   );
+  const usage = useProviderAccountUsage(version);
 
   return (
     <Group
       id="provider-accounts"
       title="Accounts"
       description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
+      action={<AccountUsageRefresh usage={usage} />}
     >
       {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
         const accounts = providerAccounts(provider);
@@ -3374,6 +3384,7 @@ function ProviderAccountsSettings() {
                 const removing = working === `remove:${provider}:${account.id}`;
                 const identity = identities[identityKey(account)];
                 const orgTag = identityOrganizationTag(identity);
+                const limits = usage.usage[accountUsageKey(account)];
                 return editing ? (
                   <ProviderAccountEditor
                     key={account.id}
@@ -3403,14 +3414,21 @@ function ProviderAccountsSettings() {
                           </span>
                         ) : null}
                       </div>
-                      <div className="mt-0.5 truncate text-[10px] text-content/35">
-                        {identitySubtitle(identity) ??
-                          (account.isDefault
-                            ? "Provider CLI profile"
-                            : "Isolated profile")}
+                      <div className="mt-0.5 flex min-w-0 items-center gap-2.5 text-[10px]">
+                        <AccountStatusLabel
+                          status={accountStatus(limits, usage.now)}
+                          className="shrink-0"
+                        />
+                        <span className="min-w-0 truncate text-content/30">
+                          {identitySubtitle(identity) ??
+                            (account.isDefault
+                              ? "Provider CLI profile"
+                              : "Isolated profile")}
+                        </span>
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
+                    <AccountUsageMeters limits={limits} now={usage.now} />
+                    <div className="flex w-24 shrink-0 items-center justify-end gap-1">
                       {account.isDefault ? (
                         <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
                           Default
