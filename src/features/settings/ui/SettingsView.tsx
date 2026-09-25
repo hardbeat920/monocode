@@ -4,6 +4,8 @@ import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  Eye,
+  EyeOff,
   Globe,
   ImagePlus,
   Loader,
@@ -2887,19 +2889,21 @@ function RuntimeTextInput({
   onChange,
   ariaLabel,
   className = "w-56",
+  type = "text",
 }: {
   value: string;
   placeholder?: string;
   onChange: (value: string) => void;
   ariaLabel: string;
   className?: string;
+  type?: "text" | "password";
 }) {
   return (
     <label
       className={`flex h-7 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20 ${className}`}
     >
       <input
-        type="text"
+        type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -3076,6 +3080,9 @@ function ProviderRuntimePanel({ harness }: { harness: HarnessId }) {
     loadHarnessRuntime(harness),
   );
   const [configDir, setConfigDir] = useState<string>(loadClaudeConfigDir);
+  const [revealedEnv, setRevealedEnv] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
 
   const update = (patch: Partial<HarnessRuntimeSettings>) => {
     setRuntime((prev) => {
@@ -3107,6 +3114,15 @@ function ProviderRuntimePanel({ harness }: { harness: HarnessId }) {
 
   const removeEnvVar = (index: number) => {
     update({ env: runtime.env.filter((_, i) => i !== index) });
+    setRevealedEnv(new Set());
+  };
+
+  const toggleEnvReveal = (index: number) => {
+    setRevealedEnv((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(index)) next.add(index);
+      return next;
+    });
   };
 
   return (
@@ -3156,7 +3172,7 @@ function ProviderRuntimePanel({ harness }: { harness: HarnessId }) {
         </SecondaryButton>
       </Row>
       {runtime.env.length > 0 ? (
-        <div className="flex flex-col gap-2 px-4 pb-3.5">
+        <div className="flex flex-col gap-2 px-4 py-3.5">
           {runtime.env.map((entry, index) => (
             <div key={index} className="flex items-center gap-2">
               <RuntimeTextInput
@@ -3172,7 +3188,26 @@ function ProviderRuntimePanel({ harness }: { harness: HarnessId }) {
                 onChange={(value) => updateEnvVar(index, { value })}
                 ariaLabel={`Environment variable ${index + 1} value`}
                 className="flex-1"
+                type={revealedEnv.has(index) ? "text" : "password"}
               />
+              <button
+                type="button"
+                aria-label={
+                  revealedEnv.has(index)
+                    ? "Hide environment variable value"
+                    : "Show environment variable value"
+                }
+                aria-pressed={revealedEnv.has(index)}
+                title={revealedEnv.has(index) ? "Hide value" : "Show value"}
+                onClick={() => toggleEnvReveal(index)}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-content/35 transition-transform duration-150 hover:bg-content/5 hover:text-content active:scale-[0.96]"
+              >
+                {revealedEnv.has(index) ? (
+                  <EyeOff className="size-3.5" strokeWidth={1.75} />
+                ) : (
+                  <Eye className="size-3.5" strokeWidth={1.75} />
+                )}
+              </button>
               <button
                 type="button"
                 aria-label="Remove environment variable"
