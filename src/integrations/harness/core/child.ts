@@ -239,6 +239,7 @@ export async function spawnChild(
   args: string[],
   cwd: string,
   account?: { provider: "claude" | "codex"; id: string },
+  env?: Record<string, string>,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
@@ -248,6 +249,7 @@ export async function spawnChild(
     args,
     cwd,
     account,
+    env,
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);
@@ -326,6 +328,14 @@ export function resolveAntigravityBinary(): Promise<{
   return invoke("harness_resolve_antigravity");
 }
 
+export function antigravityLaunchArgs(): Promise<string[]> {
+  return invoke("harness_antigravity_args");
+}
+
+export function resolveBinaryOverride(path: string): Promise<string> {
+  return invoke("harness_resolve_override", { path });
+}
+
 export function freeHarnessPort(): Promise<number> {
   return invoke("harness_free_port");
 }
@@ -357,6 +367,7 @@ export function execChild(
   command: string,
   args: string[],
   cwd?: string,
+  env?: Record<string, string>,
 ): Promise<string> {
-  return invoke("harness_exec", { command, args, cwd });
+  return invoke("harness_exec", { command, args, cwd, env });
 }

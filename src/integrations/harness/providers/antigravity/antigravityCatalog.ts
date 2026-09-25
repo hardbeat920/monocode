@@ -3,11 +3,14 @@ import { setHarnessModels } from "../../../../features/sessions/model/models";
 import { AcpClient } from "../../core/acp";
 import {
   killChild,
+  antigravityLaunchArgs,
   resolveAntigravityBinary,
   spawnChild,
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { antigravitySpawnCwd, modelsFromSessionNew } from "./antigravityProtocol";
 
 const PROBE_ID = "monocode-antigravity-probe";
@@ -31,7 +34,13 @@ export function refreshAntigravityCatalog(): Promise<void> {
 }
 
 async function discoverModels() {
-  const { path, args } = await resolveAntigravityBinary();
+  const resolved = await resolveHarnessBinary(
+    "antigravity",
+    resolveAntigravityBinary,
+  );
+  const { path } = resolved;
+  const args = resolved.args ?? (await antigravityLaunchArgs());
+  const env = harnessRuntimeEnv(loadHarnessRuntime("antigravity"));
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
     onRequest: (id, method) => {
@@ -47,7 +56,14 @@ async function discoverModels() {
     () => acp.close(new Error("Antigravity probe exited")),
   );
   try {
-    await spawnChild(PROBE_ID, path, args, antigravitySpawnCwd(path, cwd));
+    await spawnChild(
+      PROBE_ID,
+      path,
+      args,
+      antigravitySpawnCwd(path, cwd),
+      undefined,
+      env,
+    );
     await acp.request(
       "initialize",
       {

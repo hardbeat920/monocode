@@ -6,6 +6,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import { buildPiSpawnArgs, modelsFromRpcData } from "./piProtocol";
@@ -32,7 +34,8 @@ function refreshCatalog(flavor: PiFlavor): Promise<void> {
 }
 
 async function discoverModels(flavor: PiFlavor) {
-  const { path } = await flavor.resolveBinary();
+  const { path } = await resolveHarnessBinary(flavor.id, flavor.resolveBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime(flavor.id));
   const cwd = await homeDir();
   const probeId = flavor.probeChildId;
   const rpc = new PiRpc(probeId, () => undefined, flavor.label);
@@ -55,6 +58,8 @@ async function discoverModels(flavor: PiFlavor) {
       path,
       buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
       cwd,
+      undefined,
+      env,
     );
     const response = await Promise.race([
       rpc.request({ type: "get_available_models" }, DISCOVERY_TIMEOUT_MS),

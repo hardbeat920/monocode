@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -396,6 +396,36 @@ pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
         })
 }
 
+/// The platform launch args alone, for a binary-path override that bypasses
+/// `harness_resolve_antigravity`.
+#[tauri::command]
+pub fn harness_antigravity_args() -> Vec<String> {
+    antigravity_args()
+}
+
+static RESOLVED_OVERRIDES: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+/// Validates a user-set binary override the same way the default resolvers
+/// validate their candidates: a path must name an executable file, and a bare
+/// name must resolve on the GUI search path. A validated path becomes eligible
+/// for `harness_exec`.
+#[tauri::command(async)]
+pub fn harness_resolve_override(path: String) -> Result<String, String> {
+    let trimmed = path.trim();
+    let expanded = expand_home(trimmed);
+    let resolved = if expanded.components().count() > 1 {
+        existing_binary(expanded)
+    } else {
+        resolve_gui_binary(trimmed)
+    }
+    .ok_or_else(|| format!("Binary override is not an executable file: {trimmed}"))?;
+    RESOLVED_OVERRIDES
+        .lock()
+        .map_err(|_| "Resolved override registry lock poisoned".to_string())?
+        .insert(resolved.clone());
+    Ok(resolved.to_string_lossy().into_owned())
+}
+
 /// Bind an ephemeral loopback port for `opencode serve`.
 #[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
@@ -409,6 +439,7 @@ pub fn harness_free_port() -> Result<u16, String> {
 /// login-shell read. Callers await this before writing to the child. Kill can
 /// still race the fork, so a cancelled spawn must not reinsert the child.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn harness_spawn(
     app: AppHandle,
     host: State<'_, HarnessHost>,
@@ -417,6 +448,7 @@ pub fn harness_spawn(
     args: Vec<String>,
     cwd: String,
     account: Option<HarnessAccount>,
+    env: Option<HashMap<String, String>>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
@@ -440,6 +472,13 @@ pub fn harness_spawn(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    // A manual override always wins over the account-scoped env it may
+    // overlap with (e.g. a hand-set CLAUDE_CONFIG_DIR), so this runs last.
+    if let Some(env) = env.as_ref() {
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+    }
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
@@ -866,24 +905,28 @@ fn exec_args_allowed(args: &[String]) -> bool {
         .any(|a| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y))
 }
 
-/// Must be a path a resolver would hand back, not an arbitrary binary
-/// that merely shares a file name.
+/// Must be a path a resolver or `harness_resolve_override` handed back, not
+/// an arbitrary binary that merely shares a file name.
 fn is_resolved_harness_binary(command: &str) -> bool {
     let path = PathBuf::from(command);
-    [
-        resolve_cursor_agent(),
-        resolve_codex(),
-        resolve_opencode(),
-        resolve_claude(),
-        resolve_pi(),
-        resolve_omp(),
-        resolve_fx(),
-        resolve_grok(),
-        resolve_antigravity(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|resolved| resolved == path)
+    let overridden = RESOLVED_OVERRIDES
+        .lock()
+        .is_ok_and(|overrides| overrides.contains(&path));
+    overridden
+        || [
+            resolve_cursor_agent(),
+            resolve_codex(),
+            resolve_opencode(),
+            resolve_claude(),
+            resolve_pi(),
+            resolve_omp(),
+            resolve_fx(),
+            resolve_grok(),
+            resolve_antigravity(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|resolved| resolved == path)
 }
 
 /// One-shot capture of stdout (used for `cursor-agent --list-models`).
@@ -892,6 +935,7 @@ pub async fn harness_exec(
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
+    env: Option<HashMap<String, String>>,
 ) -> Result<String, String> {
     if !exec_args_allowed(&args) {
         return Err("harness_exec: unsupported arguments".into());
@@ -900,19 +944,29 @@ pub async fn harness_exec(
         if !is_resolved_harness_binary(&command) {
             return Err("harness_exec: not a resolved harness CLI".to_string());
         }
-        exec_capture(&command, &args, cwd.as_deref())
+        exec_capture(&command, &args, cwd.as_deref(), env.as_ref())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<String, String> {
+fn exec_capture(
+    command: &str,
+    args: &[String],
+    cwd: Option<&str>,
+    env: Option<&HashMap<String, String>>,
+) -> Result<String, String> {
     let mut cmd = Command::new(command);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, command);
+    if let Some(env) = env {
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+    }
     if let Some(dir) = cwd {
         let workdir = expand_home(dir);
         if workdir.is_dir() {

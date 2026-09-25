@@ -14,6 +14,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 
 const PROBE_ID = "monocode-cursor-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -55,7 +57,8 @@ async function discoverCursorModels(): Promise<AgentModel[]> {
 }
 
 async function discoverViaAcp(): Promise<AgentModel[]> {
-  const { path } = await resolveCursorBinary();
+  const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("cursor"));
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
     onRequest: (id) => {
@@ -76,7 +79,7 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["acp"], cwd);
+    await spawnChild(PROBE_ID, path, ["acp"], cwd, undefined, env);
     return await withTimeout(DISCOVERY_TIMEOUT_MS, async () => {
       await acp.request(
         "initialize",
@@ -113,9 +116,10 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
 }
 
 async function discoverViaCli(): Promise<AgentModel[]> {
-  const { path } = await resolveCursorBinary();
+  const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
   const cwd = await homeDir();
-  const stdout = await execChild(path, ["--list-models"], cwd);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("cursor"));
+  const stdout = await execChild(path, ["--list-models"], cwd, env);
   return modelsFromListModelsOutput(stdout);
 }
 

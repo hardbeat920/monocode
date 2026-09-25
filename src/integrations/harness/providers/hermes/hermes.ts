@@ -11,6 +11,12 @@ import {
   watchChild,
 } from "../../core/child";
 import {
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
+import {
   HERMES_AUTH_HELP,
   hermesBackgroundDispatch,
   hermesCurrentModelId,
@@ -196,7 +202,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   if (resume && resume.cwd !== input.cwd)
     resumeByThread.delete(input.sessionId);
 
-  const { path } = await resolveHermesBinary();
+  const runtime = loadHarnessRuntime("hermes");
+  const { path } = await resolveHarnessBinary("hermes", resolveHermesBinary);
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };
@@ -250,7 +257,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["acp"], input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["acp", ...harnessRuntimeExtraArgs(runtime)],
+    input.cwd,
+    undefined,
+    harnessRuntimeEnv(runtime),
+  );
 
   try {
     try {

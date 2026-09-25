@@ -4,7 +4,8 @@ import {
   QUICK_COMPOSER_DEFAULT_SHORTCUT,
   quickComposerShortcutLabel,
 } from "../../quick-composer/model/quickComposerShortcut";
-import { readFlag, writeFlag } from "./storageFlags";
+import { HARNESSES, type HarnessId } from "../../sessions/model/session";
+import { readFlag, readStringFlag, writeFlag, writeStringFlag } from "./storageFlags";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -335,6 +336,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "providers",
     label: "Claude Code hooks",
     keywords: "pretooluse settings.json block command notification",
+  },
+  {
+    id: "provider-runtime",
+    section: "providers",
+    label: "Runtime overrides",
+    keywords:
+      "binary path executable launch arguments flags environment variables env cli claude config dir",
   },
   {
     id: "project-notifications",
@@ -859,6 +867,116 @@ export function loadClaudeHooks(): boolean {
 
 export function saveClaudeHooks(value: boolean) {
   writeFlag(CLAUDE_HOOKS_KEY, value);
+}
+
+const HARNESS_RUNTIME_KEY = "monocode.harnessRuntime";
+
+export type HarnessRuntimeEnvVar = { key: string; value: string };
+
+export type HarnessRuntimeSettings = {
+  binaryPath: string;
+  launchArgs: string;
+  env: HarnessRuntimeEnvVar[];
+};
+
+export const HARNESS_RUNTIME_DEFAULT: HarnessRuntimeSettings = {
+  binaryPath: "",
+  launchArgs: "",
+  env: [],
+};
+
+function parseHarnessRuntimeEnv(value: unknown): HarnessRuntimeEnvVar[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === "object",
+    )
+    .map((item) => ({
+      key: typeof item.key === "string" ? item.key : "",
+      value: typeof item.value === "string" ? item.value : "",
+    }));
+}
+
+function parseHarnessRuntimeSettings(value: unknown): HarnessRuntimeSettings {
+  if (!value || typeof value !== "object") return HARNESS_RUNTIME_DEFAULT;
+  const rec = value as Record<string, unknown>;
+  return {
+    binaryPath: typeof rec.binaryPath === "string" ? rec.binaryPath : "",
+    launchArgs: typeof rec.launchArgs === "string" ? rec.launchArgs : "",
+    env: parseHarnessRuntimeEnv(rec.env),
+  };
+}
+
+function loadAllHarnessRuntime(): Partial<
+  Record<HarnessId, HarnessRuntimeSettings>
+> {
+  try {
+    const raw = localStorage.getItem(HARNESS_RUNTIME_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: Partial<Record<HarnessId, HarnessRuntimeSettings>> = {};
+    for (const [key, value] of Object.entries(
+      parsed as Record<string, unknown>,
+    )) {
+      if (HARNESSES.includes(key as HarnessId)) {
+        out[key as HarnessId] = parseHarnessRuntimeSettings(value);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function loadHarnessRuntime(harness: HarnessId): HarnessRuntimeSettings {
+  return loadAllHarnessRuntime()[harness] ?? HARNESS_RUNTIME_DEFAULT;
+}
+
+export function saveHarnessRuntime(
+  harness: HarnessId,
+  next: HarnessRuntimeSettings,
+) {
+  const all = { ...loadAllHarnessRuntime(), [harness]: next };
+  try {
+    localStorage.setItem(HARNESS_RUNTIME_KEY, JSON.stringify(all));
+  } catch {
+    // private mode / quota
+  }
+}
+
+const CLAUDE_CONFIG_DIR_KEY = "monocode.claudeConfigDir";
+
+export function loadClaudeConfigDir(): string {
+  return readStringFlag(CLAUDE_CONFIG_DIR_KEY) ?? "";
+}
+
+export function saveClaudeConfigDir(value: string) {
+  writeStringFlag(CLAUDE_CONFIG_DIR_KEY, value);
+}
+
+/** The CLAUDE_CONFIG_DIR a Claude launch ends up with: the dedicated setting,
+ * else a CLAUDE_CONFIG_DIR entry in Claude's environment variables. */
+export function claudeEffectiveConfigDir(
+  runtime: HarnessRuntimeSettings,
+  configDir: string,
+): string {
+  const dedicated = configDir.trim();
+  if (dedicated) return dedicated;
+  const entry = [...runtime.env]
+    .reverse()
+    .find((item) => item.key.trim() === "CLAUDE_CONFIG_DIR");
+  return entry?.value.trim() ?? "";
+}
+
+export function loadEffectiveClaudeConfigDir(): string {
+  return claudeEffectiveConfigDir(
+    loadHarnessRuntime("claude"),
+    loadClaudeConfigDir(),
+  );
 }
 
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";

@@ -1,7 +1,14 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
+import { homeDir } from "../../../../platform/tauri/fs";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
-import { loadClaudeHooks } from "../../../../features/settings/model/settings";
+import {
+  claudeEffectiveConfigDir,
+  loadClaudeConfigDir,
+  loadClaudeHooks,
+  loadHarnessRuntime,
+  type HarnessRuntimeSettings,
+} from "../../../../features/settings/model/settings";
 import {
   killChild,
   resolveClaudeBinary,
@@ -66,6 +73,11 @@ import {
   type ClaudeControlRequest,
 } from "./claudeProtocol";
 import { isAgentToolName } from "../../core/preview";
+import {
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../core/runtime";
 import { joinStreamText, snapshotRemainder } from "../../core/streamText";
 import {
   questionPromptTitle,
@@ -406,7 +418,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveClaudeBinaryImpl();
+  const runtime = loadHarnessRuntime("claude");
+  const configDir = loadClaudeConfigDir();
+  const { path } = await resolveHarnessBinary("claude", resolveClaudeBinaryImpl);
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =
     canResume && resume ? resume.sessionId : crypto.randomUUID();
@@ -414,6 +428,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     input,
     canResume ? resume?.sessionId : undefined,
     claudeSessionId,
+    runtime,
   );
 
   const live: Live = {
@@ -485,6 +500,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     buildClaudeSpawnArgs(launch),
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
+    await claudeRuntimeEnv(runtime, configDir),
   );
 
   liveByThread.set(input.sessionId, live);
@@ -1649,13 +1665,14 @@ function settingsKeyFor(input: HarnessSessionInput): string {
     context: input.modelSettings?.context,
     runtimeMode: input.runtimeMode,
     hooks: loadClaudeHooks(),
-  })}`;
+  })}:${JSON.stringify([loadHarnessRuntime("claude"), loadClaudeConfigDir()])}`;
 }
 
 function launchOptions(
   input: HarnessSessionInput,
   resume: string | undefined,
   sessionId: string,
+  runtime: HarnessRuntimeSettings,
 ): {
   model?: string;
   effort?: string;
@@ -1663,6 +1680,7 @@ function launchOptions(
   resume?: string;
   sessionId?: string;
   settings?: ClaudeCliSettings;
+  extraArgs?: string[];
 } {
   const native = nativeModelId(input.model);
   const effortRaw = input.modelSettings?.effort;
@@ -1680,6 +1698,7 @@ function launchOptions(
   if (!loadClaudeHooks()) {
     settings.disableAllHooks = true;
   }
+  const extraArgs = harnessRuntimeExtraArgs(runtime);
   return {
     model: resolveClaudeApiModelId(native, context),
     effort: normalizeClaudeCliEffort(effortRaw, native),
@@ -1690,7 +1709,33 @@ function launchOptions(
     resume,
     sessionId: resume ? undefined : sessionId,
     settings: Object.keys(settings).length > 0 ? settings : undefined,
+    extraArgs,
   };
+}
+
+/** Overrides the provider-account isolation `apply_provider_account` sets in
+ * Rust. Claude keys its keychain entry on CLAUDE_SECURESTORAGE_CONFIG_DIR, so
+ * the config dir sets it too, unless the generic list sets it explicitly.
+ * Claude doesn't expand `~`. */
+export async function claudeRuntimeEnv(
+  runtime: HarnessRuntimeSettings,
+  configDir: string,
+): Promise<Record<string, string> | undefined> {
+  const env = harnessRuntimeEnv(runtime) ?? {};
+  const effective = claudeEffectiveConfigDir(runtime, configDir);
+  if (effective) {
+    const dir = await expandHomeDir(effective);
+    env.CLAUDE_CONFIG_DIR = dir;
+    if (configDir.trim() || !env.CLAUDE_SECURESTORAGE_CONFIG_DIR) {
+      env.CLAUDE_SECURESTORAGE_CONFIG_DIR = dir;
+    }
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+async function expandHomeDir(path: string): Promise<string> {
+  if (path !== "~" && !path.startsWith("~/")) return path;
+  return `${await homeDir()}${path.slice(1)}`;
 }
 
 /** Exported for tests. */

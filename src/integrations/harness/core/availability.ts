@@ -20,6 +20,36 @@ import {
   setHarnessAvailability,
   type HarnessAvailability,
 } from "./availabilityState";
+import { resolveHarnessBinary } from "./runtime";
+
+/** A function rather than a lookup object, so each binding is only read inside
+ * the probe's try/catch instead of eagerly at module load. */
+function resolverFor(id: HarnessId): (() => Promise<{ path: string }>) | undefined {
+  switch (id) {
+    case "claude":
+      return resolveClaudeBinary;
+    case "codex":
+      return resolveCodexBinary;
+    case "cursor":
+      return resolveCursorBinary;
+    case "grok":
+      return resolveGrokBinary;
+    case "opencode":
+      return resolveOpenCodeBinary;
+    case "pi":
+      return resolvePiBinary;
+    case "omp":
+      return resolveOmpBinary;
+    case "fx":
+      return resolveFxBinary;
+    case "hermes":
+      return resolveHermesBinary;
+    case "antigravity":
+      return resolveAntigravityBinary;
+    default:
+      return undefined;
+  }
+}
 
 export type { HarnessAvailability } from "./availabilityState";
 export {
@@ -80,87 +110,14 @@ export function probeHarnessAvailability(
   inflight = Promise.all(
     HARNESSES.map(async (id) => {
       if (!isLiveHarness(id)) return [id, false] as const;
-      if (id === "cursor") {
-        try {
-          await resolveCursorBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
+      try {
+        const resolver = resolverFor(id);
+        if (!resolver) return [id, false] as const;
+        await resolveHarnessBinary(id, resolver);
+        return [id, true] as const;
+      } catch {
+        return [id, false] as const;
       }
-      if (id === "claude") {
-        try {
-          await resolveClaudeBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "codex") {
-        try {
-          await resolveCodexBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "opencode") {
-        try {
-          await resolveOpenCodeBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "pi") {
-        try {
-          await resolvePiBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "omp") {
-        try {
-          await resolveOmpBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "fx") {
-        try {
-          await resolveFxBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "grok") {
-        try {
-          await resolveGrokBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "hermes") {
-        try {
-          await resolveHermesBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      if (id === "antigravity") {
-        try {
-          await resolveAntigravityBinary();
-          return [id, true] as const;
-        } catch {
-          return [id, false] as const;
-        }
-      }
-      return [id, false] as const;
     }),
   )
     .then((entries) => {

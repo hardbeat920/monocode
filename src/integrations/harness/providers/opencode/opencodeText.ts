@@ -9,6 +9,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { OpenCodeClient } from "./opencodeClient";
 import {
   compareSemver,
@@ -136,7 +138,8 @@ async function startLive(
   model: { providerID: string; modelID: string },
   modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
-  const { path } = await resolveOpenCodeBinary();
+  const { path } = await resolveHarnessBinary("opencode", resolveOpenCodeBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("opencode"));
   const versionOut = await execChild(path, ["--version"], cwd).catch(() => "");
   const version = parseOpenCodeVersion(versionOut);
   if (!version || compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
@@ -167,6 +170,8 @@ async function startLive(
     path,
     ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
     cwd,
+    undefined,
+    env,
   );
 
   try {

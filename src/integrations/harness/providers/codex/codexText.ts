@@ -7,6 +7,12 @@ import {
   watchChild,
 } from "../../core/child";
 import {
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
+import {
   asRecord,
   buildThreadStartParams,
   buildTurnStartParams,
@@ -278,7 +284,9 @@ async function startLive(
   requestedThreadId?: string,
 ): Promise<LiveText> {
   await dropLive();
-  const { path } = await resolveCodexBinary();
+  const { path } = await resolveHarnessBinary("codex", resolveCodexBinary);
+  const runtime = loadHarnessRuntime("codex");
+  const env = harnessRuntimeEnv(runtime);
   const sessionRef: { session: LiveText | null } = { session: null };
   const rpc = new JsonRpcClient(
     TEXT_CHILD_ID,
@@ -324,10 +332,14 @@ async function startLive(
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, ["app-server"], cwd, {
-      provider: "codex",
-      id: providerAccountId ?? "default",
-    });
+    await spawnChild(
+      TEXT_CHILD_ID,
+      path,
+      ["app-server", ...harnessRuntimeExtraArgs(runtime)],
+      cwd,
+      { provider: "codex", id: providerAccountId ?? "default" },
+      env,
+    );
     await rpc.request(
       "initialize",
       {

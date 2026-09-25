@@ -394,6 +394,15 @@ export async function refreshHarnessCatalogs(
   );
 }
 
+/** Re-probes one harness catalog, keeping the current list until the new one lands. */
+export async function reloadHarnessCatalog(id: HarnessId): Promise<void> {
+  const adapter = getHarness(id);
+  if (!adapter?.refreshCatalog) return;
+  await adapter.refreshCatalog().catch((error: unknown) => {
+    console.debug(`[monocode] ${id} catalog`, error);
+  });
+}
+
 export async function generateHarnessTitle(
   harness: HarnessId,
   input: TitleInput,

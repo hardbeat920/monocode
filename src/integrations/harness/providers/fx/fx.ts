@@ -10,6 +10,12 @@ import {
   watchChild,
 } from "../../core/child";
 import {
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
+import {
   autoPermissionOption,
   eventsFromAcpUpdate,
   extractModelConfigId,
@@ -209,7 +215,8 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
 
-  const { path } = await resolveFxBinary();
+  const runtime = loadHarnessRuntime("fx");
+  const { path } = await resolveHarnessBinary("fx", resolveFxBinary);
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(input.sessionId, handlers);
   const liveRef: { current: Live | null } = { current: null };
@@ -260,7 +267,14 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, fxSpawnArgs(input.model), input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    [...fxSpawnArgs(input.model), ...harnessRuntimeExtraArgs(runtime)],
+    input.cwd,
+    undefined,
+    harnessRuntimeEnv(runtime),
+  );
 
   try {
     try {

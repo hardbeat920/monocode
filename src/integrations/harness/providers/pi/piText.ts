@@ -5,6 +5,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import {
@@ -232,7 +234,8 @@ async function startLive(
 ): Promise<LiveText> {
   const state = stateFor(flavor);
   const childId = flavor.textChildId;
-  const { path } = await flavor.resolveBinary();
+  const { path } = await resolveHarnessBinary(flavor.id, flavor.resolveBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime(flavor.id));
   const liveRef: { current: LiveText | null } = { current: null };
   const rpc = new PiRpc(
     childId,
@@ -279,6 +282,8 @@ async function startLive(
         model,
       }),
       cwd,
+      undefined,
+      env,
     );
     await rpc.request({ type: "get_state" }, INIT_TIMEOUT_MS);
     state.live = session;

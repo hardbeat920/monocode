@@ -9,6 +9,15 @@ import {
 } from "../../core/child";
 import { isAgentToolName } from "../../core/preview";
 import {
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../core/runtime";
+import {
+  loadClaudeConfigDir,
+  loadHarnessRuntime,
+} from "../../../../features/settings/model/settings";
+import { claudeRuntimeEnv } from "./claude";
+import {
   assistantTextBlocks,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
@@ -255,7 +264,9 @@ async function startLive(
   model = pickTextModel(),
   settings = textSettings(model),
 ): Promise<LiveText> {
-  const { path } = await resolveClaudeBinary();
+  const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
+  const runtime = loadHarnessRuntime("claude");
+  const env = await claudeRuntimeEnv(runtime, loadClaudeConfigDir());
   const session: LiveText = {
     cwd,
     providerAccountId,
@@ -297,9 +308,11 @@ async function startLive(
         settings: settings.settings,
         permissionMode: settings.permissionMode,
         maxTurns: settings.maxTurns,
+        extraArgs: harnessRuntimeExtraArgs(runtime),
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },
+      env,
     );
     live = session;
     await waitForReady(session, INIT_TIMEOUT_MS);

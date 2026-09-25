@@ -4,11 +4,18 @@ import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import {
   killChild,
+  antigravityLaunchArgs,
   resolveAntigravityBinary,
   spawnChild,
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import {
+  harnessRuntimeEnv,
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
   autoPermissionOption,
   asRecord,
@@ -386,7 +393,16 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
   if (retired()) throw new Error("Antigravity session stopped during startup");
   const childKey = `${input.sessionId}#${childSeq++}`;
 
-  const { path, args } = await resolveAntigravityBinary();
+  const runtime = loadHarnessRuntime("antigravity");
+  const resolved = await resolveHarnessBinary(
+    "antigravity",
+    resolveAntigravityBinary,
+  );
+  const path = resolved.path;
+  const args = [
+    ...(resolved.args ?? (await antigravityLaunchArgs())),
+    ...harnessRuntimeExtraArgs(runtime),
+  ];
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(childKey, handlers);
   const pendingSetup = { acp, childKey };
@@ -462,7 +478,14 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     // Binary resolution awaited above may have raced a stop/forget — re-check
     // before the child is ever spawned, not just after.
     if (retired()) throw new Error("Antigravity session stopped during startup");
-    await spawnChild(childKey, path, args, antigravitySpawnCwd(path, input.cwd));
+    await spawnChild(
+      childKey,
+      path,
+      args,
+      antigravitySpawnCwd(path, input.cwd),
+      undefined,
+      harnessRuntimeEnv(runtime),
+    );
     if (retired()) throw new Error("Antigravity session stopped during startup");
     try {
       await acp.request(

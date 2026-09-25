@@ -4,6 +4,8 @@ import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  Eye,
+  EyeOff,
   Globe,
   ImagePlus,
   Loader,
@@ -12,6 +14,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from "../../../shared/ui/icons";
@@ -142,7 +145,10 @@ import {
   probeHarnessAvailability,
   subscribeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
-import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import {
+  refreshHarnessCatalogs,
+  reloadHarnessCatalog,
+} from "../../../integrations/harness/core/registry";
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
@@ -251,8 +257,10 @@ import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import {
   filterKeybindings,
   currentKeybindings,
+  loadClaudeConfigDir,
   loadClaudeHooks,
   loadCloseToTray,
+  loadHarnessRuntime,
   loadCollapsedProjectRailMode,
   loadComposerRunner,
   loadDiffViewer,
@@ -266,8 +274,10 @@ import {
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
+  saveClaudeConfigDir,
   saveClaudeHooks,
   saveCloseToTray,
+  saveHarnessRuntime,
   saveCollapsedProjectRailMode,
   saveComposerRunner,
   saveDiffViewer,
@@ -286,6 +296,8 @@ import {
   settingsSectionLabel,
   COLLAPSED_PROJECT_RAIL_MODE_DEFAULT,
   type CollapsedProjectRailMode,
+  type HarnessRuntimeEnvVar,
+  type HarnessRuntimeSettings,
   type DiffViewer,
   type FileTabMode,
   type FollowUpBehavior,
@@ -2685,6 +2697,7 @@ function ProvidersPage({
       <ProviderAccountsSettings />
 
       <Group
+        id="provider-runtime"
         title="Agent CLIs"
         action={
           <Select
@@ -2697,7 +2710,7 @@ function ProvidersPage({
         description={
           project
             ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project.`
-            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. Open Runtime on any provider to override its binary, launch flags, and environment."
         }
       >
         {HARNESSES.map((harness) => {
@@ -2733,6 +2746,7 @@ function ProvidersPage({
               isDefault={isDefault}
               inPicker={inPicker}
               pickerLocked={pickerLocked}
+              showRuntime={!project}
               onDefault={onDefault}
               onModelChange={onModelChange}
               onPickerVisible={(visible) => onPickerVisible(harness, visible)}
@@ -3067,6 +3081,53 @@ function ProviderAccountEditor({
   );
 }
 
+function RuntimeTextInput({
+  value,
+  placeholder,
+  onChange,
+  ariaLabel,
+  className = "w-56",
+  type = "text",
+}: {
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  className?: string;
+  type?: "text" | "password";
+}) {
+  return (
+    <label
+      className={`flex h-7 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20 ${className}`}
+    >
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        autoComplete="off"
+        spellCheck={false}
+        className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+      />
+    </label>
+  );
+}
+
+/** Must match the names the resolvers in src-tauri/src/harness.rs look for. */
+const DEFAULT_HARNESS_BINARY: Record<HarnessId, string> = {
+  claude: "claude",
+  codex: "codex",
+  cursor: "cursor-agent",
+  grok: "grok",
+  opencode: "opencode",
+  pi: "pi-coding-agent",
+  omp: "omp",
+  fx: "fx",
+  hermes: "hermes",
+  antigravity: "agy_acp_server.par",
+};
+
 /** The icon the project rail shows: custom logo, else the project mascot. */
 function ProjectScopeIcon({ path }: { path: string }) {
   const logos = useTabGroupLogos();
@@ -3101,6 +3162,7 @@ function ProviderRow({
   isDefault,
   inPicker,
   pickerLocked = false,
+  showRuntime,
   onDefault,
   onModelChange,
   onPickerVisible,
@@ -3111,6 +3173,8 @@ function ProviderRow({
   inPicker: boolean;
   /** Globally hidden providers cannot be turned on per project. */
   pickerLocked?: boolean;
+  /** Runtime overrides are application-wide, so only Global scope edits them. */
+  showRuntime: boolean;
   onDefault: (harness: HarnessId, model: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onPickerVisible: (visible: boolean) => void;
@@ -3119,6 +3183,7 @@ function ProviderRow({
   const available = isHarnessAvailable(harness);
   const current =
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
+  const [runtimeOpen, setRuntimeOpen] = useState(false);
 
   useEffect(() => {
     if (!available || models.length > 0) return;
@@ -3126,55 +3191,265 @@ function ProviderRow({
   }, [available, harness, models.length]);
 
   return (
-    <Row
-      label={
-        <span className="flex items-center gap-2">
-          <HarnessIcon harness={harness} className="size-4 shrink-0" />
-          {HARNESS_TITLE[harness]}
-          {isDefault ? (
-            <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
-              Default
-            </span>
-          ) : null}
-        </span>
-      }
-      description={
-        available
-          ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
-          : harnessUnavailableHint(harness)
-      }
-    >
-      {current ? (
-        <Select
-          label={`${HARNESS_TITLE[harness]} model`}
-          value={current.id}
-          onChange={(next) => onModelChange(harness, next)}
-          options={models.map((item) => ({
-            value: item.id,
-            label: item.name,
-          }))}
-        />
-      ) : null}
-      <SecondaryButton
-        onClick={() => current && onDefault(harness, current.id)}
-        disabled={isDefault || !current}
-      >
-        {isDefault ? "Default" : "Use by default"}
-      </SecondaryButton>
-      {available ? (
-        <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">
-            {pickerLocked ? "Hidden globally" : "Show in picker"}
+    <>
+      <Row
+        label={
+          <span className="flex items-center gap-2">
+            <HarnessIcon harness={harness} className="size-4 shrink-0" />
+            {HARNESS_TITLE[harness]}
+            {isDefault ? (
+              <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
+                Default
+              </span>
+            ) : null}
           </span>
-          <Toggle
-            label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
-            on={inPicker}
-            onChange={onPickerVisible}
-            disabled={pickerLocked}
+        }
+        description={
+          available
+            ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
+            : harnessUnavailableHint(harness)
+        }
+      >
+        {current ? (
+          <Select
+            label={`${HARNESS_TITLE[harness]} model`}
+            value={current.id}
+            onChange={(next) => onModelChange(harness, next)}
+            options={models.map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
           />
+        ) : null}
+        <SecondaryButton
+          onClick={() => current && onDefault(harness, current.id)}
+          disabled={isDefault || !current}
+        >
+          {isDefault ? "Default" : "Use by default"}
+        </SecondaryButton>
+        {available ? (
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-content/50">
+              {pickerLocked ? "Hidden globally" : "Show in picker"}
+            </span>
+            <Toggle
+              label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
+              on={inPicker}
+              onChange={onPickerVisible}
+              disabled={pickerLocked}
+            />
+          </div>
+        ) : null}
+        {showRuntime ? (
+          <button
+            type="button"
+            aria-expanded={runtimeOpen}
+            aria-label={`${HARNESS_TITLE[harness]} runtime settings`}
+            onClick={() => setRuntimeOpen((prev) => !prev)}
+            className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors ${
+              runtimeOpen
+                ? "border-content/20 text-content"
+                : "border-content/10 text-content/50 hover:border-content/20 hover:text-content"
+            }`}
+          >
+            <SlidersHorizontal className="size-3.5" strokeWidth={1.75} />
+            Runtime
+            <ChevronDown
+              className={`size-3 transition-transform ${runtimeOpen ? "rotate-180" : ""}`}
+              strokeWidth={2}
+            />
+          </button>
+        ) : null}
+      </Row>
+      {showRuntime && runtimeOpen ? (
+        <ProviderRuntimePanel harness={harness} />
+      ) : null}
+    </>
+  );
+}
+
+type AppliedRuntime = { runtime: HarnessRuntimeSettings; configDir: string };
+
+function applyRuntimeChange(
+  harness: HarnessId,
+  prev: AppliedRuntime,
+  next: AppliedRuntime,
+): AppliedRuntime {
+  if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+  if (prev.runtime.binaryPath !== next.runtime.binaryPath) {
+    void probeHarnessAvailability({ force: true });
+  }
+  void reloadHarnessCatalog(harness);
+  return next;
+}
+
+function ProviderRuntimePanel({ harness }: { harness: HarnessId }) {
+  const [runtime, setRuntime] = useState<HarnessRuntimeSettings>(() =>
+    loadHarnessRuntime(harness),
+  );
+  const [configDir, setConfigDir] = useState<string>(loadClaudeConfigDir);
+  const [revealedEnv, setRevealedEnv] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
+  const applied = useRef<AppliedRuntime>({ runtime, configDir });
+  const latest = useRef<AppliedRuntime>({ runtime, configDir });
+
+  useEffect(() => {
+    latest.current = { runtime, configDir };
+  });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      applied.current = applyRuntimeChange(harness, applied.current, latest.current);
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [harness, runtime, configDir]);
+
+  useEffect(
+    () => () => {
+      applied.current = applyRuntimeChange(harness, applied.current, latest.current);
+    },
+    [harness],
+  );
+
+  const update = (patch: Partial<HarnessRuntimeSettings>) => {
+    setRuntime((prev) => {
+      const next = { ...prev, ...patch };
+      saveHarnessRuntime(harness, next);
+      return next;
+    });
+  };
+
+  const onConfigDir = (value: string) => {
+    saveClaudeConfigDir(value);
+    setConfigDir(value);
+  };
+
+  const addEnvVar = () => {
+    update({ env: [...runtime.env, { key: "", value: "" }] });
+  };
+
+  const updateEnvVar = (
+    index: number,
+    patch: Partial<HarnessRuntimeEnvVar>,
+  ) => {
+    update({
+      env: runtime.env.map((item, i) =>
+        i === index ? { ...item, ...patch } : item,
+      ),
+    });
+  };
+
+  const removeEnvVar = (index: number) => {
+    update({ env: runtime.env.filter((_, i) => i !== index) });
+    setRevealedEnv(new Set());
+  };
+
+  const toggleEnvReveal = (index: number) => {
+    setRevealedEnv((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(index)) next.add(index);
+      return next;
+    });
+  };
+
+  return (
+    <div className="flex flex-col border-b border-content/5 bg-content/[0.03] last:border-b-0">
+      <Row
+        label="Binary path"
+        description={`Path to the ${HARNESS_TITLE[harness]} binary used by this instance. Leave blank to use the CLI found on your PATH.`}
+      >
+        <RuntimeTextInput
+          value={runtime.binaryPath}
+          placeholder={DEFAULT_HARNESS_BINARY[harness]}
+          onChange={(value) => update({ binaryPath: value })}
+          ariaLabel={`${HARNESS_TITLE[harness]} binary path`}
+        />
+      </Row>
+      {harness === "claude" ? (
+        <Row
+          label="CLAUDE_CONFIG_DIR path"
+          description="Custom Claude home and config directory. Overrides any provider account profile, and takes precedence over a CLAUDE_CONFIG_DIR set below in Environment variables. Leave blank to use ~/.claude."
+        >
+          <RuntimeTextInput
+            value={configDir}
+            placeholder="~/.claude"
+            onChange={onConfigDir}
+            ariaLabel="CLAUDE_CONFIG_DIR path"
+          />
+        </Row>
+      ) : null}
+      <Row
+        label="Launch arguments"
+        description="Additional CLI arguments passed on session start."
+      >
+        <RuntimeTextInput
+          value={runtime.launchArgs}
+          placeholder="e.g. --chrome"
+          onChange={(value) => update({ launchArgs: value })}
+          ariaLabel={`${HARNESS_TITLE[harness]} launch arguments`}
+        />
+      </Row>
+      <Row
+        label="Environment variables"
+        description="API keys, base URLs, and other per-instance CLI settings."
+      >
+        <SecondaryButton onClick={addEnvVar}>
+          <Plus className="size-3.5" strokeWidth={1.75} />
+          Add variable
+        </SecondaryButton>
+      </Row>
+      {runtime.env.length > 0 ? (
+        <div className="flex flex-col gap-2 px-4 py-3.5">
+          {runtime.env.map((entry, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <RuntimeTextInput
+                value={entry.key}
+                placeholder="KEY"
+                onChange={(value) => updateEnvVar(index, { key: value })}
+                ariaLabel={`Environment variable ${index + 1} key`}
+                className="w-40"
+              />
+              <RuntimeTextInput
+                value={entry.value}
+                placeholder="value"
+                onChange={(value) => updateEnvVar(index, { value })}
+                ariaLabel={`Environment variable ${index + 1} value`}
+                className="flex-1"
+                type={revealedEnv.has(index) ? "text" : "password"}
+              />
+              <button
+                type="button"
+                aria-label={
+                  revealedEnv.has(index)
+                    ? "Hide environment variable value"
+                    : "Show environment variable value"
+                }
+                aria-pressed={revealedEnv.has(index)}
+                title={revealedEnv.has(index) ? "Hide value" : "Show value"}
+                onClick={() => toggleEnvReveal(index)}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-content/35 transition-transform duration-150 hover:bg-content/5 hover:text-content active:scale-[0.96]"
+              >
+                {revealedEnv.has(index) ? (
+                  <EyeOff className="size-3.5" strokeWidth={1.75} />
+                ) : (
+                  <Eye className="size-3.5" strokeWidth={1.75} />
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label="Remove environment variable"
+                title="Remove variable"
+                onClick={() => removeEnvVar(index)}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-content/35 transition-transform duration-150 hover:bg-red-400/10 hover:text-red-400 active:scale-[0.96]"
+              >
+                <Trash2 className="size-3.5" strokeWidth={1.75} />
+              </button>
+            </div>
+          ))}
         </div>
       ) : null}
-    </Row>
+    </div>
   );
 }
 

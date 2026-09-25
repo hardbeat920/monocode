@@ -153,6 +153,7 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     await waitPrompt();
     expect(mock.spawn).toHaveBeenCalledWith(
       genKey, provider.path, provider.args, provider.id === "antigravity" ? "/fake/" : "/repo",
+      undefined, undefined,
     );
     expect(mock.sent.find((m) => m.method === "initialize")?.params).toMatchObject({ protocolVersion: 1 });
     expect(mock.sent.find((m) => m.method === "session/set_config_option")?.params)
@@ -256,6 +257,7 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     expect(mock.spawn).toHaveBeenCalledWith(
       `monocode-${provider.id}-probe`, provider.path, provider.args,
       provider.id === "antigravity" ? "/fake/" : "/home/test",
+      undefined, undefined,
     );
     expect(mock.kill).toHaveBeenCalledWith(`monocode-${provider.id}-probe`);
     expect(mock.listeners.has(`monocode-${provider.id}-probe`)).toBe(false);

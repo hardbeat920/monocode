@@ -9,6 +9,8 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
   fallbackGrokModels,
   grokAuthMethodId,
@@ -59,7 +61,8 @@ async function discoverGrokModels() {
 }
 
 async function discoverViaAcp() {
-  const { path } = await resolveGrokBinary();
+  const { path } = await resolveHarnessBinary("grok", resolveGrokBinary);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("grok"));
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
     onRequest: (id) => {
@@ -80,7 +83,7 @@ async function discoverViaAcp() {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, grokSpawnArgs({ model: "" }), cwd);
+    await spawnChild(PROBE_ID, path, grokSpawnArgs({ model: "" }), cwd, undefined, env);
     return await withTimeout(DISCOVERY_TIMEOUT_MS, async () => {
       const init = await acp.request(
         "initialize",
@@ -119,9 +122,10 @@ async function discoverViaAcp() {
 }
 
 async function discoverViaCli() {
-  const { path } = await resolveGrokBinary();
+  const { path } = await resolveHarnessBinary("grok", resolveGrokBinary);
   const cwd = await homeDir();
-  const stdout = await execChild(path, ["models"], cwd);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("grok"));
+  const stdout = await execChild(path, ["models"], cwd, env);
   return modelsFromGrokModelsOutput(stdout);
 }
 
