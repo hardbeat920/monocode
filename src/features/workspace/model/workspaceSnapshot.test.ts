@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { INTERRUPT_MESSAGE } from "../../sessions/model/inFlight";
+import { appendUser } from "../../../integrations/harness/core/apply";
+import {
+  CONTINUE_PROMPT,
+  INTERRUPT_MESSAGE,
+  canAutoContinue,
+} from "../../sessions/model/inFlight";
 import {
   leaf,
   leafIds,
@@ -559,6 +564,38 @@ describe("hydrateWorkspaceSnapshot", () => {
     expect(
       resumed?.blocks.some((block) => block.text === INTERRUPT_MESSAGE),
     ).toBe(true);
+  });
+
+  it("continues a Codex snapshot with its saved model and settings before discovery", () => {
+    const session: Session = {
+      ...chat("s1", "/tmp/a"),
+      harness: "codex",
+      model: "codex:gpt-5.6-sol",
+      modelSettings: { reasoningEffort: "high", serviceTier: "priority" },
+    };
+    const tab = newTab(session.id);
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [session],
+      tab.id,
+      session.cwd,
+      new Map(),
+    );
+    const restored = hydrateWorkspaceSnapshot(
+      snapshot,
+      new Map(),
+      new Set([session.id]),
+    )?.sessions[0];
+    expect(restored).toBeDefined();
+    expect(restored?.model).toBe("codex:gpt-5.6-sol");
+    expect(restored?.modelSettings).toEqual(session.modelSettings);
+    expect(canAutoContinue(restored!)).toBe(true);
+    const continued = appendUser(restored!, CONTINUE_PROMPT);
+    expect(continued.blocks.at(-1)?.turnModel).toEqual({
+      harness: "codex",
+      id: "codex:gpt-5.6-sol",
+      name: "GPT-5.6-Sol",
+    });
   });
 
   it("keeps terminal-only tabs", () => {
