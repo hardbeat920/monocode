@@ -19,6 +19,15 @@ export const powershell = () =>
     "powershell.exe",
   );
 
+// Node may inherit PowerShell 7's module paths. Windows PowerShell 5.1 must
+// build its own paths at startup so it can load its compatible system modules.
+export const powershellEnvironment = (
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv =>
+  Object.fromEntries(
+    Object.entries(env).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"),
+  );
+
 export async function runPowerShell(script: string): Promise<string> {
   // Send script contents through stdin, avoiding Windows' command-line limit
   // when the user's PATH or profile directory is long.
@@ -28,7 +37,12 @@ export async function runPowerShell(script: string): Promise<string> {
       powershellArgs(
         "$ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); try { & ([ScriptBlock]::Create([Console]::In.ReadToEnd())) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
       ),
-      { windowsHide: true, timeout: 30_000, maxBuffer: 128 * 1024 },
+      {
+        env: powershellEnvironment(),
+        windowsHide: true,
+        timeout: 30_000,
+        maxBuffer: 128 * 1024,
+      },
       (error, stdout, stderr) => {
         if (error) reject(new Error(stderr.trim() || error.message));
         else resolve(stdout);

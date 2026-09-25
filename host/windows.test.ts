@@ -13,6 +13,7 @@ import { providerLaunch } from "./process";
 import {
   powershell,
   powershellArgs,
+  powershellEnvironment,
   psQuote,
   protectWindowsDirectory,
   runPowerShell,
@@ -141,7 +142,7 @@ it.skipIf(process.platform !== "win32")(
       powershellArgs(
         `$tokens = $null; $errors = $null; $null = [Management.Automation.Language.Parser]::ParseFile(${psQuote(file)}, [ref] $tokens, [ref] $errors); if ($errors.Count) { $errors | Out-String | Write-Output; exit 1 }`,
       ),
-      { encoding: "utf8" },
+      { encoding: "utf8", env: powershellEnvironment() },
     );
     expect(result).toBe("");
   },

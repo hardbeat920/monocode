@@ -29,15 +29,26 @@ const runtimes = {
 };
 const psQuote = (value) => `'${value.replaceAll("'", "''")}'`;
 const ps = (script) =>
-  execFileSync("powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-EncodedCommand",
-    Buffer.from(
-      `$ErrorActionPreference = 'Stop'; ${script}`,
-      "utf16le",
-    ).toString("base64"),
-  ]);
+  execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(
+        `$ErrorActionPreference = 'Stop'; ${script}`,
+        "utf16le",
+      ).toString("base64"),
+    ],
+    {
+      // Avoid loading inherited PowerShell 7 modules in Windows PowerShell 5.1.
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) => key.toUpperCase() !== "PSMODULEPATH",
+        ),
+      ),
+    },
+  );
 const args = process.argv.slice(2);
 const target = args.includes("--target")
   ? args[args.indexOf("--target") + 1]

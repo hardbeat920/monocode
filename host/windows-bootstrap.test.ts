@@ -13,7 +13,12 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import { powershell, powershellArgs, psQuote } from "./windows";
+import {
+  powershell,
+  powershellArgs,
+  powershellEnvironment,
+  psQuote,
+} from "./windows";
 import { version } from "../package.json";
 
 const exec = promisify(execFile);
@@ -23,7 +28,7 @@ let directory: string;
 let archive: string;
 const run = (script: string, env = {}) =>
   exec(shell!, powershellArgs(script), {
-    env: { ...process.env, ...env },
+    env: powershellEnvironment({ ...process.env, ...env }),
     windowsHide: true,
     timeout: 90_000,
     maxBuffer: 128 * 1024,

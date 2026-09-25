@@ -283,7 +283,9 @@ fn powershell_encoded(script: &str) -> String {
 /// Keep the remote command below cmd.exe's length limit. The actual script is
 /// read from UTF-8 stdin as a single block, rather than evaluated line by line.
 fn powershell_reader() -> String {
-    powershell_encoded("$ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); try { & ([ScriptBlock]::Create([Console]::In.ReadToEnd())) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }")
+    // Prefer this shell's built-in modules if the SSH environment inherited
+    // PowerShell 7 module paths through an intermediate process.
+    powershell_encoded("$env:PSModulePath = $PSHOME + '\\Modules;' + $env:PSModulePath; $ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); try { & ([ScriptBlock]::Create([Console]::In.ReadToEnd())) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }")
 }
 
 pub fn run_script(
@@ -738,6 +740,7 @@ mod tests {
             ),
         ] {
             let output = Command::new(program)
+                .env_remove("PSModulePath")
                 .args(args)
                 .arg(PLATFORM_PROBE.join(" "))
                 .output()

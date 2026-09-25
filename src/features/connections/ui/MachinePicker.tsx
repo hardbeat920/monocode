@@ -38,11 +38,14 @@ export function MachinePicker({
       {open && (
         <Popover
           anchor={anchor}
+          align="end"
           width={300}
           onDismiss={() => setOpen(false)}
           className="p-2 text-[12px]"
         >
-          <div className="px-2 py-2 font-medium">Run sessions on</div>
+          <div className="px-2 py-2 text-[11px] text-content/40">
+            Run sessions on
+          </div>
           <button
             className="w-full rounded-md px-2 py-2 text-left hover:bg-selection"
             onClick={() => choose()}
@@ -61,15 +64,17 @@ export function MachinePicker({
               </div>
             </button>
           ))}
-          <button
-            className="mt-2 flex w-full items-center gap-2 border-t border-stroke px-2 pt-3 pb-2 text-content/60 hover:text-content"
-            onClick={() => {
-              setOpen(false);
-              window.dispatchEvent(new Event(OPEN_CONNECTIONS_EVENT));
-            }}
-          >
-            <Plus className="size-3.5" /> Manage machines in Settings
-          </button>
+          <div className="mt-2 border-t border-stroke pt-2">
+            <button
+              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-content/60 hover:bg-selection hover:text-content"
+              onClick={() => {
+                setOpen(false);
+                window.dispatchEvent(new Event(OPEN_CONNECTIONS_EVENT));
+              }}
+            >
+              <Plus className="size-3.5" /> Manage machines in Settings
+            </button>
+          </div>
         </Popover>
       )}
     </>

@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -20,11 +14,8 @@ afterEach(async () => {
 });
 
 async function setup() {
-  const directory = realpathSync(
-    mkdtempSync(join(tmpdir(), "monocode-server-test-")),
-  );
+  const directory = mkdtempSync(join(tmpdir(), "monocode-server-test-"));
   const store = new HostStore(join(directory, "host.db"));
-  const project = store.addProject(directory, "Workspace");
   let turn: SendTurnInput | undefined;
   let finish = () => {};
   const send = vi.fn((input: SendTurnInput) => {
@@ -43,6 +34,9 @@ async function setup() {
       answer: () => {},
     },
   });
+  // Follow production's canonicalization, including Windows 8.3 paths such
+  // as RUNNER~1 in the CI runner's temporary directory.
+  const project = await engine.openProject(directory);
   const server = createHostServer(engine, ["codex"]);
   try {
     await new Promise<void>((resolve, reject) => {
@@ -169,13 +163,11 @@ describe("remote host API", () => {
     const s = await setup();
     writeFileSync(join(s.directory, "hello.txt"), "from host");
     expect(
-      (
-        await s.call("files.read", {
-          projectId: s.project.id,
-          path: "hello.txt",
-        })
-      ).value.result,
-    ).toBe("from host");
+      await s.call("files.read", {
+        projectId: s.project.id,
+        path: "hello.txt",
+      }),
+    ).toEqual({ status: 200, value: { result: "from host" } });
     symlinkSync(
       tmpdir(),
       join(s.directory, "outside"),
