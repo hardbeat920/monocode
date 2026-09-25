@@ -307,7 +307,7 @@ export class OpenCodeClient {
           );
           const value =
             field.type === "boolean"
-              ? /^yes|true$/i.test(mapped[0] ?? "")
+              ? /^(yes|true)$/i.test((mapped[0] ?? "").trim())
               : field.type === "number" || field.type === "integer"
                 ? Number(mapped[0] ?? "")
                 : mapped.length <= 1

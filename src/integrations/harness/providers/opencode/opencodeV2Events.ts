@@ -122,8 +122,9 @@ export class OpenCodeV2EventTranslator {
     const part = { id: partID, sessionID, messageID, type: partType };
 
     if (type.endsWith(".delta")) {
-      const delta = stringField(data, "delta");
-      if (!delta) return null;
+      // Deltas can be whitespace-only; stringField trims, so read the raw value.
+      const delta = typeof data.delta === "string" ? data.delta : "";
+      if (delta.length === 0) return null;
       if (this.startedParts.has(partID)) {
         return {
           type: "message.part.delta",

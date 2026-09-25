@@ -281,6 +281,38 @@ describe("OpenCode CLI inventory parsers", () => {
       models[0]?.settings?.find((setting) => setting.id === "agent"),
     ).toMatchObject({ value: "build", options: [{ value: "build" }] });
   });
+
+  it("publishes the selectable v2 alias id over the upstream modelID", () => {
+    const parsed = parseV2Catalog(
+      [
+        {
+          id: "openai/coding",
+          modelID: "gpt-5.2",
+          providerID: "openai",
+          name: "Coding",
+          enabled: true,
+          variants: [],
+        },
+        {
+          id: "mimo-v2.6-flash-free",
+          modelID: "mimo-v2.6-flash-free",
+          providerID: "opencode",
+          name: "MiMo",
+          enabled: true,
+          variants: [],
+        },
+      ],
+      [
+        { id: "openai", name: "OpenAI" },
+        { id: "opencode", name: "OpenCode" },
+      ],
+    );
+    const models = flattenOpenCodeModels(parsed, []);
+    expect(models.map((model) => model.nativeId).sort()).toEqual([
+      "openai/coding",
+      "opencode/mimo-v2.6-flash-free",
+    ]);
+  });
 });
 
 describe("mergeOpenCodeAssistantText", () => {

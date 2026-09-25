@@ -285,4 +285,39 @@ describe("OpenCodeClient v2", () => {
       }),
     );
   });
+
+  it("answers boolean form fields only on exact yes/true", async () => {
+    let receive: ((data: string) => void) | undefined;
+    mocks.watchSse.mockImplementation(
+      (_id: string, callback: (data: string) => void) => {
+        receive = callback;
+      },
+    );
+    const client = new OpenCodeClient("http://127.0.0.1:4096", "/repo", "v2");
+    await client.subscribeEvents("thread", () => undefined);
+    const sendForm = (id: string) =>
+      receive?.(
+        JSON.stringify({
+          type: "form.created",
+          data: {
+            form: {
+              id,
+              sessionID: "ses_1",
+              fields: [{ key: "confirm", type: "boolean" }],
+            },
+          },
+        }),
+      );
+    sendForm("frm_1");
+    sendForm("frm_2");
+    sendForm("frm_3");
+
+    await client.replyQuestion("frm_1", [["yesterday"]]);
+    await client.replyQuestion("frm_2", [["not true"]]);
+    await client.replyQuestion("frm_3", [[" yes "]]);
+    const bodies = mocks.harnessHttp.mock.calls.map(([input]) => input.body);
+    expect(bodies.at(-3)).toBe(JSON.stringify({ answer: { confirm: false } }));
+    expect(bodies.at(-2)).toBe(JSON.stringify({ answer: { confirm: false } }));
+    expect(bodies.at(-1)).toBe(JSON.stringify({ answer: { confirm: true } }));
+  });
 });
