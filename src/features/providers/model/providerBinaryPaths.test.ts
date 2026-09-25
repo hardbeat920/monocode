@@ -14,6 +14,7 @@ import {
 const key = "monocode.providerBinaryPaths.v1";
 
 beforeEach(() => {
+  mocks.invoke.mockReset();
   vi.stubGlobal("localStorage", {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -33,6 +34,22 @@ describe("provider binary paths", () => {
     });
     expect(saveProviderBinaryPath("codex", "/opt/codex")).toBe(true);
     expect(loadProviderBinaryPath("codex")).toBe("/opt/codex");
+  });
+
+  it("filters non-string paths before runtime initialization", async () => {
+    const stored = JSON.stringify({ cursor: null, codex: "/opt/codex" });
+    vi.mocked(localStorage.getItem).mockImplementation(() => stored);
+    mocks.invoke.mockResolvedValue({ codex: "/opt/codex" });
+
+    vi.resetModules();
+    const providerPaths = await import("./providerBinaryPaths");
+    await providerPaths.initializeProviderBinaryPaths();
+
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_runtime_binary_paths", {
+      paths: { codex: "/opt/codex" },
+    });
+    expect(providerPaths.runtimeProviderBinaryPath("cursor")).toBeNull();
+    expect(providerPaths.runtimeProviderBinaryPath("codex")).toBe("/opt/codex");
   });
 
   it("keeps the active path unchanged across windows until restart", async () => {

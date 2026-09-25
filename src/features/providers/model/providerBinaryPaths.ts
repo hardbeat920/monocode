@@ -13,7 +13,9 @@ function readProviderBinaryPaths(): StoredBinaryPaths {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       return {};
     }
-    return value as StoredBinaryPaths;
+    return Object.fromEntries(
+      Object.entries(value).filter(([, path]) => typeof path === "string"),
+    ) as StoredBinaryPaths;
   } catch {
     return {};
   }
