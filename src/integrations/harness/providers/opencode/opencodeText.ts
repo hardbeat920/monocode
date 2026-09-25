@@ -10,12 +10,12 @@ import {
 } from "../../core/child";
 import { OpenCodeClient } from "./opencodeClient";
 import {
-  compareSemver,
-  MINIMUM_OPENCODE_VERSION,
+  assertSupportedOpenCodeVersion,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
 } from "./opencodeProtocol";
+import { resolveOpenCodeV2Service } from "./opencodeService";
 
 const TEXT_CHILD_ID = "monocode-opencode-text";
 const SERVER_TIMEOUT_MS = 30_000;
@@ -104,39 +104,49 @@ async function startLive(
   const { path } = await resolveOpenCodeBinary();
   const versionOut = await execChild(path, ["--version"], cwd).catch(() => "");
   const version = parseOpenCodeVersion(versionOut);
-  if (!version || compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
-    throw new Error(
-      `OpenCode v${version ?? "unknown"} is too old for text generation.`,
+  const generation = assertSupportedOpenCodeVersion(version);
+
+  const service =
+    generation === "v2"
+      ? await resolveOpenCodeV2Service(path, cwd)
+      : undefined;
+  serverUrl = service?.url ?? "";
+  if (generation === "v1") {
+    watchChild(
+      TEXT_CHILD_ID,
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+      () => {
+        if (live) live = null;
+      },
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+    );
+
+    const port = await freeHarnessPort();
+    await spawnChild(
+      TEXT_CHILD_ID,
+      path,
+      ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
+      cwd,
     );
   }
 
-  serverUrl = "";
-  watchChild(
-    TEXT_CHILD_ID,
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-    () => {
-      if (live) live = null;
-    },
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-  );
-
-  const port = await freeHarnessPort();
-  await spawnChild(
-    TEXT_CHILD_ID,
-    path,
-    ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
-    cwd,
-  );
-
   try {
-    const url = await waitForUrl(() => serverUrl, SERVER_TIMEOUT_MS);
-    const client = new OpenCodeClient(url, cwd);
+    const url =
+      generation === "v2"
+        ? serverUrl
+        : await waitForUrl(() => serverUrl, SERVER_TIMEOUT_MS);
+    const client = new OpenCodeClient(
+      url,
+      cwd,
+      generation,
+      service?.password,
+    );
     const created = await client.createSession({
       permission: [{ permission: "*", pattern: "*", action: "deny" }],
     });

@@ -14,8 +14,11 @@ import { extractToolPreview } from "../../core/preview";
 import type { HarnessEvent } from "../../core/types";
 
 export const MINIMUM_OPENCODE_VERSION = "1.14.19";
+export const MINIMUM_OPENCODE_V2_VERSION = "2.0.15";
 export const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
 export const KNOWN_HIDDEN_AGENTS = new Set(["compaction", "summary", "title"]);
+
+export type OpenCodeApiGeneration = "v1" | "v2";
 
 const OPENCODE_DEFAULT_TITLE_PATTERN =
   /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -29,6 +32,12 @@ export type OpenCodePermissionRule = {
   permission: string;
   pattern: string;
   action: "allow" | "deny" | "ask";
+};
+
+export type OpenCodeV2PermissionRule = {
+  action: string;
+  resource: string;
+  effect: "allow" | "deny" | "ask";
 };
 
 export type OpenCodePart = {
@@ -100,6 +109,47 @@ export function compareSemver(left: string, right: string): number {
   return 0;
 }
 
+export function openCodeApiGeneration(
+  version: string,
+): OpenCodeApiGeneration | null {
+  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
+  if (major === 1) {
+    return compareSemver(version, MINIMUM_OPENCODE_VERSION) >= 0 ? "v1" : null;
+  }
+  if (major === 2) {
+    return compareSemver(version, MINIMUM_OPENCODE_V2_VERSION) >= 0
+      ? "v2"
+      : null;
+  }
+  return null;
+}
+
+export function assertSupportedOpenCodeVersion(
+  version: string | null,
+): OpenCodeApiGeneration {
+  if (!version) {
+    throw new Error(
+      `Unable to determine OpenCode version. MonoCode requires v${MINIMUM_OPENCODE_VERSION} or newer.`,
+    );
+  }
+  const generation = openCodeApiGeneration(version);
+  if (generation) return generation;
+  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
+  if (major === 1) {
+    throw new Error(
+      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
+    );
+  }
+  if (major === 2) {
+    throw new Error(
+      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_V2_VERSION} or newer.`,
+    );
+  }
+  throw new Error(
+    `OpenCode v${version} is not supported. MonoCode supports OpenCode v1 and v2.`,
+  );
+}
+
 export function isOpenCodeDefaultTitle(title: string): boolean {
   return OPENCODE_DEFAULT_TITLE_PATTERN.test(title);
 }
@@ -150,6 +200,16 @@ export function buildOpenCodePermissionRules(
     rules.push({ permission: "read", pattern: "*", action: "allow" });
   }
   return rules;
+}
+
+export function toOpenCodeV2PermissionRules(
+  rules: OpenCodePermissionRule[],
+): OpenCodeV2PermissionRule[] {
+  return rules.map((rule) => ({
+    action: rule.permission,
+    resource: rule.pattern,
+    effect: rule.action,
+  }));
 }
 
 export function toOpenCodePermissionReply(
@@ -494,14 +554,27 @@ export function eventSessionId(event: Record<string, unknown>): string | undefin
   if (!properties) return undefined;
   const sessionID = stringField(properties, "sessionID");
   if (sessionID) return sessionID;
+  const form = asRecord(properties.form);
+  const request = asRecord(properties.request);
   const info = asRecord(properties.info);
   return (
+    stringField(form, "sessionID") ??
+    stringField(request, "sessionID") ??
     stringField(info, "sessionID") ??
     stringField(asRecord(properties.part), "sessionID") ??
     (typeof event.type === "string" && event.type.startsWith("session.")
       ? stringField(info, "id")
       : undefined)
   );
+}
+
+export function normalizeOpenCodeV2Event(
+  event: Record<string, unknown>,
+): Record<string, unknown> {
+  if ("properties" in event) return event;
+  const data = asRecord(event.data);
+  if (!data) return event;
+  return { ...event, properties: data };
 }
 
 export function textDeltaEvent(
