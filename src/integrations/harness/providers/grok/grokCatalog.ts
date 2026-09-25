@@ -124,7 +124,8 @@ async function discoverViaAcp() {
 async function discoverViaCli() {
   const { path } = await resolveHarnessBinary("grok", resolveGrokBinary);
   const cwd = await homeDir();
-  const stdout = await execChild(path, ["models"], cwd);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("grok"));
+  const stdout = await execChild(path, ["models"], cwd, env);
   return modelsFromGrokModelsOutput(stdout);
 }
 

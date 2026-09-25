@@ -1,7 +1,8 @@
 import { homeDir } from "../../../../platform/tauri/fs";
 import { setHarnessModels } from "../../../../features/sessions/model/models";
 import { execChild, resolveFxBinary } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
   mergeFxCatalogModels,
   modelFromFxStatusOutput,
@@ -28,9 +29,10 @@ export function refreshFxCatalog(): Promise<void> {
 async function discoverFxModels() {
   const { path } = await resolveHarnessBinary("fx", resolveFxBinary);
   const cwd = await homeDir();
+  const env = harnessRuntimeEnv(loadHarnessRuntime("fx"));
   const [modelsOutput, statusOutput] = await Promise.all([
-    execChild(path, ["models", "--json"], cwd),
-    execChild(path, ["status", "--json"], cwd).catch(() => ""),
+    execChild(path, ["models", "--json"], cwd, env),
+    execChild(path, ["status", "--json"], cwd, env).catch(() => ""),
   ]);
   return mergeFxCatalogModels(
     modelsFromFxOutput(modelsOutput),

@@ -118,7 +118,8 @@ async function discoverViaAcp(): Promise<AgentModel[]> {
 async function discoverViaCli(): Promise<AgentModel[]> {
   const { path } = await resolveHarnessBinary("cursor", resolveCursorBinary);
   const cwd = await homeDir();
-  const stdout = await execChild(path, ["--list-models"], cwd);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("cursor"));
+  const stdout = await execChild(path, ["--list-models"], cwd, env);
   return modelsFromListModelsOutput(stdout);
 }
 

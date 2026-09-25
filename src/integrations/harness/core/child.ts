@@ -367,6 +367,7 @@ export function execChild(
   command: string,
   args: string[],
   cwd?: string,
+  env?: Record<string, string>,
 ): Promise<string> {
-  return invoke("harness_exec", { command, args, cwd });
+  return invoke("harness_exec", { command, args, cwd, env });
 }

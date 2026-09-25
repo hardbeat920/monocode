@@ -6,7 +6,8 @@ import {
   type ModelSettingChoice,
 } from "../../../../features/sessions/model/models";
 import { execChild, resolveOpenCodeBinary } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import { harnessRuntimeEnv, resolveHarnessBinary } from "../../core/runtime";
+import { loadHarnessRuntime } from "../../../../features/settings/model/settings";
 import {
   compareSemver,
   inferDefaultAgent,
@@ -69,7 +70,8 @@ export function refreshOpenCodeCatalog(): Promise<void> {
 async function discoverOpenCodeModels(): Promise<AgentModel[]> {
   const { path } = await resolveHarnessBinary("opencode", resolveOpenCodeBinary);
   const cwd = await homeDir();
-  const versionOut = await execChild(path, ["--version"], cwd);
+  const env = harnessRuntimeEnv(loadHarnessRuntime("opencode"));
+  const versionOut = await execChild(path, ["--version"], cwd, env);
   const version = parseOpenCodeVersion(versionOut);
   if (!version) {
     throw new Error(
@@ -82,11 +84,11 @@ async function discoverOpenCodeModels(): Promise<AgentModel[]> {
     );
   }
 
-  const modelsOut = await execChild(path, ["models", "--verbose"], cwd);
+  const modelsOut = await execChild(path, ["models", "--verbose"], cwd, env);
   const parsed = parseModelsCliOutput(modelsOut);
   let agents: OpenCodeAgent[] = [];
   try {
-    const agentsOut = await execChild(path, ["agent", "list"], cwd);
+    const agentsOut = await execChild(path, ["agent", "list"], cwd, env);
     agents = parseAgentListCliOutput(agentsOut);
   } catch (error) {
     console.debug("[monocode] opencode agents", error);
