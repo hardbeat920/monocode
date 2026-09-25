@@ -5,6 +5,7 @@ import {
   resolveClaudeBinary,
   resolveCodexBinary,
   resolveCursorBinary,
+  resolveDevinBinary,
   resolveFxBinary,
   resolveGrokBinary,
   resolveHermesBinary,
@@ -37,6 +38,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
   claude: { name: "Claude Code CLI" },
   codex: { name: "Codex CLI" },
   cursor: { name: "Cursor CLI" },
+  devin: { name: "Devin CLI", install: "https://devin.ai/cli" },
   grok: {
     name: "Grok Build CLI",
     install: "curl -fsSL https://x.ai/cli/install.sh | bash",
@@ -91,6 +93,14 @@ export function probeHarnessAvailability(
       if (id === "claude") {
         try {
           await resolveClaudeBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "devin") {
+        try {
+          await resolveDevinBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

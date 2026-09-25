@@ -111,6 +111,13 @@ export const MODELS: AgentModel[] = [
   },
 
   {
+    id: "devin:adaptive",
+    harness: "devin",
+    name: "Adaptive",
+    nativeId: "adaptive",
+  },
+
+  {
     id: "grok:grok-4.6",
     harness: "grok",
     name: "Grok 4.6",
@@ -204,6 +211,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   claude: "claude:sonnet-5",
   codex: "",
   cursor: "cursor:composer-2.5",
+  devin: "devin:adaptive",
   grok: "grok:grok-4.6",
   opencode: "opencode:glm-5",
   pi: "pi:default",
@@ -233,6 +241,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "claude",
   "codex",
   "cursor",
+  "devin",
   "grok",
   "opencode",
   "pi",
@@ -864,6 +873,14 @@ function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
   }
   if (harness === "codex") {
     return models[0]?.id ?? "";
+  }
+  if (harness === "devin") {
+    return (
+      models.find((model) => model.nativeId === "adaptive")?.id ??
+      models.find((model) => model.id === DEFAULT_MODEL_ID.devin)?.id ??
+      models[0]?.id ??
+      DEFAULT_MODEL_ID.devin
+    );
   }
   if (harness === "grok") {
     return (

@@ -68,6 +68,7 @@ describe("harness registry", () => {
       "claude",
       "codex",
       "cursor",
+      "devin",
       "grok",
       "opencode",
       "pi",
@@ -83,6 +84,7 @@ describe("harness registry", () => {
       claude: true,
       codex: true,
       cursor: true,
+      devin: false,
       grok: true,
       opencode: true,
       pi: true,
@@ -99,6 +101,7 @@ describe("harness registry", () => {
       "claude",
       "codex",
       "cursor",
+      "devin",
       "grok",
       "opencode",
       "pi",
@@ -113,6 +116,7 @@ describe("harness registry", () => {
       claude: true,
       codex: true,
       cursor: false,
+      devin: false,
       grok: true,
       opencode: true,
       pi: true,
@@ -220,6 +224,15 @@ describe("harness registry", () => {
       omp: true,
       fx: false,
     });
+  });
+
+  it("registers Devin as a live ACP harness", () => {
+    registerBuiltinHarnesses();
+    expect(isLiveHarness("devin")).toBe(true);
+    const adapter = listHarnesses().find((adapter) => adapter.id === "devin")!;
+    expect(adapter.canSteer).toBe(false);
+    expect(adapter.bindSession).toBeTypeOf("function");
+    expect(adapter.refreshCatalog).toBeTypeOf("function");
   });
 
   it("registers Antigravity as a live fx-tier harness", () => {

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import claude from "../../../assets/providers/claude.svg";
 import codex from "../../../assets/providers/codex.svg";
 import cursor from "../../../assets/providers/cursor.svg";
+import devin from "../../../assets/providers/devin.svg";
 import fx from "../../../assets/providers/fx.svg";
 import grok from "../../../assets/providers/grok.svg";
 import hermes from "../../../assets/providers/hermes.svg";
@@ -15,6 +16,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   claude,
   codex,
   cursor,
+  devin,
   grok,
   opencode,
   pi,

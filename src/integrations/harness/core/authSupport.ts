@@ -9,6 +9,7 @@ const LOGIN_ARGS: Partial<Record<HarnessId, readonly string[]>> = {
   claude: ["auth", "login"],
   codex: ["login"],
   cursor: ["login"],
+  devin: ["auth", "login"],
   grok: ["login", "--oauth"],
   // MonoCode uses fx through Vercel AI Gateway. Choosing it explicitly avoids
   // leaving `fx login` waiting on a TTY-only provider picker.

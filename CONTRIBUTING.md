@@ -1,8 +1,8 @@
 # Contributing
 
-MonoCode is early and I’m the only maintainer, so small and focused lands much faster than large and ambitious. Past that, the door is open - bug reports and fixes are genuinely welcome.
+MonoCode is early and I?m the only maintainer, so small and focused lands much faster than large and ambitious. Past that, the door is open - bug reports and fixes are genuinely welcome.
 
-Please don’t open PRs that add a new provider right now. The existing harnesses still need to agree on a few patterns, and a new adapter would copy whatever is there today. See [New providers](#new-providers).
+Please don?t open PRs that add a new provider right now. The existing harnesses still need to agree on a few patterns, and a new adapter would copy whatever is there today. See [New providers](#new-providers).
 
 ## Get it running
 
@@ -13,6 +13,7 @@ You need Node.js 20+, a current stable Rust toolchain, and at least one provider
 - [Cursor CLI](https://cursor.com/cli) - `agent login`
 - [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
 - [OpenCode](https://opencode.ai) - `opencode auth login`
+- [Devin](https://devin.ai/cli) - install the Devin CLI, then run `devin auth login`
 - [Antigravity](https://antigravity.google/docs/cli-install) (macOS/Linux) - `curl -fsSL https://antigravity.google/cli/install.sh | bash`, then run `agy` once to sign in
 - [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
 - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
@@ -26,7 +27,7 @@ npm install
 npm run tauri dev
 ```
 
-One provider is enough. MonoCode probes for each CLI at startup and disables the ones it can’t find, with a hint about how to install them, so a missing Codex doesn’t stop you from working on anything else.
+One provider is enough. MonoCode probes for each CLI at startup and disables the ones it can?t find, with a hint about how to install them, so a missing Codex doesn?t stop you from working on anything else.
 
 ## Where things live
 
@@ -37,7 +38,7 @@ One provider is enough. MonoCode probes for each CLI at startup and disables the
 - `src/shared/` - reusable UI, hooks, and small utilities that contain no feature behavior
 - `src-tauri/src/` - the Rust side: PTYs, filesystem and git, session storage, native window
 
-`src/integrations/harness/` is the most useful place to start if you want to fix something real. Each folder under `providers/` has an adapter (`claudeAdapter.ts`) that implements the shared `HarnessAdapter` lifecycle from `core/registry.ts`, and a protocol module (`claudeProtocol.ts`) that translates the CLI’s output into MonoCode’s own event types. The protocol modules are pure functions with unit tests beside them, so you can fix a Codex parsing bug with only Claude Code installed. That’s for the providers we already ship - please don’t add a new one yet.
+`src/integrations/harness/` is the most useful place to start if you want to fix something real. Each folder under `providers/` has an adapter (`claudeAdapter.ts`) that implements the shared `HarnessAdapter` lifecycle from `core/registry.ts`, and a protocol module (`claudeProtocol.ts`) that translates the CLI?s output into MonoCode?s own event types. The protocol modules are pure functions with unit tests beside them, so you can fix a Codex parsing bug with only Claude Code installed. That?s for the providers we already ship - please don?t add a new one yet.
 
 ## Before you push
 
@@ -45,11 +46,11 @@ One provider is enough. MonoCode probes for each CLI at startup and disables the
 npm run check
 ```
 
-That runs what CI runs: vitest, `tsc --noEmit`, `cargo fmt`, `cargo clippy`, and `cargo test`. If it’s green locally it should be green on GitHub. `npm run check:web` and `npm run check:rust` run the two halves separately when you only touched one side.
+That runs what CI runs: vitest, `tsc --noEmit`, `cargo fmt`, `cargo clippy`, and `cargo test`. If it?s green locally it should be green on GitHub. `npm run check:web` and `npm run check:rust` run the two halves separately when you only touched one side.
 
 ## New providers
 
-I’m pausing new harnesses until the current ones share the same patterns - session lifecycle, catalog probes, usage, approvals, and how slash commands and skills are wired. A PR that adds another provider will be closed for now, even if the work is good. Fixes, tests, and protocol bugs on Claude, Codex, Cursor, Grok, OpenCode, Antigravity, Pi, omp, fx, and Hermes Agent are still the best kind of contribution.
+I?m pausing new harnesses until the current ones share the same patterns - session lifecycle, catalog probes, usage, approvals, and how slash commands and skills are wired. A PR that adds another provider will be closed for now, even if the work is good. Fixes, tests, and protocol bugs on Claude, Codex, Cursor, Grok, OpenCode, Antigravity, Pi, omp, fx, and Hermes Agent are still the best kind of contribution.
 
 When the pause lifts, this section goes away.
 
@@ -57,8 +58,8 @@ When the pause lifts, this section goes away.
 
 Keep a PR to one thing, and say what changed and why. The [PR template](.github/pull_request_template.md) covers the rest. If it changes the UI, a before/after screenshot helps a lot.
 
-For anything that moves product direction - a new surface, new provider behavior, a refactor that changes the shape of the app - open an issue first. That’s not gatekeeping, I’d just rather you hear “I’m already halfway through that” before you write it than after. New providers are the exception: don’t send the adapter, even from an issue, until the pause above is gone.
+For anything that moves product direction - a new surface, new provider behavior, a refactor that changes the shape of the app - open an issue first. That?s not gatekeeping, I?d just rather you hear ?I?m already halfway through that? before you write it than after. New providers are the exception: don?t send the adapter, even from an issue, until the pause above is gone.
 
-I might close a PR, ask you to shrink it, or end up implementing the idea differently. That’s a call about scope and timing, not about you or the quality of your work.
+I might close a PR, ask you to shrink it, or end up implementing the idea differently. That?s a call about scope and timing, not about you or the quality of your work.
 
 Be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Security reports: [SECURITY.md](SECURITY.md).
