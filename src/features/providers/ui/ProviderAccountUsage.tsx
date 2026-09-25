@@ -1,175 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clampUsedPercent,
-  exhaustedWindowResetAt,
-  fetchingRateLimits,
   formatResetDuration,
   formatUsagePercent,
   formatWindowLabel,
-  RATE_LIMIT_MIN_REFETCH_MS,
   type ProviderRateLimits,
   type RateLimitWindow,
 } from "../model/rateLimits";
-import {
-  fetchClaudeRateLimits,
-  fetchCodexRateLimits,
-} from "../model/rateLimitsFetch";
-import {
-  PROVIDER_ACCOUNT_PROVIDERS,
-  providerAccounts,
-  type ProviderAccount,
-  type ProviderAccountProvider,
-} from "../model/providerAccounts";
-import { identityKey } from "../model/providerAccountIdentity";
+import type {
+  AccountStatus,
+  AccountStatusTone,
+  AccountUsage,
+} from "../model/accountUsage";
 import { RefreshCw } from "../../../shared/ui/icons";
-
-const CLOCK_MS = 30_000;
-
-export type AccountUsage = {
-  usage: Record<string, ProviderRateLimits>;
-  now: number;
-  refreshing: boolean;
-  refresh: () => void;
-};
-
-/** Same `provider:id` key the identity cache uses. */
-export const accountUsageKey = identityKey;
-
-function accountsFor(provider?: ProviderAccountProvider): ProviderAccount[] {
-  return provider
-    ? providerAccounts(provider)
-    : PROVIDER_ACCOUNT_PROVIDERS.flatMap((entry) => providerAccounts(entry));
-}
-
-function fetchAccountUsage(
-  account: ProviderAccount,
-): Promise<ProviderRateLimits> {
-  return account.provider === "claude"
-    ? fetchClaudeRateLimits(account.id)
-    : fetchCodexRateLimits(account.id);
-}
-
-/**
- * Usage windows for every provider account at once, so the Accounts list and
- * the footer account picker can show which profile still has headroom.
- * `accountsVersion` should change whenever accounts are added or removed.
- * While `enabled`, snapshots older than the footer's refetch floor reload.
- */
-export function useProviderAccountUsage(
-  accountsVersion: unknown,
-  {
-    provider,
-    enabled = true,
-  }: { provider?: ProviderAccountProvider; enabled?: boolean } = {},
-): AccountUsage {
-  const [usage, setUsage] = useState<Record<string, ProviderRateLimits>>({});
-  const [refreshing, setRefreshing] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  const requestedAt = useRef(new Map<string, number>());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), CLOCK_MS);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const load = useCallback(async (targets: ProviderAccount[]) => {
-    if (targets.length === 0) return;
-    const started = Date.now();
-    for (const account of targets) {
-      requestedAt.current.set(accountUsageKey(account), started);
-    }
-    setRefreshing(true);
-    setUsage((current) => {
-      const next = { ...current };
-      for (const account of targets) {
-        const key = accountUsageKey(account);
-        next[key] = fetchingRateLimits(account.provider, current[key]);
-      }
-      return next;
-    });
-    await Promise.allSettled(
-      targets.map(async (account) => {
-        const value = await fetchAccountUsage(account);
-        setUsage((current) => ({
-          ...current,
-          [accountUsageKey(account)]: value,
-        }));
-      }),
-    );
-    setRefreshing(false);
-    setNow(Date.now());
-  }, []);
-
-  // Renames also bump the version; only fetch accounts missing or stale.
-  useEffect(() => {
-    if (!enabled) return;
-    const cutoff = Date.now() - RATE_LIMIT_MIN_REFETCH_MS;
-    void load(
-      accountsFor(provider).filter(
-        (account) =>
-          (requestedAt.current.get(accountUsageKey(account)) ?? 0) < cutoff,
-      ),
-    );
-  }, [accountsVersion, enabled, load, provider]);
-
-  const refresh = useCallback(
-    () => void load(accountsFor(provider)),
-    [load, provider],
-  );
-
-  return { usage, now, refreshing, refresh };
-}
-
-export type AccountStatusTone =
-  "ready" | "low" | "exhausted" | "checking" | "unknown";
-
-export type AccountStatus = {
-  tone: AccountStatusTone;
-  label: string;
-  /** Extra context, e.g. "back in 31m" for an exhausted account. */
-  detail: string | null;
-};
-
-const LOW_HEADROOM_PERCENT = 20;
-
-/** One-word readiness for an account, shared by Settings and the footer. */
-export function accountStatus(
-  limits: ProviderRateLimits | undefined,
-  now: number,
-): AccountStatus {
-  const headroom = accountHeadroom(limits, now);
-  if (!limits || headroom == null) {
-    if (!limits || limits.status === "idle" || limits.status === "fetching") {
-      return { tone: "checking", label: "Checking…", detail: null };
-    }
-    return {
-      tone: "unknown",
-      label:
-        limits.status === "unavailable"
-          ? limits.error || "Not signed in"
-          : "Usage unavailable",
-      detail: null,
-    };
-  }
-  if (headroom <= 0) {
-    return { tone: "exhausted", label: "Exhausted", detail: backIn(limits, now) };
-  }
-  if (headroom <= LOW_HEADROOM_PERCENT) {
-    return {
-      tone: "low",
-      label: "Running low",
-      detail: `${Math.round(headroom)}% left`,
-    };
-  }
-  return { tone: "ready", label: "Ready", detail: null };
-}
-
-/** "back in 31m" for the used-up window that stays blocked longest. */
-function backIn(limits: ProviderRateLimits, now: number): string | null {
-  const resetAt = exhaustedWindowResetAt(limits);
-  if (resetAt == null || resetAt <= now) return null;
-  return `back in ${formatResetDuration(resetAt - now)}`;
-}
 
 const STATUS_DOT: Record<AccountStatusTone, string> = {
   ready: "bg-emerald-400",
@@ -204,7 +46,9 @@ export function AccountStatusLabel({
         className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[status.tone]}`}
         aria-hidden
       />
-      <span className={`shrink-0 ${STATUS_TEXT[status.tone]}`}>
+      <span
+        className={`${status.tone === "unknown" ? "min-w-0 truncate" : "shrink-0"} ${STATUS_TEXT[status.tone]}`}
+      >
         {status.label}
       </span>
       {status.detail ? (
@@ -213,24 +57,6 @@ export function AccountStatusLabel({
         </span>
       ) : null}
     </span>
-  );
-}
-
-/** Headroom for ranking accounts: the tightest window's remaining percent. */
-export function accountHeadroom(
-  limits: ProviderRateLimits | undefined,
-  now: number,
-): number | null {
-  const windows = [limits?.session, limits?.weekly, limits?.monthly].filter(
-    (window) => window != null,
-  );
-  if (windows.length === 0) return null;
-  return Math.min(
-    ...windows.map((window) =>
-      window.resetsAt != null && window.resetsAt <= now
-        ? 100
-        : 100 - clampUsedPercent(window.usedPercent),
-    ),
   );
 }
 
@@ -360,7 +186,7 @@ function MeterSkeleton() {
   );
 }
 
-/** Same thresholds as the footer usage chip. */
+/** Bar colour by percent used; shared with the footer usage chip. */
 export function barClass(pct: number): string {
   if (pct >= 90) return "bg-red-400";
   if (pct >= 80) return "bg-amber-400";

@@ -224,12 +224,14 @@ import {
   useProviderAccountIdentities,
 } from "../../providers/model/providerAccountIdentity";
 import {
-  AccountStatusLabel,
-  AccountUsageMeters,
-  AccountUsageRefresh,
   accountStatus,
   accountUsageKey,
   useProviderAccountUsage,
+} from "../../providers/model/accountUsage";
+import {
+  AccountStatusLabel,
+  AccountUsageMeters,
+  AccountUsageRefresh,
 } from "../../providers/ui/ProviderAccountUsage";
 import {
   loadSessionSidebarFilters,

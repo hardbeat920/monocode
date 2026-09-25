@@ -34,11 +34,14 @@ import {
   type ProviderAccount,
 } from "../../features/providers/model/providerAccounts";
 import {
-  AccountStatusLabel,
-  accountHeadroom,
   accountStatus,
   accountUsageKey,
+  bestAlternativeAccount,
   useProviderAccountUsage,
+} from "../../features/providers/model/accountUsage";
+import {
+  AccountStatusLabel,
+  barClass,
 } from "../../features/providers/ui/ProviderAccountUsage";
 import {
   identityKey,
@@ -143,7 +146,7 @@ export function UsageProviderChip({
   const activeStatus = accountStatus(limits, now);
   const suggestion =
     activeStatus.tone === "exhausted" || activeStatus.tone === "low"
-      ? bestAlternative(otherAccounts, usageFor, now)
+      ? bestAlternativeAccount(otherAccounts, usageFor, now)
       : null;
   const mascotProject = project ? projectName(project) : providerLabel;
   const appearanceKey = project ? projectKey(project) : mascotProject;
@@ -603,20 +606,6 @@ function UsageSummary({ limits }: { limits: ProviderRateLimits | undefined }) {
       ))}
     </span>
   );
-}
-
-function bestAlternative(
-  accounts: ProviderAccount[],
-  usageFor: (account: ProviderAccount) => ProviderRateLimits | undefined,
-  now: number,
-): ProviderAccount | null {
-  let best: { account: ProviderAccount; headroom: number } | null = null;
-  for (const account of accounts) {
-    const headroom = accountHeadroom(usageFor(account), now);
-    if (headroom == null || headroom <= 20) continue;
-    if (!best || headroom > best.headroom) best = { account, headroom };
-  }
-  return best?.account ?? null;
 }
 
 function SwitchSuggestion({
@@ -1157,10 +1146,4 @@ function MiniBar({ usedPct }: { usedPct: number }) {
       />
     </span>
   );
-}
-
-function barClass(pct: number): string {
-  if (pct >= 90) return "bg-red-400";
-  if (pct >= 80) return "bg-amber-400";
-  return "bg-content/45";
 }

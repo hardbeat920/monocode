@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude and Codex account controls show the cached account's plan, email, and organization in Settings, the account picker, and the usage popover. Identity refreshes after reconnecting. In #372.
 - A usage-limit notice shows the provider's reset time and countdown, pauses queued messages, and offers manual resume or automatic resume after the limit resets.
 - The macOS Quick composer global shortcut can be changed in Settings → Keybindings. The default remains Command+Shift+Space.
+- Settings → Providers → Accounts shows each Claude Code and Codex account's 5-hour and weekly usage with a **Ready**, **Running low**, or **Exhausted** status, and a refresh button. The footer account picker shows the same status and usage per account, and when the current account is exhausted or running low the usage popover offers to switch to the account with the most headroom.
+
+### Fixed
+
+- Codex usage checks for several accounts run one at a time instead of stopping each other.
 
 ### Changed
 
