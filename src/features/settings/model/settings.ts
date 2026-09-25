@@ -937,6 +937,27 @@ export function saveClaudeConfigDir(value: string) {
   writeStringFlag(CLAUDE_CONFIG_DIR_KEY, value);
 }
 
+/** The CLAUDE_CONFIG_DIR a Claude launch ends up with: the dedicated setting,
+ * else a CLAUDE_CONFIG_DIR entry in Claude's environment variables. */
+export function claudeEffectiveConfigDir(
+  runtime: HarnessRuntimeSettings,
+  configDir: string,
+): string {
+  const dedicated = configDir.trim();
+  if (dedicated) return dedicated;
+  const entry = [...runtime.env]
+    .reverse()
+    .find((item) => item.key.trim() === "CLAUDE_CONFIG_DIR");
+  return entry?.value.trim() ?? "";
+}
+
+export function loadEffectiveClaudeConfigDir(): string {
+  return claudeEffectiveConfigDir(
+    loadHarnessRuntime("claude"),
+    loadClaudeConfigDir(),
+  );
+}
+
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";
 
 export type KeybindingRow = {

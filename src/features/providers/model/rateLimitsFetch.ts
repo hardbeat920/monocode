@@ -17,7 +17,7 @@ import {
 } from "../../../integrations/harness/core/child";
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { JsonRpcClient } from "../../../integrations/harness/core/jsonRpc";
-import { loadClaudeConfigDir } from "../../settings/model/settings";
+import { loadEffectiveClaudeConfigDir } from "../../settings/model/settings";
 
 const USAGE_CHILD_ID = "monocode-codex-usage";
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -88,7 +88,7 @@ export async function fetchClaudeRateLimits(
   try {
     const result = await invoke<ClaudeUsageFetch>("fetch_claude_usage", {
       accountId,
-      configDirOverride: loadClaudeConfigDir(),
+      configDirOverride: loadEffectiveClaudeConfigDir(),
     });
     if (result.status === "ok" && result.body) {
       const parsed = parseClaudeOAuthUsage(result.body);

@@ -149,7 +149,7 @@ async function startLive(
 ): Promise<LiveText> {
   const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
   const runtime = loadHarnessRuntime("claude");
-  const env = claudeRuntimeEnv(runtime, loadClaudeConfigDir());
+  const env = await claudeRuntimeEnv(runtime, loadClaudeConfigDir());
   const session: LiveText = {
     cwd,
     providerAccountId,

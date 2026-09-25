@@ -250,7 +250,7 @@ async function discoverClaudeModels(): Promise<AgentModel[]> {
 
 async function discoverViaListModels(): Promise<AgentModel[]> {
   const { path } = await resolveHarnessBinary("claude", resolveClaudeBinary);
-  const env = claudeRuntimeEnv(loadHarnessRuntime("claude"), loadClaudeConfigDir());
+  const env = await claudeRuntimeEnv(loadHarnessRuntime("claude"), loadClaudeConfigDir());
   const cwd = await homeDir();
   const sessionId = crypto.randomUUID();
 

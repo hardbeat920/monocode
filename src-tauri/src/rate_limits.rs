@@ -399,32 +399,28 @@ fn usage_result(
 /// Fetch Claude Code 5-hour / weekly usage via the local OAuth token.
 /// The token never leaves the host process.
 ///
-/// `config_dir_override` mirrors the manual CLAUDE_CONFIG_DIR runtime setting
-/// (see `harness_spawn`): when set, it wins over the account-derived dir, so
-/// usage reflects wherever the user actually pointed the CLI's credentials.
+/// `config_dir_override` is the CLAUDE_CONFIG_DIR the Claude launch resolves
+/// to. It wins over the account-derived dir, matching `harness_spawn`, so
+/// usage reads the same credentials the CLI does.
 #[tauri::command]
 pub async fn fetch_claude_usage(
     app: AppHandle,
     account_id: Option<String>,
     config_dir_override: Option<String>,
 ) -> Result<ClaudeUsageFetch, String> {
-    let account_dir = crate::harness::provider_account_dir(&app, "claude", account_id.as_deref())?;
-    let config_dir = claude_usage_config_dir(config_dir_override, account_dir);
+    let config_dir = match claude_usage_config_override(config_dir_override) {
+        Some(dir) => Some(dir),
+        None => crate::harness::provider_account_dir(&app, "claude", account_id.as_deref())?,
+    };
     tauri::async_runtime::spawn_blocking(move || fetch_claude_usage_sync(config_dir))
         .await
         .map_err(|e| e.to_string())?
 }
 
-/// A manual override always wins over the account-derived dir, same as the
-/// env precedence `harness_spawn` applies when actually launching the CLI.
-fn claude_usage_config_dir(
-    config_dir_override: Option<String>,
-    account_dir: Option<PathBuf>,
-) -> Option<PathBuf> {
-    match config_dir_override.filter(|dir| !dir.trim().is_empty()) {
-        Some(dir) => Some(crate::fs::expand_home(&dir)),
-        None => account_dir,
-    }
+fn claude_usage_config_override(config_dir_override: Option<String>) -> Option<PathBuf> {
+    config_dir_override
+        .filter(|dir| !dir.trim().is_empty())
+        .map(|dir| crate::fs::expand_home(dir.trim()))
 }
 
 fn fetch_claude_usage_sync(config_dir: Option<PathBuf>) -> Result<ClaudeUsageFetch, String> {
@@ -903,22 +899,16 @@ mod tests {
     }
 
     #[test]
-    fn claude_usage_config_dir_override_wins_over_account_dir() {
+    fn claude_usage_config_override_uses_non_blank_value() {
         assert_eq!(
-            claude_usage_config_dir(
-                Some("/custom/claude-home".into()),
-                Some(PathBuf::from("/account/dir")),
-            ),
+            claude_usage_config_override(Some(" /custom/claude-home ".into())),
             Some(PathBuf::from("/custom/claude-home")),
         );
     }
 
     #[test]
-    fn claude_usage_config_dir_falls_back_to_account_dir_when_blank() {
-        assert_eq!(
-            claude_usage_config_dir(Some("   ".into()), Some(PathBuf::from("/account/dir"))),
-            Some(PathBuf::from("/account/dir")),
-        );
-        assert_eq!(claude_usage_config_dir(None, None), None);
+    fn claude_usage_config_override_ignores_blank_value() {
+        assert_eq!(claude_usage_config_override(Some("   ".into())), None);
+        assert_eq!(claude_usage_config_override(None), None);
     }
 }

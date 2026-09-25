@@ -1,7 +1,9 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
+import { homeDir } from "../../../../platform/tauri/fs";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import {
+  claudeEffectiveConfigDir,
   loadClaudeConfigDir,
   loadClaudeHooks,
   loadHarnessRuntime,
@@ -493,7 +495,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     buildClaudeSpawnArgs(launch),
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
-    claudeRuntimeEnv(runtime, configDir),
+    await claudeRuntimeEnv(runtime, configDir),
   );
 
   liveByThread.set(input.sessionId, live);
@@ -1645,7 +1647,7 @@ function settingsKeyFor(input: HarnessSessionInput): string {
     context: input.modelSettings?.context,
     runtimeMode: input.runtimeMode,
     hooks: loadClaudeHooks(),
-  })}`;
+  })}:${JSON.stringify([loadHarnessRuntime("claude"), loadClaudeConfigDir()])}`;
 }
 
 function launchOptions(
@@ -1693,22 +1695,29 @@ function launchOptions(
   };
 }
 
-/** CLAUDE_CONFIG_DIR mirrors the isolation `apply_provider_account` sets in
- * Rust for a provider account; a manual override here always wins over it. */
-/** The dedicated CLAUDE_CONFIG_DIR field always wins over a same-named entry
- * in the generic Environment variables list, since it's the one the UI
- * documents as overriding provider-account isolation. */
-export function claudeRuntimeEnv(
+/** Overrides the provider-account isolation `apply_provider_account` sets in
+ * Rust. Claude keys its keychain entry on CLAUDE_SECURESTORAGE_CONFIG_DIR, so
+ * the config dir sets it too, unless the generic list sets it explicitly.
+ * Claude doesn't expand `~`. */
+export async function claudeRuntimeEnv(
   runtime: HarnessRuntimeSettings,
   configDir: string,
-): Record<string, string> | undefined {
-  const trimmedConfigDir = configDir.trim();
+): Promise<Record<string, string> | undefined> {
   const env = harnessRuntimeEnv(runtime) ?? {};
-  if (trimmedConfigDir) {
-    env.CLAUDE_CONFIG_DIR = trimmedConfigDir;
-    env.CLAUDE_SECURESTORAGE_CONFIG_DIR = trimmedConfigDir;
+  const effective = claudeEffectiveConfigDir(runtime, configDir);
+  if (effective) {
+    const dir = await expandHomeDir(effective);
+    env.CLAUDE_CONFIG_DIR = dir;
+    if (configDir.trim() || !env.CLAUDE_SECURESTORAGE_CONFIG_DIR) {
+      env.CLAUDE_SECURESTORAGE_CONFIG_DIR = dir;
+    }
   }
   return Object.keys(env).length > 0 ? env : undefined;
+}
+
+async function expandHomeDir(path: string): Promise<string> {
+  if (path !== "~" && !path.startsWith("~/")) return path;
+  return `${await homeDir()}${path.slice(1)}`;
 }
 
 /** Exported for tests. */
