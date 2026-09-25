@@ -6,6 +6,7 @@ let onStdout: ((line: string) => void) | undefined;
 let onSseEvent: ((event: Record<string, unknown>) => void) | undefined;
 let onSseEnd: ((error?: string) => void) | undefined;
 let sessionMessages: unknown[] = [];
+let openCodeVersion = "opencode 1.14.19";
 const spawnChild = vi.fn(async () => {
   onStdout?.("opencode server listening on http://127.0.0.1:4096");
 });
@@ -17,13 +18,29 @@ const harnessHttp = vi.fn(
     body?: string;
   }): Promise<{ status: number; body: string }> => {
     const url = new URL(input.url);
-    if (input.method === "POST" && url.pathname === "/session") {
-      return { status: 200, body: JSON.stringify({ id: "session_1" }) };
-    }
-    if (input.method === "GET" && url.pathname === "/session/session_1") {
+    if (
+      input.method === "POST" &&
+      (url.pathname === "/session" || url.pathname === "/api/session")
+    ) {
+      const session = { id: "session_1", directory: "/repo" };
       return {
         status: 200,
-        body: JSON.stringify({ id: "session_1", directory: "/repo" }),
+        body: JSON.stringify(
+          url.pathname.startsWith("/api/") ? { data: session } : session,
+        ),
+      };
+    }
+    if (
+      input.method === "GET" &&
+      (url.pathname === "/session/session_1" ||
+        url.pathname === "/api/session/session_1")
+    ) {
+      const session = { id: "session_1", directory: "/repo" };
+      return {
+        status: 200,
+        body: JSON.stringify(
+          url.pathname.startsWith("/api/") ? { data: session } : session,
+        ),
       };
     }
     if (
@@ -38,7 +55,12 @@ const harnessHttp = vi.fn(
 
 vi.mock("../../core/child", () => ({
   closeHarnessSse: async () => undefined,
-  execChild: async () => "opencode 1.14.19",
+  execChild: async (_command: string, args: string[]) =>
+    args[0] !== "service"
+      ? openCodeVersion
+      : args[1] === "get"
+        ? "secret"
+        : "http://127.0.0.1:4096",
   freeHarnessPort: async () => 4096,
   harnessHttp,
   killChild,
@@ -140,6 +162,7 @@ beforeEach(() => {
   onSseEvent = undefined;
   onSseEnd = undefined;
   sessionMessages = [];
+  openCodeVersion = "opencode 1.14.19";
   spawnChild.mockClear();
   killChild.mockClear();
   harnessHttp.mockClear();
@@ -160,6 +183,127 @@ it("reports when OpenCode accepts a turn", async () => {
   idle();
   await done;
   expect(onAccepted).toHaveBeenCalledOnce();
+});
+
+it("uses the v2 API and completes from a v2 event envelope", async () => {
+  openCodeVersion = "opencode v2.0.15";
+  const events: HarnessEvent[] = [];
+  const done = turn(events);
+  await waitFor(
+    () =>
+      harnessHttp.mock.calls.some(
+        ([input]) =>
+          new URL(input.url).pathname === "/api/session/session_1/prompt",
+      ),
+    "v2 prompt",
+  );
+  expect(
+    harnessHttp.mock.calls.map(([input]) => new URL(input.url).pathname),
+  ).toEqual(
+    expect.arrayContaining([
+      "/api/session",
+      "/api/session/session_1/model",
+      "/api/session/session_1/agent",
+      "/api/session/session_1/prompt",
+    ]),
+  );
+  expect(spawnChild).not.toHaveBeenCalled();
+  onSseEvent?.({
+    id: "evt_idle",
+    type: "session.idle",
+    data: { sessionID: "session_1" },
+  });
+  await done;
+  expect(events).toContainEqual({ type: "message.completed" });
+});
+
+it("renders a v2 turn streamed as session step, text, reasoning, and tool events", async () => {
+  openCodeVersion = "opencode v2.0.15";
+  const events: HarnessEvent[] = [];
+  const done = turn(events);
+  await waitFor(
+    () =>
+      harnessHttp.mock.calls.some(
+        ([input]) =>
+          new URL(input.url).pathname === "/api/session/session_1/prompt",
+      ),
+    "v2 prompt",
+  );
+  const sessionID = "session_1";
+  const model = { id: "mimo-v2.6-flash-free", providerID: "opencode" };
+  const send = (type: string, data: Record<string, unknown>) =>
+    onSseEvent?.({ id: `evt_${type}`, type, data: { sessionID, ...data } });
+
+  send("session.execution.started", {});
+  send("session.step.started", { agent: "build", model, assistantMessageID: "msg_a" });
+  send("session.reasoning.started", { assistantMessageID: "msg_a", ordinal: 0 });
+  send("session.reasoning.delta", { assistantMessageID: "msg_a", ordinal: 0, delta: "Plan it." });
+  send("session.tool.input.started", { assistantMessageID: "msg_a", id: "call_1", name: "shell" });
+  send("session.reasoning.ended", { assistantMessageID: "msg_a", ordinal: 0, text: "Plan it." });
+  send("session.tool.called", {
+    assistantMessageID: "msg_a",
+    id: "call_1",
+    input: { command: "echo MONOCODE_TOOL_TEST" },
+  });
+  send("session.tool.success", {
+    assistantMessageID: "msg_a",
+    id: "call_1",
+    content: [{ type: "text", text: "MONOCODE_TOOL_TEST\n" }],
+    metadata: { status: "completed", exit: 0 },
+  });
+  send("session.step.ended", {
+    assistantMessageID: "msg_a",
+    finish: "tool-calls",
+    tokens: { input: 100, output: 5, reasoning: 2, cache: { read: 50, write: 0 } },
+  });
+  send("session.step.started", { agent: "build", model, assistantMessageID: "msg_b" });
+  send("session.text.started", { assistantMessageID: "msg_b", ordinal: 0 });
+  send("session.text.delta", { assistantMessageID: "msg_b", ordinal: 0, delta: "DO" });
+  send("session.text.delta", { assistantMessageID: "msg_b", ordinal: 0, delta: "NE" });
+  send("session.text.ended", { assistantMessageID: "msg_b", ordinal: 0, text: "DONE" });
+  send("session.step.ended", { assistantMessageID: "msg_b", finish: "stop" });
+  send("session.execution.succeeded", {});
+  await done;
+
+  const text = events
+    .filter((event) => event.type === "message.delta")
+    .map((event) => (event as { text: string }).text)
+    .join("");
+  expect(text).toBe("DONE");
+  expect(events).toContainEqual({ type: "reasoning.delta", text: "Plan it." });
+  expect(events).toContainEqual(
+    expect.objectContaining({ type: "tool.started", callId: "call_1", kind: "shell" }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "tool.updated",
+      callId: "call_1",
+      status: "completed",
+      detail: "MONOCODE_TOOL_TEST\n",
+    }),
+  );
+  expect(events).toContainEqual(expect.objectContaining({ type: "context" }));
+  expect(events).toContainEqual({ type: "message.completed" });
+});
+
+it("surfaces a failed v2 execution as a session error", async () => {
+  openCodeVersion = "opencode v2.0.15";
+  const events: HarnessEvent[] = [];
+  const done = turn(events);
+  await waitFor(
+    () =>
+      harnessHttp.mock.calls.some(
+        ([input]) =>
+          new URL(input.url).pathname === "/api/session/session_1/prompt",
+      ),
+    "v2 prompt",
+  );
+  onSseEvent?.({
+    type: "session.execution.failed",
+    data: { sessionID: "session_1", error: { type: "provider", message: "Rate limited" } },
+  });
+  await done.catch(() => undefined);
+  expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
 });
 
 describe("OpenCode subagent trails", () => {

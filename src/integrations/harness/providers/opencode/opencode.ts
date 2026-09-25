@@ -18,8 +18,8 @@ import {
 import {
   appendOpenCodeAssistantTextDelta,
   asRecord,
+  assertSupportedOpenCodeVersion,
   buildOpenCodePermissionRules,
-  compareSemver,
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
   detailFromToolPart,
@@ -27,7 +27,6 @@ import {
   isOpenCodeNotFound,
   openCodeChildSessionId,
   mergeOpenCodeAssistantText,
-  MINIMUM_OPENCODE_VERSION,
   KNOWN_HIDDEN_AGENTS,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
@@ -40,8 +39,10 @@ import {
   toOpenCodePromptParts,
   toOpenCodePermissionReply,
   toolKindFromName,
+  type OpenCodeApiGeneration,
   type OpenCodePart,
 } from "./opencodeProtocol";
+import { resolveOpenCodeV2Service } from "./opencodeService";
 import {
   composeToolTitle,
   extractShellCommand,
@@ -266,6 +267,7 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
     agent: input.modelSettings?.agent,
     variant: input.modelSettings?.variant,
     parts,
+    delivery: "steer",
   });
 }
 
@@ -372,53 +374,67 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const { path } = await resolveOpenCodeBinaryImpl();
-  await assertOpenCodeVersion(path, input.cwd);
+  const generation = await assertOpenCodeVersion(path, input.cwd);
 
   const liveRef: { current: Live | null } = { current: null };
-  let serverUrl = "";
+  const service =
+    generation === "v2"
+      ? await resolveOpenCodeV2Service(path, input.cwd)
+      : undefined;
+  let serverUrl = service?.url ?? "";
   let serverExited: number | null | undefined;
 
-  watchChild(
-    input.sessionId,
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-    (code) => {
-      serverExited = code;
-      liveByThread.delete(input.sessionId);
-      const live = liveRef.current;
-      if (!live?.muteUpdates) {
-        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
-      }
-      if (live) live.muteUpdates = true;
-      live?.turnFailed?.(new Error("OpenCode server exited"));
-      if (live) {
-        live.turnDone = null;
-        live.turnFailed = null;
-      }
-    },
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-  );
+  if (generation === "v1") {
+    watchChild(
+      input.sessionId,
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+      (code) => {
+        serverExited = code;
+        liveByThread.delete(input.sessionId);
+        const live = liveRef.current;
+        if (!live?.muteUpdates) {
+          (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+        }
+        if (live) live.muteUpdates = true;
+        live?.turnFailed?.(new Error("OpenCode server exited"));
+        if (live) {
+          live.turnDone = null;
+          live.turnFailed = null;
+        }
+      },
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+    );
 
-  const port = await freeHarnessPort();
-  await spawnChild(
-    input.sessionId,
-    path,
-    ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
-    input.cwd,
-  );
+    const port = await freeHarnessPort();
+    await spawnChild(
+      input.sessionId,
+      path,
+      ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
+      input.cwd,
+    );
+  }
 
   try {
-    const url = await waitForServerUrl(
-      () => serverUrl,
-      () => serverExited,
-      SERVER_TIMEOUT_MS,
+    const url =
+      generation === "v2"
+        ? serverUrl
+        : await waitForServerUrl(
+            () => serverUrl,
+            () => serverExited,
+            SERVER_TIMEOUT_MS,
+          );
+    const client = new OpenCodeClient(
+      url,
+      input.cwd,
+      generation,
+      service?.password,
     );
-    const client = new OpenCodeClient(url, input.cwd);
     const openCodeSession = await resolveSession(client, {
       resume: canResume ? resume : undefined,
       runtimeMode: input.runtimeMode,
@@ -799,6 +815,15 @@ async function handleEvent(
         break;
       }
       if (statusType === "idle" && live.activeTurn) {
+        finishActiveTurn(live, [
+          { type: "message.completed" },
+          { type: "reasoning.completed" },
+        ]);
+      }
+      break;
+    }
+    case "session.idle": {
+      if (live.activeTurn) {
         finishActiveTurn(live, [
           { type: "message.completed" },
           { type: "reasoning.completed" },
@@ -1317,19 +1342,13 @@ function unsupportedFileMediaType(error: unknown): string | undefined {
     ?.toLowerCase();
 }
 
-async function assertOpenCodeVersion(path: string, cwd: string): Promise<void> {
+async function assertOpenCodeVersion(
+  path: string,
+  cwd: string,
+): Promise<OpenCodeApiGeneration> {
   const output = await execChild(path, ["--version"], cwd).catch(() => "");
   const version = parseOpenCodeVersion(output);
-  if (!version) {
-    throw new Error(
-      `Unable to determine OpenCode version. MonoCode requires v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
-  }
-  if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
-    throw new Error(
-      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
-  }
+  return assertSupportedOpenCodeVersion(version);
 }
 
 function waitForServerUrl(

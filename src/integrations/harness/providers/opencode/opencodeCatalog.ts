@@ -6,15 +6,18 @@ import {
   type ModelSettingChoice,
 } from "../../../../features/sessions/model/models";
 import { execChild, resolveOpenCodeBinary } from "../../core/child";
+import { OpenCodeClient } from "./opencodeClient";
+import { resolveOpenCodeV2Service } from "./opencodeService";
 import {
-  compareSemver,
+  asRecord,
+  assertSupportedOpenCodeVersion,
   inferDefaultAgent,
   inferDefaultVariant,
   KNOWN_HIDDEN_AGENTS,
-  MINIMUM_OPENCODE_VERSION,
   openCodeVariantLabel,
   parseOpenCodeVersion,
   sortOpenCodeVariants,
+  stringField,
   titleCaseSlug,
 } from "./opencodeProtocol";
 
@@ -70,15 +73,9 @@ async function discoverOpenCodeModels(): Promise<AgentModel[]> {
   const cwd = await homeDir();
   const versionOut = await execChild(path, ["--version"], cwd);
   const version = parseOpenCodeVersion(versionOut);
-  if (!version) {
-    throw new Error(
-      `Unable to determine OpenCode version. MonoCode requires v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
-  }
-  if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
-    throw new Error(
-      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
+  const generation = assertSupportedOpenCodeVersion(version);
+  if (generation === "v2") {
+    return discoverOpenCodeV2Models(path, cwd);
   }
 
   const modelsOut = await execChild(path, ["models", "--verbose"], cwd);
@@ -91,6 +88,110 @@ async function discoverOpenCodeModels(): Promise<AgentModel[]> {
     console.debug("[monocode] opencode agents", error);
   }
   return flattenOpenCodeModels(parsed, agents);
+}
+
+async function discoverOpenCodeV2Models(
+  path: string,
+  cwd: string,
+): Promise<AgentModel[]> {
+  const service = await resolveOpenCodeV2Service(path, cwd);
+  // Catalog requests stay on the server's default location: location-scoped
+  // requests return an empty model snapshot for some projects on 2.x and a
+  // 500 for directories the server has not registered.
+  const client = new OpenCodeClient(service.url, "", "v2", service.password);
+  const [rawModels, rawProviders, rawAgents] = await Promise.all([
+    client.listModels(),
+    client.listProviders(),
+    // Agent discovery is optional, as in the v1 path: its failure must not
+    // lose models and providers.
+    client.listAgents().catch(() => []),
+  ]);
+  return flattenOpenCodeModels(
+    parseV2Catalog(rawModels, rawProviders),
+    parseV2Agents(rawAgents),
+  );
+}
+
+export function parseV2Catalog(
+  rawModels: unknown[],
+  rawProviders: unknown[],
+): {
+  providers: Map<string, ParsedProvider>;
+  connected: string[];
+} {
+  const providerNames = new Map<string, string>();
+  for (const value of rawProviders) {
+    const provider = asRecord(value);
+    const id = stringField(provider, "id");
+    if (id) {
+      providerNames.set(
+        id,
+        stringField(provider, "name") ?? openCodeProviderName(id),
+      );
+    }
+  }
+  const providers = new Map<string, ParsedProvider>();
+  for (const value of rawModels) {
+    const model = asRecord(value);
+    if (!model) continue;
+    const providerID = stringField(model, "providerID");
+    // `id` is the selectable name and can be an alias that differs from the
+    // upstream `modelID` (e.g. id "openai/coding", modelID "gpt-5.2").
+    const rawId = stringField(model, "id") ?? stringField(model, "modelID");
+    const modelID =
+      providerID && rawId?.startsWith(`${providerID}/`)
+        ? rawId.slice(providerID.length + 1)
+        : rawId;
+    if (!providerID || !modelID || model?.enabled === false) continue;
+    let provider = providers.get(providerID);
+    if (!provider) {
+      provider = {
+        id: providerID,
+        name: providerNames.get(providerID) ?? openCodeProviderName(providerID),
+        models: {},
+      };
+      providers.set(providerID, provider);
+    }
+    const variants = Array.isArray(model.variants)
+      ? Object.fromEntries(
+          model.variants.flatMap((variant) => {
+            const id = stringField(asRecord(variant), "id");
+            return id ? [[id, variant]] : [];
+          }),
+        )
+      : (asRecord(model.variants) ?? {});
+    const limit = asRecord(model.limit);
+    provider.models[modelID] = {
+      id: modelID,
+      name: stringField(model, "name"),
+      variants,
+      limit: limit
+        ? {
+            context:
+              typeof limit.context === "number" ? limit.context : undefined,
+            input: typeof limit.input === "number" ? limit.input : undefined,
+            output: typeof limit.output === "number" ? limit.output : undefined,
+          }
+        : undefined,
+    };
+  }
+  return { providers, connected: [...providers.keys()] };
+}
+
+export function parseV2Agents(rawAgents: unknown[]): OpenCodeAgent[] {
+  return rawAgents.flatMap((value) => {
+    const agent = asRecord(value);
+    // v2 sessions resolve agents by `id` ("build"); `name` is a display label ("Build").
+    const name = stringField(agent, "id") ?? stringField(agent, "name");
+    if (!name) return [];
+    return [
+      {
+        name,
+        mode: stringField(agent, "mode") ?? "all",
+        hidden: agent?.hidden === true || KNOWN_HIDDEN_AGENTS.has(name),
+      },
+    ];
+  });
 }
 
 export function parseModelsCliOutput(stdout: string): {

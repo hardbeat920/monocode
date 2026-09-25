@@ -3149,6 +3149,14 @@ function ProviderRow({
           label={`${HARNESS_TITLE[harness]} model`}
           value={current.id}
           onChange={(next) => onModelChange(harness, next)}
+          onOpen={() => {
+            // Opening the dropdown is an explicit refresh: fallbacks keep
+            // `models` non-empty, and routine refreshes skip once a live
+            // catalog exists, so force this one past that skip.
+            if (available) {
+              void refreshHarnessCatalogs([harness], { force: true });
+            }
+          }}
           options={models.map((item) => ({
             value: item.id,
             label: item.name,
@@ -3679,11 +3687,13 @@ function Select({
   value,
   options,
   onChange,
+  onOpen,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
@@ -3709,6 +3719,11 @@ function Select({
       ),
     );
   }, [open, value, options]);
+
+  useEffect(() => {
+    if (open) onOpen?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
