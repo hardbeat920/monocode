@@ -623,6 +623,32 @@ import {
 /** How long a hidden idle session stays attached after it leaves every tab. */
 const SESSION_DETACH_DELAY_MS = 250;
 
+type ZoomAction = "zoom-in" | "zoom-out" | "zoom-reset";
+
+const ZOOM_BY_COMMAND: Record<string, ZoomAction> = {
+  "View: Zoom In": "zoom-in",
+  "View: Zoom Out": "zoom-out",
+  "View: Reset Zoom": "zoom-reset",
+};
+
+const ZOOM_BY_ACTION = new Map<string, string>(
+  Object.entries(ZOOM_BY_COMMAND).map(([command, action]) => [action, command]),
+);
+
+/** The browser-standard zoom chords, which the webview owns instead of the native menu. */
+function defaultZoomAction(event: {
+  key: string;
+  code: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  isComposing: boolean;
+}): ZoomAction | null {
+  if (!event.metaKey && !event.ctrlKey) return null;
+  if (event.altKey || event.isComposing) return null;
+  return uiScaleCommand(event);
+}
+
 type LinkedWorkItemPanelState = {
   item: LinkedWorkItem;
   sessionId: string;
@@ -9656,40 +9682,28 @@ export default function App({
       const customCommand = e.isComposing ? null : matchCustomKeybinding(e);
       const pressed = (command: string, defaultMatch: boolean) =>
         keybindingPressed(command, e, defaultMatch);
-      // Browser-standard UI zoom. Runs before tabCommand, even in inputs and
-      // the terminal, so Ctrl/Cmd + - 0 behave like a browser.
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.isComposing) {
-        const defaultZoom = uiScaleCommand(e);
-        const zoom = customCommand
-          ? {
-              "View: Zoom In": "zoom-in",
-              "View: Zoom Out": "zoom-out",
-              "View: Reset Zoom": "zoom-reset",
-            }[customCommand]
-          : defaultZoom;
-        const binding =
-          zoom === "zoom-in"
-            ? "View: Zoom In"
-            : zoom === "zoom-out"
-              ? "View: Zoom Out"
-              : zoom === "zoom-reset"
-                ? "View: Reset Zoom"
-                : null;
-        if (binding && pressed(binding, zoom === defaultZoom)) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (zoom === "zoom-in") {
-            const next = saveUiScale(zoomInUiScale(loadUiScale()));
-            void applyUiScale(next);
-          } else if (zoom === "zoom-out") {
-            const next = saveUiScale(zoomOutUiScale(loadUiScale()));
-            void applyUiScale(next);
-          } else {
-            saveUiScale(UI_SCALE_DEFAULT);
-            void applyUiScale(UI_SCALE_DEFAULT);
-          }
-          return;
+      // A rebound zoom chord may be Option-only, so resolve it before the
+      // Cmd/Ctrl guard that only the browser-standard defaults need.
+      const customZoom = customCommand
+        ? (ZOOM_BY_COMMAND[customCommand] ?? null)
+        : null;
+      const defaultZoom = customZoom ? null : defaultZoomAction(e);
+      const zoom = customZoom ?? defaultZoom;
+      const zoomBinding = zoom ? ZOOM_BY_ACTION.get(zoom) : null;
+      if (zoomBinding && pressed(zoomBinding, zoom === defaultZoom)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (zoom === "zoom-in") {
+          const next = saveUiScale(zoomInUiScale(loadUiScale()));
+          void applyUiScale(next);
+        } else if (zoom === "zoom-out") {
+          const next = saveUiScale(zoomOutUiScale(loadUiScale()));
+          void applyUiScale(next);
+        } else {
+          saveUiScale(UI_SCALE_DEFAULT);
+          void applyUiScale(UI_SCALE_DEFAULT);
         }
+        return;
       }
       const cmd = customCommand
         ? tabCommandForKeybinding(customCommand, e)
