@@ -7,7 +7,10 @@ import {
   watchChild,
   writeChild,
 } from "../../core/child";
-import { resolveHarnessBinary } from "../../core/runtime";
+import {
+  harnessRuntimeExtraArgs,
+  resolveHarnessBinary,
+} from "../../core/runtime";
 import {
   loadClaudeConfigDir,
   loadHarnessRuntime,
@@ -183,6 +186,7 @@ async function startLive(
       buildClaudeSpawnArgs({
         isolated: true,
         model: pickTextModel(),
+        extraArgs: harnessRuntimeExtraArgs(runtime),
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },

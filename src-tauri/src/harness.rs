@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -403,9 +403,12 @@ pub fn harness_antigravity_args() -> Vec<String> {
     antigravity_args()
 }
 
+static RESOLVED_OVERRIDES: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
 /// Validates a user-set binary override the same way the default resolvers
 /// validate their candidates: a path must name an executable file, and a bare
-/// name must resolve on the GUI search path.
+/// name must resolve on the GUI search path. A validated path becomes eligible
+/// for `harness_exec`.
 #[tauri::command(async)]
 pub fn harness_resolve_override(path: String) -> Result<String, String> {
     let trimmed = path.trim();
@@ -414,10 +417,13 @@ pub fn harness_resolve_override(path: String) -> Result<String, String> {
         existing_binary(expanded)
     } else {
         resolve_gui_binary(trimmed)
-    };
-    resolved
-        .map(|path| path.to_string_lossy().into_owned())
-        .ok_or_else(|| format!("Binary override is not an executable file: {trimmed}"))
+    }
+    .ok_or_else(|| format!("Binary override is not an executable file: {trimmed}"))?;
+    RESOLVED_OVERRIDES
+        .lock()
+        .map_err(|_| "Resolved override registry lock poisoned".to_string())?
+        .insert(resolved.clone());
+    Ok(resolved.to_string_lossy().into_owned())
 }
 
 /// Bind an ephemeral loopback port for `opencode serve`.
@@ -899,24 +905,28 @@ fn exec_args_allowed(args: &[String]) -> bool {
         .any(|a| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y))
 }
 
-/// Must be a path a resolver would hand back, not an arbitrary binary
-/// that merely shares a file name.
+/// Must be a path a resolver or `harness_resolve_override` handed back, not
+/// an arbitrary binary that merely shares a file name.
 fn is_resolved_harness_binary(command: &str) -> bool {
     let path = PathBuf::from(command);
-    [
-        resolve_cursor_agent(),
-        resolve_codex(),
-        resolve_opencode(),
-        resolve_claude(),
-        resolve_pi(),
-        resolve_omp(),
-        resolve_fx(),
-        resolve_grok(),
-        resolve_antigravity(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|resolved| resolved == path)
+    let overridden = RESOLVED_OVERRIDES
+        .lock()
+        .is_ok_and(|overrides| overrides.contains(&path));
+    overridden
+        || [
+            resolve_cursor_agent(),
+            resolve_codex(),
+            resolve_opencode(),
+            resolve_claude(),
+            resolve_pi(),
+            resolve_omp(),
+            resolve_fx(),
+            resolve_grok(),
+            resolve_antigravity(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|resolved| resolved == path)
 }
 
 /// One-shot capture of stdout (used for `cursor-agent --list-models`).
