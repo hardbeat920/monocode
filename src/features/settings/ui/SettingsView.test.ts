@@ -557,6 +557,42 @@ describe("settings search", () => {
     expect(input.value).toBe("Ctrl+Shift+M");
   });
 
+  it("lets Tab leave the recorder and keeps Cmd+Delete recordable", async () => {
+    await render("keybindings");
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Change App: Search shortcut"]',
+    )!;
+
+    await act(async () => input.click());
+    await act(async () =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "Tab",
+          key: "Tab",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(container.textContent).not.toContain("Del disables");
+
+    await act(async () => input.click());
+    await act(async () =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "Delete",
+          key: "Delete",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(localStorage.getItem("monocode.keybindingOverrides")).toBe(
+      '{"App: Search":{"shortcut":"Command+Delete"}}',
+    );
+  });
+
   it("surfaces a storage failure instead of silently dropping the change", async () => {
     await render("keybindings");
     (

@@ -267,7 +267,9 @@ function WorkspaceModePicker({
           disabled={!enabled}
           title={shortcut ? `Workspace: ${label} (${shortcut})` : undefined}
           aria-label={`Workspace ${label}`}
-          aria-keyshortcuts={shortcut ?? undefined}
+          aria-keyshortcuts={
+            shortcut ? "Meta+Shift+G Control+Shift+G" : undefined
+          }
           aria-haspopup="dialog"
           aria-expanded={open}
           onMouseDown={(event) => event.preventDefault()}

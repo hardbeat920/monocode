@@ -2412,6 +2412,13 @@ function ShortcutEditor({
   useEffect(() => {
     if (!recording) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      const bare =
+        !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      // An unmodified Tab leaves the recorder instead of trapping focus.
+      if (bare && event.code === "Tab") {
+        setRecording(false);
+        return;
+      }
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.code === "Escape") {
@@ -2419,7 +2426,8 @@ function ShortcutEditor({
         setError(null);
         return;
       }
-      if (event.code === "Backspace" || event.code === "Delete") {
+      // Delete disables, but only on its own so Cmd+Delete still records.
+      if (bare && (event.code === "Backspace" || event.code === "Delete")) {
         void run(onDisable);
         return;
       }
@@ -2473,14 +2481,16 @@ function ShortcutEditor({
           readOnly
           aria-label={`Change ${name} shortcut`}
           data-shortcut-recorder-active={recording ? "true" : undefined}
-          disabled={busy}
+          aria-busy={busy || undefined}
           value={
             recording || busy ? preview || "Record…" : (display ?? "Disabled")
           }
           onFocus={beginRecording}
           onClick={beginRecording}
           onBlur={() => setRecording(false)}
-          className={`h-6 w-28 shrink-0 truncate rounded-md border bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none outline-none focus:border-accent disabled:opacity-50 ${
+          className={`h-6 w-28 shrink-0 truncate rounded-md border bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none outline-none focus:border-accent ${
+            busy ? "opacity-50" : ""
+          } ${
             display === null
               ? "border-dashed border-content/15 text-content/35"
               : "border-content/15 text-content/80 hover:bg-content/10"
@@ -2507,7 +2517,10 @@ function ShortcutEditor({
         </p>
       ) : null}
       {error ? (
-        <p className="absolute top-full left-0 z-40 mt-1.5 w-max max-w-64 rounded-md border border-content/10 bg-background-base/95 px-2 py-1 text-[11px] whitespace-nowrap text-red-400 shadow-lg">
+        <p
+          role="alert"
+          className="absolute top-full left-0 z-40 mt-1.5 w-max max-w-64 rounded-md border border-content/10 bg-background-base/95 px-2 py-1 text-[11px] whitespace-nowrap text-red-400 shadow-lg"
+        >
           {error}
         </p>
       ) : null}
@@ -2521,11 +2534,10 @@ function QuickComposerShortcutEditor() {
   const apply = async (next: string) => {
     if (!isGlobalShortcut(next))
       throw new Error("Quick Composer needs ⌘ or Ctrl as a global hotkey");
-    await setQuickComposerShortcut(true, next);
-    saveQuickComposerEnabled(true);
+    // Recording while the feature is off must not silently switch it back on.
+    if (enabled) await setQuickComposerShortcut(true, next);
     saveQuickComposerShortcut(next);
     setShortcut(next);
-    setEnabled(true);
   };
   return (
     <ShortcutEditor
