@@ -301,6 +301,7 @@ import {
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../model/sounds";
 import { setQuickComposerShortcut } from "../../quick-composer/model/quickComposer";
 import {
+  isGlobalShortcut,
   QUICK_COMPOSER_DEFAULT_SHORTCUT,
   quickComposerShortcutLabel,
   quickComposerShortcutPreview,
@@ -2518,6 +2519,8 @@ function QuickComposerShortcutEditor() {
   const [shortcut, setShortcut] = useState(loadQuickComposerShortcut);
   const [enabled, setEnabled] = useState(loadQuickComposerEnabled);
   const apply = async (next: string) => {
+    if (!isGlobalShortcut(next))
+      throw new Error("Quick Composer needs ⌘ or Ctrl as a global hotkey");
     await setQuickComposerShortcut(true, next);
     saveQuickComposerEnabled(true);
     saveQuickComposerShortcut(next);

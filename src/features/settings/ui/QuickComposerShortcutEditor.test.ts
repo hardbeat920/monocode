@@ -175,6 +175,29 @@ it("accepts Control plus one key", async () => {
   expect(input.value).toBe("⌃Y");
 });
 
+it("refuses an Alt-only global shortcut without registering it", async () => {
+  await render();
+  vi.mocked(invoke).mockClear();
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Change quick composer shortcut"]',
+  )!;
+  await act(async () => input.click());
+  await act(async () =>
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "KeyK",
+        key: "k",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(container.textContent).toContain("Quick Composer needs");
+  expect(invoke).not.toHaveBeenCalled();
+  expect(data.has("monocode.quickComposerShortcut")).toBe(false);
+});
+
 it("shows pressed keys without an error and Escape cancels recording", async () => {
   await render();
   const input = container.querySelector<HTMLInputElement>(

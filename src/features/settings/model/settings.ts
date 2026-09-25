@@ -7,7 +7,7 @@ import {
 } from "../../../platform/tauri/platform";
 import {
   canonicalShortcut,
-  isQuickComposerShortcut,
+  isGlobalShortcut,
   QUICK_COMPOSER_DEFAULT_SHORTCUT,
   quickComposerShortcutLabel,
   shortcutFromKeyEvent,
@@ -716,7 +716,7 @@ export function saveQuickComposerEnabled(value: boolean) {
 export function loadQuickComposerShortcut(): string {
   try {
     const value = localStorage.getItem(QUICK_COMPOSER_SHORTCUT_KEY);
-    return value && isQuickComposerShortcut(value)
+    return value && isGlobalShortcut(value)
       ? value
       : QUICK_COMPOSER_DEFAULT_SHORTCUT;
   } catch {
@@ -725,7 +725,7 @@ export function loadQuickComposerShortcut(): string {
 }
 
 export function saveQuickComposerShortcut(value: string) {
-  if (!isQuickComposerShortcut(value)) return;
+  if (!isGlobalShortcut(value)) return;
   try {
     localStorage.setItem(QUICK_COMPOSER_SHORTCUT_KEY, value);
   } catch {

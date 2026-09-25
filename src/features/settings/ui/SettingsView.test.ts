@@ -557,6 +557,30 @@ describe("settings search", () => {
     expect(input.value).toBe("Ctrl+Shift+M");
   });
 
+  it("records an Alt shortcut on a keybinding row", async () => {
+    await render("keybindings");
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Change App: Search shortcut"]',
+    )!;
+    await act(async () => input.click());
+    await act(async () =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyM",
+          key: "m",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+
+    expect(localStorage.getItem("monocode.keybindingOverrides")).toBe(
+      '{"App: Search":{"shortcut":"Option+KeyM"}}',
+    );
+    expect(input.value).toBe("Alt+M");
+  });
+
   it("disables and restores an individual keybinding", async () => {
     await render("keybindings");
     const input = container.querySelector<HTMLInputElement>(

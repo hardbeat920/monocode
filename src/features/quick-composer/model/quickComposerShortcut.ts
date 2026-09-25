@@ -45,12 +45,14 @@ function supportedCode(code: string): boolean {
   );
 }
 
-export function isQuickComposerShortcut(value: string): boolean {
+const PRIMARY_MODIFIERS = ["Command", "Control", "Option"];
+
+/** Any chord with at least one of Command, Control or Option. */
+export function isShortcut(value: string): boolean {
   const parts = value.split("+");
   const code = parts.pop();
   if (!code || !supportedCode(code)) return false;
-  if (!parts.some((part) => ["Command", "Control"].includes(part)))
-    return false;
+  if (!parts.some((part) => PRIMARY_MODIFIERS.includes(part))) return false;
   return (
     parts.length > 0 &&
     parts.length <= 4 &&
@@ -61,11 +63,22 @@ export function isQuickComposerShortcut(value: string): boolean {
   );
 }
 
+/** An OS-wide hotkey must keep a Command or Control modifier. */
+export function isGlobalShortcut(value: string): boolean {
+  return (
+    isShortcut(value) &&
+    value
+      .split("+")
+      .slice(0, -1)
+      .some((part) => ["Command", "Control"].includes(part))
+  );
+}
+
 const MODIFIER_ORDER = ["Command", "Control", "Option", "Shift"] as const;
 
 /** Normalises modifier order so a stored chord always matches what a key press produces. */
 export function canonicalShortcut(value: string): string | null {
-  if (!isQuickComposerShortcut(value)) return null;
+  if (!isShortcut(value)) return null;
   const parts = value.split("+");
   const code = parts.pop() as string;
   return [...MODIFIER_ORDER.filter((part) => parts.includes(part)), code].join(
@@ -83,7 +96,7 @@ export function shortcutFromKeyEvent(
     event.altKey && "Option",
     event.shiftKey && "Shift",
   ].filter(Boolean);
-  if (!event.metaKey && !event.ctrlKey) return null;
+  if (!event.metaKey && !event.ctrlKey && !event.altKey) return null;
   return [...modifiers, event.code].join("+");
 }
 
