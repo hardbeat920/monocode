@@ -7,7 +7,7 @@ use tauri::AppHandle;
 
 use crate::dirs_home;
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderAccountIdentity {
     pub email: Option<String>,
@@ -64,15 +64,20 @@ fn claude_identity(dir: Option<PathBuf>) -> Option<ProviderAccountIdentity> {
         Some(dir) => dir.join(".claude.json"),
         None => home()?.join(".claude.json"),
     };
-    let account = read_json(&path)?.get("oauthAccount")?.clone();
+    parse_claude_identity(&read_json(&path)?)
+}
+
+/// Parse the `oauthAccount` block Claude Code writes to `.claude.json`.
+fn parse_claude_identity(config: &Value) -> Option<ProviderAccountIdentity> {
+    let account = config.get("oauthAccount")?;
     // organizationType is e.g. "claude_max", "claude_pro", "claude_team".
-    let plan = text(&account, "organizationType")
+    let plan = text(account, "organizationType")
         .map(|kind| capitalize(kind.strip_prefix("claude_").unwrap_or(&kind)));
     Some(ProviderAccountIdentity {
-        email: text(&account, "emailAddress"),
-        name: text(&account, "displayName").or_else(|| text(&account, "fullName")),
+        email: text(account, "emailAddress"),
+        name: text(account, "displayName").or_else(|| text(account, "fullName")),
         plan,
-        organization: text(&account, "organizationName"),
+        organization: text(account, "organizationName"),
     })
 }
 
@@ -83,7 +88,11 @@ fn codex_identity(dir: Option<PathBuf>) -> Option<ProviderAccountIdentity> {
             .map(PathBuf::from)
             .or_else(|| home().map(|home| home.join(".codex")))?,
     };
-    let auth = read_json(&dir.join("auth.json"))?;
+    parse_codex_identity(&read_json(&dir.join("auth.json"))?)
+}
+
+/// Parse the claims of the `id_token` in Codex's `auth.json`.
+fn parse_codex_identity(auth: &Value) -> Option<ProviderAccountIdentity> {
     let id_token = auth.get("tokens")?.get("id_token")?.as_str()?;
     let payload = id_token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -100,11 +109,130 @@ fn codex_identity(dir: Option<PathBuf>) -> Option<ProviderAccountIdentity> {
         })
         .and_then(|org| text(org, "title"));
     Some(ProviderAccountIdentity {
-        email: text(&claims, "email"),
+        email: text(&claims, "email").or_else(|| {
+            claims
+                .get("https://api.openai.com/profile")
+                .and_then(|profile| text(profile, "email"))
+        }),
         name: text(&claims, "name"),
         plan: openai
             .and_then(|auth| text(auth, "chatgpt_plan_type"))
             .map(|plan| capitalize(&plan)),
         organization,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn identity(
+        email: Option<&str>,
+        name: Option<&str>,
+        plan: Option<&str>,
+        organization: Option<&str>,
+    ) -> Option<ProviderAccountIdentity> {
+        Some(ProviderAccountIdentity {
+            email: email.map(String::from),
+            name: name.map(String::from),
+            plan: plan.map(String::from),
+            organization: organization.map(String::from),
+        })
+    }
+
+    fn codex_auth(claims: Value) -> Value {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&claims).unwrap());
+        json!({ "tokens": { "id_token": format!("header.{payload}.signature") } })
+    }
+
+    #[test]
+    fn claude_reads_oauth_account() {
+        let config = json!({
+            "oauthAccount": {
+                "emailAddress": "ada@example.com",
+                "displayName": "Ada",
+                "fullName": "Ada Lovelace",
+                "organizationType": "claude_team",
+                "organizationName": "Acme"
+            }
+        });
+        assert_eq!(
+            parse_claude_identity(&config),
+            identity(
+                Some("ada@example.com"),
+                Some("Ada"),
+                Some("Team"),
+                Some("Acme")
+            )
+        );
+    }
+
+    #[test]
+    fn claude_falls_back_to_full_name_and_keeps_missing_email_optional() {
+        let config = json!({
+            "oauthAccount": { "fullName": "Ada Lovelace", "organizationType": "claude_max" }
+        });
+        assert_eq!(
+            parse_claude_identity(&config),
+            identity(None, Some("Ada Lovelace"), Some("Max"), None)
+        );
+    }
+
+    #[test]
+    fn claude_without_oauth_account_is_signed_out() {
+        assert_eq!(parse_claude_identity(&json!({ "numStartups": 3 })), None);
+    }
+
+    #[test]
+    fn codex_reads_id_token_claims() {
+        let auth = codex_auth(json!({
+            "email": "ada@example.com",
+            "name": "Ada",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "plus",
+                "organizations": [
+                    { "title": "Other", "is_default": false },
+                    { "title": "Personal", "is_default": true }
+                ]
+            }
+        }));
+        assert_eq!(
+            parse_codex_identity(&auth),
+            identity(
+                Some("ada@example.com"),
+                Some("Ada"),
+                Some("Plus"),
+                Some("Personal")
+            )
+        );
+    }
+
+    #[test]
+    fn codex_falls_back_to_namespaced_profile_email() {
+        let auth = codex_auth(json!({
+            "https://api.openai.com/profile": { "email": "ada@example.com" }
+        }));
+        assert_eq!(
+            parse_codex_identity(&auth),
+            identity(Some("ada@example.com"), None, None, None)
+        );
+    }
+
+    #[test]
+    fn codex_rejects_malformed_tokens() {
+        let token = |id_token: &str| json!({ "tokens": { "id_token": id_token } });
+        assert_eq!(parse_codex_identity(&token("no-dots")), None);
+        assert_eq!(parse_codex_identity(&token("header.!!!.signature")), None);
+        let not_json = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("not json");
+        assert_eq!(
+            parse_codex_identity(&token(&format!("h.{not_json}.s"))),
+            None
+        );
+        assert_eq!(
+            parse_codex_identity(&json!({ "OPENAI_API_KEY": "sk-x" })),
+            None
+        );
+    }
 }
