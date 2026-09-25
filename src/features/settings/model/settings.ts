@@ -1066,28 +1066,42 @@ function validateShortcut(command: string, shortcut: string): string {
   return canonical;
 }
 
+let cacheStorage: Storage | null = null;
+let cacheRaw: string | null = null;
+let cacheValue: KeybindingOverrides = {};
+
+function parseKeybindingOverrides(raw: string | null): KeybindingOverrides {
+  const value = JSON.parse(raw ?? "{}");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const next: KeybindingOverrides = {};
+  for (const [command, entry] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (!VALID_COMMANDS.has(command) || !entry || typeof entry !== "object")
+      continue;
+    const override = entry as { disabled?: unknown; shortcut?: unknown };
+    const disabled = override.disabled === true;
+    const shortcut =
+      typeof override.shortcut === "string"
+        ? (canonicalShortcut(override.shortcut) ?? undefined)
+        : undefined;
+    if (shortcut) next[command] = { shortcut };
+    else if (disabled) next[command] = { disabled: true };
+  }
+  return next;
+}
+
+/** Cached per raw value: this runs several times on every keydown. Returns a fresh object. */
 export function loadKeybindingOverrides(): KeybindingOverrides {
   try {
-    const value = JSON.parse(
-      localStorage.getItem(KEYBINDING_OVERRIDES_KEY) ?? "{}",
-    );
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    const next: KeybindingOverrides = {};
-    for (const [command, entry] of Object.entries(
-      value as Record<string, unknown>,
-    )) {
-      if (!VALID_COMMANDS.has(command) || !entry || typeof entry !== "object")
-        continue;
-      const override = entry as { disabled?: unknown; shortcut?: unknown };
-      const disabled = override.disabled === true;
-      const shortcut =
-        typeof override.shortcut === "string"
-          ? (canonicalShortcut(override.shortcut) ?? undefined)
-          : undefined;
-      if (shortcut) next[command] = { shortcut };
-      else if (disabled) next[command] = { disabled: true };
-    }
-    return next;
+    const storage = localStorage;
+    const raw = storage.getItem(KEYBINDING_OVERRIDES_KEY);
+    if (cacheStorage === storage && cacheRaw === raw) return { ...cacheValue };
+    const next = parseKeybindingOverrides(raw);
+    cacheStorage = storage;
+    cacheRaw = raw;
+    cacheValue = next;
+    return { ...next };
   } catch {
     return {};
   }

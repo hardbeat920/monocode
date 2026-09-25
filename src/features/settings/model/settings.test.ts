@@ -41,6 +41,7 @@ import {
   saveLiveAgentsEnabled,
   saveNotesEnabled,
   saveKeybindingOverride,
+  type KeybindingOverride,
   saveQuickComposerShortcut,
   saveTabAnimationsEnabled,
 } from "./settings";
@@ -238,6 +239,15 @@ describe("keybinding overrides", () => {
 
     expect(keybindingPressed("App: Search", prototyped, false)).toBe(true);
     expect(matchCustomKeybinding(prototyped)).toBe("App: Search");
+  });
+
+  it("serves a cached value without letting callers mutate it", () => {
+    saveKeybindingOverride("App: Search", { shortcut: "Command+KeyY" });
+    const first = loadKeybindingOverrides();
+    (first as Record<string, KeybindingOverride>)["App: Go to File"] = {
+      disabled: true,
+    };
+    expect(loadKeybindingOverrides()["App: Go to File"]).toBeUndefined();
   });
 
   it("disables a shortcut and restores the default", () => {
