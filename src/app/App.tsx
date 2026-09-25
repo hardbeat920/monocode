@@ -9813,11 +9813,10 @@ export default function App({
       }
       const mod = e.metaKey || e.ctrlKey;
       if (
-        mod &&
-        !e.altKey &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "n" &&
-        pressed("App: New Window", true)
+        pressed(
+          "App: New Window",
+          mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "n",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9825,11 +9824,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        !e.altKey &&
-        !e.shiftKey &&
-        e.key.toLowerCase() === "o" &&
-        pressed("App: Open Project", true)
+        pressed(
+          "App: Open Project",
+          mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "o",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9837,11 +9835,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        !e.altKey &&
-        !e.shiftKey &&
-        e.key.toLowerCase() === "b" &&
-        pressed("App: Toggle Sidebar", true)
+        pressed(
+          "App: Toggle Sidebar",
+          mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "b",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9849,11 +9846,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        !e.altKey &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "b" &&
-        pressed("App: Toggle Session Sidebar", true)
+        pressed(
+          "App: Toggle Session Sidebar",
+          mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9861,11 +9857,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        !e.altKey &&
-        !e.shiftKey &&
-        e.key.toLowerCase() === "p" &&
-        pressed("App: Go to File", true)
+        pressed(
+          "App: Go to File",
+          mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9873,11 +9868,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "p" &&
-        pressed("App: Command Palette", true)
+        pressed(
+          "App: Command Palette",
+          mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9885,11 +9879,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "r" &&
-        pressed("View: Reload", true)
+        pressed(
+          "View: Reload",
+          mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9897,11 +9890,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        !e.altKey &&
-        !e.shiftKey &&
-        e.key.toLowerCase() === "k" &&
-        pressed("App: Search", true)
+        pressed(
+          "App: Search",
+          mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k",
+        )
       ) {
         const target = e.target instanceof Element ? e.target : null;
         if (target?.closest(".monocode-terminal") && e.ctrlKey && !e.metaKey) {
@@ -9913,11 +9905,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        !e.altKey &&
-        !e.shiftKey &&
-        e.key === "," &&
-        pressed("App: Settings", true)
+        pressed(
+          "App: Settings",
+          mod && !e.altKey && !e.shiftKey && e.key === ",",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -9925,11 +9916,10 @@ export default function App({
         return;
       }
       if (
-        mod &&
-        e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "f" &&
-        pressed("App: Find in Files", true)
+        pressed(
+          "App: Find in Files",
+          mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f",
+        )
       ) {
         e.preventDefault();
         e.stopPropagation();
