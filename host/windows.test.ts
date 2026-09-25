@@ -84,7 +84,7 @@ it("uses an unlimited, unelevated per-user task and preserves literal paths", ()
 });
 
 it.skipIf(process.platform !== "win32")(
-  "protects Windows credentials and renders a task with the expected identity and lifetime",
+  "protects Windows credentials and reuses only this user's unlimited task",
   async () => {
     const directory = temporary();
     await protectWindowsDirectory(directory);
@@ -107,23 +107,41 @@ $file = Get-Acl -LiteralPath ${psQuote(join(directory, "credential.json"))}
       executable: process.execPath,
       entry: join(directory, "host.mjs"),
     };
-    const definition = JSON.parse(
+    const result = JSON.parse(
       await runPowerShell(`
-function Get-ScheduledTask { param($TaskName, $ErrorAction) return $null }
+$script:registeredTask = $null
+$script:registrations = 0
+$script:starts = 0
+function Get-ScheduledTask { param($TaskName, $ErrorAction) return $script:registeredTask }
 function Register-ScheduledTask {
   param($TaskName, $Action, $Principal, $Trigger, $Settings, $Description)
-  @{ user = $Principal.UserId; logon = $Principal.LogonType.ToString(); limit = $Settings.ExecutionTimeLimit; instances = $Settings.MultipleInstances.ToString(); action = $Action.Arguments } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psQuote(join(directory, "task.json"))}
+  $script:registrations++
+  $script:registeredTask = [PSCustomObject]@{ Principal = $Principal }
+  @{ user = $Principal.UserId; sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; logon = $Principal.LogonType.ToString(); limit = $Settings.ExecutionTimeLimit; instances = $Settings.MultipleInstances.ToString(); action = $Action.Arguments } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psQuote(join(directory, "task.json"))}
 }
-function Start-ScheduledTask { param($TaskName) }
+function Start-ScheduledTask { param($TaskName) $script:starts++ }
 ${windowsTaskScript(options, process.env.PATH ?? "")}
-Get-Content -LiteralPath ${psQuote(join(directory, "task.json"))} -Raw
+${windowsTaskScript(options, process.env.PATH ?? "")}
+$definition = Get-Content -LiteralPath ${psQuote(join(directory, "task.json"))} -Raw | ConvertFrom-Json
+$script:registeredTask = [PSCustomObject]@{ Principal = [PSCustomObject]@{ UserId = 'S-1-5-18' } }
+$rejected = $false
+try {
+  ${windowsTaskScript(options, process.env.PATH ?? "")}
+} catch {
+  if ($_.Exception.Message -notlike '*different user*') { throw }
+  $rejected = $true
+}
+@{ definition = $definition; registrations = $script:registrations; starts = $script:starts; rejected = $rejected; userSid = if ($definition.user -match '^S-1-') { $definition.user } else { ([Security.Principal.NTAccount]::new($definition.user)).Translate([Security.Principal.SecurityIdentifier]).Value } } | ConvertTo-Json -Compress
 `),
     );
-    expect(definition.user).toMatch(/^S-1-5-/);
-    expect(["Interactive", "3"]).toContain(definition.logon);
-    expect(definition.limit).toBe("PT0S");
-    expect(["IgnoreNew", "2"]).toContain(definition.instances);
-    expect(definition.action).toContain("-EncodedCommand");
+    expect(result.userSid).toBe(result.definition.sid);
+    expect(result.registrations).toBe(1);
+    expect(result.starts).toBe(2);
+    expect(result.rejected).toBe(true);
+    expect(["Interactive", "3"]).toContain(result.definition.logon);
+    expect(result.definition.limit).toBe("PT0S");
+    expect(["IgnoreNew", "2"]).toContain(result.definition.instances);
+    expect(result.definition.action).toContain("-EncodedCommand");
   },
   30_000,
 );
