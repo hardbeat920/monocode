@@ -60,7 +60,11 @@ pub fn keybindings_set_overrides(
     app: AppHandle,
     overrides: HashMap<String, KeybindingOverride>,
 ) -> Result<(), String> {
-    app.set_menu(build(&app, &overrides)?)
+    let menu = build(&app, &overrides).map_err(|error| error.to_string())?;
+    // set_menu hands back the previous menu; this command only needs to know
+    // whether it succeeded.
+    app.set_menu(menu)
+        .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
