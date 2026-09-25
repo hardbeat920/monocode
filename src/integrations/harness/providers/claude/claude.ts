@@ -184,6 +184,10 @@ const RESUME_GRACE_MS = 15_000;
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
+
+// Claude reports an unknown `--resume` target on stderr and exits. Spotting it
+// is the only way to tell a poisoned session id from an ordinary crash.
+const RESUME_MISSING = /no conversation found/i;
 const cancelledThreads = new Set<string>();
 
 let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
@@ -371,7 +375,10 @@ export function bindClaudeSession(
   resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
 }
 
-async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+async function ensureLive(
+  input: HarnessSessionInput,
+  retriedWithoutResume = false,
+): Promise<Live> {
   const settingsKey = settingsKeyFor(input);
   const planning = input.intent === "plan";
   const existing = liveByThread.get(input.sessionId);
@@ -456,6 +463,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   };
   liveRef.current = live;
 
+  const resumeMissing = { current: false };
+
   watchChild(
     input.sessionId,
     (line) => {
@@ -476,6 +485,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         current.turnFailed = null;
         current.initDone = null;
       }
+    },
+    (line) => {
+      if (RESUME_MISSING.test(line)) resumeMissing.current = true;
+      console.debug(`[monocode] claude stderr ${input.sessionId}`, line);
     },
   );
 
@@ -500,6 +513,19 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
+    // waitForInit resolves even when the child died, so a rejected `--resume`
+    // would otherwise return a live handle over a dead process and surface as
+    // "Harness process is not running" on the very next write.
+    if (
+      resumeMissing.current &&
+      !live.initialized &&
+      canResume &&
+      !retriedWithoutResume
+    ) {
+      await stopClaudeSession(input.sessionId);
+      resumeByThread.delete(input.sessionId);
+      return ensureLive(input, true);
+    }
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
@@ -508,6 +534,16 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     return live;
   } catch (error) {
     await stopClaudeSession(input.sessionId);
+    // Claude no longer has the conversation we asked to resume. The stored id
+    // would fail the same way on every later spawn, so drop it and start a
+    // fresh conversation once rather than leaving the thread wedged forever.
+    if (resumeMissing.current && canResume && !retriedWithoutResume) {
+      resumeByThread.delete(input.sessionId);
+      return ensureLive(input, true);
+    }
+    // A conversation that never initialized was never written to disk either,
+    // so the id recorded above would poison the next spawn the same way.
+    if (!canResume) resumeByThread.delete(input.sessionId);
     throw error;
   }
 }

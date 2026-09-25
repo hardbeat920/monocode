@@ -12,6 +12,7 @@ const sent: string[] = [];
 const spawned: string[][] = [];
 let onLine: ((line: string) => void) | undefined;
 let onExit: ((code?: number | null) => void) | undefined;
+let onStderr: ((line: string) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
   sent.push(line);
 });
@@ -27,9 +28,11 @@ vi.mock("../../core/child", () => ({
     _id: string,
     line: (l: string) => void,
     exit: (code?: number | null) => void,
+    stderr?: (l: string) => void,
   ) => {
     onLine = line;
     onExit = exit;
+    onStderr = stderr;
   },
   writeChild,
 }));
@@ -217,6 +220,7 @@ beforeEach(() => {
   spawned.length = 0;
   onLine = undefined;
   onExit = undefined;
+  onStderr = undefined;
   writeChild.mockClear();
   __claudeTestReset();
 });
@@ -410,6 +414,53 @@ describe("claude legacy account resume", () => {
     });
     expect(spawned[0]).not.toContain("--resume");
     expect(spawned[0]).toContain("--session-id");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+});
+
+describe("claude poisoned resume", () => {
+  it("starts a fresh conversation when Claude no longer has the resumed session", async () => {
+    bindClaudeSession("s1", "dead-session", "/repo");
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "explore the codebase",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+
+    await waitFor(() => spawned.length === 1, "resume attempt");
+    expect(spawned[0]).toEqual(
+      expect.arrayContaining(["--resume", "dead-session"]),
+    );
+
+    // Claude rejects the unknown id on stderr and exits immediately.
+    onStderr!("No conversation found with session ID: dead-session");
+    onExit!(1);
+
+    await waitFor(() => spawned.length === 2, "respawn without resume");
+    expect(spawned[1]).not.toContain("--resume");
+    expect(spawned[1]).toContain("--session-id");
+
+    await waitFor(
+      () =>
+        parse().filter((m) => {
+          const request = m.request as Record<string, unknown> | undefined;
+          return request?.subtype === "initialize";
+        }).length === 2,
+      "second initialize",
+    );
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await waitFor(() => parse().some((m) => m.type === "user"), "user prompt");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
   });

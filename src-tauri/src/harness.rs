@@ -2101,6 +2101,17 @@ fn apply_gui_path(cmd: &mut Command) {
 
 pub(crate) fn apply_gui_env(cmd: &mut Command) {
     apply_gui_path(cmd);
+    // MonoCode itself may be started from inside a Claude Code session, and the
+    // inherited marker makes a spawned Claude Code refuse to run at all
+    // ("cannot be launched inside another Claude Code session"). The child dies
+    // before it reads a byte of stdin, leaving only a generic write failure.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cmd.env_remove(key);
+    }
     crate::hide_window_console(cmd);
     if let Some(id) = passwd_identity() {
         if std::env::var_os("HOME").is_none() {

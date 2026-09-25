@@ -83,7 +83,15 @@ function ensureBridge() {
     register(
       listen<LinePayload>("harness-stderr", (event) => {
         const { sessionId, line } = event.payload;
-        stderrHandlers.get(sessionId)?.(line);
+        const handler = stderrHandlers.get(sessionId);
+        if (handler) {
+          handler(line);
+          return;
+        }
+        // A child that dies on startup explains itself on stderr and nowhere
+        // else; without this the only trace left is the generic
+        // "Harness process is not running" from the next write.
+        console.debug(`[monocode] stderr ${sessionId}`, line);
       }),
     ),
     register(
