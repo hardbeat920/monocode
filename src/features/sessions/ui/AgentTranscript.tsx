@@ -61,7 +61,10 @@ import { visibleUserPrompt } from "../../orchestration/model/orchestration";
 import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
 import { resolveModel } from "../model/models";
-import { btwOpenTargetTurnId, resolveBtwHarness } from "../model/btw";
+import {
+  btwOpenTargetTurnId,
+  btwSurfaceHarness,
+} from "../model/btw";
 import { harnessForTurn } from "../model/secondOpinion";
 import { Shimmer } from "../../../shared/ui/Shimmer";
 import {
@@ -475,9 +478,14 @@ function AgentTranscriptComponent({
   }, [scrollerEl, setShowJump, visible]);
 
   const turns = groupTurns(blocks, managed);
-  const btwOpenTurnId = btwOpenRequest
-    ? btwOpenTargetTurnId(turns, managed)
-    : undefined;
+  const btwOpenTurnId =
+    btwOpenRequest && harness
+      ? btwOpenTargetTurnId(turns, blocks, harness, managed)
+      : undefined;
+  useEffect(() => {
+    if (!btwOpenRequest || btwOpenTurnId) return;
+    onBtwOpenRequestHandled?.(btwOpenRequest.id);
+  }, [btwOpenRequest, btwOpenTurnId, onBtwOpenRequestHandled]);
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
   const turnsRef = useRef(turns);
@@ -695,6 +703,10 @@ function AgentTranscriptComponent({
           const turnHarness = harness
             ? (turnModel?.harness ?? harnessForTurn(blocks, turn, harness))
             : undefined;
+          const btwHarness =
+            harness != null
+              ? btwSurfaceHarness(blocks, turn, harness, userBlock?.btwThreads)
+              : undefined;
           // Work the turn has already answered for folds away behind one line,
           // leaving the prompt and the answer to it.
           const turnId = turn[0].id;
@@ -970,9 +982,9 @@ function AgentTranscriptComponent({
                   modelSettings={modelSettings}
                   btwThreads={userBlock?.btwThreads}
                   visible={visible}
+                  btwHarness={btwHarness}
                   onBtwSubmit={
-                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
-                    onBtwSubmit
+                    btwHarness && onBtwSubmit
                       ? (
                           threadId,
                           messageId,
@@ -991,20 +1003,17 @@ function AgentTranscriptComponent({
                       : undefined
                   }
                   onBtwRetry={
-                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
-                    onBtwRetry
+                    btwHarness && onBtwRetry
                       ? (threadId) => onBtwRetry(threadId, turn)
                       : undefined
                   }
                   onBtwDelete={
-                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
-                    onBtwDelete
+                    btwHarness && onBtwDelete
                       ? (threadId) => onBtwDelete(threadId, turn)
                       : undefined
                   }
                   onBtwModelChange={
-                    resolveBtwHarness(turnHarness, userBlock?.btwThreads) &&
-                    onBtwModelChange
+                    btwHarness && onBtwModelChange
                       ? (threadId, nextModel, nextModelSettings) =>
                           onBtwModelChange(
                             threadId,
@@ -1227,6 +1236,7 @@ function TurnDuration({
   fromHarness,
   onSecondOpinion,
   onHandoff,
+  btwHarness,
   btwThreads,
   visible,
   cwd,
@@ -1253,6 +1263,7 @@ function TurnDuration({
   fromHarness?: HarnessId;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
+  btwHarness?: HarnessId;
   btwThreads?: Block["btwThreads"];
   visible?: boolean;
   cwd?: string;
@@ -1307,9 +1318,9 @@ function TurnDuration({
         <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
 
-      {resolveBtwHarness(harness, btwThreads) && onBtwSubmit && onBtwRetry ? (
+      {btwHarness && onBtwSubmit && onBtwRetry ? (
         <BtwPopover
-          harness={resolveBtwHarness(harness, btwThreads)!}
+          harness={btwHarness}
           cwd={cwd}
           model={model}
           modelSettings={modelSettings}

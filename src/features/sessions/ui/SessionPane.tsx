@@ -44,7 +44,11 @@ import {
   type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../model/session";
-import { sessionHasBtwThreads, supportsBtwHarness } from "../model/btw";
+import {
+  sessionHasBtwEligibleTurn,
+  sessionHasBtwThreads,
+  supportsBtwHarness,
+} from "../model/btw";
 import type { BtwOpenRequest } from "./BtwPopover";
 import { AgentTranscript } from "./AgentTranscript";
 import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
@@ -379,10 +383,8 @@ export const SessionPane = memo(function SessionPane({
         session.worktreeRemoved ||
         !onBtwSubmit ||
         !onBtwRetry ||
-        !supportsBtwHarness(session.harness) ||
-        !session.blocks.some(
-          (block) => block.role === "user" && block.durationMs != null,
-        )
+        !btwEnabled ||
+        !sessionHasBtwEligibleTurn(session.blocks, session.harness, managed)
       ) {
         return false;
       }
@@ -391,6 +393,7 @@ export const SessionPane = memo(function SessionPane({
       return true;
     },
     [
+      btwEnabled,
       managed,
       onBtwRetry,
       onBtwSubmit,

@@ -6,10 +6,12 @@ import {
   BTW_MAX_SNAPSHOT_CHARS,
   buildBtwPrompt,
   btwOpenTargetTurnId,
+  btwTurnHarness,
   btwVisibleBlocks,
   consumeBtwCommand,
   replaceBtwThread,
   resolveBtwHarness,
+  sessionHasBtwEligibleTurn,
   sessionHasBtwThreads,
   serializeBtwBlock,
   serializeBtwSnapshot,
@@ -81,17 +83,75 @@ describe("consumeBtwCommand", () => {
 
 describe("btwOpenTargetTurnId", () => {
   it("targets the latest completed turn while the current turn is still running", () => {
-    const turns = [
-      [
-        { id: "u1", role: "user" as const, text: "first", durationMs: 1000 },
-        { id: "a1", role: "assistant" as const, text: "done" },
-      ],
-      [
-        { id: "u2", role: "user" as const, text: "second" },
-        { id: "a2", role: "assistant" as const, text: "working", streaming: true },
-      ],
+    const blocks = [
+      { id: "u1", role: "user" as const, text: "first", durationMs: 1000 },
+      { id: "a1", role: "assistant" as const, text: "done" },
+      { id: "u2", role: "user" as const, text: "second" },
+      { id: "a2", role: "assistant" as const, text: "working", streaming: true },
     ];
-    expect(btwOpenTargetTurnId(turns)).toBe("u1");
+    const turns = [
+      [blocks[0], blocks[1]],
+      [blocks[2], blocks[3]],
+    ];
+    expect(btwOpenTargetTurnId(turns, blocks, "claude")).toBe("u1");
+  });
+
+  it("skips the latest completed turn when its provider cannot run BTW", () => {
+    const blocks = [
+      { id: "u1", role: "user" as const, text: "first", durationMs: 1000 },
+      { id: "a1", role: "assistant" as const, text: "done" },
+      {
+        id: "h",
+        role: "handoff" as const,
+        text: "",
+        handoff: { from: "claude", to: "fx", status: "ready" as const },
+      },
+      { id: "u2", role: "user" as const, text: "second", durationMs: 900 },
+      { id: "a2", role: "assistant" as const, text: "done" },
+    ];
+    const turns = [
+      [blocks[0], blocks[1]],
+      [blocks[3], blocks[4]],
+    ];
+    expect(btwOpenTargetTurnId(turns, blocks, "fx")).toBe("u1");
+  });
+});
+
+describe("btwTurnHarness", () => {
+  it("keeps BTW available on pre-handoff turns after the session moves on", () => {
+    const first = [
+      { id: "u1", role: "user" as const, text: "first", durationMs: 1000 },
+      { id: "a1", role: "assistant" as const, text: "done" },
+    ];
+    const blocks = [
+      ...first,
+      {
+        id: "h",
+        role: "handoff" as const,
+        text: "",
+        handoff: { from: "claude", to: "fx", status: "ready" as const },
+      },
+      { id: "u2", role: "user" as const, text: "second", durationMs: 900 },
+    ];
+    expect(btwTurnHarness(blocks, first, "fx")).toBe("claude");
+  });
+});
+
+describe("sessionHasBtwEligibleTurn", () => {
+  it("returns true when only an earlier turn can accept BTW", () => {
+    const blocks = [
+      { id: "u1", role: "user" as const, text: "first", durationMs: 1000 },
+      { id: "a1", role: "assistant" as const, text: "done" },
+      {
+        id: "h",
+        role: "handoff" as const,
+        text: "",
+        handoff: { from: "claude", to: "fx", status: "ready" as const },
+      },
+      { id: "u2", role: "user" as const, text: "second", durationMs: 900 },
+      { id: "a2", role: "assistant" as const, text: "done" },
+    ];
+    expect(sessionHasBtwEligibleTurn(blocks, "fx")).toBe(true);
   });
 });
 

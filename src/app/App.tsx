@@ -252,6 +252,7 @@ import {
 import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
 import {
   applyBtwHarnessEvent,
+  btwTurnHarness,
   buildBtwPrompt,
   replaceBtwThread,
   sealBtwResponseBlocks,
@@ -7409,9 +7410,12 @@ export default function App({
       const existingEarly = sourceBlockEarly?.btwThreads?.find(
         (thread) => thread.id === threadId,
       );
-      const requestHarness = supportsBtwHarness(turnHarness)
-        ? turnHarness
-        : existingEarly?.harness;
+      const requestHarness = source
+        ? supportsBtwHarness(turnHarness)
+          ? turnHarness
+          : (existingEarly?.harness ??
+            btwTurnHarness(source.blocks, turn, source.harness))
+        : undefined;
       if (
         !source ||
         !supportsBtwHarness(requestHarness) ||
@@ -7503,9 +7507,12 @@ export default function App({
       const sourceBlock = source?.blocks.find(
         (block) => block.id === sourceUserId && block.role === "user",
       );
-      const threadHarness =
-        sourceBlock?.btwThreads?.find((thread) => thread.id === threadId)
-          ?.harness ?? turnHarness;
+      const threadHarness = source
+        ? (sourceBlock?.btwThreads?.find((thread) => thread.id === threadId)
+            ?.harness ??
+          btwTurnHarness(source.blocks, turn, source.harness) ??
+          turnHarness)
+        : undefined;
       if (
         !source ||
         !supportsBtwHarness(threadHarness) ||
@@ -7541,9 +7548,12 @@ export default function App({
       const sourceBlock = source?.blocks.find(
         (block) => block.id === sourceUserId && block.role === "user",
       );
-      const threadHarness =
-        sourceBlock?.btwThreads?.find((thread) => thread.id === threadId)
-          ?.harness ?? turnHarness;
+      const threadHarness = source
+        ? (sourceBlock?.btwThreads?.find((thread) => thread.id === threadId)
+            ?.harness ??
+          btwTurnHarness(source.blocks, turn, source.harness) ??
+          turnHarness)
+        : undefined;
       if (
         !source ||
         !supportsBtwHarness(threadHarness) ||
@@ -7575,7 +7585,11 @@ export default function App({
       const existing = sourceBlock?.btwThreads?.find(
         (thread) => thread.id === threadId,
       );
-      const threadHarness = existing?.harness ?? turnHarness;
+      const threadHarness = source
+        ? (existing?.harness ??
+          btwTurnHarness(source.blocks, turn, source.harness) ??
+          turnHarness)
+        : undefined;
       if (
         !source ||
         !supportsBtwHarness(threadHarness) ||

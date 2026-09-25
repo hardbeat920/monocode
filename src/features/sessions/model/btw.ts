@@ -4,6 +4,8 @@ import { displayPath } from "../../../shared/lib/paths";
 import type { Attachment, Block, BtwThread, HarnessId } from "./session";
 import { newSession } from "./session";
 import type { BuiltinSkill } from "../../skills/model/skills";
+import { harnessForTurn } from "./secondOpinion";
+import { groupTurns } from "./transcriptActivity";
 
 /**
  * Harnesses with an isolated text runner suitable for read-only side
@@ -41,19 +43,102 @@ export function resolveBtwHarness(
   return stored;
 }
 
+/** Which provider produced a turn for BTW, even after the session moves on. */
+export function btwTurnHarness(
+  blocks: Block[],
+  turn: Block[],
+  sessionHarness: HarnessId,
+): HarnessId | undefined {
+  const userBlock = turn.find(
+    (block) => block.role === "user" && block.turnModel?.harness,
+  );
+  if (userBlock?.turnModel?.harness) {
+    const recorded = userBlock.turnModel.harness;
+    return supportsBtwHarness(recorded) ? recorded : undefined;
+  }
+
+  const attributed = harnessForTurn(blocks, turn, sessionHarness);
+  if (supportsBtwHarness(attributed)) return attributed;
+
+  const turnStartId = turn[0]?.id;
+  const turnStartIndex = turnStartId
+    ? blocks.findIndex((block) => block.id === turnStartId)
+    : -1;
+  if (turnStartIndex < 0) return undefined;
+
+  for (let index = turnStartIndex - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block.role !== "handoff" || !block.handoff) continue;
+    const incoming = block.handoff.to;
+    return supportsBtwHarness(incoming) ? incoming : undefined;
+  }
+
+  for (let index = turnStartIndex - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block.role !== "user" || !block.turnModel?.harness) continue;
+    const recorded = block.turnModel.harness;
+    if (supportsBtwHarness(recorded)) return recorded;
+  }
+
+  const firstHandoff = blocks.find((block) => block.handoff)?.handoff;
+  const handoffIndex = blocks.findIndex((block) => block.handoff);
+  if (
+    firstHandoff &&
+    handoffIndex >= 0 &&
+    turnStartIndex < handoffIndex &&
+    supportsBtwHarness(firstHandoff.from)
+  ) {
+    return firstHandoff.from;
+  }
+
+  return undefined;
+}
+
+/** Harness to drive BTW UI and requests for one turn. */
+export function btwSurfaceHarness(
+  blocks: Block[],
+  turn: Block[],
+  sessionHarness: HarnessId,
+  threads?: BtwThread[],
+): HarnessId | undefined {
+  return resolveBtwHarness(
+    btwTurnHarness(blocks, turn, sessionHarness),
+    threads,
+  );
+}
+
+export function sessionHasBtwEligibleTurn(
+  blocks: Block[],
+  sessionHarness: HarnessId,
+  managed = false,
+): boolean {
+  const turns = groupTurns(blocks, managed);
+  return (
+    btwOpenTargetTurnId(turns, blocks, sessionHarness, managed) != null
+  );
+}
+
 /** Completed turn that should receive a composer `/btw` open request. */
 export function btwOpenTargetTurnId(
   turns: Block[][],
+  blocks: Block[],
+  sessionHarness: HarnessId,
   managed = false,
 ): string | undefined {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
+    let completed = false;
     for (let i = turn.length - 1; i >= 0; i -= 1) {
       const block = turn[i];
       if (block.role !== "user" || (managed && block.internal)) continue;
-      if (block.durationMs != null) return turn[0]?.id;
+      completed = block.durationMs != null;
       break;
     }
+    if (!completed) continue;
+    if (!supportsBtwHarness(btwTurnHarness(blocks, turn, sessionHarness))) {
+      continue;
+    }
+    return turn[0]?.id;
   }
   return undefined;
 }
