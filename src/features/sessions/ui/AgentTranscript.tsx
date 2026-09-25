@@ -30,6 +30,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AttachmentChip } from "./AttachmentChip";
+import { MonocodeSparkles } from "./MonocodeSparkles";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
@@ -120,6 +121,15 @@ import {
   type TurnItem,
 } from "../model/transcriptActivity";
 import { lastUserTurnBlock } from "../model/editLastTurn";
+import {
+  monoCodeToolCall,
+  monoCodeWorkSummary,
+  type MonoCodeToolCall,
+} from "../model/monocodeToolCall";
+import {
+  isMonocodeUserTurn,
+  monocodeUserPrompt,
+} from "../model/monocodeCommand";
 import {
   clearTranscriptHighlights,
   paintTranscriptHighlights,
@@ -259,7 +269,7 @@ function AgentTranscriptComponent({
   }, []);
   // Stretch the last turn after a send while this tab stays open. Closing
   // the tab is a new visit: the remount uses the true transcript height so
-  // the latest reply sits on the composer instead of a hole of empty space.
+  // the latest reply sits near the composer instead of a hole of empty space.
   const [anchorTurn, setAnchorTurn] = useState(!!busy);
   // Parking detaches the scroller, which drops its scroll offset.
   const restoreScroll = useRef(false);
@@ -620,7 +630,7 @@ function AgentTranscriptComponent({
       ref={setScroller}
       className="agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5"
     >
-      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-1">
+      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-8">
         {firstVisibleTurn > 0 ? (
           <div className="flex justify-center px-4 py-3">
             <button
@@ -1550,8 +1560,11 @@ function UserMessageBlock({
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
+  const monocode = isMonocodeUserTurn(block);
   const text =
-    card && card.kind !== "handoff" ? "" : visibleUserPrompt(block.text);
+    card && card.kind !== "handoff"
+      ? ""
+      : visibleUserPrompt(monocode ? monocodeUserPrompt(block) : block.text);
   const messageLink = text ? parseUserMessageLink(text) : null;
   const displayText = messageLink
     ? `${messageLink.beforeText}${messageLink.afterText}`
@@ -1622,6 +1635,7 @@ function UserMessageBlock({
       >
         <div
           data-draft={block.draft ? "true" : undefined}
+          data-monocode={monocode ? "true" : undefined}
           className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color] duration-200 ${
             block.draft
               ? "border border-dashed border-content/30 bg-content/4"
@@ -1733,6 +1747,9 @@ function UserMessageBlock({
                 </button>
               </span>
             </div>
+          ) : null}
+          {monocode ? (
+            <MonocodeSparkles blockId={block.id} startedAt={block.startedAt} />
           ) : null}
         </div>
         {text ||
@@ -2084,6 +2101,7 @@ function ActivityPhaseGroup({
   }, [phase.steps]);
   const turnFor = useStepQueue();
   const title = activityPhaseTitle(phase, active);
+  const monoCodePhase = !!monoCodeWorkSummary(phase.steps, active);
   // Opening a group on purpose is also how you read the line that titled it,
   // whole. The auto-open while it runs is a live view, not a reading one, and
   // a one-line note the header already shows in full has nothing to add.
@@ -2098,7 +2116,9 @@ function ActivityPhaseGroup({
   if (!phase.headline && phase.steps.length === 1) {
     return (
       <div className="flex min-w-0 items-start gap-1.5">
-        <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        {monoCodePhase ? null : (
+          <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        )}
         <div className="min-w-0 flex-1">
           <ActivityRow
             block={phase.steps[0]}
@@ -2151,10 +2171,14 @@ function ActivityPhaseGroup({
          * between them leaves both half-drawn on top of each other.
          */}
         <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-          <ActivityPhaseIcon
-            kind={phase.kind}
-            className="group-hover:opacity-0"
-          />
+          {monoCodePhase ? (
+            <MonoCodeMark className="size-3.5 group-hover:opacity-0" />
+          ) : (
+            <ActivityPhaseIcon
+              kind={phase.kind}
+              className="group-hover:opacity-0"
+            />
+          )}
           <ChevronRight
             className={`absolute size-3.5 text-content/45 opacity-0 transition-transform duration-200 group-hover:opacity-100 ${
               open ? "rotate-90" : ""
@@ -2927,6 +2951,16 @@ function ActivityToolRow({
   onOpenDiff?: (path: string) => void;
 }) {
   const [errorOpen, setErrorOpen] = useState(false);
+  const appCall = monoCodeToolCall(block);
+  if (appCall) {
+    return (
+      <MonoCodeCallRow
+        block={block}
+        call={appCall}
+        onApproval={onApproval}
+      />
+    );
+  }
   const label = toolCallLabel(block, cwd);
   const state = toolCallState(block);
   const pending = needsApproval(block);
@@ -2993,6 +3027,80 @@ function ActivityToolRow({
           {errorDetail}
         </pre>
       ) : null}
+    </div>
+  );
+}
+
+function MonoCodeMark({ className = "size-4" }: { className?: string }) {
+  return <img src="/monocode.png" alt="" className={`shrink-0 ${className}`} />;
+}
+
+/** MonoCode commands read like the other activity rows; failures expose their output. */
+function MonoCodeCallRow({
+  block,
+  call,
+  onApproval,
+}: {
+  block: Block;
+  call: MonoCodeToolCall;
+  onApproval?: (requestId: number, decision: ApprovalDecision) => void;
+}) {
+  const state = toolCallState(block);
+  const output = block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
+  const [errorOpen, setErrorOpen] = useState(false);
+  const hasError = state === "rejected" && !!output;
+  const command = `monocode app ${call.action}`;
+  const verb = needsApproval(block)
+    ? "Run"
+    : state === "pending"
+      ? "Running"
+      : "Ran";
+  const summary = (
+    <>
+      <span
+        className={`shrink-0 font-sans text-sm ${state === "rejected" ? "text-red-400" : "text-content/50"}`}
+      >
+        {verb}
+      </span>
+      <span
+        className={`flex min-w-0 max-w-full items-center gap-1 rounded bg-content/6 px-1 font-mono text-[13px] ${state === "rejected" ? "text-red-400" : "text-content/70"}`}
+        title={command}
+      >
+        <MonoCodeMark className="size-3.5" />
+        <span className="min-w-0 truncate">{command}</span>
+      </span>
+      <ToolCallStatusIcon state={state} />
+      {hasError ? (
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+          strokeWidth={1.75}
+        />
+      ) : null}
+    </>
+  );
+  return (
+    <div data-monocode-tool-call={call.action} className="min-w-0">
+      {hasError ? (
+        <button
+          type="button"
+          aria-expanded={errorOpen}
+          aria-label={`${errorOpen ? "Hide" : "Show"} error details for MonoCode: ${call.label}`}
+          onClick={() => setErrorOpen((value) => !value)}
+          className="flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
+        >
+          {summary}
+        </button>
+      ) : (
+        <div className="flex min-w-0 items-center gap-1.5 py-1">
+          {summary}
+        </div>
+      )}
+      {errorOpen && hasError ? (
+        <pre className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
+          {output}
+        </pre>
+      ) : null}
+      <ApprovalControls block={block} onApproval={onApproval} />
     </div>
   );
 }
@@ -3129,6 +3237,19 @@ function ToolCall({
   const expandable = !compact && !!detail && detail !== label;
 
   const frame = embedded ? "py-0.5" : "px-4 py-1";
+
+  const appCall = monoCodeToolCall(block);
+  if (appCall) {
+    return (
+      <div className={frame}>
+        <MonoCodeCallRow
+          block={block}
+          call={appCall}
+          onApproval={onApproval}
+        />
+      </div>
+    );
+  }
 
   if (editTool) {
     return (

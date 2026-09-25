@@ -25,6 +25,70 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("shows a /mono request without the command in its amber bubble", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "list my notes", monocode: true },
+    ]);
+    expect(markup).toContain('data-monocode="true"');
+    expect(markup).toContain("list my notes");
+    expect(markup).not.toContain("/mono");
+
+    const legacy = render([
+      { id: "old", role: "user", text: "/monocode list my notes" },
+    ]);
+    expect(legacy).toContain('data-monocode="true"');
+    expect(legacy).not.toContain("/monocode");
+  });
+
+  it("shows MonoCode CLI actions instead of their long shell commands", () => {
+    const command =
+      "/repo/target/debug/MonoCode.app/Contents/MacOS/monocode";
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "/monocode list my notes" },
+        {
+          id: "help",
+          role: "tool",
+          text: `${command} app --help`,
+          tool: { kind: "shell", status: "completed" },
+        },
+        {
+          id: "notes",
+          role: "tool",
+          text: `${command} app notes.list --json '{}'`,
+          tool: { kind: "shell", status: "in_progress" },
+        },
+      ],
+      true,
+    );
+    expect(markup).toContain("Using MonoCode");
+    expect(markup).toContain('data-monocode-tool-call="--help"');
+    expect(markup).toContain('data-monocode-tool-call="notes.list"');
+    expect(markup).toContain("monocode app --help");
+    expect(markup).toContain("monocode app notes.list");
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("Running");
+    expect(markup).not.toContain("Contents/MacOS/monocode");
+    expect(markup).not.toContain("Show error details for MonoCode");
+  });
+
+  it("keeps a failed MonoCode call compact until its error is opened", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "/monocode list notes" },
+      {
+        id: "notes",
+        role: "tool",
+        text: "monocode app notes.list",
+        tool: { kind: "shell", status: "failed", detail: "Connection refused" },
+      },
+    ]);
+    expect(markup).toContain('data-monocode-tool-call="notes.list"');
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("monocode app notes.list");
+    expect(markup).toContain("Show error details for MonoCode: List notes");
+    expect(markup).not.toContain("Connection refused");
+  });
+
   it("offers the saved CI context in a collapsed disclosure beside the short request", () => {
     const markup = render([
       {

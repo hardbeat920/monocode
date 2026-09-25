@@ -256,6 +256,7 @@ pub fn run() {
             control::control_attach_worker,
             control::control_authorize_turn,
             control::control_turn_finished,
+            control::app_cli_path,
             default_cwd,
             home_dir,
             notifications::notification_permission,

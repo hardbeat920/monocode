@@ -719,7 +719,12 @@ export const SessionPane = memo(function SessionPane({
                             session.id,
                             block.text,
                             block.attachments ?? [],
-                            { draftBlockId: block.id },
+                            {
+                              draftBlockId: block.id,
+                              ...(block.appRequestId
+                                ? { appRequestId: block.appRequestId }
+                                : {}),
+                            },
                           )
                       : undefined
                   }

@@ -69,6 +69,7 @@ async function startTurn(
     expectResume?: boolean;
     beforeThreadReply?: () => Promise<void>;
     onAccepted?: () => void;
+    controlsAgents?: boolean;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -87,6 +88,7 @@ async function startTurn(
     modelSettings: {},
     providerAccountId: options.providerAccountId,
     runtimeMode: options.runtimeMode ?? "supervised",
+    controlsAgents: options.controlsAgents,
     intent: options.intent,
     text: "summarize the changelog",
     attachments: [],
@@ -143,6 +145,40 @@ describe("codex live turn sequence", () => {
     expect(onAccepted).toHaveBeenCalledOnce();
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it("reopens a thread when app access changes its network policy", async () => {
+    const first = await startTurn("codex-live", { runtimeMode: "auto" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+
+    sent.length = 0;
+    const appTurn = await startTurn("codex-live", {
+      runtimeMode: "auto",
+      controlsAgents: true,
+      expectResume: true,
+    });
+    expect(parse().find((message) => message.method === "thread/resume")?.params)
+      .toMatchObject({ sandboxPolicy: { networkAccess: true } });
+    expect(parse().find((message) => message.method === "turn/start")?.params)
+      .toMatchObject({ sandboxPolicy: { networkAccess: true } });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await appTurn.turn;
+
+    sent.length = 0;
+    const ordinaryTurn = await startTurn("codex-live", {
+      runtimeMode: "auto",
+      expectResume: true,
+    });
+    expect(parse().find((message) => message.method === "thread/resume")?.params)
+      .toMatchObject({ sandboxPolicy: { type: "workspaceWrite" } });
+    expect(
+      (parse().find((message) => message.method === "thread/resume")?.params as {
+        sandboxPolicy: Record<string, unknown>;
+      }).sandboxPolicy,
+    ).not.toHaveProperty("networkAccess");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await ordinaryTurn.turn;
   });
 
   it.each([

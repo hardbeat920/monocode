@@ -145,6 +145,8 @@ export type HarnessSessionInput = {
    * that socket cannot supervise its agents at all.
    */
   controlsAgents?: boolean;
+  /** Grants this normal turn access to MonoCode's scoped app CLI. */
+  appAccess?: boolean;
   onEvent: (event: HarnessEvent) => void;
 };
 

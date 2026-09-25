@@ -377,6 +377,8 @@ type UserTurnExtra = {
   noteCard?: Block["noteCard"];
   ciContext?: string;
   internal?: boolean;
+  monocode?: boolean;
+  appRequestId?: string;
 };
 
 function userTurnFields(extra?: UserTurnExtra) {
@@ -385,6 +387,8 @@ function userTurnFields(extra?: UserTurnExtra) {
     ...(extra?.noteCard ? { noteCard: extra.noteCard } : {}),
     ...(extra?.ciContext ? { ciContext: extra.ciContext } : {}),
     ...(extra?.internal ? { internal: true } : {}),
+    ...(extra?.monocode ? { monocode: true } : {}),
+    ...(extra?.appRequestId ? { appRequestId: extra.appRequestId } : {}),
   };
 }
 

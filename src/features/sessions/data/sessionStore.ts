@@ -490,6 +490,13 @@ function sanitizeBlock(block: Block): Block | null {
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
   if (block.role === "user" && block.draft) next.draft = true;
+  if (block.role === "user" && block.monocode) next.monocode = true;
+  if (
+    block.role === "user" &&
+    typeof block.appRequestId === "string" &&
+    /^[A-Za-z0-9_-]{1,512}$/.test(block.appRequestId)
+  )
+    next.appRequestId = block.appRequestId;
   if (
     block.role === "user" &&
     typeof block.providerTurnId === "string" &&

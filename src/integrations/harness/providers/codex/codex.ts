@@ -66,6 +66,8 @@ type Live = {
   threadId: string;
   cwd: string;
   providerAccountId?: string;
+  /** Thread-level network policy used when this app-server opened the thread. */
+  controlsAgents: boolean;
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -375,16 +377,26 @@ export function bindCodexSession(
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
+  const controlsAgents = input.controlsAgents === true;
   if (
     existing &&
     existing.cwd === input.cwd &&
-    sameProviderAccountId(existing.providerAccountId, input.providerAccountId)
+    sameProviderAccountId(existing.providerAccountId, input.providerAccountId) &&
+    existing.controlsAgents === controlsAgents
   ) {
     existing.onEvent = input.onEvent;
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
+    // Codex may retain the thread's sandbox network policy across turns.
+    // Switch it when this session gains /mono access or loses agent
+    // control, so its local CLI socket matches the current policy.
+    if (
+      existing.cwd !== input.cwd ||
+      !sameProviderAccountId(existing.providerAccountId, input.providerAccountId)
+    ) {
+      resumeByThread.delete(input.sessionId);
+    }
     await stopCodexSession(input.sessionId);
   }
 
@@ -534,6 +546,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       threadId,
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
+      controlsAgents,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       onEvent: input.onEvent,

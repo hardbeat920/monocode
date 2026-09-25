@@ -979,9 +979,10 @@ describe("claude background tasks", () => {
     expect(answer?.type === "block" && answer.block.text).toBe(
       "It finished and printed done.",
     );
-    expect(fold && foldedBlocks(items, fold).map((block) => block.text)).toContain(
-      "waiting",
-    );
+    // What Claude yielded with is its answer; the follow-up does not fold it.
+    expect(
+      (fold ? foldedBlocks(items, fold) : []).map((block) => block.text),
+    ).not.toContain("waiting");
   });
 
   it("shows the waited-on command as a live row under Claude's last message", async () => {

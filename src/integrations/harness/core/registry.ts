@@ -195,6 +195,7 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       await invoke("control_authorize_turn", {
         sessionId: input.sessionId,
         cwd: input.cwd,
+        appAccess: input.appAccess === true,
       });
     activeTurnSessions.add(input.sessionId);
     try {

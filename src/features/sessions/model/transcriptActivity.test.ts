@@ -948,6 +948,45 @@ describe("the settled work trail", () => {
     expect(workKind(trailing.blocks)).toBe("note");
   });
 
+  it("keeps the answer Claude yielded with above what a background task wakes it to say", () => {
+    const background: Block = {
+      ...shell("bg"),
+      tool: {
+        kind: "shell",
+        title: "bash ls",
+        status: "completed",
+        background: true,
+      },
+    };
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        { id: "note", role: "assistant", text: "Updating the state file." },
+        shell("t2"),
+        { id: "answer", role: "assistant", text: "Two new findings." },
+        background,
+        {
+          id: "late",
+          role: "assistant",
+          text: "Stray command, nothing to do.",
+        },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "note",
+      "t2",
+    ]);
+    expect(items.slice(fold.end + 1).map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+    ]);
+  });
+
   it("lets the settled fold reach across an interjection that stops it live", () => {
     const turn = [
       { id: "u", role: "user", text: "go" },

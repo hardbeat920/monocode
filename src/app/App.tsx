@@ -1,4 +1,8 @@
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
+import {
+  handleAgentApp,
+  type AppSessionListing,
+} from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
   submitAfterProjectSync,
@@ -15,6 +19,7 @@ import {
   orchestrationCheckoutCwd,
   orchestrationProjectCwd,
   orchestrator,
+  shellPath,
   workspaceIdentity,
   type ControlOutcome,
 } from "../features/orchestration/model/orchestration";
@@ -434,6 +439,10 @@ import {
   type TabVisitHistory,
 } from "../features/workspace/model/tabVisitHistory";
 import { preparePrompt } from "../features/sessions/model/promptPreparation";
+import {
+  consumeMonocodeCommand,
+  monocodeEnabledInThread,
+} from "../features/sessions/model/monocodeCommand";
 import { warmNativeSkills, isNativeCommandPrompt } from "../features/skills/model/skills";
 import { nativeSkillContextForSession } from "../features/sessions/model/sessionSkills";
 import {
@@ -585,6 +594,7 @@ type SubmitOptions = ComposerTurnOptions & {
   buildTarget?: PlanBuildTarget;
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
+  appRequestId?: string;
   onSettled?: (outcome: ControlOutcome) => void;
   /** Generate a fresh title even when this is not the session's first turn. */
   refreshTitle?: boolean;
@@ -5392,7 +5402,12 @@ export default function App({
   );
 
   const onSaveDraft = useCallback(
-    (sessionId: string, text: string, attachments: Attachment[] = []) => {
+    (
+      sessionId: string,
+      text: string,
+      attachments: Attachment[] = [],
+      appRequestId?: string,
+    ) => {
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -5428,6 +5443,7 @@ export default function App({
                     text,
                     ...(attachments.length > 0 ? { attachments } : {}),
                     draft: true,
+                    ...(appRequestId ? { appRequestId } : {}),
                   },
                 ],
               }
@@ -5514,6 +5530,7 @@ export default function App({
       )
         return false;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
+      if (options?.appRequestId && storedCurrent?.busy) return false;
       if (
         options?.ciRepair &&
         storedCurrent &&
@@ -5629,13 +5646,36 @@ export default function App({
         return false;
       }
       const submittedText = intent === "build" ? "Build approved plan" : text;
-      const rawCommand = isNativeCommandPrompt(submittedText, current.harness);
+      const monocodeCommand = consumeMonocodeCommand(submittedText);
+      if (
+        monocodeCommand.matched &&
+        (intent !== "default" ||
+          current.orchestrationLeadId ||
+          current.inboxAsk ||
+          orchestrator.run(sessionId))
+      ) {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text: "Use /mono from a regular session turn, outside an orchestration run.",
+        });
+        flushHarnessEvents();
+        return false;
+      }
+      const monocodeAccess =
+        monocodeCommand.matched || monocodeEnabledInThread(current.blocks);
+      const promptText = monocodeCommand.matched
+        ? monocodeCommand.text.trim() ||
+          "Explain what you can do in MonoCode with the app CLI."
+        : submittedText;
+      const rawCommand =
+        !monocodeCommand.matched &&
+        isNativeCommandPrompt(submittedText, current.harness);
       const ciContext = options?.ciRepair?.prompt ?? options?.ciContext;
       const harnessText =
         options?.ciRepair?.prompt ??
         (rawCommand
           ? submittedText
-          : composeNoteMessage(noteCard, submittedText));
+          : composeNoteMessage(noteCard, promptText));
 
       const pendingSwitch =
         current.pendingSwitch && current.pendingSwitch.from !== current.harness
@@ -5643,10 +5683,23 @@ export default function App({
           : null;
 
       if (current.busy && !pendingSwitch) {
+        if (
+          monocodeCommand.matched &&
+          options?.queuedMessageId &&
+          options.followUpBehavior === "steer"
+        ) {
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "/mono starts a new turn after the current turn finishes.",
+          });
+          flushHarnessEvents();
+          return false;
+        }
         const followUpBehavior =
           current.worktreePreparing ||
           intent === "plan" ||
-          intent === "orchestrate"
+          intent === "orchestrate" ||
+          monocodeCommand.matched
             ? "queue"
             : // The agent has yielded and only background work is left, which
               // may never end (a dev server). Queuing would park the message
@@ -5841,21 +5894,29 @@ export default function App({
         !current.inboxCard &&
         !current.noteCard &&
         placeholderTitle
-          ? titleFromPrompt(submittedText, current.harness, attachments)
+          ? titleFromPrompt(
+              monocodeCommand.matched ? promptText : submittedText,
+              current.harness,
+              attachments,
+            )
           : current.title;
       const visible = displayAttachments(attachments);
       const card =
         options?.secondOpinion ??
         (handoffCard ? handoffTurnCard(handoffCard) : undefined);
       const visibleText =
-        card?.kind === "handoff"
-          ? submittedText
-          : card
-            ? SECOND_OPINION_TITLE
-            : submittedText;
+        monocodeCommand.matched
+          ? promptText
+          : card?.kind === "handoff"
+            ? submittedText
+            : card
+              ? SECOND_OPINION_TITLE
+              : submittedText;
       const cards = {
         ...(rawCommand ? undefined : userTurnCards(noteCard, card)),
         ...(ciContext ? { ciContext } : {}),
+        ...(monocodeCommand.matched ? { monocode: true } : {}),
+        ...(options?.appRequestId ? { appRequestId: options.appRequestId } : {}),
         // The orchestrator writes these turns, not the user; hide them.
         ...(options?.managed ? { internal: true } : {}),
       };
@@ -6367,30 +6428,36 @@ export default function App({
               providerAccountId,
               runtimeMode: current.runtimeMode,
               intent: intent === "orchestrate" ? "plan" : intent,
-              // A lead drives the control CLI over loopback; without this the
-              // harness sandbox denies the socket and it cannot supervise.
-              controlsAgents: orchestrator.run(sessionId)?.status === "active",
+              // A /mono user turn enables app access for this thread;
+              // orchestration leads retain their separate control access.
+              controlsAgents:
+                monocodeAccess ||
+                orchestrator.run(sessionId)?.status === "active",
+              appAccess: monocodeAccess,
               text,
               attachments: turnAttachments,
               ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
               onEvent: routeTurnEvent,
             });
-          await sendTurn(
-            orchestrator.prompt(
-              sessionId,
-              inboxAskPrompt(
-                rawCommand ? undefined : current.inboxAsk,
-                wrap && !rawCommand
-                  ? wrapHandoffPrompt(
-                      wrap.text,
-                      wrap.from,
-                      turnPrompt.trim() || CONTINUE_PROMPT,
-                      earlier,
-                    )
-                  : turnPrompt,
-              ),
+          let sendText = orchestrator.prompt(
+            sessionId,
+            inboxAskPrompt(
+              rawCommand ? undefined : current.inboxAsk,
+              wrap && !rawCommand
+                ? wrapHandoffPrompt(
+                    wrap.text,
+                    wrap.from,
+                    turnPrompt.trim() || CONTINUE_PROMPT,
+                    earlier,
+                  )
+                : turnPrompt,
             ),
           );
+          if (monocodeCommand.matched) {
+            const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
+            sendText += `\n\n<monocode_app>\nThe user's MonoCode command enables app access in this thread, including later turns without the command. You can start session tabs, read and continue other project sessions, save unsent drafts, organize session folders, and read saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
+          }
+          await sendTurn(sendText);
           acceptEditedResend();
           if (proposalDraft && !providerFailureSeen) {
             completedProposal = await completeOrRepairOrchestrationProposal(
@@ -6759,10 +6826,26 @@ export default function App({
           setSidebarTab("sessions");
         },
         submit: submitSession,
+        saveDraft: (id, prompt, attachments, requestId) =>
+          flushSync(() =>
+            onSaveDraft(id, prompt, attachments, requestId),
+          ),
       }),
-    [appendTab, submitSession],
+    [appendTab, submitSession, onSaveDraft],
   );
   useQuickComposerLaunches(launchQuickSession);
+  const launchQuickSessionRef = useRef(launchQuickSession);
+  launchQuickSessionRef.current = launchQuickSession;
+  const submitSessionRef = useRef(submitSession);
+  submitSessionRef.current = submitSession;
+  const saveDraftRef = useRef(onSaveDraft);
+  saveDraftRef.current = onSaveDraft;
+  const ensureOpenSessionRef = useRef(ensureOpenSession);
+  ensureOpenSessionRef.current = ensureOpenSession;
+
+  const appReceipts = useRef(
+    new Map<string, { signature: string; promise: Promise<unknown> }>(),
+  );
 
   const ensureAutomationRecovery = useCallback(() => {
     if (!automationRecoveryRef.current) {
@@ -7801,18 +7884,196 @@ export default function App({
   useEffect(() => {
     const listening = listen<{
       id: string;
+      namespace: string;
       sessionId: string;
       requestId: string;
       action: string;
       input: Record<string, unknown>;
     }>("monocode-control-request", ({ payload }) => {
-      void orchestrator
-        .handle(
-          payload.sessionId,
+      const handle = async () => {
+        if (payload.namespace === "control") {
+          return orchestrator.handle(
+            payload.sessionId,
+            payload.requestId,
+            payload.action,
+            payload.input,
+          );
+        }
+        if (payload.namespace !== "app")
+          throw new Error("Unknown CLI namespace");
+        const source = sessionsRef.current.find(
+          (session) => session.id === payload.sessionId,
+        );
+        if (
+          !source ||
+          source.inboxAsk ||
+          source.orchestrationLeadId ||
+          orchestrator.run(source.id)
+        )
+          throw new Error("This session cannot use the MonoCode app CLI");
+        const key = `${source.id}:${payload.requestId}`;
+        const signature = JSON.stringify([payload.action, payload.input]);
+        const previous = appReceipts.current.get(key);
+        if (previous) {
+          if (previous.signature !== signature)
+            throw new Error("Request ID was already used with different input");
+          return previous.promise;
+        }
+        const promise = handleAgentApp(
+          source,
           payload.requestId,
           payload.action,
           payload.input,
-        )
+          {
+            start: async (launch, id) => {
+              const open = sessionsRef.current.find(
+                (session) => session.id === id,
+              );
+              const stored = open ? null : await getSession(id);
+              const existing = open ?? stored;
+              const previous = existing?.blocks.find(
+                (block) => block.appRequestId === id,
+              );
+              if (previous) {
+                if (
+                  previous.text !== launch.prompt ||
+                  (!launch.draft && !!previous.draft)
+                )
+                  throw new Error("Request ID was already used for another session launch");
+                return;
+              }
+              if (
+                existing?.blocks.some(
+                  (block) => block.role === "user" && !block.draft,
+                )
+              )
+                return;
+              if (existing && sessionDraftBlock(existing))
+                throw new Error("Session ID already has a different draft");
+              await launchQuickSessionRef.current(launch, id);
+            },
+            sessions: async (cwd): Promise<AppSessionListing[]> => {
+              const stored = await listSessionsByProject(cwd);
+              const byId = new Map<string, AppSessionListing>();
+              for (const session of stored) {
+                if (session.orchestrationLeadId) continue;
+                byId.set(session.id, {
+                  id: session.id,
+                  title: session.title,
+                  harness: session.harness,
+                  model: session.model,
+                  busy: false,
+                  hasDraft: !!session.draft,
+                });
+              }
+              for (const session of sessionsRef.current) {
+                if (
+                  session.orchestrationLeadId ||
+                  !sameProjectPath(session.cwd, cwd)
+                )
+                  continue;
+                byId.set(session.id, {
+                  id: session.id,
+                  title: session.title,
+                  harness: session.harness,
+                  model: session.model,
+                  busy: !!session.busy,
+                  hasDraft: !!sessionDraftBlock(session),
+                });
+              }
+              return [...byId.values()];
+            },
+            session: async (id) => {
+              const target =
+                sessionsRef.current.find((session) => session.id === id) ??
+                (await getSession(id));
+              return target &&
+                !target.orchestrationLeadId &&
+                sameProjectPath(target.cwd, source.cwd)
+                ? target
+                : null;
+            },
+            send: async (id, prompt, requestId) => {
+              const target = await ensureOpenSessionRef.current(id);
+              if (
+                !target ||
+                target.orchestrationLeadId ||
+                !sameProjectPath(target.cwd, source.cwd) ||
+                orchestrator.run(id)
+              )
+                throw new Error("Session is unavailable in this project");
+              const previous = target.blocks.find(
+                (block) => block.appRequestId === requestId,
+              );
+              if (previous) {
+                if (previous.text !== prompt)
+                  throw new Error(
+                    "Request ID was already used with another prompt",
+                  );
+                if (previous.draft)
+                  throw new Error("Request ID belongs to an unsent draft");
+                return { alreadySubmitted: true };
+              }
+              if (target.busy)
+                throw new Error("Session is busy; try again when it finishes");
+              if (sessionDraftBlock(target))
+                throw new Error(
+                  "Session already has a draft; send or remove it first",
+                );
+              const accepted = await submitSessionRef.current(id, prompt, [], {
+                appRequestId: requestId,
+              });
+              if (!accepted)
+                throw new Error("Session could not accept the follow-up");
+              return { alreadySubmitted: false };
+            },
+            draft: async (id, prompt, requestId) => {
+              const target = await ensureOpenSessionRef.current(id);
+              if (
+                !target ||
+                target.orchestrationLeadId ||
+                !sameProjectPath(target.cwd, source.cwd) ||
+                orchestrator.run(id)
+              )
+                throw new Error("Session is unavailable in this project");
+              const previous = target.blocks.find(
+                (block) => block.appRequestId === requestId,
+              );
+              if (previous) {
+                if (previous.text !== prompt)
+                  throw new Error(
+                    "Request ID was already used with another prompt",
+                  );
+                return { alreadySaved: true, draft: !!previous.draft };
+              }
+              if (target.busy)
+                throw new Error("Session is busy; try again when it finishes");
+              if (sessionDraftBlock(target))
+                throw new Error(
+                  "Session already has a draft; send or remove it first",
+                );
+              const saved = flushSync(() =>
+                saveDraftRef.current(id, prompt, [], requestId),
+              );
+              if (!saved) throw new Error("Session could not accept a draft");
+              return { alreadySaved: false, draft: true };
+            },
+            notes: () => invoke("notes_list"),
+            note: (id) => invoke("notes_get", { id }),
+          },
+        );
+        appReceipts.current.set(key, { signature, promise });
+        void promise.catch(() => {
+          if (appReceipts.current.get(key)?.promise === promise)
+            appReceipts.current.delete(key);
+        });
+        if (appReceipts.current.size > 256) {
+          const first = appReceipts.current.keys().next().value;
+          if (first) appReceipts.current.delete(first);
+        }
+        return promise;
+      };
+      void handle()
         .then(
           (result) =>
             invoke("control_reply", {

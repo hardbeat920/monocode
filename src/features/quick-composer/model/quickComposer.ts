@@ -52,6 +52,8 @@ export type QuickChoice = { harness: HarnessId; model: string };
 
 export type QuickLaunch = {
   prompt: string;
+  /** Create an unsent user draft instead of starting an agent turn. */
+  draft?: boolean;
   cwd: string;
   harness: HarnessId;
   /** Missing means the harness default, resolved by the workspace. */

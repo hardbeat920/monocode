@@ -170,6 +170,125 @@ describe("Composer question focus", () => {
     expect(textarea.selectionEnd).toBe(initialDraft.length);
   });
 
+  it("offers /mono in the slash picker and submits it as a local command", async () => {
+    const onSubmit = vi.fn(() => true);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "/mono",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(new Event("input", { bubbles: true })),
+    );
+    const command = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((button) => button.textContent?.includes("/mono"));
+    expect(command).toBeDefined();
+    await act(async () => command!.click());
+    expect(textarea.value).toBe("/mono ");
+    await act(async () => {
+      textarea.value += "list my notes";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+    expect(onSubmit).toHaveBeenCalledWith("/mono list my notes", [], {
+      intent: "default",
+    });
+  });
+
+  it("offers Mono Operator above Orchestrator and sends the /mono command", async () => {
+    const onSubmit = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "List my notes",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Add files or choose a mode"]',
+        )!
+        .click(),
+    );
+    const options = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        "[data-composer-plus] button",
+      ),
+    );
+    const mono = options.find((button) =>
+      button.textContent?.includes("Mono Operator"),
+    )!;
+    expect(mono).toBeDefined();
+    expect(options.indexOf(mono)).toBeLessThan(
+      options.findIndex((button) =>
+        button.textContent?.includes("Orchestrator"),
+      ),
+    );
+    await act(async () => mono.click());
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.value).toBe("List my notes");
+    expect(
+      container.querySelector('[aria-label="Turn off Mono Operator"]'),
+    ).not.toBeNull();
+
+    const send = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Send"]',
+    )!;
+    await act(async () => send.click());
+    expect(onSubmit).toHaveBeenLastCalledWith("/mono List my notes", [], {
+      intent: "default",
+    });
+    expect(textarea.value).toBe("List my notes");
+    expect(
+      container.querySelector('[aria-label="Turn off Mono Operator"]'),
+    ).not.toBeNull();
+
+    await act(async () => {
+      textarea.value = "/mono List my notes";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      send.click();
+    });
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    expect(onSubmit).toHaveBeenLastCalledWith("/mono List my notes", [], {
+      intent: "default",
+    });
+    expect(textarea.value).toBe("");
+    expect(
+      container.querySelector('[aria-label="Turn off Mono Operator"]'),
+    ).toBeNull();
+  });
+
   it("clears the parent draft before submit so a remounting composer stays empty", async () => {
     let parentDraft = "Ship the empty-state fix";
     const onDraftChange = vi.fn((text: string) => {
