@@ -39,6 +39,7 @@ import {
 } from "../../../shared/ui/ColorPickerPopover";
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import { AsanaSettings } from "./AsanaSettings";
 import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
@@ -231,6 +232,7 @@ import type { SessionSummary } from "../../sessions/data/sessionStore";
 import {
   clearInboxCache,
   githubStatus,
+  inboxProjectsForRail,
   type GithubStatus,
 } from "../../inbox/model/githubTasks";
 import {
@@ -1178,6 +1180,23 @@ function InboxPage({
         description="Pull requests and Boards work items from your ADO organization."
       >
         <AzureDevOpsSettings />
+      </Group>
+
+      <Group
+        id="asana"
+        title={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark provider="asana" className="size-4 shrink-0" />
+            Asana
+          </span>
+        }
+        description="Asana tasks from the projects you pick."
+      >
+        <AsanaSettings
+          localProjects={inboxProjectsForRail(recents ?? [], cwd).map(
+            (project) => project.path,
+          )}
+        />
       </Group>
 
       <Group

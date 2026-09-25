@@ -55,6 +55,7 @@ describe.each([
       if (
         command === "linear_status" ||
         command === "jira_status" ||
+        command === "asana_status" ||
         command === "gitlab_status" ||
         command === "azure_devops_status"
       ) {

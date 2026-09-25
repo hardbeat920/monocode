@@ -89,6 +89,7 @@ import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
 import { LAYER } from "../../../shared/lib/layers";
 import { LINEAR_CHANGE_EVENT, linearConnected } from "../../inbox/model/linear";
 import { JIRA_CHANGE_EVENT, jiraConnected } from "../../inbox/model/jira";
+import { ASANA_CHANGE_EVENT, asanaConnected } from "../../inbox/model/asana";
 import { defaultSessionChoice, firstEnabledHarness, modelsFor, preferredModelId, resolveModel } from "../../sessions/model/models";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
@@ -836,6 +837,7 @@ function AutomationEditor({
     github: false,
     linear: false,
     jira: false,
+    asana: false,
     gitlab: false,
     azuredevops: false,
   });
@@ -856,27 +858,39 @@ function AutomationEditor({
         jiraConnected()
           .then((status) => status.connected)
           .catch(() => false),
+        asanaConnected()
+          .then((status) => status.connected)
+          .catch(() => false),
         gitlabConnected()
           .then((status) => status.connected)
           .catch(() => false),
         azureDevOpsConnected()
           .then((status) => status.connected)
           .catch(() => false),
-      ]).then(([github, linear, jira, gitlab, azuredevops]) => {
+      ]).then(([github, linear, jira, asana, gitlab, azuredevops]) => {
         if (!cancelled) {
-          setProviderConnected({ github, linear, jira, gitlab, azuredevops });
+          setProviderConnected({
+            github,
+            linear,
+            jira,
+            asana,
+            gitlab,
+            azuredevops,
+          });
         }
       });
     };
     load();
     window.addEventListener(LINEAR_CHANGE_EVENT, load);
     window.addEventListener(JIRA_CHANGE_EVENT, load);
+    window.addEventListener(ASANA_CHANGE_EVENT, load);
     window.addEventListener(GITLAB_CHANGE_EVENT, load);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, load);
       window.removeEventListener(JIRA_CHANGE_EVENT, load);
+      window.removeEventListener(ASANA_CHANGE_EVENT, load);
       window.removeEventListener(GITLAB_CHANGE_EVENT, load);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
     };
@@ -1667,6 +1681,7 @@ const TRIGGER_CATEGORIES: readonly {
   { value: "github", label: "GitHub" },
   { value: "linear", label: "Linear" },
   { value: "jira", label: "Jira" },
+  { value: "asana", label: "Asana" },
   { value: "gitlab", label: "GitLab" },
   { value: "azuredevops", label: "Azure DevOps" },
 ];
@@ -1690,6 +1705,7 @@ const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
   ],
   linear: [{ value: "issue_created", label: "Issue created" }],
   jira: [{ value: "issue_created", label: "Issue appeared" }],
+  asana: [{ value: "issue_created", label: "Task appeared" }],
   gitlab: [
     { value: "merge_request_opened", label: "Merge request opened" },
     { value: "issue_opened", label: "Issue opened" },

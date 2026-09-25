@@ -36,6 +36,7 @@ export const SUPPORTED_INBOX_TRIGGER_EVENTS = {
   gitlab: ["merge_request_opened", "issue_opened"],
   linear: ["issue_created"],
   jira: ["issue_created"],
+  asana: ["issue_created"],
   azuredevops: ["pull_request_appeared", "work_item_appeared"],
 } as const;
 
@@ -57,7 +58,11 @@ export function inboxAppearedEvent(
   if (item.provider === "gitlab" && item.kind === "issue") {
     return { kind: "gitlab", event: "issue_opened" };
   }
-  if (item.provider === "linear" || item.provider === "jira") {
+  if (
+    item.provider === "linear" ||
+    item.provider === "jira" ||
+    item.provider === "asana"
+  ) {
     return { kind: item.provider, event: "issue_created" };
   }
   if (item.provider === "azuredevops" && item.kind === "pr") {
@@ -73,7 +78,9 @@ export function automationEventKey(item: InboxItem): string {
   const identity =
     item.provider === "linear" || item.provider === "jira"
       ? `${item.provider}:issue:${item.id || item.identifier || item.number}`
-      : `${item.provider}:${item.kind}:${item.repo}:${item.number}`;
+      : item.provider === "asana"
+        ? `asana:task:${item.id || item.identifier || item.number}`
+        : `${item.provider}:${item.kind}:${item.repo}:${item.number}`;
   return identity
     .trim()
     .toLowerCase()
@@ -220,10 +227,12 @@ function triggerMatchesInboxItem(
 }
 
 function matchesInboxProject(item: InboxItem, cwd: string): boolean {
-  // Linear and Jira issues have no git path. The automation's own
+  // Linear, Jira and Asana items have no git path. The automation's own
   // project is the workspace the agent should run in.
   if (
-    (item.provider === "linear" || item.provider === "jira") &&
+    (item.provider === "linear" ||
+      item.provider === "jira" ||
+      item.provider === "asana") &&
     !item.projectPath.trim()
   ) return true;
   return sameProjectPath(item.projectPath, cwd);

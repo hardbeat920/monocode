@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyInboxFilters,
   DEFAULT_INBOX_FILTERS,
+  filterAsanaByDue,
+  filterAsanaByLocalProject,
   filterInboxByKind,
   filterInboxByLinearProject,
   filterInboxByProject,
@@ -10,13 +12,18 @@ import {
   filterInboxByTime,
   hasActiveInboxFilters,
   inboxFetchState,
+  isTrackerSource,
   LINEAR_NO_PROJECT,
   linearProjectOptions,
   pruneInboxFilters,
   connectableInboxSources,
   loadInboxConnections,
+  loadInboxFilters,
+  loadInboxSource,
   resolveInboxSource,
   saveInboxConnections,
+  saveInboxFilters,
+  saveInboxSource,
   visibleInboxSources,
 } from "./inboxFilters";
 import type { InboxItem } from "./githubTasks";
@@ -361,6 +368,31 @@ describe("applyInboxFilters", () => {
     ).toEqual([9]);
   });
 
+  it("ignores local project and kind exclusions on the Asana tab", () => {
+    const asana = item({
+      number: 42,
+      kind: "asana",
+      provider: "asana",
+      projectPath: "",
+      updatedAt: "2026-08-27T10:00:00Z",
+    });
+    expect(
+      applyInboxFilters(
+        [asana, item({ number: 1, updatedAt: "2026-08-27T10:00:00Z" })],
+        {
+          ...DEFAULT_INBOX_FILTERS,
+          asanaDue: "all",
+          hiddenProjects: [""],
+          hiddenKinds: ["asana"],
+          status: { open: false, draft: true, closed: false, merged: true },
+        },
+        "",
+        Date.now(),
+        "asana",
+      ),
+    ).toEqual([asana]);
+  });
+
   it("ignores local project exclusions in GitLab's attention view", () => {
     const gitlab = item({
       number: 9,
@@ -385,7 +417,105 @@ describe("applyInboxFilters", () => {
   });
 });
 
+describe("filterAsanaByDue", () => {
+  const now = new Date(2026, 8, 26, 12).getTime();
+  const task = (number: number, dueOn: string) =>
+    item({
+      number,
+      kind: "asana",
+      provider: "asana",
+      dueOn,
+      updatedAt: "2026-09-20T10:00:00Z",
+    });
+  const overdue = task(1, "2026-09-20");
+  const today = task(2, "2026-09-26");
+  const lastDay = task(3, "2026-10-03");
+  const later = task(4, "2026-10-04");
+  const undated = task(5, "");
+  const github = item({ number: 6, updatedAt: "2026-09-20T10:00:00Z" });
+
+  it("keeps tasks due within the next 7 days, overdue included", () => {
+    expect(
+      filterAsanaByDue(
+        [overdue, today, lastDay, later, undated, github],
+        "week",
+        now,
+      ),
+    ).toEqual([overdue, today, lastDay, github]);
+  });
+
+  it("keeps every task when the due filter is off", () => {
+    expect(filterAsanaByDue([later, undated], "all", now)).toEqual([
+      later,
+      undated,
+    ]);
+  });
+
+  it("defaults to the next 7 days and remembers any time", () => {
+    mockLocalStorage();
+    expect(DEFAULT_INBOX_FILTERS.asanaDue).toBe("week");
+    expect(hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "asana")).toBe(false);
+    saveInboxFilters({ ...DEFAULT_INBOX_FILTERS, asanaDue: "all" });
+    expect(loadInboxFilters().asanaDue).toBe("all");
+  });
+});
+
+describe("filterAsanaByLocalProject", () => {
+  const github = item({ number: 1, updatedAt: "2026-08-27T10:00:00Z" });
+  const linked = item({
+    number: 2,
+    kind: "asana",
+    provider: "asana",
+    projectPath: "/work/app",
+    updatedAt: "2026-08-27T10:00:00Z",
+  });
+  const unlinked = item({
+    number: 3,
+    kind: "asana",
+    provider: "asana",
+    projectPath: "",
+    updatedAt: "2026-08-27T10:00:00Z",
+  });
+
+  it("keeps only Asana tasks linked to the selected project", () => {
+    expect(
+      filterAsanaByLocalProject([github, linked, unlinked], "/work/app/"),
+    ).toEqual([github, linked]);
+    expect(
+      filterAsanaByLocalProject([github, linked, unlinked], "/work/other"),
+    ).toEqual([github]);
+  });
+
+  it("does not scope without a selected project", () => {
+    expect(filterAsanaByLocalProject([linked, unlinked], "")).toEqual([
+      linked,
+      unlinked,
+    ]);
+  });
+});
+
 describe("hasActiveInboxFilters", () => {
+  it("ignores assignee and status for Asana, which always shows incomplete My Tasks", () => {
+    const filters = {
+      ...DEFAULT_INBOX_FILTERS,
+      assignedToMe: true,
+      asanaDue: "all" as const,
+      status: { open: false, draft: false, closed: true, merged: false },
+    };
+    expect(hasActiveInboxFilters(filters, "asana")).toBe(false);
+    expect(hasActiveInboxFilters(filters, "jira")).toBe(true);
+    const closedTask = item({
+      number: 9,
+      kind: "asana",
+      provider: "asana",
+      stateType: "done",
+      updatedAt: "2026-08-27T10:00:00Z",
+    });
+    expect(applyInboxFilters([closedTask], filters, "", Date.now(), "asana")).toEqual([
+      closedTask,
+    ]);
+  });
+
   it("is false for defaults", () => {
     expect(hasActiveInboxFilters(DEFAULT_INBOX_FILTERS)).toBe(false);
   });
@@ -440,6 +570,33 @@ describe("hasActiveInboxFilters", () => {
     expect(hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "github", ["t1"])).toBe(
       false,
     );
+  });
+
+  it("tracks hidden Asana projects only on the Asana tab", () => {
+    const hidden = ["1200000000000001"];
+    expect(
+      hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "asana", [], [], hidden),
+    ).toBe(true);
+    expect(
+      hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "jira", [], [], hidden),
+    ).toBe(false);
+    expect(
+      hasActiveInboxFilters(DEFAULT_INBOX_FILTERS, "asana", [], hidden, []),
+    ).toBe(false);
+  });
+
+  it("ignores GitHub-only filters on the Asana tab", () => {
+    expect(
+      hasActiveInboxFilters(
+        {
+          ...DEFAULT_INBOX_FILTERS,
+          hiddenProjects: ["/tmp/web"],
+          hiddenKinds: ["pr"],
+          status: { open: false, draft: true, closed: false, merged: true },
+        },
+        "asana",
+      ),
+    ).toBe(false);
   });
 
   it("is false on the Linear tab when no team is hidden", () => {
@@ -502,6 +659,7 @@ describe("visibleInboxSources", () => {
         github: false,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: false,
         azuredevops: false,
       }),
@@ -511,6 +669,7 @@ describe("visibleInboxSources", () => {
         github: true,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: false,
         azuredevops: false,
       }),
@@ -520,19 +679,21 @@ describe("visibleInboxSources", () => {
         github: false,
         linear: true,
         jira: true,
+        asana: true,
         gitlab: false,
         azuredevops: false,
       }),
-    ).toEqual(["linear", "jira"]);
+    ).toEqual(["linear", "jira", "asana"]);
     expect(
       visibleInboxSources({
         github: true,
         linear: true,
         jira: true,
+        asana: true,
         gitlab: true,
         azuredevops: true,
       }),
-    ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops"]);
+    ).toEqual(["github", "linear", "jira", "asana", "gitlab", "azuredevops"]);
   });
 
   it("keeps unresolved sources visible so tabs do not flash away", () => {
@@ -541,10 +702,11 @@ describe("visibleInboxSources", () => {
         github: null,
         linear: null,
         jira: null,
+        asana: null,
         gitlab: null,
         azuredevops: null,
       }),
-    ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops"]);
+    ).toEqual(["github", "linear", "jira", "asana", "gitlab", "azuredevops"]);
   });
 });
 
@@ -555,19 +717,21 @@ describe("connectableInboxSources", () => {
         github: true,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: true,
         azuredevops: true,
       }),
-    ).toEqual(["linear", "jira"]);
+    ).toEqual(["linear", "jira", "asana"]);
     expect(
       connectableInboxSources({
         github: false,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: false,
         azuredevops: false,
       }),
-    ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops"]);
+    ).toEqual(["github", "linear", "jira", "asana", "gitlab", "azuredevops"]);
   });
 
   it("offers nothing while the checks are unresolved", () => {
@@ -576,6 +740,7 @@ describe("connectableInboxSources", () => {
         github: null,
         linear: null,
         jira: null,
+        asana: null,
         gitlab: null,
         azuredevops: null,
       }),
@@ -590,6 +755,7 @@ describe("resolveInboxSource", () => {
         github: true,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: true,
         azuredevops: false,
       }),
@@ -599,6 +765,7 @@ describe("resolveInboxSource", () => {
         github: false,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: true,
         azuredevops: false,
       }),
@@ -611,6 +778,7 @@ describe("resolveInboxSource", () => {
         github: false,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: false,
         azuredevops: false,
       }),
@@ -623,6 +791,7 @@ describe("resolveInboxSource", () => {
         github: false,
         linear: true,
         jira: true,
+        asana: true,
         gitlab: false,
         azuredevops: false,
       }),
@@ -632,6 +801,7 @@ describe("resolveInboxSource", () => {
         github: true,
         linear: false,
         jira: false,
+        asana: false,
         gitlab: false,
         azuredevops: false,
       }),
@@ -672,6 +842,7 @@ describe("inbox connection cache", () => {
       github: true,
       linear: true,
       jira: true,
+      asana: true,
       gitlab: false,
       azuredevops: false,
     });
@@ -679,6 +850,7 @@ describe("inbox connection cache", () => {
       github: true,
       linear: true,
       jira: true,
+      asana: true,
       gitlab: false,
       azuredevops: false,
     });
@@ -689,6 +861,7 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       jira: null,
+      asana: null,
       gitlab: null,
       azuredevops: null,
     });
@@ -700,6 +873,7 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       jira: null,
+      asana: null,
       gitlab: null,
       azuredevops: null,
     });
@@ -708,8 +882,31 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       jira: null,
+      asana: null,
       gitlab: null,
       azuredevops: null,
     });
+  });
+});
+
+describe("isTrackerSource", () => {
+  it("treats account-wide trackers apart from repository hosts", () => {
+    expect(isTrackerSource("linear")).toBe(true);
+    expect(isTrackerSource("jira")).toBe(true);
+    expect(isTrackerSource("asana")).toBe(true);
+    expect(isTrackerSource("github")).toBe(false);
+    expect(isTrackerSource("gitlab")).toBe(false);
+    expect(isTrackerSource(undefined)).toBe(false);
+  });
+});
+
+describe("inbox source cache", () => {
+  beforeEach(mockLocalStorage);
+
+  it("restores the Asana tab and falls back to GitHub for unknown values", () => {
+    saveInboxSource("asana");
+    expect(loadInboxSource()).toBe("asana");
+    localStorage.setItem("monocode.inboxSource", "trello");
+    expect(loadInboxSource()).toBe("github");
   });
 });

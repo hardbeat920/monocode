@@ -2150,7 +2150,9 @@ export default function App({
           item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
         setSidebarTab("sessions", cwd);
         const ref =
-          item.provider === "linear" || item.provider === "jira"
+          item.provider === "linear" ||
+          item.provider === "jira" ||
+          item.provider === "asana"
             ? item.identifier?.trim() || `#${item.number}`
             : `#${item.number}`;
         const linkedWorkItem = linkedWorkItemFromInboxItem(item);
@@ -3756,7 +3758,9 @@ export default function App({
               ? candidate
               : await invoke<string>("default_cwd");
           const description =
-            item.provider === "linear" || item.provider === "jira"
+            item.provider === "linear" ||
+            item.provider === "jira" ||
+            item.provider === "asana"
               ? await inboxTrackerDescription(item)
               : item.provider === "gitlab" &&
                   (item.kind === "issue" || item.kind === "pr")

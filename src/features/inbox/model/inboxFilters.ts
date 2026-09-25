@@ -5,7 +5,10 @@ import {
   type InboxKind,
   type InboxProvider,
 } from "./githubTasks";
-import { normalizeProjectPath } from "../../projects/model/recents";
+import {
+  normalizeProjectPath,
+  sameProjectPath,
+} from "../../projects/model/recents";
 import { timeFilterStart, type SessionTimeFilter } from "../../sessions/model/sessionFilters";
 
 export type InboxTimeFilter = SessionTimeFilter;
@@ -17,6 +20,9 @@ export type InboxStatusFilter = {
   merged: boolean;
 };
 
+/** `week` keeps Asana tasks due within the next 7 days, overdue included. */
+export type InboxAsanaDueFilter = "week" | "all";
+
 export type InboxFilters = {
   assignedToMe: boolean;
   hiddenProjects: string[];
@@ -25,6 +31,7 @@ export type InboxFilters = {
   hiddenKinds: InboxKind[];
   time: InboxTimeFilter;
   status: InboxStatusFilter;
+  asanaDue: InboxAsanaDueFilter;
 };
 
 /**
@@ -52,6 +59,7 @@ export const DEFAULT_INBOX_FILTERS: InboxFilters = {
   hiddenKinds: [],
   time: "all",
   status: DEFAULT_INBOX_STATUS_FILTER,
+  asanaDue: "week",
 };
 
 export type InboxSource = InboxProvider;
@@ -68,6 +76,7 @@ export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
   github: "GitHub",
   linear: "Linear",
   jira: "Jira",
+  asana: "Asana",
   gitlab: "GitLab",
   azuredevops: "ADO",
 };
@@ -79,6 +88,7 @@ export function visibleInboxSources(
   if (connections.github !== false) sources.push("github");
   if (connections.linear !== false) sources.push("linear");
   if (connections.jira !== false) sources.push("jira");
+  if (connections.asana !== false) sources.push("asana");
   if (connections.gitlab !== false) sources.push("gitlab");
   if (connections.azuredevops !== false) sources.push("azuredevops");
   return sources;
@@ -91,6 +101,7 @@ export function connectableInboxSources(
   if (connections.github === false) sources.push("github");
   if (connections.linear === false) sources.push("linear");
   if (connections.jira === false) sources.push("jira");
+  if (connections.asana === false) sources.push("asana");
   if (connections.gitlab === false) sources.push("gitlab");
   if (connections.azuredevops === false) sources.push("azuredevops");
   return sources;
@@ -98,7 +109,7 @@ export function connectableInboxSources(
 
 /** Account-wide issue trackers: no local repos, no PRs, no draft/merged states. */
 export function isTrackerSource(source?: InboxSource): boolean {
-  return source === "linear" || source === "jira";
+  return source === "linear" || source === "jira" || source === "asana";
 }
 
 export function resolveInboxSource(
@@ -117,6 +128,7 @@ const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
   github: null,
   linear: null,
   jira: null,
+  asana: null,
   gitlab: null,
   azuredevops: null,
 };
@@ -126,6 +138,7 @@ export function loadInboxSource(): InboxSource {
     const raw = localStorage.getItem(SOURCE_KEY);
     return raw === "linear" ||
       raw === "jira" ||
+      raw === "asana" ||
       raw === "gitlab" ||
       raw === "azuredevops"
       ? raw
@@ -161,6 +174,7 @@ export function loadInboxConnections(): InboxSourceConnections {
       github: connectFlag(record.github),
       linear: connectFlag(record.linear),
       jira: connectFlag(record.jira),
+      asana: connectFlag(record.asana),
       gitlab: connectFlag(record.gitlab),
       azuredevops: connectFlag(record.azuredevops),
     };
@@ -205,6 +219,7 @@ export function loadInboxFilters(): InboxFilters {
         closed: parsed.status?.closed === true,
         merged: parsed.status?.merged === true,
       },
+      asanaDue: parsed.asanaDue === "all" ? "all" : "week",
     };
   } catch {
     return DEFAULT_INBOX_FILTERS;
@@ -240,20 +255,25 @@ export function hasActiveInboxFilters(
   hiddenLinearTeamIds: readonly string[] = [],
   /** Same for Jira projects. */
   hiddenJiraProjectIds: readonly string[] = [],
+  /** Same for Asana projects. */
+  hiddenAsanaProjectIds: readonly string[] = [],
 ): boolean {
-  const statusActive = isTrackerSource(source)
-    ? filters.status.open || filters.status.closed
-    : filters.status.open ||
-      filters.status.draft ||
-      filters.status.closed ||
-      filters.status.merged;
+  const statusActive =
+    source !== "asana" &&
+    (isTrackerSource(source)
+      ? filters.status.open || filters.status.closed
+      : filters.status.open ||
+        filters.status.draft ||
+        filters.status.closed ||
+        filters.status.merged);
   return (
-    filters.assignedToMe ||
+    (source !== "asana" && filters.assignedToMe) ||
     (source === "linear" && hiddenLinearTeamIds.length > 0) ||
     (source === "jira" && hiddenJiraProjectIds.length > 0) ||
+    (source === "asana" && hiddenAsanaProjectIds.length > 0) ||
     (source === "linear"
       ? filters.hiddenLinearProjects.length > 0
-      : source !== "jira" && filters.hiddenProjects.length > 0) ||
+      : !isTrackerSource(source) && filters.hiddenProjects.length > 0) ||
     (isTrackerSource(source) ? false : filters.hiddenKinds.length > 0) ||
     filters.time !== "all" ||
     statusActive
@@ -359,6 +379,41 @@ export function filterInboxByTime(
   });
 }
 
+/** Asana tasks only show under the local project their Asana project is linked to. */
+export function filterAsanaByLocalProject(
+  items: readonly InboxItem[],
+  projectPath: string,
+): InboxItem[] {
+  if (!projectPath.trim()) return [...items];
+  return items.filter(
+    (item) =>
+      item.provider !== "asana" ||
+      (!!item.projectPath && sameProjectPath(item.projectPath, projectPath)),
+  );
+}
+
+const ASANA_DUE_WINDOW_DAYS = 7;
+
+export function filterAsanaByDue(
+  items: readonly InboxItem[],
+  due: InboxAsanaDueFilter | undefined,
+  now: number,
+): InboxItem[] {
+  if (due !== "week") return [...items];
+  const last = new Date(now);
+  last.setDate(last.getDate() + ASANA_DUE_WINDOW_DAYS);
+  const lastDay = localDateKey(last);
+  return items.filter(
+    (item) => item.provider !== "asana" || (!!item.dueOn && item.dueOn <= lastDay),
+  );
+}
+
+function localDateKey(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 export function filterInboxByProvider(
   items: readonly InboxItem[],
   source: InboxSource,
@@ -373,7 +428,11 @@ export function applyInboxFilters(
   now = Date.now(),
   source?: InboxSource,
 ): InboxItem[] {
-  const scoped = source ? filterInboxByProvider(items, source) : [...items];
+  const scoped = filterAsanaByDue(
+    source ? filterInboxByProvider(items, source) : items,
+    filters.asanaDue,
+    now,
+  );
   const hiddenProjects =
     isTrackerSource(source) ||
     ((source === "gitlab" || source === "azuredevops") && filters.assignedToMe)
@@ -404,6 +463,9 @@ export function statusFilterForSource(
   source?: InboxSource,
 ): InboxStatusFilter {
   if (!isTrackerSource(source)) return status;
+  if (source === "asana") {
+    return { open: false, closed: false, draft: false, merged: false };
+  }
   return {
     open: status.open,
     closed: status.closed,

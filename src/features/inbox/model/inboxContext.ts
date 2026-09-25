@@ -1,4 +1,5 @@
 import type { InboxItem } from "./githubTasks";
+import { asanaIssueDetails, peekAsanaIssueDetails } from "./asana";
 import { jiraIssueDetails, peekJiraIssueDetails } from "./jira";
 import { linearIssueDetails, peekLinearIssueDetails } from "./linear";
 
@@ -7,12 +8,24 @@ export async function inboxTrackerDescription(
   item: InboxItem,
   body?: string,
 ): Promise<string | undefined> {
-  if (item.provider !== "linear" && item.provider !== "jira") return body;
+  if (
+    item.provider !== "linear" &&
+    item.provider !== "jira" &&
+    item.provider !== "asana"
+  ) {
+    return body;
+  }
   if (body !== undefined) return body;
   if (item.provider === "jira") {
     const key = item.identifier?.trim();
     if (!key) throw new Error("Missing Jira issue key");
     return (peekJiraIssueDetails(key) ?? (await jiraIssueDetails(key))).body;
+  }
+  if (item.provider === "asana") {
+    if (!item.id) throw new Error("Missing Asana task");
+    return (
+      peekAsanaIssueDetails(item.id) ?? (await asanaIssueDetails(item.id))
+    ).body;
   }
   if (!item.id) throw new Error("Missing Linear issue");
   return (
