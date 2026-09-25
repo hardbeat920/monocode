@@ -26,7 +26,8 @@ export function harnessRuntimeEnv(
 
 /** Splits a launch-args string the way a shell would for simple cases:
  * whitespace-separated, with single or double quotes grouping a value that
- * contains spaces (`--config "my file.json"` -> ["--config", "my file.json"]).
+ * contains spaces (`--config "my file.json"` -> ["--config", "my file.json"],
+ * `--config="my file.json"` -> ["--config=my file.json"]).
  * No escaping, nesting, or unmatched-quote recovery — good enough for the
  * flags CLIs actually take, not a full shell parser. */
 export function harnessRuntimeExtraArgs(
@@ -34,18 +35,16 @@ export function harnessRuntimeExtraArgs(
 ): string[] {
   const trimmed = runtime.launchArgs.trim();
   if (!trimmed) return [];
-  const args: string[] = [];
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(trimmed))) {
-    args.push(match[1] ?? match[2] ?? match[3] ?? "");
-  }
-  return args;
+  const tokens = trimmed.match(/(?:"[^"]*"|'[^']*'|\S)+/g) ?? [];
+  return tokens.map((token) =>
+    token.replace(
+      /"([^"]*)"|'([^']*)'/g,
+      (_, double: string | undefined, single: string | undefined) =>
+        double ?? single ?? "",
+    ),
+  );
 }
 
-/** The binary override, or empty string when the harness should resolve its
- * default from PATH. Kept as a tiny wrapper so every provider trims the same
- * way instead of repeating `.trim()` at each call site. */
 export function harnessRuntimeBinaryPath(runtime: HarnessRuntimeSettings): string {
   return runtime.binaryPath.trim();
 }

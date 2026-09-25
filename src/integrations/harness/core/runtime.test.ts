@@ -44,6 +44,14 @@ describe("harnessRuntimeExtraArgs", () => {
       ),
     ).toEqual(["--config", "my file.json", "--other", "a b"]);
   });
+
+  it("keeps quoted parts joined to the rest of their token", () => {
+    expect(
+      harnessRuntimeExtraArgs(
+        runtime({ launchArgs: `--config="my file.json" -x 'a b'c` }),
+      ),
+    ).toEqual(["--config=my file.json", "-x", "a bc"]);
+  });
 });
 
 describe("harnessRuntimeEnv", () => {
