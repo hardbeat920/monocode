@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -263,6 +264,7 @@ import {
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
+  loadKeybindingOverrides,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
@@ -278,8 +280,11 @@ import {
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
+  saveKeybindingOverride,
   saveQuickComposerEnabled,
   saveQuickComposerShortcut,
+  subscribeKeybindings,
+  type KeybindingOverride,
   saveTabAnimationsEnabled,
   searchSettings,
   settingsSectionDescription,
@@ -2352,12 +2357,20 @@ function shortcutModifier(event: KeyboardEvent): ShortcutModifier | null {
   return null;
 }
 
-function QuickComposerShortcutEditor({
-  shortcut,
-  onChange,
+function ShortcutEditor({
+  name,
+  display,
+  resetVisible,
+  onApply,
+  onDisable,
+  onReset,
 }: {
-  shortcut: string;
-  onChange: (shortcut: string) => void;
+  name: string;
+  display: string | null;
+  resetVisible: boolean;
+  onApply: (shortcut: string) => void | Promise<void>;
+  onDisable: () => void | Promise<void>;
+  onReset: () => void | Promise<void>;
 }) {
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2369,6 +2382,19 @@ function QuickComposerShortcutEditor({
     altKey: false,
     shiftKey: false,
   });
+
+  const run = async (action: () => void | Promise<void>) => {
+    setRecording(false);
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const beginRecording = () => {
     held.current = {
@@ -2382,34 +2408,18 @@ function QuickComposerShortcutEditor({
     setRecording(true);
   };
 
-  const apply = useCallback(
-    async (next: string) => {
-      setRecording(false);
-      setBusy(true);
-      setError(null);
-      try {
-        if (loadQuickComposerEnabled())
-          await setQuickComposerShortcut(true, next);
-        saveQuickComposerShortcut(next);
-        onChange(next);
-      } catch (reason) {
-        setError(String(reason));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [onChange],
-  );
-
   useEffect(() => {
     if (!recording) return;
-    // Capture even when WebKit leaves focus elsewhere after a mouse click.
     const onKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.code === "Escape") {
         setRecording(false);
         setError(null);
+        return;
+      }
+      if (event.code === "Backspace" || event.code === "Delete") {
+        void run(onDisable);
         return;
       }
       const modifier = shortcutModifier(event);
@@ -2429,7 +2439,7 @@ function QuickComposerShortcutEditor({
       );
       if (modifier) return;
       const next = shortcutFromKeyEvent({ ...modifiers, code: event.code });
-      if (next) void apply(next);
+      if (next) void run(() => onApply(next));
     };
     const onKeyUp = (event: KeyboardEvent) => {
       const modifier = shortcutModifier(event);
@@ -2452,61 +2462,134 @@ function QuickComposerShortcutEditor({
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
     };
-  }, [apply, recording]);
+  }, [onApply, onDisable, recording]);
 
   return (
-    <div className="w-40 shrink-0">
-      <div className="flex items-center gap-1">
+    <div className="relative w-40 shrink-0">
+      <div className="flex items-center gap-0.5">
         <input
           type="text"
           readOnly
-          aria-label="Change quick composer shortcut"
+          aria-label={`Change ${name} shortcut`}
           data-shortcut-recorder-active={recording ? "true" : undefined}
           disabled={busy}
           value={
-            recording || busy
-              ? preview || "Press keys…"
-              : quickComposerShortcutLabel(shortcut)
+            recording || busy ? preview || "Record…" : (display ?? "Disabled")
           }
           onFocus={beginRecording}
           onClick={beginRecording}
           onBlur={() => setRecording(false)}
-          className="h-6 w-24 shrink-0 rounded-md border border-content/15 bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none text-content/80 outline-none hover:bg-content/10 focus:border-accent disabled:opacity-50"
+          className={`h-6 w-28 shrink-0 truncate rounded-md border bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none outline-none focus:border-accent disabled:opacity-50 ${
+            display === null
+              ? "border-dashed border-content/15 text-content/35"
+              : "border-content/15 text-content/80 hover:bg-content/10"
+          }`}
         />
-        {shortcut !== QUICK_COMPOSER_DEFAULT_SHORTCUT ? (
+        {resetVisible ? (
           <button
             type="button"
-            aria-label="Reset quick composer shortcut"
+            aria-label={`Reset ${name} shortcut`}
             disabled={busy}
-            onClick={() => void apply(QUICK_COMPOSER_DEFAULT_SHORTCUT)}
-            className="rounded-md px-1 py-1 text-content/45 hover:bg-content/10 hover:text-content disabled:opacity-50"
+            onClick={() => void run(onReset)}
+            className="rounded-md px-1 py-1 text-content/35 hover:bg-content/10 hover:text-content disabled:opacity-50"
           >
             <RotateCcw className="size-3.5" />
           </button>
         ) : null}
       </div>
       {recording ? (
-        <p className="mt-1 text-[11px] text-content/45" aria-live="polite">
-          ⌘ or ⌃ + one key · Esc to cancel
+        <p
+          className="pointer-events-none absolute top-1/2 right-full z-40 mr-3 -translate-y-1/2 text-[10px] whitespace-nowrap text-content/50"
+          aria-live="polite"
+        >
+          Del disables · Esc cancels
         </p>
       ) : null}
-      {error ? <p className="mt-1 text-[11px] text-red-500">{error}</p> : null}
+      {error ? (
+        <p className="absolute top-full left-0 z-40 mt-1.5 w-max max-w-64 rounded-md border border-content/10 bg-background-base/95 px-2 py-1 text-[11px] whitespace-nowrap text-red-400 shadow-lg">
+          {error}
+        </p>
+      ) : null}
     </div>
+  );
+}
+
+function QuickComposerShortcutEditor() {
+  const [shortcut, setShortcut] = useState(loadQuickComposerShortcut);
+  const [enabled, setEnabled] = useState(loadQuickComposerEnabled);
+  const apply = async (next: string) => {
+    await setQuickComposerShortcut(true, next);
+    saveQuickComposerEnabled(true);
+    saveQuickComposerShortcut(next);
+    setShortcut(next);
+    setEnabled(true);
+  };
+  return (
+    <ShortcutEditor
+      name="quick composer"
+      display={enabled ? quickComposerShortcutLabel(shortcut) : null}
+      resetVisible={
+        enabled !== true || shortcut !== QUICK_COMPOSER_DEFAULT_SHORTCUT
+      }
+      onApply={apply}
+      onDisable={async () => {
+        await setQuickComposerShortcut(false);
+        saveQuickComposerEnabled(false);
+        setEnabled(false);
+      }}
+      onReset={() => apply(QUICK_COMPOSER_DEFAULT_SHORTCUT)}
+    />
+  );
+}
+
+function KeybindingShortcutEditor({
+  command,
+  display,
+  modified,
+  onSave,
+}: {
+  command: string;
+  display: string | null;
+  modified: boolean;
+  onSave: (command: string, override: KeybindingOverride) => void;
+}) {
+  return (
+    <ShortcutEditor
+      name={command}
+      display={display}
+      resetVisible={modified}
+      onApply={(shortcut) => onSave(command, { shortcut })}
+      onDisable={() => onSave(command, { disabled: true })}
+      onReset={() => onSave(command, {})}
+    />
   );
 }
 
 function KeybindingsPage() {
   const [query, setQuery] = useState("");
-  const [quickShortcut, setQuickShortcut] = useState(loadQuickComposerShortcut);
+  const [overrides, setOverrides] = useState(loadKeybindingOverrides);
+  useEffect(
+    () => subscribeKeybindings(() => setOverrides(loadKeybindingOverrides())),
+    [],
+  );
   const rows = useMemo(
     () => filterKeybindings(currentKeybindings(), query),
-    [query, quickShortcut],
+    [query, overrides],
   );
+
+  const save = (command: string, override: KeybindingOverride) => {
+    const next = saveKeybindingOverride(command, override);
+    if (IS_MAC) {
+      void invoke("keybindings_set_overrides", { overrides: next }).catch(
+        () => {},
+      );
+    }
+  };
 
   return (
     <Group
       title="Shortcuts"
-      description="Bindings come from the app menu and the workspace key handler. Click the Quick Composer binding to change its global shortcut."
+      description="Click a shortcut to record new keys. Press Delete while recording to disable it."
       action={
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
@@ -2537,27 +2620,35 @@ function KeybindingsPage() {
           No matching bindings
         </p>
       ) : (
-        rows.map((row) => (
-          <div
-            key={row.command}
-            className="flex items-center border-b border-content/5 px-4 py-2 text-[12px] last:border-b-0"
-          >
-            <span className="min-w-0 flex-1 truncate">{row.command}</span>
-            {row.command === "App: Quick Composer" ? (
-              <QuickComposerShortcutEditor
-                shortcut={quickShortcut}
-                onChange={setQuickShortcut}
-              />
-            ) : (
-              <span className="w-40 shrink-0 font-mono text-[12px] text-content/80">
-                {row.keys}
+        rows.map((row) => {
+          const override = overrides[row.command];
+          const disabled = override?.disabled === true;
+          return (
+            <div
+              key={row.command}
+              className="flex h-11 items-center border-b border-content/5 px-4 text-[12px] last:border-b-0"
+            >
+              <span
+                className={`min-w-0 flex-1 truncate ${disabled ? "text-content/45" : ""}`}
+              >
+                {row.command}
               </span>
-            )}
-            <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
-              {row.when}
-            </span>
-          </div>
-        ))
+              {row.command === "App: Quick Composer" ? (
+                <QuickComposerShortcutEditor />
+              ) : (
+                <KeybindingShortcutEditor
+                  command={row.command}
+                  display={disabled ? null : row.keys}
+                  modified={Boolean(override)}
+                  onSave={save}
+                />
+              )}
+              <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
+                {row.when}
+              </span>
+            </div>
+          );
+        })
       )}
     </Group>
   );
@@ -2588,7 +2679,9 @@ function ProvidersPage({
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
   const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
-  const [hiddenGlobally, setHiddenGlobally] = useState(loadHiddenPickerProviders);
+  const [hiddenGlobally, setHiddenGlobally] = useState(
+    loadHiddenPickerProviders,
+  );
 
   const scopeOptions = useMemo(() => {
     const options: { value: string; label: string; icon?: ReactNode }[] = [

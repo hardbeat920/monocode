@@ -76,7 +76,7 @@ it("records a global shortcut, persists it, and restores the default", async () 
   )!;
   expect(input.value).toBe("⌘⇧Space");
   await act(async () => input.click());
-  expect(input.value).toBe("Press keys…");
+  expect(input.value).toBe("Record…");
   await act(async () =>
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -181,7 +181,8 @@ it("shows pressed keys without an error and Escape cancels recording", async () 
     '[aria-label="Change quick composer shortcut"]',
   )!;
   await act(async () => input.click());
-  expect(container.textContent).toContain("⌘ or ⌃ + one key · Esc to cancel");
+  expect(input.value).toBe("Record…");
+  expect(container.textContent).toContain("Del disables · Esc cancels");
   await act(async () =>
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -205,9 +206,7 @@ it("shows pressed keys without an error and Escape cancels recording", async () 
     ),
   );
   expect(input.value).toBe("⌘⇧Space");
-  expect(container.textContent).not.toContain(
-    "⌘ or ⌃ + one key · Esc to cancel",
-  );
+  expect(container.textContent).not.toContain("Del disables · Esc cancels");
   expect(invoke).not.toHaveBeenCalledWith(
     "quick_composer_set_enabled",
     expect.anything(),
