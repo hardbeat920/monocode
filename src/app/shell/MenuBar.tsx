@@ -7,10 +7,10 @@ import {
 import { ALT, MOD, SHIFT } from "../../platform/tauri/platform";
 import { runUpdateFlow } from "../model/updater";
 import {
+  keybindingShortcutLabel,
   loadKeybindingOverrides,
   subscribeKeybindings,
 } from "../../features/settings/model/settings";
-import { quickComposerShortcutLabel } from "../../features/quick-composer/model/quickComposerShortcut";
 
 type MenuKey = "file" | "view" | "terminal";
 
@@ -60,26 +60,17 @@ export function MenuBar({
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(
     null,
   );
-  const [keybindingOverrides, setKeybindingOverrides] = useState(
-    loadKeybindingOverrides,
-  );
+  const [, refreshShortcuts] = useState(loadKeybindingOverrides);
   const barRef = useRef<HTMLDivElement>(null);
 
   useEffect(
     () =>
-      subscribeKeybindings(() =>
-        setKeybindingOverrides(loadKeybindingOverrides()),
-      ),
+      subscribeKeybindings(() => refreshShortcuts(loadKeybindingOverrides())),
     [],
   );
 
-  const shortcut = (command: string, keys: string) => {
-    const override = keybindingOverrides[command];
-    if (override?.disabled) return undefined;
-    return override?.shortcut
-      ? quickComposerShortcutLabel(override.shortcut)
-      : keys;
-  };
+  const shortcut = (command: string, keys: string) =>
+    keybindingShortcutLabel(command, keys) ?? undefined;
 
   // Toggle with standalone Alt key tap
   useEffect(() => {
