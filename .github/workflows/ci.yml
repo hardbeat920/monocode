@@ -39,3 +39,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo check
       - run: cargo test
+
+      - name: Test per-user Linux installer
+        if: runner.os == 'Linux'
+        run: npm run test:linux:installer
