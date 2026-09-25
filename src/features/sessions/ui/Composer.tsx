@@ -1926,7 +1926,7 @@ export function Composer({
                   >
                     <CursorMagicSelection className="mt-0.5 size-4 shrink-0 text-sky-300/80" />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px]">Mono Operator</span>
+                      <span className="block text-[13px]">Operator</span>
                       <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
                         Give this thread access to MonoCode
                       </span>
@@ -2000,8 +2000,8 @@ export function Composer({
             {monoSelected ? (
               <button
                 type="button"
-                title="Turn off Mono Operator"
-                aria-label="Turn off Mono Operator"
+                title="Turn off Operator"
+                aria-label="Turn off Operator"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   setMonoSelected(false);
@@ -2010,7 +2010,7 @@ export function Composer({
                 className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-sky-500/15 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-500/20 dark:bg-sky-400/10 dark:text-sky-200/90 dark:hover:bg-sky-400/15"
               >
                 <CursorMagicSelection className="size-3.5" />
-                Mono Operator
+                Operator
                 <X className="size-3" />
               </button>
             ) : null}

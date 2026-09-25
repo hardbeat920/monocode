@@ -213,7 +213,7 @@ describe("Composer question focus", () => {
     });
   });
 
-  it("offers Mono Operator above Orchestrator and sends the /mono command", async () => {
+  it("offers Operator above Orchestrator and sends the /mono command", async () => {
     const onSubmit = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     await act(async () =>
       root.render(
@@ -247,7 +247,7 @@ describe("Composer question focus", () => {
       ),
     );
     const mono = options.find((button) =>
-      button.textContent?.includes("Mono Operator"),
+      button.textContent?.includes("Operator"),
     )!;
     expect(mono).toBeDefined();
     expect(options.indexOf(mono)).toBeLessThan(
@@ -259,7 +259,7 @@ describe("Composer question focus", () => {
     const textarea = container.querySelector("textarea")!;
     expect(textarea.value).toBe("List my notes");
     expect(
-      container.querySelector('[aria-label="Turn off Mono Operator"]'),
+      container.querySelector('[aria-label="Turn off Operator"]'),
     ).not.toBeNull();
 
     const send = container.querySelector<HTMLButtonElement>(
@@ -271,7 +271,7 @@ describe("Composer question focus", () => {
     });
     expect(textarea.value).toBe("List my notes");
     expect(
-      container.querySelector('[aria-label="Turn off Mono Operator"]'),
+      container.querySelector('[aria-label="Turn off Operator"]'),
     ).not.toBeNull();
 
     await act(async () => {
@@ -285,7 +285,7 @@ describe("Composer question focus", () => {
     });
     expect(textarea.value).toBe("");
     expect(
-      container.querySelector('[aria-label="Turn off Mono Operator"]'),
+      container.querySelector('[aria-label="Turn off Operator"]'),
     ).toBeNull();
   });
 
