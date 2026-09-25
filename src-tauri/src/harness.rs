@@ -115,6 +115,7 @@ struct HarnessInner {
 pub struct HarnessHost {
     inner: Mutex<HarnessInner>,
     sse: Mutex<HashMap<String, Arc<LiveSse>>>,
+    runtime_binary_paths: Mutex<Option<HashMap<String, String>>>,
     /// Bumped by `kill_all` so a spawn that started before quit cannot reinsert.
     kill_all_gen: AtomicU64,
 }
@@ -134,6 +135,7 @@ impl HarnessHost {
                 epochs: HashMap::new(),
             }),
             sse: Mutex::new(HashMap::new()),
+            runtime_binary_paths: Mutex::new(None),
             kill_all_gen: AtomicU64::new(0),
         }
     }
@@ -323,6 +325,27 @@ pub fn harness_resolve_configured(
         path: path.to_string_lossy().into_owned(),
         args: (provider == "antigravity").then(antigravity_args),
     })
+}
+
+fn initialize_runtime_binary_paths(
+    runtime: &Mutex<Option<HashMap<String, String>>>,
+    paths: HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut runtime = runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if runtime.is_none() {
+        *runtime = Some(paths);
+    }
+    runtime.clone().unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn harness_runtime_binary_paths(
+    host: State<'_, HarnessHost>,
+    paths: HashMap<String, String>,
+) -> HashMap<String, String> {
+    initialize_runtime_binary_paths(&host.runtime_binary_paths, paths)
 }
 
 /// Resolve the Claude Code CLI (`claude`).
@@ -1566,26 +1589,39 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
     Ok(path)
 }
 
+fn is_supported_harness_version(version: &str) -> bool {
+    version.split_whitespace().any(|token| {
+        let token = token
+            .strip_prefix('v')
+            .or_else(|| token.strip_prefix('V'))
+            .unwrap_or(token);
+        let (version, build) = match token.split_once('-') {
+            Some((version, build)) => (version, Some(build)),
+            None => (token, None),
+        };
+        let mut parts = version.split('.');
+        let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+        let valid = parts.next().is_some_and(digits)
+            && parts.next().is_some_and(digits)
+            && parts.next().is_some_and(digits)
+            && parts.next().is_none();
+        let valid_build = build.is_none_or(|build| {
+            !build.is_empty()
+                && build
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+        });
+        valid && valid_build
+    })
+}
+
 fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), String> {
     if provider == "antigravity" {
         return Ok(());
     }
     let version = exec_capture(&path.to_string_lossy(), &["--version".to_string()], None)?;
     let lower = version.to_ascii_lowercase();
-    let has_version = version.split_whitespace().any(|token| {
-        let token = token
-            .strip_prefix('v')
-            .or_else(|| token.strip_prefix('V'))
-            .unwrap_or(token);
-        let mut parts = token.splitn(3, '.');
-        let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
-        let major = parts.next().is_some_and(digits);
-        let minor = parts.next().is_some_and(digits);
-        let patch = parts
-            .next()
-            .is_some_and(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()));
-        major && minor && patch
-    });
+    let has_version = is_supported_harness_version(&version);
     let provider_marker = match provider {
         "claude" => lower.contains("claude"),
         "codex" => lower.contains("codex"),
@@ -2791,6 +2827,16 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn runtime_binary_paths_stay_fixed_for_the_process() {
+        let runtime = Mutex::new(None);
+        let old = HashMap::from([("cursor".to_string(), "/old".to_string())]);
+        let new = HashMap::from([("cursor".to_string(), "/new".to_string())]);
+
+        assert_eq!(initialize_runtime_binary_paths(&runtime, old.clone()), old);
+        assert_eq!(initialize_runtime_binary_paths(&runtime, new), old);
+    }
+
     #[cfg(unix)]
     #[test]
     fn configured_binary_paths_fail_closed_and_stay_exact() {
@@ -2804,12 +2850,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let codex = dir.join("codex");
         let opencode = dir.join("opencode");
+        let cursor_agent = dir.join("cursor-agent");
         let decoy = dir.join("codex.sh");
         let antigravity = dir.join("agy_acp_server");
         let antigravity_wrapper = dir.join("agy_acp_server.par");
         for path in [
             &codex,
             &opencode,
+            &cursor_agent,
             &decoy,
             &antigravity,
             &antigravity_wrapper,
@@ -2819,6 +2867,8 @@ mod tests {
                     b"#!/bin/sh\n"
                 } else if path == &codex {
                     b"#!/bin/sh\necho 'codex-cli 0.156.1'\n"
+                } else if path == &cursor_agent {
+                    b"#!/bin/sh\necho '2026.09.23-86fc751'\n"
                 } else {
                     b"#!/bin/sh\necho '1.18.32-beta'\n"
                 };
@@ -2864,6 +2914,10 @@ mod tests {
         assert_eq!(
             resolve_harness_binary_override("opencode", &opencode.to_string_lossy()),
             Ok(opencode.clone())
+        );
+        assert_eq!(
+            resolve_harness_binary_override("cursor", &cursor_agent.to_string_lossy()),
+            Ok(cursor_agent.clone())
         );
         assert!(is_resolved_harness_binary(
             &codex_path,

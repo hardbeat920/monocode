@@ -380,6 +380,7 @@ pub fn run() {
             harness::harness_resolve_codex,
             harness::harness_resolve_opencode,
             harness::harness_resolve_configured,
+            harness::harness_runtime_binary_paths,
             harness::harness_resolve_claude,
             harness::harness_resolve_omp,
             harness::harness_resolve_pi,
