@@ -17,6 +17,7 @@ import {
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
 } from "./opencodeProtocol";
+import { abortTextPromptRace } from "../../core/abortTextPrompt";
 
 const TEXT_CHILD_ID = "monocode-opencode-text";
 const SERVER_TIMEOUT_MS = 30_000;
@@ -60,6 +61,7 @@ export async function runOpenCodeTextPrompt(input: {
   intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
   turns = run.then(
@@ -76,17 +78,24 @@ async function promptOnLive(input: {
   intent?: TurnIntent;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const session = await ensureLive(input.cwd, input.model, input.modelSettings);
+  const abort = abortTextPromptRace(input.signal, () =>
+    session.client.abortSession(session.sessionId),
+  );
   try {
-    const result = await session.client.prompt({
-      sessionID: session.sessionId,
-      model: session.model,
-      agent: openCodeTextAgent(input.intent, session.modelSettings),
-      variant: session.modelSettings?.variant,
-      parts: [{ type: "text", text: input.prompt }],
-      timeoutMs: input.timeoutMs ?? REQUEST_TIMEOUT_MS,
-    });
+    const result = await Promise.race([
+      session.client.prompt({
+        sessionID: session.sessionId,
+        model: session.model,
+        agent: openCodeTextAgent(input.intent, session.modelSettings),
+        variant: session.modelSettings?.variant,
+        parts: [{ type: "text", text: input.prompt }],
+        timeoutMs: input.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      }),
+      ...(abort.promise ? [abort.promise] : []),
+    ]);
     const error = result.info?.error;
     if (error) {
       throw new Error(
@@ -99,6 +108,7 @@ async function promptOnLive(input: {
     if (!text) throw new Error("OpenCode returned empty output.");
     return text;
   } finally {
+    abort.detach();
     await dropLive();
   }
 }

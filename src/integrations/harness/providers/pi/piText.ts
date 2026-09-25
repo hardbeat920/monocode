@@ -16,6 +16,7 @@ import {
   isAgentSettled,
   isPiThinkingLevel,
 } from "./piProtocol";
+import { abortTextPromptRace } from "../../core/abortTextPrompt";
 import { mergeStream } from "../../core/streamText";
 
 const INIT_TIMEOUT_MS = 15_000;
@@ -94,6 +95,7 @@ export async function runTextPrompt(
     modelSettings?: Record<string, string>;
     prompt: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
   },
 ): Promise<string> {
   const state = stateFor(flavor);
@@ -115,6 +117,7 @@ async function promptOnLive(
     modelSettings?: Record<string, string>;
     prompt: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
   },
 ): Promise<string> {
   const session = await ensureLive(
@@ -148,6 +151,11 @@ async function promptOnLive(
       session.turnFailed = reject;
     });
 
+    const abort = abortTextPromptRace(input.signal, () => {
+      session.turnFailed?.(new Error("By-the-way request cancelled"));
+      void session.rpc.request({ type: "abort" }).catch(() => undefined);
+    });
+
     await session.rpc.request(buildPiPrompt({ text: input.prompt }), timeoutMs);
     if (session.turnEndPending) finishTurn(session);
 
@@ -162,8 +170,10 @@ async function promptOnLive(
             timeoutMs,
           );
         }),
+        ...(abort.promise ? [abort.promise] : []),
       ]);
     } finally {
+      abort.detach();
       if (timer) clearTimeout(timer);
     }
 

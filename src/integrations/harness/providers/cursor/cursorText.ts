@@ -6,6 +6,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { abortTextPromptRace } from "../../core/abortTextPrompt";
 import { mergeStream } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-text";
@@ -63,6 +64,7 @@ export async function runCursorTextPrompt(input: {
   modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
   turns = run.then(
@@ -78,19 +80,28 @@ async function promptOnLive(input: {
   modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const session = await ensureLive(input.cwd, input.model, input.modelSettings);
   session.output = "";
   session.collecting = true;
+  const abort = abortTextPromptRace(input.signal, () =>
+    session.acp.notify("session/cancel", {
+      sessionId: session.acpSessionId,
+    }),
+  );
   try {
-    await session.acp.request(
-      "session/prompt",
-      {
-        sessionId: session.acpSessionId,
-        prompt: [{ type: "text", text: input.prompt }],
-      },
-      input.timeoutMs ?? REQUEST_TIMEOUT_MS,
-    );
+    await Promise.race([
+      session.acp.request(
+        "session/prompt",
+        {
+          sessionId: session.acpSessionId,
+          prompt: [{ type: "text", text: input.prompt }],
+        },
+        input.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      ),
+      ...(abort.promise ? [abort.promise] : []),
+    ]);
     return session.output;
   } catch (error) {
     await session.acp
@@ -99,6 +110,7 @@ async function promptOnLive(input: {
     if (session.closed) await dropLive();
     throw error;
   } finally {
+    abort.detach();
     session.collecting = false;
     await dropLive();
   }
