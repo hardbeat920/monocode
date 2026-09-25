@@ -459,6 +459,8 @@ pub fn run() {
             set_traffic_lights_visible,
             set_window_background_blur,
             set_dock_badge,
+            #[cfg(target_os = "macos")]
+            menu::keybindings_set_overrides,
             open_new_window,
             window::hide_window,
             window::destroy_window,

@@ -1,14 +1,88 @@
 #[cfg(target_os = "macos")]
-use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, SubmenuBuilder};
+use serde::Deserialize;
+#[cfg(target_os = "macos")]
+use std::collections::HashMap;
+#[cfg(target_os = "macos")]
+use tauri::menu::{AboutMetadata, Menu, MenuItem, MenuItemBuilder, SubmenuBuilder};
 #[cfg(target_os = "macos")]
 use tauri::Wry;
 use tauri::{AppHandle, Emitter};
 
+#[cfg(target_os = "macos")]
+#[derive(Deserialize)]
+pub struct KeybindingOverride {
+    disabled: Option<bool>,
+    shortcut: Option<String>,
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn custom_accelerator(shortcut: &str) -> String {
+    let mut parts = shortcut.split('+');
+    let key = parts.next_back().unwrap_or_default();
+    let key = match key {
+        value if value.starts_with("Key") => &value[3..],
+        value if value.starts_with("Digit") => &value[5..],
+        "Equal" => "=",
+        "Minus" => "-",
+        "Backquote" => "`",
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Backslash" => "\\",
+        "ArrowUp" => "Up",
+        "ArrowDown" => "Down",
+        "ArrowLeft" => "Left",
+        "ArrowRight" => "Right",
+        other => other,
+    };
+    parts
+        .map(|part| match part {
+            "Command" => "Cmd",
+            "Control" => "Ctrl",
+            "Option" => "Option",
+            "Shift" => "Shift",
+            other => other,
+        })
+        .chain(std::iter::once(key))
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
-    app.set_menu(build(app)?)?;
+    app.set_menu(build(app, &HashMap::new())?)?;
     let _ = app;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn keybindings_set_overrides(
+    app: AppHandle,
+    overrides: HashMap<String, KeybindingOverride>,
+) -> Result<(), String> {
+    app.set_menu(build(&app, &overrides)?)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn menu_item(
+    app: &AppHandle,
+    id: &str,
+    text: &str,
+    accelerator: &str,
+    command: &str,
+    overrides: &HashMap<String, KeybindingOverride>,
+) -> tauri::Result<MenuItem<Wry>> {
+    let builder = MenuItemBuilder::with_id(id, text);
+    let override_ = overrides.get(command);
+    let builder = if override_.and_then(|value| value.disabled).unwrap_or(false) {
+        builder
+    } else if let Some(shortcut) = override_.and_then(|value| value.shortcut.as_deref()) {
+        builder.accelerator(custom_accelerator(shortcut))
+    } else {
+        builder.accelerator(accelerator)
+    };
+    builder.build(app)
 }
 
 pub fn dispatch(app: &AppHandle, id: &str) {
@@ -61,92 +135,224 @@ fn emit_to_focused(app: &AppHandle, id: &str) {
 }
 
 #[cfg(target_os = "macos")]
-fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let open_settings = MenuItemBuilder::with_id("open_settings", "Settings…")
-        .accelerator("CmdOrCtrl+,")
-        .build(app)?;
+fn build(
+    app: &AppHandle,
+    overrides: &HashMap<String, KeybindingOverride>,
+) -> tauri::Result<Menu<Wry>> {
+    let open_settings = menu_item(
+        app,
+        "open_settings",
+        "Settings…",
+        "CmdOrCtrl+,",
+        "App: Settings",
+        overrides,
+    )?;
     let check_for_updates =
         MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
-    let new_window = MenuItemBuilder::with_id("new_window", "New Window")
-        .accelerator("CmdOrCtrl+Shift+N")
-        .build(app)?;
-    let open_project = MenuItemBuilder::with_id("open_project", "Open Project…")
-        .accelerator("CmdOrCtrl+O")
-        .build(app)?;
-    let go_to_file = MenuItemBuilder::with_id("go_to_file", "Go to File…")
-        .accelerator("CmdOrCtrl+P")
-        .build(app)?;
-    let command_palette = MenuItemBuilder::with_id("open_command_palette", "Command Palette…")
-        .accelerator("CmdOrCtrl+Shift+P")
-        .build(app)?;
-    let open_search = MenuItemBuilder::with_id("open_search", "Search…")
-        .accelerator("CmdOrCtrl+K")
-        .build(app)?;
+    let new_window = menu_item(
+        app,
+        "new_window",
+        "New Window",
+        "CmdOrCtrl+Shift+N",
+        "App: New Window",
+        overrides,
+    )?;
+    let open_project = menu_item(
+        app,
+        "open_project",
+        "Open Project…",
+        "CmdOrCtrl+O",
+        "App: Open Project",
+        overrides,
+    )?;
+    let go_to_file = menu_item(
+        app,
+        "go_to_file",
+        "Go to File…",
+        "CmdOrCtrl+P",
+        "App: Go to File",
+        overrides,
+    )?;
+    let command_palette = menu_item(
+        app,
+        "open_command_palette",
+        "Command Palette…",
+        "CmdOrCtrl+Shift+P",
+        "App: Command Palette",
+        overrides,
+    )?;
+    let open_search = menu_item(
+        app,
+        "open_search",
+        "Search…",
+        "CmdOrCtrl+K",
+        "App: Search",
+        overrides,
+    )?;
     let open_inbox = MenuItemBuilder::with_id("open_inbox", "Inbox").build(app)?;
     let open_notes = MenuItemBuilder::with_id("open_notes", "Notes").build(app)?;
-    let new_tab = MenuItemBuilder::with_id("new_tab", "New Tab")
-        .accelerator("CmdOrCtrl+T")
-        .build(app)?;
-    let new_terminal = MenuItemBuilder::with_id("new_terminal", "New Terminal")
-        .accelerator("CmdOrCtrl+`")
-        .build(app)?;
-    let new_terminal_tab = MenuItemBuilder::with_id("new_terminal_tab", "New Terminal Tab")
-        .accelerator("CmdOrCtrl+Shift+`")
-        .build(app)?;
-    let toggle_terminal = MenuItemBuilder::with_id("toggle_terminal", "Toggle Terminal")
-        .accelerator("CmdOrCtrl+J")
-        .build(app)?;
-    let split_right = MenuItemBuilder::with_id("split_right", "Split Pane Right")
-        .accelerator("CmdOrCtrl+D")
-        .build(app)?;
-    let split_down = MenuItemBuilder::with_id("split_down", "Split Pane Down")
-        .accelerator("CmdOrCtrl+Shift+D")
-        .build(app)?;
-    let close_tab = MenuItemBuilder::with_id("close_tab", "Close Pane")
-        .accelerator("CmdOrCtrl+W")
-        .build(app)?;
-    let close_other_tabs = MenuItemBuilder::with_id("close_other_tabs", "Close Other Tabs")
-        .accelerator("CmdOrCtrl+Alt+T")
-        .build(app)?;
-    let close_all_tabs = MenuItemBuilder::with_id("close_all_tabs", "Close All Tabs")
-        .accelerator("CmdOrCtrl+Shift+W")
-        .build(app)?;
-    let next_tab = MenuItemBuilder::with_id("next_tab", "Next Tab")
-        .accelerator("CmdOrCtrl+Shift+]")
-        .build(app)?;
-    let prev_tab = MenuItemBuilder::with_id("prev_tab", "Previous Tab")
-        .accelerator("CmdOrCtrl+Shift+[")
-        .build(app)?;
-    let back_tab = MenuItemBuilder::with_id("back_tab", "Go Back")
-        .accelerator("CmdOrCtrl+[")
-        .build(app)?;
-    let forward_tab = MenuItemBuilder::with_id("forward_tab", "Go Forward")
-        .accelerator("CmdOrCtrl+]")
-        .build(app)?;
+    let new_tab = menu_item(
+        app,
+        "new_tab",
+        "New Tab",
+        "CmdOrCtrl+T",
+        "Tab: New",
+        overrides,
+    )?;
+    let new_terminal = menu_item(
+        app,
+        "new_terminal",
+        "New Terminal",
+        "CmdOrCtrl+`",
+        "Terminal: New",
+        overrides,
+    )?;
+    let new_terminal_tab = menu_item(
+        app,
+        "new_terminal_tab",
+        "New Terminal Tab",
+        "CmdOrCtrl+Shift+`",
+        "Terminal: New Tab",
+        overrides,
+    )?;
+    let toggle_terminal = menu_item(
+        app,
+        "toggle_terminal",
+        "Toggle Terminal",
+        "CmdOrCtrl+J",
+        "Terminal: Toggle Dock",
+        overrides,
+    )?;
+    let split_right = menu_item(
+        app,
+        "split_right",
+        "Split Pane Right",
+        "CmdOrCtrl+D",
+        "Pane: Split Right",
+        overrides,
+    )?;
+    let split_down = menu_item(
+        app,
+        "split_down",
+        "Split Pane Down",
+        "CmdOrCtrl+Shift+D",
+        "Pane: Split Down",
+        overrides,
+    )?;
+    let close_tab = menu_item(
+        app,
+        "close_tab",
+        "Close Pane",
+        "CmdOrCtrl+W",
+        "Pane: Close",
+        overrides,
+    )?;
+    let close_other_tabs = menu_item(
+        app,
+        "close_other_tabs",
+        "Close Other Tabs",
+        "CmdOrCtrl+Alt+T",
+        "Tab: Close Others",
+        overrides,
+    )?;
+    let close_all_tabs = menu_item(
+        app,
+        "close_all_tabs",
+        "Close All Tabs",
+        "CmdOrCtrl+Shift+W",
+        "Tab: Close All",
+        overrides,
+    )?;
+    let next_tab = menu_item(
+        app,
+        "next_tab",
+        "Next Tab",
+        "CmdOrCtrl+Shift+]",
+        "Tab: Next",
+        overrides,
+    )?;
+    let prev_tab = menu_item(
+        app,
+        "prev_tab",
+        "Previous Tab",
+        "CmdOrCtrl+Shift+[",
+        "Tab: Previous",
+        overrides,
+    )?;
+    let back_tab = menu_item(
+        app,
+        "back_tab",
+        "Go Back",
+        "CmdOrCtrl+[",
+        "Tab: Back",
+        overrides,
+    )?;
+    let forward_tab = menu_item(
+        app,
+        "forward_tab",
+        "Go Forward",
+        "CmdOrCtrl+]",
+        "Tab: Forward",
+        overrides,
+    )?;
 
-    let focus_left = MenuItemBuilder::with_id("focus_left", "Focus Pane Left")
-        .accelerator("CmdOrCtrl+Alt+Left")
-        .build(app)?;
-    let focus_right = MenuItemBuilder::with_id("focus_right", "Focus Pane Right")
-        .accelerator("CmdOrCtrl+Alt+Right")
-        .build(app)?;
-    let focus_up = MenuItemBuilder::with_id("focus_up", "Focus Pane Up")
-        .accelerator("CmdOrCtrl+Alt+Up")
-        .build(app)?;
-    let focus_down = MenuItemBuilder::with_id("focus_down", "Focus Pane Down")
-        .accelerator("CmdOrCtrl+Alt+Down")
-        .build(app)?;
+    let focus_left = menu_item(
+        app,
+        "focus_left",
+        "Focus Pane Left",
+        "CmdOrCtrl+Alt+Left",
+        "Pane: Focus Left",
+        overrides,
+    )?;
+    let focus_right = menu_item(
+        app,
+        "focus_right",
+        "Focus Pane Right",
+        "CmdOrCtrl+Alt+Right",
+        "Pane: Focus Right",
+        overrides,
+    )?;
+    let focus_up = menu_item(
+        app,
+        "focus_up",
+        "Focus Pane Up",
+        "CmdOrCtrl+Alt+Up",
+        "Pane: Focus Up",
+        overrides,
+    )?;
+    let focus_down = menu_item(
+        app,
+        "focus_down",
+        "Focus Pane Down",
+        "CmdOrCtrl+Alt+Down",
+        "Pane: Focus Down",
+        overrides,
+    )?;
 
-    let toggle_sidebar = MenuItemBuilder::with_id("toggle_sidebar", "Toggle Sidebar")
-        .accelerator("CmdOrCtrl+B")
-        .build(app)?;
-    let toggle_session_sidebar =
-        MenuItemBuilder::with_id("toggle_session_sidebar", "Toggle Session Sidebar")
-            .accelerator("CmdOrCtrl+Shift+B")
-            .build(app)?;
-    let open_model_picker = MenuItemBuilder::with_id("open_model_picker", "Switch Model…")
-        .accelerator("CmdOrCtrl+.")
-        .build(app)?;
+    let toggle_sidebar = menu_item(
+        app,
+        "toggle_sidebar",
+        "Toggle Sidebar",
+        "CmdOrCtrl+B",
+        "App: Toggle Sidebar",
+        overrides,
+    )?;
+    let toggle_session_sidebar = menu_item(
+        app,
+        "toggle_session_sidebar",
+        "Toggle Session Sidebar",
+        "CmdOrCtrl+Shift+B",
+        "App: Toggle Session Sidebar",
+        overrides,
+    )?;
+    let open_model_picker = menu_item(
+        app,
+        "open_model_picker",
+        "Switch Model…",
+        "CmdOrCtrl+.",
+        "App: Switch Model",
+        overrides,
+    )?;
     let sidebar_opacity =
         MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
     // No accelerators here on purpose: the webview key handler owns
@@ -155,16 +361,31 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let zoom_in = MenuItemBuilder::with_id("zoom_in", "Zoom In").build(app)?;
     let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
     let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
-    let reload = MenuItemBuilder::with_id("reload", "Reload")
-        .accelerator("CmdOrCtrl+Shift+R")
-        .build(app)?;
-    let find = MenuItemBuilder::with_id("find", "Find")
-        .accelerator("CmdOrCtrl+F")
-        .build(app)?;
+    let reload = menu_item(
+        app,
+        "reload",
+        "Reload",
+        "CmdOrCtrl+Shift+R",
+        "View: Reload",
+        overrides,
+    )?;
+    let find = menu_item(
+        app,
+        "find",
+        "Find",
+        "CmdOrCtrl+F",
+        "Editor: Find",
+        overrides,
+    )?;
 
-    let find_in_project = MenuItemBuilder::with_id("find_in_project", "Find in Files…")
-        .accelerator("CmdOrCtrl+Shift+F")
-        .build(app)?;
+    let find_in_project = menu_item(
+        app,
+        "find_in_project",
+        "Find in Files…",
+        "CmdOrCtrl+Shift+F",
+        "App: Find in Files",
+        overrides,
+    )?;
 
     let file = SubmenuBuilder::new(app, "File")
         .item(&new_window)
