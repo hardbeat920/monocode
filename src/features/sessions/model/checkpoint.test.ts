@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
+  applySessionCheckpoint,
   ensureSessionCheckpoint,
   flushSessionCheckpoint,
   trackSessionEdits,
@@ -56,4 +57,25 @@ it("ignores tools that do not edit files", async () => {
   });
   await flushSessionCheckpoint("worker");
   expect(invoke).not.toHaveBeenCalled();
+});
+
+it("marks an isolated worker's checkpoint and passes its write scopes to apply", async () => {
+  const cwd = "/repo-worktrees/mc-orch-2";
+  await ensureSessionCheckpoint("worker", cwd, true);
+  await applySessionCheckpoint("worker", cwd, "/repo", [`${cwd}/src`]);
+  await ensureSessionCheckpoint("shared", "/repo");
+
+  expect(vi.mocked(invoke).mock.calls).toEqual([
+    ["session_checkpoint_ensure", { sessionId: "worker", cwd, isolated: true }],
+    [
+      "session_checkpoint_apply",
+      {
+        sessionId: "worker",
+        fromCwd: cwd,
+        toCwd: "/repo",
+        writeScopes: [`${cwd}/src`],
+      },
+    ],
+    ["session_checkpoint_ensure", { sessionId: "shared", cwd: "/repo" }],
+  ]);
 });

@@ -672,15 +672,31 @@ pub async fn harness_write(
     .map_err(|e| format!("Harness write task failed: {e}"))?
 }
 
-/// `async` dispatch keeps kill executable while a sibling `harness_write` is
-/// blocked on a wedged child's stdin.
-#[tauri::command(async)]
-pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
+/// Returns only once the session's process tree is gone, so a caller that
+/// applies a worker's files next knows nothing is still writing them. The wait
+/// runs on the blocking pool, which also keeps kill executable while a sibling
+/// `harness_write` is blocked on a wedged child's stdin.
+#[tauri::command]
+pub async fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
     host.stop_sse(&session_id);
-    if let Some(live) = host.kill_session(&session_id) {
-        terminate(live.pid);
+    let Some(live) = host.kill_session(&session_id) else {
+        return Ok(());
+    };
+    let pid = live.pid;
+    // Drop stdin before signaling so ACP CLIs that watch the pipe can exit.
+    drop(live);
+    let exited = tauri::async_runtime::spawn_blocking(move || {
+        terminate_and_wait(pid, KILL_ESCALATE, KILL_CONFIRM)
+    })
+    .await
+    .map_err(|e| format!("Harness kill task failed: {e}"))?;
+    if exited {
+        Ok(())
+    } else {
+        Err(format!(
+            "The agent's process did not exit after it was stopped (session {session_id}, pid {pid})."
+        ))
     }
-    Ok(())
 }
 
 /// Off the main thread: `kill_all` waits for the children to die before it
@@ -945,6 +961,9 @@ fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<Str
 }
 
 const KILL_ESCALATE: Duration = Duration::from_secs(2);
+/// How long `harness_kill` keeps polling after SIGKILL before it reports the
+/// tree as stuck.
+const KILL_CONFIRM: Duration = Duration::from_secs(5);
 /// Quit and `Drop` cannot wait on a detached escalate thread — the process
 /// exits first and isolated harness groups stay behind as PID-1 orphans.
 #[cfg(not(windows))]
@@ -1019,6 +1038,36 @@ fn terminate_after(pid: u32, escalate: Duration) {
                 signal_tree(pid, TreeSignal::Kill);
             }
         });
+    }
+}
+
+/// SIGTERM the tree, wait up to `grace` for it to exit, SIGKILL it if it has
+/// not, then wait up to `confirm` more. Returns whether the tree is gone.
+///
+/// The thread that owns the `Child` must be reaping it: a zombie leader still
+/// answers `kill(pid, 0)`. On Windows `taskkill /T /F` runs to completion
+/// before this returns and there is no liveness probe, so it reports success.
+fn terminate_and_wait(pid: u32, grace: Duration, confirm: Duration) -> bool {
+    if pid == 0 || pid == 1 {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        let _ = (grace, confirm);
+        signal_tree(pid, TreeSignal::Kill);
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        let pids = [pid];
+        signal_tree(pid, TreeSignal::Term);
+        wait_until_dead(&pids, Instant::now() + grace);
+        if !tree_alive(pid) {
+            return true;
+        }
+        signal_tree(pid, TreeSignal::Kill);
+        wait_until_dead(&pids, Instant::now() + confirm);
+        !tree_alive(pid)
     }
 }
 
@@ -2459,6 +2508,82 @@ mod tests {
             let _ = child.kill();
             panic!("process group survived after its leader exited");
         }
+    }
+
+    #[test]
+    fn terminate_and_wait_returns_after_a_term_ignoring_group_exits() {
+        let mut child = Command::new("sh")
+            .args(["-c", "trap '' TERM; sleep 30 & echo ready; sleep 30"])
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn test process");
+        let pid = child.id();
+        // Signal only after the trap is installed, or SIGTERM kills sh early.
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().expect("test child stdout"))
+            .read_line(&mut ready)
+            .expect("read readiness line");
+        assert_eq!(ready.trim(), "ready");
+        // Stands in for the `harness_spawn` thread that owns and reaps the child.
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        assert!(tree_alive(pid));
+        let grace = Duration::from_millis(200);
+        let started = Instant::now();
+        let exited = terminate_and_wait(pid, grace, KILL_CONFIRM);
+        let elapsed = started.elapsed();
+        let alive = tree_alive(pid);
+        if alive {
+            signal_tree(pid, TreeSignal::Kill);
+        }
+        let _ = waiter.join();
+        assert!(exited, "terminate_and_wait reported a live tree");
+        assert!(
+            !alive,
+            "terminate_and_wait returned before the group exited"
+        );
+        assert!(elapsed >= grace, "returned before the SIGTERM grace period");
+        assert!(
+            elapsed < grace + KILL_CONFIRM,
+            "took longer than the timeout"
+        );
+    }
+
+    #[test]
+    fn terminate_and_wait_returns_early_when_term_is_honoured() {
+        let child = spawn_group("sleep 30");
+        let pid = child.id();
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        let started = Instant::now();
+        let exited = terminate_and_wait(pid, KILL_ESCALATE, KILL_CONFIRM);
+        let elapsed = started.elapsed();
+        let _ = waiter.join();
+        assert!(exited);
+        assert!(!tree_alive(pid));
+        assert!(
+            elapsed < KILL_ESCALATE,
+            "waited out the grace period anyway"
+        );
+    }
+
+    #[test]
+    fn terminate_and_wait_reports_a_tree_that_outlives_the_timeout() {
+        // No thread reaps this leader, so after SIGKILL it stays a zombie that
+        // `kill(pid, 0)` still answers: the same signal a stuck tree gives.
+        let mut child = spawn_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = child.id();
+        let exited =
+            terminate_and_wait(pid, Duration::from_millis(100), Duration::from_millis(200));
+        let _ = child.wait();
+        assert!(!exited, "terminate_and_wait missed a surviving process");
     }
 
     fn live_group(script: &str) -> (Arc<LiveChild>, std::process::Child) {

@@ -14,6 +14,7 @@ import {
   sessionIdFromResult,
 } from "./fxProtocol";
 import { harnessSupportsAttachments } from "../../../../features/sessions/model/session";
+import { isEditTool } from "../../core/preview";
 
 describe("fx protocol", () => {
   // fx's "ask" mode stops for every read and command, and we surface none of
@@ -388,6 +389,93 @@ describe("fx protocol", () => {
     expect(event).toMatchObject({
       title: "Edit app.ts",
       preview: { kind: "write", path: "app.ts", fileName: "app.ts" },
+    });
+  });
+
+  // fx 0.0.8+ announces each call as a pending tool_call with the tool name and
+  // its arguments. Session checkpoints prepare a pre-edit snapshot only from a
+  // start event that is an edit and carries the target path.
+  it("puts the write target on fx's pending tool_call", () => {
+    const [event] = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "approved_call_1",
+        name: "write_file",
+        title: "Writing",
+        kind: "edit",
+        status: "pending",
+        rawInput: { path: "/repo/out.txt", content: "first\n" },
+      },
+    });
+    expect(event).toMatchObject({
+      type: "tool.updated",
+      title: "Write",
+      kind: "edit",
+      status: "pending",
+      preview: { kind: "write", path: "/repo/out.txt", fileName: "out.txt" },
+    });
+    if (event.type !== "tool.updated") throw new Error("expected a tool event");
+    expect(isEditTool(event.kind, event.title, event.preview)).toBe(true);
+  });
+
+  it("puts the edit target on fx's pending tool_call", () => {
+    const [event] = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_edit",
+        name: "edit_file",
+        title: "Editing",
+        kind: "edit",
+        status: "pending",
+        rawInput: { path: "src/app.ts", old_string: "a", new_string: "b" },
+      },
+    });
+    expect(event).toMatchObject({
+      title: "Edit",
+      kind: "edit",
+      status: "pending",
+      preview: { kind: "write", path: "src/app.ts", fileName: "app.ts" },
+    });
+    if (event.type !== "tool.updated") throw new Error("expected a tool event");
+    expect(isEditTool(event.kind, event.title, event.preview)).toBe(true);
+  });
+
+  it("does not treat a pending fx read as an edit", () => {
+    const [event] = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_read",
+        name: "read_file",
+        title: "Reading",
+        kind: "read",
+        status: "pending",
+        rawInput: { path: "README.md" },
+      },
+    });
+    expect(event).toMatchObject({
+      kind: "read",
+      preview: { kind: "read", path: "README.md" },
+    });
+    if (event.type !== "tool.updated") throw new Error("expected a tool event");
+    expect(isEditTool(event.kind, event.title, event.preview)).toBe(false);
+  });
+
+  it("puts the write target on an fx permission prompt", () => {
+    const request = permissionRequestFromAcp({
+      sessionId: "S1",
+      toolCall: {
+        toolCallId: "approved_call_1",
+        name: "write_file",
+        title: "Writing",
+        kind: "edit",
+        status: "pending",
+        rawInput: { path: "/repo/out.txt", content: "first\n" },
+      },
+      options: [{ optionId: "allow_once" }],
+    });
+    expect(request.preview).toMatchObject({
+      kind: "write",
+      path: "/repo/out.txt",
     });
   });
 });

@@ -7367,8 +7367,23 @@ export default function App({
         // Record the worker's starting state before its first turn so
         // integrateWorker can apply exactly what it changed. A retained
         // worktree already has worker edits and keeps its existing checkpoint.
-        if (task.workspacePolicy === "shared" || !task.workspace)
+        if (task.workspacePolicy === "shared")
           await ensureSessionCheckpoint(task.sessionId, checkoutCwd);
+        else if (!task.workspace)
+          await ensureSessionCheckpoint(task.sessionId, checkoutCwd, true).catch(
+            async (error) => {
+              // Nothing records this worktree yet, so no later cleanup would
+              // find it. Remove it before reporting the failure.
+              await removeOrchestrationWorktree(leadCheckoutCwd, checkoutCwd)
+                .then(() =>
+                  workspace.branch
+                    ? removeOrchestrationBranch(leadCheckoutCwd, workspace.branch)
+                    : undefined,
+                )
+                .catch(() => undefined);
+              throw error;
+            },
+          );
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
@@ -7500,9 +7515,10 @@ export default function App({
           task.sessionId,
           fromCwd,
           orchestrationCheckoutCwd(run),
+          task.writeScopes,
         );
       },
-      cleanupWorker: async (run, task, onlyIfUnchanged) => {
+      cleanupWorker: async (run, task, onlyIfUnchanged, discardOutside) => {
         const workspace = task.workspace;
         if (!workspace || workspace.kind !== "worktree") return true;
         const path = workspace.checkoutCwd;
@@ -7531,13 +7547,29 @@ export default function App({
           const safe = await sessionCheckpointCleanupSafe(task.sessionId, path);
           if (!safe) return false;
         } else if (exists) {
-          // Re-verify immediately before destructive cleanup. The operation is
-          // idempotent, so this also finishes a partially applied integration.
-          await applySessionCheckpoint(
-            task.sessionId,
-            path,
-            orchestrationCheckoutCwd(run),
+          const dispatch = run.dispatches?.find(
+            (entry) => entry.id === task.acceptedDispatchId,
           );
+          let outside = [
+            ...(dispatch?.outsideAssignment ?? []),
+            ...(dispatch?.ignoredCreated ?? []),
+          ];
+          // Once integrated, never apply again: the lead may have changed or
+          // reverted those files since, and a second apply would undo that.
+          if (dispatch?.stage !== "integrated") {
+            // The operation is idempotent, so this also finishes a partially
+            // applied integration.
+            const applied = await applySessionCheckpoint(
+              task.sessionId,
+              path,
+              orchestrationCheckoutCwd(run),
+              task.writeScopes,
+            );
+            outside = [...applied.skipped, ...(applied.ignored ?? [])];
+          }
+          // Out-of-scope and ignored files exist only in this worktree. Keep
+          // it until the lead has copied what it needs and discards the rest.
+          if (outside.length > 0 && !discardOutside) return false;
         }
 
         if (exists) {
@@ -7667,7 +7699,7 @@ export default function App({
         } finally {
           // Also reap processes left behind by a renderer reload, before the
           // corresponding session has been restored in this window.
-          await invoke("harness_kill", { sessionId: id });
+          await invoke("harness_kill", { sessionId: id }).catch(() => undefined);
           await invoke("control_turn_finished", { sessionId: id });
         }
       },
