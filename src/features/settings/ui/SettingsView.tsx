@@ -2919,8 +2919,7 @@ function RuntimeTextInput({
   );
 }
 
-/** The binary name each resolver in src-tauri/src/harness.rs looks for on
- * PATH, shown as the Binary path placeholder when no override is set. */
+/** Must match the names the resolvers in src-tauri/src/harness.rs look for. */
 const DEFAULT_HARNESS_BINARY: Record<HarnessId, string> = {
   claude: "claude",
   codex: "codex",

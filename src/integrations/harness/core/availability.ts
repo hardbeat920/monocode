@@ -22,11 +22,8 @@ import {
 } from "./availabilityState";
 import { resolveHarnessBinary } from "./runtime";
 
-/** One resolver per live harness, keyed the same way `resolveHarnessBinary`
- * expects — used so a probe honors a runtime binary-path override the same
- * way an actual spawn would, instead of only ever checking PATH. A function
- * rather than a plain lookup object, so each binding is only read inside the
- * probe's own try/catch instead of eagerly at module load. */
+/** A function rather than a lookup object, so each binding is only read inside
+ * the probe's try/catch instead of eagerly at module load. */
 function resolverFor(id: HarnessId): (() => Promise<{ path: string }>) | undefined {
   switch (id) {
     case "claude":

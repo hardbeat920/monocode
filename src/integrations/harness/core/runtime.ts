@@ -5,15 +5,10 @@ import {
   type HarnessRuntimeSettings,
 } from "../../../features/settings/model/settings";
 
-/** POSIX env var names: a leading letter/underscore, then letters, digits, or
- * underscores. A key that doesn't match this can't be a real env var — most
- * likely the user typed `KEY=value` into the key field by mistake — so it's
- * dropped rather than sent to the child process as a broken assignment. */
+/** Drops a key like `KEY=value` typed into the key field instead of sending
+ * the child a broken assignment. */
 const VALID_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Env vars from a runtime override, or undefined when there are none —
- * matches `spawnChild`'s optional `env` param so callers can pass this
- * straight through without an extra empty-object check. */
 export function harnessRuntimeEnv(
   runtime: HarnessRuntimeSettings,
 ): Record<string, string> | undefined {
@@ -50,18 +45,10 @@ export function harnessRuntimeBinaryPath(runtime: HarnessRuntimeSettings): strin
   return runtime.binaryPath.trim();
 }
 
-/** Resolves a harness's binary, honoring a runtime binary-path override.
- * The override always wins on `path`, but this still calls `resolveDefault`
- * first so fields the default resolver supplies beyond the path — like
- * Antigravity's required launch args — aren't lost just because the user
- * pointed at a different binary. Only when the default can't resolve at all
- * (the usual reason to set an override) does this fall back to the override
- * alone, without those extra fields.
- *
- * Every provider's interactive session *and* its isolated helpers (catalog
- * probes, title/commit-message generation) should resolve through this, not
- * through `resolveXBinary()` directly — that was the gap that let the
- * override half-apply in earlier versions of this feature. */
+/** Still calls `resolveDefault` under an override so fields it supplies
+ * beyond the path, like Antigravity's launch args, survive. A failing default
+ * is expected here, since a missing default install is the usual reason to
+ * set an override. */
 export async function resolveHarnessBinary<T extends { path: string }>(
   harness: HarnessId,
   resolveDefault: () => Promise<T>,

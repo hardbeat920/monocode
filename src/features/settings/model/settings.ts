@@ -847,8 +847,6 @@ const HARNESS_RUNTIME_KEY = "monocode.harnessRuntime";
 
 export type HarnessRuntimeEnvVar = { key: string; value: string };
 
-/** Binary path, extra CLI flags, and env vars — the parts of "how to launch
- * this CLI" that apply the same way to every harness. */
 export type HarnessRuntimeSettings = {
   binaryPath: string;
   launchArgs: string;
@@ -926,9 +924,6 @@ export function saveHarnessRuntime(
 
 const CLAUDE_CONFIG_DIR_KEY = "monocode.claudeConfigDir";
 
-/** The Claude-specific runtime knob that doesn't generalize to other
- * harnesses: a CLAUDE_CONFIG_DIR convenience. General binary/launch-args/env
- * overrides live in HarnessRuntimeSettings. */
 export function loadClaudeConfigDir(): string {
   return readStringFlag(CLAUDE_CONFIG_DIR_KEY) ?? "";
 }
