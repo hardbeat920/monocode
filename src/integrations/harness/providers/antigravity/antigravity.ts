@@ -2,6 +2,7 @@ import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
+import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
 import {
   killChild,
   resolveAntigravityBinary,
@@ -165,7 +166,6 @@ export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
       live.runtimeMode = input.runtimeMode;
       live.planning = input.intent === "plan";
       live.cancelled = false;
-      live.muteUpdates = false;
       // From here until the prompt settles, a cancel can interrupt an
       // in-flight state-changing request whose server-side effect is
       // unknowable — mark the transport stale so the next send recycles.
@@ -178,6 +178,9 @@ export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
           input.runtimeMode,
           input.intent === "plan",
         );
+        // Resume/load history stays muted through setup and configuration.
+        // Open the transcript only once the new turn is ready to prompt.
+        live.muteUpdates = false;
         if (live.cancelled || cancelled()) return;
         await prompt(live, input);
       } catch (error) {
@@ -404,15 +407,18 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     noteActivity(live);
     handleNotification(live, method, params);
   };
+  handlers.onRequestRaw = (id, method) => {
+    if (typeof id === "number") return;
+    void acp.respondError(id, {
+      code: -32601,
+      message: `Method not found: ${method}`,
+    }).catch(() => undefined);
+  };
   handlers.onRequest = (id, method, params) => {
     const live = liveRef.current;
     if (live) noteActivity(live);
     if (!live) {
-      void acp
-        .respondError(id, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
+      void unknownAcpRequest(acp.respondError.bind(acp), id, method)
         .catch(() => undefined);
       return;
     }
@@ -478,66 +484,46 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       throw antigravityError(error);
     }
 
-    let setup: SessionSetupResult | undefined;
-    let acpSessionId: string | undefined;
-    let didLoad = false;
-
-    if (canLoad && resume) {
-      try {
-        setup = await acp.request<SessionSetupResult>(
+    const previous = canLoad && resume ? resume.acpSessionId : undefined;
+    const recovery = await recoverAcpSession(previous, {
+      resume: async (sessionId) => {
+        if (retired()) throw new Error("Antigravity session stopped during startup");
+        return acp.request<SessionSetupResult>(
           "session/resume",
-          { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers: [] },
+          { sessionId, cwd: input.cwd, mcpServers: [] },
           SESSION_TIMEOUT_MS,
         );
-        acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-        didLoad = true;
-      } catch (error) {
-        // User intent wins over the fallback ladder — a retired setup must not
-        // continue into session/load and wait out another timeout.
+      },
+      load: async (sessionId) => {
         if (retired()) throw new Error("Antigravity session stopped during startup");
-        // A resume that timed out may still be executing server-side; never
-        // stack session/load or a fresh session on top of it — fail the send
-        // and let the next turn retry on a recycled transport.
-        if (isTimeout(error)) throw error;
-        try {
-          setup = await acp.request<SessionSetupResult>(
-            "session/load",
-            {
-              sessionId: resume.acpSessionId,
-              cwd: input.cwd,
-              mcpServers: [],
-            },
-            SESSION_TIMEOUT_MS,
-          );
-          acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-          didLoad = true;
-        } catch (loadError) {
-          if (retired()) throw new Error("Antigravity session stopped during startup");
-          if (isTimeout(loadError)) throw loadError;
-          setup = undefined;
-          acpSessionId = undefined;
-          didLoad = false;
-        }
-      }
+        return acp.request<SessionSetupResult>(
+          "session/load",
+          { sessionId, cwd: input.cwd, mcpServers: [] },
+          SESSION_TIMEOUT_MS,
+        );
+      },
+      create: async () => {
+        if (retired()) throw new Error("Antigravity session stopped during startup");
+        return acp.request<SessionSetupResult>(
+          "session/new",
+          { cwd: input.cwd, mcpServers: [] },
+          SESSION_TIMEOUT_MS,
+        );
+      },
+      sessionId: sessionIdFromResult,
+      isTimeout,
+    });
+    const setup = recovery.setup;
+    const acpSessionId = recovery.sessionId;
+    const didLoad = recovery.restored;
+    if (retired()) throw new Error("Antigravity session stopped during startup");
+    if (!recovery.restored && previous) {
+      emit({
+        type: "status",
+        text: "Antigravity could not restore the previous conversation � starting a new session.",
+      });
     }
 
-    if (!acpSessionId) {
-      if (retired()) throw new Error("Antigravity session stopped during startup");
-      const droppedBinding = canLoad && resume != null;
-      setup = await acp.request<SessionSetupResult>(
-        "session/new",
-        { cwd: input.cwd, mcpServers: [] },
-        SESSION_TIMEOUT_MS,
-      );
-      acpSessionId = sessionIdFromResult(setup);
-      if (acpSessionId && droppedBinding) {
-        emit({
-          type: "status",
-          text: "Antigravity could not restore the previous conversation — starting a new session.",
-        });
-      }
-    }
-    if (!acpSessionId) throw new Error("Antigravity did not return a session id");
     if (retired()) throw new Error("Antigravity session stopped during startup");
 
     const configOptions = readConfigOptions(setup?.configOptions);
@@ -754,10 +740,7 @@ async function handleRequest(
   // Propagate: the caller turns a failed response write into a transport
   // failure for the active generation, so the provider cannot wedge waiting
   // for a reply that never left the pipe.
-  await live.acp.respondError(id, {
-    code: -32601,
-    message: `Method not found: ${method}`,
-  });
+  await unknownAcpRequest(live.acp.respondError.bind(live.acp), id, method);
 }
 
 async function handlePermission(live: Live, id: number, params: unknown) {

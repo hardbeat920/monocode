@@ -105,6 +105,15 @@ export {
   respondAntigravityApproval,
   bindAntigravitySession,
 } from "./providers/antigravity/antigravity";
+export {
+  sendOpenClawTurn,
+  steerOpenClawTurn,
+  cancelOpenClawTurn,
+  respondOpenClawApproval,
+  stopOpenClawSession,
+  forgetOpenClawSession,
+  bindOpenClawSession,
+} from "./providers/openclaw/openclaw";
 export { generateCursorSessionTitle } from "./providers/cursor/cursorTitle";
 export { generateCodexSessionTitle } from "./providers/codex/codexTitle";
 export { generateOpenCodeSessionTitle } from "./providers/opencode/opencodeTitle";

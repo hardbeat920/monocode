@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  validateTrustedTransport,
+  type TrustedTransportDescriptor,
+} from "./trustedTransport";
 
 type LinePayload = { sessionId: string; line: string };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
@@ -259,6 +263,16 @@ export async function spawnChild(
   exitHandlers.get(sessionId)?.(exited.code);
 }
 
+export async function spawnTrustedChild(
+  sessionId: string,
+  descriptor: TrustedTransportDescriptor,
+  cwd: string,
+  account?: { provider: "claude" | "codex"; id: string },
+): Promise<void> {
+  const trusted = validateTrustedTransport(descriptor);
+  return spawnChild(sessionId, trusted.path, [...trusted.args], cwd, account);
+}
+
 export function writeChild(sessionId: string, line: string): Promise<void> {
   return invoke("harness_write", { sessionId, line });
 }
@@ -319,11 +333,30 @@ export function resolveHermesBinary(): Promise<{ path: string }> {
   return invoke("harness_resolve_hermes");
 }
 
+export function resolveOpenClawBinary(): Promise<{ path: string }> {
+  return invoke("harness_resolve_openclaw");
+}
+
+export function openClawGatewayConfig(url?: string): Promise<{
+  url?: string;
+  secretSource: "native-runtime";
+}> {
+  return invoke("harness_openclaw_gateway_config", { url });
+}
+
+export function validateOpenClawGatewayWs(url: string): Promise<void> {
+  return invoke("harness_openclaw_gateway_ws", { url });
+}
+
 export function resolveAntigravityBinary(): Promise<{
   path: string;
   args: string[];
 }> {
   return invoke("harness_resolve_antigravity");
+}
+
+export function resolveOpenClawGateway(): Promise<{ url: string }> {
+  return invoke("harness_resolve_openclaw");
 }
 
 export function freeHarnessPort(): Promise<number> {

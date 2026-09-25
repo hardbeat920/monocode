@@ -1,5 +1,6 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
+import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import {
@@ -224,11 +225,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
   handlers.onRequest = (id, method, params) => {
     const live = liveRef.current;
     if (!live) {
-      void acp
-        .respondError(id, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
+      void unknownAcpRequest(acp.respondError.bind(acp), id, method)
         .catch(() => undefined);
       return;
     }
@@ -277,52 +274,36 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
       throw fxStartupError(error);
     }
 
-    let setup: SessionSetupResult | undefined;
-    let acpSessionId: string | undefined;
-    let didLoad = false;
-
-    if (canLoad && resume) {
-      try {
-        setup = await acp.request<SessionSetupResult>(
-          "session/resume",
-          { sessionId: resume.acpSessionId },
-          SESSION_TIMEOUT_MS,
-        );
-        acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-        didLoad = true;
-      } catch {
+    const previous = canLoad && resume ? resume.acpSessionId : undefined;
+    const recovery = await recoverAcpSession(previous, {
+      resume: async (sessionId) => acp.request<SessionSetupResult>(
+        "session/resume",
+        { sessionId },
+        SESSION_TIMEOUT_MS,
+      ),
+      load: async (sessionId) => {
         muteGate.current = true;
         try {
-          setup = await acp.request<SessionSetupResult>(
+          return await acp.request<SessionSetupResult>(
             "session/load",
-            {
-              sessionId: resume.acpSessionId,
-              cwd: input.cwd,
-              mcpServers: [],
-            },
+            { sessionId, cwd: input.cwd, mcpServers: [] },
             SESSION_TIMEOUT_MS,
           );
-          acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-          didLoad = true;
-        } catch {
-          setup = undefined;
-          acpSessionId = undefined;
-          didLoad = false;
         } finally {
           muteGate.current = false;
         }
-      }
-    }
-
-    if (!acpSessionId) {
-      setup = await acp.request<SessionSetupResult>(
+      },
+      create: async () => acp.request<SessionSetupResult>(
         "session/new",
         { cwd: input.cwd, mcpServers: [] },
         SESSION_TIMEOUT_MS,
-      );
-      acpSessionId = sessionIdFromResult(setup);
-    }
-    if (!acpSessionId) throw new Error("fx did not return a session id");
+      ),
+      sessionId: sessionIdFromResult,
+      isTimeout: (error) => error instanceof Error && error.message.endsWith("timed out"),
+    });
+    const setup = recovery.setup;
+    const acpSessionId = recovery.sessionId;
+    const didLoad = recovery.restored;
 
     const configOptions = readConfigOptions(setup?.configOptions);
     const live: Live = {
@@ -487,11 +468,7 @@ async function handleRequest(
     await handlePermission(live, id, params);
     return;
   }
-  await live.acp
-    .respondError(id, {
-      code: -32601,
-      message: `Method not found: ${method}`,
-    })
+  await unknownAcpRequest(live.acp.respondError.bind(live.acp), id, method)
     .catch(() => undefined);
 }
 

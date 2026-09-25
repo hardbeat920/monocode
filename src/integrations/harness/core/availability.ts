@@ -51,6 +51,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
       "Install from hermes-agent.nousresearch.com, then run hermes model",
   },
   antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
+  openclaw: { name: "OpenClaw Gateway" },
 };
 
 let inflight: Promise<void> | null = null;
@@ -155,6 +156,14 @@ export function probeHarnessAvailability(
       if (id === "antigravity") {
         try {
           await resolveAntigravityBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "openclaw") {
+        try {
+          await resolveOpenClawBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

@@ -18,6 +18,7 @@ let availability: HarnessAvailability = {
   fx: false,
   hermes: false,
   antigravity: false,
+  openclaw: false,
 };
 let version = 0;
 let probedAt = 0;

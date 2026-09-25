@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessEvent, SendTurnInput } from "../../core/types";
+import type { JsonRpcId } from "../../core/jsonRpc";
 import { modelsFor, resetHarnessModelOverlays } from "../../../../features/sessions/model/models";
 
 const mock = vi.hoisted(() => {
@@ -8,7 +9,7 @@ const mock = vi.hoisted(() => {
   return {
     listeners,
     exits,
-    sent: [] as { thread: string; id?: number; method?: string; params?: Record<string, unknown>; result?: unknown }[],
+    sent: [] as { thread: string; id?: JsonRpcId; method?: string; params?: Record<string, unknown>; result?: unknown }[],
     spawn: vi.fn(async () => undefined),
     // killChild unwatches in the real bridge; mirror that so a killed
     // generation can never deliver output again.
@@ -24,6 +25,7 @@ const mock = vi.hoisted(() => {
     resolveGates: null as Array<() => void> | null,
     setupConfigOptions: null as unknown[] | null,
     setConfigResult: null as unknown,
+    emitResumeHistory: false,
   };
 });
 vi.mock("../../../../platform/tauri/fs", () => ({ homeDir: async () => "/home/test" }));
@@ -83,6 +85,12 @@ vi.mock("../../core/child", () => ({
             ? mock.setConfigResult
           : {};
       mock.listeners.get(thread)?.(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+      if (method === "session/resume" && mock.emitResumeHistory) {
+        queueMicrotask(() => mock.listeners.get(thread)?.(JSON.stringify({
+          jsonrpc: "2.0", method: "session/update",
+          params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "OLD HISTORY" } } },
+        })));
+      }
     });
   },
 }));
@@ -104,7 +112,7 @@ const liveKey = () => childKeys().at(-1)!;
 const childListener = () => mock.listeners.get(liveKey())!;
 const genKey = expect.stringMatching(/^thread#\d+$/);
 
-function permission(kind = "execute", id = 100) {
+function permission(kind = "execute", id: JsonRpcId = 100) {
   childListener()(JSON.stringify({ jsonrpc: "2.0", id,
     method: "session/request_permission", params: {
       toolCall: { toolCallId: "tool-1", title: "Do work", kind },
@@ -135,6 +143,7 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     mock.resolveGates = null;
     mock.setupConfigOptions = null;
     mock.setConfigResult = null;
+    mock.emitResumeHistory = false;
     mock.spawn.mockClear();
     mock.kill.mockClear();
     events = [];
@@ -213,6 +222,28 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     await expect(provider.send(input)).rejects.toThrow("unsupported");
     expect(mock.sent.some((m) => m.method === "session/prompt")).toBe(false);
     expect(mock.kill).toHaveBeenCalledWith(genKey);
+  });
+
+  it("suppresses history delivered after a successful resume", async () => {
+    provider.bind("thread", "saved-session", "/repo");
+    mock.emitResumeHistory = true;
+    mock.autoPrompt = true;
+    await provider.send(input);
+    expect(events.some((e) => e.type === "message.delta" && e.text === "OLD HISTORY")).toBe(false);
+    expect(events).toContainEqual({ type: "message.completed" });
+  });
+
+  it("returns method-not-found for an unknown string-id request", async () => {
+    mock.autoPrompt = false;
+    const turn = provider.send(input);
+    await waitPrompt();
+    childListener()(JSON.stringify({ jsonrpc: "2.0", id: "unknown-1", method: "future/request", params: {} }));
+    await vi.waitFor(() => expect(mock.sent.some((message) =>
+      message.id === "unknown-1" && message.error?.code === -32601,
+    )).toBe(true));
+    expect(events.some((event) => event.type === "approval.requested")).toBe(false);
+    finishPrompt();
+    await turn;
   });
 
   it.each(["resume", "load", "new"])("uses the %s branch of session recovery without replay", async (branch) => {

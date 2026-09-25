@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
+let onExit: ((code: number | null) => void) | undefined;
+let blockCancelWrite = false;
 const textFiles = new Map<string, string>();
 
 vi.mock("../../core/child", () => ({
@@ -13,14 +15,18 @@ vi.mock("../../core/child", () => ({
   watchChild: (
     _id: string,
     line: (value: string) => void,
-    _exit: (code: number | null) => void,
+    exit: (code: number | null) => void,
     stderr: (value: string) => void,
   ) => {
     onLine = line;
+    onExit = exit;
     onStderr = stderr;
   },
   writeChild: async (_id: string, line: string) => {
     sent.push(line);
+    if (blockCancelWrite && JSON.parse(line).method === "session/cancel") {
+      await new Promise<void>(() => undefined);
+    }
   },
 }));
 
@@ -81,7 +87,9 @@ describe("Hermes live ACP sequence", () => {
   beforeEach(() => {
     sent.length = 0;
     onLine = undefined;
+    onExit = undefined;
     onStderr = undefined;
+    blockCancelWrite = false;
     textFiles.clear();
   });
 
@@ -143,6 +151,41 @@ describe("Hermes live ACP sequence", () => {
       { type: "text", text: "inspect this" },
       { type: "image", mimeType: "image/png", data: "AAAA" },
     ]);
+    onLine!(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "hermes-session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Hello" },
+        },
+      },
+    }));
+    onLine!(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "hermes-session-1",
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "reasoning" },
+        },
+      },
+    }));
+    onLine!(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "hermes-session-1",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-1",
+          title: "Read file",
+          status: "completed",
+        },
+      },
+    }));
     reply(prompt.id, { stopReason: "end_turn" });
 
     await turn;
@@ -150,6 +193,18 @@ describe("Hermes live ACP sequence", () => {
       type: "session.providerBound",
       providerSessionId: "hermes-session-1",
     });
+    expect(events).toContainEqual({ type: "message.delta", text: "Hello" });
+    expect(events).toContainEqual({
+      type: "reasoning.delta",
+      text: "reasoning",
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool.updated",
+        callId: "tool-1",
+        status: "completed",
+      }),
+    );
     expect(events.some((event) => event.type === "session.error")).toBe(false);
     await stopHermesSession("hermes-live-new");
   });
@@ -271,6 +326,70 @@ describe("Hermes live ACP sequence", () => {
     await stopHermesSession("hermes-live-permission");
   });
 
+  it("cancels an in-flight prompt without replaying it", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendHermesTurn({
+      sessionId: "hermes-live-cancel",
+      cwd: "/repo",
+      model: "hermes:nous:hermes-4",
+      runtimeMode: "supervised",
+      text: "long task",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await initialize();
+    await newSession();
+    await waitFor(
+      () => parse().some((message) => message.method === "session/set_mode"),
+      "session/set_mode",
+    );
+    reply(parse().find((message) => message.method === "session/set_mode")!.id, {});
+    await waitFor(
+      () => parse().some((message) => message.method === "session/prompt"),
+      "session/prompt",
+    );
+    const { cancelHermesTurn } = await import("./hermes");
+    blockCancelWrite = true;
+    await Promise.race([
+      cancelHermesTurn("hermes-live-cancel"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("cancel hung")), 100),
+      ),
+    ]);
+    await turn;
+    expect(parse().filter((message) => message.method === "session/prompt")).toHaveLength(1);
+    expect(parse().some((message) => message.method === "session/cancel")).toBe(true);
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
+    await stopHermesSession("hermes-live-cancel");
+  });
+
+  it("settles a pending prompt when the ACP child exits", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendHermesTurn({
+      sessionId: "hermes-live-exit",
+      cwd: "/repo",
+      model: "hermes:nous:hermes-4",
+      runtimeMode: "supervised",
+      text: "crash during turn",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await initialize();
+    await newSession();
+    await waitFor(
+      () => parse().some((message) => message.method === "session/set_mode"),
+      "session/set_mode",
+    );
+    reply(parse().find((message) => message.method === "session/set_mode")!.id, {});
+    await waitFor(
+      () => parse().some((message) => message.method === "session/prompt"),
+      "session/prompt",
+    );
+    onExit!(17);
+    await expect(turn).rejects.toThrow("Hermes Agent exited");
+    expect(events).toContainEqual({ type: "session.ended", code: 17 });
+    await stopHermesSession("hermes-live-exit");
+  });
   it("stays busy and resumes after Hermes background subagents finish", async () => {
     const events: HarnessEvent[] = [];
     const transcript = "/tmp/deleg_abcd/task-0.log";

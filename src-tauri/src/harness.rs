@@ -63,6 +63,13 @@ struct HarnessSseEnd {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenClawGatewayConfig {
+    pub url: Option<String>,
+    pub secret_source: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HarnessHttpResponse {
     pub status: u16,
     pub body: String,
@@ -383,6 +390,18 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve the OpenClaw CLI used by the fixed `openclaw acp` bridge.
+#[tauri::command(async)]
+pub fn harness_resolve_openclaw() -> Result<CursorBinary, String> {
+    resolve_openclaw()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "OpenClaw CLI not found. Install OpenClaw and retry.".into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -394,6 +413,47 @@ pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
         .ok_or_else(|| {
             "Antigravity ACP server (agy_acp_server.par) not found. Install Antigravity and run `agy` once in Terminal.".into()
         })
+}
+
+/// Native WebSocket transport seam for OpenClaw. Credentials are resolved by
+/// the runtime and never returned to the frontend.
+#[tauri::command]
+pub fn harness_openclaw_gateway_ws(url: String) -> Result<(), String> {
+    let lower = url.trim().to_ascii_lowercase();
+    if !(lower.starts_with("ws://") || lower.starts_with("wss://")) {
+        return Err("OpenClaw Gateway URL must use ws:// or wss://".into());
+    }
+    if url.contains('@') || url.contains('\0') {
+        return Err("OpenClaw Gateway URL must not contain credentials".into());
+    }
+    // The actual WebSocket session is intentionally native-only. This command
+    // validates the endpoint and establishes no browser-visible credential.
+    Ok(())
+}
+
+/// Validate non-secret OpenClaw Gateway configuration. Credentials stay in the
+/// native runtime/environment and are never returned to the frontend.
+#[tauri::command]
+pub fn harness_openclaw_gateway_config(
+    url: Option<String>,
+) -> Result<OpenClawGatewayConfig, String> {
+    let url = url.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    if let Some(url) = &url {
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("ws://") || lower.starts_with("wss://")) {
+            return Err("OpenClaw Gateway URL must use ws:// or wss://".into());
+        }
+        if url.contains('@') || url.contains('\0') {
+            return Err("OpenClaw Gateway URL must not contain credentials".into());
+        }
+    }
+    Ok(OpenClawGatewayConfig {
+        url,
+        secret_source: "native-runtime",
+    })
 }
 
 /// Bind an ephemeral loopback port for `opencode serve`.
@@ -418,6 +478,7 @@ pub fn harness_spawn(
     cwd: String,
     account: Option<HarnessAccount>,
 ) -> Result<u32, String> {
+    validate_spawn_request(&command, &args)?;
     let workdir = expand_home(&cwd);
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
@@ -884,6 +945,41 @@ fn is_resolved_harness_binary(command: &str) -> bool {
     .into_iter()
     .flatten()
     .any(|resolved| resolved == path)
+}
+
+fn is_allowed_spawn_command(command: &str, resolved: impl IntoIterator<Item = PathBuf>) -> bool {
+    let command = Path::new(command);
+    resolved.into_iter().any(|path| path == command)
+}
+
+fn validate_spawn_request_args(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|arg| arg.contains('\0')) {
+        return Err("harness_spawn: invalid NUL byte in arguments".into());
+    }
+    Ok(())
+}
+
+fn spawn_args_allowed_for(provider: &str, args: &[String]) -> bool {
+    provider != "openclaw" || args == ["acp"]
+}
+
+fn validate_spawn_request(command: &str, args: &[String]) -> Result<(), String> {
+    validate_spawn_request_args(args)?;
+    let openclaw = resolve_openclaw();
+    if openclaw.as_deref() == Some(Path::new(command)) && !spawn_args_allowed_for("openclaw", args) {
+        return Err("harness_spawn: OpenClaw requires the fixed `acp` command".into());
+    }
+    let resolved = [
+        resolve_cursor_agent(), resolve_codex(), resolve_opencode(),
+        resolve_claude(), resolve_pi(), resolve_omp(), resolve_fx(),
+        resolve_grok(), resolve_hermes(), openclaw, resolve_antigravity(),
+    ]
+    .into_iter()
+    .flatten();
+    if !is_allowed_spawn_command(command, resolved) {
+        return Err("harness_spawn: executable was not returned by a trusted resolver".into());
+    }
+    Ok(())
 }
 
 /// One-shot capture of stdout (used for `cursor-agent --list-models`).
@@ -1668,6 +1764,27 @@ fn resolve_hermes() -> Option<PathBuf> {
         candidates.push(from_shell);
     }
 
+    first_binary(candidates)
+}
+
+fn resolve_openclaw() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates = Vec::new();
+    if let Some(home) = &home {
+        candidates.push(home.join(".local/bin/openclaw"));
+        candidates.push(home.join(".npm-global/bin/openclaw"));
+    }
+    #[cfg(windows)]
+    if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
+        candidates.push(app_data.join("npm/openclaw.cmd"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/openclaw"));
+    candidates.push(PathBuf::from("/usr/local/bin/openclaw"));
+    candidates.push(PathBuf::from("/usr/bin/openclaw"));
+    if let Some(from_shell) = which_via_login_shell("openclaw") {
+        candidates.push(from_shell);
+    }
     first_binary(candidates)
 }
 
@@ -2815,6 +2932,26 @@ mod tests {
         } else {
             assert!(antigravity_args().is_empty());
         }
+    }
+
+    #[test]
+    fn spawn_validation_accepts_only_resolver_paths() {
+        let trusted = PathBuf::from("/trusted/agent");
+        assert!(is_allowed_spawn_command("/trusted/agent", [trusted.clone()]));
+        assert!(!is_allowed_spawn_command("/tmp/agent", [trusted]));
+    }
+
+    #[test]
+    fn openclaw_spawn_args_are_fixed() {
+        assert!(spawn_args_allowed_for("openclaw", &["acp".into()]));
+        assert!(!spawn_args_allowed_for("openclaw", &["acp", "--shell"].into_iter().map(String::from).collect()));
+        assert!(spawn_args_allowed_for("hermes", &["acp", "--model", "m"].into_iter().map(String::from).collect()));
+    }
+
+    #[test]
+    fn spawn_validation_rejects_nul_arguments() {
+        assert!(validate_spawn_request_args(&["acp".into()]).is_ok());
+        assert!(validate_spawn_request_args(&["acp\0--shell".into()]).is_err());
     }
 
     #[test]

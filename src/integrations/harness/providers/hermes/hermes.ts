@@ -3,6 +3,7 @@ import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { readTextFile } from "../../../../platform/tauri/fs";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import { AcpSubagents } from "../../core/acpSubagents";
+import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
 import {
   killChild,
   resolveHermesBinary,
@@ -45,6 +46,7 @@ type Live = {
   modeId: string;
   muteUpdates: boolean;
   cancelled: boolean;
+  stopReason?: "cancelled" | "process-exit";
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -91,12 +93,12 @@ export async function sendHermesTurn(input: SendTurnInput): Promise<void> {
       live.muteUpdates = false;
       try {
         await applyModelSelection(live, input);
-        if (live.cancelled) return;
+        if (live.cancelled && live.stopReason !== "process-exit") return;
         await applyRuntimeMode(live, input.runtimeMode, live.planning);
-        if (live.cancelled) return;
+        if (live.cancelled && live.stopReason !== "process-exit") return;
         await prompt(live, input);
       } catch (error) {
-        if (live.cancelled) return;
+        if (live.cancelled && live.stopReason !== "process-exit") return;
         throw error;
       }
     });
@@ -139,13 +141,14 @@ export async function cancelHermesTurn(sessionId: string): Promise<void> {
     return;
   }
   live.cancelled = true;
+  live.stopReason = "cancelled";
   live.muteUpdates = true;
   live.background.clear();
   resolveApprovals(live);
-  await live.acp
+  live.acp.rejectPending(new Error("cancelled"));
+  void live.acp
     .notify("session/cancel", { sessionId: live.acpSessionId })
     .catch(() => undefined);
-  live.acp.rejectPending(new Error("cancelled"));
 }
 
 export async function stopHermesSession(sessionId: string): Promise<void> {
@@ -211,11 +214,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   handlers.onRequest = (id, method, params) => {
     const live = liveRef.current;
     if (!live) {
-      void acp
-        .respondError(id, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
+      void unknownAcpRequest(acp.respondError.bind(acp), id, method)
         .catch(() => undefined);
       return;
     }
@@ -232,6 +231,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       const live = liveRef.current;
       if (live) {
         live.cancelled = true;
+        live.stopReason = "process-exit";
         live.background.clear();
       }
       acp.close(new Error("Hermes Agent exited"));
@@ -267,42 +267,49 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       throw hermesStartupError(error);
     }
 
-    let setup: unknown;
-    let acpSessionId: string | undefined;
-    let didLoad = false;
-    if (canLoad && resume) {
-      muteGate.current = true;
-      try {
-        setup = await acp.request(
-          "session/load",
-          { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers: [] },
-          SESSION_TIMEOUT_MS,
-        );
-        acpSessionId = hermesSessionId(setup) ?? resume.acpSessionId;
-        didLoad = true;
-      } catch {
-        setup = undefined;
-        acpSessionId = undefined;
-      } finally {
-        muteGate.current = false;
-      }
-    }
-
-    if (!acpSessionId) {
-      try {
-        setup = await acp.request(
-          "session/new",
-          { cwd: input.cwd, mcpServers: [] },
-          SESSION_TIMEOUT_MS,
-        );
-      } catch (error) {
-        throw hermesStartupError(error);
-      }
-      acpSessionId = hermesSessionId(setup);
-    }
-    if (!acpSessionId)
-      throw new Error("Hermes Agent did not return a session id");
-
+    const previous = canLoad && resume ? resume.acpSessionId : undefined;
+    const recovery = await recoverAcpSession(previous, {
+      resume: async (sessionId) => {
+        muteGate.current = true;
+        try {
+          return await acp.request(
+            "session/load",
+            { sessionId, cwd: input.cwd, mcpServers: [] },
+            SESSION_TIMEOUT_MS,
+          );
+        } finally {
+          muteGate.current = false;
+        }
+      },
+      load: async (sessionId) => {
+        muteGate.current = true;
+        try {
+          return await acp.request(
+            "session/load",
+            { sessionId, cwd: input.cwd, mcpServers: [] },
+            SESSION_TIMEOUT_MS,
+          );
+        } finally {
+          muteGate.current = false;
+        }
+      },
+      create: async () => {
+        try {
+          return await acp.request(
+            "session/new",
+            { cwd: input.cwd, mcpServers: [] },
+            SESSION_TIMEOUT_MS,
+          );
+        } catch (error) {
+          throw hermesStartupError(error);
+        }
+      },
+      sessionId: hermesSessionId,
+      isTimeout: (error) => error instanceof Error && error.message.endsWith("timed out"),
+    });
+    const setup = recovery.setup;
+    const acpSessionId = recovery.sessionId;
+    const didLoad = recovery.restored;
     const live: Live = {
       subagents: new AcpSubagents(),
       background: new Map(),
@@ -374,7 +381,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
         { sessionId: live.acpSessionId, prompt: blocks },
         PROMPT_TIMEOUT_MS,
       );
-      if (live.cancelled) return;
+      if (live.cancelled && live.stopReason !== "process-exit") return;
       // Close this assistant bubble without ending MonoCode's busy turn. A
       // background handoff opens a fresh assistant bubble after it arrives.
       live.onEvent({ type: "message.completed" });
@@ -386,7 +393,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
       blocks = hermesPromptBlocks(await backgroundHandoff(finished));
     }
   } catch (error) {
-    if (live.cancelled) return;
+    if (live.cancelled && live.stopReason !== "process-exit") return;
     const detail = error instanceof Error ? error.message : String(error);
     live.onEvent({
       type: "session.error",

@@ -1,5 +1,6 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
+import { recoverAcpSession, unknownAcpRequest } from "../../core/acpLifecycle";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import {
@@ -254,11 +255,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   handlers.onRequest = (id, method, params) => {
     const live = liveRef.current;
     if (!live) {
-      void acp
-        .respondError(id, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
+      void unknownAcpRequest(acp.respondError.bind(acp), id, method)
         .catch(() => undefined);
       return;
     }
@@ -329,57 +326,42 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         });
     }
 
-    let setup: unknown;
-    let acpSessionId: string | undefined;
-    let didLoad = false;
-
-    if (canLoad && resume) {
-      try {
-        setup = await acp.request(
-          "session/resume",
-          { sessionId: resume.acpSessionId },
-          SESSION_TIMEOUT_MS,
-        );
-        acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-        didLoad = true;
-      } catch {
+    const previous = canLoad && resume ? resume.acpSessionId : undefined;
+    const recovery = await recoverAcpSession(previous, {
+      resume: async (sessionId) => acp.request(
+        "session/resume",
+        { sessionId },
+        SESSION_TIMEOUT_MS,
+      ),
+      load: async (sessionId) => {
         muteGate.current = true;
         try {
-          setup = await acp.request(
+          return await acp.request(
             "session/load",
-            {
-              sessionId: resume.acpSessionId,
-              cwd: input.cwd,
-              mcpServers: [],
-            },
+            { sessionId, cwd: input.cwd, mcpServers: [] },
             SESSION_TIMEOUT_MS,
           );
-          acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-          didLoad = true;
-        } catch {
-          setup = undefined;
-          acpSessionId = undefined;
-          didLoad = false;
         } finally {
           muteGate.current = false;
         }
-      }
-    }
-
-    if (!acpSessionId) {
-      try {
-        setup = await acp.request(
-          "session/new",
-          grokSessionNewParams(input.cwd, input.runtimeMode),
-          SESSION_TIMEOUT_MS,
-        );
-      } catch (error) {
-        throw grokAuthError(error);
-      }
-      acpSessionId = sessionIdFromResult(setup);
-    }
-    if (!acpSessionId)
-      throw new Error("Grok Build did not return a session id");
+      },
+      create: async () => {
+        try {
+          return await acp.request(
+            "session/new",
+            grokSessionNewParams(input.cwd, input.runtimeMode),
+            SESSION_TIMEOUT_MS,
+          );
+        } catch (error) {
+          throw grokAuthError(error);
+        }
+      },
+      sessionId: sessionIdFromResult,
+      isTimeout: (error) => error instanceof Error && error.message.endsWith("timed out"),
+    });
+    const setup = recovery.setup;
+    const acpSessionId = recovery.sessionId;
+    const didLoad = recovery.restored;
 
     const live: Live = {
       subagents: new AcpSubagents(),
@@ -542,11 +524,7 @@ async function handleRequest(
       .catch(() => undefined);
     return;
   }
-  await live.acp
-    .respondError(id, {
-      code: -32601,
-      message: `Method not found: ${method}`,
-    })
+  await unknownAcpRequest(live.acp.respondError.bind(live.acp), id, method)
     .catch(() => undefined);
 }
 
