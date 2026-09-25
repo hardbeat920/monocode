@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./Composer";
@@ -95,8 +96,10 @@ import {
 } from "../../settings/model/appearance";
 import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
+import { SessionMachineRouter } from "../../connections/ui/SessionMachineRouter";
 
 type Props = {
+  machineControl?: ReactNode;
   session: Session;
   reviewUndoLocked?: boolean;
   visible: boolean;
@@ -215,7 +218,26 @@ type Props = {
   transcriptPool?: TranscriptPool;
 };
 
-export const SessionPane = memo(function SessionPane({
+export const SessionPane = memo(function SessionPane(props: Props) {
+  const { session } = props;
+  return (
+    <SessionMachineRouter
+      cwd={session.cwd}
+      choosable={
+        session.blocks.length === 0 &&
+        !session.inboxAsk &&
+        !session.orchestrationLeadId &&
+        looksLikeProject(session.cwd)
+      }
+      local={(machineControl) => (
+        <LocalSessionPane {...props} machineControl={machineControl} />
+      )}
+    />
+  );
+});
+
+const LocalSessionPane = memo(function LocalSessionPane({
+  machineControl,
   session,
   reviewUndoLocked = false,
   visible,
@@ -515,6 +537,7 @@ export const SessionPane = memo(function SessionPane({
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
   const composer = (
     <Composer
+      machineControl={machineControl}
       enabled={visible}
       focused={focused && composerFocused}
       focusToken={composerFocusToken}

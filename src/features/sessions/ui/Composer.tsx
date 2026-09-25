@@ -192,6 +192,7 @@ type Props = {
   hideProjectPicker?: boolean;
   hideBranchPicker?: boolean;
   hideTopBar?: boolean;
+  machineControl?: ReactNode;
   context?: ContextUsage;
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
@@ -475,6 +476,7 @@ export function Composer({
   hideProjectPicker = false,
   hideBranchPicker = false,
   hideTopBar = false,
+  machineControl,
   context,
   compactSupported = false,
   quoteRequest,
@@ -2263,6 +2265,9 @@ export function Composer({
           />
         ) : null}
       </div>
+      {machineControl ? (
+        <div className="mt-2 flex justify-end px-1">{machineControl}</div>
+      ) : null}
     </div>
   );
 }

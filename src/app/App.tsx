@@ -524,6 +524,7 @@ import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock
 import { SearchView } from "../features/search/ui/SearchView";
 import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
 import { SettingsView, type SettingsAnchor } from "../features/settings/ui/SettingsView";
+import { OPEN_CONNECTIONS_EVENT } from "../features/connections/model/connections";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import { InboxView, LinkedWorkItemPanel } from "../features/inbox/ui/InboxView";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
@@ -9388,6 +9389,11 @@ export default function App({
   );
 
   const onOpenSettings = useCallback(() => openSettings(), [openSettings]);
+  useEffect(() => {
+    const openConnections = () => openSettings("connections");
+    window.addEventListener(OPEN_CONNECTIONS_EVENT, openConnections);
+    return () => window.removeEventListener(OPEN_CONNECTIONS_EVENT, openConnections);
+  }, [openSettings]);
 
   const onOpenNotificationSettings = useCallback(
     (path?: string) => {
