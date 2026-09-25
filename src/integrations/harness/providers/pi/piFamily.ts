@@ -1172,6 +1172,16 @@ async function applyModel(
       }
     }
   }
+
+  if (
+    flavor.id === "pi" &&
+    parsePiModelRef(live.nativeModel) &&
+    input.model !== `pi:${live.nativeModel}` &&
+    stateFor(flavor).liveByThread.get(input.sessionId) === live &&
+    !live.muteUpdates
+  ) {
+    live.onEvent({ type: "session.configChanged", model: `pi:${live.nativeModel}` });
+  }
 }
 
 function bindState(
@@ -1193,7 +1203,7 @@ function bindState(
   const model = asRecord(asRecord(data)?.model);
   const provider = stringField(model, "provider");
   const modelId = stringField(model, "id");
-  if (provider && modelId && !live.nativeModel) {
+  if (provider && modelId && (flavor.id === "pi" || !live.nativeModel)) {
     live.nativeModel = piNativeId(provider, modelId);
   }
   const fastModeEnabled = asRecord(data)?.fastModeEnabled;

@@ -29,6 +29,7 @@ tauri-plugin-dialog = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"], default-features = false }
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
 url = "2.5"
+time = { version = "0.3", features = ["parsing"] }
 tauri-plugin-process = "2"
 
 [target.'cfg(unix)'.dependencies]
