@@ -145,7 +145,10 @@ import {
   probeHarnessAvailability,
   subscribeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
-import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import {
+  refreshHarnessCatalogs,
+  reloadHarnessCatalog,
+} from "../../../integrations/harness/core/registry";
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
@@ -3071,10 +3074,21 @@ function ProviderRow({
   );
 }
 
-/** Binary path, launch arguments, and env vars apply the same way to every
- * harness (see `harness_spawn` in src-tauri, which is generic over these).
- * Claude additionally gets a CLAUDE_CONFIG_DIR convenience, which doesn't
- * generalize to the other CLIs. */
+type AppliedRuntime = { runtime: HarnessRuntimeSettings; configDir: string };
+
+function applyRuntimeChange(
+  harness: HarnessId,
+  prev: AppliedRuntime,
+  next: AppliedRuntime,
+): AppliedRuntime {
+  if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+  if (prev.runtime.binaryPath !== next.runtime.binaryPath) {
+    void probeHarnessAvailability({ force: true });
+  }
+  void reloadHarnessCatalog(harness);
+  return next;
+}
+
 function ProviderRuntimePanel({ harness }: { harness: HarnessId }) {
   const [runtime, setRuntime] = useState<HarnessRuntimeSettings>(() =>
     loadHarnessRuntime(harness),
@@ -3082,6 +3096,26 @@ function ProviderRuntimePanel({ harness }: { harness: HarnessId }) {
   const [configDir, setConfigDir] = useState<string>(loadClaudeConfigDir);
   const [revealedEnv, setRevealedEnv] = useState<ReadonlySet<number>>(
     () => new Set(),
+  );
+  const applied = useRef<AppliedRuntime>({ runtime, configDir });
+  const latest = useRef<AppliedRuntime>({ runtime, configDir });
+
+  useEffect(() => {
+    latest.current = { runtime, configDir };
+  });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      applied.current = applyRuntimeChange(harness, applied.current, latest.current);
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [harness, runtime, configDir]);
+
+  useEffect(
+    () => () => {
+      applied.current = applyRuntimeChange(harness, applied.current, latest.current);
+    },
+    [harness],
   );
 
   const update = (patch: Partial<HarnessRuntimeSettings>) => {
