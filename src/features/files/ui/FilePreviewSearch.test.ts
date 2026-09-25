@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleEditorFindKey } from "../editor/editorSearch";
 import { FilePreviewSearch, findPreviewTextMatches } from "./FilePreviewSearch";
+import { saveKeybindingOverride } from "../../settings/model/settings";
 
 const options = {
   caseSensitive: false,
@@ -60,8 +61,64 @@ describe("FilePreviewSearch", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    localStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("opens from a custom find shortcut instead of the default", async () => {
+    saveKeybindingOverride("Editor: Find", { shortcut: "Control+Shift+KeyM" });
+    await act(async () =>
+      root.render(
+        createElement(
+          FilePreviewSearch,
+          { active: true, contentVersion: "Alpha" },
+          createElement(
+            "div",
+            { className: "markdown-preview", "aria-label": "Markdown preview" },
+            createElement("p", null, "Alpha"),
+          ),
+        ),
+      ),
+    );
+
+    const custom = new KeyboardEvent("keydown", {
+      code: "KeyM",
+      key: "M",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      expect(handleEditorFindKey(custom)).toBe(true);
+    });
+    expect(custom.defaultPrevented).toBe(true);
+    expect(
+      container.querySelector("[data-file-preview-search-open]"),
+    ).not.toBeNull();
+
+    await act(async () => {
+      handleEditorFindKey(
+        new KeyboardEvent("keydown", {
+          code: "Escape",
+          key: "Escape",
+          cancelable: true,
+        }),
+      );
+    });
+    await act(async () => {
+      handleEditorFindKey(
+        new KeyboardEvent("keydown", {
+          code: "KeyF",
+          key: "f",
+          ctrlKey: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(
+      container.querySelector("[data-file-preview-search-open]"),
+    ).toBeNull();
   });
 
   it("opens from the find shortcut and navigates rendered matches", async () => {

@@ -1054,17 +1054,27 @@ export function saveKeybindingOverride(
   return next;
 }
 
+export type ShortcutEvent = Pick<KeyboardEvent, "code"> &
+  Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
+
 export function shortcutMatches(
   shortcut: string,
-  event: Pick<KeyboardEvent, "code"> &
-    Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  event: ShortcutEvent,
 ): boolean {
-  return shortcutFromKeyEvent({ ...event, code: event.code }) === shortcut;
+  // Copy the fields: real keyboard events expose modifiers as prototype
+  // accessors, so spreading the event would silently drop all of them.
+  return (
+    shortcutFromKeyEvent({
+      code: event.code,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+    }) === shortcut
+  );
 }
 
-export function matchCustomKeybinding(
-  event: Parameters<typeof shortcutMatches>[1],
-): string | null {
+export function matchCustomKeybinding(event: ShortcutEvent): string | null {
   for (const [command, override] of Object.entries(loadKeybindingOverrides())) {
     if (override.shortcut && shortcutMatches(override.shortcut, event)) {
       return command;
@@ -1075,7 +1085,7 @@ export function matchCustomKeybinding(
 
 export function keybindingPressed(
   command: string,
-  event: Parameters<typeof shortcutMatches>[1],
+  event: ShortcutEvent,
   defaultMatch: boolean,
 ): boolean {
   const override = loadKeybindingOverrides()[command];

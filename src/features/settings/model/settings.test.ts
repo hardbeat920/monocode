@@ -224,6 +224,22 @@ describe("keybinding overrides", () => {
     expect(localStorage.getItem(KEYBINDING_OVERRIDES_KEY)).toBeNull();
   });
 
+  it("matches real keyboard events whose modifiers are prototype accessors", () => {
+    saveKeybindingOverride("App: Search", { shortcut: "Control+Shift+KeyM" });
+    // Browsers define metaKey/ctrlKey/altKey/shiftKey on KeyboardEvent.prototype,
+    // so they are not own properties and must be read, never spread.
+    const prototyped = Object.create({
+      code: "KeyM",
+      metaKey: false,
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: true,
+    }) as Parameters<typeof keybindingPressed>[1];
+
+    expect(keybindingPressed("App: Search", prototyped, false)).toBe(true);
+    expect(matchCustomKeybinding(prototyped)).toBe("App: Search");
+  });
+
   it("disables a shortcut and restores the default", () => {
     saveKeybindingOverride("App: Search", { disabled: true });
     expect(loadKeybindingOverrides()).toEqual({
