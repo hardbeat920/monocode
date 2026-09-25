@@ -429,13 +429,21 @@ export function homeDir(): Promise<string> {
   return invoke<string>("home_dir");
 }
 
-export async function pickFolder(title = "Open project"): Promise<string | null> {
+/**
+ * Folders chosen from the system picker. Multi-select is on, so several
+ * projects can be opened in one pass; the dialog still returns a bare string
+ * when only one was taken.
+ */
+export async function pickFolders(title = "Open projects"): Promise<string[]> {
   const selected = await open({
     directory: true,
-    multiple: false,
+    multiple: true,
     title,
   });
-  return typeof selected === "string" && selected ? slash(selected) : null;
+  if (Array.isArray(selected)) {
+    return selected.filter((path) => !!path).map(slash);
+  }
+  return typeof selected === "string" && selected ? [slash(selected)] : [];
 }
 
 export async function pickFiles(title = "Attach files"): Promise<string[] | null> {

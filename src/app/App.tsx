@@ -121,7 +121,7 @@ import {
 import {
   basename,
   notifyGitChanged,
-  pickFolder,
+  pickFolders,
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "../platform/tauri/fs";
@@ -5028,8 +5028,9 @@ export default function App({
   );
 
   const pickProject = useCallback(async () => {
-    const path = await pickFolder();
-    if (path) onSelectProject(path);
+    // Several folders can be taken at once; each opens as its own project, and
+    // the last one selected ends up focused.
+    for (const path of await pickFolders()) onSelectProject(path);
   }, [onSelectProject]);
 
   const onPlaceSessionInFolder = useCallback(
