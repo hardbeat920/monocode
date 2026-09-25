@@ -26,6 +26,22 @@ it("groups Jira notification preferences by site and stable project ID", () => {
   expect(loadNotificationProjects()).toContainEqual(project);
 });
 
+it("groups Asana notification preferences by stable project gid", () => {
+  const item = {
+    provider: "asana" as const, repo: "Acme", teamId: "1200000000000001",
+    teamName: "Launch", url: "https://app.asana.com/0/1200000000000001/1200000000000042",
+  };
+  const project = inboxNotificationProject(item);
+  expect(project).toEqual({
+    id: "asana:project:1200000000000001", name: "Launch",
+    detail: "Asana", kind: "asana", paths: [],
+  });
+  expect(inboxNotificationProject({ ...item, teamName: "Renamed", repo: "Other" }).id).toBe(project.id);
+  expect(inboxNotificationProject({ ...item, teamId: "1200000000000002" }).id).not.toBe(project.id);
+  rememberNotificationProjects([project]);
+  expect(loadNotificationProjects()).toContainEqual(project);
+});
+
 it("derives local notification identity immediately from the normalized path", () => {
   expect(knownNotificationProject("C:/Work/App")).toEqual({
     id: "local:c:/work/app",

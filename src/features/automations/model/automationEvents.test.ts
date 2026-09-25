@@ -66,6 +66,19 @@ describe("inbox automation events", () => {
     expect(matchInboxAutomations([automation({ triggers: [trigger] })], [{ ...jira, repo: "OPS" }])).toEqual([]);
   });
 
+  it("matches account-wide Asana tasks by stable task gid", () => {
+    const asana = item({ provider: "asana", kind: "asana", id: "1200000000000042", identifier: "1200000000000042", repo: "Acme", teamId: "1200000000000001", projectPath: "" });
+    const trigger = createAutomationTrigger("asana", "issue_created");
+    expect(inboxAppearedEvent(asana)).toEqual({ kind: "asana", event: "issue_created" });
+    expect(automationEventKey(asana)).toBe("asana:task:1200000000000042");
+    expect(automationEventKey({ ...asana, repo: "Other", teamId: "1200000000000002" })).toBe("asana:task:1200000000000042");
+    const matches = matchInboxAutomations([automation({ triggers: [trigger] })], [asana]);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].prompt).toContain("Work on this Asana task:");
+    const jiraOnly = createAutomationTrigger("jira", "issue_created");
+    expect(matchInboxAutomations([automation({ triggers: [jiraOnly] })], [asana])).toEqual([]);
+  });
+
   it("maps opened PRs, drafts, and issues", () => {
     expect(inboxAppearedEvent(item())).toEqual({
       kind: "github",

@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod account_identity;
+mod asana;
 mod automations;
 mod azure_devops;
 mod chat_background;
@@ -360,6 +361,13 @@ pub fn run() {
             jira::jira_issue_details,
             jira::jira_issue_thread,
             jira::jira_issue_comment,
+            asana::asana_status,
+            asana::asana_set_token,
+            asana::asana_list_projects,
+            asana::asana_list_issues,
+            asana::asana_issue_details,
+            asana::asana_issue_thread,
+            asana::asana_issue_comment,
             link_preview::fetch_link_preview,
             fs::git_branches,
             fs::git_checkout,

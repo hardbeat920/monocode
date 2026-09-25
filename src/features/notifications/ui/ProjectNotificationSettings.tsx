@@ -200,7 +200,11 @@ export function ProjectNotificationSettings({
                   : null;
                 const categories = NOTIFICATION_CATEGORIES.filter(
                   (category) => {
-                    if (project.kind === "linear" || project.kind === "jira")
+                    if (
+                      project.kind === "linear" ||
+                      project.kind === "jira" ||
+                      project.kind === "asana"
+                    )
                       return category.id === "issues";
                     if (project.kind === "local")
                       return !["pullRequests", "issues"].includes(category.id);

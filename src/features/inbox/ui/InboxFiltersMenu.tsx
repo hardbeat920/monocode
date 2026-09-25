@@ -5,11 +5,13 @@ import {
   DEFAULT_INBOX_FILTERS,
   hasActiveInboxFilters,
   isTrackerSource,
+  type InboxAsanaDueFilter,
   type InboxFilters,
   type InboxSource,
   type InboxTimeFilter,
   type LinearProjectOption,
 } from "../model/inboxFilters";
+import type { AsanaProject } from "../model/asana";
 import type { JiraProject } from "../model/jira";
 import type { LinearTeam } from "../model/linear";
 import { Popover } from "../../../shared/ui/Popover";
@@ -32,6 +34,8 @@ type Props = {
   hiddenLinearTeamIds: string[];
   jiraProjects: JiraProject[];
   hiddenJiraProjectIds: string[];
+  asanaProjects: AsanaProject[];
+  hiddenAsanaProjectIds: string[];
   source: InboxSource;
   filters: InboxFilters;
   onChange: (filters: InboxFilters) => void;
@@ -39,8 +43,15 @@ type Props = {
   onLinearTeamsChange: (ids: string[]) => void;
   /** Shared with Settings → Inbox → Jira; narrows the fetch, not just the list. */
   onJiraProjectsChange: (ids: string[]) => void;
+  /** Shared with Settings → Inbox → Asana; narrows the fetch, not just the list. */
+  onAsanaProjectsChange: (ids: string[]) => void;
   onClose: () => void;
 };
+
+const ASANA_DUE_OPTIONS: { id: InboxAsanaDueFilter; label: string }[] = [
+  { id: "week", label: "Next 7 days" },
+  { id: "all", label: "Any time" },
+];
 
 const TIME_OPTIONS: { id: InboxTimeFilter; label: string }[] = [
   { id: "all", label: "All time" },
@@ -75,11 +86,14 @@ export function InboxFiltersMenu({
   hiddenLinearTeamIds,
   jiraProjects,
   hiddenJiraProjectIds,
+  asanaProjects,
+  hiddenAsanaProjectIds,
   source,
   filters,
   onChange,
   onLinearTeamsChange,
   onJiraProjectsChange,
+  onAsanaProjectsChange,
   onClose,
 }: Props) {
   const hiddenProjects = new Set(filters.hiddenProjects);
@@ -90,6 +104,9 @@ export function InboxFiltersMenu({
   const hiddenJira = new Set(hiddenJiraProjectIds);
   const jiraProjectsActive =
     source === "jira" && hiddenJiraProjectIds.length > 0;
+  const hiddenAsana = new Set(hiddenAsanaProjectIds);
+  const asanaProjectsActive =
+    source === "asana" && hiddenAsanaProjectIds.length > 0;
   const tracker = isTrackerSource(source);
 
   const toggleAssigned = () => {
@@ -124,6 +141,13 @@ export function InboxFiltersMenu({
     onJiraProjectsChange([...next]);
   };
 
+  const toggleAsanaProject = (id: string) => {
+    const next = new Set(hiddenAsana);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onAsanaProjectsChange([...next]);
+  };
+
   const toggleLinearProject = (id: string) => {
     const next = new Set(hiddenLinearProjects);
     if (next.has(id)) next.delete(id);
@@ -154,40 +178,60 @@ export function InboxFiltersMenu({
       onContextMenu={(event) => event.preventDefault()}
       className="overflow-y-auto overscroll-none p-1"
     >
-      <FilterItem
-        label={
-          source === "gitlab" || source === "azuredevops"
-            ? "Needs attention"
-            : "Assigned to me"
-        }
-        checked={filters.assignedToMe}
-        onClick={toggleAssigned}
-      />
-
-      <SectionLabel>Status</SectionLabel>
-      <FilterItem
-        label="Open"
-        checked={filters.status.open}
-        onClick={() => toggleStatus("open")}
-      />
-      {!tracker ? (
+      {source !== "asana" ? (
         <FilterItem
-          label="Draft"
-          checked={filters.status.draft}
-          onClick={() => toggleStatus("draft")}
+          label={
+            source === "gitlab" || source === "azuredevops"
+              ? "Needs attention"
+              : "Assigned to me"
+          }
+          checked={filters.assignedToMe}
+          onClick={toggleAssigned}
         />
       ) : null}
-      <FilterItem
-        label="Closed"
-        checked={filters.status.closed}
-        onClick={() => toggleStatus("closed")}
-      />
-      {!tracker ? (
-        <FilterItem
-          label="Merged"
-          checked={filters.status.merged}
-          onClick={() => toggleStatus("merged")}
-        />
+
+      {source !== "asana" ? (
+        <>
+          <SectionLabel>Status</SectionLabel>
+          <FilterItem
+            label="Open"
+            checked={filters.status.open}
+            onClick={() => toggleStatus("open")}
+          />
+          {!tracker ? (
+            <FilterItem
+              label="Draft"
+              checked={filters.status.draft}
+              onClick={() => toggleStatus("draft")}
+            />
+          ) : null}
+          <FilterItem
+            label="Closed"
+            checked={filters.status.closed}
+            onClick={() => toggleStatus("closed")}
+          />
+          {!tracker ? (
+            <FilterItem
+              label="Merged"
+              checked={filters.status.merged}
+              onClick={() => toggleStatus("merged")}
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      {source === "asana" ? (
+        <>
+          <SectionLabel>Due</SectionLabel>
+          {ASANA_DUE_OPTIONS.map((option) => (
+            <FilterItem
+              key={option.id}
+              label={option.label}
+              checked={(filters.asanaDue ?? "week") === option.id}
+              onClick={() => onChange({ ...filters, asanaDue: option.id })}
+            />
+          ))}
+        </>
       ) : null}
 
       <SectionLabel>Time</SectionLabel>
@@ -261,6 +305,20 @@ export function InboxFiltersMenu({
         </>
       ) : null}
 
+      {source === "asana" && asanaProjects.length > 0 ? (
+        <>
+          <SectionLabel>Projects</SectionLabel>
+          {asanaProjects.map((project) => (
+            <FilterItem
+              key={project.id}
+              label={project.name || project.key}
+              checked={!hiddenAsana.has(project.id)}
+              onClick={() => toggleAsanaProject(project.id)}
+            />
+          ))}
+        </>
+      ) : null}
+
       {!tracker &&
       !(
         (source === "gitlab" || source === "azuredevops") &&
@@ -294,6 +352,7 @@ export function InboxFiltersMenu({
         source,
         hiddenLinearTeamIds,
         hiddenJiraProjectIds,
+        hiddenAsanaProjectIds,
       ) ? (
         <>
           <div role="separator" className="my-1 h-px bg-content/10" />
@@ -305,6 +364,7 @@ export function InboxFiltersMenu({
               onChange(DEFAULT_INBOX_FILTERS);
               if (teamsActive) onLinearTeamsChange([]);
               if (jiraProjectsActive) onJiraProjectsChange([]);
+              if (asanaProjectsActive) onAsanaProjectsChange([]);
             }}
             className="flex h-7 w-full items-center rounded-lg px-2 text-left text-[13px] leading-none text-content/70 hover:bg-content/5 hover:text-content"
           >
