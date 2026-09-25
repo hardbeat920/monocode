@@ -4658,6 +4658,35 @@ export default function App({
     [onRemoveHistorySession],
   );
 
+  const sessionIdsInTitleTab = useCallback((tabId: string): string[] => {
+    const tab = tabsRef.current.find((entry) => entry.id === tabId);
+    if (!tab) return [];
+    const openSessionIds = new Set(
+      sessionsRef.current.map((session) => session.id),
+    );
+    return leafIds(tab.layout).filter((id) => openSessionIds.has(id));
+  }, []);
+
+  const onArchiveTitleTab = useCallback(
+    (tabId: string) => {
+      const sessionIds = sessionIdsInTitleTab(tabId);
+      void onArchiveHistorySessions(sessionIds, true);
+    },
+    [onArchiveHistorySessions, sessionIdsInTitleTab],
+  );
+
+  const onDeleteTitleTab = useCallback(
+    (tabId: string) => {
+      const sessionIds = sessionIdsInTitleTab(tabId);
+      if (sessionIds.length === 1) {
+        void onDeleteHistorySession(sessionIds[0]);
+      } else if (sessionIds.length > 1) {
+        void onDeleteHistorySessions(sessionIds);
+      }
+    },
+    [onDeleteHistorySession, onDeleteHistorySessions, sessionIdsInTitleTab],
+  );
+
   const onFocusDir = useCallback(
     (dir: FocusDir) => {
       if (!activeTab) return;
@@ -10051,6 +10080,8 @@ export default function App({
       onOpenNotes={notesEnabled ? onOpenNotes : undefined}
       onClose={onCloseTitleTab}
       onCloseMany={onCloseTabs}
+      onArchiveTab={onArchiveTitleTab}
+      onDeleteTab={onDeleteTitleTab}
       onReorder={onReorderTabs}
       onPlaceOnPane={onPlaceTabOnPane}
       onGoToFile={onGoToFile}

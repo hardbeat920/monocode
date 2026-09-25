@@ -7,9 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-25
+
 ### Added
 
+- **BTW** opens a read-only side conversation on a completed agent response without changing the main thread. Use the response's BTW control or `/btw` in the composer. Side conversations support Claude, Codex, Cursor, Grok, OpenCode, Pi, and omp, retain their threads and model settings, and use the provider that produced the original turn even after a handoff. In #353.
+- `/operator` gives an agent opt-in access to MonoCode in that thread through a local `app` CLI. It can inspect models, start or draft sessions, read and message project sessions, organize folders, and read notes. App access lasts for that thread; `/mono` and `/monocode` remain supported aliases. See [Agent access to MonoCode](README.md#agent-access-to-monocode). In #423.
+- Claude and Codex account controls show the cached account's plan, email, and organization in Settings, the account picker, and the usage popover. Identity refreshes after reconnecting. In #372.
+- A usage-limit notice shows the provider's reset time and countdown, pauses queued messages, and offers manual resume or automatic resume after the limit resets.
 - The macOS Quick composer global shortcut can be changed in Settings → Keybindings. The default remains Command+Shift+Space.
+
+### Changed
+
+- The selected Workspace sidebar tab is remembered separately for each project, including when a project is renamed.
+- BTW controls and turn metrics sit with the transcript's response metadata; their hover and focus styles and the BTW popover spacing have been refined.
+- Source-control diff utilities now cover reusing unchanged items and pruning stale entries, with tests for both behaviors.
+- Composer controls fit better in narrow layouts. In #414 by @sambhavthakkar.
+
+### Fixed
+
+- Resuming an interrupted Codex session preserves its saved model and settings while the model catalog loads, instead of temporarily selecting another provider's model. In #422.
+- Closing the last window quits the app on Linux, as it already does on Windows. In #419 by @sambhavthakkar.
+- Escape handling waits for later keydown listeners, so controls can prevent the window-level Escape action when they handle the key themselves.
 
 ## [0.1.56] - 2026-09-24
 
@@ -1021,7 +1040,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.56...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hardbeat920/monocode/compare/v0.1.56...v0.2.0
 [0.1.56]: https://github.com/hardbeat920/monocode/compare/v0.1.55...v0.1.56
 [0.1.55]: https://github.com/hardbeat920/monocode/compare/v0.1.54...v0.1.55
 [0.1.54]: https://github.com/hardbeat920/monocode/compare/v0.1.53...v0.1.54
