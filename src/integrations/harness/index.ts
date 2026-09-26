@@ -97,6 +97,15 @@ export {
   bindHermesSession,
 } from "./providers/hermes/hermes";
 export {
+  sendCopilotTurn,
+  steerCopilotTurn,
+  cancelCopilotTurn,
+  respondCopilotApproval,
+  stopCopilotSession,
+  forgetCopilotSession,
+  bindCopilotSession,
+} from "./providers/copilot/copilot";
+export {
   sendAntigravityTurn,
   steerAntigravityTurn,
   cancelAntigravityTurn,
@@ -154,6 +163,7 @@ export { refreshPiCatalog, refreshOmpCatalog } from "./providers/pi/piCatalog";
 export { refreshFxCatalog } from "./providers/fx/fxCatalog";
 export { refreshGrokCatalog } from "./providers/grok/grokCatalog";
 export { refreshHermesCatalog } from "./providers/hermes/hermesCatalog";
+export { refreshCopilotCatalog } from "./providers/copilot/copilotCatalog";
 export { refreshAntigravityCatalog } from "./providers/antigravity/antigravityCatalog";
 export { registerBuiltinHarnesses } from "./core/register";
 export {

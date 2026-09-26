@@ -193,6 +193,12 @@ export const MODELS: AgentModel[] = [
     nativeId: "",
   },
   {
+    id: "copilot:auto",
+    harness: "copilot",
+    name: "Auto",
+    nativeId: "auto",
+  },
+  {
     id: "antigravity:gemini-3.8-flash-high",
     harness: "antigravity",
     name: "Gemini 3.8 Flash (High)",
@@ -210,6 +216,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
   hermes: "hermes:default",
+  copilot: "copilot:auto",
   antigravity: "antigravity:gemini-3.8-flash-high",
 };
 
@@ -239,6 +246,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "omp",
   "fx",
   "hermes",
+  "copilot",
   "antigravity",
 ];
 

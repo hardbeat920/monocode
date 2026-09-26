@@ -166,9 +166,13 @@ describe("model picker", () => {
     const modelFlyout = container.querySelector<HTMLElement>(
       '[role="dialog"][aria-label="Models"]',
     )!;
-    expect(modelFlyout.style.height).toBe("404px");
-    expect(modelFlyout.dataset.minHeight).toBe("406");
-    expect(modelFlyout.dataset.maxHeight).toBe("406");
+    const providerTabs = container.querySelectorAll('[role="tab"]');
+    expect(Number.parseInt(modelFlyout.style.height, 10)).toBe(
+      providerTabs.length * 32 + (providerTabs.length - 1) * 4 + 12,
+    );
+    expect(modelFlyout.dataset.minHeight).toBe(
+      modelFlyout.dataset.maxHeight,
+    );
     expect(
       container.querySelector('[role="tablist"][aria-orientation="vertical"]'),
     ).not.toBeNull();
