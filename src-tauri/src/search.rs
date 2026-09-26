@@ -94,6 +94,12 @@ pub fn cancel_project_search(cwd: String, search_id: String) {
 
 #[tauri::command]
 pub async fn search_project(options: SearchOptions) -> Result<SearchResult, String> {
+    if options.query.trim().is_empty() {
+        return Ok(SearchResult {
+            matches: Vec::new(),
+            truncated: false,
+        });
+    }
     let root = expand_home(&options.cwd);
     if !root.is_dir() {
         return Err(format!("{}: Not a directory", root.display()));

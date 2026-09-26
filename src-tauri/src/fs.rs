@@ -3,7 +3,8 @@ use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -4026,33 +4027,85 @@ pub(crate) fn git_output_capped(
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::Builder::new()
+        .name("git-output-reader".to_string())
+        .spawn(move || {
+            let mut chunk = vec![0u8; 8192];
+            loop {
+                match stdout.read(&mut chunk) {
+                    Ok(0) => {
+                        let _ = sender.send(Ok(Vec::new()));
+                        break;
+                    }
+                    Ok(read) => {
+                        if sender.send(Ok(chunk[..read].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        });
+    let mut reader = match reader {
+        Ok(reader) => Some(reader),
+        Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
             return None;
         }
-        let n = match stdout.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+    };
+    let stop = |child: &mut std::process::Child, reader: &mut Option<thread::JoinHandle<()>>| {
+        let _ = child.kill();
+        let _ = child.wait();
+        // Dropping the handle detaches the reader. A killed git process can leave
+        // a shell descendant holding the pipe, so joining here would re-block the
+        // cancelled search until that unrelated descendant exits.
+        reader.take();
+    };
+
+    let mut buf = Vec::new();
+    loop {
+        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+            stop(&mut child, &mut reader);
+            return None;
+        }
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(chunk)) if chunk.is_empty() => break,
+            Ok(Ok(chunk)) => {
+                let remaining = max_bytes.saturating_sub(buf.len());
+                if chunk.len() > remaining {
+                    buf.extend_from_slice(&chunk[..remaining]);
+                    stop(&mut child, &mut reader);
+                    return Some((buf, true));
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Ok(Err(_)) => {
+                stop(&mut child, &mut reader);
                 return None;
             }
-        };
-        let remaining = max_bytes.saturating_sub(buf.len());
-        if n > remaining {
-            buf.extend_from_slice(&chunk[..remaining]);
-            let _ = child.kill();
-            let _ = child.wait();
-            return Some((buf, true));
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+                    stop(&mut child, &mut reader);
+                    return None;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                stop(&mut child, &mut reader);
+                return None;
+            }
         }
-        buf.extend_from_slice(&chunk[..n]);
     }
+    let _ = reader.take().map(thread::JoinHandle::join);
     let status = child.wait().ok()?;
     if git_status_ok(&status, args) {
         Some((buf, false))
@@ -5375,7 +5428,8 @@ pub async fn open_path_with_default_app(path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -7725,6 +7779,32 @@ mod tests {
             git_output_capped(&dir.0, &["rev-parse", "HEAD"], 1024, None).unwrap();
         assert!(!truncated);
         assert!(!head.is_empty());
+    }
+
+    #[test]
+    fn git_output_capped_cancels_a_silent_child() {
+        let dir = tmp("git-output-cancel-silent");
+        if !init_git_commit(&dir.0, &[("a.txt", "a\n")]) {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        let setter = cancel.clone();
+        let setter_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            setter.store(true, Ordering::Release);
+        });
+        let started = Instant::now();
+
+        let result = git_output_capped(
+            &dir.0,
+            &["-c", "alias.slow=!sleep 5", "slow"],
+            1024,
+            Some(&cancel),
+        );
+        setter_thread.join().unwrap();
+
+        assert!(result.is_none());
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]

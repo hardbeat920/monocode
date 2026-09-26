@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -266,34 +267,51 @@ const MAX_CONVERSATION_HITS: usize = 40;
 const MAX_MESSAGE_HITS: usize = 40;
 const SNIPPET_RADIUS: usize = 42;
 const SEARCH_PROGRESS_INTERVAL: usize = 1_000;
-static SESSION_SEARCH_GENERATIONS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+const MAX_SEARCH_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+static SESSION_SEARCH_TOKENS: Mutex<Option<HashMap<String, Arc<AtomicU64>>>> = Mutex::new(None);
 
-fn next_session_search_generation(owner: &str) -> u64 {
-    if owner.is_empty() {
-        return 0;
-    }
-    let Ok(mut generations) = SESSION_SEARCH_GENERATIONS.lock() else {
-        return 0;
-    };
-    let generations = generations.get_or_insert_with(HashMap::new);
-    let generation = generations.entry(owner.to_string()).or_insert(0);
-    *generation = generation.wrapping_add(1);
-    *generation
+#[derive(Clone)]
+struct SessionSearchToken {
+    counter: Arc<AtomicU64>,
+    generation: u64,
 }
 
-fn session_search_is_current(owner: &str, generation: u64) -> bool {
-    if owner.is_empty() {
-        return true;
+impl SessionSearchToken {
+    fn is_current(&self) -> bool {
+        self.counter.load(Ordering::Acquire) == self.generation
     }
-    SESSION_SEARCH_GENERATIONS
-        .lock()
-        .ok()
-        .and_then(|generations| {
-            generations
-                .as_ref()
-                .and_then(|generations| generations.get(owner).copied())
-        })
-        .is_some_and(|current| current == generation)
+}
+
+fn begin_session_search(owner: &str) -> Option<SessionSearchToken> {
+    if owner.is_empty() {
+        return None;
+    }
+    let mut tokens = SESSION_SEARCH_TOKENS.lock().ok()?;
+    let tokens = tokens.get_or_insert_with(HashMap::new);
+    let counter = tokens
+        .entry(owner.to_string())
+        .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+        .clone();
+    let generation = counter.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    Some(SessionSearchToken {
+        counter,
+        generation,
+    })
+}
+
+fn cancel_owned_session_search(owner: &str) {
+    if owner.is_empty() {
+        return;
+    }
+    if let Ok(tokens) = SESSION_SEARCH_TOKENS.lock() {
+        if let Some(counter) = tokens.as_ref().and_then(|tokens| tokens.get(owner)) {
+            counter.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
+
+fn session_search_is_current(token: Option<&SessionSearchToken>) -> bool {
+    token.is_none_or(SessionSearchToken::is_current)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -336,12 +354,12 @@ pub fn session_search(
     store: State<'_, SessionStore>,
     options: SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
-    let generation = next_session_search_generation(&options.search_owner);
+    let token = begin_session_search(&options.search_owner);
     let (candidates, truncated) = {
         let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-        search_session_candidates(&conn, &options, generation).map_err(|e| e.to_string())?
+        search_session_candidates(&conn, &options, token.as_ref()).map_err(|e| e.to_string())?
     };
-    if !session_search_is_current(&options.search_owner, generation) {
+    if !session_search_is_current(token.as_ref()) {
         return Ok(SessionSearchResult {
             hits: Vec::new(),
             truncated: false,
@@ -354,7 +372,7 @@ pub fn session_search(
 
 #[tauri::command(async)]
 pub fn cancel_session_search(search_owner: String) {
-    next_session_search_generation(&search_owner);
+    cancel_owned_session_search(&search_owner);
 }
 
 #[tauri::command(async)]
@@ -1088,13 +1106,21 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
 
 type SearchCandidate = (String, String, String, String, i64, String);
 
+struct SearchProgressGuard<'a>(&'a Connection);
+
+impl Drop for SearchProgressGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.progress_handler(1, None::<fn() -> bool>);
+    }
+}
+
 #[cfg(test)]
 fn search_sessions(
     conn: &Connection,
     options: &SessionSearchOptions,
 ) -> rusqlite::Result<SessionSearchResult> {
-    let generation = next_session_search_generation(&options.search_owner);
-    let (candidates, truncated) = search_session_candidates(conn, options, generation)?;
+    let token = begin_session_search(&options.search_owner);
+    let (candidates, truncated) = search_session_candidates(conn, options, token.as_ref())?;
     Ok(search_session_candidates_hits(
         candidates, options, truncated,
     ))
@@ -1103,7 +1129,7 @@ fn search_sessions(
 fn search_session_candidates(
     conn: &Connection,
     options: &SessionSearchOptions,
-    generation: u64,
+    token: Option<&SessionSearchToken>,
 ) -> rusqlite::Result<(Vec<SearchCandidate>, bool)> {
     let query = options.query.trim();
     if query.is_empty() {
@@ -1141,36 +1167,40 @@ fn search_session_candidates(
         statement.query_map(params![pattern, limit], search_row)?
     };
 
-    let owner = options.search_owner.clone();
+    let progress_token = token.cloned();
     conn.progress_handler(
         SEARCH_PROGRESS_INTERVAL as i32,
-        Some(move || !session_search_is_current(&owner, generation)),
+        Some(move || !session_search_is_current(progress_token.as_ref())),
     )?;
+    let _progress_guard = SearchProgressGuard(conn);
     let mut candidates = Vec::new();
+    let mut buffered_bytes = 0usize;
     let mut cancelled = false;
+    let mut truncated = false;
     for row in rows {
-        if !session_search_is_current(&options.search_owner, generation) {
+        if !session_search_is_current(token) {
             cancelled = true;
             break;
         }
         match row {
-            Ok(candidate) => candidates.push(candidate),
-            Err(_) if !session_search_is_current(&options.search_owner, generation) => {
+            Ok(candidate) => {
+                buffered_bytes += candidate.5.len();
+                if candidates.len() >= MAX_SEARCH_SCAN || buffered_bytes > MAX_SEARCH_BUFFER_BYTES {
+                    truncated = true;
+                    break;
+                }
+                candidates.push(candidate);
+            }
+            Err(_) if !session_search_is_current(token) => {
                 cancelled = true;
                 break;
             }
-            Err(error) => {
-                conn.progress_handler(1, None::<fn() -> bool>)?;
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         }
     }
-    conn.progress_handler(1, None::<fn() -> bool>)?;
     if cancelled {
         return Ok((Vec::new(), false));
     }
-    let truncated = candidates.len() > MAX_SEARCH_SCAN;
-    candidates.truncate(MAX_SEARCH_SCAN);
     Ok((candidates, truncated))
 }
 
@@ -2814,13 +2844,13 @@ mod tests {
     #[test]
     fn a_new_session_search_supersedes_the_same_owner() {
         let owner = "session-search-owner-test";
-        let first = next_session_search_generation(owner);
-        assert!(session_search_is_current(owner, first));
-        let second = next_session_search_generation(owner);
-        assert!(!session_search_is_current(owner, first));
-        assert!(session_search_is_current(owner, second));
-        next_session_search_generation(owner);
-        assert!(!session_search_is_current(owner, second));
+        let first = begin_session_search(owner).unwrap();
+        assert!(first.is_current());
+        let second = begin_session_search(owner).unwrap();
+        assert!(!first.is_current());
+        assert!(second.is_current());
+        cancel_owned_session_search(owner);
+        assert!(!second.is_current());
     }
 
     #[test]
@@ -2829,8 +2859,8 @@ mod tests {
         let conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "Searchable title")).unwrap();
         let owner = "superseded-session-search-test";
-        let stale = next_session_search_generation(owner);
-        next_session_search_generation(owner);
+        let stale = begin_session_search(owner).unwrap();
+        begin_session_search(owner);
         let options = SessionSearchOptions {
             query: "Searchable".into(),
             cwd: None,
@@ -2838,10 +2868,71 @@ mod tests {
             search_owner: owner.into(),
         };
 
-        let (candidates, truncated) = search_session_candidates(&conn, &options, stale).unwrap();
+        let (candidates, truncated) =
+            search_session_candidates(&conn, &options, Some(&stale)).unwrap();
 
         assert!(candidates.is_empty());
         assert!(!truncated);
+        // The progress handler belongs to the search, not the shared connection.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn session_search_buffers_a_bounded_number_of_transcript_bytes() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let filler = "needle ".repeat(250_000);
+        for index in 0..5 {
+            let mut session = sample(&format!("s{index}"), "/tmp/a", "Needle title");
+            session.blocks = json!([
+                { "id": format!("u{index}"), "role": "user", "text": filler }
+            ]);
+            upsert_session(&conn, &session).unwrap();
+        }
+        let (candidates, truncated) = search_session_candidates(
+            &conn,
+            &SessionSearchOptions {
+                query: "needle".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: String::new(),
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(truncated);
+        let buffered: usize = candidates.iter().map(|candidate| candidate.5.len()).sum();
+        assert!(buffered <= MAX_SEARCH_BUFFER_BYTES);
+    }
+
+    #[test]
+    fn search_uses_top_level_user_blocks_for_the_materialized_filter() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Unrelated title");
+        session.blocks = json!([
+            { "id": "t1", "role": "tool", "text": "wrapper", "tool": {
+                "preview": { "output": "nested role: user needle" }
+            } }
+        ]);
+        upsert_session(&conn, &session).unwrap();
+
+        let result = search_sessions(
+            &conn,
+            &SessionSearchOptions {
+                query: "needle".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: String::new(),
+            },
+        )
+        .unwrap();
+
+        assert!(result.hits.is_empty());
     }
 
     #[test]
