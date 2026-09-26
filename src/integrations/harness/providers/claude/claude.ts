@@ -535,6 +535,7 @@ async function ensureLive(
     buildClaudeSpawnArgs(launch),
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
+    "claude",
   );
 
   // The stop that arrived while this was forking ran its teardown against a

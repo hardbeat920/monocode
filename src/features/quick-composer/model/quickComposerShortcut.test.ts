@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../../platform/tauri/platform", () => ({ IS_MAC: true }));
+
 import {
-  isQuickComposerShortcut,
+  isGlobalShortcut,
+  isShortcut,
   quickComposerShortcutLabel,
   quickComposerShortcutPreview,
   shortcutFromKeyEvent,
@@ -75,10 +79,41 @@ describe("quick composer shortcut", () => {
         shiftKey: false,
       }),
     ).toBeNull();
-    expect(isQuickComposerShortcut("Shift+Space")).toBe(false);
-    expect(isQuickComposerShortcut("Command+Command+Space")).toBe(false);
-    expect(isQuickComposerShortcut("Option+KeyK")).toBe(false);
-    expect(isQuickComposerShortcut("Command+KeyK")).toBe(true);
-    expect(isQuickComposerShortcut("Control+KeyK")).toBe(true);
+    expect(isShortcut("Shift+Space")).toBe(false);
+    expect(isShortcut("Command+Command+Space")).toBe(false);
+    expect(isShortcut("Command+KeyK")).toBe(true);
+    expect(isShortcut("Control+KeyK")).toBe(true);
+  });
+
+  it("records Option chords but keeps them out of OS-global hotkeys", () => {
+    const alt = shortcutFromKeyEvent({
+      code: "KeyK",
+      metaKey: false,
+      ctrlKey: false,
+      altKey: true,
+      shiftKey: false,
+    });
+    expect(alt).toBe("Option+KeyK");
+    const altShift = shortcutFromKeyEvent({
+      code: "KeyK",
+      metaKey: false,
+      ctrlKey: false,
+      altKey: true,
+      shiftKey: true,
+    });
+    expect(altShift).toBe("Option+Shift+KeyK");
+    expect(
+      shortcutFromKeyEvent({
+        code: "KeyK",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: true,
+      }),
+    ).toBeNull();
+
+    expect(isShortcut("Option+KeyK")).toBe(true);
+    expect(isGlobalShortcut("Option+KeyK")).toBe(false);
+    expect(isGlobalShortcut("Control+Option+KeyK")).toBe(true);
   });
 });

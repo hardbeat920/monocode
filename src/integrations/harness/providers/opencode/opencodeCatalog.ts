@@ -68,7 +68,7 @@ export function refreshOpenCodeCatalog(): Promise<void> {
 async function discoverOpenCodeModels(): Promise<AgentModel[]> {
   const { path } = await resolveOpenCodeBinary();
   const cwd = await homeDir();
-  const versionOut = await execChild(path, ["--version"], cwd);
+  const versionOut = await execChild(path, ["--version"], cwd, "opencode");
   const version = parseOpenCodeVersion(versionOut);
   if (!version) {
     throw new Error(
@@ -81,11 +81,16 @@ async function discoverOpenCodeModels(): Promise<AgentModel[]> {
     );
   }
 
-  const modelsOut = await execChild(path, ["models", "--verbose"], cwd);
+  const modelsOut = await execChild(
+    path,
+    ["models", "--verbose"],
+    cwd,
+    "opencode",
+  );
   const parsed = parseModelsCliOutput(modelsOut);
   let agents: OpenCodeAgent[] = [];
   try {
-    const agentsOut = await execChild(path, ["agent", "list"], cwd);
+    const agentsOut = await execChild(path, ["agent", "list"], cwd, "opencode");
     agents = parseAgentListCliOutput(agentsOut);
   } catch (error) {
     console.debug("[monocode] opencode agents", error);
