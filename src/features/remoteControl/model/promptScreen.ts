@@ -190,14 +190,35 @@ const CHARSET = /\x1b[()*+][0-9A-Za-z]/y;
 const PARTIAL = /^\x1b(?:\[[0-9;:<=>?]*[ -/]*|\][^\x07\x1b]*|[()*+]?)?$/;
 
 /**
- * The screen the TUI has painted, one string per row.
+ * A screen the TUI paints into, one chunk at a time.
  *
  * A quarter of a terminal emulator: enough of it that the text lands where the
  * TUI put it. The CLI paints words at absolute columns rather than writing
  * spaces, so stripping escapes instead of placing cells runs `Do you want to`
  * together into `Doyouwantto` and loses every column the layout depends on.
+ *
+ * Stateful because a terminal is, and that is the whole point: the grid has to
+ * outlive the chunks. Re-rendering a retained buffer from blank looks
+ * equivalent and is not. A live caller's buffer is bounded — `trimReplay` drops
+ * the oldest chunks past 256KB — and every row painted before the retained
+ * window and not repainted since comes back blank. The composer's two `─` rules
+ * are exactly those rows: the `❯` line is repainted constantly, the box around
+ * it is not. Measured on a 996KB capture: the whole stream reads `idle`, its
+ * last 256KB reads `unrecognised`/`no-composer`, and a screen with no composer
+ * refuses every send and cannot see an approval either. So feed each chunk in
+ * once, and never re-feed.
  */
-export function renderScreen(output: string, size: ScreenSize): string[] {
+export type ScreenBuffer = {
+  /** Apply one chunk of pty output. */
+  write(chunk: string): void;
+  /** The rows as text, trailing blanks trimmed — what the parser reads. */
+  lines(): string[];
+  /** What is on screen now. */
+  screen(): PromptScreen;
+};
+
+/** A screen of `size`, blank, waiting to be written into. */
+export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
   const cols = Math.max(1, Math.trunc(size.cols));
   const rows = Math.max(1, Math.trunc(size.rows));
   const grid: string[][] = [];
@@ -218,117 +239,151 @@ export function renderScreen(output: string, size: ScreenSize): string[] {
     grid.shift();
     grid.push(new Array<string>(cols).fill(" "));
   };
+  /**
+   * An escape cut in half by the end of a chunk, held for the next one.
+   *
+   * A stateless render could drop it and lose nothing, because the following
+   * call re-rendered every byte anyway. Here each chunk is seen once, so a
+   * discarded half would paint its own tail as text: `\x1b[3` followed by
+   * `1mX` would put `1mX` on the screen.
+   */
+  let pending = "";
 
-  let i = 0;
-  while (i < output.length) {
-    const ch = output[i];
-    if (ch === "\x1b") {
-      if (PARTIAL.test(output.slice(i))) break;
-      CSI.lastIndex = i;
-      const csi = CSI.exec(output);
-      if (csi) {
-        const params = csi[1]
-          .split(";")
-          .map((part) => (/^\d+$/.test(part) ? Number(part) : 0));
-        const first = params[0] ?? 0;
-        const count = Math.max(1, first);
-        switch (csi[2]) {
-          case "H":
-          case "f":
-            row = Math.min(rows - 1, Math.max(0, (params[0] || 1) - 1));
-            col = Math.min(cols - 1, Math.max(0, (params[1] || 1) - 1));
-            break;
-          case "G":
-            col = Math.min(cols - 1, Math.max(0, (first || 1) - 1));
-            break;
-          case "d":
-            row = Math.min(rows - 1, Math.max(0, (first || 1) - 1));
-            break;
-          case "A":
-            row = Math.max(0, row - count);
-            break;
-          case "B":
-            row = Math.min(rows - 1, row + count);
-            break;
-          case "C":
-            col = Math.min(cols - 1, col + count);
-            break;
-          case "D":
-            col = Math.max(0, col - count);
-            break;
-          case "K":
-            if (first === 1) clear(row, 0, col);
-            else if (first === 2) clear(row, 0, cols - 1);
-            else clear(row, col, cols - 1);
-            break;
-          case "J":
-            if (first === 1) {
-              for (let y = 0; y < row; y += 1) clear(y, 0, cols - 1);
-              clear(row, 0, col);
-            } else if (first === 2 || first === 3) {
-              for (let y = 0; y < rows; y += 1) clear(y, 0, cols - 1);
-            } else {
-              clear(row, col, cols - 1);
-              for (let y = row + 1; y < rows; y += 1) clear(y, 0, cols - 1);
-            }
-            break;
-          default:
-            break;
+  const write = (chunk: string) => {
+    const output = pending + chunk;
+    pending = "";
+    let i = 0;
+    while (i < output.length) {
+      const ch = output[i];
+      if (ch === "\x1b") {
+        if (PARTIAL.test(output.slice(i))) {
+          pending = output.slice(i);
+          break;
         }
-        i = CSI.lastIndex;
+        CSI.lastIndex = i;
+        const csi = CSI.exec(output);
+        if (csi) {
+          const params = csi[1]
+            .split(";")
+            .map((part) => (/^\d+$/.test(part) ? Number(part) : 0));
+          const first = params[0] ?? 0;
+          const count = Math.max(1, first);
+          switch (csi[2]) {
+            case "H":
+            case "f":
+              row = Math.min(rows - 1, Math.max(0, (params[0] || 1) - 1));
+              col = Math.min(cols - 1, Math.max(0, (params[1] || 1) - 1));
+              break;
+            case "G":
+              col = Math.min(cols - 1, Math.max(0, (first || 1) - 1));
+              break;
+            case "d":
+              row = Math.min(rows - 1, Math.max(0, (first || 1) - 1));
+              break;
+            case "A":
+              row = Math.max(0, row - count);
+              break;
+            case "B":
+              row = Math.min(rows - 1, row + count);
+              break;
+            case "C":
+              col = Math.min(cols - 1, col + count);
+              break;
+            case "D":
+              col = Math.max(0, col - count);
+              break;
+            case "K":
+              if (first === 1) clear(row, 0, col);
+              else if (first === 2) clear(row, 0, cols - 1);
+              else clear(row, col, cols - 1);
+              break;
+            case "J":
+              if (first === 1) {
+                for (let y = 0; y < row; y += 1) clear(y, 0, cols - 1);
+                clear(row, 0, col);
+              } else if (first === 2 || first === 3) {
+                for (let y = 0; y < rows; y += 1) clear(y, 0, cols - 1);
+              } else {
+                clear(row, col, cols - 1);
+                for (let y = row + 1; y < rows; y += 1) clear(y, 0, cols - 1);
+              }
+              break;
+            default:
+              break;
+          }
+          i = CSI.lastIndex;
+          continue;
+        }
+        OSC.lastIndex = i;
+        const osc = OSC.exec(output);
+        if (osc) {
+          i = OSC.lastIndex;
+          continue;
+        }
+        CHARSET.lastIndex = i;
+        const charset = CHARSET.exec(output);
+        if (charset) {
+          i = CHARSET.lastIndex;
+          continue;
+        }
+        const next = output[i + 1];
+        if (next === "7") saved = { row, col };
+        else if (next === "8") ({ row, col } = saved);
+        else if (next === "M") row = Math.max(0, row - 1);
+        else if (next === "D" || next === "E") lineFeed();
+        i += 2;
         continue;
       }
-      OSC.lastIndex = i;
-      const osc = OSC.exec(output);
-      if (osc) {
-        i = OSC.lastIndex;
+      if (ch === "\r") {
+        col = 0;
+        i += 1;
         continue;
       }
-      CHARSET.lastIndex = i;
-      const charset = CHARSET.exec(output);
-      if (charset) {
-        i = CHARSET.lastIndex;
+      if (ch === "\n") {
+        lineFeed();
+        i += 1;
         continue;
       }
-      const next = output[i + 1];
-      if (next === "7") saved = { row, col };
-      else if (next === "8") ({ row, col } = saved);
-      else if (next === "M") row = Math.max(0, row - 1);
-      else if (next === "D" || next === "E") lineFeed();
-      i += 2;
-      continue;
+      if (ch === "\b") {
+        col = Math.max(0, col - 1);
+        i += 1;
+        continue;
+      }
+      if (ch < " " || ch === "\x7f") {
+        i += 1;
+        continue;
+      }
+      const point = output.codePointAt(i);
+      const glyph = String.fromCodePoint(point ?? 32);
+      if (col >= cols) {
+        col = 0;
+        lineFeed();
+      }
+      grid[row][col] = glyph;
+      col += 1;
+      i += glyph.length;
     }
-    if (ch === "\r") {
-      col = 0;
-      i += 1;
-      continue;
-    }
-    if (ch === "\n") {
-      lineFeed();
-      i += 1;
-      continue;
-    }
-    if (ch === "\b") {
-      col = Math.max(0, col - 1);
-      i += 1;
-      continue;
-    }
-    if (ch < " " || ch === "\x7f") {
-      i += 1;
-      continue;
-    }
-    const point = output.codePointAt(i);
-    const glyph = String.fromCodePoint(point ?? 32);
-    if (col >= cols) {
-      col = 0;
-      lineFeed();
-    }
-    grid[row][col] = glyph;
-    col += 1;
-    i += glyph.length;
-  }
+    // An escape that never completes would otherwise hold every byte after it.
+    // A title is the longest legitimate one by far, so past this the stream is
+    // malformed and the half is worth less than the memory.
+    if (pending.length > 4096) pending = "";
+  };
 
-  return grid.map((line) => line.join("").replace(/\s+$/u, ""));
+  const lines = () => grid.map((line) => line.join("").replace(/\s+$/u, ""));
+
+  return { write, lines, screen: () => readRenderedScreen(lines()) };
+}
+
+/**
+ * Render a whole stream in one go.
+ *
+ * Starts from a blank grid, so it may only be given every byte the TUI ever
+ * wrote. For a live pty, hold a `createScreenBuffer` instead.
+ */
+export function renderScreen(output: string, size: ScreenSize): string[] {
+  const buffer = createScreenBuffer(size);
+  buffer.write(output);
+  return buffer.lines();
 }
 
 /**

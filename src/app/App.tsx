@@ -135,7 +135,7 @@ import {
   writePty,
 } from "../platform/tauri/pty";
 import {
-  readPromptScreen,
+  createScreenBuffer,
   type PromptScreen,
 } from "../features/remoteControl/model/promptScreen";
 import {
@@ -1696,6 +1696,14 @@ export default function App({
       // parameter, so the constants go in rather than a window measurement: a
       // disagreement silently moves every column the parser reads.
       const chunks: string[] = [];
+      // Held across chunks rather than rebuilt from `chunks`, which is bounded:
+      // re-rendering a trimmed buffer loses every row the TUI painted before the
+      // retained window and has not repainted since — the composer's box, while
+      // the `❯` inside it repaints constantly. See `createScreenBuffer`.
+      const painted = createScreenBuffer({
+        cols: REMOTE_CONTROL_COLS,
+        rows: REMOTE_CONTROL_ROWS,
+      });
       const state: { screen: PromptScreen | null } = { screen: null };
       const spoke: { at: number | null } = { at: null };
       /**
@@ -1719,17 +1727,16 @@ export default function App({
       };
       const parse = (text: string) => {
         spoke.at = Date.now();
+        // Once, and only here: the buffer is stateful, so a chunk written twice
+        // would paint twice.
+        painted.write(text);
         chunks.push(text);
         const trimmed = trimReplay(
           chunks.map((part) => part.length),
           chunks.reduce((total, part) => total + part.length, 0),
         );
         if (trimmed.drop > 0) chunks.splice(0, trimmed.drop);
-        const screen = readPromptScreen(chunks.join(""), {
-          cols: REMOTE_CONTROL_COLS,
-          rows: REMOTE_CONTROL_ROWS,
-        });
-        state.screen = screen;
+        state.screen = painted.screen();
         settleTurn();
         syncRemoteApproval(sessionId);
       };

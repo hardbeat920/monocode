@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createScreenBuffer,
   planInjection,
   readPromptScreen,
   readRenderedScreen,
@@ -484,5 +485,56 @@ describe("a screen we do not recognise", () => {
     for (const screen of screens) {
       expect(JSON.stringify(screen)).not.toContain("keystroke");
     }
+  });
+});
+
+/**
+ * pty_raw.bin[3200:4200] and [4200:4400], the two halves of one real idle
+ * screen at 120x40: the first paints the composer's box, the second only
+ * repaints inside and around it — the hand-over line, the session link, the
+ * `/rc` indicator. Neither rule is touched by the second, which is the whole
+ * point of the pair.
+ */
+const COMPOSER_PAINTED =
+  '──────────────────────────────────────────────────────────────────────────────────────╯\r\x1b[103C\x1b[23B\x1b[38;2;153;153;153m● high · /effort\r\x1b[1B\x1b[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\x1b[1B\x1b[39m❯ \x1b[2mTry "how do I log an error?"\r\x1b[1B\x1b[22m\x1b[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\x1b[104C\x1b[1B\x1b[38;2;255;193;7m/rc connecting…\r\x1b[2C\x1b[1B\x1b[38;2;72;150;140m⏸ plan mode on\x1b[38;2;153;153;153m (shift+tab to cycle) · ← for agents\x1b[39m\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\r\x1b[1C\x1b[13B\x1b[38;2;255;193;7m⚠\x1b[4G1 MCP server needs authentication\x1b[38;2;153;153;153m · run /mcp\r\x1b[2C\x1b[23B\x1b[39m\x1b[K\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\r\x1b[2C\x1b[38B\x1b[33m⬆ /gsd:update\x1b[38;2;153;153;153m │ \x1b[2mOpus 5 (1M context)\x1b[22m │ \x1b[2mrctest\x1b[22m\x1b[39m\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\r\x1b[2C\x1b[15B/remote-control\x1b[19Gis\x1b[22Gactive\x1b[38;2;153;153;153m · Continue here, on y';
+('──────────────────────────────────────────────────────────────────────────────────────╯\r\\x1b[103C\\x1b[23B\\x1b[38;2;153;153;153m● high · /effort\r\\x1b[1B\\x1b[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\\x1b[1B\\x1b[39m❯ \\x1b[2mTry "how do I log an error?"\r\\x1b[1B\\x1b[22m\\x1b[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\\x1b[104C\\x1b[1B\\x1b[38;2;255;193;7m/rc connecting…\r\\x1b[2C\\x1b[1B\\x1b[38;2;72;150;140m⏸ plan mode on\\x1b[38;2;153;153;153m (shift+tab to cycle) · ← for agents\\x1b[39m\\x1b[40;1H\\x1b[37;3H\\x1b[?25h\\x1b[?25l\\x1b[H\r\\x1b[1C\\x1b[13B\\x1b[38;2;255;193;7m⚠\\x1b[4G1 MCP server needs authentication\\x1b[38;2;153;153;153m · run /mcp\r\\x1b[2C\\x1b[23B\\x1b[39m\\x1b[K\\x1b[40;1H\\x1b[37;3H\\x1b[?25h\\x1b[?25l\\x1b[H\r\\x1b[2C\\x1b[38B\\x1b[33m⬆ /gsd:update\\x1b[38;2;153;153;153m │ \\x1b[2mOpus 5 (1M context)\\x1b[22m │ \\x1b[2mrctest\\x1b[22m\\x1b[39m\\x1b[40;1H\\x1b[37;3H\\x1b[?25h\\x1b[?25l\\x1b[H\r\\x1b[2C\\x1b[15B/remote-control\\x1b[19Gis\\x1b[22Gactive\\x1b[38;2;153;153;153m · Continue here, on y');
+('\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n\x1b[103C\x1b[23B\x1b[38;2;153;153;153m\u25cf high \u00b7 /effort\n\x1b[1B\x1b[38;2;136;136;136m\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\x1b[1B\x1b[39m\u276f\u00a0\x1b[2mTry "how do I log an error?"\n\x1b[1B\x1b[22m\x1b[38;2;136;136;136m\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\x1b[104C\x1b[1B\x1b[38;2;255;193;7m/rc connecting\u2026\n\x1b[2C\x1b[1B\x1b[38;2;72;150;140m\u23f8 plan mode on\x1b[38;2;153;153;153m (shift+tab to cycle) \u00b7 \u2190 for agents\x1b[39m\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\n\x1b[1C\x1b[13B\x1b[38;2;255;193;7m\u26a0\x1b[4G1 MCP server needs authentication\x1b[38;2;153;153;153m \u00b7 run /mcp\n\x1b[2C\x1b[23B\x1b[39m\x1b[K\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\n\x1b[2C\x1b[38B\x1b[33m\u2b06 /gsd:update\x1b[38;2;153;153;153m \u2502 \x1b[2mOpus 5 (1M context)\x1b[22m \u2502 \x1b[2mrctest\x1b[22m\x1b[39m\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\n\x1b[2C\x1b[15B/remote-control\x1b[19Gis\x1b[22Gactive\x1b[38;2;153;153;153m \u00b7 Continue here, on your phone, or at \n\x1b[2');
+const REPAINT_AROUND_IT =
+  "our phone, or at \r\x1b[2C\x1b[1Bhttps://claude.ai/code/session_01LP8vc1MuWegwHowkjJNnRK\r\x1b[104C\x1b[22B\x1b[39m            \x1b[38;2;78;186;101m/rc\x1b[39m\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\r\x1b[103C\x1b[34B\x1b[K\x1b[40;1H\x1b[37;3H\x1b[?25h";
+("our phone, or at \r\\x1b[2C\\x1b[1Bhttps://claude.ai/code/session_01LP8vc1MuWegwHowkjJNnRK\r\\x1b[104C\\x1b[22B\\x1b[39m            \\x1b[38;2;78;186;101m/rc\\x1b[39m\\x1b[40;1H\\x1b[37;3H\\x1b[?25h\\x1b[?25l\\x1b[H\r\\x1b[103C\\x1b[34B\\x1b[K\\x1b[40;1H\\x1b[37;3H\\x1b[?25h");
+("C\x1b[1Bhttps://claude.ai/code/session_01LP8vc1MuWegwHowkjJNnRK\n\x1b[104C\x1b[22B\x1b[39m            \x1b[38;2;78;186;101m/rc\x1b[39m\x1b[40;1H\x1b[37;3H\x1b[?25h\x1b[?25l\x1b[H\n\x1b[103C\x1b[34B\x1b[K\x1b[40;1H\x1b[37;3H\x1b[?25h");
+
+describe("a screen held across chunks", () => {
+  it("keeps a row painted by a chunk it can no longer see", () => {
+    const buffer = createScreenBuffer({ cols: 120, rows: 40 });
+    buffer.write(COMPOSER_PAINTED);
+    buffer.write(REPAINT_AROUND_IT);
+
+    expect(buffer.screen().kind).toBe("idle");
+  });
+
+  it("loses that row when the same bytes are re-rendered from blank", () => {
+    // What the caller's replay buffer gives you once `trimReplay` has dropped
+    // the older chunks: the `❯` is still repainted, its box is not, and a
+    // screen with no composer refuses every send. This is the bug the buffer
+    // exists to stop, so it is asserted rather than described.
+    const screen = readRenderedScreen(
+      renderScreen(REPAINT_AROUND_IT, { cols: 120, rows: 40 }),
+    );
+
+    expect(screen).toMatchObject({
+      kind: "unrecognised",
+      reason: "no-composer",
+    });
+  });
+
+  it("carries an escape cut in half by the end of a chunk", () => {
+    const buffer = createScreenBuffer({ cols: 20, rows: 3 });
+    buffer.write("A\x1b[3");
+    buffer.write("1mB");
+
+    // Not "A1mB": the half was held, not dropped, so its tail stayed an escape
+    // rather than becoming text.
+    expect(buffer.lines()[0]).toBe("AB");
   });
 });
