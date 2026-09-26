@@ -13,6 +13,8 @@ import {
   consumeCodexRateLimitResetCredit,
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
+  fetchDroidRateLimits,
+  fetchGrokRateLimits,
   fetchOpencodeGoRateLimits,
 } from "../../features/providers/model/rateLimitsFetch";
 import {
@@ -88,6 +90,8 @@ export function UsageFooter({
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
+  const wantDroid = providers.includes("droid");
+  const wantGrok = providers.includes("grok");
   const [claude, setClaude] = useState<ProviderRateLimits>(() =>
     idleRateLimits("claude"),
   );
@@ -96,6 +100,12 @@ export function UsageFooter({
   );
   const [opencode, setOpencode] = useState<ProviderRateLimits>(() =>
     idleRateLimits("opencode"),
+  );
+  const [droid, setDroid] = useState<ProviderRateLimits>(() =>
+    idleRateLimits("droid"),
+  );
+  const [grok, setGrok] = useState<ProviderRateLimits>(() =>
+    idleRateLimits("grok"),
   );
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
@@ -107,6 +117,10 @@ export function UsageFooter({
   claudeRef.current = claude;
   codexRef.current = codex;
   opencodeRef.current = opencode;
+  const droidRef = useRef(droid);
+  const grokRef = useRef(grok);
+  droidRef.current = droid;
+  grokRef.current = grok;
   const claudeAccountId =
     session?.harness === "claude" && session.providerAccountId
       ? session.providerAccountId
@@ -148,7 +162,19 @@ export function UsageFooter({
       const fetchOpencode =
         wantOpencode &&
         shouldFetchProvider(opencodeRef.current, { force, visible });
-      if (!fetchClaude && !fetchCodex && !fetchOpencode) return;
+      const fetchDroid =
+        wantDroid && shouldFetchProvider(droidRef.current, { force, visible });
+      const fetchGrok =
+        wantGrok && shouldFetchProvider(grokRef.current, { force, visible });
+      if (
+        !fetchClaude &&
+        !fetchCodex &&
+        !fetchOpencode &&
+        !fetchDroid &&
+        !fetchGrok
+      ) {
+        return;
+      }
       if (force) setRefreshing(true);
       const jobs: Promise<void>[] = [];
       if (fetchClaude) {
@@ -177,6 +203,14 @@ export function UsageFooter({
           }),
         );
       }
+      if (fetchDroid) {
+        setDroid((current) => fetchingRateLimits("droid", current));
+        jobs.push(fetchDroidRateLimits().then(setDroid));
+      }
+      if (fetchGrok) {
+        setGrok((current) => fetchingRateLimits("grok", current));
+        jobs.push(fetchGrokRateLimits().then(setGrok));
+      }
       const run = Promise.allSettled(jobs)
         .then(() => undefined)
         .finally(() => {
@@ -193,6 +227,8 @@ export function UsageFooter({
       codexAccountId,
       wantClaude,
       wantCodex,
+      wantDroid,
+      wantGrok,
       wantOpencode,
     ],
   );
@@ -338,6 +374,11 @@ export function UsageFooter({
     [codexAccountId, reconnectProvider],
   );
 
+  const reconnectGrok = useCallback(
+    () => reconnectProvider("grok", "default", fetchGrokRateLimits, setGrok),
+    [reconnectProvider],
+  );
+
   const selectAccount = useCallback(
     (provider: ProviderAccountProvider, accountId: string) => {
       selectProviderAccount(provider, project, accountId);
@@ -358,7 +399,8 @@ export function UsageFooter({
   );
 
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
-  const showUsage = wantClaude || wantCodex || showOpencodeChip;
+  const showUsage =
+    wantClaude || wantCodex || showOpencodeChip || wantDroid || wantGrok;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
   const terminalLabel = projectTerminalActive
@@ -416,6 +458,17 @@ export function UsageFooter({
           ) : null}
           {showOpencodeChip ? (
             <UsageProviderChip limits={opencode} now={now} project={project} />
+          ) : null}
+          {wantDroid ? (
+            <UsageProviderChip limits={droid} now={now} project={project} />
+          ) : null}
+          {wantGrok ? (
+            <UsageProviderChip
+              limits={grok}
+              now={now}
+              project={project}
+              onReconnect={reconnectGrok}
+            />
           ) : null}
           <button
             type="button"

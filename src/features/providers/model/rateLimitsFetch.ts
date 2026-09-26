@@ -4,6 +4,8 @@ import {
   errorRateLimits,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseDroidUsage,
+  parseGrokBilling,
   parseOpencodeGoUsage,
   unavailableRateLimits,
   type ProviderRateLimits,
@@ -11,14 +13,21 @@ import {
 import {
   killChild,
   resolveCodexBinary,
+  resolveGrokBinary,
   spawnChild,
   unwatchChild,
   watchChild,
 } from "../../../integrations/harness/core/child";
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { JsonRpcClient } from "../../../integrations/harness/core/jsonRpc";
+import { AcpClient } from "../../../integrations/harness/core/acp";
+import {
+  grokAuthMethodId,
+  grokSpawnArgs,
+} from "../../../integrations/harness/providers/grok/grokProtocol";
 
 const USAGE_CHILD_ID = "monocode-codex-usage";
+const GROK_USAGE_CHILD_ID = "monocode-grok-usage";
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
@@ -69,6 +78,143 @@ export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
     "opencode",
     result.error?.trim() || "OpenCode Go usage unavailable",
   );
+}
+
+type DroidUsageFetch = {
+  status: "ok" | "error" | "unavailable" | string;
+  httpStatus?: number | null;
+  body?: string | null;
+  error?: string | null;
+};
+
+/**
+ * Fetch Factory Droid 5h / weekly / monthly usage. The Tauri command reads
+ * the token Droid stores in ~/.factory and calls Factory's billing API.
+ */
+export async function fetchDroidRateLimits(): Promise<ProviderRateLimits> {
+  let result: DroidUsageFetch;
+  try {
+    result = await invoke<DroidUsageFetch>("fetch_droid_usage");
+  } catch (error) {
+    return errorRateLimits(
+      "droid",
+      error instanceof Error ? error.message : "Droid usage unavailable",
+    );
+  }
+  if (result.status === "ok" && result.body) {
+    let parsed: ProviderRateLimits;
+    try {
+      parsed = parseDroidUsage(JSON.parse(result.body));
+    } catch {
+      return errorRateLimits("droid", "Droid usage response was not JSON");
+    }
+    if (parsed.session || parsed.weekly || parsed.monthly) return parsed;
+    return unavailableRateLimits("droid", "No Droid usage data");
+  }
+  if (result.status === "unavailable") {
+    return unavailableRateLimits(
+      "droid",
+      result.error?.trim() || "Droid not signed in",
+    );
+  }
+  return errorRateLimits(
+    "droid",
+    result.error?.trim() || "Droid usage unavailable",
+  );
+}
+
+/**
+ * Fetch the Grok Build credit allowance. Grok exposes it only through its
+ * ACP agent (`_x.ai/billing`), so this spawns a short-lived agent, asks,
+ * and exits. The agent reads its own cached sign-in from ~/.grok.
+ */
+export async function fetchGrokRateLimits(): Promise<ProviderRateLimits> {
+  let path: string;
+  try {
+    path = (await resolveGrokBinary()).path;
+  } catch {
+    return unavailableRateLimits("grok", "Grok Build CLI not found");
+  }
+  try {
+    const parsed = parseGrokBilling(await requestGrokBilling(path));
+    if (parsed.weekly || parsed.monthly) return parsed;
+    return unavailableRateLimits("grok", "No Grok usage data");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/authentication required|not authenticated|not signed in/i.test(message)) {
+      return unavailableRateLimits("grok", "Grok not signed in");
+    }
+    if (/ENOENT|not found|could not run/i.test(message)) {
+      return unavailableRateLimits("grok", "Grok Build CLI not found");
+    }
+    return errorRateLimits("grok", message);
+  }
+}
+
+async function requestGrokBilling(path: string): Promise<unknown> {
+  const cwd = await homeDir();
+  const acp = new AcpClient(GROK_USAGE_CHILD_ID, {
+    onRequest: (id) => {
+      void acp.respond(id, {}).catch(() => undefined);
+    },
+  });
+
+  const stop = async () => {
+    acp.close();
+    unwatchChild(GROK_USAGE_CHILD_ID);
+    await killChild(GROK_USAGE_CHILD_ID).catch(() => undefined);
+  };
+
+  await killChild(GROK_USAGE_CHILD_ID).catch(() => undefined);
+
+  watchChild(
+    GROK_USAGE_CHILD_ID,
+    (line) => acp.pushLine(line),
+    () => acp.close(new Error("Grok usage probe exited")),
+  );
+
+  try {
+    await spawnChild(
+      GROK_USAGE_CHILD_ID,
+      path,
+      grokSpawnArgs({ model: "" }),
+      cwd,
+    );
+    return await withTimeout(
+      DISCOVERY_TIMEOUT_MS,
+      async () => {
+        const init = await acp.request(
+          "initialize",
+          {
+            protocolVersion: 1,
+            clientCapabilities: {
+              fs: { readTextFile: false, writeTextFile: false },
+              terminal: false,
+            },
+            clientInfo: { name: "monocode", version: "0.1.0" },
+          },
+          REQUEST_TIMEOUT_MS,
+        );
+        const methodId = grokAuthMethodId(init);
+        if (methodId) {
+          await acp
+            .request(
+              "authenticate",
+              { methodId, _meta: { headless: true } },
+              REQUEST_TIMEOUT_MS,
+            )
+            .catch(() => undefined);
+        }
+        return acp.request<unknown>("_x.ai/billing", {}, REQUEST_TIMEOUT_MS);
+      },
+      () => {
+        void stop();
+      },
+      "Grok usage probe timed out",
+    );
+  } finally {
+    await stop();
+  }
 }
 
 export type CodexRateLimitResetOutcome =
@@ -252,6 +398,7 @@ async function withTimeout<T>(
   ms: number,
   work: () => Promise<T>,
   onTimeout: () => void,
+  message = "Codex usage probe timed out",
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const pending = work();
@@ -261,7 +408,7 @@ async function withTimeout<T>(
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => {
           onTimeout();
-          reject(new Error("Codex usage probe timed out"));
+          reject(new Error(message));
         }, ms);
       }),
     ]);

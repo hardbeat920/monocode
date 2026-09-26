@@ -391,6 +391,7 @@ pub fn run() {
             harness::provider_account_remove,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
+            rate_limits::fetch_droid_usage,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
