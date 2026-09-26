@@ -7,6 +7,7 @@ import {
   injectRemoteText,
   queuedNotice,
   remoteApprovalTransition,
+  turnSignal,
   type ApprovalEffect,
   type RemoteApprovalView,
   noteInterruptedTurn,
@@ -436,8 +437,13 @@ const allowed = {
   queued: false,
 } as const;
 
+/**
+ * An idle composer as the parser actually reports one since #30: `kind: "idle"`
+ * with `turn: "unknown"`, because a composer with no spinner over it says nothing
+ * about the turn either way.
+ */
 function idleWith(lines: readonly string[]): PromptScreen {
-  return { lines, turn: "ended", kind: "idle" };
+  return { lines, turn: "unknown", kind: "idle" };
 }
 
 describe("the composer the CLI restores after an interrupt", () => {
@@ -633,8 +639,21 @@ describe("typing a message into the pty", () => {
 
     const outcome = await injectRemoteText("say OK", false, pty.ports);
 
-    expect(outcome).toEqual({ kind: "sent", queued: false });
+    // `queued: "unknown"` rather than `false`: an idle composer says nothing
+    // about the turn since #30, so whether the TUI queues this is unknowable
+    // from the frame — which is what the hedge exists for.
+    expect(outcome).toEqual({ kind: "sent", queued: "unknown" });
     expect(pty.written).toEqual([MESSAGE]);
+  });
+
+  it("reports a definitely-finished turn as not queued", async () => {
+    const screen = { ...idleWith(IDLE_COMPOSER), turn: "ended" } as PromptScreen;
+    const pty = scriptedPty([screen]);
+
+    expect(await injectRemoteText("say OK", false, pty.ports)).toEqual({
+      kind: "sent",
+      queued: false,
+    });
   });
 
   it("clears a restored prompt first, then sends", async () => {
@@ -911,5 +930,45 @@ describe("retiring and re-raising", () => {
       effect.kind === "ask" ? [effect.requestId] : [],
     );
     expect(ids).toEqual([1, 2]);
+  });
+});
+
+describe("what to tell the mirror about a turn", () => {
+  const held = idleWith(AFTER_INTERRUPT);
+
+  it("takes the screen's word when it says the turn ended", () => {
+    // `COMPLETED` matched a real marker, so nothing else is considered.
+    expect(turnSignal({ ...held, turn: "ended" }, 1_000, 99_000)).toBe(true);
+  });
+
+  it("reports silence and a held composer when the screen cannot tell", () => {
+    expect(turnSignal(held, 1_000, 6_000)).toEqual({
+      quietForMs: 5_000,
+      composerHeld: true,
+    });
+  });
+
+  it("reports an empty composer as such", () => {
+    expect(turnSignal(idleWith(IDLE_COMPOSER), 1_000, 6_000)).toEqual({
+      quietForMs: 5_000,
+      composerHeld: false,
+    });
+  });
+
+  it("gives no signal when the pty has never produced output", () => {
+    // Quiet since a moment nobody observed is not evidence of silence, and an
+    // absence of evidence must never end a turn.
+    expect(turnSignal(held, null, 99_000)).toBe(false);
+  });
+
+  it("gives no signal before the screen has painted", () => {
+    expect(turnSignal(null, 1_000, 99_000)).toBe(false);
+  });
+
+  it("never reports negative quiet from a clock that moved backwards", () => {
+    expect(turnSignal(held, 9_000, 1_000)).toEqual({
+      quietForMs: 0,
+      composerHeld: true,
+    });
   });
 });

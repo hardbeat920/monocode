@@ -23,6 +23,7 @@ import type {
 import type {
   MirrorEvent,
   RemoteUserMessage,
+  TurnLiveness,
 } from "../features/remoteControl/model/transcript";
 import type {
   UserQuestion,
@@ -724,5 +725,35 @@ export function remoteApprovalTransition(
     effects: [
       { kind: "ask", requestId: nextRequestId, question: view.question },
     ],
+  };
+}
+
+// ------------------------------------------------------------- turn liveness
+
+/**
+ * What to tell `resolveTurnFromScreen` about a turn.
+ *
+ * Two readings, in priority order. A screen that says the turn is **over** is
+ * definite — `COMPLETED` matched a real `for 2s` marker — so it is passed as the
+ * plain boolean and nothing else is considered. Otherwise the only evidence an
+ * interrupt leaves is negative: the pty stops producing output, measured at
+ * 800ms worst case across a live turn against indefinite afterwards, and the CLI
+ * restores the interrupted prompt into the composer.
+ *
+ * A pty that has produced **nothing at all** reports no signal. Quiet since a
+ * moment we never observed is not evidence of silence, and an absence of
+ * evidence must never end a turn.
+ */
+export function turnSignal(
+  screen: PromptScreen | null,
+  lastChunkAt: number | null,
+  now: number,
+): boolean | TurnLiveness {
+  if (!screen) return false;
+  if (screen.turn === "ended") return true;
+  if (lastChunkAt === null) return false;
+  return {
+    quietForMs: Math.max(0, now - lastChunkAt),
+    composerHeld: composerHeld(screen.lines) !== null,
   };
 }

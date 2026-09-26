@@ -180,6 +180,7 @@ import {
   remoteControlTarget,
   seatRemoteUserMessage,
   shouldAutoOpen,
+  turnSignal,
   type ApprovalProgress,
   type PtyFanout,
   type RemoteAnswer,
@@ -1326,6 +1327,12 @@ export default function App({
         /** A holder, so the parser can own it without the map in the way. */
         screen: { screen: PromptScreen | null };
         /**
+         * When the pty last produced output, and `null` until it ever has.
+         * Silence is the only trace an interrupt leaves, and it cannot be seen
+         * from inside a chunk handler — hence the clock below.
+         */
+        spoke: { at: number | null };
+        /**
          * The one subscription's readers. The parser is built into it and cannot
          * be detached; see `createPtyFanout`.
          */
@@ -1651,7 +1658,28 @@ export default function App({
       // disagreement silently moves every column the parser reads.
       const chunks: string[] = [];
       const state: { screen: PromptScreen | null } = { screen: null };
+      const spoke: { at: number | null } = { at: null };
+      /**
+       * Apply whatever the screen and the pty's silence say about the turn.
+       *
+       * Called from the chunk handler for the definite case and from a clock for
+       * the silent one: an interrupt writes no record and produces no output, so
+       * the evidence is an absence and an event handler can never observe it.
+       */
+      const settleTurn = () => {
+        const ended = resolveTurnFromScreen(
+          mirror,
+          turnSignal(state.screen, spoke.at, Date.now()),
+        );
+        for (const event of ended) {
+          if (event.type !== "remote.userMessage") {
+            enqueueHarnessEvent(sessionId, event);
+          }
+        }
+        if (ended.length > 0) flushHarnessEvents();
+      };
       const parse = (text: string) => {
+        spoke.at = Date.now();
         chunks.push(text);
         const trimmed = trimReplay(
           chunks.map((part) => part.length),
@@ -1663,15 +1691,7 @@ export default function App({
           rows: REMOTE_CONTROL_ROWS,
         });
         state.screen = screen;
-        // An interrupt taken on the phone writes no record at all, so the
-        // composer coming back is the only evidence its turn is over.
-        const ended = resolveTurnFromScreen(mirror, screen.turn === "ended");
-        for (const event of ended) {
-          if (event.type !== "remote.userMessage") {
-            enqueueHarnessEvent(sessionId, event);
-          }
-        }
-        if (ended.length > 0) flushHarnessEvents();
+        settleTurn();
         syncRemoteApproval(sessionId);
       };
       const fanout = createPtyFanout(parse);
@@ -1680,6 +1700,9 @@ export default function App({
       // Stored before subscribing: `subscribePty` replays anything it buffered
       // straight away, and a chunk arriving before the entry exists would be
       // parsed against nothing.
+      // Ticks faster than the 3s threshold so an interrupt resolves promptly,
+      // and cheaply: one comparison unless a turn is actually open.
+      const liveness = setInterval(settleTurn, 1000);
       let unsubscribe = () => undefined as void;
       remoteControl.current.set(sessionId, {
         ptyId: handle.ptyId,
@@ -1688,10 +1711,12 @@ export default function App({
         pending: new Set<string>(),
         chunks,
         screen: state,
+        spoke,
         fanout,
         approval: emptyApprovalProgress(),
         stop: () => {
           live = false;
+          clearInterval(liveness);
           watcher.stop();
           unsubscribe();
         },
