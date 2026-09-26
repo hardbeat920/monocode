@@ -216,10 +216,17 @@ async function requestCodexAccount<T>(
   );
 
   try {
-    await spawnChild(USAGE_CHILD_ID, path, ["app-server"], cwd, {
-      provider: "codex",
-      id: accountId,
-    });
+    await spawnChild(
+      USAGE_CHILD_ID,
+      path,
+      ["app-server"],
+      cwd,
+      {
+        provider: "codex",
+        id: accountId,
+      },
+      "codex",
+    );
     return await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {

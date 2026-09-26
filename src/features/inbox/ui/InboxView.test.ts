@@ -11,6 +11,7 @@ import type { LinkedWorkItem } from "../../sessions/model/session";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import {
   InboxDetail,
+  inboxStatusMark,
   inboxShowsFullFileDiff,
   LinkedWorkItemPanel,
 } from "./InboxView";
@@ -53,6 +54,20 @@ function renderDetail(
 }
 
 describe("InboxDetail layout", () => {
+  it("uses GitHub's purple check for issues closed as completed", () => {
+    const completed = inboxStatusMark(
+      item({ state: "closed", stateReason: "completed" }),
+    );
+    expect(completed.Icon.displayName).toBe("CheckCircle");
+    expect(completed.className).toBe("text-violet-400/90");
+
+    const notPlanned = inboxStatusMark(
+      item({ state: "closed", stateReason: "not_planned" }),
+    );
+    expect(notPlanned.Icon.displayName).toBe("CircleX");
+    expect(notPlanned.className).toBe("text-rose-400/90");
+  });
+
   it("renders a linked item as a standalone, closable side panel", () => {
     const target: LinkedWorkItem = {
       kind: "issue",

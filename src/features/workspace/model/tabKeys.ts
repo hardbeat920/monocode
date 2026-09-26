@@ -40,6 +40,8 @@ export type TabCommand =
   | "close"
   | "next"
   | "prev"
+  | "cycle-next"
+  | "cycle-prev"
   | "back"
   | "forward"
   | "split-right"
@@ -72,7 +74,7 @@ export function tabCommand(e: KeyboardEvent): TabCommand | null {
   }
 
   if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
-    return e.shiftKey ? "prev" : "next";
+    return e.shiftKey ? "cycle-prev" : "cycle-next";
   }
 
   if (!mod || e.altKey) return null;
@@ -107,6 +109,66 @@ export function tabCommand(e: KeyboardEvent): TabCommand | null {
   if (key >= "1" && key <= "8") return { activate: Number(key) - 1 };
   if (key === "9") return { activate: -1 };
   return null;
+}
+
+const TAB_COMMAND_KEYBINDINGS: Record<Exclude<TabCommand, object>, string> = {
+  new: "Tab: New",
+  "close-others": "Tab: Close Others",
+  "close-all": "Tab: Close All",
+  close: "Pane: Close",
+  next: "Tab: Next",
+  prev: "Tab: Previous",
+  "cycle-next": "Tab: Cycle Next",
+  "cycle-prev": "Tab: Cycle Previous",
+  back: "Tab: Back",
+  forward: "Tab: Forward",
+  "split-right": "Pane: Split Right",
+  "split-down": "Pane: Split Down",
+  "new-terminal": "Terminal: New",
+  "new-terminal-tab": "Terminal: New Tab",
+  "toggle-terminal": "Terminal: Toggle Dock",
+  "prev-session": "Session: Previous",
+  "next-session": "Session: Next",
+  "prev-session-in-tab": "Session: Previous in Current Tab",
+  "next-session-in-tab": "Session: Next in Current Tab",
+  "archive-session": "Session: Archive",
+  "prev-project": "Project: Previous",
+  "next-project": "Project: Next",
+};
+
+const KEYBINDING_TAB_COMMANDS = new Map<string, TabCommand>(
+  Object.entries(TAB_COMMAND_KEYBINDINGS).map(([command, binding]) => [
+    binding,
+    command as Exclude<TabCommand, object>,
+  ]),
+);
+
+export function tabCommandKeybinding(command: TabCommand): string {
+  if (typeof command === "object" && "focus" in command) {
+    const direction = command.focus[0].toUpperCase() + command.focus.slice(1);
+    return `Pane: Focus ${direction}`;
+  }
+  if (typeof command === "object" && "activate" in command) {
+    return command.activate < 0 ? "Tab: Activate Last" : "Tab: Activate 1–8";
+  }
+  return TAB_COMMAND_KEYBINDINGS[command];
+}
+
+export function tabCommandForKeybinding(
+  binding: string,
+  event: Pick<KeyboardEvent, "code">,
+): TabCommand | null {
+  if (binding === "Tab: Activate 1–8") {
+    const digit = /^Digit([1-8])$/.exec(event.code)?.[1];
+    return digit ? { activate: Number(digit) - 1 } : null;
+  }
+  if (binding === "Tab: Activate Last") return { activate: -1 };
+  if (binding.startsWith("Pane: Focus ")) {
+    return {
+      focus: binding.slice("Pane: Focus ".length).toLowerCase() as FocusDir,
+    };
+  }
+  return KEYBINDING_TAB_COMMANDS.get(binding) ?? null;
 }
 
 export function adjacentItemId(
