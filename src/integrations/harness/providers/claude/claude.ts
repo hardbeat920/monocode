@@ -385,16 +385,6 @@ function isReplayableRecord(rec: Record<string, unknown>): boolean {
 }
 
 /**
- * Rebuild a thread's transcript from a conversation Claude stored on disk.
- *
- * The stored records are the same shape as the ones the live process streams,
- * so they go through `handleLine` unchanged and produce the same events —
- * including tool rows and subagent steps. Passing the MonoCode thread id also
- * makes `handleLine` record the resume binding and emit `session.providerBound`
- * on its own, so an imported thread continues the real conversation on its next
- * turn without a separate bind step.
- */
-/**
  * The prompt a person typed, or nothing when this record is a tool result
  * wearing the user role — those are answers to the agent's own calls and are
  * replayed through `handleLine` onto their tool rows instead.
@@ -414,8 +404,19 @@ function userPromptText(rec: Record<string, unknown>): string | undefined {
   return text || undefined;
 }
 
+/**
+ * Rebuild a thread's transcript from a conversation Claude stored on disk.
+ *
+ * The stored records are the same shape as the ones the live process streams,
+ * so they go through `handleLine` unchanged and produce the same events —
+ * including tool rows and subagent steps. Passing the MonoCode thread id also
+ * means `handleLine` records the resume binding on its own, from `cwd`, so that
+ * has to be the directory the next turn will run in: the working copy, not the
+ * project root a worktree session is filed under.
+ */
 export function replayClaudeSession(input: {
   sessionId: string;
+  /** Directory the next turn runs in; the binding replay records is keyed to it. */
   cwd: string;
   providerAccountId?: string;
   runtimeMode: RuntimeMode;

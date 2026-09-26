@@ -59,7 +59,11 @@ export function buildImportedSession(input: {
   let session: Session = { ...input.base, blocks: [] };
   replayClaudeSession({
     sessionId: input.base.id,
-    cwd: input.base.cwd,
+    // Replay records the resume binding itself, from this directory, as the
+    // live stream does. It has to be the working copy: `cwd` is the project
+    // for a worktree session, and a binding under the project is dropped when
+    // the next turn runs in the checkout.
+    cwd: sessionWorkCwd(input.base),
     providerAccountId: input.providerAccountId,
     runtimeMode: input.base.runtimeMode,
     transcript: input.transcript,

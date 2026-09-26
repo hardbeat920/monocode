@@ -45,6 +45,9 @@ const {
   stopClaudeSession,
   __claudeTestReset,
 } = await import("./claude");
+// Imports `claude.ts`, so it has to be loaded after the child mock like the rest.
+const { buildImportedSession } =
+  await import("../../../../features/sessions/model/claudeSessionImport");
 import type { HarnessEvent } from "../../core/types";
 import type { RuntimeMode, TurnIntent } from "../../../../features/sessions/model/session";
 
@@ -436,7 +439,10 @@ describe("claude session replay", () => {
       { type: "user", message: { role: "user", content: "ilk soru" } },
       {
         type: "assistant",
-        message: { role: "assistant", content: [{ type: "text", text: "cevap" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "cevap" }],
+        },
       },
       {
         type: "assistant",
@@ -1267,5 +1273,53 @@ describe("claude manual compaction", () => {
       text: "Compacted context",
     });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+  });
+});
+
+describe("claude replay bindings", () => {
+  // `handleLine` keys the resume binding to the directory replay is given, so
+  // an imported worktree thread has to be replayed against its checkout: a
+  // binding under the project root is dropped once the next turn runs in the
+  // checkout, and Claude starts a new conversation instead of continuing.
+  async function turnIn(cwd: string) {
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd,
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "devam",
+      attachments: [],
+      onEvent: () => undefined,
+    });
+    await waitFor(() => spawned.length === 1, "claude process");
+    void turn.catch(() => undefined);
+    return spawned[0] ?? [];
+  }
+
+  it("imports a worktree thread against its checkout", async () => {
+    const session = buildImportedSession({
+      base: {
+        ...newSession("claude", "/repo", "claude:claude-sonnet-5"),
+        id: "s1",
+        worktreeCwd: "/repo/.worktrees/a",
+      },
+      // Records reach `handleLine` in the shape the live stream sends, which
+      // is where the session id is read from.
+      transcript: JSON.stringify({
+        type: "assistant",
+        session_id: "stored-conv",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "cevap" }],
+        },
+      }),
+      providerSessionId: "stored-conv",
+    });
+    expect(session.providerSessionId).toBe("stored-conv");
+
+    const args = await turnIn("/repo/.worktrees/a");
+    expect(args).toEqual(expect.arrayContaining(["--resume", "stored-conv"]));
+    expect(args).not.toContain("--session-id");
   });
 });
