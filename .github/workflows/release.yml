@@ -396,6 +396,16 @@ jobs:
             echo "Expected exactly one .rpm" >&2
             exit 1
           fi
+          # tauri-bundler derives rpm Requires only from
+          # bundle.linux.rpm.depends, and the setup script has already
+          # installed every -devel package, so assert the metadata directly.
+          requires="$(rpm -qp --requires "${bundle[0]}")"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3 librsvg2 openssl-libs; do
+            if ! grep -qx "$dep" <<<"$requires"; then
+              echo "rpm is missing Requires: $dep" >&2
+              exit 1
+            fi
+          done
           dnf install -y "${bundle[0]}"
           rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
           mkdir -p release-artifacts
