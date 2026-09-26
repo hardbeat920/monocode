@@ -13,6 +13,7 @@ import type {
   RemoteControlTarget,
 } from "../features/remoteControl/model/action";
 import type {
+  InjectionPlan,
   InjectionRefusal,
   PermissionPrompt,
   PromptOption,
@@ -326,3 +327,62 @@ export const REMOTE_REFUSALS: Record<InjectionRefusal, string> = {
   "command-prefix":
     "a message starting with /, ! or # drives the terminal's own menus instead of being sent",
 };
+
+// ------------------------------------------------------------ outbound text
+
+/** Ctrl-U. Every write is verified against the screen before anything is typed. */
+export const COMPOSER_CLEAR = "\x15";
+
+/**
+ * What the TUI's composer is holding, or `null` when no composer is on screen.
+ *
+ * An empty composer renders as a bare `❯`; text after it is content. Measured
+ * from captures: idle and mid-turn screens show `❯` alone, and the screen 25s
+ * after an ESC shows `❯ Write a very long essay about…` — the CLI restores the
+ * interrupted prompt there. Nothing paints placeholder text into it, so the
+ * remainder after the marker is real content rather than a hint.
+ */
+export function composerHeld(lines: readonly string[]): string | null {
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed !== "❯" && !trimmed.startsWith("❯ ")) continue;
+    const held = trimmed.slice(1).trim();
+    return held.length > 0 ? held : null;
+  }
+  return null;
+}
+
+export type SendGate =
+  | { kind: "send" }
+  /** Clear the composer first, then re-check. Never typed blind. */
+  | { kind: "clear"; held: string }
+  | { kind: "refuse"; reason: string };
+
+/**
+ * Whether a composer turn may be typed into the pty.
+ *
+ * `planInjection` answers "is the screen injectable", and its rule — composer
+ * idle, no modal — is necessary but not sufficient. **An idle composer holding
+ * restored text passes it.** Measured: after an ESC, injecting `say OK`
+ * produced one user message reading
+ * `…Think carefully first.say OK`, with no separator, because bracketed paste
+ * appends and the CR submits the concatenation. The assistant happened to ignore
+ * the prefix, which is luck rather than safety.
+ *
+ * So a held composer is its own outcome: clear it, then look again. Nothing is
+ * typed on the strength of the clear having probably worked.
+ */
+export function remoteSendGate(
+  screen: PromptScreen | null,
+  plan: InjectionPlan | null,
+): SendGate {
+  if (!screen || !plan) {
+    return { kind: "refuse", reason: "the terminal has not painted yet" };
+  }
+  if (!plan.allowed) {
+    return { kind: "refuse", reason: REMOTE_REFUSALS[plan.reason] };
+  }
+  const held = composerHeld(screen.lines);
+  if (held) return { kind: "clear", held };
+  return { kind: "send" };
+}

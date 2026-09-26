@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  composerHeld,
   noteInterruptedTurn,
   pendingAfter,
   remoteApprovalKeystroke,
@@ -8,6 +9,7 @@ import {
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
+  remoteSendGate,
   seatRemoteUserMessage,
   shouldAutoOpen,
 } from "./remoteControlSession";
@@ -358,5 +360,69 @@ describe("tracking what the transcript says is outstanding", () => {
     ]);
 
     expect([...pending]).toEqual([]);
+  });
+});
+
+/** Rendered composer rows, copied from the parser's own capture fixtures. */
+const IDLE_COMPOSER = ["─".repeat(20), "❯", "─".repeat(20), "  ⏸ plan mode on"];
+const AFTER_INTERRUPT = [
+  "─".repeat(20),
+  "❯ Write a very long essay about the history of the abacus, at least 2000 words. Think carefully first.",
+  "─".repeat(20),
+  "  ⏸ manual mode on",
+];
+
+const allowed = { allowed: true, bytes: "\x1b[200~say OK\x1b[201~\r", queued: false } as const;
+
+function idleWith(lines: readonly string[]): PromptScreen {
+  return { lines, turn: "ended", kind: "idle" };
+}
+
+describe("the composer the CLI restores after an interrupt", () => {
+  it("reads nothing out of an empty composer", () => {
+    // Measured: an idle composer renders as a bare marker, with no placeholder
+    // text to mistake for content.
+    expect(composerHeld(IDLE_COMPOSER)).toBeNull();
+  });
+
+  it("reads the restored prompt out of a held composer", () => {
+    expect(composerHeld(AFTER_INTERRUPT)).toBe(
+      "Write a very long essay about the history of the abacus, at least 2000 words. Think carefully first.",
+    );
+  });
+
+  it("finds no composer on a screen without one", () => {
+    expect(composerHeld(["╭─── Claude Code v2.1.221"])).toBeNull();
+  });
+
+  it("sends when the composer is empty", () => {
+    expect(remoteSendGate(idleWith(IDLE_COMPOSER), allowed)).toEqual({
+      kind: "send",
+    });
+  });
+
+  it("clears first when the composer is holding text", () => {
+    // `planInjection` says yes here — idle screen, no modal — which is exactly
+    // why this is a third outcome and not a refusal reason.
+    const gate = remoteSendGate(idleWith(AFTER_INTERRUPT), allowed);
+
+    expect(gate.kind).toBe("clear");
+    if (gate.kind !== "clear") return;
+    expect(gate.held).toContain("abacus");
+  });
+
+  it("refuses when the parser refused, whatever the composer holds", () => {
+    const gate = remoteSendGate(idleWith(IDLE_COMPOSER), {
+      allowed: false,
+      reason: "modal",
+    });
+
+    expect(gate.kind).toBe("refuse");
+    if (gate.kind !== "refuse") return;
+    expect(gate.reason).toMatch(/dialog/);
+  });
+
+  it("refuses before the terminal has painted", () => {
+    expect(remoteSendGate(null, null).kind).toBe("refuse");
   });
 });

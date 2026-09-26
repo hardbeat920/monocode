@@ -149,9 +149,11 @@ import {
   emptyCursor,
   mapRecord,
   resolveTurnFromScreen,
+  type BridgeStatus,
   type MirrorState,
 } from "../features/remoteControl/model/transcript";
 import { claudeTranscriptPath } from "../features/remoteControl/model/transcriptPath";
+import { RemoteControlLink } from "../features/remoteControl/ui/RemoteControlLink";
 import {
   watchTranscript,
   type TranscriptWatcher,
@@ -163,6 +165,8 @@ import {
   REMOTE_CONTROL_ROWS,
 } from "../integrations/harness/providers/claude/remoteControl";
 import {
+  composerHeld,
+  COMPOSER_CLEAR,
   noteInterruptedTurn,
   pendingAfter,
   remoteApprovalKeystroke,
@@ -172,6 +176,7 @@ import {
   remoteControlStep,
   remoteControlTarget,
   REMOTE_REFUSALS,
+  remoteSendGate,
   seatRemoteUserMessage,
   shouldAutoOpen,
   type RemoteAnswer,
@@ -615,9 +620,11 @@ import {
   loadFollowUpBehavior,
   loadRemoteControl,
   loadSettingsSection,
+  REMOTE_CONTROL_DEFAULT,
   saveSettingsSection,
   subscribeLiveAgentsEnabled,
   subscribeNotesEnabled,
+  subscribeRemoteControl,
   type CollapsedProjectRailMode,
   type SettingsSectionId,
   type FollowUpBehavior,
@@ -1001,6 +1008,13 @@ export default function App({
     loadNotesEnabled,
     () => true,
   );
+  // Switching to `all` has to reach live sessions at once, not on the next
+  // session update.
+  const remoteControlMode = useSyncExternalStore(
+    subscribeRemoteControl,
+    loadRemoteControl,
+    () => REMOTE_CONTROL_DEFAULT,
+  );
   const liveAgentsEnabled = useSyncExternalStore(
     subscribeLiveAgentsEnabled,
     loadLiveAgentsEnabled,
@@ -1330,6 +1344,10 @@ export default function App({
     [],
   );
   const remoteHome = useRef<string | null>(null);
+  /** Per session, so the link can render. `undefined` renders nothing. */
+  const [remoteBridges, setRemoteBridges] = useState<
+    Readonly<Record<string, BridgeStatus>>
+  >({});
 
   /**
    * Raise, retire or re-raise the approval a remote-controlled session waits on.
@@ -1450,6 +1468,25 @@ export default function App({
   );
 
   /**
+   * Wait for the composer to come back empty after a clear.
+   *
+   * Bounded rather than open-ended: a TUI that does not repaint means we do not
+   * know what is in the composer, and not knowing has to end in a refusal rather
+   * than in a send.
+   */
+  const waitForClearComposer = useCallback(
+    async (entry: { screen: PromptScreen | null }): Promise<boolean> => {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const lines = entry.screen?.lines;
+        if (lines && !composerHeld(lines)) return true;
+      }
+      return false;
+    },
+    [],
+  );
+
+  /**
    * Type a composer turn into the pty, or `null` when this session is not
    * remote-controlled and the ordinary harness send should run.
    *
@@ -1465,20 +1502,50 @@ export default function App({
     ): Promise<void> | null => {
       const entry = remoteControl.current.get(sessionId);
       if (!entry) return null;
-      const plan = entry.screen ? planInjection(entry.screen, text) : null;
-      const refusal = !plan
-        ? "the terminal has not painted yet"
-        : !plan.allowed
-          ? REMOTE_REFUSALS[plan.reason]
-          : null;
-      if (!plan?.allowed) {
+      const refuse = (reason: string) => {
         enqueueHarnessEvent(sessionId, {
           type: "interjection",
           customType: "remote-control",
           severity: "concern",
-          text: `Nothing was sent: ${refusal}. Close Remote Control to send this here, or type it in the terminal.`,
+          text: `Nothing was sent: ${reason}. Close Remote Control to send this here, or continue on your phone.`,
         });
         flushHarnessEvents();
+      };
+      const screenNow = () => entry.screen;
+      const gate = remoteSendGate(
+        screenNow(),
+        screenNow() ? planInjection(screenNow()!, text) : null,
+      );
+      if (gate.kind === "refuse") {
+        refuse(gate.reason);
+        return Promise.resolve();
+      }
+      if (gate.kind === "clear") {
+        // The CLI restores an interrupted prompt into the composer, and
+        // bracketed paste appends to it, so typing now would submit the two
+        // welded together. Clear it and look again — never type on the strength
+        // of the clear having probably worked.
+        return (async () => {
+          await writePty(entry.ptyId, COMPOSER_CLEAR).catch(() => undefined);
+          const cleared = await waitForClearComposer(entry);
+          if (!cleared) {
+            refuse(
+              `the terminal's composer still holds "${gate.held}", which a send would be joined onto`,
+            );
+            return;
+          }
+          const after = screenNow();
+          const plan = after ? planInjection(after, text) : null;
+          if (!plan?.allowed) {
+            refuse("the terminal stopped accepting input while it was cleared");
+            return;
+          }
+          await writePty(entry.ptyId, plan.bytes);
+        })();
+      }
+      const plan = planInjection(screenNow()!, text);
+      if (!plan.allowed) {
+        refuse(REMOTE_REFUSALS[plan.reason]);
         return Promise.resolve();
       }
       if (hasAttachments) {
@@ -1500,7 +1567,7 @@ export default function App({
       flushHarnessEvents();
       return writePty(entry.ptyId, plan.bytes);
     },
-    [enqueueHarnessEvent, flushHarnessEvents],
+    [enqueueHarnessEvent, flushHarnessEvents, waitForClearComposer],
   );
 
   const openRemote = useCallback(
@@ -1574,6 +1641,13 @@ export default function App({
               // A result landing can retire the prompt that was on screen.
               syncRemoteApproval(sessionId);
             }
+            const bridge = mirror.bridge;
+            setRemoteBridges((current) =>
+              current[sessionId]?.active === bridge.active &&
+              current[sessionId]?.url === bridge.url
+                ? current
+                : { ...current, [sessionId]: bridge },
+            );
             for (const event of events) {
               if (event.type === "remote.userMessage") {
                 setSessions((prev) =>
@@ -1681,6 +1755,7 @@ export default function App({
     remoteControl.current.delete(sessionId);
     setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
     if (byUser) remoteControlClosed.current.add(sessionId);
+    setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
     entry.stop();
     await closeRemoteControl(sessionId, { killPty });
   }, []);
@@ -1719,8 +1794,8 @@ export default function App({
   // The setting has no subscribe helper, so a change to it takes effect on the
   // next session update rather than instantly.
   useEffect(() => {
-    const mode = loadRemoteControl();
-    if (mode !== "all") return;
+    if (remoteControlMode !== "all") return;
+    const mode = remoteControlMode;
     for (const session of sessions) {
       if (
         !shouldAutoOpen(session, {
@@ -1732,7 +1807,7 @@ export default function App({
         continue;
       void openRemote(session.id);
     }
-  }, [sessions, openRemote]);
+  }, [sessions, openRemote, remoteControlMode]);
 
   useEffect(() => {
     if (resumed?.sessions.length) bindResumedSessions(resumed.sessions);
@@ -10781,6 +10856,13 @@ export default function App({
                   />
                 ) : null}
                 {compactTitleBar ? null : workspaceTitleBar}
+
+                {activeSessionId ? (
+                  <RemoteControlLink
+                    bridge={remoteBridges[activeSessionId]}
+                    className="mx-2 mb-1"
+                  />
+                ) : null}
 
                 <main className="relative flex min-h-0 min-w-0 flex-1">
                   <div
