@@ -5048,7 +5048,9 @@ export default function App({
       (session) => session.id === sessionId,
     );
     if (!source) return;
-    setResumePickerFor({ sessionId, cwd: source.cwd });
+    // Claude files conversations under the directory it ran in, which for a
+    // worktree session is the checkout rather than the project root.
+    setResumePickerFor({ sessionId, cwd: sessionWorkCwd(source) });
   }, []);
 
   /**
@@ -5079,11 +5081,19 @@ export default function App({
         !stillThere ||
         stillThere.busy ||
         stillThere.harness !== "claude" ||
-        stillThere.cwd !== source.cwd ||
+        sessionWorkCwd(stillThere) !== sessionWorkCwd(source) ||
         stillThere.providerAccountId !== source.providerAccountId
       ) {
         return;
       }
+
+      // A child that is already running ignores the new binding: `ensureLive`
+      // hands back the existing one before the resume state is read, so the
+      // next turn would carry on the old conversation. Stopping it first makes
+      // that turn spawn with `--resume`; the resume state itself survives.
+      await stopHarnessSession("claude", target.sessionId).catch(
+        () => undefined,
+      );
 
       setSessions((current) =>
         current.map((session) =>
@@ -5101,7 +5111,9 @@ export default function App({
         "claude",
         target.sessionId,
         summary.id,
-        target.cwd,
+        // Claude only resumes when the bound directory matches the one the
+        // next turn runs in, which for a worktree session is the checkout.
+        sessionWorkCwd(stillThere),
         source.providerAccountId,
       );
     },

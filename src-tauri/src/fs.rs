@@ -125,19 +125,18 @@ pub struct ClaudeSessionSummary {
 }
 
 /// Claude Code stores a project's conversations under a directory derived from
-/// its working directory, with every separator flattened to `-`. The mapping
-/// only runs this way: `-a-b` could have come from `/a/b`, `/a-b` or `/a.b`, so
-/// a directory name can never be turned back into a path.
+/// its working directory: every character that is not an ASCII letter or digit
+/// becomes `-`. That covers separators, but also spaces, punctuation, drive
+/// colons and anything non-ASCII — so listing only the characters that looked
+/// like separators would miss `/Users/me/My Project` and `C:\src\app` and read
+/// a directory that does not exist.
+///
+/// The mapping only runs this way: `-a-b` could have come from `/a/b`, `/a-b`
+/// or `/a.b`, so a directory name can never be turned back into a path.
 pub(crate) fn claude_project_dir(home: &Path, cwd: &str) -> PathBuf {
     let flattened: String = cwd
         .chars()
-        .map(|c| {
-            if c == '/' || c == '\\' || c == '.' || c == '_' {
-                '-'
-            } else {
-                c
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     home.join(".claude").join("projects").join(flattened)
 }
@@ -5851,6 +5850,24 @@ mod tests {
         let dotted = claude_project_dir(home, "/a/b.c");
         assert_eq!(dotted, claude_project_dir(home, "/a/b-c"));
         assert_eq!(dotted, claude_project_dir(home, "/a/b_c"));
+
+        // Everything that is not a letter or digit goes, not just the
+        // characters that read as separators. Spaces and punctuation are
+        // ordinary in project paths, and a Windows path carries a drive colon.
+        assert_eq!(
+            claude_project_dir(home, "/Users/me/My Project (v2)"),
+            home.join(".claude/projects/-Users-me-My-Project--v2-")
+        );
+        assert_eq!(
+            claude_project_dir(home, "C:\\Users\\dev\\proj"),
+            home.join(".claude/projects/C--Users-dev-proj")
+        );
+        // Non-ASCII letters are replaced rather than transliterated: each one
+        // becomes a single `-`, so `çalışma` is `-al--ma`, not `calisma`.
+        assert_eq!(
+            claude_project_dir(home, "/Users/me/çalışma"),
+            home.join(".claude/projects/-Users-me--al--ma")
+        );
     }
 
     #[test]
