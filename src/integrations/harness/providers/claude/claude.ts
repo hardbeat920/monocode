@@ -461,7 +461,24 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (line) => {
       const current = liveRef.current;
       if (!current) return;
-      handleLine(input.sessionId, current, line);
+      try {
+        handleLine(input.sessionId, current, line);
+      } catch (error) {
+        // A throw here escapes into the Tauri event listener, where nothing
+        // catches it. The turn's promise would then never settle and the
+        // thread would look busy forever, with no way back. Fail the turn
+        // instead, the same way a rejected control request does.
+        const failure =
+          error instanceof Error ? error : new Error(String(error));
+        console.debug(
+          `[monocode] claude line failed ${input.sessionId}`,
+          failure,
+        );
+        if (current.turnFailed) current.turnFailed(failure);
+        else if (!current.muteUpdates) {
+          current.onEvent({ type: "session.error", message: failure.message });
+        }
+      }
     },
     (code) => {
       liveByThread.delete(input.sessionId);
