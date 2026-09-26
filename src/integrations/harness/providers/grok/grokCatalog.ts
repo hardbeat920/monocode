@@ -80,7 +80,14 @@ async function discoverViaAcp() {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, grokSpawnArgs({ model: "" }), cwd);
+    await spawnChild(
+      PROBE_ID,
+      path,
+      grokSpawnArgs({ model: "" }),
+      cwd,
+      undefined,
+      "grok",
+    );
     return await withTimeout(DISCOVERY_TIMEOUT_MS, async () => {
       const init = await acp.request(
         "initialize",
@@ -121,7 +128,7 @@ async function discoverViaAcp() {
 async function discoverViaCli() {
   const { path } = await resolveGrokBinary();
   const cwd = await homeDir();
-  const stdout = await execChild(path, ["models"], cwd);
+  const stdout = await execChild(path, ["models"], cwd, "grok");
   return modelsFromGrokModelsOutput(stdout);
 }
 

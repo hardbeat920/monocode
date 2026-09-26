@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { SettingsView } from "./SettingsView";
+import { saveKeybindingOverride } from "../model/settings";
 
 vi.mock("../../../platform/tauri/platform", () => ({
   IS_MAC: true,
@@ -76,7 +77,7 @@ it("records a global shortcut, persists it, and restores the default", async () 
   )!;
   expect(input.value).toBe("⌘⇧Space");
   await act(async () => input.click());
-  expect(input.value).toBe("Press keys…");
+  expect(input.value).toBe("Record…");
   await act(async () =>
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -91,8 +92,8 @@ it("records a global shortcut, persists it, and restores the default", async () 
   await act(async () =>
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
-        code: "KeyK",
-        key: "k",
+        code: "KeyQ",
+        key: "q",
         bubbles: true,
         cancelable: true,
       }),
@@ -100,10 +101,10 @@ it("records a global shortcut, persists it, and restores the default", async () 
   );
   expect(invoke).toHaveBeenCalledWith("quick_composer_set_enabled", {
     enabled: true,
-    shortcut: "Command+KeyK",
+    shortcut: "Command+KeyQ",
   });
-  expect(data.get("monocode.quickComposerShortcut")).toBe("Command+KeyK");
-  expect(input.value).toBe("⌘K");
+  expect(data.get("monocode.quickComposerShortcut")).toBe("Command+KeyQ");
+  expect(input.value).toBe("⌘Q");
 
   await act(async () =>
     container
@@ -128,8 +129,8 @@ it("keeps the previous shortcut when native registration fails", async () => {
   await act(async () =>
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
-        code: "KeyK",
-        key: "k",
+        code: "KeyQ",
+        key: "q",
         metaKey: true,
         bubbles: true,
         cancelable: true,
@@ -175,13 +176,127 @@ it("accepts Control plus one key", async () => {
   expect(input.value).toBe("⌃Y");
 });
 
+it("refuses a chord another command already owns", async () => {
+  await render();
+  vi.mocked(invoke).mockClear();
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Change quick composer shortcut"]',
+  )!;
+  await act(async () => input.click());
+  // Command+K is App: Search's default.
+  await act(async () =>
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "KeyK",
+        key: "k",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(container.textContent).toContain("Already used by App: Search");
+  expect(data.has("monocode.quickComposerShortcut")).toBe(false);
+  // A rejected chord must never reach native registration, or the OS would
+  // hold a live global hotkey that is not in settings.
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+it("reserves its live custom chord so no other command can claim it", async () => {
+  await render();
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Change quick composer shortcut"]',
+  )!;
+  await act(async () => input.click());
+  await act(async () =>
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "KeyQ",
+        key: "q",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(data.get("monocode.quickComposerShortcut")).toBe("Command+Shift+KeyQ");
+
+  // The chord is stored outside the override table, so this is the path the
+  // reviewer flagged: it must still be treated as taken.
+  expect(() =>
+    saveKeybindingOverride("App: Search", {
+      shortcut: "Command+Shift+KeyQ",
+    }),
+  ).toThrow("Already used by App: Quick Composer");
+});
+
+it("re-enables and re-registers the default when a disabled row is reset", async () => {
+  await render();
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Change quick composer shortcut"]',
+  )!;
+
+  await act(async () => input.click());
+  await act(async () =>
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "Backspace",
+        key: "Backspace",
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(input.value).toBe("Disabled");
+  expect(data.get("monocode.quickComposerEnabled")).toBe("0");
+
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Reset quick composer shortcut"]',
+      )!
+      .click(),
+  );
+  expect(invoke).toHaveBeenCalledWith("quick_composer_set_enabled", {
+    enabled: true,
+    shortcut: "Command+Shift+Space",
+  });
+  expect(data.get("monocode.quickComposerEnabled")).toBe("1");
+  expect(input.value).toBe("⌘⇧Space");
+});
+
+it("refuses an Alt-only global shortcut without registering it", async () => {
+  await render();
+  vi.mocked(invoke).mockClear();
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Change quick composer shortcut"]',
+  )!;
+  await act(async () => input.click());
+  await act(async () =>
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "KeyK",
+        key: "k",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(container.textContent).toContain("Quick Composer needs");
+  expect(invoke).not.toHaveBeenCalled();
+  expect(data.has("monocode.quickComposerShortcut")).toBe(false);
+});
+
 it("shows pressed keys without an error and Escape cancels recording", async () => {
   await render();
   const input = container.querySelector<HTMLInputElement>(
     '[aria-label="Change quick composer shortcut"]',
   )!;
   await act(async () => input.click());
-  expect(container.textContent).toContain("⌘ or ⌃ + one key · Esc to cancel");
+  expect(input.value).toBe("Record…");
+  expect(container.textContent).toContain("Del disables · Esc cancels");
   await act(async () =>
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -205,9 +320,7 @@ it("shows pressed keys without an error and Escape cancels recording", async () 
     ),
   );
   expect(input.value).toBe("⌘⇧Space");
-  expect(container.textContent).not.toContain(
-    "⌘ or ⌃ + one key · Esc to cancel",
-  );
+  expect(container.textContent).not.toContain("Del disables · Esc cancels");
   expect(invoke).not.toHaveBeenCalledWith(
     "quick_composer_set_enabled",
     expect.anything(),

@@ -7,10 +7,47 @@ import {
   type Session,
 } from "../model/session";
 import {
+  backfillClaudeShellCommands,
   isPersistableId,
   persistFingerprint,
   sanitizeSessionForPersist,
 } from "./sessionStore";
+
+describe("Claude Shell row recovery", () => {
+  it("restores only matching placeholder rows and preserves tool output", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "toolu_shell",
+          title: "Shell",
+          kind: "execute",
+          status: "completed",
+          detail: "tests passed",
+        },
+      },
+      {
+        id: "read",
+        role: "tool",
+        text: "Read file.ts",
+        tool: { callId: "toolu_read", kind: "read" },
+      },
+    ];
+    const command = `npm run check:web ${"--filter tests ".repeat(20)}`.trim();
+    const repaired = backfillClaudeShellCommands(blocks, {
+      toolu_shell: command,
+      toolu_read: "ignore me",
+    });
+    expect(repaired[0]).toMatchObject({
+      text: command,
+      tool: { title: command, status: "completed", detail: "tests passed" },
+    });
+    expect(repaired[1]).toBe(blocks[1]);
+    expect(backfillClaudeShellCommands(repaired, {})).toBe(repaired);
+  });
+});
 
 describe("isPersistableId", () => {
   it("accepts alphanumeric ids with hyphens and underscores", () => {

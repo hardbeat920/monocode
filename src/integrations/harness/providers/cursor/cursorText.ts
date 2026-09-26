@@ -182,7 +182,7 @@ async function startLive(
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, ["acp"], cwd);
+    await spawnChild(TEXT_CHILD_ID, path, ["acp"], cwd, undefined, "cursor");
     await acp.request(
       "initialize",
       {

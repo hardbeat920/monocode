@@ -1127,10 +1127,11 @@ function preferLabel(...parts: (string | undefined)[]): string {
     .filter((part): part is string => !!part?.trim())
     .map((part) => part.trim())
     .filter((part) => !isCallId(part));
-  const strong = filled.filter(
-    (part) => !isWeakToolTitle(part) && compactLabel(part) === part,
-  );
-  strong.sort((a, b) => b.length - a.length);
+  const strong = filled.filter((part) => !isWeakToolTitle(part));
+  const compactStrong = strong.filter((part) => compactLabel(part) === part);
+  compactStrong.sort((a, b) => b.length - a.length);
+  if (compactStrong[0]) return compactStrong[0];
+  // A long command is still more useful than an earlier "Shell" placeholder.
   if (strong[0]) return strong[0];
   const compact = filled.filter((part) => compactLabel(part) === part);
   compact.sort((a, b) => b.length - a.length);
