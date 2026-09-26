@@ -850,6 +850,42 @@ export function forEachSafely(
 }
 
 /**
+ * Run one hand-over with its session claimed for the whole of it.
+ *
+ * The claim is what stops `all` mode starting a second hand-over for a session
+ * whose first one has not finished: the entry that marks it done is written many
+ * awaits in, and until then nothing else says this one is being taken. Releasing
+ * it was previously spelled out on the two paths someone thought of, so a throw
+ * anywhere else stranded the id for the life of the window — and `shouldAutoOpen`
+ * reads that set as `open`, so the session could never be handed over again.
+ *
+ * Silently, which is the worse half. The caller is async, so the throw is a
+ * rejected promise; `forEachSafely` wraps the *call*, not the settlement, and
+ * never sees it. So the error is reported here rather than left to a handler that
+ * structurally cannot receive it.
+ *
+ * `finally` rather than two call sites to remember, because "every exit releases
+ * the claim" is the whole point and a rule kept by hand is a rule waiting to be
+ * missed once.
+ */
+export async function withClaim(
+  claimed: Set<string>,
+  id: string,
+  run: () => Promise<void>,
+  onError: (error: unknown) => void,
+): Promise<void> {
+  if (claimed.has(id)) return;
+  claimed.add(id);
+  try {
+    await run();
+  } catch (error) {
+    onError(error);
+  } finally {
+    claimed.delete(id);
+  }
+}
+
+/**
  * Which sessions `all` mode should hand over now.
  *
  * Separated from the loop so the choice stays a function of the sessions and

@@ -25,6 +25,7 @@ import {
   shouldAutoOpen,
   dismissalsAfterModeChange,
   planRemoteExit,
+  withClaim,
 } from "./remoteControlSession";
 import { newSession, type Session } from "../features/sessions/model/session";
 import type {
@@ -206,6 +207,100 @@ describe("all mode opening lazily", () => {
         { mode: "all", open: false, dismissed: false },
       ),
     ).toBe(false);
+  });
+});
+
+describe("claiming a session for the length of a hand-over", () => {
+  it("holds the claim while it runs and releases it after", async () => {
+    const claimed = new Set<string>();
+    let heldDuringRun = false;
+    await withClaim(
+      claimed,
+      "s1",
+      async () => {
+        heldDuringRun = claimed.has("s1");
+      },
+      () => expect.unreachable("should not have failed"),
+    );
+    expect(heldDuringRun).toBe(true);
+    expect(claimed.has("s1")).toBe(false);
+  });
+
+  // The whole bug: the release was spelled out on two paths, so a throw anywhere
+  // else stranded the id and `shouldAutoOpen` read it as `open` for ever.
+  it("releases the claim when the hand-over throws", async () => {
+    const claimed = new Set<string>();
+    const errors: unknown[] = [];
+    await withClaim(
+      claimed,
+      "s1",
+      async () => {
+        throw new Error("no such session to resume");
+      },
+      (error) => errors.push(error),
+    );
+    expect(claimed.has("s1")).toBe(false);
+    expect((errors[0] as Error).message).toBe("no such session to resume");
+  });
+
+  // `forEachSafely` wraps the call, not the settlement, so a rejected promise
+  // reaches no handler unless this one reports it.
+  it("reports rather than rejecting", async () => {
+    const claimed = new Set<string>();
+    let reported = false;
+    await expect(
+      withClaim(
+        claimed,
+        "s1",
+        () => Promise.reject(new Error("spawn failed")),
+        () => {
+          reported = true;
+        },
+      ),
+    ).resolves.toBeUndefined();
+    expect(reported).toBe(true);
+  });
+
+  it("releases the claim even if the report itself throws", async () => {
+    const claimed = new Set<string>();
+    await expect(
+      withClaim(
+        claimed,
+        "s1",
+        () => Promise.reject(new Error("spawn failed")),
+        () => {
+          throw new Error("reporting broke too");
+        },
+      ),
+    ).rejects.toThrow("reporting broke too");
+    expect(claimed.has("s1")).toBe(false);
+  });
+
+  it("does nothing for a hand-over already in flight", async () => {
+    const claimed = new Set<string>();
+    let runs = 0;
+    let second: Promise<void> | null = null;
+    await withClaim(
+      claimed,
+      "s1",
+      async () => {
+        runs += 1;
+        // Re-entered from inside the first, which is exactly when `all` mode did
+        // it: the effect re-ran before the finished entry existed.
+        second = withClaim(
+          claimed,
+          "s1",
+          async () => {
+            runs += 1;
+          },
+          () => expect.unreachable("should not have been reached"),
+        );
+        await second;
+      },
+      () => expect.unreachable("should not have failed"),
+    );
+    expect(runs).toBe(1);
+    expect(claimed.has("s1")).toBe(false);
   });
 });
 

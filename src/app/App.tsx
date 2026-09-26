@@ -185,6 +185,7 @@ import {
   remoteControlTarget,
   seatRemoteUserMessage,
   turnSignal,
+  withClaim,
   type ApprovalProgress,
   type PtyFanout,
   type RemoteAnswer,
@@ -1581,10 +1582,12 @@ export default function App({
     [enqueueHarnessEvent, flushHarnessEvents],
   );
 
-  const openRemote = useCallback(
+  /**
+   * The hand-over itself. Only ever called through `openRemote`, which holds the
+   * claim that keeps `all` mode from starting a second one.
+   */
+  const handOverToRemote = useCallback(
     async (sessionId: string) => {
-      if (remoteControl.current.has(sessionId)) return;
-      if (remoteOpening.current.has(sessionId)) return;
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
@@ -1595,9 +1598,6 @@ export default function App({
         session.cwd,
         [...remoteControl.current.values()].map((entry) => entry.name),
       );
-      // Claimed here, before the first await: the finished entry below is many
-      // awaits away, and until one of them exists nothing stops a re-entry.
-      remoteOpening.current.add(sessionId);
       if (!remoteHome.current) remoteHome.current = await homeDir();
       const path = claudeTranscriptPath(
         remoteHome.current,
@@ -1640,7 +1640,6 @@ export default function App({
           }`,
         });
         flushHarnessEvents();
-        remoteOpening.current.delete(sessionId);
         return;
       }
       const mirror = createMirrorState();
@@ -1803,12 +1802,51 @@ export default function App({
           flushHarnessEvents();
         },
       );
-      remoteOpening.current.delete(sessionId);
       setRemoteControlIds((ids) =>
         ids.includes(sessionId) ? ids : [...ids, sessionId],
       );
     },
     [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Hand a session over, claimed for as long as it takes.
+   *
+   * The claim is what stops `all` mode starting a second hand-over for the same
+   * session: the entry in `remoteControl` is written many awaits in, and until it
+   * exists nothing else says this one is being taken. It used to be released on
+   * the two paths that were thought of, so a throw anywhere else — `homeDir`, or
+   * any of the constructors after the spawn — left the id in the set for the life
+   * of the window, and `shouldAutoOpen` read it as `open` forever. Silently, too:
+   * this is async, so the throw is a rejected promise and `forEachSafely` never
+   * sees it.
+   *
+   * Hence a `finally` rather than two remembered call sites, and a report rather
+   * than a swallowed rejection. The cover is continuous: by the time the release
+   * runs on a successful hand-over, `remoteControl` already holds the session, so
+   * one set or the other answers for it throughout.
+   */
+  const openRemote = useCallback(
+    async (sessionId: string) => {
+      if (remoteControl.current.has(sessionId)) return;
+      await withClaim(
+        remoteOpening.current,
+        sessionId,
+        () => handOverToRemote(sessionId),
+        // Whatever the inner catch did not already report. The conversation and
+        // its binding survive either way, so the thread carries on headless.
+        (error) => {
+          enqueueHarnessEvent(sessionId, {
+            type: "session.error",
+            message: `Could not open Remote Control. ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          });
+          flushHarnessEvents();
+        },
+      );
+    },
+    [enqueueHarnessEvent, flushHarnessEvents, handOverToRemote],
   );
 
   /**
