@@ -100,7 +100,20 @@ describe("remote control target", () => {
       harness: "claude",
       providerSessionId: "sess-abc",
       active: true,
+      automatic: false,
+      queued: false,
     });
+  });
+
+  // Neither is on the session — the workspace knows the mode and the queue, so
+  // they are passed in rather than guessed at from the thread.
+  it("carries what the workspace knows about waiting", () => {
+    expect(
+      remoteControlTarget(session({ providerSessionId: "sess-abc" }), false, {
+        automatic: true,
+        queued: true,
+      }),
+    ).toMatchObject({ automatic: true, queued: true });
   });
 });
 

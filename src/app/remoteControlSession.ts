@@ -36,11 +36,21 @@ import { projectName } from "../shared/lib/paths";
 export function remoteControlTarget(
   session: Session,
   active: boolean,
+  /**
+   * What the workspace knows and the session does not: whether the mode hands
+   * threads over on its own, and whether this one is already waiting its turn.
+   */
+  waiting: { automatic: boolean; queued: boolean } = {
+    automatic: false,
+    queued: false,
+  },
 ): RemoteControlTarget {
   return {
     harness: session.harness,
     providerSessionId: session.providerSessionId,
     active,
+    automatic: waiting.automatic,
+    queued: waiting.queued,
   };
 }
 

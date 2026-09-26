@@ -1949,10 +1949,13 @@ export default function App({
         : undefined;
       if (!session) return null;
       return remoteControlAction(
-        remoteControlTarget(session, remoteControlIds.includes(session.id)),
+        remoteControlTarget(session, remoteControlIds.includes(session.id), {
+          automatic: remoteControlMode === "all",
+          queued: remotePending.current.has(session.id),
+        }),
       );
     },
-    [remoteControlIds],
+    [remoteControlIds, remoteControlMode],
   );
 
   const onRemoteControl = useCallback(
@@ -1984,10 +1987,13 @@ export default function App({
       );
       if (!session) return null;
       return remoteControlAction(
-        remoteControlTarget(session, remoteControlIds.includes(session.id)),
+        remoteControlTarget(session, remoteControlIds.includes(session.id), {
+          automatic: remoteControlMode === "all",
+          queued: remotePending.current.has(session.id),
+        }),
       );
     },
-    [remoteControlIds],
+    [remoteControlIds, remoteControlMode],
   );
 
   const onRemoteControlSession = useCallback(
