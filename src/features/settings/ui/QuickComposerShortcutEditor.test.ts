@@ -34,6 +34,7 @@ const data = new Map<string, string>();
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   data.clear();
+  data.set("monocode.language", "en");
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => data.set(key, value),
@@ -52,11 +53,11 @@ afterEach(async () => {
   vi.resetAllMocks();
 });
 
-async function render() {
+async function render(section: "general" | "keybindings" = "keybindings") {
   await act(async () =>
     root.render(
       createElement(SettingsView, {
-        section: "keybindings",
+        section,
         cwd: "/repo",
         sessions: [],
         onClose: vi.fn(),
@@ -69,6 +70,41 @@ async function render() {
     ),
   );
 }
+
+it.each([
+  {
+    language: "en",
+    prompt: "Press ⌘⌥K in any app",
+    hint: "Change the shortcut in Keybindings.",
+    bindings:
+      "Click a shortcut to record new keys. Press Delete while recording to disable it.",
+  },
+  {
+    language: "zh",
+    prompt: "在任意应用中按 ⌘⌥K",
+    hint: "可在快捷键设置中更改快捷键。",
+    bindings: "点击快捷键即可录制新的组合键；录制时按 Delete 可禁用它。",
+  },
+])("shows the configured shortcut and editable-binding help in $language", async ({
+  language,
+  prompt,
+  hint,
+  bindings,
+}) => {
+  data.set("monocode.language", language);
+  data.set("monocode.quickComposerShortcut", "Command+Option+KeyK");
+  await render("general");
+  expect(container.textContent).toContain(prompt);
+  expect(container.textContent).toContain(hint);
+
+  await render();
+  expect(container.textContent).toContain(bindings);
+  expect(
+    container.querySelector<HTMLInputElement>(
+      '[aria-label="Change quick composer shortcut"]',
+    )!.value,
+  ).toBe("⌘⌥K");
+});
 
 it("records a global shortcut, persists it, and restores the default", async () => {
   await render();

@@ -5,6 +5,7 @@ import {
   MOD,
   SHIFT,
 } from "../../../platform/tauri/platform";
+import { currentLanguage, t } from "../../../shared/lib/i18n";
 import {
   canonicalShortcut,
   isGlobalShortcut,
@@ -146,6 +147,12 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
+  {
+    id: "language",
+    section: "general",
+    label: "Language",
+    keywords: "language locale chinese english 界面语言 中文",
+  },
   {
     id: "project-worktrees",
     section: "worktrees",
@@ -446,6 +453,75 @@ export function searchSettings(
       needle,
       section.label,
       `${section.description} ${section.keywords ?? ""}`,
+    );
+    if (score == null) continue;
+    scored.push({
+      score: score + 0.5,
+      result: {
+        section: section.id,
+        sectionLabel: section.label,
+        settingId: null,
+        label: section.label,
+      },
+    });
+  }
+
+  return scored
+    .sort(
+      (a, b) =>
+        a.score - b.score || a.result.label.localeCompare(b.result.label),
+    )
+    .slice(0, limit)
+    .map((item) => item.result);
+}
+
+/** Best of the translated and source label, so either language finds the row. */
+function matchScoreLocalized(
+  needle: string,
+  source: string,
+  keywords?: string,
+): number | null {
+  const translated = matchScore(needle, t(source), keywords);
+  const original = matchScore(needle, source, keywords);
+  if (translated == null) return original;
+  if (original == null) return translated;
+  return Math.min(translated, original);
+}
+
+/**
+ * `searchSettings`, but matching against the translated labels when the
+ * interface language is not English, so a Chinese query finds its row.
+ * A row is still reachable by its English name. Result labels come back
+ * translated; `t()` on them is a no-op.
+ */
+export function searchSettingsLocalized(
+  query: string,
+  limit = 8,
+): SettingsSearchResult[] {
+  if (currentLanguage() === "en") return searchSettings(query, limit);
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const scored: { score: number; result: SettingsSearchResult }[] = [];
+
+  for (const entry of SETTINGS_INDEX) {
+    const score = matchScoreLocalized(needle, entry.label, entry.keywords);
+    if (score == null) continue;
+    scored.push({
+      score,
+      result: {
+        section: entry.section,
+        sectionLabel: settingsSectionLabel(entry.section),
+        settingId: entry.id,
+        label: entry.label,
+      },
+    });
+  }
+
+  for (const section of SETTINGS_SECTIONS) {
+    const score = matchScoreLocalized(
+      needle,
+      section.label,
+      `${t(section.description)} ${section.keywords ?? ""}`,
     );
     if (score == null) continue;
     scored.push({

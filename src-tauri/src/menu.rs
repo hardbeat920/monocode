@@ -1,18 +1,53 @@
-#[cfg(target_os = "macos")]
 use serde::Deserialize;
-#[cfg(target_os = "macos")]
 use std::collections::HashMap;
+use std::sync::Mutex;
 #[cfg(target_os = "macos")]
-use tauri::menu::{AboutMetadata, Menu, MenuItem, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{
+    AboutMetadata, Menu, MenuItem, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+};
 #[cfg(target_os = "macos")]
 use tauri::Wry;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
+pub use crate::menu_language::{Lang, MenuLanguage};
+// Only macOS builds a native menu, so only macOS needs the label tables.
 #[cfg(target_os = "macos")]
-#[derive(Deserialize)]
+pub use crate::menu_language::labels;
+
+/// The language the menu is currently built in.
+pub fn language(app: &AppHandle) -> Lang {
+    app.state::<MenuLanguage>().get()
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Clone, Deserialize)]
 pub struct KeybindingOverride {
     disabled: Option<bool>,
     shortcut: Option<String>,
+}
+
+/// Managed state: the keybinding overrides the native menu was last built with.
+///
+/// The webview owns them (they live in localStorage) and pushes them across.
+/// The language command rebuilds the same menu, so the Rust side has to keep
+/// the last set: without it a language flip would drop custom accelerators.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Default)]
+pub struct MenuKeybindings(Mutex<HashMap<String, KeybindingOverride>>);
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+impl MenuKeybindings {
+    fn get(&self) -> HashMap<String, KeybindingOverride> {
+        self.0
+            .lock()
+            .map(|current| current.clone())
+            .unwrap_or_default()
+    }
+
+    fn set(&self, next: HashMap<String, KeybindingOverride>) -> Result<(), String> {
+        *self.0.lock().map_err(|error| error.to_string())? = next;
+        Ok(())
+    }
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -48,9 +83,40 @@ fn custom_accelerator(shortcut: &str) -> String {
 }
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
+    let lang = language(app);
     #[cfg(target_os = "macos")]
-    app.set_menu(build(app, &HashMap::new())?)?;
-    let _ = app;
+    app.set_menu(build(app, lang, &app.state::<MenuKeybindings>().get())?)?;
+    let _ = (app, lang);
+    Ok(())
+}
+
+/// Rebuilds the native menu in `language`. The webview calls this on boot and
+/// whenever the language setting flips. A no-op on platforms whose menu bar is
+/// drawn by the webview (Windows/Linux), so the frontend can call it blindly.
+#[tauri::command]
+pub fn set_menu_language(app: AppHandle, language: String) -> Result<(), String> {
+    let next = Lang::from_tag(&language);
+    if !app.state::<MenuLanguage>().set(next)? {
+        return Ok(());
+    }
+    apply(&app, next)
+}
+
+#[cfg(target_os = "macos")]
+fn apply(app: &AppHandle, lang: Lang) -> Result<(), String> {
+    app.set_menu(
+        build(app, lang, &app.state::<MenuKeybindings>().get())
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    // The dock menu is a separate NSMenu that Tauri does not own, so it has to
+    // be rebuilt alongside the app menu.
+    crate::macos::install_dock_menu(app, lang);
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply(_app: &AppHandle, _lang: Lang) -> Result<(), String> {
     Ok(())
 }
 
@@ -60,12 +126,8 @@ pub fn keybindings_set_overrides(
     app: AppHandle,
     overrides: HashMap<String, KeybindingOverride>,
 ) -> Result<(), String> {
-    let menu = build(&app, &overrides).map_err(|error| error.to_string())?;
-    // set_menu hands back the previous menu; this command only needs to know
-    // whether it succeeded.
-    app.set_menu(menu)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    app.state::<MenuKeybindings>().set(overrides)?;
+    apply(&app, language(&app))
 }
 
 #[cfg(target_os = "macos")]
@@ -141,22 +203,24 @@ fn emit_to_focused(app: &AppHandle, id: &str) {
 #[cfg(target_os = "macos")]
 fn build(
     app: &AppHandle,
+    lang: Lang,
     overrides: &HashMap<String, KeybindingOverride>,
 ) -> tauri::Result<Menu<Wry>> {
+    let l = labels(lang);
     let open_settings = menu_item(
         app,
         "open_settings",
-        "Settings…",
+        l.settings,
         "CmdOrCtrl+,",
         "App: Settings",
         overrides,
     )?;
     let check_for_updates =
-        MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
+        MenuItemBuilder::with_id("check_for_updates", l.check_for_updates).build(app)?;
     let new_window = menu_item(
         app,
         "new_window",
-        "New Window",
+        l.new_window,
         "CmdOrCtrl+Shift+N",
         "App: New Window",
         overrides,
@@ -164,7 +228,7 @@ fn build(
     let open_project = menu_item(
         app,
         "open_project",
-        "Open Project…",
+        l.open_project,
         "CmdOrCtrl+O",
         "App: Open Project",
         overrides,
@@ -172,7 +236,7 @@ fn build(
     let go_to_file = menu_item(
         app,
         "go_to_file",
-        "Go to File…",
+        l.go_to_file,
         "CmdOrCtrl+P",
         "App: Go to File",
         overrides,
@@ -180,7 +244,7 @@ fn build(
     let command_palette = menu_item(
         app,
         "open_command_palette",
-        "Command Palette…",
+        l.command_palette,
         "CmdOrCtrl+Shift+P",
         "App: Command Palette",
         overrides,
@@ -188,17 +252,17 @@ fn build(
     let open_search = menu_item(
         app,
         "open_search",
-        "Search…",
+        l.open_search,
         "CmdOrCtrl+K",
         "App: Search",
         overrides,
     )?;
-    let open_inbox = MenuItemBuilder::with_id("open_inbox", "Inbox").build(app)?;
-    let open_notes = MenuItemBuilder::with_id("open_notes", "Notes").build(app)?;
+    let open_inbox = MenuItemBuilder::with_id("open_inbox", l.open_inbox).build(app)?;
+    let open_notes = MenuItemBuilder::with_id("open_notes", l.open_notes).build(app)?;
     let new_tab = menu_item(
         app,
         "new_tab",
-        "New Tab",
+        l.new_tab,
         "CmdOrCtrl+T",
         "Tab: New",
         overrides,
@@ -206,7 +270,7 @@ fn build(
     let new_terminal = menu_item(
         app,
         "new_terminal",
-        "New Terminal",
+        l.new_terminal,
         "CmdOrCtrl+`",
         "Terminal: New",
         overrides,
@@ -214,7 +278,7 @@ fn build(
     let new_terminal_tab = menu_item(
         app,
         "new_terminal_tab",
-        "New Terminal Tab",
+        l.new_terminal_tab,
         "CmdOrCtrl+Shift+`",
         "Terminal: New Tab",
         overrides,
@@ -222,7 +286,7 @@ fn build(
     let toggle_terminal = menu_item(
         app,
         "toggle_terminal",
-        "Toggle Terminal",
+        l.toggle_terminal,
         "CmdOrCtrl+J",
         "Terminal: Toggle Dock",
         overrides,
@@ -230,7 +294,7 @@ fn build(
     let split_right = menu_item(
         app,
         "split_right",
-        "Split Pane Right",
+        l.split_right,
         "CmdOrCtrl+D",
         "Pane: Split Right",
         overrides,
@@ -238,7 +302,7 @@ fn build(
     let split_down = menu_item(
         app,
         "split_down",
-        "Split Pane Down",
+        l.split_down,
         "CmdOrCtrl+Shift+D",
         "Pane: Split Down",
         overrides,
@@ -246,7 +310,7 @@ fn build(
     let close_tab = menu_item(
         app,
         "close_tab",
-        "Close Pane",
+        l.close_tab,
         "CmdOrCtrl+W",
         "Pane: Close",
         overrides,
@@ -254,7 +318,7 @@ fn build(
     let close_other_tabs = menu_item(
         app,
         "close_other_tabs",
-        "Close Other Tabs",
+        l.close_other_tabs,
         "CmdOrCtrl+Alt+T",
         "Tab: Close Others",
         overrides,
@@ -262,7 +326,7 @@ fn build(
     let close_all_tabs = menu_item(
         app,
         "close_all_tabs",
-        "Close All Tabs",
+        l.close_all_tabs,
         "CmdOrCtrl+Shift+W",
         "Tab: Close All",
         overrides,
@@ -270,7 +334,7 @@ fn build(
     let next_tab = menu_item(
         app,
         "next_tab",
-        "Next Tab",
+        l.next_tab,
         "CmdOrCtrl+Shift+]",
         "Tab: Next",
         overrides,
@@ -278,7 +342,7 @@ fn build(
     let prev_tab = menu_item(
         app,
         "prev_tab",
-        "Previous Tab",
+        l.prev_tab,
         "CmdOrCtrl+Shift+[",
         "Tab: Previous",
         overrides,
@@ -286,7 +350,7 @@ fn build(
     let back_tab = menu_item(
         app,
         "back_tab",
-        "Go Back",
+        l.back_tab,
         "CmdOrCtrl+[",
         "Tab: Back",
         overrides,
@@ -294,7 +358,7 @@ fn build(
     let forward_tab = menu_item(
         app,
         "forward_tab",
-        "Go Forward",
+        l.forward_tab,
         "CmdOrCtrl+]",
         "Tab: Forward",
         overrides,
@@ -303,7 +367,7 @@ fn build(
     let focus_left = menu_item(
         app,
         "focus_left",
-        "Focus Pane Left",
+        l.focus_left,
         "CmdOrCtrl+Alt+Left",
         "Pane: Focus Left",
         overrides,
@@ -311,7 +375,7 @@ fn build(
     let focus_right = menu_item(
         app,
         "focus_right",
-        "Focus Pane Right",
+        l.focus_right,
         "CmdOrCtrl+Alt+Right",
         "Pane: Focus Right",
         overrides,
@@ -319,7 +383,7 @@ fn build(
     let focus_up = menu_item(
         app,
         "focus_up",
-        "Focus Pane Up",
+        l.focus_up,
         "CmdOrCtrl+Alt+Up",
         "Pane: Focus Up",
         overrides,
@@ -327,7 +391,7 @@ fn build(
     let focus_down = menu_item(
         app,
         "focus_down",
-        "Focus Pane Down",
+        l.focus_down,
         "CmdOrCtrl+Alt+Down",
         "Pane: Focus Down",
         overrides,
@@ -336,7 +400,7 @@ fn build(
     let toggle_sidebar = menu_item(
         app,
         "toggle_sidebar",
-        "Toggle Sidebar",
+        l.toggle_sidebar,
         "CmdOrCtrl+B",
         "App: Toggle Sidebar",
         overrides,
@@ -344,7 +408,7 @@ fn build(
     let toggle_session_sidebar = menu_item(
         app,
         "toggle_session_sidebar",
-        "Toggle Session Sidebar",
+        l.toggle_session_sidebar,
         "CmdOrCtrl+Shift+B",
         "App: Toggle Session Sidebar",
         overrides,
@@ -352,23 +416,23 @@ fn build(
     let open_model_picker = menu_item(
         app,
         "open_model_picker",
-        "Switch Model…",
+        l.switch_model,
         "CmdOrCtrl+.",
         "App: Switch Model",
         overrides,
     )?;
     let sidebar_opacity =
-        MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
+        MenuItemBuilder::with_id("sidebar_opacity", l.sidebar_appearance).build(app)?;
     // No accelerators here on purpose: the webview key handler owns
     // CmdOrCtrl + - 0, and a menu accelerator would fire the same command
     // a second time on top of it.
-    let zoom_in = MenuItemBuilder::with_id("zoom_in", "Zoom In").build(app)?;
-    let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
+    let zoom_in = MenuItemBuilder::with_id("zoom_in", l.zoom_in).build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("zoom_out", l.zoom_out).build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", l.zoom_reset).build(app)?;
     let reload = menu_item(
         app,
         "reload",
-        "Reload",
+        l.reload,
         "CmdOrCtrl+Shift+R",
         "View: Reload",
         overrides,
@@ -376,7 +440,7 @@ fn build(
     let find = menu_item(
         app,
         "find",
-        "Find",
+        l.find,
         "CmdOrCtrl+F",
         "Editor: Find",
         overrides,
@@ -385,13 +449,13 @@ fn build(
     let find_in_project = menu_item(
         app,
         "find_in_project",
-        "Find in Files…",
+        l.find_in_project,
         "CmdOrCtrl+Shift+F",
         "App: Find in Files",
         overrides,
     )?;
 
-    let file = SubmenuBuilder::new(app, "File")
+    let file = SubmenuBuilder::new(app, l.file)
         .item(&new_window)
         .item(&open_project)
         .item(&open_search)
@@ -414,7 +478,7 @@ fn build(
         .item(&forward_tab)
         .build()?;
 
-    let view = SubmenuBuilder::new(app, "View")
+    let view = SubmenuBuilder::new(app, l.view)
         .item(&toggle_sidebar)
         .item(&toggle_session_sidebar)
         .item(&open_inbox)
@@ -435,40 +499,50 @@ fn build(
         .item(&sidebar_opacity)
         .build()?;
 
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
+    // The standard items take explicit text: Tauri's defaults are English, so
+    // leaving them alone would put Undo/Cut/Copy in an English menu bar.
+    let undo = PredefinedMenuItem::undo(app, Some(l.undo))?;
+    let redo = PredefinedMenuItem::redo(app, Some(l.redo))?;
+    let cut = PredefinedMenuItem::cut(app, Some(l.cut))?;
+    let copy = PredefinedMenuItem::copy(app, Some(l.copy))?;
+    let paste = PredefinedMenuItem::paste(app, Some(l.paste))?;
+    let select_all = PredefinedMenuItem::select_all(app, Some(l.select_all))?;
+
+    let edit = SubmenuBuilder::new(app, l.edit)
+        .item(&undo)
+        .item(&redo)
         .separator()
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
+        .item(&cut)
+        .item(&copy)
+        .item(&paste)
+        .item(&select_all)
         .separator()
         .item(&find)
         .build()?;
 
-    #[cfg(target_os = "macos")]
-    {
-        let quit = MenuItemBuilder::with_id("quit", "Quit MonoCode")
-            .accelerator("CmdOrCtrl+Q")
-            .build(app)?;
-        let app_menu = SubmenuBuilder::new(app, "MonoCode")
-            .about(Some(AboutMetadata::default()))
-            .separator()
-            .item(&open_settings)
-            .item(&check_for_updates)
-            .separator()
-            .hide()
-            .hide_others()
-            .show_all()
-            .separator()
-            .item(&quit)
-            .build()?;
-        let window_menu =
-            SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window").build()?;
-        return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
-    }
+    let about = PredefinedMenuItem::about(app, Some(l.about), Some(AboutMetadata::default()))?;
+    let hide = PredefinedMenuItem::hide(app, Some(l.hide))?;
+    let hide_others = PredefinedMenuItem::hide_others(app, Some(l.hide_others))?;
+    let show_all = PredefinedMenuItem::show_all(app, Some(l.show_all))?;
+    let quit = MenuItemBuilder::with_id("quit", l.quit)
+        .accelerator("CmdOrCtrl+Q")
+        .build(app)?;
+    let app_menu = SubmenuBuilder::new(app, "MonoCode")
+        .item(&about)
+        .separator()
+        .item(&open_settings)
+        .item(&check_for_updates)
+        .separator()
+        .item(&hide)
+        .item(&hide_others)
+        .item(&show_all)
+        .separator()
+        .item(&quit)
+        .build()?;
 
-    #[allow(unreachable_code)]
-    Menu::with_items(app, &[&file, &edit, &view])
+    // Use Tauri's reserved id so macOS wires the native Window menu (including
+    // system tiling actions) when the menu is attached to the application.
+    let window_menu =
+        SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, l.window).build()?;
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu])
 }

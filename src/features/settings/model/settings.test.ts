@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { saveLanguage } from "../../../shared/lib/i18n";
 import {
   COMPOSER_RUNNER_DEFAULT,
   COLLAPSED_PROJECT_RAIL_MODE_DEFAULT,
   searchSettings,
+  searchSettingsLocalized,
   SETTINGS_INDEX,
   settingsSectionsByGroup,
   MODEL_CONTROLS_DEFAULT,
@@ -59,6 +61,7 @@ const DIFF_VIEWER_KEY = "monocode.diffViewer";
 const FORMAT_ON_SAVE_KEY = "monocode.formatOnSave";
 const FILE_TAB_MODE_KEY = "monocode.fileTabMode";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
+const LANGUAGE_KEY = "monocode.language";
 const TAB_ANIMATIONS_KEY = "monocode.tabAnimationsEnabled";
 const COLLAPSED_PROJECT_RAIL_MODE_KEY = "monocode.collapsedProjectRailMode";
 
@@ -645,5 +648,55 @@ describe("settings search", () => {
 
   it("caps the result list", () => {
     expect(searchSettings("e", 4)).toHaveLength(4);
+  });
+});
+
+describe("localized settings search", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(LANGUAGE_KEY);
+  });
+
+  it("defers to the english search in english", () => {
+    saveLanguage("en");
+    expect(searchSettingsLocalized("glass")[0]).toMatchObject({
+      settingId: "main-pane-glass",
+      label: "Main pane glass",
+    });
+  });
+
+  it("matches a chinese query against the translated label", () => {
+    saveLanguage("zh");
+    expect(searchSettingsLocalized("毛玻璃")[0]).toMatchObject({
+      settingId: "main-pane-glass",
+      label: "Main pane glass",
+    });
+  });
+
+  it("reports english labels so callers translate them once", () => {
+    saveLanguage("zh");
+    expect(
+      searchSettingsLocalized("不透明度").map((result) => result.label),
+    ).toContain("Sidebar opacity");
+  });
+
+  it("still finds a row by its english name while in chinese", () => {
+    saveLanguage("zh");
+    expect(searchSettingsLocalized("glass").map((r) => r.settingId)).toContain(
+      "main-pane-glass",
+    );
+  });
+
+  it("finds the language setting itself", () => {
+    saveLanguage("zh");
+    expect(searchSettingsLocalized("语言")[0]).toMatchObject({
+      settingId: "language",
+      label: "Language",
+    });
+  });
+
+  it("returns nothing for an empty query", () => {
+    saveLanguage("zh");
+    expect(searchSettingsLocalized("   ")).toEqual([]);
   });
 });

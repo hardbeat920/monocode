@@ -13,6 +13,7 @@
     "check": "npm run check:web && npm run check:rust",
     "check:web": "vitest run && tsc --noEmit",
     "check:rust": "cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test",
+    "check:i18n": "node scripts/check-i18n-keys.mjs",
     "set-version": "node scripts/bump-version.mjs",
     "tauri": "tauri",
     "tauri:stable": "tauri dev --no-watch --config src-tauri/tauri.stable.conf.json",

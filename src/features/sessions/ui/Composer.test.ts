@@ -25,6 +25,19 @@ import { Composer, ComposerAction } from "./Composer";
 import type { ComposerTurnOptions, Attachment } from "../model/session";
 import type { UserQuestionPrompt } from "../model/userQuestion";
 
+/**
+ * The assertions below pin English copy (button labels, placeholders), and the
+ * interface language follows the machine's locale, so pin it for the file:
+ * otherwise the expectations depend on where the tests run.
+ */
+beforeEach(() => {
+  localStorage.setItem("monocode.language", "en");
+});
+
+afterEach(() => {
+  localStorage.removeItem("monocode.language");
+});
+
 function renderAction(busy: boolean, hasValue: boolean) {
   return renderToStaticMarkup(
     createElement(ComposerAction, {
