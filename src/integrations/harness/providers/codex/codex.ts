@@ -480,10 +480,17 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["app-server"], input.cwd, {
-    provider: "codex",
-    id: input.providerAccountId ?? "default",
-  });
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["app-server"],
+    input.cwd,
+    {
+      provider: "codex",
+      id: input.providerAccountId ?? "default",
+    },
+    "codex",
+  );
 
   try {
     await rpc.request("initialize", {

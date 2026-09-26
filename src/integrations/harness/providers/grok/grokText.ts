@@ -184,7 +184,14 @@ async function startLive(
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, grokTextSpawnArgs(), cwd);
+    await spawnChild(
+      TEXT_CHILD_ID,
+      path,
+      grokTextSpawnArgs(),
+      cwd,
+      undefined,
+      "grok",
+    );
     const init = await acp.request(
       "initialize",
       {

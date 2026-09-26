@@ -279,6 +279,8 @@ async function startLive(
         model,
       }),
       cwd,
+      undefined,
+      flavor.id,
     );
     await rpc.request({ type: "get_state" }, INIT_TIMEOUT_MS);
     state.live = session;

@@ -6,6 +6,8 @@ import {
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
+  tabCommandForKeybinding,
+  tabCommandKeybinding,
 } from "./tabKeys";
 
 function key(
@@ -40,12 +42,12 @@ function key(
 
 describe("tabCommand", () => {
   it("archives with Cmd+Shift+A or Ctrl+Shift+A", () => {
-    expect(
-      tabCommand(key({ key: "A", metaKey: true, shiftKey: true })),
-    ).toBe("archive-session");
-    expect(
-      tabCommand(key({ key: "a", ctrlKey: true, shiftKey: true })),
-    ).toBe("archive-session");
+    expect(tabCommand(key({ key: "A", metaKey: true, shiftKey: true }))).toBe(
+      "archive-session",
+    );
+    expect(tabCommand(key({ key: "a", ctrlKey: true, shiftKey: true }))).toBe(
+      "archive-session",
+    );
   });
 
   it.each([
@@ -61,9 +63,9 @@ describe("tabCommand", () => {
   });
 
   it("opens a terminal pane with cmd-backtick", () => {
-    expect(tabCommand(key({ key: "`", code: "Backquote", metaKey: true }))).toBe(
-      "new-terminal",
-    );
+    expect(
+      tabCommand(key({ key: "`", code: "Backquote", metaKey: true })),
+    ).toBe("new-terminal");
   });
 
   it("opens a terminal workspace tab with shift-cmd-backtick", () => {
@@ -75,23 +77,30 @@ describe("tabCommand", () => {
   });
 
   it("closes all tabs with Cmd+Shift+W or Ctrl+Shift+W", () => {
-    expect(
-      tabCommand(key({ key: "W", metaKey: true, shiftKey: true })),
-    ).toBe("close-all");
-    expect(
-      tabCommand(key({ key: "w", ctrlKey: true, shiftKey: true })),
-    ).toBe("close-all");
+    expect(tabCommand(key({ key: "W", metaKey: true, shiftKey: true }))).toBe(
+      "close-all",
+    );
+    expect(tabCommand(key({ key: "w", ctrlKey: true, shiftKey: true }))).toBe(
+      "close-all",
+    );
     expect(tabCommand(key({ key: "w", metaKey: true }))).toBe("close");
+  });
+
+  it("keeps Ctrl+Tab separate from the adjacent tab shortcut", () => {
+    expect(tabCommand(key({ key: "Tab", ctrlKey: true }))).toBe("cycle-next");
+    expect(tabCommand(key({ key: "Tab", ctrlKey: true, shiftKey: true }))).toBe(
+      "cycle-prev",
+    );
   });
 
   it("keeps existing tab chrome bindings", () => {
     expect(tabCommand(key({ key: "t", metaKey: true }))).toBe("new");
-    expect(
-      tabCommand(key({ key: "t", metaKey: true, altKey: true })),
-    ).toBe("close-others");
-    expect(
-      tabCommand(key({ key: "t", ctrlKey: true, altKey: true })),
-    ).toBe("close-others");
+    expect(tabCommand(key({ key: "t", metaKey: true, altKey: true }))).toBe(
+      "close-others",
+    );
+    expect(tabCommand(key({ key: "t", ctrlKey: true, altKey: true }))).toBe(
+      "close-others",
+    );
     expect(tabCommand(key({ key: "d", metaKey: true }))).toBe("split-right");
     expect(tabCommand(key({ key: "j", metaKey: true }))).toBe(
       "toggle-terminal",
@@ -136,15 +145,35 @@ describe("tabCommand", () => {
   });
 
   it("uses unshifted mod arrows to switch sessions in the current tab", () => {
+    expect(tabCommand(key({ key: "ArrowUp", metaKey: true }))).toBe(
+      "prev-session-in-tab",
+    );
+    expect(tabCommand(key({ key: "ArrowDown", ctrlKey: true }))).toBe(
+      "next-session-in-tab",
+    );
     expect(
-      tabCommand(key({ key: "ArrowUp", metaKey: true })),
-    ).toBe("prev-session-in-tab");
-    expect(
-      tabCommand(key({ key: "ArrowDown", ctrlKey: true })),
-    ).toBe("next-session-in-tab");
-    expect(
-      tabCommand(key({ key: "ArrowUp", metaKey: true, altKey: true, shiftKey: true })),
+      tabCommand(
+        key({ key: "ArrowUp", metaKey: true, altKey: true, shiftKey: true }),
+      ),
     ).toBeNull();
+  });
+
+  it("maps parsed commands to configurable keybinding rows", () => {
+    expect(tabCommandKeybinding("new")).toBe("Tab: New");
+    expect(tabCommandKeybinding("cycle-next")).toBe("Tab: Cycle Next");
+    expect(tabCommandKeybinding({ activate: 0 })).toBe("Tab: Activate 1–8");
+    expect(tabCommandKeybinding({ activate: -1 })).toBe("Tab: Activate Last");
+    expect(tabCommandKeybinding({ focus: "left" })).toBe("Pane: Focus Left");
+  });
+
+  it("maps custom keybinding rows back to commands", () => {
+    expect(tabCommandForKeybinding("Tab: New", key({ key: "y" }))).toBe("new");
+    expect(
+      tabCommandForKeybinding("Tab: Activate 1–8", key({ code: "Digit3" })),
+    ).toEqual({ activate: 2 });
+    expect(
+      tabCommandForKeybinding("Pane: Focus Down", key({ key: "ArrowDown" })),
+    ).toEqual({ focus: "down" });
   });
 
   it("cycles ordered item ids and wraps at both ends", () => {

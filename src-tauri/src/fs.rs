@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
 
 use crate::dirs_home;
 
@@ -325,6 +326,91 @@ pub fn omp_active_assistant_texts(
         return Ok(Vec::new());
     };
     active_omp_assistant_texts(&path)
+}
+
+/// Recover Bash commands that older UI builds saved as a bare "Shell" row.
+/// Claude's own transcript retains the complete tool input by tool-use id.
+#[tauri::command(async)]
+pub fn claude_shell_commands(
+    app: AppHandle,
+    provider_session_id: String,
+    provider_account_id: Option<String>,
+    tool_ids: Vec<String>,
+) -> Result<HashMap<String, String>, String> {
+    if provider_session_id.is_empty()
+        || !provider_session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Invalid Claude provider session id".into());
+    }
+    if tool_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let config_dir = match provider_account_id.as_deref() {
+        Some(id) if id != "default" => crate::harness::provider_account_path(&app, "claude", id)?,
+        _ => match std::env::var_os("CLAUDE_CONFIG_DIR") {
+            Some(path) => PathBuf::from(path),
+            None => {
+                PathBuf::from(dirs_home().ok_or("Home directory is unavailable")?).join(".claude")
+            }
+        },
+    };
+    let transcript_name = format!("{provider_session_id}.jsonl");
+    let root = config_dir.join("projects");
+    let Some(path) = std::fs::read_dir(root).ok().and_then(|projects| {
+        projects.flatten().find_map(|project| {
+            let candidate = project.path().join(&transcript_name);
+            candidate.is_file().then_some(candidate)
+        })
+    }) else {
+        return Ok(HashMap::new());
+    };
+    claude_shell_commands_from_file(&path, &tool_ids)
+}
+
+fn claude_shell_commands_from_file(
+    path: &Path,
+    tool_ids: &[String],
+) -> Result<HashMap<String, String>, String> {
+    let wanted: HashSet<&str> = tool_ids.iter().map(String::as_str).collect();
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut commands = HashMap::new();
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|error| error.to_string())?;
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if record.get("type").and_then(serde_json::Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = record
+            .pointer("/message/content")
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for block in content {
+            let Some(id) = block.get("id").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if wanted.contains(id)
+                && block.get("name").and_then(serde_json::Value::as_str) == Some("Bash")
+            {
+                if let Some(command) = block
+                    .pointer("/input/command")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|command| !command.trim().is_empty())
+                {
+                    commands.insert(id.to_owned(), command.to_owned());
+                }
+            }
+        }
+        if commands.len() == wanted.len() {
+            break;
+        }
+    }
+    Ok(commands)
 }
 
 fn omp_session_path(provider_session_id: &str) -> Result<Option<PathBuf>, String> {
@@ -1221,6 +1307,7 @@ pub struct GitHubWorkItem {
     pub title: String,
     pub url: String,
     pub state: String,
+    pub state_reason: String,
     pub created_at: String,
     pub updated_at: String,
     pub labels: Vec<GitHubLabel>,
@@ -2703,7 +2790,7 @@ fn git_github_work_items_for(
     let fields = if kind == "pr" {
         "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
     } else {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
     };
     let mut args = vec![
         kind.to_string(),
@@ -2750,7 +2837,7 @@ fn git_github_work_item_for(
     let fields = if kind == "pr" {
         "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
     } else {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
     };
     let json = gh_checked(
         root,
@@ -3921,6 +4008,8 @@ fn parse_github_work_items(
         url: String,
         state: String,
         #[serde(default)]
+        state_reason: String,
+        #[serde(default)]
         created_at: String,
         #[serde(default)]
         updated_at: String,
@@ -3940,6 +4029,7 @@ fn parse_github_work_items(
             title: row.title,
             url: row.url,
             state: row.state.to_lowercase(),
+            state_reason: row.state_reason.to_lowercase(),
             created_at: row.created_at,
             updated_at: row.updated_at,
             labels: row
@@ -5523,6 +5613,29 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn claude_shell_commands_match_only_requested_bash_tool_ids() {
+        let dir = tmp("claude-shell-commands");
+        let path = dir.0.join("session.jsonl");
+        let records = [
+            serde_json::json!({"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":"toolu_one","name":"Bash","input":{"command":"npm test"}},
+                {"type":"tool_use","id":"toolu_read","name":"Read","input":{"command":"ignore"}}
+            ]}}),
+            serde_json::json!({"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":"toolu_two","name":"Bash","input":{"command":"git status"}}
+            ]}}),
+        ];
+        std::fs::write(&path, records.map(|record| record.to_string()).join("\n")).unwrap();
+        let commands =
+            claude_shell_commands_from_file(&path, &["toolu_one".into(), "toolu_read".into()])
+                .unwrap();
+        assert_eq!(
+            commands,
+            HashMap::from([("toolu_one".into(), "npm test".into())])
+        );
+    }
 
     fn assistant_text(text: &str, concat: &str) -> OmpAssistantText {
         OmpAssistantText {
@@ -7137,6 +7250,7 @@ mod tests {
             "title": "Promo codes fail to apply",
             "url": "https://github.com/acme/web/issues/5138",
             "state": "OPEN",
+            "stateReason": "",
             "createdAt": "2026-08-20T09:00:00Z",
             "updatedAt": "2026-08-27T08:00:00Z",
             "labels": [{"name": "bug", "color": "d73a4a"}],
@@ -7147,6 +7261,7 @@ mod tests {
         assert_eq!(items[0].kind, "issue");
         assert_eq!(items[0].number, 5138);
         assert_eq!(items[0].state, "open");
+        assert_eq!(items[0].state_reason, "");
         assert_eq!(items[0].repo, "acme/web");
         assert_eq!(items[0].labels[0].name, "bug");
         assert_eq!(items[0].assignees[0].login, "maya");
@@ -7158,6 +7273,24 @@ mod tests {
         let payload = serde_json::to_value(&items[0]).unwrap();
         assert_eq!(payload["createdAt"], "2026-08-20T09:00:00Z");
         assert_eq!(payload["updatedAt"], "2026-08-27T08:00:00Z");
+    }
+
+    #[test]
+    fn parse_github_work_items_reads_issue_state_reason() {
+        let json = r#"[{
+            "number": 42,
+            "title": "Ship the fix",
+            "url": "https://github.com/acme/web/issues/42",
+            "state": "CLOSED",
+            "stateReason": "COMPLETED"
+        }]"#;
+        let items = parse_github_work_items(json, "issue", "acme/web").unwrap();
+        assert_eq!(items[0].state, "closed");
+        assert_eq!(items[0].state_reason, "completed");
+        assert_eq!(
+            serde_json::to_value(&items[0]).unwrap()["stateReason"],
+            "completed"
+        );
     }
 
     #[test]

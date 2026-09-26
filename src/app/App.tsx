@@ -119,10 +119,11 @@ import {
   loadUiScale,
   saveUiScale,
   UI_SCALE_DEFAULT,
-  uiScaleCommand,
   zoomInUiScale,
   zoomOutUiScale,
 } from "../features/settings/model/uiScale";
+import { resolveZoomKeybinding } from "../features/settings/model/zoomKeybinding";
+import { resolveAppShortcut } from "../features/settings/model/appShortcuts";
 import { runUpdateFlow } from "./model/updater";
 import {
   displayAttachments,
@@ -476,6 +477,8 @@ import {
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
+  tabCommandForKeybinding,
+  tabCommandKeybinding,
 } from "../features/workspace/model/tabKeys";
 import {
   canTabVisitBack,
@@ -572,7 +575,10 @@ import {
   loadNotesEnabled,
   loadDiffViewer,
   loadFollowUpBehavior,
+  loadKeybindingOverrides,
   loadSettingsSection,
+  keybindingPressed,
+  matchCustomKeybinding,
   saveSettingsSection,
   subscribeLiveAgentsEnabled,
   subscribeNotesEnabled,
@@ -9749,34 +9755,49 @@ export default function App({
   }, []);
 
   useEffect(() => {
+    if (!IS_MAC) return;
+    void invoke("keybindings_set_overrides", {
+      overrides: loadKeybindingOverrides(),
+    }).catch(console.error);
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The Quick Composer recorder owns the next key combination, including
       // bindings that the workspace would normally handle in capture phase.
       if (document.querySelector('[data-shortcut-recorder-active="true"]'))
         return;
-      // Browser-standard UI zoom. Runs before tabCommand and always applies —
-      // even in inputs and the terminal — so Ctrl/Cmd + - 0 behave like a browser.
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.isComposing) {
-        const zoom = uiScaleCommand(e);
-        if (zoom) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (zoom === "zoom-in") {
-            const next = saveUiScale(zoomInUiScale(loadUiScale()));
-            void applyUiScale(next);
-          } else if (zoom === "zoom-out") {
-            const next = saveUiScale(zoomOutUiScale(loadUiScale()));
-            void applyUiScale(next);
-          } else {
-            saveUiScale(UI_SCALE_DEFAULT);
-            void applyUiScale(UI_SCALE_DEFAULT);
-          }
-          return;
+      // Never act on a chord while an IME is composing: tabCommand and the
+      // editor guards already do, and the app shortcut resolver does too, so
+      // this keeps the whole handler consistent for whatever is added next.
+      if (e.isComposing) return;
+      const customCommand = matchCustomKeybinding(e);
+      const pressed = (command: string, defaultMatch: boolean) =>
+        keybindingPressed(command, e, defaultMatch);
+      // A rebound zoom chord may be Option-only, so it is resolved outside the
+      // Cmd/Ctrl guard that only the browser-standard defaults need.
+      const zoom = resolveZoomKeybinding(e);
+      if (zoom) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (zoom === "zoom-in") {
+          const next = saveUiScale(zoomInUiScale(loadUiScale()));
+          void applyUiScale(next);
+        } else if (zoom === "zoom-out") {
+          const next = saveUiScale(zoomOutUiScale(loadUiScale()));
+          void applyUiScale(next);
+        } else {
+          saveUiScale(UI_SCALE_DEFAULT);
+          void applyUiScale(UI_SCALE_DEFAULT);
         }
+        return;
       }
-      const cmd = tabCommand(e);
-      if (cmd) {
+      const cmd = customCommand
+        ? tabCommandForKeybinding(customCommand, e)
+        : tabCommand(e);
+      if (cmd && pressed(tabCommandKeybinding(cmd), !customCommand)) {
         if (cmd === "archive-session") {
+          if (e.repeat) return;
           actions.current.onArchiveFocusedSession(e);
           return;
         }
@@ -9849,6 +9870,8 @@ export default function App({
         else if (cmd === "close") run("close", a.onClosePane);
         else if (cmd === "next") run("next", a.onNext);
         else if (cmd === "prev") run("prev", a.onPrev);
+        else if (cmd === "cycle-next") run("next", a.onNext);
+        else if (cmd === "cycle-prev") run("prev", a.onPrev);
         else if (cmd === "back") run("back", a.onVisitBack);
         else if (cmd === "forward") run("forward", a.onVisitForward);
         else if (cmd === "split-right")
@@ -9892,57 +9915,40 @@ export default function App({
         e.stopPropagation();
         return;
       }
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        e.stopPropagation();
-        run("toggle_sidebar", actions.current.onToggleSidebar);
-        return;
-      }
-      if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        e.stopPropagation();
-        run("toggle_session_sidebar", actions.current.onToggleSessionSidebar);
-        return;
-      }
-      if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
-        e.preventDefault();
-        e.stopPropagation();
-        run("go_to_file", actions.current.onGoToFile);
-        return;
-      }
-      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
-        e.preventDefault();
-        e.stopPropagation();
-        run("open_command_palette", actions.current.onOpenCommandPalette);
-        return;
-      }
-      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
-        e.preventDefault();
-        e.stopPropagation();
-        run("reload", actions.current.onReload);
-        return;
-      }
-      if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
-        const target = e.target instanceof Element ? e.target : null;
-        if (target?.closest(".monocode-terminal") && e.ctrlKey && !e.metaKey) {
+      const shortcut = resolveAppShortcut(e);
+      if (shortcut) {
+        if (
+          shortcut === "App: Search" &&
+          e.target instanceof Element &&
+          e.target.closest(".monocode-terminal") &&
+          e.ctrlKey &&
+          !e.metaKey
+        ) {
           return;
         }
         e.preventDefault();
         e.stopPropagation();
-        run("open_search", actions.current.onOpenSearch);
+        const a = actions.current;
+        if (shortcut === "App: New Window")
+          run("new_window", () => void invoke("open_new_window"));
+        else if (shortcut === "App: Open Project")
+          run("open_project", () => void a.pickProject());
+        else if (shortcut === "App: Toggle Sidebar")
+          run("toggle_sidebar", a.onToggleSidebar);
+        else if (shortcut === "App: Toggle Session Sidebar")
+          run("toggle_session_sidebar", a.onToggleSessionSidebar);
+        else if (shortcut === "App: Go to File")
+          run("go_to_file", a.onGoToFile);
+        else if (shortcut === "App: Command Palette")
+          run("open_command_palette", a.onOpenCommandPalette);
+        else if (shortcut === "View: Reload") run("reload", a.onReload);
+        else if (shortcut === "App: Search")
+          run("open_search", a.onOpenSearch);
+        else if (shortcut === "App: Settings")
+          run("open_settings", () => a.openSettings());
+        else if (shortcut === "App: Find in Files")
+          run("find_in_project", a.onFindInProject);
         return;
-      }
-      if (mod && !e.altKey && !e.shiftKey && e.key === ",") {
-        e.preventDefault();
-        e.stopPropagation();
-        run("open_settings", () => actions.current.openSettings());
-        return;
-      }
-      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        e.stopPropagation();
-        run("find_in_project", actions.current.onFindInProject);
       }
     };
     window.addEventListener("keydown", onKey, true);

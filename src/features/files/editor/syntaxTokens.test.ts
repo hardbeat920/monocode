@@ -1,6 +1,7 @@
 import { javascript } from "@codemirror/lang-javascript";
 import { describe, expect, it } from "vitest";
 import { buildUnifiedFile } from "../../source-control/model/unifiedDiff";
+import { languageForPath } from "./editorLanguage";
 import {
   highlightDiffFile,
   highlightSource,
@@ -19,6 +20,12 @@ describe("highlightSource", () => {
     );
     expect(token(lines[0], "const")?.color).toBe(KEYWORD_DARK);
     expect(token(lines[0], '"agent"')?.color).toBe(STRING_DARK);
+    expect(token(lines[1], "// note")?.color).toBe(COMMENT_DARK);
+  });
+
+  it("colors comments in JSONC files", async () => {
+    const language = await languageForPath("settings.jsonc");
+    const lines = highlightSource('{\n  // note\n  "a": 1\n}', language, "dark");
     expect(token(lines[1], "// note")?.color).toBe(COMMENT_DARK);
   });
 
