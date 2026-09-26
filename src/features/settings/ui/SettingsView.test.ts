@@ -358,11 +358,14 @@ describe("settings pages", () => {
 
     failAutoCodex = true;
     await save("Codex", "");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Codex auto-detection failed",
+    );
     expect(
       JSON.parse(
         localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}",
       ).codex,
-    ).toBeUndefined();
+    ).toBe("/opt/codex/bin/codex");
 
     failAutoCodex = false;
     await save("Codex", "");

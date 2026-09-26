@@ -2471,6 +2471,8 @@ function ProviderBinaryControl({
 
   const useAuto = async () => {
     if (working) return;
+    const next = await inspect(null);
+    if (!next || binaryInspectionError(provider, next)) return;
     if (!saveProviderBinaryPath(provider, null)) {
       setInspection(undefined);
       setError("Could not save the binary path.");
@@ -2478,10 +2480,7 @@ function ProviderBinaryControl({
     }
     setDraft("");
     setOverridden(false);
-    const next = await inspect(null);
-    if (next && !binaryInspectionError(provider, next)) {
-      dismiss(true);
-    }
+    dismiss(true);
   };
 
   const title = HARNESS_TITLE[provider];
