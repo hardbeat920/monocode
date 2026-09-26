@@ -13,6 +13,7 @@ import { registerHarness, type HarnessAdapter } from "../../core/registry";
 export const copilotAdapter: HarnessAdapter = {
   id: "copilot",
   live: true,
+  canSteer: false,
   sendTurn: sendCopilotTurn,
   steerTurn: steerCopilotTurn,
   cancelTurn: cancelCopilotTurn,

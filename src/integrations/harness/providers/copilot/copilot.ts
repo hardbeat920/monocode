@@ -106,16 +106,8 @@ export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
   }
 }
 
-export async function steerCopilotTurn(input: SteerTurnInput): Promise<void> {
-  const live = liveByThread.get(input.sessionId);
-  if (!live) throw new Error("No active Copilot CLI session");
-  const blocks = promptBlocks(input.text, input.attachments);
-  if (blocks.length === 0) return;
-  await live.acp.request(
-    "session/prompt",
-    { sessionId: live.acpSessionId, prompt: blocks },
-    PROMPT_TIMEOUT_MS,
-  );
+export async function steerCopilotTurn(_input: SteerTurnInput): Promise<void> {
+  throw new Error("Copilot CLI does not support steering an in-flight turn");
 }
 
 export function respondCopilotApproval(

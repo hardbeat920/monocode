@@ -33,6 +33,7 @@ const {
   forgetCopilotSession,
   respondCopilotApproval,
   sendCopilotTurn,
+  steerCopilotTurn,
   stopCopilotSession,
 } = await import("./copilot");
 
@@ -89,6 +90,32 @@ describe("Copilot live ACP sequence", () => {
     onExit = undefined;
     onStderr = undefined;
     spawn.mockClear();
+  });
+
+  it("rejects steering without sending a concurrent prompt or disturbing the active turn", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = start("copilot-steer", events);
+    await ready();
+    await selectModelAndMode("copilot-session-1", "auto");
+    await request("session/prompt");
+
+    const steering = steerCopilotTurn({
+      sessionId: "copilot-steer",
+      cwd: "/repo",
+      model: "copilot:auto",
+      text: "follow up",
+    }).catch((error: unknown) => error);
+    const prompts = parse().filter((message) => message.method === "session/prompt");
+    for (const prompt of prompts) reply(prompt.id, { stopReason: "end_turn" });
+    await turn;
+    const steeringResult = await steering;
+    await stopCopilotSession("copilot-steer");
+
+    expect(prompts).toHaveLength(1);
+    expect(steeringResult).toEqual(new Error("Copilot CLI does not support steering an in-flight turn"));
+    expect(events.filter((event) => event.type === "message.completed")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "reasoning.completed")).toHaveLength(1);
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
   });
 
   it("starts ACP, selects model and mode, streams text, tools and context, then reports usage", async () => {
