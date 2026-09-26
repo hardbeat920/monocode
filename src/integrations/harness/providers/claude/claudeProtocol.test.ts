@@ -45,7 +45,9 @@ describe("runtimeModeToPermission", () => {
   it("maps runtime modes onto Claude permission flags", () => {
     expect(runtimeModeToPermission("supervised")).toBe("default");
     expect(runtimeModeToPermission("auto-accept-edits")).toBe("acceptEdits");
-    expect(runtimeModeToPermission("auto")).toBe("auto");
+    // Auto is reviewed inside MonoCode, so the CLI is still asked to prompt.
+    // The CLI has no "auto" and refuses to start when given one.
+    expect(runtimeModeToPermission("auto")).toBe("default");
     expect(runtimeModeToPermission("full-access")).toBe("bypassPermissions");
   });
 

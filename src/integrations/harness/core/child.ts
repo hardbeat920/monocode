@@ -96,6 +96,7 @@ function ensureBridge() {
         const handler = exitHandlers.get(sessionId);
         if (!handler || pid == null || pid <= 0) return;
         const currentPid = livePid.get(sessionId);
+        console.debug(`[monocode] exit ${sessionId}`, { pid, code, currentPid });
         if (isCurrentChildExit(currentPid, pid)) {
           livePid.delete(sessionId);
           handler(code);
@@ -259,6 +260,7 @@ export async function spawnChild(
     binaryProvider,
     binaryPath,
   });
+  console.debug(`[monocode] spawn ${sessionId}`, { command, pid, cwd });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);
   const exits = pendingExit.get(sessionId);
@@ -270,7 +272,14 @@ export async function spawnChild(
 }
 
 export function writeChild(sessionId: string, line: string): Promise<void> {
-  return invoke("harness_write", { sessionId, line });
+  return invoke<void>("harness_write", { sessionId, line }).catch(
+    (error: unknown) => {
+      // The write is the first thing that notices a child which never started
+      // or already died, so name the session it was meant for.
+      console.debug(`[monocode] write failed ${sessionId}`, error);
+      throw error;
+    },
+  );
 }
 
 export function killChild(sessionId: string): Promise<void> {
