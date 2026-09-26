@@ -132,6 +132,20 @@ export function quickComposerShortcutPreview(
   return prefix + displayedKey;
 }
 
+/** `aria-keyshortcuts` token form: Meta/Control/Alt/Shift plus a bare key. */
+export function shortcutTokens(value: string): string {
+  return value
+    .split("+")
+    .map((part) => {
+      if (part === "Command") return "Meta";
+      if (part === "Option") return "Alt";
+      if (part.startsWith("Key")) return part.slice(3);
+      if (part.startsWith("Digit")) return part.slice(5);
+      return part;
+    })
+    .join("+");
+}
+
 export function quickComposerShortcutLabel(value: string): string {
   const parts = value.split("+");
   const code = parts.pop() ?? "Space";

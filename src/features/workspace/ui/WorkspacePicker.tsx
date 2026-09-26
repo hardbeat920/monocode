@@ -29,6 +29,7 @@ import { LAYER } from "../../../shared/lib/layers";
 import {
   keybindingPressed,
   keybindingShortcutLabel,
+  keybindingShortcutTokens,
 } from "../../settings/model/settings";
 
 export const WORKSPACE_MODE_SHORTCUT = `${MOD}${SHIFT}G`;
@@ -257,6 +258,10 @@ function WorkspaceModePicker({
     "Composer: Toggle Workspace",
     WORKSPACE_MODE_SHORTCUT,
   );
+  const shortcutTokens = keybindingShortcutTokens(
+    "Composer: Toggle Workspace",
+    "Meta+Shift+G Control+Shift+G",
+  );
   const Icon = mode === "worktree" ? FolderTree : Folder;
 
   return (
@@ -267,9 +272,7 @@ function WorkspaceModePicker({
           disabled={!enabled}
           title={shortcut ? `Workspace: ${label} (${shortcut})` : undefined}
           aria-label={`Workspace ${label}`}
-          aria-keyshortcuts={
-            shortcut ? "Meta+Shift+G Control+Shift+G" : undefined
-          }
+          aria-keyshortcuts={shortcutTokens ?? undefined}
           aria-haspopup="dialog"
           aria-expanded={open}
           onMouseDown={(event) => event.preventDefault()}
