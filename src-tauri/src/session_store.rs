@@ -303,8 +303,8 @@ fn cancel_owned_session_search(owner: &str) {
     if owner.is_empty() {
         return;
     }
-    if let Ok(tokens) = SESSION_SEARCH_TOKENS.lock() {
-        if let Some(counter) = tokens.as_ref().and_then(|tokens| tokens.get(owner)) {
+    if let Ok(mut tokens) = SESSION_SEARCH_TOKENS.lock() {
+        if let Some(counter) = tokens.as_mut().and_then(|tokens| tokens.remove(owner)) {
             counter.fetch_add(1, Ordering::AcqRel);
         }
     }
@@ -2856,6 +2856,17 @@ mod tests {
         assert!(second.is_current());
         cancel_owned_session_search(owner);
         assert!(!second.is_current());
+    }
+
+    #[test]
+    fn cancelling_one_session_search_does_not_cancel_another() {
+        let first = begin_session_search("first-session-owner").unwrap();
+        let second = begin_session_search("second-session-owner").unwrap();
+
+        cancel_owned_session_search("first-session-owner");
+
+        assert!(!first.is_current());
+        assert!(second.is_current());
     }
 
     #[test]

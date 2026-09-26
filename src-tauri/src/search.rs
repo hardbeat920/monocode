@@ -77,12 +77,11 @@ fn finish_search(root: &Path, search_id: &str, token: &Arc<AtomicBool>) {
 }
 
 fn cancel_search(root: &Path, search_id: &str) {
-    if let Ok(active) = ACTIVE_SEARCHES.lock() {
-        if let Some(token) = active
-            .as_ref()
-            .and_then(|searches| searches.get(&(root.to_path_buf(), search_id.to_string())))
-        {
-            token.store(true, Ordering::Release);
+    if let Ok(mut active) = ACTIVE_SEARCHES.lock() {
+        if let Some(searches) = active.as_mut() {
+            if let Some(token) = searches.remove(&(root.to_path_buf(), search_id.to_string())) {
+                token.store(true, Ordering::Release);
+            }
         }
     }
 }
@@ -573,6 +572,20 @@ mod tests {
 
         finish_search(&dir.0, "owner", &first);
         finish_search(&dir.0, "owner", &second);
+    }
+
+    #[test]
+    fn cancelling_one_project_search_does_not_cancel_another() {
+        let dir = tmp("search-cancel-isolated");
+        let first = begin_search(&dir.0, "first");
+        let second = begin_search(&dir.0, "second");
+
+        cancel_search(&dir.0, "first");
+
+        assert!(first.load(Ordering::Acquire));
+        assert!(!second.load(Ordering::Acquire));
+        finish_search(&dir.0, "first", &first);
+        finish_search(&dir.0, "second", &second);
     }
 
     #[test]

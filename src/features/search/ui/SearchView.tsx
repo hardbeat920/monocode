@@ -56,8 +56,6 @@ const SCOPES: { id: SearchScope; label: string }[] = [
   { id: "files", label: "Files" },
   { id: "projects", label: "Projects" },
 ];
-const PROJECT_SEARCH_ID = crypto.randomUUID();
-const SESSION_SEARCH_OWNER = crypto.randomUUID();
 
 type Props = {
   open: boolean;
@@ -91,6 +89,8 @@ export function SearchView({
   onOpenProject,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeProjectSearchId = useRef<string | null>(null);
+  const activeSessionOwner = useRef<string | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -107,32 +107,6 @@ export function SearchView({
 
   const trimmed = query.trim();
   const truncated = contentTruncated || sessionTruncated;
-
-  useEffect(() => {
-    if (!open) return;
-    return () => {
-      void cancelSessionSearch(SESSION_SEARCH_OWNER).catch(() => undefined);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || !looksLikeProject(cwd)) return;
-    return () => {
-      void cancelProjectSearch(cwd, PROJECT_SEARCH_ID).catch(() => undefined);
-    };
-  }, [cwd, open]);
-
-  useEffect(() => {
-    if (scope === "all" || scope === "conversations" || !looksLikeProject(cwd)) {
-      return;
-    }
-    void cancelProjectSearch(cwd, PROJECT_SEARCH_ID).catch(() => undefined);
-  }, [cwd, scope]);
-
-  useEffect(() => {
-    if (scope === "all" || scope === "files") return;
-    void cancelSessionSearch(SESSION_SEARCH_OWNER).catch(() => undefined);
-  }, [scope]);
 
   useEffect(() => {
     if (!open) return;
@@ -240,9 +214,11 @@ export function SearchView({
       const wantFiles = scope === "all" || scope === "files";
 
       if (wantSessions) {
+        const searchOwner = crypto.randomUUID();
+        activeSessionOwner.current = searchOwner;
         setLoading(true);
         jobs.push(
-          searchSessions({ query: trimmed, searchOwner: SESSION_SEARCH_OWNER })
+          searchSessions({ query: trimmed, searchOwner })
             .then((result) => {
               if (cancelled) return;
               setRemoteHits(hitsFromSessionSearch(result.hits));
@@ -252,6 +228,11 @@ export function SearchView({
               if (cancelled) return;
               setRemoteHits([]);
               setSessionTruncated(false);
+            })
+            .finally(() => {
+              if (activeSessionOwner.current === searchOwner) {
+                activeSessionOwner.current = null;
+              }
             }),
         );
       } else {
@@ -260,12 +241,14 @@ export function SearchView({
       }
 
       if (wantFiles && looksLikeProject(cwd)) {
+        const searchId = crypto.randomUUID();
+        activeProjectSearchId.current = searchId;
         setLoading(true);
         jobs.push(
           searchProject({
             cwd,
             query: trimmed,
-            searchId: PROJECT_SEARCH_ID,
+            searchId,
           })
             .then((result) => {
               if (cancelled) return;
@@ -278,6 +261,11 @@ export function SearchView({
               setContentHits([]);
               setContentTruncated(false);
               setError(err instanceof Error ? err.message : String(err));
+            })
+            .finally(() => {
+              if (activeProjectSearchId.current === searchId) {
+                activeProjectSearchId.current = null;
+              }
             }),
         );
       } else {
@@ -293,6 +281,16 @@ export function SearchView({
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      const searchOwner = activeSessionOwner.current;
+      activeSessionOwner.current = null;
+      if (searchOwner) {
+        void cancelSessionSearch(searchOwner).catch(() => undefined);
+      }
+      const searchId = activeProjectSearchId.current;
+      activeProjectSearchId.current = null;
+      if (searchId && looksLikeProject(cwd)) {
+        void cancelProjectSearch(cwd, searchId).catch(() => undefined);
+      }
     };
   }, [cwd, open, scope, trimmed]);
 
