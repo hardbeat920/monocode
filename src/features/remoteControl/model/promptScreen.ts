@@ -26,12 +26,20 @@ export type PromptOption = {
   number: number;
   label: string;
   /**
-   * What to write into the pty to take this option. The digit is the key the
-   * TUI advertises by numbering the option; `\r` was the one measured, taking
-   * whichever option the cursor sits on.
+   * What to write into the pty to take this option: the option's own digit,
+   * which selects and acts in one keystroke with no highlight to move first.
+   * Measured over five runs against the transcript and the filesystem — `1`
+   * returned a success `tool_result` and the file appeared, `3` returned
+   * `is_error: true` with `"User rejected tool use"` and it did not. A digit no
+   * option carries does nothing at all and leaves the prompt pending, which is
+   * the benign way for this to fail.
+   *
+   * Nothing further is needed: a `\r` sent after the digit is mouse-mode and
+   * cursor housekeeping the TUI answers with, not the actuator. On its own,
+   * without a digit, `\r` takes whichever option the cursor sits on.
    */
   keystroke: string;
-  /** The option under the TUI's `❯` cursor, which is what `\r` would take. */
+  /** The option under the TUI's `❯` cursor, which is the one a bare `\r` takes. */
   selected: boolean;
 };
 
@@ -43,7 +51,20 @@ export type PermissionPrompt = {
   options: readonly PromptOption[];
   /** The prompt's own footer, verbatim: `Esc to cancel · Tab to amend`. */
   footer: string;
-  /** Present when the footer advertises Esc, which dismisses without answering. */
+  /**
+   * Present when the footer advertises Esc. **Esc denies the tool call — it does
+   * not dismiss the prompt unanswered**, whatever the footer's wording suggests.
+   * Measured: it produces the identical `tool_result` to option 3, `is_error:
+   * true` with `"User rejected tool use"`, and the file is not written. `label`
+   * is the TUI's own text, kept for display; the effect is a denial, so do not
+   * offer it as a way out of deciding.
+   *
+   * Downstream consequence, since Esc and the No option are byte-identical in
+   * the transcript: nothing reading the result can tell a cancel from an
+   * explicit No, while MonoCode's `approval.resolved` separates `deny` from
+   * `cancelled`. Only the client that sent the keystroke knows which happened,
+   * so it has to remember.
+   */
   cancel?: { label: string; keystroke: string };
 };
 
@@ -253,7 +274,15 @@ export function renderScreen(output: string, size: ScreenSize): string[] {
   return grid.map((line) => line.join("").replace(/\s+$/u, ""));
 }
 
-/** Read the screen the TUI has painted in `output`. */
+/**
+ * Read the screen the TUI has painted in `output`.
+ *
+ * This is the only answer to "is a prompt pending". The transcript mirror's
+ * `MirrorState.tools` looks like it could answer too and cannot: entries are
+ * only ever set and read, never deleted, so a resolved call stays in the map
+ * and "still in `tools`" is true forever. Whoever shows a pending approval has
+ * to track that state themselves, from these results.
+ */
 export function readPromptScreen(
   output: string,
   size: ScreenSize,
