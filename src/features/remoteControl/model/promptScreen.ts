@@ -475,9 +475,21 @@ function readTurn(
   );
   if (marker && SPINNER.test(marker)) return "in-progress";
   if (marker && COMPLETED.test(marker)) return "ended";
-  // A composer with no spinner above it: an interrupt writes no record at all,
-  // and this is the only thing that says the turn is over (§8).
-  return composer ? "ended" : "unknown";
+  // Nothing above the composer says anything about the turn, so neither does
+  // this. An earlier version answered "ended" here, reasoning that a composer
+  // with no spinner over it had to mean idle. It does not: once the assistant
+  // starts streaming text the spinner leaves the visible grid entirely and the
+  // line above the composer is prose, which looks exactly like this. Measured
+  // over one 252-second turn replayed in 4KB frames, that guess was wrong for
+  // 337 consecutive frames — about 166 seconds of a turn that was still
+  // running.
+  //
+  // The cost is that an interrupted turn is "unknown" too, since the screen
+  // carries no positive trace of one (§8). A caller resolving that needs more
+  // than a frame: the transcript's `turn_duration` where there is one, and for
+  // an interrupt, an empty composer plus no assistant text appended since the
+  // last user record.
+  return "unknown";
 }
 
 function lastContentLine(

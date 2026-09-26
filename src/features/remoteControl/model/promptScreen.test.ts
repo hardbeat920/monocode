@@ -63,6 +63,24 @@ const AFTER_INTERRUPT: string[] = [
   "  ⏸ manual mode on",
 ];
 
+/**
+ * interrupt_raw.bin[0:819200] rendered at 130x45: frame 200 of one 252-second
+ * turn, mid-stream. The assistant is writing; the spinner has scrolled off the
+ * grid entirely, so the line above the composer is prose. This screen is why
+ * "a composer with no spinner is idle" is not a rule — it was wrong for 337
+ * consecutive frames of this capture.
+ */
+const STREAMING_MID_TURN: string[] = [
+  "  counters were pushed. The bench of the money-changer, banca, gave us bank, and a broken bench, banca rotta, gave us bankruptcy.",
+  "",
+  "",
+  "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+  "❯",
+  "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+  "  ⬆ /gsd:update │ Opus 5 (1M context) │ keytest ░░░░░░░░░░ 5%                                                                 /rc",
+  "  ⏸ manual mode on · ← for agents",
+];
+
 /** pty_raw2.bin[0:200] rendered at 130x45: the banner, before the TUI is up. */
 const BANNER_ONLY: string[] = ["", "╭─── Claude Code v2.1.221"];
 
@@ -192,7 +210,8 @@ describe("an idle composer", () => {
   it("accepts a message as bracketed paste", () => {
     const screen = readRenderedScreen(IDLE_COMPOSER);
     expect(screen.kind).toBe("idle");
-    expect(screen.turn).toBe("ended");
+    // Nothing above the composer, so nothing is claimed about the turn.
+    expect(screen.turn).toBe("unknown");
     expect(planInjection(screen, "say ALPHA")).toEqual({
       allowed: true,
       bytes: "\x1b[200~say ALPHA\x1b[201~\r",
@@ -239,10 +258,20 @@ describe("turn state", () => {
     });
   });
 
-  it("reads the composer coming back after an interrupt as a turn ended", () => {
+  it("does not claim an interrupted turn ended, because the screen cannot say", () => {
+    // This was asserted as "ended" on the reasoning that a returned composer
+    // ends a turn. A streaming turn produces the same screen, so the rule was
+    // unsound; the honest answer is that an interrupt leaves no trace here, and
+    // the caller has to resolve it from the transcript.
     const screen = readRenderedScreen(AFTER_INTERRUPT);
-    expect(screen.turn).toBe("ended");
+    expect(screen.turn).toBe("unknown");
     expect(screen.kind).toBe("idle");
+  });
+
+  it("does not report a streaming turn as ended", () => {
+    const screen = readRenderedScreen(STREAMING_MID_TURN);
+    expect(screen.turn).not.toBe("ended");
+    expect(screen.turn).toBe("unknown");
   });
 
   it("reads a turn that ran past a minute as ended", () => {
