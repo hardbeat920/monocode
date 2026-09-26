@@ -349,6 +349,31 @@ dismisses the prompt, `Tab to amend` opens it for editing. A prompt parsed
 without its footer is one the user can only say yes or no to, which is exactly
 the kind of narrowing that turns a safe parser into a coercive one.
 
+**Answering one: the digit acts, and Esc denies.** Measured over five runs, with
+ground truth taken from the `tool_result` record *and* from whether the file
+appeared on disk, because the record alone would not have caught a no-op. An
+option's own digit selects and acts in a single keystroke — there is no highlight
+to move first. `1` returned a success result and `probe.txt` appeared with its
+contents; `3` returned `is_error: true` with `"User rejected tool use"` and no
+file. A digit no option carries does nothing and leaves the prompt pending, which
+is the benign way for this to go wrong.
+
+Two corrections to the obvious reading, both of which would have cost something.
+The `\r` above is not the actuator — after a digit it is 80 bytes of mouse-mode
+and cursor housekeeping the TUI answers with; it mattered in the first probe only
+because, sent alone, it takes whichever option the cursor already sits on. And
+**Esc denies**: it produces the identical result to option 3, so a UI that offers
+`Esc to cancel` as a way out of deciding is quietly rejecting the tool call. The
+footer is the TUI's wording, not a description of the effect.
+
+So there is no approval bias to design around — every option including denial is
+one keystroke away, and the never-auto-approve rule below is implementable as
+written. One consequence is live and easy to get wrong: because Esc and option 3
+are byte-identical in the transcript, nothing reading the mirror can tell a cancel
+from an explicit No, while MonoCode's `approval.resolved` distinguishes `deny`
+from `cancelled`. Only the client that sent the keystroke knows which happened, so
+it has to remember rather than re-derive it.
+
 **So the pty output parser is load-bearing.** It is the only source of approval
 state, and the feature cannot be built without it.
 
@@ -609,15 +634,9 @@ Each of these is unproven. They are listed in the order they would hurt.
 - **Whether the bridge relays permission prompts to the phone.** Likely — it
   would be strange if it did not — but untested. It matters because it decides
   whether the phone is a real fallback when §7's parser gives up.
-- **Which keystroke takes which option.** Only `\r` was ever measured, and it
-  took the option the `❯` cursor was already on. The parser sends each option's
-  own digit, on the reasoning that a TUI numbering its options is advertising
-  them, and Esc because the footer says `Esc to cancel` — read off the screen
-  rather than guessed, but not measured either. Whether a digit selects at once
-  or wants a following return is open. The consequence if digits turn out wrong
-  is one-sided and worth stating: only the pre-selected option would work, and
-  that option is `1. Yes`, so a broken denial path fails towards approving. Being
-  measured now.
+- **Which keystroke takes which option** was open here, and is now measured —
+  see §7. It moved out of this section because the answer inverted the guess:
+  the digit acts, and Esc denies rather than dismissing.
 - **Every permission prompt except one.** The corpus contains a single prompt:
   `Write` → `Create file`, three options, in default permission mode. No
   `AskUserQuestion`, no `ExitPlanMode` plan approval, no Bash-command approval, no
