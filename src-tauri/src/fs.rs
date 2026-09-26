@@ -4006,7 +4006,11 @@ fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     None
 }
 
-fn git_output_capped(root: &Path, args: &[&str], max_bytes: usize) -> Option<(Vec<u8>, bool)> {
+pub(crate) fn git_output_capped(
+    root: &Path,
+    args: &[&str],
+    max_bytes: usize,
+) -> Option<(Vec<u8>, bool)> {
     let mut child = git_cmd()
         .arg("--no-pager")
         .arg("-C")
@@ -4050,7 +4054,8 @@ fn git_output_capped(root: &Path, args: &[&str], max_bytes: usize) -> Option<(Ve
 }
 
 fn git_status_ok(status: &std::process::ExitStatus, args: &[&str]) -> bool {
-    status.success() || (status.code() == Some(1) && args.first().copied() == Some("diff"))
+    status.success()
+        || (status.code() == Some(1) && matches!(args.first().copied(), Some("diff" | "grep")))
 }
 
 fn git_branch(root: &Path) -> Option<String> {
