@@ -20,6 +20,7 @@ mod link_preview;
 mod macos;
 #[cfg(target_os = "macos")]
 mod macos_background;
+mod mcp;
 mod menu;
 mod notes;
 mod notifications;
@@ -403,6 +404,12 @@ pub fn run() {
             harness::harness_resolve_configured,
             harness::harness_runtime_binary_paths,
             harness::harness_resolve_claude,
+            harness::claude_mcp_list,
+            mcp::mcp_discover,
+            mcp::mcp_add,
+            harness::claude_mcp_add,
+            harness::claude_mcp_remove,
+            harness::mcp_provider_login,
             harness::harness_resolve_omp,
             harness::harness_resolve_pi,
             harness::harness_resolve_fx,

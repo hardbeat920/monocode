@@ -361,6 +361,341 @@ pub fn harness_resolve_claude() -> Result<CursorBinary, String> {
         })
 }
 
+fn claude_mcp_command(args: Vec<String>, cwd: String, timeout: Duration) -> Result<String, String> {
+    let binary = resolve_claude().ok_or("Claude Code CLI not found")?;
+    mcp_command(binary, args, cwd, timeout)
+}
+
+fn mcp_command(
+    binary: PathBuf,
+    args: Vec<String>,
+    cwd: String,
+    timeout: Duration,
+) -> Result<String, String> {
+    let workdir = expand_home(&cwd);
+    if !workdir.is_dir() {
+        return Err("Project directory does not exist".into());
+    }
+    let mut command = Command::new(&binary);
+    command
+        .args(&args)
+        .current_dir(workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    prepare_child(&mut command, &binary.to_string_lossy());
+    let child = spawn_managed(&mut command).map_err(|e| e.to_string())?;
+    let pid = child.id();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    let output = match receiver.recv_timeout(timeout) {
+        Ok(result) => result.map_err(|e| e.to_string())?,
+        Err(_) => {
+            terminate(pid);
+            return Err("Claude MCP command timed out".into());
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() {
+        return Ok(stdout);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("{} {}", stderr.trim(), stdout).trim().to_string())
+}
+
+#[tauri::command]
+pub async fn claude_mcp_list(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut output = claude_mcp_command(
+            vec!["mcp".into(), "list".into()],
+            cwd.clone(),
+            Duration::from_secs(30),
+        )?;
+        for name in configured_ws_mcp_servers(&expand_home(&cwd)) {
+            if !output
+                .lines()
+                .any(|line| line.starts_with(&format!("{name}:")))
+            {
+                output.push_str(&format!(
+                    "\n{name}: WebSocket server (open Claude /mcp for status)"
+                ));
+            }
+        }
+        Ok(output)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let read = |path: &Path| -> Option<serde_json::Value> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    };
+    let collect = |servers: Option<&serde_json::Value>, names: &mut Vec<String>| {
+        if let Some(servers) = servers.and_then(serde_json::Value::as_object) {
+            for (name, config) in servers {
+                if config.get("type").and_then(serde_json::Value::as_str) == Some("ws")
+                    && valid_mcp_name(name)
+                    && !names.contains(name)
+                {
+                    names.push(name.clone());
+                }
+            }
+        }
+    };
+    if let Some(home) = dirs_home() {
+        if let Some(settings) = read(&Path::new(&home).join(".claude.json")) {
+            collect(settings.get("mcpServers"), &mut names);
+            collect(
+                settings
+                    .get("projects")
+                    .and_then(|projects| projects.get(cwd.to_string_lossy().as_ref()))
+                    .and_then(|project| project.get("mcpServers")),
+                &mut names,
+            );
+        }
+    }
+    for directory in cwd.ancestors() {
+        if let Some(settings) = read(&directory.join(".mcp.json")) {
+            collect(settings.get("mcpServers"), &mut names);
+        }
+        if directory.join(".git").exists() {
+            break;
+        }
+    }
+    names
+}
+
+#[tauri::command]
+pub async fn claude_mcp_add(
+    cwd: String,
+    name: String,
+    config: String,
+    scope: String,
+) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Server name must use letters, numbers, hyphens, or underscores".into());
+    }
+    if !matches!(scope.as_str(), "local" | "project" | "user") {
+        return Err("Invalid MCP scope".into());
+    }
+    let value: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+    if !value.is_object() {
+        return Err("Server configuration must be a JSON object".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec![
+                "mcp".into(),
+                "add-json".into(),
+                name,
+                config,
+                "--scope".into(),
+                scope,
+            ],
+            cwd,
+            Duration::from_secs(30),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+pub(crate) fn add_mcp_via_cli(
+    provider: &str,
+    scope: &str,
+    cwd: &str,
+    name: &str,
+    config: &serde_json::Value,
+) -> Result<(), String> {
+    let (binary, args) = mcp_add_args(provider, scope, name, config)?;
+    mcp_command(binary, args, cwd.to_owned(), Duration::from_secs(30))?;
+    Ok(())
+}
+
+fn mcp_add_args(
+    provider: &str,
+    scope: &str,
+    name: &str,
+    config: &serde_json::Value,
+) -> Result<(PathBuf, Vec<String>), String> {
+    if provider == "claude" {
+        if !matches!(scope, "local" | "project" | "user") {
+            return Err("Invalid Claude MCP scope".into());
+        }
+        let binary = resolve_claude().ok_or("Claude Code CLI not found")?;
+        let config = serde_json::to_string(config).map_err(|e| e.to_string())?;
+        return Ok((
+            binary,
+            vec![
+                "mcp".into(),
+                "add-json".into(),
+                name.into(),
+                config,
+                "--scope".into(),
+                scope.into(),
+            ],
+        ));
+    }
+    if provider == "codex" && scope != "user" {
+        return Err("Codex CLI adds user-scoped servers only".into());
+    }
+    if provider == "opencode" && !matches!(scope, "user" | "project") {
+        return Err("Invalid OpenCode MCP scope".into());
+    }
+    let binary = match provider {
+        "codex" => resolve_codex().ok_or("Codex CLI not found")?,
+        "opencode" => resolve_opencode().ok_or("OpenCode CLI not found")?,
+        _ => return Err("Unsupported MCP provider".into()),
+    };
+    let object = config
+        .as_object()
+        .ok_or("Server configuration must be an object")?;
+    let remote = object.get("url").and_then(serde_json::Value::as_str);
+    let allowed: &[&str] = if remote.is_some() {
+        if provider == "codex" {
+            &["type", "url", "bearerTokenEnvVar"]
+        } else {
+            &["type", "url", "headers"]
+        }
+    } else {
+        &["type", "command", "args", "env"]
+    };
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!(
+            "{provider} add cannot preserve '{key}'; edit its config file instead"
+        ));
+    }
+    let kind = object.get("type").and_then(serde_json::Value::as_str);
+    if remote.is_some() && !matches!(kind, None | Some("http") | Some("remote")) {
+        return Err(format!("{provider} CLI supports HTTP URLs only"));
+    }
+    if remote.is_none() && !matches!(kind, None | Some("stdio") | Some("local")) {
+        return Err("Local server type must be stdio".into());
+    }
+    let mut args = vec!["mcp".into(), "add".into(), name.into()];
+    if provider == "opencode" && scope == "user" {
+        args.push("--global".into());
+    }
+    if let Some(url) = remote {
+        let parsed = url::Url::parse(url).map_err(|_| "Invalid server URL")?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("MCP URL must use HTTP or HTTPS".into());
+        }
+        args.extend(["--url".into(), url.into()]);
+        if provider == "codex" {
+            if let Some(var) = object
+                .get("bearerTokenEnvVar")
+                .and_then(serde_json::Value::as_str)
+            {
+                args.extend(["--bearer-token-env-var".into(), var.into()]);
+            }
+        } else {
+            args.extend(mcp_key_values(config, "headers", "--header")?);
+        }
+    } else {
+        args.extend(mcp_key_values(config, "env", "--env")?);
+        let command = object
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or("Local server needs a command")?;
+        let parameters = object
+            .get("args")
+            .map(|value| value.as_array().ok_or("args must be an array"))
+            .transpose()?;
+        args.push("--".into());
+        args.push(command.into());
+        for parameter in parameters.into_iter().flatten() {
+            args.push(
+                parameter
+                    .as_str()
+                    .ok_or("args must contain strings")?
+                    .into(),
+            );
+        }
+    }
+    Ok((binary, args))
+}
+
+fn mcp_key_values(
+    config: &serde_json::Value,
+    field: &str,
+    flag: &str,
+) -> Result<Vec<String>, String> {
+    let Some(value) = config.get(field) else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_object()
+        .ok_or_else(|| format!("{field} must be an object"))?;
+    let mut args = Vec::new();
+    for (key, value) in values {
+        let value = value
+            .as_str()
+            .ok_or_else(|| format!("{field} values must be strings"))?;
+        args.extend([flag.to_owned(), format!("{key}={value}")]);
+    }
+    Ok(args)
+}
+
+#[tauri::command]
+pub async fn claude_mcp_remove(cwd: String, name: String, scope: String) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Invalid MCP server name".into());
+    }
+    if !matches!(scope.as_str(), "local" | "project" | "user") {
+        return Err("Invalid MCP scope".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec!["mcp".into(), "remove".into(), name, "--scope".into(), scope],
+            cwd,
+            Duration::from_secs(30),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn mcp_provider_login(cwd: String, provider: String, name: String) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Invalid MCP server name".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let (binary, args) = match provider.as_str() {
+            "claude" => (resolve_claude(), vec!["mcp", "login"]),
+            "codex" => (resolve_codex(), vec!["mcp", "login"]),
+            "cursor" => (resolve_cursor_agent(), vec!["mcp", "login"]),
+            "opencode" => (resolve_opencode(), vec!["mcp", "auth"]),
+            _ => return Err("Unsupported MCP provider".into()),
+        };
+        let binary = binary.ok_or_else(|| format!("{provider} CLI not found"))?;
+        mcp_command(
+            binary,
+            args.into_iter().map(String::from).chain([name]).collect(),
+            cwd,
+            Duration::from_secs(180),
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn valid_mcp_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Resolve the Pi coding agent CLI (`pi`).
 #[tauri::command(async)]
 pub fn harness_resolve_pi() -> Result<CursorBinary, String> {

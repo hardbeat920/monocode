@@ -145,6 +145,38 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe("");
   });
 
+  it("opens MCP settings without sending a turn", async () => {
+    const onSubmit = vi.fn();
+    const onOpen = vi.fn();
+    window.addEventListener("monocode:open-mcp-settings", onOpen);
+    try {
+      await renderComposer(
+        undefined,
+        vi.fn(),
+        false,
+        0,
+        "/mcp",
+        undefined,
+        onSubmit,
+      );
+      const textarea = container.querySelector("textarea")!;
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(onOpen).toHaveBeenCalledOnce();
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(textarea.value).toBe("");
+    } finally {
+      window.removeEventListener("monocode:open-mcp-settings", onOpen);
+    }
+  });
+
   it("keeps the draft when onBtwCommand rejects the command", async () => {
     const onBtwCommand = vi.fn(() => false);
     const onSubmit = vi.fn();
@@ -987,5 +1019,62 @@ describe("Composer question focus", () => {
 
     expect(document.activeElement).toBe(searchInput);
     portaledPicker.remove();
+  });
+
+  it("opens MCP settings while Save draft mode is selected", async () => {
+    const onSaveDraft = vi.fn();
+    const onOpen = vi.fn();
+    window.addEventListener("monocode:open-mcp-settings", onOpen);
+    try {
+      await act(async () =>
+        root.render(
+          createElement(Composer, {
+            focused: true,
+            harness: "claude",
+            model: "claude-sonnet",
+            runtimeMode: "supervised",
+            executionCwd: "/repo",
+            hideProjectPicker: true,
+            hideBranchPicker: true,
+            canSaveDraft: true,
+            onFocus: vi.fn(),
+            onCwdChange: vi.fn(),
+            onModelChange: vi.fn(),
+            onRuntimeModeChange: vi.fn(),
+            onSubmit: vi.fn(),
+            onSaveDraft,
+          }),
+        ),
+      );
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Add files or choose a mode"]',
+          )!
+          .click(),
+      );
+      const draftMode = [
+        ...document.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.includes("Save this message"))!;
+      await act(async () => draftMode.click());
+      const textarea = container.querySelector("textarea")!;
+      await act(async () => {
+        textarea.value = "/mcp";
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(onOpen).toHaveBeenCalledOnce();
+      expect(onSaveDraft).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("monocode:open-mcp-settings", onOpen);
+    }
   });
 });

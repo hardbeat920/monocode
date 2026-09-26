@@ -21,6 +21,7 @@ tauri-plugin-opener = "2"
 open = "5.4.1"
 serde.workspace = true
 serde_json.workspace = true
+toml = "0.9.12"
 sha2 = "0.10"
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
