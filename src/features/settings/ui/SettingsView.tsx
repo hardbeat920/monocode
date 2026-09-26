@@ -2539,6 +2539,14 @@ function QuickComposerShortcutEditor() {
     saveQuickComposerShortcut(next);
     setShortcut(next);
   };
+  const reset = async () => {
+    // Reset restores the whole default state, including the enabled flag.
+    await setQuickComposerShortcut(true, QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    saveQuickComposerEnabled(true);
+    saveQuickComposerShortcut(QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    setShortcut(QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    setEnabled(true);
+  };
   return (
     <ShortcutEditor
       name="quick composer"
@@ -2552,7 +2560,7 @@ function QuickComposerShortcutEditor() {
         saveQuickComposerEnabled(false);
         setEnabled(false);
       }}
-      onReset={() => apply(QUICK_COMPOSER_DEFAULT_SHORTCUT)}
+      onReset={reset}
     />
   );
 }
