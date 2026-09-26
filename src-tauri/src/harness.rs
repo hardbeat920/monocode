@@ -2066,9 +2066,16 @@ fn gui_search_path_from(
 ) -> String {
     let mut parts: Vec<PathBuf> = Vec::new();
     // Login-shell PATH first so Homebrew, mise, nvm, and custom dirs match
-    // the user's terminal. The fixed list is a fallback when that read fails.
+    // the user's terminal. Our own PATH next: that read can fail or time out,
+    // and an app started from a terminal still inherits the real thing, which
+    // beats guessing. The fixed dirs come last — they are all a Finder launch
+    // has, since launchd hands it a bare PATH, and preferring them over an
+    // inherited PATH is how an abandoned `~/.local/bin` install wins.
     if let Some(path) = login_path {
         parts.extend(std::env::split_paths(&path));
+    }
+    if let Some(existing) = existing {
+        parts.extend(std::env::split_paths(&existing));
     }
     if let Some(home) = home {
         parts.push(format!("{home}/.local/bin").into());
@@ -2092,9 +2099,6 @@ fn gui_search_path_from(
     {
         parts.push(r"C:\Program Files\Git\cmd".into());
         parts.push(r"C:\Program Files\nodejs".into());
-    }
-    if let Some(existing) = existing {
-        parts.extend(std::env::split_paths(&existing));
     }
     std::env::join_paths(parts)
         .unwrap_or_default()
@@ -2622,15 +2626,33 @@ mod tests {
         let path = gui_search_path_from(
             Some("/custom/gh-dir:/usr/bin".into()),
             Some("/tmp/home".into()),
-            Some("/bin".into()),
+            Some("/inherited/bin".into()),
         );
         let parts: Vec<&str> = path.split(':').collect();
+        let at = |dir: &str| parts.iter().position(|part| *part == dir).unwrap();
         assert_eq!(parts[0], "/custom/gh-dir");
-        assert!(parts.contains(&"/tmp/home/.local/bin"));
         assert!(parts.contains(&"/tmp/home/.grok/bin"));
-        assert!(parts.contains(&"/opt/homebrew/bin"));
         assert!(parts.contains(&"/usr/local/bin"));
-        assert_eq!(*parts.last().unwrap(), "/bin");
+        assert!(at("/custom/gh-dir") < at("/inherited/bin"));
+        assert!(at("/inherited/bin") < at("/tmp/home/.local/bin"));
+        assert!(at("/tmp/home/.local/bin") < at("/opt/homebrew/bin"));
+    }
+
+    /// The login read can fail or time out, and the fixed dirs are guesses: a
+    /// `claude` the user actually installed, on the PATH we were launched with,
+    /// has to win over an abandoned `~/.local/bin` one.
+    #[test]
+    fn inherited_path_beats_fixed_dirs_when_the_login_read_fails() {
+        let path = gui_search_path_from(
+            None,
+            Some("/tmp/home".into()),
+            Some("/opt/mise/shims:/usr/bin".into()),
+        );
+        let parts: Vec<&str> = path.split(':').collect();
+        let at = |dir: &str| parts.iter().position(|part| *part == dir).unwrap();
+        assert_eq!(parts[0], "/opt/mise/shims");
+        assert!(at("/opt/mise/shims") < at("/tmp/home/.local/bin"));
+        assert!(at("/tmp/home/.local/bin") < at("/opt/homebrew/bin"));
     }
 
     #[test]
