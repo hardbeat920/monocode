@@ -474,8 +474,12 @@ them is about being idle:
   captures — so it is decoration, and a matcher keyed on it fails on the next
   turn, never mind the next CLI version.
 
-**Both durations change format at 60 seconds, and not in the same way.** This
-cost a real bug: a finished turn past a minute reads `✻ Brewed for 4m 12s`, so a
+**Both durations change format at 60 seconds, and not in the same way.** The
+minutes form lives in one capture only — `interrupt_raw.bin`, the 252-second turn
+— which is why a check across the six older `pty_raw*.bin` files finds none of it
+and is right to. Two independent attestations, neither needing anyone's harness:
+that turn's own record says `turn_duration: 252410`, and
+`grep -c "Brewed for 4m 12s" interrupt_raw.bin` returns 1. This cost a real bug: a finished turn past a minute reads `✻ Brewed for 4m 12s`, so a
 matcher understanding only `for <N>s` recognises short turns and silently stops
 recognising long ones — which are exactly the turns someone walks away from. Match
 `for (<N>h )?(<N>m )?<N>s`. The running counter is the other half of the trap: its
@@ -484,17 +488,46 @@ raw seconds past 60 — `✻ Osmosing… (1m 25s · thought for 83s)` — so a f
 matcher without an end anchor swallows a *running* turn's own counter and calls it
 finished. Anchor it to the end of the line, and test the spinner first.
 
-After an interrupt neither signal is fresh: no spinner is painted, and the newest
-summary belongs to some earlier turn. What says *this* turn is over is the
-composer box coming back — the pair of horizontal rules with a `❯` line inside —
-carrying the interrupted prompt, which the TUI restores into it. That, and not a
-record, is the only evidence there is.
+**The absence of a spinner is not a third signal, and an earlier version of this
+section said it was.** "Treat a return to an idle composer as ending the turn"
+was the instruction here, and it is false: while the assistant streams its reply
+the spinner is not on the visible grid at all — 325 of 348 frames of one turn had
+none anywhere in 45 rows — so the line above the composer is prose and the screen
+is indistinguishable from an idle one. Measured on a 252-second turn replayed in
+4KB frames the way a consumer of pty data sees it: 11 frames correctly
+in-progress, then **337 consecutive frames reported as ended**, about 166 seconds
+of a turn that was still running. Anything reading that would close the turn and
+emit a completion mid-sentence, and would permit an injection into a live turn.
 
-One string not to write code against: `esc to interrupt` appears nowhere. Not a
-spot check — the substring `interrupt` occurs **zero** times across all twelve
-captures, raw, ANSI-stripped and whitespace-squashed alike. A matcher looking for
-it finds nothing on every screen, including the ones where a turn plainly is
-running. What a running turn shows instead is the gerund and its counter above.
+So `ended` requires a positive marker — the summary, freshest above the composer —
+and everything else is `unknown`. Accepting the summary from *anywhere* on screen
+is the tempting weaker rule and is the same mistake: it reads a stale marker as
+evidence about the current turn. It happens to work on the long capture only
+because a 252-second essay scrolls the previous summary away.
+
+**Which leaves the interrupt case genuinely unresolved from the screen alone, and
+it is worth being exact about why.** The trace an interrupt leaves is a composer
+*holding text* — the CLI restores the interrupted prompt into it, so "empty
+composer" is the wrong condition and a guard written on it never fires. But a
+composer holding text with no spinner above it is also what a user typing ahead
+mid-turn looks like, which the TUI allows and queues. One frame cannot separate
+those. Resolving it needs the transcript: `turn_duration` where there is one, and
+otherwise whether a user record opened a turn that nothing has closed. Until that
+rule lands, an interrupt taken on the phone shows as running — which is the safe
+direction, and strictly better than closing live turns 337 frames early.
+
+One string not to write code against: `esc to interrupt` appears nowhere in any
+capture, raw, ANSI-stripped or whitespace-squashed. A matcher looking for it finds
+nothing on every screen, including the ones where a turn plainly is running; what
+a running turn shows is the gerund and its counter above.
+
+An earlier version of this paragraph overstated that as "the substring
+`interrupt` occurs zero times", which was true of the six captures it was checked
+against and is not true of the corpus as it grew. The word does occur, once, in a
+line that has nothing to do with turn state: `⎿ Tip: Use /btw to ask a quick side
+question without interrupting Claude's current work`. Which is its own small
+lesson — the exact string is the claim worth making, and a substring search is a
+different, weaker one.
 
 ## 9. What to build
 
