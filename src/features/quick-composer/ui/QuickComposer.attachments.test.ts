@@ -10,6 +10,9 @@ const native = vi.hoisted(() => ({
   shown: () => {},
   submitFails: false,
 }));
+const terminalMeta = vi.hoisted(
+  () => new Map<string, (patch: { title?: string; cwd?: string }) => void>(),
+);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ hide: native.hide }),
@@ -41,21 +44,26 @@ vi.mock("../../terminal/ui/TerminalView", () => ({
     id,
     cwd,
     active,
+    onMetaChange,
   }: {
     id: string;
     cwd: string;
     active: boolean;
-  }) =>
-    createElement("div", {
+    onMetaChange?: (patch: { title?: string; cwd?: string }) => void;
+  }) => {
+    if (onMetaChange) terminalMeta.set(id, onMetaChange);
+    return createElement("div", {
       "data-test-terminal": "",
       "data-id": id,
       "data-cwd": cwd,
       "data-active": String(active),
-    }),
+    });
+  },
 }));
 vi.mock("../model/quickComposer", async (actual) => ({
   ...(await actual<object>()),
-  loadQuickProjects: () => ["/tmp/project"],
+  loadQuickProjects: () => ["/tmp/project", "/tmp/other"],
+  initialQuickProject: () => "/tmp/project",
   initialQuickChoice: () => ({ harness: "codex", model: "test" }),
   resolveQuickModel: () => ({
     harness: "codex",
@@ -107,6 +115,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.clearAllMocks();
+  terminalMeta.clear();
   vi.unstubAllGlobals();
 });
 
@@ -168,4 +177,86 @@ it("keeps the floating terminal mounted across picker changes and composer shows
   act(() => button("Toggle floating terminal").click());
   expect(container.querySelector("[data-test-terminal]")).toBe(terminal);
   expect(terminal?.getAttribute("data-active")).toBe("true");
+});
+
+it("keeps separate terminal tabs and processes for each project", async () => {
+  const visibleGroup = () =>
+    container.querySelector<HTMLElement>(
+      '[aria-label="Floating terminal"] > div > div[aria-hidden="false"]',
+    )!;
+  const selectProject = async (name: string) => {
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('button[title="Project (⌘P)"]')!
+        .click(),
+    );
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ].find((item) => item.textContent?.includes(name))!;
+    await act(async () => option.click());
+  };
+
+  act(() => button("Toggle floating terminal").click());
+  const first = visibleGroup().querySelector("[data-test-terminal]")!;
+  act(() =>
+    visibleGroup()
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="New floating terminal"]',
+      )!
+      .click(),
+  );
+  expect(visibleGroup().querySelectorAll('[role="tab"]')).toHaveLength(2);
+  const projectTerminals = [
+    ...visibleGroup().querySelectorAll("[data-test-terminal]"),
+  ];
+  expect(projectTerminals[0]).toBe(first);
+  expect(projectTerminals[1].getAttribute("data-id")).not.toBe(
+    first.getAttribute("data-id"),
+  );
+  expect(first.getAttribute("data-active")).toBe("false");
+  act(() =>
+    visibleGroup().querySelector<HTMLButtonElement>('[role="tab"]')!.click(),
+  );
+  expect(first.getAttribute("data-active")).toBe("true");
+  expect(projectTerminals[1].getAttribute("data-active")).toBe("false");
+  act(() =>
+    terminalMeta.get(projectTerminals[1].getAttribute("data-id")!)?.({
+      title: "npm",
+    }),
+  );
+  expect(
+    visibleGroup().querySelectorAll('[role="tab"]')[1].textContent,
+  ).toContain("npm");
+
+  await selectProject("other");
+  act(() => button("Toggle floating terminal").click());
+  expect(visibleGroup().querySelectorAll('[role="tab"]')).toHaveLength(1);
+  const otherTerminal = visibleGroup().querySelector("[data-test-terminal]");
+  expect(
+    visibleGroup()
+      .querySelector("[data-test-terminal]")
+      ?.getAttribute("data-cwd"),
+  ).toBe("/tmp/other");
+  expect(otherTerminal).not.toBe(first);
+
+  await selectProject("project");
+  act(() => button("Toggle floating terminal").click());
+  expect(visibleGroup().querySelectorAll('[role="tab"]')).toHaveLength(2);
+  expect(visibleGroup().querySelector("[data-test-terminal]")).toBe(first);
+  act(() =>
+    visibleGroup()
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Close terminal npm"]',
+      )!
+      .click(),
+  );
+  expect(visibleGroup().querySelectorAll('[role="tab"]')).toHaveLength(1);
+  expect(visibleGroup().querySelector("[data-test-terminal]")).toBe(first);
+  expect(first.getAttribute("data-active")).toBe("true");
+
+  await selectProject("other");
+  act(() => button("Toggle floating terminal").click());
+  expect(visibleGroup().querySelector("[data-test-terminal]")).toBe(
+    otherTerminal,
+  );
 });

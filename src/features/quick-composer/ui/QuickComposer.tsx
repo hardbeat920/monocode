@@ -52,7 +52,7 @@ import { quickLaunchAttachments } from "../model/quickAttachments";
 import { useQuickAttachments } from "./useQuickAttachments";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { QuickModelSelector } from "./QuickModelSelector";
-import { TerminalView } from "../../terminal/ui/TerminalView";
+import { QuickTerminalDock } from "./QuickTerminalDock";
 import { useQuickPickerMotion } from "./useQuickPickerMotion";
 import {
   applyQuickCatalog,
@@ -100,8 +100,6 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     "project" | "model" | "attachments" | "terminal" | null
   >(null);
   const [terminalStarted, setTerminalStarted] = useState(false);
-  const terminalId = useRef(`quick-composer:${crypto.randomUUID()}`);
-  const terminalCwd = useRef("");
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -233,10 +231,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       return;
     }
     setPicker(kind);
-    if (kind === "terminal" && !terminalStarted) {
-      terminalCwd.current = cwd ?? "";
-      setTerminalStarted(true);
-    }
+    if (kind === "terminal") setTerminalStarted(true);
     setQuery("");
     setHighlight(Math.max(0, projects.indexOf(cwd ?? "")));
     if (kind === "project")
@@ -604,11 +599,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
           className={`h-[320px] shrink-0 border-t border-stroke ${picker === "terminal" ? "" : "hidden"}`}
           aria-label="Floating terminal"
         >
-          <TerminalView
-            id={terminalId.current}
-            cwd={terminalCwd.current}
-            active={picker === "terminal"}
-          />
+          <QuickTerminalDock cwd={cwd ?? ""} active={picker === "terminal"} />
         </div>
       ) : null}
       {picker && picker !== "attachments" && picker !== "terminal" ? (
