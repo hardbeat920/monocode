@@ -166,18 +166,21 @@ import {
 } from "../integrations/harness/providers/claude/remoteControl";
 import {
   createPtyFanout,
+  emptyApprovalProgress,
   injectRemoteText,
   noteInterruptedTurn,
   pendingAfter,
   queuedNotice,
   remoteApprovalKeystroke,
   remoteApprovalReply,
+  remoteApprovalTransition,
   remoteApprovalView,
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
   seatRemoteUserMessage,
   shouldAutoOpen,
+  type ApprovalProgress,
   type PtyFanout,
   type RemoteAnswer,
 } from "./remoteControlSession";
@@ -1327,11 +1330,11 @@ export default function App({
          * be detached; see `createPtyFanout`.
          */
         fanout: PtyFanout;
-        /** What is currently in front of the user, so it is not raised twice. */
-        shown:
-          | { kind: "question"; requestId: number }
-          | { kind: "raw" }
-          | null;
+        /**
+         * What is in front of the user and how close the screen is to settling.
+         * Owned by `remoteApprovalTransition`; nothing here interprets it.
+         */
+        approval: ApprovalProgress;
         stop: () => void;
       }
     >(),
@@ -1354,77 +1357,69 @@ export default function App({
   >({});
 
   /**
-   * Raise, retire or re-raise the approval a remote-controlled session waits on.
+   * Perform whatever `remoteApprovalTransition` decided.
    *
    * Called from both sides because either can change the answer: a transcript
    * batch can retire a prompt answered on the phone, and a screen repaint can be
-   * the first sight of one. Idempotent, so both may call it freely — `shown` is
-   * what keeps a prompt from being raised twice.
+   * the first sight of one — or the second frame that finally settles it.
    */
   const syncRemoteApproval = useCallback(
     (sessionId: string) => {
       const entry = remoteControl.current.get(sessionId);
       if (!entry) return;
-      const terminalOpen = remoteTerminalIds.includes(sessionId);
       const screen = entry.screen.screen;
       const view = screen
         ? remoteApprovalView({
             pending: entry.pending.size > 0,
             screen,
-            terminalOpen,
+            terminalOpen: remoteTerminalIds.includes(sessionId),
           })
         : ({ kind: "none" } as const);
 
-      if (view.kind === "none") {
-        const shown = entry.shown;
-        entry.shown = null;
-        if (shown?.kind === "question") {
-          // Answered on the phone or in the TUI while MonoCode was showing it.
-          // `cancelled`, not `skipped`: nobody declined it here.
+      const step = remoteApprovalTransition(
+        entry.approval,
+        view,
+        remoteRequestId.current + 1,
+      );
+      entry.approval = step.progress;
+      if (step.effects.length === 0) return;
+      for (const effect of step.effects) {
+        if (effect.kind === "ask") {
+          remoteRequestId.current = effect.requestId;
+          enqueueHarnessEvent(sessionId, {
+            type: "question.asked",
+            requestId: effect.requestId,
+            title: effect.question.header,
+            questions: [effect.question],
+          });
+          continue;
+        }
+        if (effect.kind === "resolve") {
           enqueueHarnessEvent(sessionId, {
             type: "question.resolved",
-            requestId: shown.requestId,
-            decision: "cancelled",
+            requestId: effect.requestId,
+            decision: effect.decision,
           });
-          flushHarnessEvents();
+          continue;
         }
-        return;
-      }
-
-      if (view.kind === "raw") {
-        if (entry.shown?.kind === "raw") return;
-        entry.shown = { kind: "raw" };
-        // The decided rule is that the user answers it themselves, which needs
-        // the pty in front of them rather than a description of it.
-        setRemoteTerminalIds((ids) =>
-          ids.includes(sessionId) ? ids : [...ids, sessionId],
-        );
-        // Failing visible, which is the decided rule: something is waiting, the
-        // screen cannot be read with confidence, so the screen itself goes in
-        // front of the user and MonoCode answers nothing.
+        if (effect.kind === "openTerminal") {
+          // The decided rule is that the user answers it themselves, which needs
+          // the pty in front of them rather than a description of it.
+          setRemoteTerminalIds((ids) =>
+            ids.includes(sessionId) ? ids : [...ids, sessionId],
+          );
+          continue;
+        }
         enqueueHarnessEvent(sessionId, {
           type: "interjection",
           customType: "remote-control",
           severity: "blocker",
-          text: `Remote Control is waiting on something it cannot read (${view.reason}). Answer it in the terminal:\n\n${view.lines
+          text: `Remote Control is waiting on something it cannot read (${effect.reason}). Answer it in the terminal:\n\n${effect.lines
             .map((line) => line.trimEnd())
             .join("\n")
             .trim()}`,
         });
-        flushHarnessEvents();
-        return;
       }
-
-      if (entry.shown?.kind === "question") return;
-      remoteRequestId.current += 1;
-      const requestId = remoteRequestId.current;
-      entry.shown = { kind: "question", requestId };
-      enqueueHarnessEvent(sessionId, {
-        type: "question.asked",
-        requestId,
-        title: view.question.header,
-        questions: [view.question],
-      });
       flushHarnessEvents();
     },
     [enqueueHarnessEvent, flushHarnessEvents, remoteTerminalIds],
@@ -1443,8 +1438,9 @@ export default function App({
       reply: UserQuestionReply,
     ): boolean => {
       const entry = remoteControl.current.get(sessionId);
-      if (!entry || entry.shown?.kind !== "question") return false;
-      if (entry.shown.requestId !== requestId) return false;
+      const shown = entry?.approval.shown;
+      if (!entry || shown?.kind !== "question") return false;
+      if (shown.requestId !== requestId) return false;
       const screen = entry.screen.screen;
       const chosen =
         reply.kind === "answered"
@@ -1454,7 +1450,7 @@ export default function App({
         ? { kind: "option", id: chosen }
         : { kind: "cancel" };
       const bytes = screen ? remoteApprovalKeystroke(screen, answer) : null;
-      entry.shown = null;
+      entry.approval = emptyApprovalProgress();
       if (!bytes) {
         // An option no longer on screen, or a cancel this prompt does not
         // advertise. An out-of-range digit would be a harmless no-op in the TUI,
@@ -1693,7 +1689,7 @@ export default function App({
         chunks,
         screen: state,
         fanout,
-        shown: null,
+        approval: emptyApprovalProgress(),
         stop: () => {
           live = false;
           watcher.stop();

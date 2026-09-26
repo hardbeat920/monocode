@@ -3,8 +3,12 @@ import {
   composerHeld,
   COMPOSER_CLEAR,
   createPtyFanout,
+  emptyApprovalProgress,
   injectRemoteText,
   queuedNotice,
+  remoteApprovalTransition,
+  type ApprovalEffect,
+  type RemoteApprovalView,
   noteInterruptedTurn,
   pendingAfter,
   remoteApprovalKeystroke,
@@ -244,7 +248,8 @@ describe("what a remote session shows for a pending prompt", () => {
     expect(view.question.header).toBe("Create file");
     expect(view.question.prompt).toContain("probe.txt");
     expect(view.question.prompt).toContain(" 1 hello");
-    expect(view.cancel).toBe("Esc to cancel");
+    // Named `deny` after the parser's rename: Esc denies rather than dismissing.
+    expect(view.deny).toBe("Esc to cancel");
   });
 
   it("shows nothing when the transcript says nothing is waiting", () => {
@@ -712,5 +717,199 @@ describe("describing where a sent message went", () => {
 
     expect(notice).toMatch(/may be queued/);
     expect(notice).not.toMatch(/^Queued/);
+  });
+});
+
+const QUESTION_VIEW = remoteApprovalView({
+  pending: true,
+  screen: promptScreen(),
+  terminalOpen: false,
+});
+
+const RAW_VIEW: RemoteApprovalView = {
+  kind: "raw",
+  lines: ["1. Something"],
+  reason: "unknown-dialog",
+};
+
+/** Same prompt, fewer options — a box caught halfway through painting. */
+function halfPainted(): RemoteApprovalView {
+  return remoteApprovalView({
+    pending: true,
+    terminalOpen: false,
+    screen: promptScreen({ options: OPTIONS.slice(0, 2) }),
+  });
+}
+
+function run(views: RemoteApprovalView[], from = emptyApprovalProgress()) {
+  let progress = from;
+  const effects: ApprovalEffect[] = [];
+  let nextId = 0;
+  for (const view of views) {
+    const step = remoteApprovalTransition(progress, view, nextId + 1);
+    progress = step.progress;
+    for (const effect of step.effects) {
+      if (effect.kind === "ask") nextId = effect.requestId;
+      effects.push(effect);
+    }
+  }
+  return { progress, effects };
+}
+
+describe("deciding when an approval goes in front of the user", () => {
+  it("does not raise on the first frame", () => {
+    // Contiguous numbering with one cursor proves the run is unbroken, not that
+    // it is finished, so one frame is never enough.
+    const { effects, progress } = run([QUESTION_VIEW]);
+
+    expect(effects).toEqual([]);
+    expect(progress.shown).toBeNull();
+  });
+
+  it("raises once two frames agree", () => {
+    const { effects } = run([QUESTION_VIEW, QUESTION_VIEW]);
+
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ kind: "ask", requestId: 1 });
+  });
+
+  it("never raises a half-painted option list", () => {
+    // Two options where the finished prompt has three: an approval with no
+    // denial on it, which is the whole reason this gate exists.
+    const { effects } = run([halfPainted(), QUESTION_VIEW]);
+
+    expect(effects).toEqual([]);
+  });
+
+  it("raises the settled prompt after a half-painted frame", () => {
+    const { effects } = run([halfPainted(), QUESTION_VIEW, QUESTION_VIEW]);
+
+    expect(effects).toHaveLength(1);
+    const asked = effects[0];
+    expect(asked.kind).toBe("ask");
+    if (asked.kind !== "ask") return;
+    expect(asked.question.options.map((option) => option.label)).toEqual([
+      "Yes",
+      "Yes, allow all edits during this session",
+      "No",
+    ]);
+  });
+
+  it("does not raise twice for one prompt", () => {
+    const { effects } = run([QUESTION_VIEW, QUESTION_VIEW, QUESTION_VIEW]);
+
+    expect(effects.filter((effect) => effect.kind === "ask")).toHaveLength(1);
+  });
+
+  it("surfaces the terminal when the options keep changing", () => {
+    // A screen repainting is not a prompt being read; it is one we cannot read.
+    // Refusing to raise is safe, and it must not be silent.
+    const { effects } = run([
+      halfPainted(),
+      QUESTION_VIEW,
+      remoteApprovalView({
+        pending: true,
+        terminalOpen: false,
+        screen: promptScreen({ options: OPTIONS.slice(0, 1) }),
+      }),
+    ]);
+
+    expect(effects.map((effect) => effect.kind)).toEqual([
+      "openTerminal",
+      "surface",
+    ]);
+  });
+
+  it("treats a cursor moving as the same prompt", () => {
+    // Navigation within one prompt. Counting selection would mean arrow keys
+    // suppressed the raise, and it guards nothing the labels do not.
+    const moved = remoteApprovalView({
+      pending: true,
+      terminalOpen: false,
+      screen: promptScreen({
+        options: OPTIONS.map((option, index) => ({
+          ...option,
+          selected: index === 2,
+        })),
+      }),
+    });
+
+    const { effects } = run([QUESTION_VIEW, moved]);
+
+    expect(effects).toHaveLength(1);
+    expect(effects[0].kind).toBe("ask");
+  });
+
+  it("treats a prompt with no footer as the same prompt", () => {
+    // After #38 a missing footer is legitimate, so it cannot distinguish a
+    // partial paint from a complete one.
+    const noFooter = remoteApprovalView({
+      pending: true,
+      terminalOpen: false,
+      screen: promptScreen({ deny: undefined }),
+    });
+
+    const { effects } = run([QUESTION_VIEW, noFooter]);
+
+    expect(effects).toHaveLength(1);
+    expect(effects[0].kind).toBe("ask");
+  });
+});
+
+describe("retiring and re-raising", () => {
+  it("retires a prompt answered elsewhere as cancelled, not skipped", () => {
+    const shown = run([QUESTION_VIEW, QUESTION_VIEW]).progress;
+
+    const { effects, progress } = run([{ kind: "none" }], shown);
+
+    expect(effects).toEqual([
+      { kind: "resolve", requestId: 1, decision: "cancelled" },
+    ]);
+    expect(progress.shown).toBeNull();
+  });
+
+  it("says nothing when there was nothing in front of the user", () => {
+    expect(run([{ kind: "none" }]).effects).toEqual([]);
+  });
+
+  it("surfaces an unreadable screen once, not on every frame", () => {
+    const { effects } = run([RAW_VIEW, RAW_VIEW, RAW_VIEW]);
+
+    expect(effects.map((effect) => effect.kind)).toEqual([
+      "openTerminal",
+      "surface",
+    ]);
+  });
+
+  it("re-opens the terminal after it was hidden, without repeating itself", () => {
+    // Hiding the terminal with something still unreadable has to put it back —
+    // something genuinely is waiting. What it must not do is re-print the screen
+    // into the transcript every time, which is what made this a decision worth
+    // recording rather than a side effect of the ordering.
+    const afterRaw = run([RAW_VIEW]).progress;
+    // The view reads `none` while the terminal is open, clearing `shown`.
+    const hidden = run([{ kind: "none" }], afterRaw).progress;
+
+    const { effects } = run([RAW_VIEW], hidden);
+
+    expect(effects.map((effect) => effect.kind)).toEqual([
+      "openTerminal",
+      "surface",
+    ]);
+  });
+
+  it("allocates a request id only when it actually raises", () => {
+    const { effects } = run([
+      QUESTION_VIEW,
+      QUESTION_VIEW,
+      { kind: "none" },
+      QUESTION_VIEW,
+      QUESTION_VIEW,
+    ]);
+
+    const ids = effects.flatMap((effect) =>
+      effect.kind === "ask" ? [effect.requestId] : [],
+    );
+    expect(ids).toEqual([1, 2]);
   });
 });

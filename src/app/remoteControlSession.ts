@@ -180,7 +180,13 @@ export function shouldAutoOpen(
  */
 export type RemoteApprovalView =
   | { kind: "none" }
-  | { kind: "question"; question: UserQuestion; cancel?: string }
+  | {
+      kind: "question";
+      question: UserQuestion;
+      deny?: string;
+      /** Carried so an option set that never settles can be shown verbatim. */
+      lines: readonly string[];
+    }
   /** Something is waiting and the screen could not be read. Show it verbatim. */
   | { kind: "raw"; lines: readonly string[]; reason: string };
 
@@ -209,7 +215,8 @@ export function remoteApprovalView({
     return {
       kind: "question",
       question: questionFromPrompt(screen.prompt),
-      ...(screen.prompt.deny ? { cancel: screen.prompt.deny.label } : {}),
+      lines: screen.lines,
+      ...(screen.prompt.deny ? { deny: screen.prompt.deny.label } : {}),
     };
   }
   // An outstanding call is equally the ordinary state of a tool that is simply
@@ -546,4 +553,176 @@ export async function injectRemoteText(
   }
   await ports.write(plan.bytes);
   return { kind: "sent", queued: plan.queued };
+}
+
+// ------------------------------------------------------- raising an approval
+
+/**
+ * Consecutive frames that must agree on the option set before a prompt is shown.
+ *
+ * 1..n numbering with exactly one cursor proves the run is **contiguous**, not
+ * that it is **complete**: a box painted halfway gives `1..2 of 3`, which is
+ * contiguous, singly-selected, and parses as a finished two-option prompt.
+ * On the captured prompt the options are `Yes` / `Yes, and don't ask again` /
+ * `No`, so a half-painted frame is an approval **with no denial on it** — the
+ * user is offered Yes or Yes and the way out is not on screen. Re-reading every
+ * chunk corrects the frame, but not before someone can answer the one in front
+ * of them. A settled prompt costs one extra chunk; a half-painted one is never
+ * raised.
+ */
+export const APPROVAL_STABLE_FRAMES = 2;
+
+/**
+ * Distinct option sets in a row before the screen is treated as unreadable.
+ *
+ * A screen that keeps repainting is not a prompt being read, it is a prompt we
+ * cannot read — which is the raw-pty case. Refusing to raise is the safe
+ * direction, but it must not be silent, so it ends with the terminal in front of
+ * the user rather than with nothing.
+ */
+export const APPROVAL_CHURN_LIMIT = 3;
+
+export type ApprovalShown =
+  | { kind: "question"; requestId: number }
+  | { kind: "raw" }
+  | null;
+
+export type ApprovalProgress = {
+  shown: ApprovalShown;
+  /** The option set last parsed, and how many frames running it has held. */
+  signature: string | null;
+  agreed: number;
+  /** Distinct option sets seen in a row without one settling. */
+  churn: number;
+};
+
+export type ApprovalEffect =
+  | { kind: "ask"; requestId: number; question: UserQuestion }
+  | { kind: "resolve"; requestId: number; decision: "cancelled" }
+  | { kind: "openTerminal" }
+  | { kind: "surface"; lines: readonly string[]; reason: string };
+
+export type ApprovalStep = {
+  progress: ApprovalProgress;
+  effects: ApprovalEffect[];
+};
+
+export function emptyApprovalProgress(): ApprovalProgress {
+  return { shown: null, signature: null, agreed: 0, churn: 0 };
+}
+
+/**
+ * What a prompt is, for the purpose of deciding it is the same prompt.
+ *
+ * The question and its option labels, in order. Three deliberate exclusions:
+ *
+ * The **selected index** is out, and by construction rather than by choice here:
+ * `questionFromPrompt` keeps only each option's id and label, so selection never
+ * reaches this function at all. That is the right outcome — a cursor moving is
+ * navigation within one prompt, and counting it would mean arrow keys suppressed
+ * the raise — but it is enforced by the view's shape, so no test here can break
+ * it and none pretends to.
+ *
+ * The **deny footer** is out, because after #38 its absence is legitimate — a
+ * real `WebFetch` prompt prints no footer at all — so a missing one cannot
+ * distinguish a partial paint from a complete one, and a half-painted *footer*
+ * is not a safety problem the way a half-painted option list is.
+ *
+ * **Counts** need no separate mention: fewer labels is a different signature,
+ * which is exactly the case this exists to catch.
+ */
+function approvalSignature(question: UserQuestion): string {
+  return JSON.stringify([
+    question.prompt,
+    question.options.map((option) => option.label),
+  ]);
+}
+
+/**
+ * Raise, retire or re-raise the approval a session is waiting on.
+ *
+ * A function over `(what is shown, what the screen says)` so every path is a row
+ * in a table rather than an emergent property of the order the branches happen
+ * to be written in. The caller performs the effects; deciding which ones is all
+ * that happens here.
+ */
+export function remoteApprovalTransition(
+  progress: ApprovalProgress,
+  view: RemoteApprovalView,
+  nextRequestId: number,
+): ApprovalStep {
+  const cleared = emptyApprovalProgress();
+
+  if (view.kind === "none") {
+    // Answered on the phone or in the TUI while MonoCode was showing it.
+    // `cancelled`, not `skipped`: nobody declined it here.
+    const effects: ApprovalEffect[] =
+      progress.shown?.kind === "question"
+        ? [
+            {
+              kind: "resolve",
+              requestId: progress.shown.requestId,
+              decision: "cancelled",
+            },
+          ]
+        : [];
+    return { progress: cleared, effects };
+  }
+
+  if (view.kind === "raw") {
+    if (progress.shown?.kind === "raw") return { progress, effects: [] };
+    return {
+      progress: { ...cleared, shown: { kind: "raw" } },
+      effects: [
+        { kind: "openTerminal" },
+        { kind: "surface", lines: view.lines, reason: view.reason },
+      ],
+    };
+  }
+
+  // Already in front of the user. Re-raising would allocate a second request id
+  // for one prompt.
+  if (progress.shown?.kind === "question") return { progress, effects: [] };
+
+  const signature = approvalSignature(view.question);
+  const fresh = signature !== progress.signature;
+  const churn = fresh ? progress.churn + 1 : progress.churn;
+  // A first sighting counts as one agreeing frame, not as a special case: if it
+  // returned early the threshold could never be read on this path, and
+  // `APPROVAL_STABLE_FRAMES = 1` would behave exactly like `2`.
+  const agreed = fresh ? 1 : progress.agreed + 1;
+  if (fresh) {
+    if (churn >= APPROVAL_CHURN_LIMIT) {
+      // Repainting rather than settling, so this is a screen we cannot read.
+      return {
+        progress: { ...cleared, shown: { kind: "raw" } },
+        effects: [
+          { kind: "openTerminal" },
+          {
+            kind: "surface",
+            lines: view.lines,
+            reason: "the options kept changing",
+          },
+        ],
+      };
+    }
+  }
+
+  if (agreed < APPROVAL_STABLE_FRAMES) {
+    return {
+      progress: { shown: progress.shown, signature, agreed, churn },
+      effects: [],
+    };
+  }
+  return {
+    progress: {
+      shown: { kind: "question", requestId: nextRequestId },
+      signature,
+      agreed,
+      churn: 0,
+    },
+    effects: [
+      { kind: "ask", requestId: nextRequestId, question: view.question },
+    ],
+  };
 }
