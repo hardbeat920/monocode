@@ -830,6 +830,20 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         "CREATE INDEX IF NOT EXISTS sessions_legacy_inbox
          ON sessions (id) WHERE inbox_ask IS NOT NULL;",
     )?;
+    // Unscoped session search pins this index with `INDEXED BY`, and SQLite
+    // rejects that statement outright when the index is missing instead of
+    // falling back to another plan. The versioned blocks above are the normal
+    // path, but a recorded version can outlive the schema it describes, so
+    // restore the index here for the same reason the tables above are
+    // restored: a missing index would fail every search without a `cwd`.
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS sessions_cwd_cover_idx
+           ON sessions (cwd, has_user_message, updated_at DESC, id, harness,
+                        model, runtime_mode, title, provider_session_id,
+                        created_at, branch, archived, pinned,
+                        linked_work_item_json, worktree_cwd, worktree_removed,
+                        is_draft, automation_id);",
+    )?;
     crate::notes::ensure_notes_table(conn)?;
     crate::reminders::ensure_table(conn)?;
     crate::automations::ensure_tables(conn)?;
@@ -2863,6 +2877,76 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(inflight, 1);
         assert_eq!(snapshot, 1);
+    }
+
+    #[test]
+    fn migrate_restores_the_covering_index_when_versions_already_recorded() {
+        let path = std::env::temp_dir().join(format!(
+            "monocode-stale-index-{}-{}.db",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            // A database that claims every version but carries none of the
+            // columns or indexes those versions describe.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE sessions (
+                   id TEXT PRIMARY KEY,
+                   cwd TEXT NOT NULL,
+                   harness TEXT NOT NULL,
+                   model TEXT NOT NULL,
+                   model_settings TEXT NOT NULL DEFAULT '{}',
+                   runtime_mode TEXT NOT NULL,
+                   title TEXT NOT NULL,
+                   provider_session_id TEXT,
+                   blocks_json TEXT NOT NULL DEFAULT '[]',
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO schema_migrations (version, applied_at)
+                   VALUES (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1),
+                          (8, 1), (9, 1), (10, 1), (11, 1), (12, 1), (13, 1),
+                          (14, 1), (15, 1), (16, 1), (17, 1), (18, 1);",
+            )
+            .unwrap();
+        }
+        let store = SessionStore::open(path.clone()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index'
+                   AND name = 'sessions_cwd_cover_idx'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
+        upsert_session(&conn, &sample("s1", "/tmp/a", "Restored index")).unwrap();
+        let result = search_sessions(
+            &conn,
+            &SessionSearchOptions {
+                query: "Restored".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: String::new(),
+            },
+        )
+        .expect("unscoped search must not fail when the index was restored");
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
+        drop(conn);
+        drop(store);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
