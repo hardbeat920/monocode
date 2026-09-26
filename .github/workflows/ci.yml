@@ -40,16 +40,23 @@ jobs:
       - run: cargo check
       - run: cargo test
 
-  fedora:
-    name: Fedora rpm build
+  rpm:
+    name: RPM build (${{ matrix.image }})
     runs-on: ubuntu-latest
-    container: fedora:43
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # almalinux:10 covers the Enterprise Linux path in
+        # scripts/install-linux-deps-fedora.sh (EPEL 10 + CRB), which is the
+        # only way to catch packages that are missing from EPEL 10.
+        image: [fedora:43, almalinux:10]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Install Fedora system dependencies
+      - name: Install system dependencies
         run: bash scripts/install-linux-deps-fedora.sh
 
       - uses: actions/setup-node@v4
@@ -62,13 +69,18 @@ jobs:
       - run: npm ci
       - run: npm run build:fedora
 
-      - name: Verify rpm bundle
+      - name: Install the generated rpm
         run: |
           set -euo pipefail
           shopt -s nullglob
-          rpm=(target/release/bundle/rpm/*.rpm)
-          if (( ${#rpm[@]} != 1 )); then
+          bundle=(target/release/bundle/rpm/*.rpm)
+          if (( ${#bundle[@]} != 1 )); then
             echo "Expected exactly one .rpm" >&2
             exit 1
           fi
-          rpm -qip "${rpm[0]}"
+          rpm -qip "${bundle[0]}"
+          # dnf resolves the generated Requires (and would fail here if the
+          # package asked for something the setup script did not install).
+          dnf install -y "${bundle[0]}"
+          rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
+          command -v monocode

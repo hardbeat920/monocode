@@ -78,6 +78,9 @@ if [ -n "$distro" ]; then
 fi
 
 # The conditional expansions also support empty arrays with nounset on Bash 3.
+# libxdo is deliberately absent: it is only needed for Tauri's opt-in
+# linux-libxdo feature, which this project does not enable (and it is not
+# packaged in EPEL 10).
 "${SUDO[@]+"${SUDO[@]}"}" dnf install -y \
   gcc \
   gcc-c++ \
@@ -90,7 +93,6 @@ fi
   javascriptcoregtk4.1-devel \
   libsoup3-devel \
   openssl-devel \
-  libxdo-devel \
   librsvg2-devel \
   libappindicator-gtk3-devel \
   patchelf \
