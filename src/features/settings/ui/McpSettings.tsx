@@ -8,6 +8,9 @@ import {
   type FormEvent,
 } from "react";
 import { revealPath } from "../../../platform/tauri/fs";
+import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
+import { Modal } from "../../../shared/ui/Modal";
+import { Globe, Plus, RefreshCw, ChevronDown } from "../../../shared/ui/icons";
 import {
   MCP_PROVIDER_LABELS,
   parseClaudeMcpList,
@@ -17,6 +20,197 @@ import {
 type Scope = McpConnection["scope"];
 type ServerRow = McpConnection & { status: string };
 type Filter = "all" | McpConnection["provider"];
+type Provider = McpConnection["provider"];
+const PROVIDERS: Provider[] = [
+  "claude",
+  "claude_desktop",
+  "codex",
+  "cursor",
+  "opencode",
+];
+const SCOPES: Record<Provider, Scope[]> = {
+  claude: ["local", "project", "user"],
+  claude_desktop: ["user"],
+  codex: ["user"],
+  cursor: ["project", "user"],
+  opencode: ["project", "user"],
+};
+
+function ProviderIcon({ provider }: { provider: Provider }) {
+  return (
+    <HarnessIcon
+      harness={provider === "claude_desktop" ? "claude" : provider}
+      className="size-3.5 shrink-0"
+    />
+  );
+}
+
+function AddServerModal({
+  cwd,
+  initialProvider,
+  onClose,
+  onAdded,
+}: {
+  cwd: string;
+  initialProvider: Provider;
+  onClose: () => void;
+  onAdded: () => Promise<void>;
+}) {
+  const [provider, setProvider] = useState<Provider>(initialProvider);
+  const [scope, setScope] = useState<Scope>(SCOPES[initialProvider][0]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [config, setConfig] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const parsed: unknown = JSON.parse(config);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Configuration must be a JSON object");
+      }
+      setBusy(true);
+      setError("");
+      await invoke("mcp_add", {
+        cwd,
+        provider,
+        scope,
+        name: name.trim(),
+        config,
+      });
+      await onAdded();
+      onClose();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="Add MCP server"
+      description="Paste a server configuration and choose where to add it."
+      onClose={onClose}
+      fitViewport
+    >
+      <form onSubmit={(event) => void add(event)} className="space-y-4 p-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="relative text-xs text-content/65">
+            <span>Provider</span>
+            <button
+              type="button"
+              aria-label="Provider"
+              aria-expanded={pickerOpen}
+              onClick={() => setPickerOpen(!pickerOpen)}
+              className="mt-1 flex w-full items-center gap-2 rounded-md border border-stroke bg-background-base px-2 py-1.5 text-left text-sm text-content"
+            >
+              <ProviderIcon provider={provider} />
+              <span className="flex-1">{MCP_PROVIDER_LABELS[provider]}</span>
+              <ChevronDown className="size-3.5" />
+            </button>
+            {pickerOpen ? (
+              <div
+                role="listbox"
+                aria-label="Choose provider"
+                className="absolute z-10 mt-1 w-full rounded-md border border-stroke bg-background-base p-1 shadow-lg"
+              >
+                {PROVIDERS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    role="option"
+                    aria-selected={provider === option}
+                    onClick={() => {
+                      setProvider(option);
+                      setScope(SCOPES[option][0]);
+                      setPickerOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-content hover:bg-content/5"
+                  >
+                    <ProviderIcon provider={option} />
+                    {MCP_PROVIDER_LABELS[option]}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <label className="text-xs text-content/65">
+            Scope
+            <select
+              value={scope}
+              onChange={(event) => setScope(event.target.value as Scope)}
+              className="mt-1 block w-full rounded-md border border-stroke bg-background-base px-2 py-1.5 text-sm text-content"
+            >
+              {SCOPES[provider].map((option) => (
+                <option key={option} value={option}>
+                  {option[0].toUpperCase() + option.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="block text-xs text-content/65">
+          Name{" "}
+          <span className="text-content/40">
+            (optional for an mcpServers block)
+          </span>
+          <input
+            value={name}
+            pattern="[A-Za-z0-9_-]*"
+            onChange={(event) => setName(event.target.value)}
+            className="mt-1 block w-full rounded-md border border-stroke bg-background-base px-2 py-1.5 text-sm text-content"
+            placeholder="my-server"
+          />
+        </label>
+        <label className="block text-xs text-content/65">
+          JSON configuration
+          <textarea
+            required
+            value={config}
+            onChange={(event) => setConfig(event.target.value)}
+            rows={7}
+            spellCheck={false}
+            className="mt-1 block w-full rounded-md border border-stroke bg-background-base px-2 py-1.5 font-mono text-xs text-content"
+            placeholder={
+              '{"mcpServers":{"my-server":{"command":"npx","args":["-y","example-mcp"]}}}'
+            }
+          />
+        </label>
+        <p className="text-xs text-content/45">
+          Paste one entry from an mcpServers block, or a single server object
+          with a name above.
+        </p>
+        {error ? (
+          <p
+            role="alert"
+            className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-400"
+          >
+            {error}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5 disabled:opacity-50"
+          >
+            {busy ? "Adding…" : "Add server"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 
 export function McpSettings({ cwd }: { cwd: string }) {
   const [servers, setServers] = useState<ServerRow[]>([]);
@@ -25,9 +219,7 @@ export function McpSettings({ cwd }: { cwd: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [claudeError, setClaudeError] = useState("");
-  const [name, setName] = useState("");
-  const [config, setConfig] = useState("");
-  const [scope, setScope] = useState<Scope>("local");
+  const [addOpen, setAddOpen] = useState(false);
   const [removeScopes, setRemoveScopes] = useState<Record<string, Scope>>({});
 
   const refresh = useCallback(async () => {
@@ -93,26 +285,6 @@ export function McpSettings({ cwd }: { cwd: string }) {
     [filter, servers],
   );
 
-  async function add(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    try {
-      const parsed: unknown = JSON.parse(config);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("Configuration must be a JSON object");
-      }
-      setBusy("add");
-      setError("");
-      await invoke("claude_mcp_add", { cwd, name: name.trim(), config, scope });
-      setName("");
-      setConfig("");
-      await refresh();
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function login(server: ServerRow) {
     setBusy(server.name);
     setError("");
@@ -169,38 +341,52 @@ export function McpSettings({ cwd }: { cwd: string }) {
             Configured servers for this project and your provider accounts.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          disabled={loading || busy !== null}
-          className="rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5 disabled:opacity-50"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={loading || busy !== null}
+            className="flex items-center gap-1.5 rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5 disabled:opacity-50"
+          >
+            <RefreshCw className="size-3.5" />
+            Refresh
+          </button>
+          <button
+            type="button"
+            aria-label="Add MCP server"
+            onClick={() => setAddOpen(true)}
+            className="grid size-7 place-items-center rounded-md border border-stroke hover:bg-content/5"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        </div>
       </div>
       <div
         className="flex flex-wrap gap-1"
         aria-label="Filter MCP servers by provider"
       >
-        {(["all", "claude", "codex", "cursor", "opencode"] as const).map(
-          (provider) => (
-            <button
-              key={provider}
-              type="button"
-              aria-pressed={filter === provider}
-              onClick={() => setFilter(provider)}
-              className={`rounded-md px-2.5 py-1 text-xs ${filter === provider ? "bg-selection text-content" : "text-content/55 hover:bg-content/5 hover:text-content"}`}
-            >
-              {provider === "all" ? "All" : MCP_PROVIDER_LABELS[provider]}
-              <span className="ml-1 opacity-60">
-                {provider === "all"
-                  ? servers.length
-                  : servers.filter((server) => server.provider === provider)
-                      .length}
-              </span>
-            </button>
-          ),
-        )}
+        {(["all", ...PROVIDERS] as const).map((provider) => (
+          <button
+            key={provider}
+            type="button"
+            aria-pressed={filter === provider}
+            onClick={() => setFilter(provider)}
+            className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs ${filter === provider ? "bg-selection text-content" : "text-content/55 hover:bg-content/5 hover:text-content"}`}
+          >
+            {provider === "all" ? (
+              <Globe className="size-3.5" />
+            ) : (
+              <ProviderIcon provider={provider} />
+            )}
+            {provider === "all" ? "All" : MCP_PROVIDER_LABELS[provider]}
+            <span className="opacity-60">
+              {provider === "all"
+                ? servers.length
+                : servers.filter((server) => server.provider === provider)
+                    .length}
+            </span>
+          </button>
+        ))}
       </div>
       {error ? (
         <p
@@ -243,7 +429,8 @@ export function McpSettings({ cwd }: { cwd: string }) {
                   </div>
                 ) : null}
               </div>
-              {!["stdio", "local", "ws"].includes(server.transport) ? (
+              {server.provider !== "claude_desktop" &&
+              !["stdio", "local", "ws"].includes(server.transport) ? (
                 <button
                   type="button"
                   disabled={busy !== null}
@@ -301,67 +488,18 @@ export function McpSettings({ cwd }: { cwd: string }) {
           ))}
         </div>
       )}
-      <form
-        onSubmit={(event) => void add(event)}
-        className="space-y-3 rounded-lg border border-stroke p-4"
-      >
-        <div>
-          <h2 className="text-sm font-semibold">Add a Claude Code server</h2>
-          <p className="mt-1 text-xs text-content/55">
-            Paste a Claude Code MCP server JSON object. Other providers keep
-            their own configuration files, shown above.
-          </p>
-        </div>
-        <label className="block text-xs text-content/65">
-          Name
-          <input
-            required
-            pattern="[A-Za-z0-9_-]+"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            className="mt-1 block w-full rounded-md border border-stroke bg-background-base px-2 py-1.5 text-sm text-content"
-            placeholder="my-server"
-          />
-        </label>
-        <label className="block text-xs text-content/65">
-          Configuration
-          <textarea
-            required
-            value={config}
-            onChange={(event) => setConfig(event.target.value)}
-            rows={4}
-            spellCheck={false}
-            className="mt-1 block w-full rounded-md border border-stroke bg-background-base px-2 py-1.5 font-mono text-xs text-content"
-            placeholder={'{"type":"http","url":"https://example.com/mcp"}'}
-          />
-        </label>
-        <div className="flex items-center gap-3">
-          <label className="text-xs text-content/65">
-            Scope{" "}
-            <select
-              value={scope}
-              onChange={(event) => setScope(event.target.value as Scope)}
-              className="rounded border border-stroke bg-background-base px-2 py-1 text-content"
-            >
-              <option value="local">Local</option>
-              <option value="project">Project</option>
-              <option value="user">User</option>
-            </select>
-          </label>
-          <button
-            type="submit"
-            disabled={busy !== null}
-            className="rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5 disabled:opacity-50"
-          >
-            Add server
-          </button>
-        </div>
-      </form>
       <p className="text-xs text-content/45">
-        Claude status comes from its CLI. Other providers show configured
-        entries; open their config to manage them. Claude OAuth sign in opens
-        your browser when supported.
+        Claude Code status comes from its CLI. Other providers show configured
+        entries. Sign in opens your browser when supported.
       </p>
+      {addOpen ? (
+        <AddServerModal
+          cwd={cwd}
+          initialProvider={filter === "all" ? "claude" : filter}
+          onClose={() => setAddOpen(false)}
+          onAdded={refresh}
+        />
+      ) : null}
     </div>
   );
 }

@@ -91,33 +91,44 @@ it("filters connections by provider", async () => {
   });
 });
 
-it("adds a server with its selected scope", async () => {
+it("adds a standard mcpServers entry to the selected provider", async () => {
   await act(async () =>
     root.render(createElement(McpSettings, { cwd: "/repo" })),
   );
-  const name = container.querySelector<HTMLInputElement>("input")!;
-  const config = container.querySelector<HTMLTextAreaElement>("textarea")!;
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Add MCP server"]')!
+      .click(),
+  );
+  expect(document.body.textContent).toContain("Add MCP server");
+  const provider = document.body.querySelector<HTMLButtonElement>(
+    '[aria-label="Provider"]',
+  )!;
+  await act(async () => provider.click());
+  const cursor = [
+    ...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+  ].find((button) => button.textContent === "Cursor")!;
+  await act(async () => cursor.click());
+  const config = document.body.querySelector<HTMLTextAreaElement>("textarea")!;
+  const json =
+    '{"mcpServers":{"new-server":{"command":"npx","args":["example"]}}}';
   await act(async () => {
-    Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )!.set!.call(name, "new-server");
-    name.dispatchEvent(new Event("input", { bubbles: true }));
     Object.getOwnPropertyDescriptor(
       HTMLTextAreaElement.prototype,
       "value",
-    )!.set!.call(config, '{"type":"http","url":"https://example.com/mcp"}');
+    )!.set!.call(config, json);
     config.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () =>
-    container
+    document.body
       .querySelector("form")!
       .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
   );
-  expect(invoke).toHaveBeenCalledWith("claude_mcp_add", {
+  expect(invoke).toHaveBeenCalledWith("mcp_add", {
     cwd: "/repo",
-    name: "new-server",
-    config: '{"type":"http","url":"https://example.com/mcp"}',
-    scope: "local",
+    provider: "cursor",
+    name: "",
+    config: json,
+    scope: "project",
   });
 });
