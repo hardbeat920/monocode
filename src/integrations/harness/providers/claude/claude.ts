@@ -854,8 +854,12 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
-    if (isAgentToolName(tool.name) && isBackgroundedAgentTool(live, tool.id)) {
-      continue;
+    if (isAgentToolName(tool.name)) {
+      // Backgrounded work keeps running past its tool call, so its result is
+      // not the end of it; anything else is done and must stop holding the
+      // turn open.
+      if (isBackgroundedAgentTool(live, tool.id)) continue;
+      clearAgentToolTasks(live, tool.id);
     }
     live.onEvent({
       type: "tool.updated",
@@ -1391,6 +1395,29 @@ function noteSubagentResults(
       status: result.isError ? "failed" : "completed",
     });
   }
+}
+
+/**
+ * A foreground subagent is finished the moment its result comes back.
+ *
+ * Its bookkeeping is otherwise cleared only by a task-list update, and Claude
+ * does not reliably send one after the tool returns. The entry then sits in
+ * `agentTasks`/`backgroundTasks`, `maybeFinishTurn` refuses to end the turn,
+ * and nothing else ever will — the thread stays busy until the app is closed,
+ * which then records the turn as failed even though the work succeeded.
+ */
+function clearAgentToolTasks(live: Live, toolUseId: string): void {
+  let cleared = false;
+  for (const [taskId, task] of [...live.agentTasks]) {
+    if (task.toolUseId !== toolUseId) continue;
+    live.agentTasks.delete(taskId);
+    live.backgroundTasks.delete(taskId);
+    settleBackgroundRow(live, taskId, "completed");
+    cleared = true;
+  }
+  if (!cleared) return;
+  syncBackgroundWait(live);
+  maybeFinishTurn(live);
 }
 
 function isBackgroundedAgentTool(live: Live, toolUseId: string): boolean {

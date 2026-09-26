@@ -616,6 +616,62 @@ describe("claude subagents", () => {
     });
   });
 
+  it("ends the turn when a foreground subagent returns its result", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_agent",
+            name: "Task",
+            input: { description: "Generate translations" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "t_agent",
+      tool_use_id: "toolu_agent",
+      description: "Generate translations",
+      task_type: "local_agent",
+    });
+    // The subagent finishes and hands its work back. Claude does not
+    // necessarily follow this with a task-list update, and without one the
+    // bookkeeping entry would sit there holding the turn open indefinitely.
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_agent",
+            content: "All 37 locales pushed successfully",
+          },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await waitFor(() => settled, "turn ended after the subagent returned");
+    expect(settled).toBe(true);
+  });
+
   it("does not let a failed turn's late result settle the next one", async () => {
     const { events, turn } = await startTurn("s1");
     emit({
