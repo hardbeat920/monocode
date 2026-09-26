@@ -52,8 +52,8 @@ jobs:
         # only way to catch packages that are missing from EPEL 10.
         image: [fedora:43, almalinux:10]
     steps:
-      # almalinux:10 ships no git, which actions/checkout otherwise has to work
-      # around with a REST API tarball download.
+      # Neither fedora:43 nor almalinux:10 ships git, which actions/checkout
+      # otherwise has to work around with a REST API tarball download.
       - name: Install git
         run: dnf install -y git
 
