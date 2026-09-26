@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   composerHeld,
+  COMPOSER_CLEAR,
   createPtyFanout,
+  injectRemoteText,
+  queuedNotice,
   noteInterruptedTurn,
   pendingAfter,
   remoteApprovalKeystroke,
@@ -595,5 +598,119 @@ describe("one pty subscription, many readers", () => {
     expect(() => fanout.dispatch("x")).not.toThrow();
     expect(parsed).toEqual(["x"]);
     expect(survivor).toEqual(["x"]);
+  });
+});
+
+/** A screen sequence the injector walks through as it polls. */
+function scriptedPty(screens: (PromptScreen | null)[]) {
+  const written: string[] = [];
+  let at = 0;
+  return {
+    written,
+    ports: {
+      write: async (bytes: string) => {
+        written.push(bytes);
+      },
+      screen: () => screens[Math.min(at, screens.length - 1)],
+      settle: async () => {
+        at += 1;
+      },
+      attempts: 3,
+    },
+  };
+}
+
+const MESSAGE = "\x1b[200~say OK\x1b[201~\r";
+
+describe("typing a message into the pty", () => {
+  it("sends straight away when the composer is empty", async () => {
+    const pty = scriptedPty([idleWith(IDLE_COMPOSER)]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome).toEqual({ kind: "sent", queued: false });
+    expect(pty.written).toEqual([MESSAGE]);
+  });
+
+  it("clears a restored prompt first, then sends", async () => {
+    const pty = scriptedPty([
+      idleWith(AFTER_INTERRUPT),
+      idleWith(IDLE_COMPOSER),
+    ]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome.kind).toBe("sent");
+    // The clear goes first and the message only after the screen came back
+    // empty, which is the whole ordering.
+    expect(pty.written).toEqual([COMPOSER_CLEAR, MESSAGE]);
+  });
+
+  it("never writes the message while the composer still holds text", async () => {
+    // The measured bug: bracketed paste appends, so a send here would submit
+    // the interrupted prompt and this message welded together.
+    const pty = scriptedPty([idleWith(AFTER_INTERRUPT)]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome.kind).toBe("refused");
+    if (outcome.kind !== "refused") return;
+    expect(outcome.reason).toContain("abacus");
+    expect(pty.written).toEqual([COMPOSER_CLEAR]);
+    expect(pty.written).not.toContain(MESSAGE);
+  });
+
+  it("writes nothing at all when the parser refuses the screen", async () => {
+    const pty = scriptedPty([
+      {
+        lines: ["Do you want to create probe.txt?"],
+        turn: "in-progress",
+        kind: "permission-prompt",
+        prompt: promptScreen().prompt,
+      } as PromptScreen,
+    ]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome.kind).toBe("refused");
+    expect(pty.written).toEqual([]);
+  });
+
+  it("writes nothing while the user has the terminal open", async () => {
+    const pty = scriptedPty([idleWith(IDLE_COMPOSER)]);
+
+    const outcome = await injectRemoteText("say OK", true, pty.ports);
+
+    expect(outcome.kind).toBe("refused");
+    expect(pty.written).toEqual([]);
+  });
+
+  it("refuses before the terminal has painted", async () => {
+    const pty = scriptedPty([null]);
+
+    expect((await injectRemoteText("say OK", false, pty.ports)).kind).toBe(
+      "refused",
+    );
+    expect(pty.written).toEqual([]);
+  });
+});
+
+describe("describing where a sent message went", () => {
+  it("says nothing when it went straight in", () => {
+    expect(queuedNotice(false)).toBeNull();
+  });
+
+  it("says it was queued when the screen knows a turn is running", () => {
+    expect(queuedNotice(true)).toMatch(/Queued/);
+  });
+
+  it("hedges when the screen cannot tell", () => {
+    // `kind` answers "can I inject"; `turn` answers "will it queue". During
+    // streaming the screen reads idle with an unknown turn, so a confident
+    // answer either way would be a guess.
+    const notice = queuedNotice("unknown");
+
+    expect(notice).toMatch(/may be queued/);
+    expect(notice).not.toMatch(/^Queued/);
   });
 });

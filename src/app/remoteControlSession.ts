@@ -12,6 +12,7 @@ import type {
   RemoteControlIntent,
   RemoteControlTarget,
 } from "../features/remoteControl/model/action";
+import { planInjection } from "../features/remoteControl/model/promptScreen";
 import type {
   InjectionPlan,
   InjectionRefusal,
@@ -461,4 +462,88 @@ export function createPtyFanout(parser: (chunk: string) => void): PtyFanout {
     },
     viewerCount: () => viewers.size,
   };
+}
+
+/**
+ * How to describe a send's fate, when the screen may not know it.
+ *
+ * `kind` answers *can I inject*; `turn` answers *will it queue*. They were one
+ * field's job and they are not the same question — during streaming the screen
+ * reads `idle` with `turn: "unknown"`, so a send is allowed while whether the
+ * TUI queues it is genuinely unknowable from a frame. Nothing is lost either
+ * way: a mid-turn send was measured to queue cleanly. So the only wrong answer
+ * here is a confident one.
+ */
+export function queuedNotice(queued: boolean | "unknown"): string | null {
+  if (queued === "unknown") {
+    return "Sent — it may be queued in the terminal until the current turn ends; the screen cannot tell while a turn is streaming";
+  }
+  return queued ? "Queued in the terminal until the current turn ends" : null;
+}
+
+export type InjectOutcome =
+  | { kind: "sent"; queued: boolean | "unknown" }
+  | { kind: "refused"; reason: string };
+
+/** The impure edges of typing into a TUI, so the sequence can be asserted. */
+export type InjectPorts = {
+  write: (bytes: string) => Promise<void>;
+  screen: () => PromptScreen | null;
+  /** One poll interval. Resolves when the screen may have repainted. */
+  settle: () => Promise<void>;
+  /** Polls before giving up on a clear. */
+  attempts?: number;
+};
+
+/**
+ * Type a message into the pty, clearing a restored prompt out of the way first.
+ *
+ * The clear keystroke is written and then **checked**, never trusted: after an
+ * ESC the CLI restores the interrupted prompt into its composer and bracketed
+ * paste appends to it, so a send that assumed the clear worked would submit the
+ * two welded together — measured as one message reading
+ * `…Think carefully first.say OK`. A composer that will not come back empty
+ * therefore ends in a refusal. Not knowing what is in the composer stops a send;
+ * it never permits one.
+ */
+export async function injectRemoteText(
+  text: string,
+  terminalOpen: boolean,
+  ports: InjectPorts,
+): Promise<InjectOutcome> {
+  const planFor = (screen: PromptScreen | null) =>
+    screen ? planInjection(screen, text) : null;
+  const gate = remoteSendGate(ports.screen(), planFor(ports.screen()), terminalOpen);
+  if (gate.kind === "refuse") return { kind: "refused", reason: gate.reason };
+
+  if (gate.kind === "clear") {
+    await ports.write(COMPOSER_CLEAR);
+    let cleared = false;
+    for (let attempt = 0; attempt < (ports.attempts ?? 20); attempt += 1) {
+      await ports.settle();
+      const lines = ports.screen()?.lines;
+      if (lines && !composerHeld(lines)) {
+        cleared = true;
+        break;
+      }
+    }
+    if (!cleared) {
+      return {
+        kind: "refused",
+        reason: `the terminal's composer still holds "${gate.held}", which a send would be joined onto`,
+      };
+    }
+  }
+
+  const plan = planFor(ports.screen());
+  if (!plan?.allowed) {
+    return {
+      kind: "refused",
+      reason: plan
+        ? REMOTE_REFUSALS[plan.reason]
+        : "the terminal stopped painting while it was cleared",
+    };
+  }
+  await ports.write(plan.bytes);
+  return { kind: "sent", queued: plan.queued };
 }

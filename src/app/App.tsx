@@ -135,7 +135,6 @@ import {
   writePty,
 } from "../platform/tauri/pty";
 import {
-  planInjection,
   readPromptScreen,
   type PromptScreen,
 } from "../features/remoteControl/model/promptScreen";
@@ -166,19 +165,17 @@ import {
   REMOTE_CONTROL_ROWS,
 } from "../integrations/harness/providers/claude/remoteControl";
 import {
-  composerHeld,
-  COMPOSER_CLEAR,
+  createPtyFanout,
+  injectRemoteText,
   noteInterruptedTurn,
   pendingAfter,
+  queuedNotice,
   remoteApprovalKeystroke,
   remoteApprovalReply,
   remoteApprovalView,
-  createPtyFanout,
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
-  REMOTE_REFUSALS,
-  remoteSendGate,
   seatRemoteUserMessage,
   shouldAutoOpen,
   type PtyFanout,
@@ -1492,27 +1489,13 @@ export default function App({
    * know what is in the composer, and not knowing has to end in a refusal rather
    * than in a send.
    */
-  const waitForClearComposer = useCallback(
-    async (entry: {
-      screen: { screen: PromptScreen | null };
-    }): Promise<boolean> => {
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        const lines = entry.screen.screen?.lines;
-        if (lines && !composerHeld(lines)) return true;
-      }
-      return false;
-    },
-    [],
-  );
-
   /**
    * Type a composer turn into the pty, or `null` when this session is not
    * remote-controlled and the ordinary harness send should run.
    *
-   * Gated on the parsed screen because a modal swallows injected text silently —
-   * no error, no record, nothing in the write's result — which is how a probe
-   * lost a whole message to the first-run trust dialog.
+   * The sequence lives in `injectRemoteText`, which is where its guarantee is
+   * asserted: no message bytes are written while the composer still holds text.
+   * This is the adapter — ports in, outcome turned into something readable.
    */
   const injectRemoteTurn = useCallback(
     (
@@ -1522,78 +1505,41 @@ export default function App({
     ): Promise<void> | null => {
       const entry = remoteControl.current.get(sessionId);
       if (!entry) return null;
-      const refuse = (reason: string) => {
+      const note = (body: string) => {
         enqueueHarnessEvent(sessionId, {
           type: "interjection",
           customType: "remote-control",
           severity: "concern",
-          text: `Nothing was sent: ${reason}. Close Remote Control to send this here, or continue on your phone.`,
+          text: body,
         });
-        flushHarnessEvents();
       };
-      const screenNow = () => entry.screen.screen;
-      const gate = remoteSendGate(
-        screenNow(),
-        screenNow() ? planInjection(screenNow()!, text) : null,
-        remoteTerminalIds.includes(sessionId),
-      );
-      if (gate.kind === "refuse") {
-        refuse(gate.reason);
-        return Promise.resolve();
-      }
-      if (gate.kind === "clear") {
-        // The CLI restores an interrupted prompt into the composer, and
-        // bracketed paste appends to it, so typing now would submit the two
-        // welded together. Clear it and look again — never type on the strength
-        // of the clear having probably worked.
-        return (async () => {
-          await writePty(entry.ptyId, COMPOSER_CLEAR).catch(() => undefined);
-          const cleared = await waitForClearComposer(entry);
-          if (!cleared) {
-            refuse(
-              `the terminal's composer still holds "${gate.held}", which a send would be joined onto`,
-            );
-            return;
-          }
-          const after = screenNow();
-          const plan = after ? planInjection(after, text) : null;
-          if (!plan?.allowed) {
-            refuse("the terminal stopped accepting input while it was cleared");
-            return;
-          }
-          await writePty(entry.ptyId, plan.bytes);
-        })();
-      }
-      const plan = planInjection(screenNow()!, text);
-      if (!plan.allowed) {
-        refuse(REMOTE_REFUSALS[plan.reason]);
-        return Promise.resolve();
-      }
-      if (hasAttachments) {
-        // The TUI takes typed text. `@file` mentions in it resolve as usual, but
-        // a pasted attachment has no keystroke to become.
-        enqueueHarnessEvent(sessionId, {
-          type: "interjection",
-          customType: "remote-control",
-          severity: "concern",
-          text: "Attachments cannot be sent while Remote Control is open, so only the message text was sent.",
-        });
-      }
-      if (plan.queued) {
-        enqueueHarnessEvent(sessionId, {
-          type: "status",
-          text: "Queued in the terminal until the current turn ends",
-        });
-      }
-      flushHarnessEvents();
-      return writePty(entry.ptyId, plan.bytes);
+      return injectRemoteText(text, remoteTerminalIds.includes(sessionId), {
+        write: (bytes) => writePty(entry.ptyId, bytes),
+        screen: () => entry.screen.screen,
+        settle: () => new Promise((resolve) => setTimeout(resolve, 25)),
+      }).then((outcome) => {
+        if (outcome.kind === "refused") {
+          note(
+            `Nothing was sent: ${outcome.reason}. Close Remote Control to send this here, or continue on your phone.`,
+          );
+          flushHarnessEvents();
+          return;
+        }
+        if (hasAttachments) {
+          // The TUI takes typed text. `@file` mentions in it resolve as usual,
+          // but a pasted attachment has no keystroke to become.
+          note(
+            "Attachments cannot be sent while Remote Control is open, so only the message text was sent.",
+          );
+        }
+        const queued = queuedNotice(outcome.queued);
+        if (queued) {
+          enqueueHarnessEvent(sessionId, { type: "status", text: queued });
+        }
+        flushHarnessEvents();
+      });
     },
-    [
-      enqueueHarnessEvent,
-      flushHarnessEvents,
-      remoteTerminalIds,
-      waitForClearComposer,
-    ],
+    [enqueueHarnessEvent, flushHarnessEvents, remoteTerminalIds],
   );
 
   const openRemote = useCallback(
