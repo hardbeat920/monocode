@@ -56,10 +56,6 @@ export function editorPathsEqual(a: string, b: string): boolean {
   return pathKey(a) === pathKey(b);
 }
 
-export function createProjectSearchId(): string {
-  return crypto.randomUUID();
-}
-
 export function searchProject(
   options: ProjectSearchOptions,
 ): Promise<ProjectSearchResult> {

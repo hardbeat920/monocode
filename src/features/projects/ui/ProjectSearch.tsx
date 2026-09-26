@@ -15,12 +15,13 @@ import {
 } from "react";
 import {
   cancelProjectSearch,
-  createProjectSearchId,
   searchProject,
   type OpenFileFn,
   type ProjectSearchMatch,
 } from "../../search/model/search";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+
+const PROJECT_SEARCH_ID = crypto.randomUUID();
 
 type Props = {
   cwd: string;
@@ -55,14 +56,13 @@ export function ProjectSearch({
   const [error, setError] = useState<string | null>(null);
   const [matches, setMatches] = useState<ProjectSearchMatch[]>([]);
   const [truncated, setTruncated] = useState(false);
-  const [searchId] = useState(createProjectSearchId);
 
   useEffect(() => {
     if (!cwd || cwd === "~") return;
     return () => {
-      void cancelProjectSearch(cwd, searchId);
+      void cancelProjectSearch(cwd, PROJECT_SEARCH_ID).catch(() => undefined);
     };
-  }, [cwd, searchId]);
+  }, [cwd]);
 
   useEffect(() => {
     if (!focusToken) return;
@@ -98,7 +98,7 @@ export function ProjectSearch({
       void searchProject({
         cwd,
         query: trimmed,
-        searchId,
+        searchId: PROJECT_SEARCH_ID,
         caseSensitive,
         wholeWord,
         regex,

@@ -40,7 +40,6 @@ import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
 import {
   cancelProjectSearch,
-  createProjectSearchId,
   searchProject,
   type OpenFileFn,
 } from "../model/search";
@@ -57,6 +56,8 @@ const SCOPES: { id: SearchScope; label: string }[] = [
   { id: "files", label: "Files" },
   { id: "projects", label: "Projects" },
 ];
+const PROJECT_SEARCH_ID = crypto.randomUUID();
+const SESSION_SEARCH_OWNER = crypto.randomUUID();
 
 type Props = {
   open: boolean;
@@ -99,25 +100,39 @@ export function SearchView({
   const [files, setFiles] = useState(() => peekProjectFiles(cwd) ?? []);
   const [contentHits, setContentHits] = useState<AppSearchHit[]>([]);
   const [remoteHits, setRemoteHits] = useState<AppSearchHit[]>([]);
+  const [contentTruncated, setContentTruncated] = useState(false);
+  const [sessionTruncated, setSessionTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [projectSearchId] = useState(createProjectSearchId);
-  const [sessionSearchOwner] = useState(() => crypto.randomUUID());
 
   const trimmed = query.trim();
+  const truncated = contentTruncated || sessionTruncated;
 
   useEffect(() => {
+    if (!open) return;
     return () => {
-      void cancelSessionSearch(sessionSearchOwner);
+      void cancelSessionSearch(SESSION_SEARCH_OWNER).catch(() => undefined);
     };
-  }, [sessionSearchOwner]);
+  }, [open]);
 
   useEffect(() => {
-    if (!looksLikeProject(cwd)) return;
+    if (!open || !looksLikeProject(cwd)) return;
     return () => {
-      void cancelProjectSearch(cwd, projectSearchId);
+      void cancelProjectSearch(cwd, PROJECT_SEARCH_ID).catch(() => undefined);
     };
-  }, [cwd, projectSearchId]);
+  }, [cwd, open]);
+
+  useEffect(() => {
+    if (scope === "all" || scope === "conversations" || !looksLikeProject(cwd)) {
+      return;
+    }
+    void cancelProjectSearch(cwd, PROJECT_SEARCH_ID).catch(() => undefined);
+  }, [cwd, scope]);
+
+  useEffect(() => {
+    if (scope === "all" || scope === "files") return;
+    void cancelSessionSearch(SESSION_SEARCH_OWNER).catch(() => undefined);
+  }, [scope]);
 
   useEffect(() => {
     if (!open) return;
@@ -126,6 +141,8 @@ export function SearchView({
     setActive(0);
     setContentHits([]);
     setRemoteHits([]);
+    setContentTruncated(false);
+    setSessionTruncated(false);
     setError(null);
   }, [open]);
 
@@ -209,6 +226,8 @@ export function SearchView({
     if (!open || !trimmed) {
       setRemoteHits([]);
       setContentHits([]);
+      setSessionTruncated(false);
+      setContentTruncated(false);
       setLoading(false);
       setError(null);
       return;
@@ -223,16 +242,21 @@ export function SearchView({
       if (wantSessions) {
         setLoading(true);
         jobs.push(
-          searchSessions({ query: trimmed, searchOwner: sessionSearchOwner })
+          searchSessions({ query: trimmed, searchOwner: SESSION_SEARCH_OWNER })
             .then((result) => {
-              if (!cancelled) setRemoteHits(hitsFromSessionSearch(result.hits));
+              if (cancelled) return;
+              setRemoteHits(hitsFromSessionSearch(result.hits));
+              setSessionTruncated(result.truncated);
             })
             .catch(() => {
-              if (!cancelled) setRemoteHits([]);
+              if (cancelled) return;
+              setRemoteHits([]);
+              setSessionTruncated(false);
             }),
         );
       } else {
         setRemoteHits([]);
+        setSessionTruncated(false);
       }
 
       if (wantFiles && looksLikeProject(cwd)) {
@@ -241,23 +265,24 @@ export function SearchView({
           searchProject({
             cwd,
             query: trimmed,
-            searchId: projectSearchId,
+            searchId: PROJECT_SEARCH_ID,
           })
             .then((result) => {
-              if (!cancelled) {
-                setContentHits(hitsFromContentMatches(result.matches));
-                setError(null);
-              }
+              if (cancelled) return;
+              setContentHits(hitsFromContentMatches(result.matches));
+              setContentTruncated(result.truncated);
+              setError(null);
             })
             .catch((err: unknown) => {
-              if (!cancelled) {
-                setContentHits([]);
-                setError(err instanceof Error ? err.message : String(err));
-              }
+              if (cancelled) return;
+              setContentHits([]);
+              setContentTruncated(false);
+              setError(err instanceof Error ? err.message : String(err));
             }),
         );
       } else {
         setContentHits([]);
+        setContentTruncated(false);
       }
 
       void Promise.all(jobs).then(() => {
@@ -269,7 +294,7 @@ export function SearchView({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cwd, open, projectSearchId, scope, sessionSearchOwner, trimmed]);
+  }, [cwd, open, scope, trimmed]);
 
   const hits = useMemo(() => {
     if (!trimmed) return [];
@@ -427,13 +452,20 @@ export function SearchView({
         ) : noResults ? (
           <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
         ) : (
-          <ResultList
-            hits={hits}
-            active={active}
-            query={trimmed}
-            onActive={setActive}
-            onOpen={openHit}
-          />
+          <>
+            {truncated ? (
+              <p className="px-2.5 py-1 text-[11px] text-content/45">
+                Results limited to the first matches
+              </p>
+            ) : null}
+            <ResultList
+              hits={hits}
+              active={active}
+              query={trimmed}
+              onActive={setActive}
+              onOpen={openHit}
+            />
+          </>
         )}
       </div>
     </div>

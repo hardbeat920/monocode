@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
   cancelProjectSearch,
-  createProjectSearchId,
   searchProject,
 } from "./search";
 import {
@@ -17,12 +16,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 describe("project search cancellation", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
-  });
-
-  it("gives each mounted search a distinct id", () => {
-    const first = createProjectSearchId();
-    const second = createProjectSearchId();
-    expect(second).not.toBe(first);
   });
 
   it("passes the owner id with search and cancel commands", async () => {

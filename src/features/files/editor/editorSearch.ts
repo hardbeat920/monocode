@@ -433,9 +433,14 @@ class FindPanel implements Panel {
   }
 
   private refreshCount() {
-    const result = countMatches(this.view);
-    this.matches = result.matches;
-    this.countCapped = result.capped;
+    if (!this.searchField.value || !this.query.valid) {
+      this.matches = [];
+      this.countCapped = false;
+    } else {
+      const result = countMatches(this.view);
+      this.matches = result.matches;
+      this.countCapped = result.capped;
+    }
     this.syncCount();
   }
 
