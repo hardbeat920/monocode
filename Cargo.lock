@@ -2268,6 +2268,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tauri-winrt-notification 0.8.1",
+ "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
  "ureq",
  "url",

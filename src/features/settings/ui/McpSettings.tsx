@@ -1,15 +1,30 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { parseClaudeMcpList, type McpServer } from "../model/mcp";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
+import { revealPath } from "../../../platform/tauri/fs";
+import {
+  MCP_PROVIDER_LABELS,
+  parseClaudeMcpList,
+  type McpConnection,
+} from "../model/mcp";
 
-type Scope = "local" | "project" | "user";
+type Scope = McpConnection["scope"];
+type ServerRow = McpConnection & { status: string };
+type Filter = "all" | McpConnection["provider"];
 
 export function McpSettings({ cwd }: { cwd: string }) {
-  const [servers, setServers] = useState<McpServer[]>([]);
+  const [servers, setServers] = useState<ServerRow[]>([]);
+  const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [claudeError, setClaudeError] = useState("");
   const [name, setName] = useState("");
   const [config, setConfig] = useState("");
   const [scope, setScope] = useState<Scope>("local");
@@ -18,8 +33,45 @@ export function McpSettings({ cwd }: { cwd: string }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const output = await invoke<string>("claude_mcp_list", { cwd });
-      setServers(parseClaudeMcpList(output));
+      const configured = await invoke<McpConnection[]>("mcp_discover", { cwd });
+      let health = new Map<string, string>();
+      try {
+        const output = await invoke<string>("claude_mcp_list", { cwd });
+        health = new Map(
+          parseClaudeMcpList(output).map((server) => [
+            server.name,
+            server.status,
+          ]),
+        );
+        setClaudeError("");
+      } catch (cause) {
+        setClaudeError(String(cause));
+      }
+      const rows: ServerRow[] = configured.map((server) => ({
+        ...server,
+        status:
+          server.provider === "claude"
+            ? (health.get(server.name) ?? "Configured")
+            : "Configured",
+      }));
+      // Claude can supply connections that are not stored in a local config file.
+      for (const [serverName, status] of health) {
+        if (
+          rows.some(
+            (row) => row.provider === "claude" && row.name === serverName,
+          )
+        )
+          continue;
+        rows.push({
+          provider: "claude",
+          name: serverName,
+          scope: "local",
+          configPath: "",
+          transport: "",
+          status,
+        });
+      }
+      setServers(rows);
       setError("");
     } catch (cause) {
       setServers([]);
@@ -32,6 +84,14 @@ export function McpSettings({ cwd }: { cwd: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const visible = useMemo(
+    () =>
+      filter === "all"
+        ? servers
+        : servers.filter((server) => server.provider === filter),
+    [filter, servers],
+  );
 
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -53,11 +113,15 @@ export function McpSettings({ cwd }: { cwd: string }) {
     }
   }
 
-  async function login(server: McpServer) {
+  async function login(server: ServerRow) {
     setBusy(server.name);
     setError("");
     try {
-      await invoke("claude_mcp_login", { cwd, name: server.name });
+      await invoke("mcp_provider_login", {
+        cwd,
+        provider: server.provider,
+        name: server.name,
+      });
       await refresh();
     } catch (cause) {
       setError(String(cause));
@@ -66,8 +130,10 @@ export function McpSettings({ cwd }: { cwd: string }) {
     }
   }
 
-  async function remove(server: McpServer) {
-    const selectedScope = removeScopes[server.name] ?? "local";
+  async function remove(server: ServerRow) {
+    const selectedScope = server.configPath
+      ? server.scope
+      : (removeScopes[server.name] ?? "local");
     if (
       !(await ask(`Remove ${server.name} from ${selectedScope} scope?`, {
         title: "Remove MCP server",
@@ -96,11 +162,11 @@ export function McpSettings({ cwd }: { cwd: string }) {
       data-setting-id="mcp-servers"
       className="space-y-6"
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">Claude Code servers</h2>
+          <h2 className="text-sm font-semibold">MCP connections</h2>
           <p className="mt-1 text-xs text-content/55">
-            Connections for this project, including user and local scopes.
+            Configured servers for this project and your provider accounts.
           </p>
         </div>
         <button
@@ -112,6 +178,30 @@ export function McpSettings({ cwd }: { cwd: string }) {
           Refresh
         </button>
       </div>
+      <div
+        className="flex flex-wrap gap-1"
+        aria-label="Filter MCP servers by provider"
+      >
+        {(["all", "claude", "codex", "cursor", "opencode"] as const).map(
+          (provider) => (
+            <button
+              key={provider}
+              type="button"
+              aria-pressed={filter === provider}
+              onClick={() => setFilter(provider)}
+              className={`rounded-md px-2.5 py-1 text-xs ${filter === provider ? "bg-selection text-content" : "text-content/55 hover:bg-content/5 hover:text-content"}`}
+            >
+              {provider === "all" ? "All" : MCP_PROVIDER_LABELS[provider]}
+              <span className="ml-1 opacity-60">
+                {provider === "all"
+                  ? servers.length
+                  : servers.filter((server) => server.provider === provider)
+                      .length}
+              </span>
+            </button>
+          ),
+        )}
+      </div>
       {error ? (
         <p
           role="alert"
@@ -120,55 +210,93 @@ export function McpSettings({ cwd }: { cwd: string }) {
           {error}
         </p>
       ) : null}
+      {claudeError && (filter === "all" || filter === "claude") ? (
+        <p className="text-xs text-content/55">
+          Claude connection status unavailable: {claudeError}
+        </p>
+      ) : null}
       {loading ? (
         <p className="text-sm text-content/55">Checking servers…</p>
-      ) : servers.length === 0 ? (
-        <p className="text-sm text-content/55">No MCP servers configured.</p>
+      ) : visible.length === 0 ? (
+        <p className="text-sm text-content/55">
+          No MCP servers configured for this provider.
+        </p>
       ) : (
         <div className="divide-y divide-stroke rounded-lg border border-stroke">
-          {servers.map((server) => (
+          {visible.map((server) => (
             <div
-              key={server.name}
+              key={`${server.provider}:${server.scope}:${server.configPath}:${server.name}`}
               className="flex flex-wrap items-center gap-3 p-3"
             >
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">{server.name}</div>
-                <div className="text-xs text-content/55">{server.status}</div>
+                <div className="text-xs text-content/55">
+                  {MCP_PROVIDER_LABELS[server.provider]} · {server.scope} ·{" "}
+                  {server.transport || "MCP"} · {server.status}
+                </div>
+                {server.configPath ? (
+                  <div
+                    className="truncate text-[11px] text-content/40"
+                    title={server.configPath}
+                  >
+                    {server.configPath}
+                  </div>
+                ) : null}
               </div>
-              <button
-                type="button"
-                disabled={busy !== null}
-                onClick={() => void login(server)}
-                className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5 disabled:opacity-50"
-              >
-                Sign in
-              </button>
-              <label className="text-xs text-content/55">
-                Scope{" "}
-                <select
-                  aria-label={`Scope to remove ${server.name} from`}
-                  value={removeScopes[server.name] ?? "local"}
-                  onChange={(event) =>
-                    setRemoveScopes((current) => ({
-                      ...current,
-                      [server.name]: event.target.value as Scope,
-                    }))
-                  }
-                  className="rounded border border-stroke bg-background-base px-1 py-1 text-content"
+              {!["stdio", "local", "ws"].includes(server.transport) ? (
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void login(server)}
+                  className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5 disabled:opacity-50"
                 >
-                  <option value="local">Local</option>
-                  <option value="project">Project</option>
-                  <option value="user">User</option>
-                </select>
-              </label>
-              <button
-                type="button"
-                disabled={busy !== null}
-                onClick={() => void remove(server)}
-                className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5 disabled:opacity-50"
-              >
-                Remove
-              </button>
+                  Sign in
+                </button>
+              ) : null}
+              {server.provider === "claude" ? (
+                <>
+                  {!server.configPath ? (
+                    <label className="text-xs text-content/55">
+                      Scope{" "}
+                      <select
+                        aria-label={`Scope to remove ${server.name} from`}
+                        value={removeScopes[server.name] ?? "local"}
+                        onChange={(event) =>
+                          setRemoveScopes((current) => ({
+                            ...current,
+                            [server.name]: event.target.value as Scope,
+                          }))
+                        }
+                        className="rounded border border-stroke bg-background-base px-1 py-1 text-content"
+                      >
+                        <option value="local">Local</option>
+                        <option value="project">Project</option>
+                        <option value="user">User</option>
+                      </select>
+                    </label>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => void remove(server)}
+                    className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void revealPath(server.configPath).catch((cause) =>
+                      setError(String(cause)),
+                    )
+                  }
+                  className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5"
+                >
+                  Show config
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -178,10 +306,10 @@ export function McpSettings({ cwd }: { cwd: string }) {
         className="space-y-3 rounded-lg border border-stroke p-4"
       >
         <div>
-          <h2 className="text-sm font-semibold">Add server</h2>
+          <h2 className="text-sm font-semibold">Add a Claude Code server</h2>
           <p className="mt-1 text-xs text-content/55">
-            Paste a Claude Code MCP server JSON object. HTTP servers need a type
-            and URL; local servers need a command and optional args.
+            Paste a Claude Code MCP server JSON object. Other providers keep
+            their own configuration files, shown above.
           </p>
         </div>
         <label className="block text-xs text-content/65">
@@ -230,8 +358,9 @@ export function McpSettings({ cwd }: { cwd: string }) {
         </div>
       </form>
       <p className="text-xs text-content/45">
-        Project servers may need approval in Claude Code before they connect.
-        Sign in opens the browser for OAuth when the server supports it.
+        Claude status comes from its CLI. Other providers show configured
+        entries; open their config to manage them. Claude OAuth sign in opens
+        your browser when supported.
       </p>
     </div>
   );

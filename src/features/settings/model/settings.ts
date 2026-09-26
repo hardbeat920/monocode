@@ -95,8 +95,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: "mcp",
     group: "agents",
     label: "MCP",
-    description: "Manage Claude Code MCP servers and their connections.",
-    keywords: "tools servers connections oauth authenticate login claude",
+    description: "Find MCP servers across providers and manage their connections.",
+    keywords: "tools servers connections oauth authenticate login claude codex cursor opencode",
   },
   {
     id: "skills",

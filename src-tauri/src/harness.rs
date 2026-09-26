@@ -363,6 +363,15 @@ pub fn harness_resolve_claude() -> Result<CursorBinary, String> {
 
 fn claude_mcp_command(args: Vec<String>, cwd: String, timeout: Duration) -> Result<String, String> {
     let binary = resolve_claude().ok_or("Claude Code CLI not found")?;
+    mcp_command(binary, args, cwd, timeout)
+}
+
+fn mcp_command(
+    binary: PathBuf,
+    args: Vec<String>,
+    cwd: String,
+    timeout: Duration,
+) -> Result<String, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
         return Err("Project directory does not exist".into());
@@ -399,14 +408,65 @@ fn claude_mcp_command(args: Vec<String>, cwd: String, timeout: Duration) -> Resu
 #[tauri::command]
 pub async fn claude_mcp_list(cwd: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        claude_mcp_command(
+        let mut output = claude_mcp_command(
             vec!["mcp".into(), "list".into()],
-            cwd,
+            cwd.clone(),
             Duration::from_secs(30),
-        )
+        )?;
+        for name in configured_ws_mcp_servers(&expand_home(&cwd)) {
+            if !output
+                .lines()
+                .any(|line| line.starts_with(&format!("{name}:")))
+            {
+                output.push_str(&format!(
+                    "\n{name}: WebSocket server (open Claude /mcp for status)"
+                ));
+            }
+        }
+        Ok(output)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let read = |path: &Path| -> Option<serde_json::Value> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    };
+    let collect = |servers: Option<&serde_json::Value>, names: &mut Vec<String>| {
+        if let Some(servers) = servers.and_then(serde_json::Value::as_object) {
+            for (name, config) in servers {
+                if config.get("type").and_then(serde_json::Value::as_str) == Some("ws")
+                    && valid_mcp_name(name)
+                    && !names.contains(name)
+                {
+                    names.push(name.clone());
+                }
+            }
+        }
+    };
+    if let Some(home) = dirs_home() {
+        if let Some(settings) = read(&Path::new(&home).join(".claude.json")) {
+            collect(settings.get("mcpServers"), &mut names);
+            collect(
+                settings
+                    .get("projects")
+                    .and_then(|projects| projects.get(cwd.to_string_lossy().as_ref()))
+                    .and_then(|project| project.get("mcpServers")),
+                &mut names,
+            );
+        }
+    }
+    for directory in cwd.ancestors() {
+        if let Some(settings) = read(&directory.join(".mcp.json")) {
+            collect(settings.get("mcpServers"), &mut names);
+        }
+        if directory.join(".git").exists() {
+            break;
+        }
+    }
+    names
 }
 
 #[tauri::command]
@@ -466,20 +526,29 @@ pub async fn claude_mcp_remove(cwd: String, name: String, scope: String) -> Resu
 }
 
 #[tauri::command]
-pub async fn claude_mcp_login(cwd: String, name: String) -> Result<(), String> {
+pub async fn mcp_provider_login(cwd: String, provider: String, name: String) -> Result<(), String> {
     if !valid_mcp_name(&name) {
         return Err("Invalid MCP server name".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        claude_mcp_command(
-            vec!["mcp".into(), "login".into(), name],
+        let (binary, args) = match provider.as_str() {
+            "claude" => (resolve_claude(), vec!["mcp", "login"]),
+            "codex" => (resolve_codex(), vec!["mcp", "login"]),
+            "cursor" => (resolve_cursor_agent(), vec!["mcp", "login"]),
+            "opencode" => (resolve_opencode(), vec!["mcp", "auth"]),
+            _ => return Err("Unsupported MCP provider".into()),
+        };
+        let binary = binary.ok_or_else(|| format!("{provider} CLI not found"))?;
+        mcp_command(
+            binary,
+            args.into_iter().map(String::from).chain([name]).collect(),
             cwd,
             Duration::from_secs(180),
-        )
+        )?;
+        Ok(())
     })
     .await
-    .map_err(|e| e.to_string())??;
-    Ok(())
+    .map_err(|e| e.to_string())?
 }
 
 fn valid_mcp_name(name: &str) -> bool {

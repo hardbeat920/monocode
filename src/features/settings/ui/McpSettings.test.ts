@@ -23,9 +23,26 @@ beforeEach(() => {
   root = createRoot(container);
   invoke.mockReset();
   invoke.mockImplementation(async (command: string) =>
-    command === "claude_mcp_list"
-      ? "sentry: https://mcp.example.com - ! Needs authentication"
-      : undefined,
+    command === "mcp_discover"
+      ? [
+          {
+            provider: "claude",
+            name: "sentry",
+            scope: "user",
+            configPath: "/home/.claude.json",
+            transport: "http",
+          },
+          {
+            provider: "codex",
+            name: "docs",
+            scope: "user",
+            configPath: "/home/.codex/config.toml",
+            transport: "http",
+          },
+        ]
+      : command === "claude_mcp_list"
+        ? "sentry: https://mcp.example.com - ! Needs authentication"
+        : undefined,
   );
 });
 
@@ -41,13 +58,36 @@ it("lists servers and routes sign in through Claude MCP", async () => {
   );
   expect(container.textContent).toContain("sentry");
   expect(container.textContent).toContain("Needs authentication");
+  expect(container.textContent).toContain("Codex");
   const signIn = [...container.querySelectorAll("button")].find(
     (button) => button.textContent === "Sign in",
   )!;
   await act(async () => signIn.click());
-  expect(invoke).toHaveBeenCalledWith("claude_mcp_login", {
+  expect(invoke).toHaveBeenCalledWith("mcp_provider_login", {
     cwd: "/repo",
+    provider: "claude",
     name: "sentry",
+  });
+});
+
+it("filters connections by provider", async () => {
+  await act(async () =>
+    root.render(createElement(McpSettings, { cwd: "/repo" })),
+  );
+  const codex = [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.startsWith("Codex"),
+  )!;
+  await act(async () => codex.click());
+  expect(container.textContent).toContain("docs");
+  expect(container.textContent).not.toContain("sentry");
+  const signIn = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Sign in",
+  )!;
+  await act(async () => signIn.click());
+  expect(invoke).toHaveBeenCalledWith("mcp_provider_login", {
+    cwd: "/repo",
+    provider: "codex",
+    name: "docs",
   });
 });
 
