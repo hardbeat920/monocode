@@ -102,11 +102,23 @@ describe("remote control target", () => {
       active: true,
       automatic: false,
       queued: false,
+      busy: false,
     });
   });
 
   // Neither is on the session — the workspace knows the mode and the queue, so
   // they are passed in rather than guessed at from the thread.
+  // Off the session, not passed in: `handoverTiming` decides from the same field,
+  // so a second opinion here could disagree with the rule the click is judged by.
+  it("takes busy from the session itself", () => {
+    expect(
+      remoteControlTarget(
+        session({ providerSessionId: "sess-abc", busy: true }),
+        false,
+      ),
+    ).toMatchObject({ busy: true });
+  });
+
   it("carries what the workspace knows about waiting", () => {
     expect(
       remoteControlTarget(session({ providerSessionId: "sess-abc" }), false, {

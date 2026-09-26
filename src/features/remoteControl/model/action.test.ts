@@ -77,12 +77,48 @@ describe("remoteControlAction", () => {
     ).toMatch(/opens when this turn ends/i);
   });
 
+  // The click that cost the user a turn. It is held now rather than refused, so
+  // the entry stays usable — but the label is all they read before committing.
+  it("says the click lands after the turn while one is running", () => {
+    const action = remoteControlAction(target({ busy: true }));
+    expect(action?.disabled).toBe(false);
+    expect(action?.intent).toBe("open");
+    expect(action?.label).toBe("Open Remote Control after this turn");
+    expect(action?.description).toBeUndefined();
+  });
+
+  // Hedging about a turn that is not running would be its own small lie.
+  it("promises nothing about a turn when the session is idle", () => {
+    expect(remoteControlAction(target({ busy: false }))?.label).toBe(
+      "Open Remote Control",
+    );
+  });
+
+  it("does not hedge a close, whatever the session is doing", () => {
+    expect(remoteControlAction(target({ active: true, busy: true }))?.label).toBe(
+      "Close Remote Control",
+    );
+  });
+
+  // Disabled already says why it is waiting; a second "after this turn" on top
+  // would be two answers to one question.
+  it.each([
+    ["queued", { queued: true }],
+    ["unbound under manual", { providerSessionId: undefined }],
+    ["unbound under all", { providerSessionId: undefined, automatic: true }],
+  ] as const)("keeps the plain label while %s and busy", (_name, over) => {
+    const action = remoteControlAction(target({ busy: true, ...over }));
+    expect(action?.disabled).toBe(true);
+    expect(action?.label).toBe("Open Remote Control");
+  });
+
   // Closing acts on a process that is already running, so nothing about waiting
   // to open may disable it.
   it.each([
     ["queued", { queued: true }],
     ["automatic", { automatic: true }],
     ["both", { queued: true, automatic: true }],
+    ["busy", { busy: true }],
   ] as const)("can still close while %s", (_name, over) => {
     const action = remoteControlAction(target({ active: true, ...over }));
     expect(action?.disabled).toBe(false);
@@ -124,11 +160,16 @@ describe("remoteControlAction", () => {
       for (const providerSessionId of ["sess-1", undefined]) {
         for (const automatic of [false, true]) {
           for (const queued of [false, true]) {
-            const action = remoteControlAction(
-              target({ active, providerSessionId, automatic, queued }),
-            );
-            if (action && !action.disabled) {
-              expect(action.description).toBeUndefined();
+            for (const busy of [false, true]) {
+              const action = remoteControlAction(
+                target({ active, providerSessionId, automatic, queued, busy }),
+              );
+              if (action && !action.disabled) {
+                expect(action.description).toBeUndefined();
+              }
+              // Whatever the wording, the entry has to stay recognisable as the
+              // one thing it is.
+              expect(action?.label).toMatch(/Remote Control/);
             }
           }
         }

@@ -30,6 +30,12 @@ export type RemoteControlTarget = {
    * See `handoverTiming` — the request is held rather than refused.
    */
   queued?: boolean;
+  /**
+   * Whether a turn is running. The click is still offered — it is held rather
+   * than refused — but it will not act immediately, and the label is the only
+   * thing read before committing to it.
+   */
+  busy?: boolean;
 };
 
 export type RemoteControlAction = {
@@ -55,15 +61,20 @@ export function remoteControlAction(
   if (target.harness !== "claude") return null;
 
   const intent: RemoteControlIntent = target.active ? "close" : "open";
-  const label = target.active ? "Close Remote Control" : "Open Remote Control";
 
   // Closing only ever applies to something already running, which by definition
   // had an id to start from, so neither the missing-id case nor the waiting ones
   // below can block it.
   if (target.active) {
-    return { id: "remote-control", label, intent, disabled: false };
+    return {
+      id: "remote-control",
+      label: "Close Remote Control",
+      intent,
+      disabled: false,
+    };
   }
 
+  const label = "Open Remote Control";
   const waiting = (description: string): RemoteControlAction => ({
     id: "remote-control",
     label,
@@ -89,6 +100,22 @@ export function remoteControlAction(
       : waiting(
           "Send a message first — there is no conversation to hand over yet",
         );
+  }
+
+  // Offered, and honest about when it lands. A turn running means the hand-over
+  // is held until it ends — measured the hard way, by a click mid-turn throwing a
+  // turn away before `handoverTiming` existed. The status line that reports the
+  // hold arrives one moment too late to inform the click, and the label is what
+  // is read before it. Only ever while a turn is genuinely running: hedging about
+  // a turn that is not there would be its own small lie, and the click really is
+  // immediate then.
+  if (target.busy) {
+    return {
+      id: "remote-control",
+      label: "Open Remote Control after this turn",
+      intent,
+      disabled: false,
+    };
   }
 
   return { id: "remote-control", label, intent, disabled: false };

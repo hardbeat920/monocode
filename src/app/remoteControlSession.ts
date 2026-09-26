@@ -51,6 +51,10 @@ export function remoteControlTarget(
     active,
     automatic: waiting.automatic,
     queued: waiting.queued,
+    // Read off the session rather than passed in: `handoverTiming` decides from
+    // the same field, so a second opinion here could disagree with the rule the
+    // click will actually be judged by.
+    busy: session.busy ?? false,
   };
 }
 
