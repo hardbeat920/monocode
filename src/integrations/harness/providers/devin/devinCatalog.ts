@@ -14,7 +14,6 @@ import {
   modelsFromDevinSession,
 } from "./devinProtocol";
 
-const PROBE_ID = "monocode-devin-probe";
 const REQUEST_TIMEOUT_MS = 20_000;
 let inflight: Promise<void> | null = null;
 
@@ -33,12 +32,19 @@ export function refreshDevinCatalog(): Promise<void> {
   return inflight;
 }
 
+function newProbeId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `monocode-devin-probe-${uuid}`;
+  return `monocode-devin-probe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 async function discoverModels() {
+  const probeId = newProbeId();
   const [{ path }, cwd] = await Promise.all([
     resolveDevinBinary(),
     homeDir(),
   ]);
-  const acp = new AcpClient(PROBE_ID, {
+  const acp = new AcpClient(probeId, {
     onRequest: (id, method) => {
       const response =
         method === "_cognition.ai/request_diagnostics"
@@ -54,13 +60,13 @@ async function discoverModels() {
   });
 
   watchChild(
-    PROBE_ID,
+    probeId,
     (line) => acp.pushLine(line),
     () => acp.close(new Error("Devin catalog probe exited")),
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["acp"], cwd);
+    await spawnChild(probeId, path, ["acp"], cwd);
     await acp.request(
       "initialize",
       {
@@ -78,7 +84,7 @@ async function discoverModels() {
     return modelsFromDevinSession(created);
   } finally {
     acp.close();
-    unwatchChild(PROBE_ID);
-    await killChild(PROBE_ID).catch(() => undefined);
+    unwatchChild(probeId);
+    await killChild(probeId).catch(() => undefined);
   }
 }

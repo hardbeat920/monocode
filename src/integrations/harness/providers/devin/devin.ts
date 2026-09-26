@@ -57,6 +57,8 @@ type Live = {
   planning: boolean;
   cancelled: boolean;
   stale: boolean;
+  promptInFlight: boolean;
+  turnActive: boolean;
   approvals: Map<number, (decision: ApprovalDecision) => void>;
 };
 
@@ -68,6 +70,14 @@ const AUTH_HELP = "Run `devin auth login` in Terminal, then retry.";
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
+const cancelEpoch = new Map<string, number>();
+const sessionEpoch = new Map<string, number>();
+const lifecycleByThread = new Map<string, Promise<void>>();
+const pendingSetupByThread = new Map<
+  string,
+  { acp: AcpClient; childKey: string }
+>();
+const turnsByThread = new Map<string, Promise<void>>();
 let childSeq = 0;
 
 function devinError(error: unknown): Error {
@@ -78,24 +88,66 @@ function devinError(error: unknown): Error {
   return error instanceof Error ? error : new Error(detail);
 }
 
+function isTimeout(error: unknown): boolean {
+  return error instanceof Error && /timed out$/i.test(error.message);
+}
+
 export async function sendDevinTurn(input: SendTurnInput): Promise<void> {
-  const live = await ensureLive(input);
-  live.onEvent = input.onEvent;
-  live.runtimeMode = input.runtimeMode;
-  live.planning = input.intent === "plan";
-  live.cancelled = false;
+  const epoch = cancelEpoch.get(input.sessionId) ?? 0;
+  const cancelled = () => (cancelEpoch.get(input.sessionId) ?? 0) !== epoch;
 
   try {
-    await applyModelSelection(live, input);
-    if (live.cancelled) return;
-    await applyRuntimeMode(live, input.runtimeMode, live.planning);
-    if (live.cancelled) return;
-    input.onAccepted?.();
-    await prompt(live, input);
+    await ensureLive(input, false);
   } catch (error) {
-    if (live.cancelled) return;
-    live.stale = true;
-    throw devinError(error);
+    if (cancelled()) return;
+    throw error;
+  }
+  if (cancelled()) return;
+
+  const run = (turnsByThread.get(input.sessionId) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(async () => {
+      if (cancelled()) return;
+      let live: Live;
+      try {
+        live = await ensureLive(input, true);
+      } catch (error) {
+        if (cancelled()) return;
+        throw error;
+      }
+      if (cancelled()) return;
+
+      live.onEvent = input.onEvent;
+      live.runtimeMode = input.runtimeMode;
+      live.planning = input.intent === "plan";
+      live.cancelled = false;
+      live.turnActive = true;
+
+      try {
+        await applyModelSelection(live, input);
+        if (live.cancelled || cancelled()) return;
+        await applyRuntimeMode(live, input.runtimeMode, live.planning);
+        if (live.cancelled || cancelled()) return;
+        input.onAccepted?.();
+        await prompt(live, input);
+      } catch (error) {
+        if (live.cancelled || cancelled()) return;
+        if (liveByThread.get(input.sessionId) === live) {
+          await teardownLive(live);
+        }
+        throw devinError(error);
+      } finally {
+        live.turnActive = false;
+      }
+    });
+
+  turnsByThread.set(input.sessionId, run);
+  try {
+    await run;
+  } finally {
+    if (turnsByThread.get(input.sessionId) === run) {
+      turnsByThread.delete(input.sessionId);
+    }
   }
 }
 
@@ -112,12 +164,15 @@ export function respondDevinApproval(
 }
 
 export async function cancelDevinTurn(sessionId: string): Promise<void> {
+  cancelEpoch.set(sessionId, (cancelEpoch.get(sessionId) ?? 0) + 1);
+  sessionEpoch.set(sessionId, (sessionEpoch.get(sessionId) ?? 0) + 1);
+  abortPendingSetup(sessionId);
+
   const live = liveByThread.get(sessionId);
   if (!live) return;
   live.cancelled = true;
-  live.stale = true;
-  for (const resolve of live.approvals.values()) resolve("deny");
-  live.approvals.clear();
+  if (live.turnActive) live.stale = true;
+  settleApprovals(live);
   live.acp.rejectPending(new Error("cancelled"));
   void live.acp
     .notify("session/cancel", { sessionId: live.acpSessionId })
@@ -125,9 +180,11 @@ export async function cancelDevinTurn(sessionId: string): Promise<void> {
 }
 
 export async function stopDevinSession(sessionId: string): Promise<void> {
+  cancelEpoch.set(sessionId, (cancelEpoch.get(sessionId) ?? 0) + 1);
+  sessionEpoch.set(sessionId, (sessionEpoch.get(sessionId) ?? 0) + 1);
+  abortPendingSetup(sessionId);
   const live = liveByThread.get(sessionId);
-  if (!live) return;
-  await teardownLive(live);
+  if (live) await teardownLive(live);
 }
 
 export async function forgetDevinSession(sessionId: string): Promise<void> {
@@ -145,20 +202,74 @@ export function bindDevinSession(
   resumeByThread.set(threadId, { acpSessionId: providerId, cwd });
 }
 
-async function ensureLive(input: SendTurnInput): Promise<Live> {
-  const existing = liveByThread.get(input.sessionId);
-  if (existing && !existing.stale && existing.cwd === input.cwd) {
-    return existing;
-  }
-  if (existing) await teardownLive(existing);
-  return startLive(input);
+function abortPendingSetup(sessionId: string): void {
+  const pending = pendingSetupByThread.get(sessionId);
+  if (!pending) return;
+  pending.acp.close(new Error("cancelled"));
+  void killChild(pending.childKey).catch(() => undefined);
 }
 
-async function startLive(input: SendTurnInput): Promise<Live> {
+async function ensureLive(input: SendTurnInput, recycle: boolean): Promise<Live> {
+  const existing = liveByThread.get(input.sessionId);
+  if (existing) {
+    if (!recycle) return existing;
+    if (!existing.stale && existing.cwd === input.cwd) return existing;
+  }
+  return queueLifecycle(input, recycle);
+}
+
+function queueLifecycle(input: SendTurnInput, recycle: boolean): Promise<Live> {
+  const life = sessionEpoch.get(input.sessionId) ?? 0;
+  const previous = lifecycleByThread.get(input.sessionId) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    if ((sessionEpoch.get(input.sessionId) ?? 0) !== life) {
+      throw new Error("Devin session superseded");
+    }
+
+    let live = liveByThread.get(input.sessionId);
+    if (live) {
+      if (!recycle) return live;
+      if (!live.stale && live.cwd === input.cwd) return live;
+      if (live.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
+      await teardownLive(live);
+      live = undefined;
+    }
+    return startLive(input, life);
+  });
+
+  lifecycleByThread.set(
+    input.sessionId,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
+}
+
+async function startLive(input: SendTurnInput, life: number): Promise<Live> {
+  const resume = resumeByThread.get(input.sessionId);
+  const canLoad = resume != null && resume.cwd === input.cwd;
+  if (resume && resume.cwd !== input.cwd) {
+    resumeByThread.delete(input.sessionId);
+  }
+
+  const retired = () => (sessionEpoch.get(input.sessionId) ?? 0) !== life;
+  if (retired()) throw new Error("Devin session stopped during startup");
+
   const childKey = `${input.sessionId}#devin-${childSeq++}`;
   const { path } = await resolveDevinBinary();
+  if (retired()) throw new Error("Devin session stopped during startup");
+
   const handlers: AcpHandlers = {};
   const acp = new AcpClient(childKey, handlers);
+  const pendingSetup = { acp, childKey };
+  pendingSetupByThread.set(input.sessionId, pendingSetup);
+  const clearPending = () => {
+    if (pendingSetupByThread.get(input.sessionId) === pendingSetup) {
+      pendingSetupByThread.delete(input.sessionId);
+    }
+  };
   const liveRef: { current: Live | null } = { current: null };
 
   handlers.onNotification = (method, params) => {
@@ -175,6 +286,10 @@ async function startLive(input: SendTurnInput): Promise<Live> {
     });
   };
 
+  const emit = (event: HarnessEvent) => {
+    (liveRef.current?.onEvent ?? input.onEvent)(event);
+  };
+
   watchChild(
     childKey,
     (line) => acp.pushLine(line),
@@ -184,13 +299,9 @@ async function startLive(input: SendTurnInput): Promise<Live> {
       if (live && liveByThread.get(input.sessionId) === live) {
         liveByThread.delete(input.sessionId);
       }
-      if (live) {
-        settleApprovals(live);
-        live.onEvent({ type: "session.ended", code });
-      } else {
-        input.onEvent({ type: "session.ended", code });
-      }
+      if (live) settleLive(live);
       acp.close(new Error("Devin exited"));
+      if (live || !retired()) emit({ type: "session.ended", code });
     },
     (line) => {
       if (line.trim()) console.debug("[monocode] devin stderr", line);
@@ -198,7 +309,10 @@ async function startLive(input: SendTurnInput): Promise<Live> {
   );
 
   try {
+    if (retired()) throw new Error("Devin session stopped during startup");
     await spawnChild(childKey, path, ["acp"], input.cwd);
+    if (retired()) throw new Error("Devin session stopped during startup");
+
     await acp.request(
       "initialize",
       {
@@ -208,12 +322,13 @@ async function startLive(input: SendTurnInput): Promise<Live> {
       },
       INIT_TIMEOUT_MS,
     );
+    if (retired()) throw new Error("Devin session stopped during startup");
 
-    const resume = resumeByThread.get(input.sessionId);
     let setup: SessionSetupResult | undefined;
     let acpSessionId: string | undefined;
+    let loadFailed = false;
 
-    if (resume?.cwd === input.cwd) {
+    if (canLoad && resume) {
       try {
         setup = await acp.request<SessionSetupResult>(
           "session/load",
@@ -225,24 +340,33 @@ async function startLive(input: SendTurnInput): Promise<Live> {
           SESSION_TIMEOUT_MS,
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-      } catch {
+      } catch (error) {
+        if (retired()) throw new Error("Devin session stopped during startup");
+        if (isTimeout(error)) throw error;
+        loadFailed = true;
         setup = undefined;
         acpSessionId = undefined;
       }
-    } else if (resume) {
-      resumeByThread.delete(input.sessionId);
     }
 
     if (!acpSessionId) {
+      if (retired()) throw new Error("Devin session stopped during startup");
       setup = await acp.request<SessionSetupResult>(
         "session/new",
         { cwd: input.cwd, mcpServers: [] },
         SESSION_TIMEOUT_MS,
       );
       acpSessionId = sessionIdFromResult(setup);
+      if (acpSessionId && loadFailed) {
+        emit({
+          type: "status",
+          text: "Devin could not restore the previous conversation - starting a new session.",
+        });
+      }
     }
 
     if (!acpSessionId) throw new Error("Devin did not return a session id");
+    if (retired()) throw new Error("Devin session stopped during startup");
 
     const configOptions = readConfigOptions(setup?.configOptions);
     const live: Live = {
@@ -259,11 +383,14 @@ async function startLive(input: SendTurnInput): Promise<Live> {
       planning: input.intent === "plan",
       cancelled: false,
       stale: false,
+      promptInFlight: false,
+      turnActive: false,
       approvals: new Map(),
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
     resumeByThread.set(input.sessionId, { acpSessionId, cwd: input.cwd });
+    clearPending();
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: acpSessionId,
@@ -274,7 +401,15 @@ async function startLive(input: SendTurnInput): Promise<Live> {
     acp.close(error instanceof Error ? error : new Error(String(error)));
     unwatchChild(childKey);
     await killChild(childKey).catch(() => undefined);
+    if (
+      liveRef.current != null &&
+      liveByThread.get(input.sessionId) === liveRef.current
+    ) {
+      liveByThread.delete(input.sessionId);
+    }
     throw devinError(error);
+  } finally {
+    clearPending();
   }
 }
 
@@ -282,16 +417,21 @@ async function teardownLive(live: Live): Promise<void> {
   if (liveByThread.get(live.threadId) === live) {
     liveByThread.delete(live.threadId);
   }
-  settleApprovals(live);
+  settleLive(live);
   live.acp.close();
   unwatchChild(live.childKey);
   await killChild(live.childKey).catch(() => undefined);
 }
 
 function settleApprovals(live: Live): void {
-  live.cancelled = true;
   for (const resolve of live.approvals.values()) resolve("deny");
   live.approvals.clear();
+}
+
+function settleLive(live: Live): void {
+  live.cancelled = true;
+  live.promptInFlight = false;
+  settleApprovals(live);
 }
 
 async function applyModelSelection(
@@ -371,6 +511,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   const blocks = devinPromptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
 
+  live.promptInFlight = true;
   try {
     const result = await live.acp.request(
       "session/prompt",
@@ -394,6 +535,8 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     const failure = devinError(error);
     live.onEvent({ type: "session.error", message: failure.message });
     throw failure;
+  } finally {
+    live.promptInFlight = false;
   }
 }
 
@@ -402,9 +545,7 @@ function handleNotification(
   method: string,
   params: unknown,
 ): void {
-  if (method !== "session/update") {
-    return;
-  }
+  if (method !== "session/update") return;
 
   const rec = asRecord(params);
   const update = asRecord(rec?.update) ?? rec;
@@ -433,8 +574,12 @@ async function handleRequest(
     await acp.respond(id, {});
     return;
   }
-  if (method === "session/request_permission" && live) {
-    await handlePermission(live, id, params);
+  if (method === "session/request_permission") {
+    if (live) {
+      await handlePermission(live, id, params);
+    } else {
+      await acp.respond(id, { outcome: { outcome: "cancelled" } });
+    }
     return;
   }
   await acp.respondError(id, {
@@ -449,7 +594,12 @@ async function handlePermission(
   params: unknown,
 ): Promise<void> {
   const request = permissionRequestFromAcp(params);
-  if (request.callId && !live.cancelled) {
+  const active = () =>
+    liveByThread.get(live.threadId) === live &&
+    live.promptInFlight &&
+    !live.cancelled;
+
+  if (request.callId && active()) {
     live.onEvent({
       type: "tool.updated",
       callId: request.callId,
@@ -460,7 +610,7 @@ async function handlePermission(
   }
 
   let optionId: string | null = null;
-  if (!live.cancelled && request.optionIds.length > 0) {
+  if (active() && request.optionIds.length > 0) {
     if (live.planning) {
       optionId = permissionOptionId(
         request.kind === "read" || request.kind === "search" ? "allow" : "deny",
@@ -492,7 +642,7 @@ async function handlePermission(
           requestId: id,
           decision,
         });
-        if (!live.cancelled) {
+        if (active()) {
           optionId = permissionOptionId(
             decision,
             request.optionIds,

@@ -662,7 +662,7 @@ fn apply_provider_account(
 }
 
 /// A child that stops draining stdin can block `write_all` for minutes, so the
-/// write runs on the blocking pool ? never on an async worker or the IPC path,
+/// write runs on the blocking pool — never on an async worker or the IPC path,
 /// where it would starve `harness_kill` and make the wedged child unrecoverable.
 #[tauri::command]
 pub async fn harness_write(
@@ -958,7 +958,7 @@ fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<Str
 }
 
 const KILL_ESCALATE: Duration = Duration::from_secs(2);
-/// Quit and `Drop` cannot wait on a detached escalate thread ? the process
+/// Quit and `Drop` cannot wait on a detached escalate thread — the process
 /// exits first and isolated harness groups stay behind as PID-1 orphans.
 #[cfg(not(windows))]
 const KILL_ALL_GRACE: Duration = Duration::from_millis(300);
@@ -1163,7 +1163,7 @@ struct ProcessSnapshot {
 /// before SIGKILL ran (crash, force-quit, or the detached escalate thread).
 /// Off-thread: the sweep shells out to `ps` and then waits on a SIGKILL, and
 /// launch would otherwise hold the first window for both. Nothing this run
-/// spawns can be caught by it ? our own children carry our pid as the marker.
+/// spawns can be caught by it — our own children carry our pid as the marker.
 pub(crate) fn reap_orphaned_harness_processes() {
     #[cfg(unix)]
     {
@@ -1206,7 +1206,7 @@ fn is_legacy_orphaned_cursor_acp(args: &str) -> bool {
     args.split_whitespace().any(|part| part == "acp")
 }
 
-/// Argv of an agent CLI we spawned ? not a shell, tmux, or `npm start`.
+/// Argv of an agent CLI we spawned — not a shell, tmux, or `npm start`.
 /// Used to decide whose environment is worth opening; the marker still
 /// decides what actually dies.
 #[cfg(any(unix, test))]
@@ -1445,7 +1445,7 @@ fn resolve_cursor_agent() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // Stable shims first. `command -v` often returns a versioned path
-    // (`?/versions/<build>/cursor-agent`); macOS TCC then treats each
+    // (`…/versions/<build>/cursor-agent`); macOS TCC then treats each
     // upgrade as a new binary.
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/cursor-agent"));
@@ -1693,7 +1693,7 @@ fn resolve_hermes() -> Option<PathBuf> {
 }
 
 fn resolve_antigravity() -> Option<PathBuf> {
-    // The .par wrapper is a POSIX self-extracting archive ? Antigravity ships
+    // The .par wrapper is a POSIX self-extracting archive — Antigravity ships
     // no Windows ACP binary, so report the provider unavailable there instead
     // of probing paths that can never be executable.
     if cfg!(windows) {
@@ -2063,7 +2063,7 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 /// Resolve `name` the way a terminal would, then fall back to common install
-/// dirs. Finder-launched apps inherit launchd's PATH (`/usr/bin:/bin/?`), so
+/// dirs. Finder-launched apps inherit launchd's PATH (`/usr/bin:/bin/…`), so
 /// Homebrew / mise / `~/.local/bin` tools look missing unless we search here.
 pub(crate) fn resolve_gui_binary(name: &str) -> Option<PathBuf> {
     which_in_path(&gui_search_path(), name)
@@ -2431,7 +2431,7 @@ mod tests {
         use std::io::Write;
         let host = HarnessHost::new();
         // `sleep` never drains stdin: filling the pipe wedges the writer while
-        // it holds the stdin mutex ? the worst case recovery must survive.
+        // it holds the stdin mutex — the worst case recovery must survive.
         let (live, mut child) = live_child();
         host.lock_inner()
             .children

@@ -45,7 +45,7 @@ mod worktrees;
 // Phase 1 seam: spawn / kill harness children per MonoCode thread.
 // Adapters own the protocol; this host only supervises processes.
 
-/// Project directory for new sessions ? prefer cwd, else home.
+/// Project directory for new sessions — prefer cwd, else home.
 #[tauri::command]
 fn default_cwd() -> String {
     if let Ok(cwd) = std::env::current_dir() {
@@ -544,7 +544,7 @@ pub fn run() {
             }
             api.prevent_exit();
             // Last window destroyed (red button). Stay in the dock on macOS;
-            // ?Q is a separate menu handler and arrives with an exit code.
+            // ⌘Q is a separate menu handler and arrives with an exit code.
             // Linux and Windows have no dock, so the last close is a quit.
             if !should_request_quit(code) {
                 return;
