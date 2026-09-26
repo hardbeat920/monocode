@@ -84,6 +84,25 @@ const STREAMING_MID_TURN: string[] = [
 /** pty_raw2.bin[0:200] rendered at 130x45: the banner, before the TUI is up. */
 const BANNER_ONLY: string[] = ["", "╭─── Claude Code v2.1.221"];
 
+/**
+ * shape_fetch.bin rendered at 130x45, rows 22-32: a real `WebFetch` domain
+ * prompt. It prints no footer — `Esc to cancel` appears nowhere on the screen —
+ * and advertises Esc inside option 3 instead.
+ */
+const WEBFETCH_PROMPT: string[] = [
+  "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+  " Fetch",
+  "",
+  '   url: "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/packages/sdk/README.md", prompt: "What is',
+  '   the very first heading in this document? Quote it exactly, including its markdown level."',
+  "   Claude wants to fetch content from raw.githubusercontent.com",
+  "",
+  " Do you want to allow Claude to fetch this content?",
+  " ❯ 1. Yes",
+  "   2. Yes, and don't ask again for raw.githubusercontent.com",
+  "   3. No, and tell Claude what to do differently (esc)",
+];
+
 function promptScreen(): PromptScreen {
   return readPromptScreen(PERMISSION_PROMPT_BYTES, PERMISSION_PROMPT_SIZE);
 }
@@ -151,14 +170,53 @@ describe("a permission prompt on screen", () => {
     });
   });
 
-  it("is refused when the screen only half shows it", () => {
+  it("is refused when the option run is broken or nothing is selected", () => {
     const lines = renderScreen(PERMISSION_PROMPT_BYTES, PERMISSION_PROMPT_SIZE);
-    // The same real screen with its footer dropped, as a repaint in progress
-    // would leave it.
-    const half = lines.filter((line) => !line.includes("Esc to cancel"));
-    const screen = readRenderedScreen(half);
-    expect(screen.kind).toBe("unrecognised");
-    expect(JSON.stringify(screen)).not.toContain("keystroke");
+    // The same real screen with option 2 renumbered, and with the cursor taken
+    // off every option. These are the checks that carry the weight now that a
+    // missing footer no longer disqualifies a prompt.
+    const renumbered = lines.map((line) =>
+      line.includes("2. Yes, allow all") ? line.replace("2.", "4.") : line,
+    );
+    expect(readRenderedScreen(renumbered).kind).toBe("unrecognised");
+    const uncursored = lines.map((line) => line.replace("❯ 1.", "  1."));
+    expect(readRenderedScreen(uncursored).kind).toBe("unrecognised");
+    expect(JSON.stringify(readRenderedScreen(uncursored))).not.toContain(
+      "keystroke",
+    );
+  });
+
+  it("reads a prompt that prints no footer at all", () => {
+    // Verbatim rows 22-32 of shape_fetch.bin rendered at 130x45: a real WebFetch
+    // domain prompt. There is no `Esc to cancel` anywhere on that screen — the
+    // escape hint lives inside option 3 instead — and requiring a footer made
+    // every domain approval permanently unanswerable.
+    const screen = readRenderedScreen(WEBFETCH_PROMPT);
+    expect(screen.kind).toBe("permission-prompt");
+    if (screen.kind !== "permission-prompt") return;
+
+    expect(screen.prompt.question).toBe(
+      "Do you want to allow Claude to fetch this content?",
+    );
+    expect(screen.prompt.footer).toBeUndefined();
+    expect(screen.prompt.options.map((option) => option.keystroke)).toEqual([
+      "1",
+      "2",
+      "3",
+    ]);
+    expect(screen.prompt.detail).toContain(
+      "Claude wants to fetch content from raw.githubusercontent.com",
+    );
+    // Esc is option 3 here, by the TUI's own label, which is the same denial the
+    // footer form advertises.
+    expect(screen.prompt.deny).toEqual({
+      label: "No, and tell Claude what to do differently (esc)",
+      keystroke: "\x1b",
+    });
+    expect(planInjection(screen, "carry on")).toEqual({
+      allowed: false,
+      reason: "permission-prompt",
+    });
   });
 
   it("reads a question the box wrapped onto a second line", () => {

@@ -49,8 +49,12 @@ export type PermissionPrompt = {
   /** What the prompt box shows above the question: the tool header and its diff. */
   detail: readonly string[];
   options: readonly PromptOption[];
-  /** The prompt's own footer, verbatim: `Esc to cancel · Tab to amend`. */
-  footer: string;
+  /**
+   * The prompt's own footer, verbatim: `Esc to cancel · Tab to amend`. Absent on
+   * prompts that do not print one — a `WebFetch` domain prompt has no footer
+   * anywhere on screen and puts its escape hint inside an option label instead.
+   */
+  footer?: string;
   /**
    * Present when the footer advertises Esc. It is called `deny` and not `cancel`
    * because that is what it does: **Esc denies the tool call, it does not dismiss
@@ -120,6 +124,8 @@ const OPTION = /^(❯\s*)?(\d+)\.\s+(\S.*)$/u;
 const QUESTION_START = /^Do you want to /u;
 const QUESTION = /^Do you want to .+\?$/u;
 const PROMPT_FOOTER = /Esc to cancel/u;
+/** How a footerless prompt advertises Esc: inside the option it stands for. */
+const ESC_HINT = /\(esc\)/iu;
 const COMPOSER = /^❯(?:\s|$)/u;
 /**
  * A spinner frame: a glyph, then one *word* ending in an ellipsis — `✢ Osmosing…`.
@@ -419,23 +425,39 @@ function readPermissionPrompt(
     break;
   }
 
-  // Prefer refusing to a half-read prompt: the options must be the complete
-  // run the TUI numbered, exactly one of them under the cursor, and the footer
-  // the prompt's own.
-  if (options.length < 2 || !footer) return undefined;
+  // Prefer refusing to a half-read prompt: the options must be the complete run
+  // the TUI numbered, with exactly one of them under the cursor.
+  //
+  // The footer used to be required too, on the reasoning that it proved the run
+  // was complete. It does not prove much that the numbering does not, and a real
+  // `WebFetch` domain prompt has no footer at all — which made a whole class of
+  // approvals permanently unanswerable. What is genuinely given up: a run painted
+  // halfway is contiguous by construction, so `1..2 of 3` now parses as a
+  // complete pair. Nothing on the screen distinguishes those, and the caller
+  // re-reads on every chunk, so the next frame corrects it.
+  if (options.length < 2) return undefined;
   if (options.some((option, index) => option.number !== index + 1))
     return undefined;
   if (options.filter((option) => option.selected).length !== 1)
     return undefined;
 
+  // Esc is advertised either by the footer or, when there is no footer, by a
+  // hint inside the option it corresponds to — `3. No, and tell Claude what to
+  // do differently (esc)`. Either way the key denies, so either way it is `deny`.
+  const escOption = options.find((option) => ESC_HINT.test(option.label));
+  const deny =
+    footer && /\bEsc to cancel\b/u.test(footer)
+      ? { label: "Esc to cancel", keystroke: "\x1b" }
+      : escOption
+        ? { label: escOption.label, keystroke: "\x1b" }
+        : undefined;
+
   return {
     question,
     detail: promptDetail(lines, trimmed, at),
     options,
-    footer,
-    ...(/\bEsc to cancel\b/u.test(footer)
-      ? { deny: { label: "Esc to cancel", keystroke: "\x1b" } }
-      : {}),
+    ...(footer ? { footer } : {}),
+    ...(deny ? { deny } : {}),
   };
 }
 
