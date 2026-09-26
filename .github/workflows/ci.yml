@@ -83,9 +83,65 @@ jobs:
             echo "Expected exactly one .rpm" >&2
             exit 1
           fi
-          rpm -qip "${bundle[0]}"
-          # dnf resolves the generated Requires (and would fail here if the
-          # package asked for something the setup script did not install).
+          # tauri-bundler derives rpm Requires only from
+          # bundle.linux.rpm.depends, so assert the runtime stack is declared.
+          # The install below cannot prove this on its own: the setup script has
+          # already installed every -devel package.
+          requires="$(rpm -qp --requires "${bundle[0]}")"
+          echo "$requires"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3 librsvg2 openssl-libs; do
+            if ! grep -qx "$dep" <<<"$requires"; then
+              echo "rpm is missing Requires: $dep" >&2
+              exit 1
+            fi
+          done
           dnf install -y "${bundle[0]}"
           rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
           command -v monocode
+
+      - name: Upload rpm for the clean install check
+        if: matrix.image == 'fedora:43'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+
+  rpm-clean-install:
+    name: Clean rpm install
+    needs: rpm
+    runs-on: ubuntu-latest
+    # Deliberately no setup script: this is the only job that can catch an rpm
+    # whose Requires are missing, since everywhere else the -devel packages are
+    # already installed. It mirrors the README instructions for an EL 10 user.
+    container: almalinux:10
+    steps:
+      - name: Install git
+        run: dnf install -y git
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Enable EPEL 10
+        run: dnf install -y epel-release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rpm-package
+          path: rpm
+
+      - name: Install the rpm on a clean image
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=(rpm/*.rpm)
+          if (( ${#bundle[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          dnf install -y "${bundle[0]}"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3; do
+            rpm -q "$dep" >/dev/null || { echo "dnf did not install $dep" >&2; exit 1; }
+          done
+          rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"

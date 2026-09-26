@@ -33,7 +33,7 @@ macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.d
 
 macOS (Intel): download [MonoCode_x64.dmg](https://dl.usemono.dev/MonoCode_x64.dmg), open it, drag MonoCode to Applications.
 
-Linux (x86_64): download the `.deb` or AppImage from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install the `.deb` with `sudo apt install ./MonoCode_*.deb`, or make the AppImage executable with `chmod +x MonoCode_*.AppImage` and run it directly. On Fedora and Enterprise Linux 10, download the `.rpm` from the same release page and install it with `sudo dnf install ./MonoCode-*.rpm` — see [Fedora / Enterprise Linux packages](#fedora--enterprise-linux-packages).
+Linux (x86_64): download the `.deb` or AppImage from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install the `.deb` with `sudo apt install ./MonoCode_*.deb`, or make the AppImage executable with `chmod +x MonoCode_*.AppImage` and run it directly. On Fedora and Enterprise Linux 10, download the `.rpm` from the same release page — see [Fedora / Enterprise Linux packages](#fedora--enterprise-linux-packages) for the one extra repository step Enterprise Linux needs.
 
 Windows (x86_64): download the NSIS installer from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest) and run it.
 
@@ -80,7 +80,17 @@ Tauri loads `src-tauri/tauri.linux.conf.json` automatically for Linux developmen
 
 ### Fedora / Enterprise Linux packages
 
-On a Fedora workstation — or an Enterprise Linux 10 one (registered RHEL, Rocky, Alma, CentOS Stream, Oracle), where the setup script enables EPEL 10 and CRB automatically — the repository can install the native Tauri prerequisites and build a distributable `.rpm` directly. EL 9 and older are unsupported (`webkit2gtk4.1-devel` only exists in EPEL 10):
+On Fedora, or on an Enterprise Linux 10 system (registered RHEL, Rocky, Alma, CentOS Stream, Oracle), install the release `.rpm` from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Enterprise Linux needs EPEL first, because `webkit2gtk4.1` is an EPEL package there — CRB is not needed to run MonoCode:
+
+```bash
+# Enterprise Linux 10 only; skip on Fedora.
+sudo dnf install -y epel-release   # RHEL: sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+sudo dnf install ./MonoCode-*.rpm
+```
+
+The `.rpm` declares its own runtime dependencies, so `dnf` pulls the WebKitGTK stack for you. Building natively links the system WebKitGTK instead of the Ubuntu-built libraries shipped in the AppImage, which avoids graphics issues (e.g. `Could not create default EGL display`) on newer Mesa/Wayland systems.
+
+To build it yourself instead — which also enables EPEL 10 and CRB automatically, since the -devel packages need CRB:
 
 ```bash
 npm run setup:linux:fedora
@@ -88,7 +98,7 @@ npm ci
 npm run build:fedora
 ```
 
-The Fedora build emits a `.rpm` bundle under `target/release/bundle/rpm/`, installable with `sudo dnf install ./target/release/bundle/rpm/MonoCode-*.rpm`. The same `.rpm` is attached to every [GitHub release](https://github.com/hardbeat920/monocode/releases/latest), so most users do not need to build it. Building natively links the system WebKitGTK instead of the Ubuntu-built libraries shipped in the AppImage, which avoids graphics issues (e.g. `Could not create default EGL display`) on newer Mesa/Wayland systems.
+That emits a `.rpm` under `target/release/bundle/rpm/`, installable with `sudo dnf install ./target/release/bundle/rpm/MonoCode-*.rpm`. EL 9 and older are unsupported (`webkit2gtk4.1-devel` only exists in EPEL 10).
 
 ### Troubleshooting on Fedora / Wayland
 
