@@ -33,7 +33,7 @@ macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.d
 
 macOS (Intel): download [MonoCode_x64.dmg](https://dl.usemono.dev/MonoCode_x64.dmg), open it, drag MonoCode to Applications.
 
-Linux (x86_64): download the `.deb` or AppImage from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install the `.deb` with `sudo apt install ./MonoCode_*.deb`, or make the AppImage executable with `chmod +x MonoCode_*.AppImage` and run it directly.
+Linux (x86_64): download the `.deb` or AppImage from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install the `.deb` with `sudo apt install ./MonoCode_*.deb`, or make the AppImage executable with `chmod +x MonoCode_*.AppImage` and run it directly. On Fedora and Enterprise Linux 10, download the `.rpm` from the same release page and install it with `sudo dnf install ./MonoCode-*.rpm` — see [Fedora / Enterprise Linux packages](#fedora--enterprise-linux-packages).
 
 Windows (x86_64): download the NSIS installer from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest) and run it.
 
@@ -88,7 +88,7 @@ npm ci
 npm run build:fedora
 ```
 
-The Fedora build emits a `.rpm` bundle under `target/release/bundle/rpm/`, installable with `sudo dnf install ./target/release/bundle/rpm/MonoCode-*.rpm`. Building natively links the system WebKitGTK instead of the Ubuntu-built libraries shipped in the AppImage, which avoids graphics issues (e.g. `Could not create default EGL display`) on newer Mesa/Wayland systems.
+The Fedora build emits a `.rpm` bundle under `target/release/bundle/rpm/`, installable with `sudo dnf install ./target/release/bundle/rpm/MonoCode-*.rpm`. The same `.rpm` is attached to every [GitHub release](https://github.com/hardbeat920/monocode/releases/latest), so most users do not need to build it. Building natively links the system WebKitGTK instead of the Ubuntu-built libraries shipped in the AppImage, which avoids graphics issues (e.g. `Could not create default EGL display`) on newer Mesa/Wayland systems.
 
 ### Troubleshooting on Fedora / Wayland
 
