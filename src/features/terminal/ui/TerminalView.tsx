@@ -15,7 +15,10 @@ import {
   scanOscCwd,
   type TerminalMetaPatch,
 } from "../model/terminalTab";
-import { isLightScheme, SCHEME_CHANGE_EVENT } from "../../settings/model/appearance";
+import {
+  isLightScheme,
+  SCHEME_CHANGE_EVENT,
+} from "../../settings/model/appearance";
 import {
   applyTerminalChrome,
   fitTerminal,
@@ -44,7 +47,10 @@ function cssColor(expr: string, fallback: string): string {
 function cssHexColor(expr: string, fallback: string): string {
   const color = cssColor(expr, fallback);
   if (/^#[\da-f]{6}$/i.test(color)) return color;
-  const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+  const channels = color
+    .match(/[\d.]+/g)
+    ?.slice(0, 3)
+    .map(Number);
   if (!channels || channels.length < 3 || channels.some(Number.isNaN)) {
     return fallback;
   }
@@ -120,18 +126,12 @@ function monoFont(): string {
 function oscColors() {
   const light = isLightScheme();
   return {
-    fg: cssHexColor(
-      "var(--color-content)",
-      light ? "#2e2e2e" : "#ebebeb",
-    ),
+    fg: cssHexColor("var(--color-content)", light ? "#2e2e2e" : "#ebebeb"),
     bg: cssHexColor(
       "var(--color-background-base)",
       light ? "#f7f7f7" : "#171717",
     ),
-    cursor: cssHexColor(
-      "var(--color-accent)",
-      light ? "#4078f2" : "#4da3f5",
-    ),
+    cursor: cssHexColor("var(--color-accent)", light ? "#4078f2" : "#4da3f5"),
   };
 }
 
@@ -140,12 +140,17 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const spawned = useRef(false);
+  const spawnVersion = useRef(0);
+  const latestSpawnId = useRef(id);
   const applySizeRef = useRef<() => void>(() => {});
   const onMetaChangeRef = useRef(onMetaChange);
   onMetaChangeRef.current = onMetaChange;
   const runningProcessRef = useRef<string | null>(null);
 
   useEffect(() => {
+    const version = ++spawnVersion.current;
+    latestSpawnId.current = id;
+    const spawnAbort = new AbortController();
     const outer = outerRef.current;
     const host = hostRef.current;
     if (!outer || !host) return;
@@ -232,7 +237,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       },
     );
 
-    const starting = spawnPty(id, cwd, term.cols, term.rows)
+    const starting = spawnPty(id, cwd, term.cols, term.rows, spawnAbort.signal)
       .then(() => {
         if (!closed) spawned.current = true;
       })
@@ -337,6 +342,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
 
     return () => {
       closed = true;
+      spawnAbort.abort();
       cancelAnimationFrame(frame);
       if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
@@ -352,7 +358,18 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       renderSub.dispose();
       bufferSub.dispose();
       unsubscribe();
-      void starting.catch(() => undefined).then(() => killPty(id));
+      void starting
+        .catch(() => undefined)
+        .then(() => {
+          // StrictMode can remount the same terminal while its first spawn is
+          // pending. That old cleanup must not kill the replacement shell.
+          if (
+            latestSpawnId.current !== id ||
+            spawnVersion.current === version
+          ) {
+            return killPty(id);
+          }
+        });
       term.dispose();
       termRef.current = null;
       spawned.current = false;

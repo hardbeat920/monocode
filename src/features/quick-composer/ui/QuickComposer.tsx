@@ -25,6 +25,7 @@ import {
   X,
   ImagePlus,
   Maximize2,
+  Terminal,
 } from "../../../shared/ui/icons";
 import {
   QuickProjectIcon,
@@ -51,6 +52,7 @@ import { quickLaunchAttachments } from "../model/quickAttachments";
 import { useQuickAttachments } from "./useQuickAttachments";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { QuickModelSelector } from "./QuickModelSelector";
+import { QuickTerminalDock } from "./QuickTerminalDock";
 import { useQuickPickerMotion } from "./useQuickPickerMotion";
 import {
   applyQuickCatalog,
@@ -95,8 +97,9 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [prompt, setPrompt] = useState("");
   const [picker, setPicker] = useState<
-    "project" | "model" | "attachments" | null
+    "project" | "model" | "attachments" | "terminal" | null
   >(null);
+  const [terminalStarted, setTerminalStarted] = useState(false);
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -220,12 +223,15 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
   };
   const settings = mergeModelSettings(model, modelSettings);
   const optionCount = projectOptions.length;
-  const openPicker = (kind: "project" | "model" | "attachments") => {
+  const openPicker = (
+    kind: "project" | "model" | "attachments" | "terminal",
+  ) => {
     if (picker === kind) {
       closePicker();
       return;
     }
     setPicker(kind);
+    if (kind === "terminal") setTerminalStarted(true);
     setQuery("");
     setHighlight(Math.max(0, projects.indexOf(cwd ?? "")));
     if (kind === "project")
@@ -358,12 +364,24 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     // Selectors expand below the toolbar without moving the prompt.
     <div
       ref={frameRef}
-      onPaste={attachments.onPaste}
+      onPaste={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".monocode-terminal")
+        )
+          return;
+        attachments.onPaste(event);
+      }}
       onDragOver={attachments.onDragOver}
       onDragLeave={attachments.onDragLeave}
       onDrop={attachments.onDrop}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || event.defaultPrevented) return;
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".monocode-terminal")
+        )
+          return;
         event.preventDefault();
         if (picker) closePicker();
         else dismiss();
@@ -496,6 +514,17 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
           <span className="truncate">{model.name}</span>
           <ChevronDown className="size-3 shrink-0 opacity-60" />
         </button>
+        <button
+          type="button"
+          aria-label="Toggle floating terminal"
+          aria-expanded={picker === "terminal"}
+          title="Floating terminal"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => openPicker("terminal")}
+          className={`grid size-6.5 shrink-0 place-items-center rounded-md ${picker === "terminal" ? "bg-selection-emphasis text-content" : "text-content/70 hover:bg-selection-hover hover:text-content"}`}
+        >
+          <Terminal className="size-3.5" strokeWidth={1.5} />
+        </button>
         <span className="ml-auto flex shrink-0 items-center gap-3 text-[11px] text-content/45">
           {attachments.loading ? (
             <span role="status">Adding attachment…</span>
@@ -564,7 +593,16 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
           </button>
         </Popover>
       ) : null}
-      {picker && picker !== "attachments" ? (
+      {terminalStarted ? (
+        <div
+          ref={picker === "terminal" ? pickerRef : undefined}
+          className={`h-[320px] shrink-0 border-t border-stroke ${picker === "terminal" ? "" : "hidden"}`}
+          aria-label="Floating terminal"
+        >
+          <QuickTerminalDock cwd={cwd ?? ""} active={picker === "terminal"} />
+        </div>
+      ) : null}
+      {picker && picker !== "attachments" && picker !== "terminal" ? (
         <div ref={pickerRef} key={picker} className="flex min-h-0 flex-col">
           {picker === "model" ? (
             <QuickModelSelector

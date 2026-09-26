@@ -8,7 +8,7 @@ const EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 export function useQuickPickerMotion(
   frameRef: RefObject<HTMLDivElement | null>,
   pickerRef: RefObject<HTMLDivElement | null>,
-  picker: "project" | "model" | "attachments" | null,
+  picker: "project" | "model" | "attachments" | "terminal" | null,
 ) {
   const lastHeight = useRef<number | null>(null);
   const previousPicker = useRef(picker);
