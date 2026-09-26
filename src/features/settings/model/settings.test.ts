@@ -268,8 +268,12 @@ describe("keybinding overrides", () => {
   });
 
   it("rejects a shortcut that shadows another command's default", () => {
+    // `App: Go to File` is bound to the platform modifier, so hardcoding
+    // Control here clashes with nothing on macOS and the assertion passes
+    // vacuously.
+    const mod = IS_MAC ? "Command" : "Control";
     expect(() =>
-      saveKeybindingOverride("App: Search", { shortcut: "Control+KeyP" }),
+      saveKeybindingOverride("App: Search", { shortcut: `${mod}+KeyP` }),
     ).toThrow("Already used by App: Go to File");
     expect(() =>
       saveKeybindingOverride("Tab: New", { shortcut: "Control+Tab" }),
