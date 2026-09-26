@@ -4996,11 +4996,6 @@ export default function App({
    */
   const openProjects = useCallback(
     (paths: readonly string[]) => {
-      setSearchViewOpen(false);
-      setInboxViewOpen(false);
-      setNotesViewOpen(false);
-      setAutomationsViewOpen(false);
-
       const steps = planProjectOpenRun({
         memory: readProjectReturnMemory(),
         tabs: tabsRef.current,
@@ -5010,6 +5005,16 @@ export default function App({
       });
       const last = steps[steps.length - 1];
       if (!last) return;
+
+      // After the early return, not before it. `pickFolders` hands back an
+      // empty list when the picker is dismissed, and every path failing
+      // `looksLikeProject` comes out the same way — so closing these first
+      // meant cancelling a folder picker shut whatever the user had open.
+      // Nothing below opens a project without also leaving one of these views.
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
 
       // At most one folder can take the blank session, and it keeps the
       // retargeting rules `onCwdChange` already owns.
