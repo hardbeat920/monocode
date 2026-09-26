@@ -19,6 +19,24 @@ const BLOCK_ELEMENTS = new Set([
 
 let highlightOwner: symbol | null = null;
 
+export function transcriptMutationNeedsRepaint(
+  records: MutationRecord[],
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return false;
+  for (const record of records) {
+    const target =
+      record.target.nodeType === Node.TEXT_NODE
+        ? record.target.parentElement
+        : (record.target as Element);
+    const item = target?.closest<HTMLElement>("[data-transcript-search-item]");
+    if (!item) return true;
+    if ((item.textContent ?? "").toLowerCase().includes(needle)) return true;
+  }
+  return false;
+}
+
 export function transcriptWordRanges(
   root: HTMLElement,
   query: string,

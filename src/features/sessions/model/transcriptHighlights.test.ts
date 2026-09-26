@@ -1,6 +1,42 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { transcriptWordRanges } from "./transcriptHighlights";
+import {
+  transcriptMutationNeedsRepaint,
+  transcriptWordRanges,
+} from "./transcriptHighlights";
+
+describe("transcriptMutationNeedsRepaint", () => {
+  function record(target: Node): MutationRecord {
+    return { target } as MutationRecord;
+  }
+
+  it("ignores streaming changes in items that cannot contain the query", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<div data-transcript-search-item><p>unrelated output</p></div>`;
+    const item = root.firstElementChild as HTMLElement;
+
+    expect(transcriptMutationNeedsRepaint([record(item)], "needle")).toBe(false);
+  });
+
+  it("repaints when a mutated item contains the query", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<div data-transcript-search-item><p>found the NEEDLE here</p></div>`;
+    const text = root.querySelector("p")?.firstChild as Text;
+
+    expect(transcriptMutationNeedsRepaint([record(text)], "needle")).toBe(true);
+  });
+
+  it("repaints structural changes outside a searchable item", () => {
+    const root = document.createElement("div");
+
+    expect(transcriptMutationNeedsRepaint([record(root)], "needle")).toBe(true);
+  });
+
+  it("does nothing without a query", () => {
+    const root = document.createElement("div");
+    expect(transcriptMutationNeedsRepaint([record(root)], "  ")).toBe(false);
+  });
+});
 
 describe("transcriptWordRanges", () => {
   it("highlights only matching words, including text split by formatting", () => {
