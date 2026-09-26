@@ -409,3 +409,53 @@ export function remoteSendGate(
   if (held) return { kind: "clear", held };
   return { kind: "send" };
 }
+
+// ------------------------------------------------------------ pty fan-out
+
+export type PtyFanout = {
+  /** One decoded chunk of pty output, to the parser and every viewer. */
+  dispatch: (chunk: string) => void;
+  /** Adds a viewer. The returned function removes that viewer and only it. */
+  attach: (read: (chunk: string) => void) => () => void;
+  /** Viewers only. The parser is not one of them. */
+  viewerCount: () => number;
+};
+
+/**
+ * One subscription, many readers.
+ *
+ * `subscribePty` keeps a **single** handler per pty id, so a terminal view cannot
+ * subscribe for itself: doing so would replace the screen parser's handler, and
+ * its unsubscribe — guarded on `dataHandlers.get(id) === onData` — would then
+ * delete the view's own entry and leave the pty **watched by nobody**, silently
+ * and with no error anywhere.
+ *
+ * So the parser is passed in here rather than registered, which makes it
+ * structurally undetachable: `attach` returns a remover closed over one viewer,
+ * and there is no path by which any caller can remove the parser. That is the
+ * guarantee, not a convention to be careful about.
+ */
+export function createPtyFanout(parser: (chunk: string) => void): PtyFanout {
+  const viewers = new Set<(chunk: string) => void>();
+  return {
+    dispatch: (chunk) => {
+      // The parser first, so a viewer that throws cannot cost it the chunk.
+      parser(chunk);
+      for (const read of [...viewers]) {
+        try {
+          read(chunk);
+        } catch {
+          // A disposed terminal throws on write. The pty subscription must
+          // survive that, and the parser has already had the chunk.
+        }
+      }
+    },
+    attach: (read) => {
+      viewers.add(read);
+      return () => {
+        viewers.delete(read);
+      };
+    },
+    viewerCount: () => viewers.size,
+  };
+}

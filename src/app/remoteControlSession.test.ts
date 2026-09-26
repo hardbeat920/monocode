@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   composerHeld,
+  createPtyFanout,
   noteInterruptedTurn,
   pendingAfter,
   remoteApprovalKeystroke,
@@ -465,5 +466,85 @@ describe("while the user has the terminal open", () => {
     expect(gate.kind).toBe("refuse");
     if (gate.kind !== "refuse") return;
     expect(gate.reason).toMatch(/terminal is open/);
+  });
+});
+
+describe("one pty subscription, many readers", () => {
+  it("gives the parser every chunk", () => {
+    const parsed: string[] = [];
+    const fanout = createPtyFanout((chunk) => parsed.push(chunk));
+
+    fanout.dispatch("a");
+    fanout.dispatch("b");
+
+    expect(parsed).toEqual(["a", "b"]);
+  });
+
+  it("gives an attached viewer the chunks after it attached", () => {
+    const seen: string[] = [];
+    const fanout = createPtyFanout(() => undefined);
+
+    fanout.dispatch("before");
+    fanout.attach((chunk) => seen.push(chunk));
+    fanout.dispatch("after");
+
+    expect(seen).toEqual(["after"]);
+  });
+
+  it("keeps the parser subscribed when a viewer detaches", () => {
+    // The regression this exists for: `subscribePty` holds one handler per id,
+    // so if a view's teardown could remove the parser the pty would be left
+    // watched by nobody — silently, with no error anywhere.
+    const parsed: string[] = [];
+    const fanout = createPtyFanout((chunk) => parsed.push(chunk));
+    const detach = fanout.attach(() => undefined);
+
+    detach();
+    fanout.dispatch("still parsed");
+
+    expect(parsed).toEqual(["still parsed"]);
+    expect(fanout.viewerCount()).toBe(0);
+  });
+
+  it("detaches exactly one viewer", () => {
+    const first: string[] = [];
+    const second: string[] = [];
+    const fanout = createPtyFanout(() => undefined);
+    const detachFirst = fanout.attach((chunk) => first.push(chunk));
+    fanout.attach((chunk) => second.push(chunk));
+
+    detachFirst();
+    fanout.dispatch("x");
+
+    expect(first).toEqual([]);
+    expect(second).toEqual(["x"]);
+    expect(fanout.viewerCount()).toBe(1);
+  });
+
+  it("is harmless to detach twice", () => {
+    const fanout = createPtyFanout(() => undefined);
+    const detach = fanout.attach(() => undefined);
+    fanout.attach(() => undefined);
+
+    detach();
+    detach();
+
+    expect(fanout.viewerCount()).toBe(1);
+  });
+
+  it("keeps parsing when a viewer throws", () => {
+    // A disposed terminal throws on write. The subscription has to survive it,
+    // and the parser has already had the chunk by then.
+    const parsed: string[] = [];
+    const fanout = createPtyFanout((chunk) => parsed.push(chunk));
+    fanout.attach(() => {
+      throw new Error("disposed");
+    });
+    const survivor: string[] = [];
+    fanout.attach((chunk) => survivor.push(chunk));
+
+    expect(() => fanout.dispatch("x")).not.toThrow();
+    expect(parsed).toEqual(["x"]);
+    expect(survivor).toEqual(["x"]);
   });
 });

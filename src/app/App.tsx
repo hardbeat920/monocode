@@ -173,6 +173,7 @@ import {
   remoteApprovalKeystroke,
   remoteApprovalReply,
   remoteApprovalView,
+  createPtyFanout,
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
@@ -180,6 +181,7 @@ import {
   remoteSendGate,
   seatRemoteUserMessage,
   shouldAutoOpen,
+  type PtyFanout,
   type RemoteAnswer,
 } from "./remoteControlSession";
 import {
@@ -1321,19 +1323,13 @@ export default function App({
         pending: Set<string>;
         /** Replayed pty bytes, trimmed by the same rule the pty bridge uses. */
         chunks: string[];
-        screen: PromptScreen | null;
+        /** A holder, so the parser can own it without the map in the way. */
+        screen: { screen: PromptScreen | null };
         /**
-         * Streaming, because a multi-byte character split across two pty reads
-         * would otherwise arrive as a replacement character and cost the line
-         * the parser needs.
+         * The one subscription's readers. The parser is built into it and cannot
+         * be detached; see `createPtyFanout`.
          */
-        decoder: TextDecoder;
-        /**
-         * Extra readers of the one subscription. `subscribePty` keeps a single
-         * handler per id, so a terminal view has to be fanned out to rather than
-         * subscribe for itself.
-         */
-        readers: Set<(chunk: string) => void>;
+        fanout: PtyFanout;
         /** What is currently in front of the user, so it is not raised twice. */
         shown:
           | { kind: "question"; requestId: number }
@@ -1373,10 +1369,11 @@ export default function App({
       const entry = remoteControl.current.get(sessionId);
       if (!entry) return;
       const terminalOpen = remoteTerminalIds.includes(sessionId);
-      const view = entry.screen
+      const screen = entry.screen.screen;
+      const view = screen
         ? remoteApprovalView({
             pending: entry.pending.size > 0,
-            screen: entry.screen,
+            screen,
             terminalOpen,
           })
         : ({ kind: "none" } as const);
@@ -1451,7 +1448,7 @@ export default function App({
       const entry = remoteControl.current.get(sessionId);
       if (!entry || entry.shown?.kind !== "question") return false;
       if (entry.shown.requestId !== requestId) return false;
-      const screen = entry.screen;
+      const screen = entry.screen.screen;
       const chosen =
         reply.kind === "answered"
           ? reply.answers["remote-approval"]?.[0]
@@ -1496,10 +1493,12 @@ export default function App({
    * than in a send.
    */
   const waitForClearComposer = useCallback(
-    async (entry: { screen: PromptScreen | null }): Promise<boolean> => {
+    async (entry: {
+      screen: { screen: PromptScreen | null };
+    }): Promise<boolean> => {
       for (let attempt = 0; attempt < 20; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 25));
-        const lines = entry.screen?.lines;
+        const lines = entry.screen.screen?.lines;
         if (lines && !composerHeld(lines)) return true;
       }
       return false;
@@ -1532,7 +1531,7 @@ export default function App({
         });
         flushHarnessEvents();
       };
-      const screenNow = () => entry.screen;
+      const screenNow = () => entry.screen.screen;
       const gate = remoteSendGate(
         screenNow(),
         screenNow() ? planInjection(screenNow()!, text) : null,
@@ -1704,52 +1703,50 @@ export default function App({
         // the moment of a hand-over, not a failure.
         onError: () => undefined,
       });
-      // The parser is written against a fixed screen, and the pty was spawned
-      // at that size, so the constants go in rather than a window measurement:
-      // a disagreement here silently changes where every column lands.
-      const unsubscribe = subscribePty(
-        handle.ptyId,
-        (chunk) => {
-          const entry = remoteControl.current.get(sessionId);
-          if (!entry) return;
-          const text = entry.decoder.decode(chunk, { stream: true });
-          entry.chunks.push(text);
-          for (const read of entry.readers) read(text);
-          const trimmed = trimReplay(
-            entry.chunks.map((part) => part.length),
-            entry.chunks.reduce((total, part) => total + part.length, 0),
-          );
-          if (trimmed.drop > 0) entry.chunks.splice(0, trimmed.drop);
-          const screen = readPromptScreen(entry.chunks.join(""), {
-            cols: REMOTE_CONTROL_COLS,
-            rows: REMOTE_CONTROL_ROWS,
-          });
-          entry.screen = screen;
-          // An interrupt taken on the phone writes no record at all, so the
-          // composer going idle is the only evidence its turn is over.
-          const ended = resolveTurnFromScreen(
-            entry.mirror,
-            screen.turn === "ended",
-          );
-          for (const event of ended) {
-            if (event.type !== "remote.userMessage") {
-              enqueueHarnessEvent(sessionId, event);
-            }
+      // The screen parser, and the fan-out's one undetachable reader. The pty
+      // was spawned at a fixed size and the parser takes the size as a
+      // parameter, so the constants go in rather than a window measurement: a
+      // disagreement silently moves every column the parser reads.
+      const chunks: string[] = [];
+      const state: { screen: PromptScreen | null } = { screen: null };
+      const parse = (text: string) => {
+        chunks.push(text);
+        const trimmed = trimReplay(
+          chunks.map((part) => part.length),
+          chunks.reduce((total, part) => total + part.length, 0),
+        );
+        if (trimmed.drop > 0) chunks.splice(0, trimmed.drop);
+        const screen = readPromptScreen(chunks.join(""), {
+          cols: REMOTE_CONTROL_COLS,
+          rows: REMOTE_CONTROL_ROWS,
+        });
+        state.screen = screen;
+        // An interrupt taken on the phone writes no record at all, so the
+        // composer coming back is the only evidence its turn is over.
+        const ended = resolveTurnFromScreen(mirror, screen.turn === "ended");
+        for (const event of ended) {
+          if (event.type !== "remote.userMessage") {
+            enqueueHarnessEvent(sessionId, event);
           }
-          if (ended.length > 0) flushHarnessEvents();
-          syncRemoteApproval(sessionId);
-        },
-        () => undefined,
-      );
+        }
+        if (ended.length > 0) flushHarnessEvents();
+        syncRemoteApproval(sessionId);
+      };
+      const fanout = createPtyFanout(parse);
+      const decoder = new TextDecoder();
+
+      // Stored before subscribing: `subscribePty` replays anything it buffered
+      // straight away, and a chunk arriving before the entry exists would be
+      // parsed against nothing.
+      let unsubscribe = () => undefined as void;
       remoteControl.current.set(sessionId, {
         ptyId: handle.ptyId,
         name,
         mirror,
         pending: new Set<string>(),
-        chunks: [],
-        screen: null,
-        decoder: new TextDecoder(),
-        readers: new Set<(chunk: string) => void>(),
+        chunks,
+        screen: state,
+        fanout,
         shown: null,
         stop: () => {
           live = false;
@@ -1757,6 +1754,14 @@ export default function App({
           unsubscribe();
         },
       });
+      unsubscribe = subscribePty(
+        handle.ptyId,
+        // Streaming decode: a multi-byte character split across two pty reads
+        // would otherwise arrive as a replacement character and cost the line
+        // the parser needs.
+        (chunk) => fanout.dispatch(decoder.decode(chunk, { stream: true })),
+        () => undefined,
+      );
       setRemoteControlIds((ids) =>
         ids.includes(sessionId) ? ids : [...ids, sessionId],
       );
@@ -1799,11 +1804,10 @@ export default function App({
    */
   const attachRemoteReader = useCallback(
     (sessionId: string) => (read: (chunk: string) => void) => {
-      const entry = remoteControl.current.get(sessionId);
-      entry?.readers.add(read);
-      return () => {
-        remoteControl.current.get(sessionId)?.readers.delete(read);
-      };
+      const fanout = remoteControl.current.get(sessionId)?.fanout;
+      // Nothing here can reach the parser: `attach` hands back a remover closed
+      // over this viewer alone.
+      return fanout ? fanout.attach(read) : () => undefined;
     },
     [],
   );
