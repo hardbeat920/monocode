@@ -137,7 +137,7 @@ async function startLive(
   modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
   const { path } = await resolveOpenCodeBinary();
-  const versionOut = await execChild(path, ["--version"], cwd).catch(() => "");
+  const versionOut = await execChild(path, ["--version"], cwd, "opencode").catch(() => "");
   const version = parseOpenCodeVersion(versionOut);
   if (!version || compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
     throw new Error(
@@ -167,6 +167,8 @@ async function startLive(
     path,
     ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
     cwd,
+    undefined,
+    "opencode",
   );
 
   try {

@@ -55,6 +55,8 @@ async function discoverModels(flavor: PiFlavor) {
       path,
       buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
       cwd,
+      undefined,
+      flavor.id,
     );
     const response = await Promise.race([
       rpc.request({ type: "get_available_models" }, DISCOVERY_TIMEOUT_MS),

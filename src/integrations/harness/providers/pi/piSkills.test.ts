@@ -115,6 +115,8 @@ describe("OMP native commands", () => {
       "/bin/omp",
       ["--mode", "rpc", "--no-session"],
       "/repo-worktree",
+      undefined,
+      "omp",
     );
     expect(mocks.request).toHaveBeenCalledWith(
       { type: "get_available_commands" },

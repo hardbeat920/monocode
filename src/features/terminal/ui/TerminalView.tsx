@@ -9,6 +9,7 @@ import {
   writePty,
 } from "../../../platform/tauri/pty";
 import { isOscColorQuery, oscColorReply } from "../model/terminalChrome";
+import { macTerminalShortcutData } from "../model/terminalKeys";
 import {
   defaultTerminalTitle,
   scanOscCwd,
@@ -182,6 +183,16 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     host.addEventListener("paste", onPaste);
 
     term.attachCustomKeyEventHandler((event) => {
+      const shortcutData = IS_MAC ? macTerminalShortcutData(event) : null;
+      if (shortcutData) {
+        if (event.type === "keydown") {
+          event.preventDefault();
+          event.stopPropagation();
+          term.input(shortcutData);
+        }
+        return false;
+      }
+
       const mod = event.metaKey || event.ctrlKey;
       if (!mod || event.altKey) return true;
       const key = event.key.toLowerCase();

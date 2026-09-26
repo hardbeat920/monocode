@@ -499,6 +499,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     buildClaudeSpawnArgs(launch),
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
+    "claude",
   );
 
   liveByThread.set(input.sessionId, live);

@@ -73,7 +73,7 @@ async function discoverCodexModels(): Promise<AgentModel[]> {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["app-server"], cwd);
+    await spawnChild(PROBE_ID, path, ["app-server"], cwd, undefined, "codex");
     return await withTimeout(DISCOVERY_TIMEOUT_MS, async () => {
       await rpc.request(
         "initialize",

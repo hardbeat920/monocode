@@ -324,10 +324,17 @@ async function startLive(
   );
 
   try {
-    await spawnChild(TEXT_CHILD_ID, path, ["app-server"], cwd, {
-      provider: "codex",
-      id: providerAccountId ?? "default",
-    });
+    await spawnChild(
+      TEXT_CHILD_ID,
+      path,
+      ["app-server"],
+      cwd,
+      {
+        provider: "codex",
+        id: providerAccountId ?? "default",
+      },
+      "codex",
+    );
     await rpc.request(
       "initialize",
       {

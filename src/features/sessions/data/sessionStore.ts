@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { titleFromToolInput } from "../../../integrations/harness/core/preview";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
 import type { ContextUsage } from "../model/contextUsage";
 import { normalizeProjectPath } from "../../projects/model/recents";
 import {
+  claudeShellCommands,
   ompActiveAssistantTexts,
   ompSessionInterjections,
 } from "../../../platform/tauri/fs";
@@ -342,6 +344,32 @@ export async function getSession(sessionId: string): Promise<Session | null> {
   });
   if (!record) return null;
   const session = recordToSession(record);
+  if (session.harness === "claude" && session.providerSessionId) {
+    const toolIds = session.blocks.flatMap((block) =>
+      block.role === "tool" &&
+      block.tool?.kind === "execute" &&
+      block.text.trim() === "Shell" &&
+      block.tool.callId
+        ? [block.tool.callId]
+        : [],
+    );
+    if (toolIds.length) {
+      try {
+        const commands = await claudeShellCommands(
+          session.providerSessionId,
+          session.providerAccountId,
+          toolIds,
+        );
+        const blocks = backfillClaudeShellCommands(session.blocks, commands);
+        if (blocks !== session.blocks) {
+          session.blocks = blocks;
+          await upsertSession(session);
+        }
+      } catch {
+        // A missing or unreadable Claude transcript must not block the session.
+      }
+    }
+  }
   if (session.harness !== "omp" || !session.providerSessionId) {
     return recoverCursorSubagents(session);
   }
@@ -364,6 +392,34 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     // restore; the recovered in-memory boundaries can still be displayed.
   }
   return session;
+}
+
+export function backfillClaudeShellCommands(
+  blocks: Block[],
+  commands: Record<string, string>,
+): Block[] {
+  let changed = false;
+  const repaired = blocks.map((block) => {
+    const callId = block.tool?.callId;
+    const value = callId ? commands[callId] : undefined;
+    const command = typeof value === "string" ? value.trim() : undefined;
+    if (
+      block.role !== "tool" ||
+      block.tool?.kind !== "execute" ||
+      block.text.trim() !== "Shell" ||
+      !command
+    ) {
+      return block;
+    }
+    changed = true;
+    const title = titleFromToolInput("Bash", "execute", { command });
+    return {
+      ...block,
+      text: title,
+      tool: { ...block.tool, title },
+    };
+  });
+  return changed ? repaired : blocks;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
