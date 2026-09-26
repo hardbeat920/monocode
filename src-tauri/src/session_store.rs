@@ -1184,11 +1184,16 @@ fn search_session_candidates(
         }
         match row {
             Ok(candidate) => {
-                buffered_bytes += candidate.5.len();
-                if candidates.len() >= MAX_SEARCH_SCAN || buffered_bytes > MAX_SEARCH_BUFFER_BYTES {
+                if candidates.len() >= MAX_SEARCH_SCAN {
                     truncated = true;
                     break;
                 }
+                let size = candidate.5.len();
+                if buffered_bytes + size > MAX_SEARCH_BUFFER_BYTES {
+                    truncated = true;
+                    continue;
+                }
+                buffered_bytes += size;
                 candidates.push(candidate);
             }
             Err(_) if !session_search_is_current(token) => {
@@ -2907,6 +2912,42 @@ mod tests {
         assert!(truncated);
         let buffered: usize = candidates.iter().map(|candidate| candidate.5.len()).sum();
         assert!(buffered <= MAX_SEARCH_BUFFER_BYTES);
+    }
+
+    #[test]
+    fn session_search_skips_an_oversized_newest_transcript() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut small = sample("small", "/tmp/a", "Needle title");
+        small.blocks = json!([{ "id": "small", "role": "user", "text": "needle" }]);
+        upsert_session(&conn, &small).unwrap();
+        let mut huge = sample("huge", "/tmp/a", "Needle title");
+        huge.blocks = json!([{
+            "id": "huge",
+            "role": "user",
+            "text": "needle ".repeat(1_500_000),
+        }]);
+        upsert_session(&conn, &huge).unwrap();
+        conn.execute("UPDATE sessions SET updated_at = 1 WHERE id = 'small'", [])
+            .unwrap();
+        conn.execute("UPDATE sessions SET updated_at = 2 WHERE id = 'huge'", [])
+            .unwrap();
+
+        let (candidates, truncated) = search_session_candidates(
+            &conn,
+            &SessionSearchOptions {
+                query: "needle".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: String::new(),
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(truncated);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0, "small");
     }
 
     #[test]
