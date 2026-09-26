@@ -27,6 +27,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MOD, ALT, SHIFT } from "../../../platform/tauri/platform";
+import { keybindingPressed } from "../../settings/model/settings";
 import {
   handleFilePreviewFindKey,
   openFindInActiveFilePreview,
@@ -53,14 +54,24 @@ export function handleEditorFindKey(event: KeyboardEvent): boolean {
   const mod = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
 
-  if (mod && event.altKey && !event.shiftKey && key === "f") {
+  const defaultReplace = mod && event.altKey && !event.shiftKey && key === "f";
+  const defaultFind = mod && !event.altKey && !event.shiftKey && key === "f";
+  if (
+    (defaultReplace && !keybindingPressed("Editor: Replace", event, true)) ||
+    (defaultFind && !keybindingPressed("Editor: Find", event, true))
+  ) {
+    event.preventDefault();
+    return true;
+  }
+
+  if (keybindingPressed("Editor: Replace", event, defaultReplace)) {
     if (!view) return false;
     event.preventDefault();
     openReplacePanel(view);
     return true;
   }
 
-  if (mod && !event.altKey && !event.shiftKey && key === "f") {
+  if (keybindingPressed("Editor: Find", event, defaultFind)) {
     if (!view) return false;
     event.preventDefault();
     openSearchPanel(view);

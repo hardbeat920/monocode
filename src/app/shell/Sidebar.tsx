@@ -3,6 +3,7 @@ import { OrchestrationSidebarAgents } from "../../features/orchestration/ui/Orch
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Archive,
+  Chatting,
   Check,
   ChevronDown,
   ChevronRight,
@@ -10,13 +11,12 @@ import {
   CircleDashed,
   CircleDot,
   Clock,
-  Files,
+  FileScript,
   Folder,
   GitBranch,
   GitPullRequest,
   Inbox,
   ListFilter,
-  MessageMultiple,
   PanelLeft,
   Pin,
   Plus,
@@ -173,9 +173,9 @@ const TAB_LABELS: Record<SidebarTab, string> = {
 };
 
 const COMPACT_TAB_ICONS: Record<SidebarTab, typeof PanelLeft> = {
-  sessions: MessageMultiple,
+  sessions: Chatting,
   inbox: Inbox,
-  files: Files,
+  files: FileScript,
   changes: GitBranch,
 };
 
@@ -2437,11 +2437,14 @@ function CompactRailAction({
           : "text-content/50 hover:bg-content/10 hover:text-content"
       } disabled:cursor-default disabled:opacity-35`}
     >
-      <Icon className="size-4" strokeWidth={1.75} />
+      <Icon
+        className={`size-4 ${dot ? "compact-rail-icon-with-dot" : ""}`}
+        strokeWidth={1.75}
+      />
       {dot ? (
         <span
           aria-hidden
-          className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent ring-2 ring-background-base"
+          className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent"
         />
       ) : null}
     </button>

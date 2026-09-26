@@ -37,6 +37,18 @@ export function ompActiveAssistantTexts(providerSessionId: string): Promise<OmpA
   return invoke<OmpAssistantText[]>("omp_active_assistant_texts", { providerSessionId });
 }
 
+export function claudeShellCommands(
+  providerSessionId: string,
+  providerAccountId: string | undefined,
+  toolIds: string[],
+): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("claude_shell_commands", {
+    providerSessionId,
+    providerAccountId,
+    toolIds,
+  });
+}
+
 export type FsEntry = {
   name: string;
   path: string;

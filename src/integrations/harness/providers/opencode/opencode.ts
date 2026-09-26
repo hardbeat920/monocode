@@ -410,6 +410,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     path,
     ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
     input.cwd,
+    undefined,
+    "opencode",
   );
 
   try {
@@ -1318,7 +1320,7 @@ function unsupportedFileMediaType(error: unknown): string | undefined {
 }
 
 async function assertOpenCodeVersion(path: string, cwd: string): Promise<void> {
-  const output = await execChild(path, ["--version"], cwd).catch(() => "");
+  const output = await execChild(path, ["--version"], cwd, "opencode").catch(() => "");
   const version = parseOpenCodeVersion(output);
   if (!version) {
     throw new Error(

@@ -848,6 +848,32 @@ describe("tool enrichment", () => {
     );
     expect(tool?.text).toBe("ls");
   });
+
+  it("keeps a long shell command instead of the earlier Shell placeholder", () => {
+    const command = `npm run check:web 2>&1 | grep -E "${"test output".repeat(28)}"`;
+    expect(command.length).toBeGreaterThan(240);
+    let session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started",
+      callId: "call_1",
+      title: "Shell",
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      title: command,
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      status: "completed",
+    });
+    expect(session.blocks[0].text).toBe(command);
+    expect(session.blocks[0].tool?.status).toBe("completed");
+  });
 });
 
 describe("clarifying questions", () => {

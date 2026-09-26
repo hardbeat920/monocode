@@ -1,9 +1,12 @@
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  ExternalLink,
+  FolderOpen,
   Globe,
   ImagePlus,
   Loader,
@@ -142,6 +145,21 @@ import {
   probeHarnessAvailability,
   subscribeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
+import {
+  inspectHarnessBinary,
+  type HarnessBinaryInspection,
+} from "../../../integrations/harness/core/child";
+import {
+  loadProviderBinaryPath,
+  providerBinaryPathChangePending,
+  saveProviderBinaryPath,
+  type ConfigurableBinaryProvider,
+} from "../../providers/model/providerBinaryPaths";
+import {
+  compareSemver,
+  MINIMUM_OPENCODE_VERSION,
+  parseOpenCodeVersion,
+} from "../../../integrations/harness/providers/opencode/opencodeProtocol";
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
@@ -164,6 +182,7 @@ import {
   projectKey,
   projectName,
 } from "../../../shared/lib/paths";
+import { revealPath } from "../../../platform/tauri/fs";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
@@ -263,6 +282,7 @@ import {
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
+  loadKeybindingOverrides,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
   loadRemoteControl,
@@ -279,9 +299,13 @@ import {
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
+  saveKeybindingOverride,
+  validateKeybindingShortcut,
   saveQuickComposerEnabled,
   saveQuickComposerShortcut,
   saveRemoteControl,
+  subscribeKeybindings,
+  type KeybindingOverride,
   saveTabAnimationsEnabled,
   searchSettings,
   settingsSectionDescription,
@@ -299,6 +323,7 @@ import {
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../model/sounds";
 import { setQuickComposerShortcut } from "../../quick-composer/model/quickComposer";
 import {
+  isGlobalShortcut,
   QUICK_COMPOSER_DEFAULT_SHORTCUT,
   quickComposerShortcutLabel,
   quickComposerShortcutPreview,
@@ -2355,12 +2380,20 @@ function shortcutModifier(event: KeyboardEvent): ShortcutModifier | null {
   return null;
 }
 
-function QuickComposerShortcutEditor({
-  shortcut,
-  onChange,
+function ShortcutEditor({
+  name,
+  display,
+  resetVisible,
+  onApply,
+  onDisable,
+  onReset,
 }: {
-  shortcut: string;
-  onChange: (shortcut: string) => void;
+  name: string;
+  display: string | null;
+  resetVisible: boolean;
+  onApply: (shortcut: string) => void | Promise<void>;
+  onDisable: () => void | Promise<void>;
+  onReset: () => void | Promise<void>;
 }) {
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2372,6 +2405,19 @@ function QuickComposerShortcutEditor({
     altKey: false,
     shiftKey: false,
   });
+
+  const run = async (action: () => void | Promise<void>) => {
+    setRecording(false);
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const beginRecording = () => {
     held.current = {
@@ -2385,34 +2431,26 @@ function QuickComposerShortcutEditor({
     setRecording(true);
   };
 
-  const apply = useCallback(
-    async (next: string) => {
-      setRecording(false);
-      setBusy(true);
-      setError(null);
-      try {
-        if (loadQuickComposerEnabled())
-          await setQuickComposerShortcut(true, next);
-        saveQuickComposerShortcut(next);
-        onChange(next);
-      } catch (reason) {
-        setError(String(reason));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [onChange],
-  );
-
   useEffect(() => {
     if (!recording) return;
-    // Capture even when WebKit leaves focus elsewhere after a mouse click.
     const onKeyDown = (event: KeyboardEvent) => {
+      const bare =
+        !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      // An unmodified Tab leaves the recorder instead of trapping focus.
+      if (bare && event.code === "Tab") {
+        setRecording(false);
+        return;
+      }
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.code === "Escape") {
         setRecording(false);
         setError(null);
+        return;
+      }
+      // Delete disables, but only on its own so Cmd+Delete still records.
+      if (bare && (event.code === "Backspace" || event.code === "Delete")) {
+        void run(onDisable);
         return;
       }
       const modifier = shortcutModifier(event);
@@ -2432,7 +2470,7 @@ function QuickComposerShortcutEditor({
       );
       if (modifier) return;
       const next = shortcutFromKeyEvent({ ...modifiers, code: event.code });
-      if (next) void apply(next);
+      if (next) void run(() => onApply(next));
     };
     const onKeyUp = (event: KeyboardEvent) => {
       const modifier = shortcutModifier(event);
@@ -2455,61 +2493,154 @@ function QuickComposerShortcutEditor({
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
     };
-  }, [apply, recording]);
+  }, [onApply, onDisable, recording]);
 
   return (
-    <div className="w-40 shrink-0">
-      <div className="flex items-center gap-1">
+    <div className="relative w-40 shrink-0">
+      <div className="flex items-center gap-0.5">
         <input
           type="text"
           readOnly
-          aria-label="Change quick composer shortcut"
+          aria-label={`Change ${name} shortcut`}
           data-shortcut-recorder-active={recording ? "true" : undefined}
-          disabled={busy}
+          aria-busy={busy || undefined}
           value={
-            recording || busy
-              ? preview || "Press keys…"
-              : quickComposerShortcutLabel(shortcut)
+            recording || busy ? preview || "Record…" : (display ?? "Disabled")
           }
           onFocus={beginRecording}
           onClick={beginRecording}
           onBlur={() => setRecording(false)}
-          className="h-6 w-24 shrink-0 rounded-md border border-content/15 bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none text-content/80 outline-none hover:bg-content/10 focus:border-accent disabled:opacity-50"
+          className={`h-6 w-28 shrink-0 truncate rounded-md border bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none outline-none focus:border-accent ${
+            busy ? "opacity-50" : ""
+          } ${
+            display === null
+              ? "border-dashed border-content/15 text-content/35"
+              : "border-content/15 text-content/80 hover:bg-content/10"
+          }`}
         />
-        {shortcut !== QUICK_COMPOSER_DEFAULT_SHORTCUT ? (
+        {resetVisible ? (
           <button
             type="button"
-            aria-label="Reset quick composer shortcut"
+            aria-label={`Reset ${name} shortcut`}
             disabled={busy}
-            onClick={() => void apply(QUICK_COMPOSER_DEFAULT_SHORTCUT)}
-            className="rounded-md px-1 py-1 text-content/45 hover:bg-content/10 hover:text-content disabled:opacity-50"
+            onClick={() => void run(onReset)}
+            className="rounded-md px-1 py-1 text-content/35 hover:bg-content/10 hover:text-content disabled:opacity-50"
           >
             <RotateCcw className="size-3.5" />
           </button>
         ) : null}
       </div>
       {recording ? (
-        <p className="mt-1 text-[11px] text-content/45" aria-live="polite">
-          ⌘ or ⌃ + one key · Esc to cancel
+        <p
+          className="pointer-events-none absolute top-1/2 right-full z-40 mr-3 -translate-y-1/2 text-[10px] whitespace-nowrap text-content/50"
+          aria-live="polite"
+        >
+          Del disables · Esc cancels
         </p>
       ) : null}
-      {error ? <p className="mt-1 text-[11px] text-red-500">{error}</p> : null}
+      {error ? (
+        <p
+          role="alert"
+          className="absolute top-full left-0 z-40 mt-1.5 w-max max-w-64 rounded-md border border-content/10 bg-background-base/95 px-2 py-1 text-[11px] whitespace-nowrap text-red-400 shadow-lg"
+        >
+          {error}
+        </p>
+      ) : null}
     </div>
+  );
+}
+
+function QuickComposerShortcutEditor() {
+  const [shortcut, setShortcut] = useState(loadQuickComposerShortcut);
+  const [enabled, setEnabled] = useState(loadQuickComposerEnabled);
+  const apply = async (next: string) => {
+    if (!isGlobalShortcut(next))
+      throw new Error("Quick Composer needs ⌘ or Ctrl as a global hotkey");
+    // Validate before the native call: a rejected chord must not leave the OS
+    // holding a registered global hotkey that settings does not know about.
+    validateKeybindingShortcut("App: Quick Composer", next);
+    // Recording while the feature is off must not silently switch it back on.
+    if (enabled) await setQuickComposerShortcut(true, next);
+    saveQuickComposerShortcut(next);
+    setShortcut(next);
+  };
+  const reset = async () => {
+    // Reset restores the whole default state, including the enabled flag.
+    validateKeybindingShortcut(
+      "App: Quick Composer",
+      QUICK_COMPOSER_DEFAULT_SHORTCUT,
+    );
+    await setQuickComposerShortcut(true, QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    saveQuickComposerEnabled(true);
+    saveQuickComposerShortcut(QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    setShortcut(QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    setEnabled(true);
+  };
+  return (
+    <ShortcutEditor
+      name="quick composer"
+      display={enabled ? quickComposerShortcutLabel(shortcut) : null}
+      resetVisible={
+        enabled !== true || shortcut !== QUICK_COMPOSER_DEFAULT_SHORTCUT
+      }
+      onApply={apply}
+      onDisable={async () => {
+        await setQuickComposerShortcut(false);
+        saveQuickComposerEnabled(false);
+        setEnabled(false);
+      }}
+      onReset={reset}
+    />
+  );
+}
+
+function KeybindingShortcutEditor({
+  command,
+  display,
+  modified,
+  onSave,
+}: {
+  command: string;
+  display: string | null;
+  modified: boolean;
+  onSave: (
+    command: string,
+    override: KeybindingOverride,
+  ) => void | Promise<void>;
+}) {
+  return (
+    <ShortcutEditor
+      name={command}
+      display={display}
+      resetVisible={modified}
+      onApply={(shortcut) => onSave(command, { shortcut })}
+      onDisable={() => onSave(command, { disabled: true })}
+      onReset={() => onSave(command, {})}
+    />
   );
 }
 
 function KeybindingsPage() {
   const [query, setQuery] = useState("");
-  const [quickShortcut, setQuickShortcut] = useState(loadQuickComposerShortcut);
+  const [overrides, setOverrides] = useState(loadKeybindingOverrides);
+  useEffect(
+    () => subscribeKeybindings(() => setOverrides(loadKeybindingOverrides())),
+    [],
+  );
   const rows = useMemo(
     () => filterKeybindings(currentKeybindings(), query),
-    [query, quickShortcut],
+    [query, overrides],
   );
+
+  const save = async (command: string, override: KeybindingOverride) => {
+    const next = saveKeybindingOverride(command, override);
+    if (IS_MAC) await invoke("keybindings_set_overrides", { overrides: next });
+  };
 
   return (
     <Group
       title="Shortcuts"
-      description="Bindings come from the app menu and the workspace key handler. Click the Quick Composer binding to change its global shortcut."
+      description="Click a shortcut to record new keys. Press Delete while recording to disable it."
       action={
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
@@ -2540,33 +2671,369 @@ function KeybindingsPage() {
           No matching bindings
         </p>
       ) : (
-        rows.map((row) => (
-          <div
-            key={row.command}
-            className="flex items-center border-b border-content/5 px-4 py-2 text-[12px] last:border-b-0"
-          >
-            <span className="min-w-0 flex-1 truncate">{row.command}</span>
-            {row.command === "App: Quick Composer" ? (
-              <QuickComposerShortcutEditor
-                shortcut={quickShortcut}
-                onChange={setQuickShortcut}
-              />
-            ) : (
-              <span className="w-40 shrink-0 font-mono text-[12px] text-content/80">
-                {row.keys}
+        rows.map((row) => {
+          const override = overrides[row.command];
+          const disabled = override?.disabled === true;
+          return (
+            <div
+              key={row.command}
+              className="flex h-11 items-center border-b border-content/5 px-4 text-[12px] last:border-b-0"
+            >
+              <span
+                className={`min-w-0 flex-1 truncate ${disabled ? "text-content/45" : ""}`}
+              >
+                {row.command}
               </span>
-            )}
-            <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
-              {row.when}
-            </span>
-          </div>
-        ))
+              {row.command === "App: Quick Composer" ? (
+                <QuickComposerShortcutEditor />
+              ) : (
+                <KeybindingShortcutEditor
+                  command={row.command}
+                  display={disabled ? null : row.keys}
+                  modified={Boolean(override)}
+                  onSave={save}
+                />
+              )}
+              <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
+                {row.when}
+              </span>
+            </div>
+          );
+        })
       )}
     </Group>
   );
 }
 
 const GLOBAL_PROVIDER_SCOPE = "global";
+
+function binaryInspectionError(
+  provider: ConfigurableBinaryProvider,
+  inspection: HarnessBinaryInspection,
+): string | null {
+  if (inspection.error) return inspection.error;
+  if (provider === "codex" && !/^codex-cli\s+\d+\.\d+\.\d+/.test(inspection.version ?? "")) {
+    return "Codex CLI returned an invalid version.";
+  }
+  if (provider === "opencode") {
+    const version = parseOpenCodeVersion(inspection.version ?? "");
+    if (!version) return "OpenCode CLI returned an invalid version.";
+    if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
+      return `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`;
+    }
+  }
+  return null;
+}
+
+function ProviderBinaryControl({
+  provider,
+}: {
+  provider: ConfigurableBinaryProvider;
+}) {
+  const root = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const editInput = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(
+    () => loadProviderBinaryPath(provider) ?? "",
+  );
+  const [overridden, setOverridden] = useState(() =>
+    Boolean(loadProviderBinaryPath(provider)),
+  );
+  const [inspection, setInspection] = useState<
+    HarnessBinaryInspection & { overridden: boolean }
+  >();
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  const inspect = useCallback(
+    async (binaryPath?: string | null) => {
+      setWorking(true);
+      setInspection(undefined);
+      setError(null);
+      setRevealError(null);
+      try {
+        const next = await inspectHarnessBinary(provider, binaryPath);
+        setInspection({
+          ...next,
+          overridden: Boolean(binaryPath?.trim()),
+        });
+        setError(binaryInspectionError(provider, next));
+        return next;
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setError(message);
+        return null;
+      } finally {
+        setWorking(false);
+      }
+    },
+    [provider],
+  );
+
+  useEffect(() => {
+    void inspect(loadProviderBinaryPath(provider));
+  }, [inspect, provider]);
+
+  useEffect(() => {
+    if (editing) editInput.current?.focus();
+  }, [editing]);
+
+  const dismiss = (restoreFocus = false) => {
+    setOpen(false);
+    setEditing(false);
+    if (restoreFocus) queueMicrotask(() => trigger.current?.focus());
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (working) return;
+    const value = draft.trim();
+    if (!value) {
+      await useAuto();
+      return;
+    }
+    const next = await inspect(value);
+    if (!next) return;
+    const validationError = binaryInspectionError(provider, next);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    if (!saveProviderBinaryPath(provider, value)) {
+      setInspection(undefined);
+      setError("Could not save the binary path.");
+      return;
+    }
+    setOverridden(true);
+    dismiss(true);
+  };
+
+  const useAuto = async () => {
+    if (working) return;
+    const next = await inspect(null);
+    if (!next || binaryInspectionError(provider, next)) return;
+    if (!saveProviderBinaryPath(provider, null)) {
+      setInspection(undefined);
+      setError("Could not save the binary path.");
+      return;
+    }
+    setDraft("");
+    setOverridden(false);
+    dismiss(true);
+  };
+
+  const title = HARNESS_TITLE[provider];
+  const restartRequired = providerBinaryPathChangePending(provider);
+
+  return (
+    <span ref={root} className="inline-flex align-middle">
+      <button
+        ref={trigger}
+        type="button"
+        aria-label={
+          restartRequired
+            ? `Show ${title} CLI details, restart required`
+            : `Show ${title} CLI details`
+        }
+        aria-expanded={open}
+        aria-controls={`${provider}-binary-popover`}
+        aria-haspopup="dialog"
+        title={`${title} CLI path${restartRequired ? " — restart required" : ""}`}
+        onClick={() => {
+          setOpen((value) => !value);
+          setEditing(false);
+        }}
+        className={`grid size-6 place-items-center rounded hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent ${
+          restartRequired ? "text-amber-300" : "text-content/35 hover:text-content"
+        }`}
+      >
+        <FolderOpen className="size-3.5" strokeWidth={1.75} />
+      </button>
+      {open ? (
+        <Popover
+          id={`${provider}-binary-popover`}
+          role="dialog"
+          aria-label={`${title} CLI details`}
+          aria-busy={working}
+          tabIndex={-1}
+          anchor={root}
+          side="bottom"
+          align="start"
+          width={440}
+          className="p-3"
+          autoFocus
+          onKeyDown={(event) => {
+            if (event.key !== "Tab") return;
+            const focusable = Array.from(
+              event.currentTarget.querySelectorAll<HTMLElement>(
+                'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+              ),
+            );
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (!first || !last) return;
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          }}
+          onDismiss={(reason) => dismiss(reason === "escape")}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[12px] font-medium text-content">
+              {title} CLI
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
+                Global path
+              </span>
+              <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
+                {error
+                  ? "Needs attention"
+                  : restartRequired
+                    ? "Restart required"
+                    : overridden
+                      ? "Configured"
+                      : "Auto-detected"}
+              </span>
+            </div>
+          </div>
+          {editing ? (
+            <form className="mt-2" onSubmit={submit}>
+              <label
+                htmlFor={`${provider}-binary-path`}
+                className="text-[11px] text-content/50"
+              >
+                CLI path
+              </label>
+              <input
+                id={`${provider}-binary-path`}
+                ref={editInput}
+                type="text"
+                value={draft}
+                placeholder={inspection?.path ?? "Auto-detected path"}
+                disabled={working}
+                autoFocus
+                onChange={(event) => setDraft(event.target.value)}
+                className="mt-1.5 h-8 w-full rounded-md border border-content/10 bg-content/[0.04] px-2 font-mono text-[11px] text-content outline-none placeholder:font-sans placeholder:text-content/35 focus:border-accent/45 disabled:opacity-50"
+              />
+              <p className="mt-1.5 text-[10px] text-content/40">
+                Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.
+              </p>
+              {error ? (
+                <span
+                  role="alert"
+                  className="mt-1.5 block text-[11px] text-red-400"
+                >
+                  {error}
+                </span>
+              ) : null}
+              <div className="mt-3 flex justify-end gap-2">
+                <SecondaryButton
+                  disabled={working}
+                  onClick={() => {
+                    setDraft(loadProviderBinaryPath(provider) ?? "");
+                    setEditing(false);
+                    queueMicrotask(() => trigger.current?.focus());
+                  }}
+                >
+                  Cancel
+                </SecondaryButton>
+                {overridden ? (
+                  <SecondaryButton
+                    disabled={working}
+                    onClick={() => void useAuto()}
+                  >
+                    Use auto-detected path
+                  </SecondaryButton>
+                ) : null}
+                <SecondaryButton type="submit" disabled={working}>
+                  Save path
+                </SecondaryButton>
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="mt-2 rounded-md border border-content/10 bg-content/[0.03] px-2.5 py-2">
+                <span className="block max-h-12 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] text-content/65">
+                  {inspection?.path ??
+                    (error ? "CLI could not be resolved" : "Checking the selected CLI…")}
+                </span>
+                <span className="mt-1 block max-h-10 overflow-y-auto whitespace-pre-wrap break-words text-[10px] text-content/40">
+                  {inspection?.version ??
+                    (error ? "Retry to check this CLI" : "Checking version…")}
+                </span>
+              </div>
+               {error ? (
+                 <span
+                   role="alert"
+                   title={error}
+                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                 >
+                   {error}
+                 </span>
+               ) : null}
+               {revealError ? (
+                 <span
+                   role="alert"
+                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                 >
+                   Could not open the CLI location: {revealError}
+                 </span>
+               ) : null}
+               <div className="mt-3 flex justify-end gap-2">
+                {error ? (
+                  <SecondaryButton
+                    disabled={working}
+                    aria-label={`Retry ${title} ${
+                      overridden ? "configured path" : "auto-detect"
+                    }`}
+                    onClick={() =>
+                      void inspect(overridden ? draft.trim() || null : null)
+                    }
+                  >
+                    <RefreshCw className="size-3.5" strokeWidth={1.75} />
+                    {overridden ? "Retry configured path" : "Retry auto-detect"}
+                  </SecondaryButton>
+                ) : null}
+                <SecondaryButton
+                  aria-label={`Open ${title} CLI location`}
+                  disabled={!inspection}
+                  onClick={() => {
+                    if (inspection) {
+                      void revealPath(inspection.path).catch((cause) => {
+                        setRevealError(
+                          cause instanceof Error ? cause.message : String(cause),
+                        );
+                      });
+                    }
+                  }}
+                >
+                  <ExternalLink className="size-3.5" strokeWidth={1.75} />
+                  Open location
+                </SecondaryButton>
+                <SecondaryButton
+                  aria-label={`Edit ${title} CLI path`}
+                  disabled={working}
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="size-3.5" strokeWidth={1.75} />
+                  Edit path
+                </SecondaryButton>
+              </div>
+            </>
+          )}
+        </Popover>
+      ) : null}
+    </span>
+  );
+}
 
 function ProvidersPage({
   cwd,
@@ -2592,7 +3059,9 @@ function ProvidersPage({
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
   const [remoteControl, setRemoteControl] = useState(loadRemoteControl);
   const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
-  const [hiddenGlobally, setHiddenGlobally] = useState(loadHiddenPickerProviders);
+  const [hiddenGlobally, setHiddenGlobally] = useState(
+    loadHiddenPickerProviders,
+  );
 
   const scopeOptions = useMemo(() => {
     const options: { value: string; label: string; icon?: ReactNode }[] = [
@@ -2694,6 +3163,7 @@ function ProvidersPage({
       <ProviderAccountsSettings />
 
       <Group
+        id="agent-clis"
         title="Agent CLIs"
         action={
           <Select
@@ -2705,8 +3175,8 @@ function ProvidersPage({
         }
         description={
           project
-            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project.`
-            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project. CLI paths remain global for MonoCode.`
+            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. CLI paths are global for MonoCode and apply to every project."
         }
       >
         {HARNESSES.map((harness) => {
@@ -3156,6 +3626,7 @@ function ProviderRow({
         <span className="flex items-center gap-2">
           <HarnessIcon harness={harness} className="size-4 shrink-0" />
           {HARNESS_TITLE[harness]}
+          <ProviderBinaryControl provider={harness} />
           {isDefault ? (
             <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
               Default
