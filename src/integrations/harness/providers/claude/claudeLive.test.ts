@@ -464,6 +464,51 @@ describe("claude poisoned resume", () => {
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
   });
+
+  it.each([
+    ["while the doomed child is up", false],
+    ["before the child is spawned", true],
+  ])("drops the prompt when the turn was stopped %s", async (_label, early) => {
+    bindClaudeSession("s1", "dead-session", "/repo");
+    if (early) await cancelClaudeTurn("s1");
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "explore the codebase",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+
+    await waitFor(() => spawned.length === 1, "resume attempt");
+    if (!early) await cancelClaudeTurn("s1");
+
+    onStderr!("No conversation found with session ID: dead-session");
+    onExit!(1);
+
+    await waitFor(() => spawned.length === 2, "respawn without resume");
+    await waitFor(
+      () =>
+        parse().filter((m) => {
+          const request = m.request as Record<string, unknown> | undefined;
+          return request?.subtype === "initialize";
+        }).length === 2,
+      "second initialize",
+    );
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+
+    await turn;
+    // The stop was aimed at this turn, so the fresh conversation must not be
+    // handed the prompt the user already called off.
+    expect(parse().some((m) => m.type === "user")).toBe(false);
+  });
 });
 
 describe("claude failed startup", () => {

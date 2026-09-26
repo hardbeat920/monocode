@@ -526,12 +526,20 @@ async function ensureLive(
     live.onEvent({ type: "session.started" });
     return live;
   } catch (error) {
+    // A stop pressed during startup lands either on this Live or, if the child
+    // had already gone, on the pending-cancel set. stopClaudeSession clears the
+    // latter, so read both before it runs.
+    const stopped = live.cancelled || cancelledThreads.has(input.sessionId);
     await stopClaudeSession(input.sessionId);
     // Claude no longer has the conversation we asked to resume. The stored id
     // would fail the same way on every later spawn, so drop it and start a
     // fresh conversation once rather than leaving the thread wedged forever.
     if (resumeMissing.current && canResume && !retriedWithoutResume) {
       resumeByThread.delete(input.sessionId);
+      // The retry serves the same turn the stop was aimed at, so carry the
+      // stop over; otherwise the replacement child is handed the prompt the
+      // user already called off.
+      if (stopped) cancelledThreads.add(input.sessionId);
       return ensureLive(input, true);
     }
     // A conversation that never initialized was never written to disk either,
