@@ -120,11 +120,42 @@ import {
 } from "../features/sessions/model/attachments";
 import {
   basename,
+  homeDir,
   notifyGitChanged,
   pickFolder,
+  readTextFile,
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "../platform/tauri/fs";
+import { killPty, spawnPty } from "../platform/tauri/pty";
+import {
+  remoteControlAction,
+  type RemoteControlAction,
+  type RemoteControlIntent,
+} from "../features/remoteControl/model/action";
+import {
+  createMirrorState,
+  emptyCursor,
+  mapRecord,
+  type MirrorState,
+} from "../features/remoteControl/model/transcript";
+import { claudeTranscriptPath } from "../features/remoteControl/model/transcriptPath";
+import {
+  watchTranscript,
+  type TranscriptWatcher,
+} from "../features/remoteControl/model/transcriptWatch";
+import {
+  closeRemoteControl,
+  openRemoteControl,
+} from "../integrations/harness/providers/claude/remoteControl";
+import {
+  noteInterruptedTurn,
+  remoteControlName,
+  remoteControlStep,
+  remoteControlTarget,
+  seatRemoteUserMessage,
+  shouldAutoOpen,
+} from "./remoteControlSession";
 import {
   invalidateProjectFiles,
   prefetchProjectFiles,
@@ -562,6 +593,7 @@ import {
   loadNotesEnabled,
   loadDiffViewer,
   loadFollowUpBehavior,
+  loadRemoteControl,
   loadSettingsSection,
   saveSettingsSection,
   subscribeLiveAgentsEnabled,
@@ -1236,10 +1268,232 @@ export default function App({
     [applyApprovalEvent, flushHarnessEvents],
   );
 
+  // ---------------------------------------------------------------- Remote
+  // One interactive CLI per handed-over conversation. The pty is keyed by the
+  // thread, so nothing here has to survive a reload for the process to be
+  // findable again; what is held is only what a reload would have to rebuild.
+  const remoteControl = useRef(
+    new Map<
+      string,
+      { ptyId: string; name: string; mirror: MirrorState; stop: () => void }
+    >(),
+  );
+  // Closed by hand. `all` mode consults this so it does not reopen what the
+  // user just shut, which would be unarguable-with rather than automatic.
+  const remoteControlClosed = useRef(new Set<string>());
+  const [remoteControlIds, setRemoteControlIds] = useState<readonly string[]>(
+    [],
+  );
+  const remoteHome = useRef<string | null>(null);
+
+  const openRemote = useCallback(
+    async (sessionId: string) => {
+      if (remoteControl.current.has(sessionId)) return;
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      const providerSessionId = session?.providerSessionId;
+      if (!session || session.harness !== "claude" || !providerSessionId) return;
+      const cwd = sessionWorkCwd(session);
+      const name = remoteControlName(
+        session.cwd,
+        [...remoteControl.current.values()].map((entry) => entry.name),
+      );
+      if (!remoteHome.current) remoteHome.current = await homeDir();
+      const path = claudeTranscriptPath(
+        remoteHome.current,
+        cwd,
+        providerSessionId,
+      );
+      setSessions((prev) =>
+        prev.map((entry) =>
+          entry.id === sessionId ? noteInterruptedTurn(entry) : entry,
+        ),
+      );
+      let handle;
+      try {
+        handle = await openRemoteControl(
+          { sessionId, providerSessionId, cwd, name },
+          {
+            stopSession: (id) => stopHarnessSession("claude", id),
+            // Byte length, matching the cursor the watcher advances. A
+            // transcript that is not there yet starts the mirror at zero, which
+            // is correct: there is nothing before it to skip.
+            transcriptEnd: async () =>
+              new TextEncoder().encode(
+                await readTextFile(path).catch(() => ""),
+              ).length,
+            spawnPty,
+            killPty,
+          },
+        );
+      } catch (error) {
+        // Only the hand-over failed; the conversation and its binding are
+        // intact, so the thread carries on headless from the next turn.
+        enqueueHarnessEvent(sessionId, {
+          type: "session.error",
+          message: `Could not open Remote Control. ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+        flushHarnessEvents();
+        return;
+      }
+      const mirror = createMirrorState();
+      // Read in the closure rather than off the map: the watcher polls once
+      // immediately, which can land before the entry below is stored, and a
+      // dropped batch would be lost for good because the cursor has moved.
+      let live = true;
+      const watcher: TranscriptWatcher = watchTranscript({
+        path,
+        from: emptyCursor(handle.offset),
+        onRecords: (records) => {
+          if (!live) return;
+          for (const record of records) {
+            for (const event of mapRecord(mirror, record)) {
+              if (event.type === "remote.userMessage") {
+                setSessions((prev) =>
+                  prev.map((entry) =>
+                    entry.id === sessionId
+                      ? seatRemoteUserMessage(entry, event)
+                      : entry,
+                  ),
+                );
+                continue;
+              }
+              // Everything else is an ordinary harness event, so it goes
+              // through the same queue the headless path uses and renders
+              // identically.
+              enqueueHarnessEvent(sessionId, event);
+            }
+          }
+          flushHarnessEvents();
+        },
+        // NOT WIRED — the link. `mirror.bridge` now carries `{active, url}` from
+        // the `bridge_status` record, and nothing displays it. Expected: link
+        // plus QR for the focused session (§6). The URL belongs to the
+        // conversation, not the process, so it survives a close and reopen —
+        // whatever renders it must not regenerate the QR each time.
+        //
+        // A transcript the pty has not written to yet is the ordinary state at
+        // the moment of a hand-over, not a failure.
+        onError: () => undefined,
+      });
+      // NOT WIRED — the pty's own output. Nothing subscribes to `handle.ptyId`
+      // yet, so three things the transcript cannot supply are still missing, all
+      // of them screen-derived (`docs/remote-control.md` §5, §7, §8):
+      //
+      //   * Approvals. Permission prompts are written nowhere, so the screen is
+      //     the only source. Expected: `subscribePty(handle.ptyId, …)` feeding
+      //     `promptScreen.ts`, a parsed prompt rendered in MonoCode's own
+      //     approval UI, and the chosen option written back with `writePty`. An
+      //     unparseable screen must surface the raw pty rather than answer for
+      //     the user.
+      //   * Interrupted turns. An interrupt writes no record at all, so a turn
+      //     ended that way never closes from the file. `resolveTurnFromScreen`
+      //     exists for exactly this and needs the screen to read.
+      //   * Outbound composer text. Writing into the pty has to be gated on
+      //     parsed state, because a modal swallows injected text silently.
+      //
+      // Left unwired rather than stubbed: a subscription that fed nothing would
+      // look live and answer no prompt.
+      remoteControl.current.set(sessionId, {
+        ptyId: handle.ptyId,
+        name,
+        mirror,
+        stop: () => {
+          live = false;
+          watcher.stop();
+        },
+      });
+      setRemoteControlIds((ids) =>
+        ids.includes(sessionId) ? ids : [...ids, sessionId],
+      );
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Kill every remote-control pty on the way out.
+   *
+   * `reapWindowRuntime` kills terminal ptys only, by id, so these are not
+   * covered by it — and a pty outliving the window is exactly the case §9.6 of
+   * the plan names. Fire-and-forget because the unload handlers cannot await.
+   */
+  const reapRemoteControl = useCallback(() => {
+    for (const [sessionId, entry] of remoteControl.current) {
+      entry.stop();
+      void killPty(entry.ptyId).catch(() => undefined);
+      remoteControl.current.delete(sessionId);
+    }
+  }, []);
+
+  const closeRemote = useCallback(async (sessionId: string, byUser: boolean) => {
+    const entry = remoteControl.current.get(sessionId);
+    if (!entry) return;
+    remoteControl.current.delete(sessionId);
+    setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
+    if (byUser) remoteControlClosed.current.add(sessionId);
+    entry.stop();
+    await closeRemoteControl(sessionId, { killPty });
+  }, []);
+
+  const remoteControlFor = useCallback(
+    (tabId: string): RemoteControlAction | null => {
+      const tab = tabsRef.current.find((entry) => entry.id === tabId);
+      const session = tab
+        ? sessionsRef.current.find((entry) => entry.id === tab.focusedId)
+        : undefined;
+      if (!session) return null;
+      return remoteControlAction(
+        remoteControlTarget(session, remoteControlIds.includes(session.id)),
+      );
+    },
+    [remoteControlIds],
+  );
+
+  const onRemoteControl = useCallback(
+    (tabId: string, intent: RemoteControlIntent) => {
+      const tab = tabsRef.current.find((entry) => entry.id === tabId);
+      const sessionId = tab?.focusedId;
+      if (!sessionId) return;
+      const step = remoteControlStep(
+        intent,
+        remoteControl.current.has(sessionId),
+      );
+      if (step === "open") void openRemote(sessionId);
+      if (step === "close") void closeRemote(sessionId, true);
+    },
+    [closeRemote, openRemote],
+  );
+
+  // `all` mode, opened lazily. See `shouldAutoOpen` for why idle-with-a-bound-
+  // conversation is the only moment that works rather than a preference.
+  // The setting has no subscribe helper, so a change to it takes effect on the
+  // next session update rather than instantly.
+  useEffect(() => {
+    const mode = loadRemoteControl();
+    if (mode !== "all") return;
+    for (const session of sessions) {
+      if (
+        !shouldAutoOpen(session, {
+          mode,
+          open: remoteControl.current.has(session.id),
+          dismissed: remoteControlClosed.current.has(session.id),
+        })
+      )
+        continue;
+      void openRemote(session.id);
+    }
+  }, [sessions, openRemote]);
+
   useEffect(() => {
     if (resumed?.sessions.length) bindResumedSessions(resumed.sessions);
     const stopBridge = startHarnessBridge();
     const reap = () => {
+      // Ahead of the quitting guard: the pty has to go either way, and the quit
+      // path below reaps sessions but not these.
+      reapRemoteControl();
       if (isAppQuitting()) return;
       void persistQuitState(
         sessionsRef.current,
@@ -1267,7 +1521,7 @@ export default function App({
       cancelScheduledFlush(harnessFlush.current);
       harnessFlush.current = null;
     };
-  }, [resumed, readProjectReturnMemory]);
+  }, [resumed, readProjectReturnMemory, reapRemoteControl]);
 
   useEffect(() => {
     void probeHarnessAvailability();
@@ -1664,6 +1918,7 @@ export default function App({
           projectTerminalsRef.current,
           lastDockSideRef.current ?? undefined,
         ).finally(() => {
+          if (!toTray) reapRemoteControl();
           void (toTray ? hideCurrentWindow() : closeCurrentWindow());
         });
       })
@@ -1674,7 +1929,7 @@ export default function App({
       releaseQuit();
       unlistenClose?.();
     };
-  }, [flushHarnessEvents, readProjectReturnMemory]);
+  }, [flushHarnessEvents, readProjectReturnMemory, reapRemoteControl]);
 
   const refreshHistory = useCallback(async (cwd: string) => {
     if (!cwd || cwd === "~") return;
@@ -4247,6 +4502,10 @@ export default function App({
         ? sessionDisplayTitle(seed.title, seed.harness)
         : "this session";
       removingSessionIds.current.add(sessionId);
+      // An archived thread leaves the tab list, and a deleted one is gone
+      // altogether, so this is the last moment anything can close its pty —
+      // the action surface reads the tabs and will never see it again.
+      void closeRemote(sessionId, true);
       let deleteWorktreePath: string | undefined;
       if (mode === "delete" && !skipDeleteConfirm) {
         deleteConfirmationPending.current = true;
@@ -4444,6 +4703,7 @@ export default function App({
     },
     [
       activateTab,
+      closeRemote,
       history,
       invalidateLoadedSession,
       refreshHistory,
@@ -10088,6 +10348,8 @@ export default function App({
       onPinFile={onPinFile}
       recents={recents}
       onSelectProject={onSelectProject}
+      remoteControlFor={remoteControlFor}
+      onRemoteControl={onRemoteControl}
     />
   );
 
