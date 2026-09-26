@@ -85,6 +85,27 @@ describe("importing a stored Claude conversation", () => {
     expect(tool?.text).toContain("Read");
   });
 
+  it("replaces what the thread already showed", () => {
+    const base = newSession("claude", "/repo", "claude:claude-sonnet-5");
+    const session = buildImportedSession({
+      base: {
+        ...base,
+        blocks: [
+          { id: "old-1", role: "user", text: "onceki konusma" },
+          { id: "old-2", role: "assistant", text: "onceki cevap" },
+        ],
+      },
+      transcript: jsonl([
+        { type: "user", message: { role: "user", content: "yeni soru" } },
+      ]),
+      providerSessionId: "conv-1",
+    });
+
+    // The loaded conversation is the transcript now; keeping the old blocks
+    // would show two unrelated conversations back to back.
+    expect(session.blocks.map((block) => block.text)).toEqual(["yeni soru"]);
+  });
+
   it("keeps an empty conversation empty", () => {
     const session = importOf([{ type: "mode", mode: "normal" }]);
     expect(session.blocks).toEqual([]);

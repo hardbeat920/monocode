@@ -16,7 +16,10 @@ export function buildImportedSession(input: {
   providerSessionId: string;
   providerAccountId?: string;
 }): Session {
-  let session = input.base;
+  // The conversation being loaded *is* the thread's transcript now, so the
+  // replay starts from an empty one. Appending instead would leave the target
+  // showing two unrelated conversations back to back.
+  let session: Session = { ...input.base, blocks: [] };
   replayClaudeSession({
     sessionId: input.base.id,
     cwd: input.base.cwd,

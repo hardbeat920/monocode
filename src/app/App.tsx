@@ -5067,6 +5067,24 @@ export default function App({
       if (!source) return;
       const transcript = await readTextFile(summary.path).catch(() => null);
       if (transcript === null) return;
+
+      // Reading is async, and loading replaces the thread's transcript. In the
+      // meantime it may have been closed, started a turn, or moved to another
+      // provider or working copy — none of which should have its content
+      // overwritten, and none of which should be bound to this conversation.
+      const stillThere = sessionsRef.current.find(
+        (session) => session.id === target.sessionId,
+      );
+      if (
+        !stillThere ||
+        stillThere.busy ||
+        stillThere.harness !== "claude" ||
+        stillThere.cwd !== source.cwd ||
+        stillThere.providerAccountId !== source.providerAccountId
+      ) {
+        return;
+      }
+
       setSessions((current) =>
         current.map((session) =>
           session.id === target.sessionId
