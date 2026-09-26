@@ -268,6 +268,21 @@ describe("turn state", () => {
     expect(screen.kind).toBe("idle");
   });
 
+  it("does not take prose that happens to end in a duration as a summary", () => {
+    // Constructed, not captured: no assistant line in the corpus ends this way,
+    // which is why it stayed latent. It is the shape that matters — this line
+    // would be the last one above the composer mid-stream.
+    const screen = readRenderedScreen([
+      "⏺ I ran the benchmark and waited for 3s",
+      "",
+      "──────────────────────────────────────────────",
+      "❯",
+      "──────────────────────────────────────────────",
+      "  ⏸ manual mode on",
+    ]);
+    expect(screen.turn).toBe("unknown");
+  });
+
   it("does not report a streaming turn as ended", () => {
     const screen = readRenderedScreen(STREAMING_MID_TURN);
     expect(screen.turn).not.toBe("ended");

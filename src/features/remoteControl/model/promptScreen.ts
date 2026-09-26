@@ -126,12 +126,22 @@ const SPINNER = /^[^\p{L}\p{N}\s]\s+\S+…/u;
  * earlier seconds-only version of this missed. The hour group is precaution
  * rather than observation: the longest turn measured was 4m 12s.
  *
+ * The leading glyph and the single word before `for` are what keep prose out. An
+ * assistant sentence ending "…waited for 3s" is a finished-turn summary to a
+ * matcher that only looks at the tail, and it would be the last line above the
+ * composer while the turn was still streaming. Matching the whole shape costs
+ * nothing: across fifteen captures it accepts every real summary — twelve
+ * distinct words so far — and rejects nothing it used to accept. A two-word
+ * status would fall outside it and read as `unknown`, which is the safe way to
+ * be wrong.
+ *
  * The `$` stays. A running turn's counter carries a nested duration in raw
  * seconds (`✻ Osmosing… (1m 25s · thought for 83s)`) which an unanchored match
  * would read as a finished turn — the dangerous direction. `readTurn` tests the
  * spinner first, so the anchor is the second guard rather than the only one.
  */
-const COMPLETED = /\bfor (?:\d+h )?(?:\d+m )?\d+(?:\.\d+)?s$/u;
+const COMPLETED =
+  /^[^\p{L}\p{N}\s]\s+\S+ for (?:\d+h )?(?:\d+m )?\d+(?:\.\d+)?s$/u;
 const TRUST_QUESTION = /Is this a project you created or one you trust\?/u;
 const TRUST_HEADER = /^Accessing workspace:$/u;
 const TRUST_FOOTER = /Enter to confirm/u;
