@@ -27,6 +27,11 @@ import type {
   PermissionPrompt,
   PromptScreen,
 } from "../features/remoteControl/model/promptScreen";
+import {
+  createMirrorState,
+  mapRecord,
+  resolveTurnFromScreen,
+} from "../features/remoteControl/model/transcript";
 
 function session(patch: Partial<Session> = {}): Session {
   return { ...newSession("claude", "/repo/monocode"), ...patch };
@@ -970,5 +975,67 @@ describe("what to tell the mirror about a turn", () => {
       quietForMs: 0,
       composerHeld: true,
     });
+  });
+});
+
+describe("an interrupt resolves with no further output", () => {
+  /** A live turn, opened by a user record the way the mirror opens one. */
+  function turnInFlight() {
+    const state = createMirrorState();
+    mapRecord(state, {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "go" }] },
+    });
+    expect(state.turn.active).toBe(true);
+    return state;
+  }
+
+  const held = idleWith(AFTER_INTERRUPT);
+  const spokeAt = 1_000;
+
+  it("ends the turn once the clock passes the threshold, with no chunk", () => {
+    // Every other test in this file proves what happens when something arrives.
+    // This is the one rule whose trigger is nothing arriving, so an event-driven
+    // suite would pass whether or not the caller ever re-evaluates.
+    const state = turnInFlight();
+
+    const events = resolveTurnFromScreen(
+      state,
+      turnSignal(held, spokeAt, spokeAt + 3_500),
+    );
+
+    expect(state.turn.active).toBe(false);
+    expect(events).toEqual([]);
+  });
+
+  it("leaves the turn running while the silence is still short", () => {
+    // 800ms is the measured worst case between reads during a live turn, so a
+    // threshold reached early would end turns that are merely thinking.
+    const state = turnInFlight();
+
+    resolveTurnFromScreen(state, turnSignal(held, spokeAt, spokeAt + 900));
+
+    expect(state.turn.active).toBe(true);
+  });
+
+  it("leaves the turn running when the composer is empty", () => {
+    // Silence alone is not an interrupt: the restored prompt is the positive
+    // trace, and without it this is just a quiet turn.
+    const state = turnInFlight();
+
+    resolveTurnFromScreen(
+      state,
+      turnSignal(idleWith(IDLE_COMPOSER), spokeAt, spokeAt + 3_500),
+    );
+
+    expect(state.turn.active).toBe(true);
+  });
+
+  it("leaves the turn running when the pty has said nothing yet", () => {
+    const state = turnInFlight();
+
+    resolveTurnFromScreen(state, turnSignal(held, null, spokeAt + 99_000));
+
+    expect(state.turn.active).toBe(true);
   });
 });
