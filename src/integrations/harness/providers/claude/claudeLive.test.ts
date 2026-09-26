@@ -45,7 +45,10 @@ const {
   __claudeTestReset,
 } = await import("./claude");
 import type { HarnessEvent } from "../../core/types";
-import type { RuntimeMode, TurnIntent } from "../../../../features/sessions/model/session";
+import type {
+  RuntimeMode,
+  TurnIntent,
+} from "../../../../features/sessions/model/session";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -202,7 +205,8 @@ function emitBashFinished(taskId = "b1") {
     task_id: taskId,
     tool_use_id: "toolu_bash",
     status: "completed",
-    summary: 'Background command "sleep 30 && echo done" completed (exit code 0)',
+    summary:
+      'Background command "sleep 30 && echo done" completed (exit code 0)',
   });
 }
 
@@ -616,6 +620,143 @@ describe("claude subagents", () => {
     });
   });
 
+  it("ends the turn when a foreground subagent returns its result", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_agent",
+            name: "Task",
+            input: { description: "Generate translations" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "t_agent",
+      tool_use_id: "toolu_agent",
+      description: "Generate translations",
+      task_type: "local_agent",
+    });
+    // The subagent finishes and hands its work back. Claude does not
+    // necessarily follow this with a task-list update, and without one the
+    // bookkeeping entry would sit there holding the turn open indefinitely.
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_agent",
+            content: "All 37 locales pushed successfully",
+          },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await waitFor(() => settled, "turn ended after the subagent returned");
+    expect(settled).toBe(true);
+  });
+
+  it("ends the turn when a foreground task arrives with no tool_use_id", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    // `tool_use_id` is optional in the protocol, and without one nothing can
+    // ever match this task to a returning tool result — so an entry held for it
+    // would keep the turn open for the life of the session.
+    emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "t_orphan",
+      description: "Generate translations",
+      task_type: "local_agent",
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await waitFor(() => settled, "turn ended despite the unassociated task");
+    expect(settled).toBe(true);
+  });
+
+  it("does not let a failed turn's late result settle the next one", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "control_request",
+      request_id: "perm_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Read",
+        input: { file_path: "/repo/a.ts" },
+      },
+    });
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    let failure: unknown;
+    void turn.catch((error) => {
+      failure = error;
+    });
+    writeChild.mockRejectedValueOnce(new Error("Broken pipe"));
+    respondClaudeApproval("s1", approval.requestId, "allow");
+    await waitFor(() => failure instanceof Error, "turn failed");
+
+    // Claude does not know the turn died and still reports its result.
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    const second = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "try again",
+      attachments: [],
+      onEvent: () => undefined,
+    });
+    let secondSettled = false;
+    void second.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
+
+    // The dead turn's result must not end this one; only its own reply may.
+    await new Promise((r) => setTimeout(r, 40));
+    expect(secondSettled).toBe(false);
+
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+  });
+
   it("stays busy after a parent result while a background subagent is running", async () => {
     const { events, turn } = await startTurn("s1");
     let settled = false;
@@ -1003,9 +1144,9 @@ describe("claude background tasks", () => {
     });
     const items = groupTurnItems(session.blocks.slice(1));
     const group = items.at(-1);
-    expect(group?.type === "activity" && workSummaryLine(group.blocks, true)).toBe(
-      "Running in background",
-    );
+    expect(
+      group?.type === "activity" && workSummaryLine(group.blocks, true),
+    ).toBe("Running in background");
   });
 
   it("lets the turn go if a finished task never wakes Claude", async () => {
@@ -1043,6 +1184,103 @@ describe("claude background tasks", () => {
     expect(events.some((event) => event.type === "message.completed")).toBe(
       true,
     );
+  });
+});
+
+describe("claude auto mode permissions", () => {
+  it("answers tool requests itself but still asks before running a command", async () => {
+    const { events, turn } = await startTurn("s1", { runtimeMode: "auto" });
+
+    // An MCP tool cannot be classified by name, so before this it fell through
+    // to a prompt — one modal per call, dozens in a row on a research run.
+    emit({
+      type: "control_request",
+      request_id: "mcp_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "mcp__astro__get_app_keywords",
+        input: { appId: "123" },
+      },
+    });
+    // Named like a shell but it is a server call, so it must not be mistaken
+    // for command execution: the display kind is derived from the name.
+    emit({
+      type: "control_request",
+      request_id: "mcp_2",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "mcp__host__list_shells",
+        input: {},
+      },
+    });
+    emit({
+      type: "control_request",
+      request_id: "bash_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Bash",
+        input: { command: "rm -rf build" },
+      },
+    });
+
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            message.type === "control_response" &&
+            (message.response as Record<string, unknown>)?.request_id ===
+              "mcp_1",
+        ),
+      "mcp answered without a prompt",
+    );
+    const responses = parse().filter(
+      (message) => message.type === "control_response",
+    );
+    const mcp = responses.find(
+      (message) =>
+        (message.response as Record<string, unknown>)?.request_id === "mcp_1",
+    );
+    expect(
+      (
+        (mcp?.response as Record<string, unknown>)?.response as Record<
+          string,
+          unknown
+        >
+      )?.behavior,
+    ).toBe("allow");
+    const mcpShell = responses.find(
+      (message) =>
+        (message.response as Record<string, unknown>)?.request_id === "mcp_2",
+    );
+    expect(
+      (
+        (mcpShell?.response as Record<string, unknown>)?.response as Record<
+          string,
+          unknown
+        >
+      )?.behavior,
+    ).toBe("allow");
+
+    // Running a command is the one thing Auto still stops for; that is what
+    // keeps it short of full access.
+    expect(
+      responses.some(
+        (message) =>
+          (message.response as Record<string, unknown>)?.request_id ===
+          "bash_1",
+      ),
+    ).toBe(false);
+    const asked = events.filter((event) => event.type === "approval.requested");
+    expect(asked).toHaveLength(1);
+
+    respondClaudeApproval(
+      "s1",
+      (asked[0] as Extract<HarnessEvent, { type: "approval.requested" }>)
+        .requestId,
+      "deny",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
   });
 });
 

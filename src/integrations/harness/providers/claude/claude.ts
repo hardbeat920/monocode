@@ -461,7 +461,21 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (line) => {
       const current = liveRef.current;
       if (!current) return;
-      handleLine(input.sessionId, current, line);
+      try {
+        handleLine(input.sessionId, current, line);
+      } catch (error) {
+        // A throw here escapes into the Tauri event listener, where nothing
+        // catches it. The turn's promise would then never settle and the
+        // thread would look busy forever, with no way back. Fail the turn
+        // instead, the same way a rejected control request does.
+        const failure =
+          error instanceof Error ? error : new Error(String(error));
+        console.debug(
+          `[monocode] claude line failed ${input.sessionId}`,
+          failure,
+        );
+        failActiveTurn(current, failure);
+      }
     },
     (code) => {
       liveByThread.delete(input.sessionId);
@@ -532,9 +546,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundTasks.clear();
   live.backgroundRows.clear();
   clearAwaitingResume(live);
-  live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
+  // Leave `backgroundKey` alone and let the sync clear it: resetting it here
+  // makes the next sync see no change and skip the event, stranding a notice
+  // from the previous turn on screen.
+  syncBackgroundWait(live);
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -592,11 +609,7 @@ function handleLine(sessionId: string, live: Live, line: string): void {
         if (live.muteUpdates || live.turnDone !== turn) return;
         const failure =
           error instanceof Error ? error : new Error(String(error));
-        if (live.turnFailed) {
-          live.turnFailed(failure);
-        } else {
-          live.onEvent({ type: "session.error", message: failure.message });
-        }
+        failActiveTurn(live, failure);
       },
     );
     return;
@@ -842,8 +855,12 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
-    if (isAgentToolName(tool.name) && isBackgroundedAgentTool(live, tool.id)) {
-      continue;
+    if (isAgentToolName(tool.name)) {
+      // Backgrounded work keeps running past its tool call, so its result is
+      // not the end of it; anything else is done and must stop holding the
+      // turn open.
+      if (isBackgroundedAgentTool(live, tool.id)) continue;
+      clearAgentToolTasks(live, tool.id);
     }
     live.onEvent({
       type: "tool.updated",
@@ -886,8 +903,7 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // A refused window can still fall back to another model, so only a turn
   // that ended in error was stopped by it.
   const turnErrored = rec.is_error === true || result.status === "failed";
-  const usageLimit =
-    live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
+  const usageLimit = live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
   live.usageLimit = null;
   if (usageLimit && turnErrored && !live.cancelled) {
     live.onEvent({ type: "usage.limited", ...usageLimit });
@@ -904,10 +920,7 @@ async function handleControlRequest(
   control: ClaudeControlRequest,
 ): Promise<void> {
   if (control.subtype !== "can_use_tool" && control.subtype !== "permission") {
-    await writeJson(
-      sessionId,
-      buildControlResponse(control.requestId, {}),
-    );
+    await writeJson(sessionId, buildControlResponse(control.requestId, {}));
     return;
   }
 
@@ -994,6 +1007,22 @@ async function handleControlRequest(
   }
 
   if (live.runtimeMode === "full-access") {
+    await writeJson(
+      sessionId,
+      buildControlResponse(
+        control.requestId,
+        toClaudePermissionResult("allow", input),
+      ),
+    );
+    return;
+  }
+
+  // Auto exists to keep work moving without a prompt per step, so it answers
+  // everything except running a command. An MCP call cannot be judged by its
+  // name anyway — `get_app_keywords` and `add_keywords` look alike — and it
+  // comes from a server the user installed. Arbitrary command execution stays
+  // behind a prompt, which is what separates this from full access.
+  if (live.runtimeMode === "auto" && !runsCommand(toolName)) {
     await writeJson(
       sessionId,
       buildControlResponse(
@@ -1103,18 +1132,35 @@ function handleAgentLifecycle(
   const started = parseTaskStarted(rec);
   if (started) {
     if (started.ambient) return true;
-    live.backgroundTasks.set(started.taskId, {
-      description: started.description,
-      toolUseId: started.toolUseId,
-    });
+    // Nothing goes into these maps that nothing can take out again. Both of
+    // them hold the turn open, and a foreground task is released by its tool
+    // result, through `clearAgentToolTasks` — which matches on `tool_use_id`.
+    // The field is optional in the protocol, and a task that arrives without
+    // it has no exit: `task_updated` and notifications are keyed on the task
+    // id, and a foreground subagent's completion is reported by the tool
+    // result rather than by either of those. So an entry for one would sit
+    // there for the life of the session with the turn never ending — the
+    // failure this branch exists to remove, arriving by another door.
+    //
+    // Backgrounded is different: those are released by task id, so a missing
+    // `tool_use_id` costs them nothing.
+    const releasable = !!started.toolUseId || started.backgrounded;
+    if (releasable) {
+      live.backgroundTasks.set(started.taskId, {
+        description: started.description,
+        toolUseId: started.toolUseId,
+      });
+    }
     syncBackgroundWait(live);
     if (!isAgentTaskType(started.taskType)) return true;
-    live.agentTasks.set(started.taskId, {
-      taskId: started.taskId,
-      toolUseId: started.toolUseId,
-      description: started.description,
-      backgrounded: started.backgrounded,
-    });
+    if (releasable) {
+      live.agentTasks.set(started.taskId, {
+        taskId: started.taskId,
+        toolUseId: started.toolUseId,
+        description: started.description,
+        backgrounded: started.backgrounded,
+      });
+    }
     upsertAgentTool(
       live,
       started.toolUseId,
@@ -1309,10 +1355,7 @@ function noteSubagentTool(
  * never joins the parent transcript — that would read as the main agent
  * talking — but it is the most legible thing in the panel for its own row.
  */
-function noteSubagentNarration(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentNarration(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   const model = stringField(asRecord(rec.message), "model");
@@ -1347,10 +1390,7 @@ function noteSubagentNarration(
 }
 
 /** Settles the subagent's own tool rows once their results come back. */
-function noteSubagentResults(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentResults(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   for (const result of toolResultsFromUserMessage(rec)) {
@@ -1363,6 +1403,29 @@ function noteSubagentResults(
       status: result.isError ? "failed" : "completed",
     });
   }
+}
+
+/**
+ * A foreground subagent is finished the moment its result comes back.
+ *
+ * Its bookkeeping is otherwise cleared only by a task-list update, and Claude
+ * does not reliably send one after the tool returns. The entry then sits in
+ * `agentTasks`/`backgroundTasks`, `maybeFinishTurn` refuses to end the turn,
+ * and nothing else ever will — the thread stays busy until the app is closed,
+ * which then records the turn as failed even though the work succeeded.
+ */
+function clearAgentToolTasks(live: Live, toolUseId: string): void {
+  let cleared = false;
+  for (const [taskId, task] of [...live.agentTasks]) {
+    if (task.toolUseId !== toolUseId) continue;
+    live.agentTasks.delete(taskId);
+    live.backgroundTasks.delete(taskId);
+    settleBackgroundRow(live, taskId, "completed");
+    cleared = true;
+  }
+  if (!cleared) return;
+  syncBackgroundWait(live);
+  maybeFinishTurn(live);
 }
 
 function isBackgroundedAgentTool(live: Live, toolUseId: string): boolean {
@@ -1494,7 +1557,8 @@ function noteClaudeTurnStarted(live: Live): void {
 function showBackgroundRows(live: Live): void {
   if (!live.activeTurn || live.cancelled) return;
   for (const [taskId, task] of live.backgroundTasks) {
-    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId)) continue;
+    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId))
+      continue;
     const source = task.toolUseId
       ? live.toolsById.get(task.toolUseId)
       : undefined;
@@ -1508,7 +1572,9 @@ function showBackgroundRows(live: Live): void {
       kind: source ? toolKindFromName(source.name) : "execute",
       status: "in_progress",
       background: true,
-      ...(source ? { preview: previewFromTool(source.name, source.input) } : {}),
+      ...(source
+        ? { preview: previewFromTool(source.name, source.input) }
+        : {}),
     });
   }
 }
@@ -1576,6 +1642,15 @@ function syncBackgroundWait(live: Live): void {
   live.onEvent({ type: "background.updated", tasks: waiting });
 }
 
+/**
+ * End the turn if nothing is still owed to it.
+ *
+ * Claude's `result` says its own reply is done, not that the turn is: work it
+ * started can outlive it and wake it again. So the turn also waits on every
+ * subagent and backgrounded task, and on the grace period after one finishes.
+ * Anything left in those maps holds the turn open indefinitely — whatever put
+ * an entry there is responsible for taking it out.
+ */
 function maybeFinishTurn(live: Live): void {
   if (!live.turnResultSeen) return;
   if (live.agentTasks.size > 0 || live.backgroundTasks.size > 0) return;
@@ -1587,11 +1662,24 @@ function maybeFinishTurn(live: Live): void {
   ]);
 }
 
+/**
+ * Close a turn that ended normally and settle whoever is waiting on it.
+ *
+ * `extraEvents` go out before the promise resolves, so anything still shown as
+ * streaming is closed in the same update. A result that lands before the next
+ * turn has registered its promise is held as `turnEndPending` for that turn to
+ * pick up, which is why the flag is cleared here rather than assumed unset.
+ */
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   clearAwaitingResume(live);
   live.turnEndPending = false;
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);
+  // Nothing is waiting on background work once the turn is over, so drop the
+  // notice. Without this it survives the turn that raised it and keeps the
+  // thread looking busy — through later turns too, since the next sync sees an
+  // unchanged key and stays quiet.
+  syncBackgroundWait(live);
   const done = live.turnDone;
   const failed = live.turnFailed;
   live.turnDone = null;
@@ -1601,6 +1689,44 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
     return;
   }
   if (!failed) live.turnEndPending = true;
+}
+
+/**
+ * Whether this tool is the kind Auto still stops for: one that runs a command.
+ *
+ * The display kind is inferred from the name, which is fine for a label but
+ * wrong as a permission boundary. An MCP tool's name belongs to its server, so
+ * `mcp__host__list_shells` reads as `execute` while running nothing — and a
+ * server call is exactly what Auto is meant to let through.
+ */
+function runsCommand(toolName: string): boolean {
+  if (toolName.startsWith("mcp__")) return false;
+  return toolKindFromName(toolName) === "execute";
+}
+
+/**
+ * End a turn that failed, rather than only rejecting its promise.
+ *
+ * Leaving `activeTurn` set keeps the dead turn eligible for everything that
+ * follows: a late `result` for it can mark `turnEndPending`, and the next turn
+ * then settles on that instead of on its own reply.
+ */
+function failActiveTurn(live: Live, error: Error): void {
+  clearAwaitingResume(live);
+  live.turnEndPending = false;
+  live.activeTurn = false;
+  live.turnResultSeen = false;
+  syncBackgroundWait(live);
+  const failed = live.turnFailed;
+  live.turnDone = null;
+  live.turnFailed = null;
+  if (failed) {
+    failed(error);
+    return;
+  }
+  if (!live.muteUpdates) {
+    live.onEvent({ type: "session.error", message: error.message });
+  }
 }
 
 function settlePendingTurn(live: Live): void {
