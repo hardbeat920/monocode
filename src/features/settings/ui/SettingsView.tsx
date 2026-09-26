@@ -265,6 +265,7 @@ import {
   loadNotesEnabled,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
+  loadRemoteControl,
   loadTabAnimationsEnabled,
   saveClaudeHooks,
   saveCloseToTray,
@@ -280,6 +281,7 @@ import {
   saveNotesEnabled,
   saveQuickComposerEnabled,
   saveQuickComposerShortcut,
+  saveRemoteControl,
   saveTabAnimationsEnabled,
   searchSettings,
   settingsSectionDescription,
@@ -290,6 +292,7 @@ import {
   type FileTabMode,
   type FollowUpBehavior,
   type ModelControls,
+  type RemoteControlMode,
   type SettingsSearchResult,
   type SettingsSectionId,
 } from "../model/settings";
@@ -2587,6 +2590,7 @@ function ProvidersPage({
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [remoteControl, setRemoteControl] = useState(loadRemoteControl);
   const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
   const [hiddenGlobally, setHiddenGlobally] = useState(loadHiddenPickerProviders);
 
@@ -2642,6 +2646,11 @@ function ProvidersPage({
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
     setClaudeHooks(next);
+  };
+
+  const onRemoteControl = (next: RemoteControlMode) => {
+    saveRemoteControl(next);
+    setRemoteControl(next);
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
@@ -2751,6 +2760,22 @@ function ProvidersPage({
             label="Claude Code hooks"
             on={claudeHooks}
             onChange={onClaudeHooks}
+          />
+        </Row>
+        <Row
+          id="remote-control"
+          label="Remote control"
+          description="Claude Code's own Remote Control only starts in an interactive session, which MonoCode's sessions are not, so a session has to be handed to an interactive child for it to appear. Manual does that only for the sessions you pick. Every session does it automatically for every Claude session, named after its project — that is one extra CLI process per session, so the cost grows with how many you leave open."
+        >
+          <Segmented
+            label="Remote control"
+            value={remoteControl}
+            options={[
+              { value: "manual", label: "Manual" },
+              { value: "all", label: "Every session" },
+            ]}
+            onChange={onRemoteControl}
+            optionIdPrefix="remote-control"
           />
         </Row>
       </Group>

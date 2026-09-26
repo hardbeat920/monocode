@@ -337,6 +337,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "pretooluse settings.json block command notification",
   },
   {
+    id: "remote-control",
+    section: "providers",
+    label: "Remote control",
+    keywords: "phone mobile browser interactive mirror handoff automatic",
+  },
+  {
     id: "project-notifications",
     section: "inbox",
     label: "Project notifications",
@@ -859,6 +865,38 @@ export function loadClaudeHooks(): boolean {
 
 export function saveClaudeHooks(value: boolean) {
   writeFlag(CLAUDE_HOOKS_KEY, value);
+}
+
+const REMOTE_CONTROL_KEY = "monocode.remoteControl";
+
+/**
+ * `all` hands every Claude session to an interactive child so Claude Code's own
+ * Remote Control starts, which costs one extra CLI process per session. That is
+ * why `manual` is the default and the fallback for anything unrecognised.
+ */
+export type RemoteControlMode = "manual" | "all";
+
+export const REMOTE_CONTROL_DEFAULT: RemoteControlMode = "manual";
+
+function isRemoteControlMode(value: unknown): value is RemoteControlMode {
+  return value === "manual" || value === "all";
+}
+
+export function loadRemoteControl(): RemoteControlMode {
+  try {
+    const raw = localStorage.getItem(REMOTE_CONTROL_KEY);
+    return isRemoteControlMode(raw) ? raw : REMOTE_CONTROL_DEFAULT;
+  } catch {
+    return REMOTE_CONTROL_DEFAULT;
+  }
+}
+
+export function saveRemoteControl(value: RemoteControlMode) {
+  try {
+    localStorage.setItem(REMOTE_CONTROL_KEY, value);
+  } catch {
+    // private mode / quota
+  }
 }
 
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";
