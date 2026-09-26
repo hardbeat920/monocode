@@ -1383,12 +1383,26 @@ export default function App({
       // yet, so three things the transcript cannot supply are still missing, all
       // of them screen-derived (`docs/remote-control.md` §5, §7, §8):
       //
-      //   * Approvals. Permission prompts are written nowhere, so the screen is
-      //     the only source. Expected: `subscribePty(handle.ptyId, …)` feeding
-      //     `promptScreen.ts`, a parsed prompt rendered in MonoCode's own
-      //     approval UI, and the chosen option written back with `writePty`. An
-      //     unparseable screen must surface the raw pty rather than answer for
-      //     the user.
+      //   * Approvals. Expected: `subscribePty(handle.ptyId, …)` feeding
+      //     `promptScreen.ts`, the parsed prompt rendered in MonoCode's own
+      //     approval UI, and the chosen option written back with `writePty` as
+      //     the bare digit — measured to select and act in one keystroke, with
+      //     no `\r` and no cursor-move step. An unparseable screen must surface
+      //     the raw pty rather than answer for the user.
+      //
+      //     Two rules that are not obvious from the parsed shape, both measured:
+      //     Esc *denies*, producing byte-identical `tool_result` output to
+      //     option 3, so the transcript cannot tell a cancel from an explicit
+      //     No. Whatever emits `approval.resolved` must therefore carry the
+      //     decision this client sent — it is the only thing that knows — and
+      //     must never infer it from the result, or `deny` and `cancelled`
+      //     silently collapse into one. And *whether* a prompt is pending comes
+      //     from the transcript, not the screen: a `tool_use` with no
+      //     `tool_result` behind it held across every measured run, while
+      //     matching screen text picked up the composer footer instead. The
+      //     screen says what the prompt is; it does not say that there is one.
+      //     `MirrorState.tools` cannot answer this as it stands — it only ever
+      //     grows — so pending tracking belongs to whoever builds the UI.
       //   * Interrupted turns. An interrupt writes no record at all, so a turn
       //     ended that way never closes from the file. `resolveTurnFromScreen`
       //     exists for exactly this and needs the screen to read.
