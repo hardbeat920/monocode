@@ -39,8 +39,13 @@ export const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
   "image/webp",
 ]);
 
+/** Exactly what `--permission-mode` accepts; anything else exits the CLI. */
 export type ClaudePermissionMode =
-  "default" | "plan" | "acceptEdits" | "auto" | "bypassPermissions";
+  | "default"
+  | "plan"
+  | "acceptEdits"
+  | "dontAsk"
+  | "bypassPermissions";
 
 export type ClaudeControlRequest = {
   requestId: string;
@@ -112,7 +117,10 @@ export function runtimeModeToPermission(
     case "auto-accept-edits":
       return "acceptEdits";
     case "auto":
-      return "auto";
+      // MonoCode reviews each request itself, so the CLI still has to ask —
+      // it just gets its answer from the reviewer instead of a person. There
+      // is no `auto` on the CLI side, and passing one exits before startup.
+      return "default";
     case "full-access":
       return "bypassPermissions";
     default:

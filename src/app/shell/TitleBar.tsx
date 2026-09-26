@@ -25,6 +25,10 @@ import {
 import { basename } from "../../platform/tauri/fs";
 import { looksLikeProject } from "../../features/projects/model/recents";
 import type { HarnessId } from "../../features/sessions/model/session";
+import type {
+  RemoteControlAction,
+  RemoteControlIntent,
+} from "../../features/remoteControl/model/action";
 import { CwdPicker } from "../../features/projects/ui/CwdPicker";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import {
@@ -101,6 +105,9 @@ type Props = {
   onCloseMany: (ids: string[], fallbackId: string) => void;
   onArchiveTab?: (id: string) => void;
   onDeleteTab?: (id: string) => void;
+  /** Remote-control entry for a tab, or `null` to leave it out of the menu. */
+  remoteControlFor?: (tabId: string) => RemoteControlAction | null;
+  onRemoteControl?: (tabId: string, intent: RemoteControlIntent) => void;
   onReorder: (ids: string[], movedId?: string) => void;
   onPlaceOnPane?: (tabId: string, targetId: string, edge: PaneEdge) => void;
   onGoToFile?: () => void;
@@ -620,6 +627,8 @@ function TitleBarComponent({
   onCloseMany,
   onArchiveTab,
   onDeleteTab,
+  remoteControlFor,
+  onRemoteControl,
   onReorder,
   onPlaceOnPane,
   onGoToFile,
@@ -755,6 +764,9 @@ function TitleBarComponent({
         left: titleTabContextCloseIds(tabs, contextTab.id, "left"),
       }
     : null;
+  const contextRemoteControl = contextTab
+    ? (remoteControlFor?.(contextTab.id) ?? null)
+    : null;
   const contextMenuItems: ExplorerMenuItem[] = contextTab
     ? [
         {
@@ -783,6 +795,18 @@ function TitleBarComponent({
           label: "Close Tabs to the Left",
           disabled: contextCloseIds?.left.length === 0,
         },
+        ...(contextRemoteControl
+          ? [
+              { kind: "sep" as const },
+              {
+                kind: "item" as const,
+                id: contextRemoteControl.id,
+                label: contextRemoteControl.label,
+                description: contextRemoteControl.description,
+                disabled: contextRemoteControl.disabled,
+              },
+            ]
+          : []),
         ...(contextTab.sessionCount > 0 && (onArchiveTab || onDeleteTab)
           ? [
               { kind: "sep" as const },
@@ -823,6 +847,14 @@ function TitleBarComponent({
     setTabMenu(null);
     if (id === "close") {
       onClose(contextTab.id);
+      return;
+    }
+    if (id === "remote-control") {
+      // The menu already decided which way this goes; passing the intent keeps
+      // a click from flipping if the bridge changed state behind the menu.
+      if (contextRemoteControl && !contextRemoteControl.disabled) {
+        onRemoteControl?.(contextTab.id, contextRemoteControl.intent);
+      }
       return;
     }
     if (id === "archive") {

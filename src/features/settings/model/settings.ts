@@ -354,6 +354,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "pretooluse settings.json block command notification",
   },
   {
+    id: "remote-control",
+    section: "providers",
+    label: "Remote control",
+    keywords: "phone mobile browser interactive mirror handoff automatic",
+  },
+  {
     id: "project-notifications",
     section: "inbox",
     label: "Project notifications",
@@ -879,6 +885,58 @@ export function loadClaudeHooks(): boolean {
 
 export function saveClaudeHooks(value: boolean) {
   writeFlag(CLAUDE_HOOKS_KEY, value);
+}
+
+const REMOTE_CONTROL_KEY = "monocode.remoteControl";
+
+/**
+ * `all` hands every Claude session to an interactive child so Claude Code's own
+ * Remote Control starts, which costs one extra CLI process per session. That is
+ * why `manual` is the default and the fallback for anything unrecognised.
+ */
+export type RemoteControlMode = "manual" | "all";
+
+export const REMOTE_CONTROL_DEFAULT: RemoteControlMode = "manual";
+
+function isRemoteControlMode(value: unknown): value is RemoteControlMode {
+  return value === "manual" || value === "all";
+}
+
+export function loadRemoteControl(): RemoteControlMode {
+  try {
+    const raw = localStorage.getItem(REMOTE_CONTROL_KEY);
+    return isRemoteControlMode(raw) ? raw : REMOTE_CONTROL_DEFAULT;
+  } catch {
+    return REMOTE_CONTROL_DEFAULT;
+  }
+}
+
+export const REMOTE_CONTROL_CHANGE_EVENT = "monocode:remote-control-change";
+
+export function saveRemoteControl(value: RemoteControlMode) {
+  const next = isRemoteControlMode(value) ? value : REMOTE_CONTROL_DEFAULT;
+  try {
+    localStorage.setItem(REMOTE_CONTROL_KEY, next);
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<RemoteControlMode>(REMOTE_CONTROL_CHANGE_EVENT, {
+      detail: next,
+    }),
+  );
+}
+
+/**
+ * Switching to `all` has to reach live sessions at once. Without this the new
+ * mode only took effect on the next session update.
+ */
+export function subscribeRemoteControl(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(REMOTE_CONTROL_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(REMOTE_CONTROL_CHANGE_EVENT, onStoreChange);
 }
 
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";

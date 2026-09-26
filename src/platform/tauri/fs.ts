@@ -496,6 +496,26 @@ export function readTextFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
+export type FileRange = {
+  /** Bytes from the offset, cut back to the last complete character. */
+  text: string;
+  /** Length of the file when it was read, so a caller can tell it shrank. */
+  size: number;
+};
+
+/**
+ * Read a byte range, for following a file that only ever grows. `readTextFile`
+ * reads the whole file and refuses anything over 8 MB, which a long transcript
+ * passes. A range past the end returns empty text rather than failing.
+ */
+export function readFileRange(
+  path: string,
+  offset: number,
+  maxBytes: number,
+): Promise<FileRange> {
+  return invoke<FileRange>("read_file_range", { path, offset, maxBytes });
+}
+
 /** Raw bytes for the image viewer. Arrives as an ArrayBuffer, not base64. */
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
   const buffer = await invoke<ArrayBuffer>("read_binary_file", { path });

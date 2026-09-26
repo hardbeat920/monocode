@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -5100,6 +5100,89 @@ fn read_text_file_sync(path: &str) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8.".into())
 }
 
+/// Most bytes one range read will return, however much the caller asks for.
+const MAX_RANGE_BYTES: u64 = 1024 * 1024;
+
+/// Longest a single UTF-8 character can be. A read window smaller than this
+/// could split every character it reached and never decode any of them, so a
+/// caller asking for less still gets this much: returning nothing forever is
+/// worse than overshooting a cap by three bytes.
+const MIN_RANGE_BYTES: u64 = 4;
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRange {
+    /// Bytes from `offset`, cut back to the last complete character.
+    text: String,
+    /// Length of the file when it was read, so a caller can tell it shrank.
+    size: u64,
+}
+
+/// Read a byte range, for following a file that only ever grows.
+///
+/// `read_text_file` refuses anything over `MAX_TEXT_FILE_BYTES`, and reads the
+/// whole file besides, so it cannot tail a long transcript at all.
+///
+/// The file may be appended to while this runs. That is safe rather than merely
+/// tolerated: the bytes before `offset` never change in an append-only file, so
+/// what comes back is always a consistent prefix. A read may return less than
+/// the file's eventual length, never torn or reordered content, and whatever
+/// arrived after the read is picked up by the next one.
+#[tauri::command]
+pub async fn read_file_range(
+    path: String,
+    offset: u64,
+    max_bytes: u64,
+) -> Result<FileRange, String> {
+    tauri::async_runtime::spawn_blocking(move || read_file_range_sync(&path, offset, max_bytes))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn read_file_range_sync(path: &str, offset: u64, max_bytes: u64) -> Result<FileRange, String> {
+    let path = expand_home(path);
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err("Not a file".into());
+    }
+    let size = meta.len();
+    // Starting past the end is what every poll sees when nothing was appended,
+    // and a file shorter than the offset was replaced rather than added to.
+    if offset >= size {
+        return Ok(FileRange {
+            text: String::new(),
+            size,
+        });
+    }
+
+    let available = size - offset;
+    let want = available.min(max_bytes.clamp(MIN_RANGE_BYTES, MAX_RANGE_BYTES));
+    let mut file = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut buf = Vec::with_capacity(want as usize);
+    file.take(want)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+
+    // The cap can land inside a multi-byte character; stop short of it and let
+    // the next read start there. Callers advance by the bytes they were given,
+    // so a short return costs nothing.
+    let valid = match std::str::from_utf8(&buf) {
+        Ok(_) => buf.len(),
+        Err(err) => err.valid_up_to(),
+    };
+    // The window is wide enough for any single character, so nothing decodable
+    // means the file is corrupt rather than merely cut. Failing is better than
+    // returning empty forever and looking like a file that stopped growing.
+    if valid == 0 && !buf.is_empty() {
+        return Err(format!("{}: not valid UTF-8 at {offset}", path.display()));
+    }
+    buf.truncate(valid);
+    let text = String::from_utf8(buf).map_err(|_| "File is not valid UTF-8.".to_string())?;
+    Ok(FileRange { text, size })
+}
+
 /// Atomically replace a text file from a temporary file in the same directory.
 #[tauri::command]
 pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
@@ -5791,6 +5874,124 @@ mod tests {
                 Err(error) => panic!("{}", error),
             }
         }
+    }
+
+    #[test]
+    fn read_file_range_tails_appended_bytes() {
+        let dir = tmp("range");
+        let file = dir.0.join("t.jsonl");
+        std::fs::write(&file, "one\n").unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let first = read_file_range_sync(&path, 0, 1024).unwrap();
+        assert_eq!(first.text, "one\n");
+        assert_eq!(first.size, 4);
+
+        std::fs::write(&file, "one\ntwo\n").unwrap();
+        let second = read_file_range_sync(&path, 4, 1024).unwrap();
+        assert_eq!(second.text, "two\n");
+        assert_eq!(second.size, 8);
+    }
+
+    #[test]
+    fn read_file_range_past_the_end_is_empty_not_an_error() {
+        let dir = tmp("range-eof");
+        let file = dir.0.join("t.jsonl");
+        std::fs::write(&file, "abc").unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        // What every poll hits when nothing was appended.
+        let at_end = read_file_range_sync(&path, 3, 1024).unwrap();
+        assert_eq!(at_end.text, "");
+        assert_eq!(at_end.size, 3);
+
+        // And a file that was replaced by a shorter one.
+        let past = read_file_range_sync(&path, 99, 1024).unwrap();
+        assert_eq!(past.text, "");
+        assert_eq!(past.size, 3);
+    }
+
+    #[test]
+    fn read_file_range_stops_before_a_split_character() {
+        let dir = tmp("range-utf8");
+        let file = dir.0.join("t.jsonl");
+        // "é" is two bytes, so a one-byte cap cannot return any of it.
+        std::fs::write(&file, "é!").unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        // A cap below one character is widened rather than returning nothing,
+        // which would stall a tailer forever. Both of these read the 3-byte
+        // file whole instead of splitting the leading character.
+        for cap in [1, 2] {
+            let widened = read_file_range_sync(&path, 0, cap).unwrap();
+            assert_eq!(widened.text, "é!", "cap {cap}");
+        }
+
+        // Resuming mid-file at a character boundary.
+        let rest = read_file_range_sync(&path, 2, 1024).unwrap();
+        assert_eq!(rest.text, "!");
+    }
+
+    #[test]
+    fn read_file_range_cuts_a_split_character_off_the_end() {
+        let dir = tmp("range-split");
+        let file = dir.0.join("t.jsonl");
+        // Four ASCII bytes then a two-byte character: a cap of 5 lands inside it.
+        std::fs::write(&file, "abcdé").unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let cut = read_file_range_sync(&path, 0, 5).unwrap();
+        assert_eq!(cut.text, "abcd");
+        let rest = read_file_range_sync(&path, 4, 1024).unwrap();
+        assert_eq!(rest.text, "é");
+    }
+
+    #[test]
+    fn read_file_range_fails_loudly_on_undecodable_bytes() {
+        let dir = tmp("range-corrupt");
+        let file = dir.0.join("t.jsonl");
+        // A lone continuation byte decodes at no width, so this cannot be a cut.
+        std::fs::write(&file, [0x80, 0x80, 0x80, 0x80, 0x80]).unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let error = read_file_range_sync(&path, 0, 1024).unwrap_err();
+        assert!(error.contains("not valid UTF-8 at 0"), "{error}");
+    }
+
+    #[test]
+    fn read_file_range_caps_what_it_returns() {
+        let dir = tmp("range-cap");
+        let file = dir.0.join("t.jsonl");
+        std::fs::write(&file, "abcdefghij").unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let capped = read_file_range_sync(&path, 0, 4).unwrap();
+        assert_eq!(capped.text, "abcd");
+        // The whole file is still reported, so a caller knows to read again.
+        assert_eq!(capped.size, 10);
+    }
+
+    #[test]
+    fn read_file_range_reads_past_the_text_file_limit() {
+        let dir = tmp("range-big");
+        let file = dir.0.join("t.jsonl");
+        let big = vec![b'x'; (MAX_TEXT_FILE_BYTES + 1024) as usize];
+        std::fs::write(&file, &big).unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        // The point of the command: `read_text_file` refuses this outright.
+        assert!(read_text_file_sync(&path).is_err());
+        let tail = read_file_range_sync(&path, MAX_TEXT_FILE_BYTES, 1024).unwrap();
+        assert_eq!(tail.text.len(), 1024);
+        assert_eq!(tail.size, MAX_TEXT_FILE_BYTES + 1024);
+    }
+
+    #[test]
+    fn read_file_range_rejects_a_directory_and_a_missing_file() {
+        let dir = tmp("range-bad");
+        assert!(read_file_range_sync(&dir.0.to_string_lossy(), 0, 16).is_err());
+        let missing = dir.0.join("nope.jsonl");
+        assert!(read_file_range_sync(&missing.to_string_lossy(), 0, 16).is_err());
     }
 
     #[test]
