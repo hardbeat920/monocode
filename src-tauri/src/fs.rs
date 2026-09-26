@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -3591,6 +3592,7 @@ fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<(String,
             &three_dot,
         ],
         MAX_PR_DIFF_BYTES,
+        None,
     )
     .ok_or_else(|| format!("git diff failed for {base}...{head}"))?;
     if truncated {
@@ -4010,6 +4012,7 @@ pub(crate) fn git_output_capped(
     root: &Path,
     args: &[&str],
     max_bytes: usize,
+    cancel: Option<&AtomicBool>,
 ) -> Option<(Vec<u8>, bool)> {
     let mut child = git_cmd()
         .arg("--no-pager")
@@ -4027,6 +4030,11 @@ pub(crate) fn git_output_capped(
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
+        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
         let n = match stdout.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => n,
@@ -7710,10 +7718,11 @@ mod tests {
             return;
         }
         let (bytes, truncated) =
-            git_output_capped(&dir.0, &["diff", "HEAD~1", "HEAD"], 1024).unwrap();
+            git_output_capped(&dir.0, &["diff", "HEAD~1", "HEAD"], 1024, None).unwrap();
         assert!(truncated);
         assert!(bytes.len() <= 1024);
-        let (head, truncated) = git_output_capped(&dir.0, &["rev-parse", "HEAD"], 1024).unwrap();
+        let (head, truncated) =
+            git_output_capped(&dir.0, &["rev-parse", "HEAD"], 1024, None).unwrap();
         assert!(!truncated);
         assert!(!head.is_empty());
     }

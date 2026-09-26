@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +25,8 @@ pub struct SearchOptions {
     pub regex: bool,
     pub include: Option<String>,
     pub exclude: Option<String>,
+    #[serde(default)]
+    pub search_id: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -41,36 +46,104 @@ pub struct SearchResult {
     pub truncated: bool,
 }
 
-#[tauri::command]
-pub async fn search_project(options: SearchOptions) -> Result<SearchResult, String> {
-    tauri::async_runtime::spawn_blocking(move || search_project_sync(&options))
-        .await
-        .map_err(|e| e.to_string())?
+type SearchKey = (PathBuf, String);
+static ACTIVE_SEARCHES: Mutex<Option<HashMap<SearchKey, Arc<AtomicBool>>>> = Mutex::new(None);
+
+fn begin_search(root: &Path, search_id: &str) -> Arc<AtomicBool> {
+    let token = Arc::new(AtomicBool::new(false));
+    if let Ok(mut active) = ACTIVE_SEARCHES.lock() {
+        let searches = active.get_or_insert_with(HashMap::new);
+        if let Some(previous) =
+            searches.insert((root.to_path_buf(), search_id.to_string()), token.clone())
+        {
+            previous.store(true, Ordering::Release);
+        }
+    }
+    token
 }
 
-fn search_project_sync(options: &SearchOptions) -> Result<SearchResult, String> {
+fn finish_search(root: &Path, search_id: &str, token: &Arc<AtomicBool>) {
+    if let Ok(mut active) = ACTIVE_SEARCHES.lock() {
+        if let Some(searches) = active.as_mut() {
+            let key = (root.to_path_buf(), search_id.to_string());
+            if searches
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, token))
+            {
+                searches.remove(&key);
+            }
+        }
+    }
+}
+
+fn cancel_search(root: &Path, search_id: &str) {
+    if let Ok(active) = ACTIVE_SEARCHES.lock() {
+        if let Some(token) = active
+            .as_ref()
+            .and_then(|searches| searches.get(&(root.to_path_buf(), search_id.to_string())))
+        {
+            token.store(true, Ordering::Release);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn cancel_project_search(cwd: String, search_id: String) {
+    cancel_search(&expand_home(&cwd), &search_id);
+}
+
+#[tauri::command]
+pub async fn search_project(options: SearchOptions) -> Result<SearchResult, String> {
+    let root = expand_home(&options.cwd);
+    if !root.is_dir() {
+        return Err(format!("{}: Not a directory", root.display()));
+    }
+    let search_id = options.search_id.clone();
+    let token = begin_search(&root, &search_id);
+    let result = match tauri::async_runtime::spawn_blocking({
+        let root = root.clone();
+        let token = token.clone();
+        move || search_project_sync(&root, &options, &token)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            finish_search(&root, &search_id, &token);
+            return Err(error.to_string());
+        }
+    };
+    finish_search(&root, &search_id, &token);
+    result
+}
+
+fn search_project_sync(
+    root: &Path,
+    options: &SearchOptions,
+    cancel: &AtomicBool,
+) -> Result<SearchResult, String> {
     let query = options.query.trim();
-    if query.is_empty() {
+    if query.is_empty() || cancel.load(Ordering::Acquire) {
         return Ok(SearchResult {
             matches: Vec::new(),
             truncated: false,
         });
     }
 
-    let root = expand_home(&options.cwd);
-    if !root.is_dir() {
-        return Err(format!("{}: Not a directory", root.display()));
-    }
-
-    if let Some(result) = git_grep(&root, options, query) {
+    if let Some(result) = git_grep(root, options, query, cancel) {
         return Ok(result);
     }
 
-    scan_files(&root, options, query)
+    scan_files(root, options, query, cancel)
 }
 
-fn git_grep(root: &Path, options: &SearchOptions, query: &str) -> Option<SearchResult> {
-    git_grep_capped(root, options, query, MAX_GIT_GREP_BYTES)
+fn git_grep(
+    root: &Path,
+    options: &SearchOptions,
+    query: &str,
+    cancel: &AtomicBool,
+) -> Option<SearchResult> {
+    git_grep_capped(root, options, query, MAX_GIT_GREP_BYTES, cancel)
 }
 
 fn git_grep_capped(
@@ -78,6 +151,7 @@ fn git_grep_capped(
     options: &SearchOptions,
     query: &str,
     max_bytes: usize,
+    cancel: &AtomicBool,
 ) -> Option<SearchResult> {
     let mut args = vec!["grep".to_string(), "-z".to_string(), "-n".to_string()];
     if !options.case_sensitive {
@@ -96,7 +170,17 @@ fn git_grep_capped(
     args.extend(pathspecs(&options.include, &options.exclude));
 
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let (mut raw, mut truncated) = crate::fs::git_output_capped(root, &args, max_bytes)?;
+    let (mut raw, mut truncated) =
+        match crate::fs::git_output_capped(root, &args, max_bytes, Some(cancel)) {
+            Some(output) => output,
+            None if cancel.load(Ordering::Acquire) => {
+                return Some(SearchResult {
+                    matches: Vec::new(),
+                    truncated: false,
+                });
+            }
+            None => return None,
+        };
     if truncated {
         // The cap can land inside a match record. Keep only complete lines so the
         // parser never invents a match from a partial path, number, or preview.
@@ -167,8 +251,13 @@ fn read_until(bytes: &[u8], delimiter: u8) -> Option<(&[u8], usize)> {
     Some((&bytes[..end], end + 1))
 }
 
-fn scan_files(root: &Path, options: &SearchOptions, query: &str) -> Result<SearchResult, String> {
-    if options.regex {
+fn scan_files(
+    root: &Path,
+    options: &SearchOptions,
+    query: &str,
+    cancel: &AtomicBool,
+) -> Result<SearchResult, String> {
+    if options.regex || cancel.load(Ordering::Acquire) {
         return Ok(SearchResult {
             matches: Vec::new(),
             truncated: false,
@@ -188,6 +277,12 @@ fn scan_files(root: &Path, options: &SearchOptions, query: &str) -> Result<Searc
     let mut truncated = false;
 
     'files: for file in files {
+        if cancel.load(Ordering::Acquire) {
+            return Ok(SearchResult {
+                matches: Vec::new(),
+                truncated: false,
+            });
+        }
         if !matches_pathspec(&file.relative, &include, &exclude) {
             continue;
         }
@@ -279,6 +374,7 @@ fn match_column(
             regex: false,
             include: None,
             exclude: None,
+            search_id: String::new(),
         },
     )
     .unwrap_or(1)
@@ -381,6 +477,7 @@ mod tests {
             regex: false,
             include: None,
             exclude: None,
+            search_id: String::new(),
         }
     }
 
@@ -394,7 +491,14 @@ mod tests {
         std::fs::write(dir.0.join("many.txt"), &body).unwrap();
         assert!(git(&dir.0, &["add", "many.txt"]));
 
-        let result = git_grep_capped(&dir.0, &options(&dir.0, "find me"), "find me", 256).unwrap();
+        let result = git_grep_capped(
+            &dir.0,
+            &options(&dir.0, "find me"),
+            "find me",
+            256,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
 
         assert!(result.truncated);
         assert!(!result.matches.is_empty());
@@ -414,10 +518,55 @@ mod tests {
         std::fs::write(dir.0.join("empty.txt"), "nothing here\n").unwrap();
         assert!(git(&dir.0, &["add", "empty.txt"]));
 
-        let result = git_grep_capped(&dir.0, &options(&dir.0, "absent"), "absent", 256).unwrap();
+        let result = git_grep_capped(
+            &dir.0,
+            &options(&dir.0, "absent"),
+            "absent",
+            256,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
 
         assert!(result.matches.is_empty());
         assert!(!result.truncated);
+    }
+
+    #[test]
+    fn git_grep_cancelled_search_returns_empty_instead_of_falling_back() {
+        let dir = tmp("git-grep-cancelled");
+        if !git(&dir.0, &["init", "--quiet"]) {
+            return;
+        }
+        std::fs::write(dir.0.join("many.txt"), "find me\n".repeat(100)).unwrap();
+        assert!(git(&dir.0, &["add", "many.txt"]));
+
+        let result = git_grep_capped(
+            &dir.0,
+            &options(&dir.0, "find me"),
+            "find me",
+            256,
+            &AtomicBool::new(true),
+        )
+        .unwrap();
+
+        assert!(result.matches.is_empty());
+        assert!(!result.truncated);
+    }
+
+    #[test]
+    fn a_new_search_cancels_the_previous_owner() {
+        let dir = tmp("search-cancel-owner");
+        let first = begin_search(&dir.0, "owner");
+        let second = begin_search(&dir.0, "owner");
+
+        assert!(first.load(Ordering::Acquire));
+        assert!(!second.load(Ordering::Acquire));
+
+        cancel_search(&dir.0, "owner");
+        assert!(second.load(Ordering::Acquire));
+
+        finish_search(&dir.0, "owner", &first);
+        finish_search(&dir.0, "owner", &second);
     }
 
     #[test]
@@ -438,6 +587,7 @@ mod tests {
                 ..options(&dir.0, "find me")
             },
             "find me",
+            &AtomicBool::new(false),
         )
         .unwrap();
 

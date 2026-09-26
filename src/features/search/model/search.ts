@@ -22,6 +22,7 @@ export type ProjectSearchOptions = {
   regex?: boolean;
   include?: string;
   exclude?: string;
+  searchId: string;
 };
 
 export type EditorNavigation = {
@@ -55,8 +56,19 @@ export function editorPathsEqual(a: string, b: string): boolean {
   return pathKey(a) === pathKey(b);
 }
 
+export function createProjectSearchId(): string {
+  return crypto.randomUUID();
+}
+
 export function searchProject(
   options: ProjectSearchOptions,
 ): Promise<ProjectSearchResult> {
   return invoke<ProjectSearchResult>("search_project", { options });
+}
+
+export function cancelProjectSearch(
+  cwd: string,
+  searchId: string,
+): Promise<void> {
+  return invoke<void>("cancel_project_search", { cwd, searchId });
 }

@@ -38,9 +38,18 @@ import {
 import { prettyCwd, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
-import { searchProject, type OpenFileFn } from "../model/search";
+import {
+  cancelProjectSearch,
+  createProjectSearchId,
+  searchProject,
+  type OpenFileFn,
+} from "../model/search";
 import { type Session } from "../../sessions/model/session";
-import { searchSessions, type SessionSummary } from "../../sessions/data/sessionStore";
+import {
+  cancelSessionSearch,
+  searchSessions,
+  type SessionSummary,
+} from "../../sessions/data/sessionStore";
 
 const SCOPES: { id: SearchScope; label: string }[] = [
   { id: "all", label: "All" },
@@ -92,8 +101,23 @@ export function SearchView({
   const [remoteHits, setRemoteHits] = useState<AppSearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [projectSearchId] = useState(createProjectSearchId);
+  const [sessionSearchOwner] = useState(() => crypto.randomUUID());
 
   const trimmed = query.trim();
+
+  useEffect(() => {
+    return () => {
+      void cancelSessionSearch(sessionSearchOwner);
+    };
+  }, [sessionSearchOwner]);
+
+  useEffect(() => {
+    if (!looksLikeProject(cwd)) return;
+    return () => {
+      void cancelProjectSearch(cwd, projectSearchId);
+    };
+  }, [cwd, projectSearchId]);
 
   useEffect(() => {
     if (!open) return;
@@ -199,7 +223,7 @@ export function SearchView({
       if (wantSessions) {
         setLoading(true);
         jobs.push(
-          searchSessions({ query: trimmed })
+          searchSessions({ query: trimmed, searchOwner: sessionSearchOwner })
             .then((result) => {
               if (!cancelled) setRemoteHits(hitsFromSessionSearch(result.hits));
             })
@@ -214,7 +238,11 @@ export function SearchView({
       if (wantFiles && looksLikeProject(cwd)) {
         setLoading(true);
         jobs.push(
-          searchProject({ cwd, query: trimmed })
+          searchProject({
+            cwd,
+            query: trimmed,
+            searchId: projectSearchId,
+          })
             .then((result) => {
               if (!cancelled) {
                 setContentHits(hitsFromContentMatches(result.matches));
@@ -241,7 +269,7 @@ export function SearchView({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cwd, open, scope, trimmed]);
+  }, [cwd, open, projectSearchId, scope, sessionSearchOwner, trimmed]);
 
   const hits = useMemo(() => {
     if (!trimmed) return [];

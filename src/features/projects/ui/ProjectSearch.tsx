@@ -14,6 +14,8 @@ import {
   type ReactNode,
 } from "react";
 import {
+  cancelProjectSearch,
+  createProjectSearchId,
   searchProject,
   type OpenFileFn,
   type ProjectSearchMatch,
@@ -53,6 +55,14 @@ export function ProjectSearch({
   const [error, setError] = useState<string | null>(null);
   const [matches, setMatches] = useState<ProjectSearchMatch[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [searchId] = useState(createProjectSearchId);
+
+  useEffect(() => {
+    if (!cwd || cwd === "~") return;
+    return () => {
+      void cancelProjectSearch(cwd, searchId);
+    };
+  }, [cwd, searchId]);
 
   useEffect(() => {
     if (!focusToken) return;
@@ -88,6 +98,7 @@ export function ProjectSearch({
       void searchProject({
         cwd,
         query: trimmed,
+        searchId,
         caseSensitive,
         wholeWord,
         regex,
