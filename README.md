@@ -80,11 +80,14 @@ Tauri loads `src-tauri/tauri.linux.conf.json` automatically for Linux developmen
 
 ### Fedora / Enterprise Linux packages
 
-On Fedora, or on an Enterprise Linux 10 system (registered RHEL, Rocky, Alma, CentOS Stream, Oracle), install the release `.rpm` from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Enterprise Linux needs EPEL first, because `webkit2gtk4.1` is an EPEL package there — CRB is not needed to run MonoCode:
+On Fedora, or on an Enterprise Linux 10 system (registered RHEL, Rocky, Alma, CentOS Stream, Oracle), install the release `.rpm` from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Enterprise Linux needs EPEL first, because `webkit2gtk4.1` is an EPEL package there — CRB is not needed to run MonoCode. On Oracle Linux 10, `epel-release` does not enable `ol10_developer_EPEL`, which is the repository that provides that package. Enable it before installing the rpm:
 
 ```bash
 # Enterprise Linux 10 only; skip on Fedora.
 sudo dnf install -y epel-release   # RHEL: sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+# Oracle Linux 10, instead of epel-release:
+# sudo dnf install -y oracle-epel-release-el10 dnf-plugins-core
+# sudo dnf config-manager --set-enabled ol10_developer_EPEL
 sudo dnf install ./MonoCode-*.rpm
 ```
 
