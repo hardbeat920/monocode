@@ -447,6 +447,14 @@ marker of any kind. A mirror that waits for `turn_duration` to clear its
 pending state will spin "thinking…" forever after any interrupt taken on the
 phone or in the TUI.
 
+**And it is never written later.** The 25-second reading left open whether a
+terminating record arrives eventually or on the next action; it does neither. ESC
+into a thinking turn, then 240 seconds with the process alive: the session file
+stayed byte-identical. A follow-up message at 241s got its own `user`,
+`assistant` and `turn_duration` records, and **nothing was back-filled** for the
+interrupted turn — `interruptedMessageId` was `null` on both user records. So the
+screen is not a stopgap until a record shows up. There is no record.
+
 The implementation must therefore not treat the transcript as the only source of
 turn state. The pty parser already has to watch the screen for §7; it must also
 resolve turn-end. An interrupt that MonoCode itself sent is easy — it knows it
@@ -456,14 +464,25 @@ sent ESC. An interrupt taken from the phone is the case that needs the screen.
 it, which hides that the screen carries two different signals and only one of
 them is about being idle:
 
-- A **running** turn paints a spinner line: a glyph, one present-tense word
-  ending in an ellipsis, sometimes an elapsed time and a token count —
-  `✢ Synthesizing…`, `✻ Ruminating… (3s · ↓143 tokens)`.
+- A **running** turn paints a spinner line: a glyph, one gerund ending in an
+  ellipsis, sometimes an elapsed time and a token count — `✢ Synthesizing…`,
+  `✻ Ruminating… (3s · ↓143 tokens)`.
 - A **finished** turn leaves a past-tense summary where the spinner was:
   `✻ Baked for 2s`, `✻ Sautéed for 6s`, `✻ Churned for 6s`. **Match the
-  `for <N>s` shape and never the word.** The vocabulary rotates from turn to turn
-  — those three came from one session — so it is decoration, and a matcher keyed
-  on it fails on the next turn, never mind the next CLI version.
+  `for <duration>` shape and never the word.** The vocabulary rotates from turn
+  to turn — eight finished-turn words and twenty-odd gerunds counted across the
+  captures — so it is decoration, and a matcher keyed on it fails on the next
+  turn, never mind the next CLI version.
+
+**Both durations change format at 60 seconds, and not in the same way.** This
+cost a real bug: a finished turn past a minute reads `✻ Brewed for 4m 12s`, so a
+matcher understanding only `for <N>s` recognises short turns and silently stops
+recognising long ones — which are exactly the turns someone walks away from. Match
+`for (<N>h )?(<N>m )?<N>s`. The running counter is the other half of the trap: its
+elapsed time also switches to `1m 25s`, but the nested figure inside it stays in
+raw seconds past 60 — `✻ Osmosing… (1m 25s · thought for 83s)` — so a finished-turn
+matcher without an end anchor swallows a *running* turn's own counter and calls it
+finished. Anchor it to the end of the line, and test the spinner first.
 
 After an interrupt neither signal is fresh: no spinner is painted, and the newest
 summary belongs to some earlier turn. What says *this* turn is over is the
@@ -471,9 +490,11 @@ composer box coming back — the pair of horizontal rules with a `❯` line insi
 carrying the interrupted prompt, which the TUI restores into it. That, and not a
 record, is the only evidence there is.
 
-One string not to write code against: `esc to interrupt` appears nowhere in any
-capture, so a matcher looking for it finds nothing on every screen, including the
-ones where a turn plainly is running.
+One string not to write code against: `esc to interrupt` appears nowhere. Not a
+spot check — the substring `interrupt` occurs **zero** times across all twelve
+captures, raw, ANSI-stripped and whitespace-squashed alike. A matcher looking for
+it finds nothing on every screen, including the ones where a turn plainly is
+running. What a running turn shows instead is the gerund and its counter above.
 
 ## 9. What to build
 
