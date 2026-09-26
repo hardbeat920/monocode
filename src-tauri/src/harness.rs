@@ -1039,10 +1039,37 @@ fn spawn_managed(cmd: &mut Command) -> std::io::Result<std::process::Child> {
     {
         crate::windows::spawn_managed(cmd)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        spawn_retrying_text_file_busy(cmd)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         cmd.spawn()
     }
+}
+
+/// Linux refuses to `execve` a file that any process holds open for writing,
+/// and whether one does is not ours to decide: a sibling thread's spawn
+/// inherits our write handles for the moment before it execs its own program.
+/// So a binary written seconds ago — a CLI mid-upgrade, or a `--version` probe
+/// of a path the user just pointed us at — can be briefly unrunnable rather
+/// than wrong, and reporting it as invalid is the wrong answer.
+#[cfg(unix)]
+fn spawn_retrying_text_file_busy(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    const ATTEMPTS: u32 = 4;
+    for attempt in 1..ATTEMPTS {
+        match cmd.spawn() {
+            Err(e) if is_text_file_busy(&e) => thread::sleep(Duration::from_millis(20) * attempt),
+            settled => return settled,
+        }
+    }
+    cmd.spawn()
+}
+
+#[cfg(unix)]
+fn is_text_file_busy(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ETXTBSY)
 }
 
 fn terminate(pid: u32) {
@@ -2827,6 +2854,18 @@ mod tests {
     /// The marker is what lets the next launch tell a crashed run's leftovers
     /// from a live instance's children. Every spawn funnels through
     /// `isolate_child`, so losing it here silently un-reaps probes and shells.
+    #[cfg(unix)]
+    #[test]
+    fn only_text_file_busy_is_worth_respawning_for() {
+        assert!(is_text_file_busy(&std::io::Error::from_raw_os_error(
+            libc::ETXTBSY
+        )));
+        assert!(!is_text_file_busy(&std::io::Error::from_raw_os_error(
+            libc::ENOENT
+        )));
+        assert!(!is_text_file_busy(&std::io::Error::other("no errno")));
+    }
+
     #[test]
     fn isolate_child_stamps_the_reap_marker() {
         let pid = std::process::id().to_string();
