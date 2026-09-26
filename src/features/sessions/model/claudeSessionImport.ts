@@ -8,6 +8,8 @@ export type ClaudeImportTarget = {
   /** Directory the conversations were listed for; the working copy, not the project. */
   cwd: string;
   providerAccountId?: string;
+  /** Turn generation when the conversation was picked. */
+  turnGen: number;
 };
 
 /**
@@ -21,15 +23,24 @@ export type ClaudeImportTarget = {
  * listed for `cwd`, and Claude drops a resume binding whose directory is not
  * the one the next turn runs in, so a thread that has since moved would start
  * a new conversation rather than continue the chosen one.
+ *
+ * `busy` alone cannot see that, because it reports the current state rather
+ * than whether anything happened: a turn that both starts and finishes inside
+ * one of those round trips reads exactly like a thread that was never busy, and
+ * replacing the transcript would throw the finished turn away. The turn
+ * generation moves on every turn that starts, so a turn that ran and settled
+ * leaves it ahead of where it was when the conversation was picked.
  */
 export function claudeImportTarget(
   sessions: Session[],
   target: ClaudeImportTarget,
+  turnGen: number,
 ): Session | null {
   const session = sessions.find((entry) => entry.id === target.sessionId);
   if (
     !session ||
     session.busy ||
+    turnGen !== target.turnGen ||
     session.harness !== "claude" ||
     sessionWorkCwd(session) !== target.cwd ||
     session.providerAccountId !== target.providerAccountId

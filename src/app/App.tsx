@@ -5055,6 +5055,7 @@ export default function App({
       // Claude files conversations under the directory it ran in, which for a
       // worktree session is the checkout rather than the project root.
       cwd: sessionWorkCwd(source),
+      turnGen: turnGen.current.get(sessionId) ?? 0,
       ...(source.providerAccountId
         ? { providerAccountId: source.providerAccountId }
         : {}),
@@ -5069,11 +5070,18 @@ export default function App({
   const importClaudeConversation = useCallback(
     async (target: ClaudeImportTarget, summary: ClaudeSessionSummary) => {
       // Each step below is a round trip the thread can change across, so the
-      // target is rechecked at every one rather than once at the start.
-      if (!claudeImportTarget(sessionsRef.current, target)) return;
+      // target is rechecked at every one rather than once at the start. The
+      // picker has already closed by now, so the composer is live throughout.
+      const stillTarget = () =>
+        claudeImportTarget(
+          sessionsRef.current,
+          target,
+          turnGen.current.get(target.sessionId) ?? 0,
+        );
+      if (!stillTarget()) return;
       const transcript = await readTextFile(summary.path).catch(() => null);
       if (transcript === null) return;
-      if (!claudeImportTarget(sessionsRef.current, target)) return;
+      if (!stillTarget()) return;
 
       // A child that is already running ignores the new binding: `ensureLive`
       // hands back the existing one before the resume state is read, so the
@@ -5082,7 +5090,7 @@ export default function App({
       await stopHarnessSession("claude", target.sessionId).catch(
         () => undefined,
       );
-      if (!claudeImportTarget(sessionsRef.current, target)) return;
+      if (!stillTarget()) return;
 
       setSessions((current) =>
         current.map((session) =>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildImportedSession,
   claudeImportTarget,
+  type ClaudeImportTarget,
 } from "./claudeSessionImport";
 import { newSession, type Session } from "./session";
 
@@ -124,53 +125,73 @@ describe("deciding whether an import may still be committed", () => {
     };
   }
 
-  const target = { sessionId: "thread-1", cwd: "/repo" };
+  const target = { sessionId: "thread-1", cwd: "/repo", turnGen: 3 };
+
+  /** The check as the import runs it: against the target captured at the pick. */
+  function check(
+    sessions: Session[],
+    overrides: Partial<ClaudeImportTarget> = {},
+    turnGen = target.turnGen,
+  ) {
+    return claudeImportTarget(sessions, { ...target, ...overrides }, turnGen);
+  }
 
   it("accepts the thread the conversations were listed for", () => {
     const thread = threadIn();
-    expect(claudeImportTarget([thread], target)).toBe(thread);
+    expect(check([thread])).toBe(thread);
   });
 
   it("refuses a thread that has been closed", () => {
-    expect(claudeImportTarget([], target)).toBeNull();
+    expect(check([])).toBeNull();
   });
 
   it("refuses a thread that started a turn", () => {
-    expect(claudeImportTarget([threadIn({ busy: true })], target)).toBeNull();
+    expect(check([threadIn({ busy: true })])).toBeNull();
   });
 
   it("refuses a thread that moved to another harness", () => {
-    expect(claudeImportTarget([threadIn({ harness: "codex" })], target)).toBe(
-      null,
-    );
+    expect(check([threadIn({ harness: "codex" })])).toBeNull();
   });
 
   it("refuses a thread that moved to another account", () => {
-    expect(
-      claudeImportTarget([threadIn({ providerAccountId: "work" })], target),
-    ).toBeNull();
+    expect(check([threadIn({ providerAccountId: "work" })])).toBeNull();
     // And the other way: picked under an account, since cleared.
-    expect(
-      claudeImportTarget([threadIn()], {
-        ...target,
-        providerAccountId: "work",
-      }),
-    ).toBeNull();
+    expect(check([threadIn()], { providerAccountId: "work" })).toBeNull();
   });
 
   it("refuses a thread that moved to another working copy", () => {
     // The conversations were listed for /repo. Claude drops a resume binding
     // whose directory is not the one the next turn runs in, so binding one of
     // them here would start a new conversation instead of continuing it.
-    expect(
-      claudeImportTarget([threadIn({ worktreeCwd: "/repo/.tree/a" })], target),
-    ).toBeNull();
+    expect(check([threadIn({ worktreeCwd: "/repo/.tree/a" })])).toBeNull();
   });
 
   it("accepts the worktree the conversations were listed for", () => {
     const thread = threadIn({ worktreeCwd: "/repo/.tree/a" });
-    expect(
-      claudeImportTarget([thread], { ...target, cwd: "/repo/.tree/a" }),
-    ).toBe(thread);
+    expect(check([thread], { cwd: "/repo/.tree/a" })).toBe(thread);
+  });
+
+  it("refuses a thread whose turn both started and finished during the read", () => {
+    // The thread was idle when the conversation was picked and is idle again
+    // now, so `busy` reads the same at both ends and sees nothing. The turn in
+    // between left an answer that replacing the transcript would throw away.
+    const settled = threadIn({
+      busy: false,
+      blocks: [
+        { id: "b1", role: "user", text: "arada sordum" },
+        { id: "b2", role: "assistant", text: "arada cevapladim" },
+      ],
+    });
+    expect(check([settled], {}, target.turnGen + 1)).toBeNull();
+  });
+
+  it("refuses a thread whose turn was cancelled during the read", () => {
+    // Cancelling advances the generation too, and leaves the partial reply.
+    expect(check([threadIn()], {}, target.turnGen + 1)).toBeNull();
+  });
+
+  it("accepts a thread no turn has run on since the pick", () => {
+    const thread = threadIn();
+    expect(check([thread], {}, target.turnGen)).toBe(thread);
   });
 });
