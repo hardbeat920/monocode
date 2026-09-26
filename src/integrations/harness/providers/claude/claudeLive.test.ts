@@ -466,6 +466,36 @@ describe("claude poisoned resume", () => {
   });
 });
 
+describe("claude failed startup", () => {
+  it("fails the turn instead of handing back a session that never initialized", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "explore the codebase",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+
+    await waitFor(() => spawned.length === 1, "spawn");
+    // A startup failure with nothing recognisable on stderr: bad auth, a
+    // crash, a flag the CLI rejects. The child simply never initializes.
+    onStderr!("something the CLI has never said before");
+    onExit!(1);
+
+    await expect(turn).rejects.toThrow();
+    // Returning a live handle here is what produced "Harness process is not
+    // running" on the next write, so the session must never look started.
+    expect(events.some((event) => event.type === "session.started")).toBe(
+      false,
+    );
+    expect(spawned).toHaveLength(1);
+  });
+});
+
 describe("claude subagents", () => {
   it.each(["allow", "deny"] as const)(
     "routes a child permission decision: %s",

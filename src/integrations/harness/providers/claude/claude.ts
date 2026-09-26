@@ -513,19 +513,12 @@ async function ensureLive(
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
-    // waitForInit resolves even when the child died, so a rejected `--resume`
-    // would otherwise return a live handle over a dead process and surface as
-    // "Harness process is not running" on the very next write.
-    if (
-      resumeMissing.current &&
-      !live.initialized &&
-      canResume &&
-      !retriedWithoutResume
-    ) {
-      await stopClaudeSession(input.sessionId);
-      resumeByThread.delete(input.sessionId);
-      return ensureLive(input, true);
-    }
+    // waitForInit resolves on a dead child and on timeout alike, so an
+    // uninitialized Live here means startup failed however it failed —
+    // rejected `--resume`, failed auth, a crash, or never answering at all.
+    // Returning it would hand back a handle over a process that cannot reply,
+    // which surfaces as "Harness process is not running" on the next write.
+    if (!live.initialized) throw new Error("Claude Code did not start");
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
