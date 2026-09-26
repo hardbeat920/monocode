@@ -167,6 +167,7 @@ import {
   type SessionFolder,
 } from "../model/sessionFolders";
 import { SessionFolderPicker } from "./SessionFolderPicker";
+import { MCP_COMMAND, isMcpCommand } from "../model/mcpCommand";
 import type { LastTurnRecall } from "../model/editLastTurn";
 
 type Props = {
@@ -642,6 +643,7 @@ export function Composer({
   const slashItems = useMemo(
     () => [
       SESSION_FOLDER_COMMAND,
+      MCP_COMMAND,
       OPERATOR_COMMAND,
       PLAN_COMMAND,
       COMPACT_COMMAND,
@@ -653,6 +655,7 @@ export function Composer({
             (skill.name !== PLAN_COMMAND.name &&
               skill.name !== COMPACT_COMMAND.name &&
               skill.name !== SESSION_FOLDER_COMMAND.name &&
+              skill.name !== MCP_COMMAND.name &&
               skill.name !== BTW_COMMAND.name)),
       ),
     ],
@@ -1363,6 +1366,19 @@ export function Composer({
       return;
     }
 
+    if (isMcpCommand(value)) {
+      if (ref.current) {
+        ref.current.value = "";
+        ref.current.style.height = "auto";
+      }
+      setDraft("");
+      onDraftChange?.("");
+      setSlash(null);
+      syncHasValue("", attachments);
+      window.dispatchEvent(new Event("monocode:open-mcp-settings"));
+      return;
+    }
+
     const command = consumePlanCommand(
       folderCommand.matched && sessionFolderSelected
         ? folderCommand.text
@@ -1506,6 +1522,7 @@ export function Composer({
       e.key === "Enter" &&
       !e.shiftKey &&
       (isCompactCommand(e.currentTarget.value) ||
+        isMcpCommand(e.currentTarget.value) ||
         isSessionFolderCommand(e.currentTarget.value))
     ) {
       e.preventDefault();

@@ -9424,6 +9424,12 @@ export default function App({
 
   const onOpenSettings = useCallback(() => openSettings(), [openSettings]);
 
+  useEffect(() => {
+    const onOpenMcp = () => openSettings("mcp");
+    window.addEventListener("monocode:open-mcp-settings", onOpenMcp);
+    return () => window.removeEventListener("monocode:open-mcp-settings", onOpenMcp);
+  }, [openSettings]);
+
   const onOpenNotificationSettings = useCallback(
     (path?: string) => {
       openSettings("inbox", "project-notifications");

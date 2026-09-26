@@ -361,6 +361,134 @@ pub fn harness_resolve_claude() -> Result<CursorBinary, String> {
         })
 }
 
+fn claude_mcp_command(args: Vec<String>, cwd: String, timeout: Duration) -> Result<String, String> {
+    let binary = resolve_claude().ok_or("Claude Code CLI not found")?;
+    let workdir = expand_home(&cwd);
+    if !workdir.is_dir() {
+        return Err("Project directory does not exist".into());
+    }
+    let mut command = Command::new(&binary);
+    command
+        .args(&args)
+        .current_dir(workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    prepare_child(&mut command, &binary.to_string_lossy());
+    let child = spawn_managed(&mut command).map_err(|e| e.to_string())?;
+    let pid = child.id();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    let output = match receiver.recv_timeout(timeout) {
+        Ok(result) => result.map_err(|e| e.to_string())?,
+        Err(_) => {
+            terminate(pid);
+            return Err("Claude MCP command timed out".into());
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() {
+        return Ok(stdout);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("{} {}", stderr.trim(), stdout).trim().to_string())
+}
+
+#[tauri::command]
+pub async fn claude_mcp_list(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec!["mcp".into(), "list".into()],
+            cwd,
+            Duration::from_secs(30),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn claude_mcp_add(
+    cwd: String,
+    name: String,
+    config: String,
+    scope: String,
+) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Server name must use letters, numbers, hyphens, or underscores".into());
+    }
+    if !matches!(scope.as_str(), "local" | "project" | "user") {
+        return Err("Invalid MCP scope".into());
+    }
+    let value: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+    if !value.is_object() {
+        return Err("Server configuration must be a JSON object".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec![
+                "mcp".into(),
+                "add-json".into(),
+                name,
+                config,
+                "--scope".into(),
+                scope,
+            ],
+            cwd,
+            Duration::from_secs(30),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn claude_mcp_remove(cwd: String, name: String, scope: String) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Invalid MCP server name".into());
+    }
+    if !matches!(scope.as_str(), "local" | "project" | "user") {
+        return Err("Invalid MCP scope".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec!["mcp".into(), "remove".into(), name, "--scope".into(), scope],
+            cwd,
+            Duration::from_secs(30),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn claude_mcp_login(cwd: String, name: String) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Invalid MCP server name".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec!["mcp".into(), "login".into(), name],
+            cwd,
+            Duration::from_secs(180),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+fn valid_mcp_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Resolve the Pi coding agent CLI (`pi`).
 #[tauri::command(async)]
 pub fn harness_resolve_pi() -> Result<CursorBinary, String> {

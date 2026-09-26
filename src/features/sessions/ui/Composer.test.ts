@@ -145,6 +145,38 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe("");
   });
 
+  it("opens MCP settings without sending a turn", async () => {
+    const onSubmit = vi.fn();
+    const onOpen = vi.fn();
+    window.addEventListener("monocode:open-mcp-settings", onOpen);
+    try {
+      await renderComposer(
+        undefined,
+        vi.fn(),
+        false,
+        0,
+        "/mcp",
+        undefined,
+        onSubmit,
+      );
+      const textarea = container.querySelector("textarea")!;
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(onOpen).toHaveBeenCalledOnce();
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(textarea.value).toBe("");
+    } finally {
+      window.removeEventListener("monocode:open-mcp-settings", onOpen);
+    }
+  });
+
   it("keeps the draft when onBtwCommand rejects the command", async () => {
     const onBtwCommand = vi.fn(() => false);
     const onSubmit = vi.fn();
