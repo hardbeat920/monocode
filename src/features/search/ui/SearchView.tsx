@@ -38,9 +38,17 @@ import {
 import { prettyCwd, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
-import { searchProject, type OpenFileFn } from "../model/search";
+import {
+  cancelProjectSearch,
+  searchProject,
+  type OpenFileFn,
+} from "../model/search";
 import { type Session } from "../../sessions/model/session";
-import { searchSessions, type SessionSummary } from "../../sessions/data/sessionStore";
+import {
+  cancelSessionSearch,
+  searchSessions,
+  type SessionSummary,
+} from "../../sessions/data/sessionStore";
 
 const SCOPES: { id: SearchScope; label: string }[] = [
   { id: "all", label: "All" },
@@ -81,6 +89,8 @@ export function SearchView({
   onOpenProject,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeProjectSearchId = useRef<string | null>(null);
+  const activeSessionOwner = useRef<string | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -90,10 +100,13 @@ export function SearchView({
   const [files, setFiles] = useState(() => peekProjectFiles(cwd) ?? []);
   const [contentHits, setContentHits] = useState<AppSearchHit[]>([]);
   const [remoteHits, setRemoteHits] = useState<AppSearchHit[]>([]);
+  const [contentTruncated, setContentTruncated] = useState(false);
+  const [sessionTruncated, setSessionTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const trimmed = query.trim();
+  const truncated = contentTruncated || sessionTruncated;
 
   useEffect(() => {
     if (!open) return;
@@ -102,6 +115,8 @@ export function SearchView({
     setActive(0);
     setContentHits([]);
     setRemoteHits([]);
+    setContentTruncated(false);
+    setSessionTruncated(false);
     setError(null);
   }, [open]);
 
@@ -185,6 +200,8 @@ export function SearchView({
     if (!open || !trimmed) {
       setRemoteHits([]);
       setContentHits([]);
+      setSessionTruncated(false);
+      setContentTruncated(false);
       setLoading(false);
       setError(null);
       return;
@@ -197,39 +214,63 @@ export function SearchView({
       const wantFiles = scope === "all" || scope === "files";
 
       if (wantSessions) {
+        const searchOwner = crypto.randomUUID();
+        activeSessionOwner.current = searchOwner;
         setLoading(true);
         jobs.push(
-          searchSessions({ query: trimmed })
+          searchSessions({ query: trimmed, searchOwner })
             .then((result) => {
-              if (!cancelled) setRemoteHits(hitsFromSessionSearch(result.hits));
+              if (cancelled) return;
+              setRemoteHits(hitsFromSessionSearch(result.hits));
+              setSessionTruncated(result.truncated);
             })
             .catch(() => {
-              if (!cancelled) setRemoteHits([]);
+              if (cancelled) return;
+              setRemoteHits([]);
+              setSessionTruncated(false);
+            })
+            .finally(() => {
+              if (activeSessionOwner.current === searchOwner) {
+                activeSessionOwner.current = null;
+              }
             }),
         );
       } else {
         setRemoteHits([]);
+        setSessionTruncated(false);
       }
 
       if (wantFiles && looksLikeProject(cwd)) {
+        const searchId = crypto.randomUUID();
+        activeProjectSearchId.current = searchId;
         setLoading(true);
         jobs.push(
-          searchProject({ cwd, query: trimmed })
+          searchProject({
+            cwd,
+            query: trimmed,
+            searchId,
+          })
             .then((result) => {
-              if (!cancelled) {
-                setContentHits(hitsFromContentMatches(result.matches));
-                setError(null);
-              }
+              if (cancelled) return;
+              setContentHits(hitsFromContentMatches(result.matches));
+              setContentTruncated(result.truncated);
+              setError(null);
             })
             .catch((err: unknown) => {
-              if (!cancelled) {
-                setContentHits([]);
-                setError(err instanceof Error ? err.message : String(err));
+              if (cancelled) return;
+              setContentHits([]);
+              setContentTruncated(false);
+              setError(err instanceof Error ? err.message : String(err));
+            })
+            .finally(() => {
+              if (activeProjectSearchId.current === searchId) {
+                activeProjectSearchId.current = null;
               }
             }),
         );
       } else {
         setContentHits([]);
+        setContentTruncated(false);
       }
 
       void Promise.all(jobs).then(() => {
@@ -240,6 +281,16 @@ export function SearchView({
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      const searchOwner = activeSessionOwner.current;
+      activeSessionOwner.current = null;
+      if (searchOwner) {
+        void cancelSessionSearch(searchOwner).catch(() => undefined);
+      }
+      const searchId = activeProjectSearchId.current;
+      activeProjectSearchId.current = null;
+      if (searchId && looksLikeProject(cwd)) {
+        void cancelProjectSearch(cwd, searchId).catch(() => undefined);
+      }
     };
   }, [cwd, open, scope, trimmed]);
 
@@ -320,6 +371,11 @@ export function SearchView({
 
   const empty = !trimmed;
   const noResults = !empty && hits.length === 0 && !loading;
+  const limitNotice = truncated ? (
+    <p className="px-2.5 py-1 text-[11px] text-content/45">
+      Results limited to the first matches
+    </p>
+  ) : null;
 
   return (
     <div
@@ -397,15 +453,21 @@ export function SearchView({
         ) : error && hits.length === 0 ? (
           <p className="px-2 py-1.5 text-[12px] text-red-400">{error}</p>
         ) : noResults ? (
-          <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+          <>
+            <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+            {limitNotice}
+          </>
         ) : (
-          <ResultList
-            hits={hits}
-            active={active}
-            query={trimmed}
-            onActive={setActive}
-            onOpen={openHit}
-          />
+          <>
+            {limitNotice}
+            <ResultList
+              hits={hits}
+              active={active}
+              query={trimmed}
+              onActive={setActive}
+              onOpen={openHit}
+            />
+          </>
         )}
       </div>
     </div>
