@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { SettingsView } from "./SettingsView";
+import { saveKeybindingOverride } from "../model/settings";
 
 vi.mock("../../../platform/tauri/platform", () => ({
   IS_MAC: true,
@@ -196,6 +197,35 @@ it("refuses a chord another command already owns", async () => {
   );
   expect(container.textContent).toContain("Already used by App: Search");
   expect(data.has("monocode.quickComposerShortcut")).toBe(false);
+});
+
+it("reserves its live custom chord so no other command can claim it", async () => {
+  await render();
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Change quick composer shortcut"]',
+  )!;
+  await act(async () => input.click());
+  await act(async () =>
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "KeyQ",
+        key: "q",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  expect(data.get("monocode.quickComposerShortcut")).toBe("Command+Shift+KeyQ");
+
+  // The chord is stored outside the override table, so this is the path the
+  // reviewer flagged: it must still be treated as taken.
+  expect(() =>
+    saveKeybindingOverride("App: Search", {
+      shortcut: "Command+Shift+KeyQ",
+    }),
+  ).toThrow("Already used by App: Quick Composer");
 });
 
 it("re-enables and re-registers the default when a disabled row is reset", async () => {
