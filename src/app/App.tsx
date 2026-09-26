@@ -184,6 +184,7 @@ import {
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
+  remoteControlTargetForRunningHandover,
   seatRemoteUserMessage,
   turnSignal,
   withClaim,
@@ -1996,7 +1997,15 @@ export default function App({
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
-      if (!session) return null;
+      // A thread the workspace has not loaded still gets an entry when this
+      // window is running a hand-over for it — otherwise closing its tab left the
+      // CLI running with nothing anywhere able to stop it. Opening is what needs
+      // the session; closing does not.
+      if (!session) {
+        return remoteControlIds.includes(sessionId)
+          ? remoteControlAction(remoteControlTargetForRunningHandover())
+          : null;
+      }
       return remoteControlAction(
         remoteControlTarget(session, remoteControlIds.includes(session.id), {
           automatic: remoteControlMode === "all",

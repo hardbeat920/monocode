@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { remoteControlAction } from "../features/remoteControl/model/action";
 import {
   autoOpenTargets,
   composerHeld,
@@ -20,6 +21,7 @@ import {
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
+  remoteControlTargetForRunningHandover,
   remoteSendGate,
   seatRemoteUserMessage,
   handoverTiming,
@@ -169,6 +171,22 @@ describe("the cue for a turn the handover stopped", () => {
     const idle = session({ busy: false });
 
     expect(noteInterruptedTurn(idle)).toBe(idle);
+  });
+});
+
+describe("a hand-over against a thread the workspace has not loaded", () => {
+  it("still offers to close it", () => {
+    // The state this exists for: tab closed, so the thread is a history summary
+    // with no harness and no bound id, while the CLI is still running and still
+    // listed on the phone. An absent entry left nothing able to stop it.
+    const action = remoteControlAction(remoteControlTargetForRunningHandover());
+
+    expect(action).toMatchObject({
+      id: "remote-control",
+      intent: "close",
+      disabled: false,
+    });
+    expect(action?.label).toMatch(/Close/);
   });
 });
 

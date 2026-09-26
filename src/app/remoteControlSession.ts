@@ -59,6 +59,25 @@ export function remoteControlTarget(
 }
 
 /**
+ * The target for a hand-over this window is running against a thread it has not
+ * loaded.
+ *
+ * The workspace-backed rule needs a `Session`, and a thread whose tab has been
+ * closed is only a history summary carrying neither harness nor
+ * `providerSessionId` — so it returned nothing, and the entry vanished from the
+ * menu while the CLI went on running and stayed listed on the phone. Unreachable
+ * and alive is the worst of the states: the user cannot even see what to stop.
+ *
+ * Closing needs none of what the summary lacks. `active` is what a close turns
+ * on, the id only matters for opening, and a live hand-over is only ever Claude —
+ * nothing else can produce one. So this is the whole target, and it exists to say
+ * "you can still close this".
+ */
+export function remoteControlTargetForRunningHandover(): RemoteControlTarget {
+  return { harness: "claude", active: true };
+}
+
+/**
  * What to actually do about a click, given the state now.
  *
  * The menu decided the intent from what it could see when it opened. If that
