@@ -1300,6 +1300,18 @@ export function Composer({
 
   const submit = (value: string) => {
     if (disabled || worktreeRemoved) return;
+    if (isMcpCommand(value)) {
+      if (ref.current) {
+        ref.current.value = "";
+        ref.current.style.height = "auto";
+      }
+      setDraft("");
+      onDraftChange?.("");
+      setSlash(null);
+      syncHasValue("", attachments);
+      window.dispatchEvent(new Event("monocode:open-mcp-settings"));
+      return;
+    }
     if (draftSelected && onSaveDraft) {
       const files = attachments;
       if (!value.trim() && files.length === 0) return;
@@ -1363,19 +1375,6 @@ export function Composer({
       setCreatingSkill(false);
       setCreateError(null);
       syncHasValue("", attachments);
-      return;
-    }
-
-    if (isMcpCommand(value)) {
-      if (ref.current) {
-        ref.current.value = "";
-        ref.current.style.height = "auto";
-      }
-      setDraft("");
-      onDraftChange?.("");
-      setSlash(null);
-      syncHasValue("", attachments);
-      window.dispatchEvent(new Event("monocode:open-mcp-settings"));
       return;
     }
 

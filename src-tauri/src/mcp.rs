@@ -122,10 +122,36 @@ fn write_json_server(path: &Path, name: &str, server: Value) -> Result<(), Strin
     }
     servers.insert(name.to_owned(), server);
     let encoded = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let parent = path.parent().ok_or("Invalid config path")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("mcp"),
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            file.set_permissions(metadata.permissions())?;
+        }
+        file.write_all(&encoded)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
     }
-    std::fs::write(path, encoded).map_err(|e| e.to_string())
+    result.map_err(|e| e.to_string())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -144,13 +170,27 @@ pub async fn mcp_discover(cwd: String) -> Result<Vec<McpConnection>, String> {
         let home = dirs_home().ok_or("Home directory not found")?;
         let project = expand_home(&cwd);
         let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
-        Ok(discover(Path::new(&home), &project, codex_home.as_deref()))
+        let desktop_config = claude_desktop_config(Path::new(&home));
+        let opencode_config = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
+        Ok(discover(
+            Path::new(&home),
+            &project,
+            codex_home.as_deref(),
+            &desktop_config,
+            opencode_config.as_deref(),
+        ))
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn discover(home: &Path, project: &Path, codex_home_override: Option<&Path>) -> Vec<McpConnection> {
+fn discover(
+    home: &Path,
+    project: &Path,
+    codex_home_override: Option<&Path>,
+    desktop_config: &Path,
+    opencode_config: Option<&Path>,
+) -> Vec<McpConnection> {
     let mut connections = Vec::new();
     let claude = home.join(".claude.json");
     if let Some(config) = read_json(&claude) {
@@ -178,7 +218,7 @@ fn discover(home: &Path, project: &Path, codex_home_override: Option<&Path>) -> 
         &mut connections,
         "claude_desktop",
         "user",
-        &claude_desktop_config(home),
+        desktop_config,
         "mcpServers",
     );
 
@@ -201,19 +241,16 @@ fn discover(home: &Path, project: &Path, codex_home_override: Option<&Path>) -> 
             "mcp",
         );
     }
-    if let Some(custom) = std::env::var_os("OPENCODE_CONFIG") {
-        add_json_file(
-            &mut connections,
-            "opencode",
-            "user",
-            &PathBuf::from(custom),
-            "mcp",
-        );
+    if let Some(custom) = opencode_config {
+        add_json_file(&mut connections, "opencode", "user", custom, "mcp");
     }
 
     // Project configuration is inherited from parent directories. Stop at the
     // repository boundary so an unrelated parent project is not shown.
     for directory in project.ancestors() {
+        if directory == home {
+            break;
+        }
         add_json_file(
             &mut connections,
             "claude",
@@ -283,7 +320,17 @@ fn add_json_servers(
     servers: Option<&Value>,
 ) {
     // OpenCode 2.x nests the map under mcp.servers; older versions use mcp.
-    let servers = servers.and_then(|value| value.get("servers").or(Some(value)));
+    // A server can itself be named "servers", so inspect the nested shape.
+    let servers = servers.map(|value| {
+        if provider == "opencode" {
+            if let Some(nested) = value.get("servers").and_then(Value::as_object) {
+                if nested.values().all(Value::is_object) {
+                    return &value["servers"];
+                }
+            }
+        }
+        value
+    });
     let Some(servers) = servers.and_then(Value::as_object) else {
         return;
     };
@@ -481,9 +528,9 @@ mod tests {
             r#"{"mcpServers":{"two":{"command":"npx"}}}"#,
         )
         .unwrap();
-        let desktop = claude_desktop_config(&home);
+        let desktop = root.join("claude_desktop_config.json");
         std::fs::create_dir_all(desktop.parent().unwrap()).unwrap();
-        std::fs::write(desktop, r#"{"mcpServers":{"desktop":{"command":"npx"}}}"#).unwrap();
+        std::fs::write(&desktop, r#"{"mcpServers":{"desktop":{"command":"npx"}}}"#).unwrap();
         std::fs::write(
             home.join(".codex/config.toml"),
             "[mcp_servers.three]\nurl = 'https://example.com'\n",
@@ -493,7 +540,7 @@ mod tests {
         let codex_config: toml::Value = toml::from_str(&codex_raw).unwrap();
         assert!(codex_config.get("mcp_servers").is_some());
         std::fs::write(home.join(".config/opencode/opencode.jsonc"), "{\"mcp\": {\"servers\": {\"four\": {\"type\": \"remote\", \"url\": \"https://example.com\",},},}}").unwrap();
-        let found = discover(&home, &project, None);
+        let found = discover(&home, &project, None, &desktop, None);
         let names: Vec<_> = found
             .iter()
             .map(|entry| (entry.provider.as_str(), entry.name.as_str()))
@@ -509,6 +556,24 @@ mod tests {
             ]
         );
         assert!(!serde_json::to_string(&found).unwrap().contains("secret"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn does_not_duplicate_home_configs_or_hide_a_server_named_servers() {
+        let root = std::env::temp_dir().join(format!("monocode-mcp-{}", uuid::Uuid::new_v4()));
+        let project = root.join("work/notes");
+        std::fs::create_dir_all(root.join(".cursor")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            root.join(".cursor/mcp.json"),
+            r#"{"mcpServers":{"servers":{"command":"npx"},"docs":{"command":"node"}}}"#,
+        )
+        .unwrap();
+        let found = discover(&root, &project, None, &root.join("desktop.json"), None);
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|server| server.scope == "user"));
+        assert!(found.iter().any(|server| server.name == "servers"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

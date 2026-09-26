@@ -102,7 +102,7 @@ it("adds a standard mcpServers entry to the selected provider", async () => {
   );
   expect(document.body.textContent).toContain("Add MCP server");
   const provider = document.body.querySelector<HTMLButtonElement>(
-    '[aria-label="Provider"]',
+    '[aria-label="Provider: Claude Code"]',
   )!;
   await act(async () => provider.click());
   const cursor = [
@@ -131,4 +131,69 @@ it("adds a standard mcpServers entry to the selected provider", async () => {
     config: json,
     scope: "project",
   });
+});
+
+it("shows only configured provider chips until the filter button reveals all", async () => {
+  await act(async () =>
+    root.render(createElement(McpSettings, { cwd: "/repo" })),
+  );
+  const chips = container.querySelector(
+    '[aria-label="Filter MCP servers by provider"]',
+  )!;
+  expect(chips.textContent).toContain("Codex");
+  expect(chips.textContent).not.toContain("Cursor");
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Show all providers"]')!
+      .click(),
+  );
+  expect(chips.textContent).toContain("Cursor");
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Show available providers"]',
+      )!
+      .click(),
+  );
+  expect(chips.textContent).not.toContain("Cursor");
+});
+
+it("ignores discovery from a previous project after cwd changes", async () => {
+  let resolveOld!: (connections: unknown[]) => void;
+  invoke.mockImplementation((command: string, args: { cwd: string }) => {
+    if (command === "claude_mcp_list") return Promise.resolve("");
+    if (args.cwd === "/old")
+      return new Promise((resolve) => {
+        resolveOld = resolve;
+      });
+    return Promise.resolve([
+      {
+        provider: "cursor",
+        name: "new-project",
+        scope: "project",
+        configPath: "/new/.cursor/mcp.json",
+        transport: "stdio",
+      },
+    ]);
+  });
+  await act(async () =>
+    root.render(createElement(McpSettings, { cwd: "/old" })),
+  );
+  await act(async () =>
+    root.render(createElement(McpSettings, { cwd: "/new" })),
+  );
+  expect(container.textContent).toContain("new-project");
+  await act(async () =>
+    resolveOld([
+      {
+        provider: "cursor",
+        name: "old-project",
+        scope: "project",
+        configPath: "/old/.cursor/mcp.json",
+        transport: "stdio",
+      },
+    ]),
+  );
+  expect(container.textContent).toContain("new-project");
+  expect(container.textContent).not.toContain("old-project");
 });

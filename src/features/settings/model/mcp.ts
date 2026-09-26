@@ -22,7 +22,8 @@ export function parseClaudeMcpList(output: string): McpServer[] {
     const match = line.match(/^([A-Za-z0-9_-]+):\s+(.+)$/);
     if (!match) return [];
     const detail = match[2];
-    const status = detail.match(/(?: - | — )(.+)$/)?.[1] ?? detail;
+    const parts = detail.split(/ - | — /);
+    const status = parts[parts.length - 1];
     return [{ name: match[1], status }];
   });
 }

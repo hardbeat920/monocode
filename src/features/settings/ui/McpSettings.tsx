@@ -4,13 +4,24 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import { revealPath } from "../../../platform/tauri/fs";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { Modal } from "../../../shared/ui/Modal";
-import { Globe, Plus, RefreshCw, ChevronDown } from "../../../shared/ui/icons";
+import { Popover } from "../../../shared/ui/Popover";
+import { LAYER } from "../../../shared/lib/layers";
+import {
+  Globe,
+  Plus,
+  RefreshCw,
+  ChevronDown,
+  ListFilter,
+  Check,
+} from "../../../shared/ui/icons";
 import {
   MCP_PROVIDER_LABELS,
   parseClaudeMcpList,
@@ -45,6 +56,83 @@ function ProviderIcon({ provider }: { provider: Provider }) {
   );
 }
 
+function McpPicker<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string; icon?: ReactNode }[];
+  onChange: (value: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const selected = options.find((option) => option.value === value);
+  return (
+    <div ref={anchor} className="relative min-w-0">
+      <span className="text-xs text-content/65">{label}</span>
+      <button
+        ref={trigger}
+        type="button"
+        aria-label={`${label}: ${selected?.label ?? value}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="mt-1 flex h-8 w-full items-center gap-2 rounded-md border border-content/10 bg-content/5 px-2 text-left text-[12px] text-content outline-none hover:border-content/20"
+      >
+        {selected?.icon}
+        <span className="min-w-0 flex-1 truncate">
+          {selected?.label ?? value}
+        </span>
+        <ChevronDown
+          className={`size-3.5 shrink-0 text-content/50 transition-transform ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.75}
+        />
+      </button>
+      {open ? (
+        <Popover
+          anchor={anchor}
+          side="bottom"
+          align="start"
+          width={240}
+          maxHeight={320}
+          layer={LAYER.dialogPopover}
+          autoFocus
+          onDismiss={() => setOpen(false)}
+          role="listbox"
+          aria-label={label}
+          data-dialog-popover
+          className="overflow-y-auto overscroll-contain p-1"
+        >
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={value === option.value}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+                trigger.current?.focus();
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] ${value === option.value ? "bg-selection text-content" : "text-content hover:bg-content/5"}`}
+            >
+              {option.icon}
+              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              {value === option.value ? (
+                <Check className="size-3.5 shrink-0" />
+              ) : null}
+            </button>
+          ))}
+        </Popover>
+      ) : null}
+    </div>
+  );
+}
+
 function AddServerModal({
   cwd,
   initialProvider,
@@ -58,7 +146,6 @@ function AddServerModal({
 }) {
   const [provider, setProvider] = useState<Provider>(initialProvider);
   const [scope, setScope] = useState<Scope>(SCOPES[initialProvider][0]);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [name, setName] = useState("");
   const [config, setConfig] = useState("");
   const [busy, setBusy] = useState(false);
@@ -98,59 +185,28 @@ function AddServerModal({
     >
       <form onSubmit={(event) => void add(event)} className="space-y-4 p-4">
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="relative text-xs text-content/65">
-            <span>Provider</span>
-            <button
-              type="button"
-              aria-label="Provider"
-              aria-expanded={pickerOpen}
-              onClick={() => setPickerOpen(!pickerOpen)}
-              className="mt-1 flex w-full items-center gap-2 rounded-md border border-stroke bg-background-base px-2 py-1.5 text-left text-sm text-content"
-            >
-              <ProviderIcon provider={provider} />
-              <span className="flex-1">{MCP_PROVIDER_LABELS[provider]}</span>
-              <ChevronDown className="size-3.5" />
-            </button>
-            {pickerOpen ? (
-              <div
-                role="listbox"
-                aria-label="Choose provider"
-                className="absolute z-10 mt-1 w-full rounded-md border border-stroke bg-background-base p-1 shadow-lg"
-              >
-                {PROVIDERS.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    role="option"
-                    aria-selected={provider === option}
-                    onClick={() => {
-                      setProvider(option);
-                      setScope(SCOPES[option][0]);
-                      setPickerOpen(false);
-                    }}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-content hover:bg-content/5"
-                  >
-                    <ProviderIcon provider={option} />
-                    {MCP_PROVIDER_LABELS[option]}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <label className="text-xs text-content/65">
-            Scope
-            <select
-              value={scope}
-              onChange={(event) => setScope(event.target.value as Scope)}
-              className="mt-1 block w-full rounded-md border border-stroke bg-background-base px-2 py-1.5 text-sm text-content"
-            >
-              {SCOPES[provider].map((option) => (
-                <option key={option} value={option}>
-                  {option[0].toUpperCase() + option.slice(1)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <McpPicker
+            label="Provider"
+            value={provider}
+            options={PROVIDERS.map((option) => ({
+              value: option,
+              label: MCP_PROVIDER_LABELS[option],
+              icon: <ProviderIcon provider={option} />,
+            }))}
+            onChange={(next) => {
+              setProvider(next);
+              setScope(SCOPES[next][0]);
+            }}
+          />
+          <McpPicker
+            label="Scope"
+            value={scope}
+            options={SCOPES[provider].map((option) => ({
+              value: option,
+              label: option[0].toUpperCase() + option.slice(1),
+            }))}
+            onChange={setScope}
+          />
         </div>
         <label className="block text-xs text-content/65">
           Name{" "}
@@ -215,14 +271,17 @@ function AddServerModal({
 export function McpSettings({ cwd }: { cwd: string }) {
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
+  const [showAllProviders, setShowAllProviders] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [claudeError, setClaudeError] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [removeScopes, setRemoveScopes] = useState<Record<string, Scope>>({});
+  const refreshGeneration = useRef(0);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     setLoading(true);
     try {
       const configured = await invoke<McpConnection[]>("mcp_discover", { cwd });
@@ -235,9 +294,10 @@ export function McpSettings({ cwd }: { cwd: string }) {
             server.status,
           ]),
         );
-        setClaudeError("");
+        if (generation === refreshGeneration.current) setClaudeError("");
       } catch (cause) {
-        setClaudeError(String(cause));
+        if (generation === refreshGeneration.current)
+          setClaudeError(String(cause));
       }
       const rows: ServerRow[] = configured.map((server) => ({
         ...server,
@@ -263,18 +323,25 @@ export function McpSettings({ cwd }: { cwd: string }) {
           status,
         });
       }
-      setServers(rows);
-      setError("");
+      if (generation === refreshGeneration.current) {
+        setServers(rows);
+        setError("");
+      }
     } catch (cause) {
-      setServers([]);
-      setError(String(cause));
+      if (generation === refreshGeneration.current) {
+        setServers([]);
+        setError(String(cause));
+      }
     } finally {
-      setLoading(false);
+      if (generation === refreshGeneration.current) setLoading(false);
     }
   }, [cwd]);
 
   useEffect(() => {
     void refresh();
+    return () => {
+      refreshGeneration.current += 1;
+    };
   }, [refresh]);
 
   const visible = useMemo(
@@ -284,6 +351,15 @@ export function McpSettings({ cwd }: { cwd: string }) {
         : servers.filter((server) => server.provider === filter),
     [filter, servers],
   );
+  const filterProviders = showAllProviders
+    ? PROVIDERS
+    : PROVIDERS.filter((provider) =>
+        servers.some((server) => server.provider === provider),
+      );
+
+  useEffect(() => {
+    if (filter !== "all" && !filterProviders.includes(filter)) setFilter("all");
+  }, [filter, filterProviders]);
 
   async function login(server: ServerRow) {
     setBusy(server.name);
@@ -353,6 +429,24 @@ export function McpSettings({ cwd }: { cwd: string }) {
           </button>
           <button
             type="button"
+            aria-label={
+              showAllProviders
+                ? "Show available providers"
+                : "Show all providers"
+            }
+            aria-pressed={showAllProviders}
+            title={
+              showAllProviders
+                ? "Showing all providers"
+                : "Showing available providers"
+            }
+            onClick={() => setShowAllProviders(!showAllProviders)}
+            className={`grid size-7 place-items-center rounded-md border border-content/10 hover:bg-content/5 ${showAllProviders ? "bg-selection text-content" : "text-content/55"}`}
+          >
+            <ListFilter className="size-3.5" />
+          </button>
+          <button
+            type="button"
             aria-label="Add MCP server"
             onClick={() => setAddOpen(true)}
             className="grid size-7 place-items-center rounded-md border border-stroke hover:bg-content/5"
@@ -362,16 +456,18 @@ export function McpSettings({ cwd }: { cwd: string }) {
         </div>
       </div>
       <div
-        className="flex flex-wrap gap-1"
+        role="radiogroup"
+        className="inline-flex max-w-full flex-wrap gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
         aria-label="Filter MCP servers by provider"
       >
-        {(["all", ...PROVIDERS] as const).map((provider) => (
+        {(["all", ...filterProviders] as const).map((provider) => (
           <button
             key={provider}
             type="button"
-            aria-pressed={filter === provider}
+            role="radio"
+            aria-checked={filter === provider}
             onClick={() => setFilter(provider)}
-            className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs ${filter === provider ? "bg-selection text-content" : "text-content/55 hover:bg-content/5 hover:text-content"}`}
+            className={`inline-flex min-w-0 items-center gap-1.5 rounded-[5px] px-2.5 py-1 ${filter === provider ? "bg-selection text-content" : "text-content/50 hover:text-content"}`}
           >
             {provider === "all" ? (
               <Globe className="size-3.5" />
@@ -408,21 +504,26 @@ export function McpSettings({ cwd }: { cwd: string }) {
           No MCP servers configured for this provider.
         </p>
       ) : (
-        <div className="divide-y divide-stroke rounded-lg border border-stroke">
+        <div className="overflow-hidden rounded-xl border border-content/10 bg-content/3">
           {visible.map((server) => (
             <div
               key={`${server.provider}:${server.scope}:${server.configPath}:${server.name}`}
-              className="flex flex-wrap items-center gap-3 p-3"
+              className="flex flex-wrap items-center gap-3 border-b border-content/5 px-4 py-3.5 last:border-b-0"
             >
+              <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.05] ring-1 ring-inset ring-content/[0.06]">
+                <ProviderIcon provider={server.provider} />
+              </span>
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium">{server.name}</div>
-                <div className="text-xs text-content/55">
+                <div className="text-[13px] font-medium text-content">
+                  {server.name}
+                </div>
+                <div className="mt-1 text-[12px] leading-relaxed text-content/45">
                   {MCP_PROVIDER_LABELS[server.provider]} · {server.scope} ·{" "}
                   {server.transport || "MCP"} · {server.status}
                 </div>
                 {server.configPath ? (
                   <div
-                    className="truncate text-[11px] text-content/40"
+                    className="truncate text-[11px] text-content/35"
                     title={server.configPath}
                   >
                     {server.configPath}

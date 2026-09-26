@@ -1020,4 +1020,61 @@ describe("Composer question focus", () => {
     expect(document.activeElement).toBe(searchInput);
     portaledPicker.remove();
   });
+
+  it("opens MCP settings while Save draft mode is selected", async () => {
+    const onSaveDraft = vi.fn();
+    const onOpen = vi.fn();
+    window.addEventListener("monocode:open-mcp-settings", onOpen);
+    try {
+      await act(async () =>
+        root.render(
+          createElement(Composer, {
+            focused: true,
+            harness: "claude",
+            model: "claude-sonnet",
+            runtimeMode: "supervised",
+            executionCwd: "/repo",
+            hideProjectPicker: true,
+            hideBranchPicker: true,
+            canSaveDraft: true,
+            onFocus: vi.fn(),
+            onCwdChange: vi.fn(),
+            onModelChange: vi.fn(),
+            onRuntimeModeChange: vi.fn(),
+            onSubmit: vi.fn(),
+            onSaveDraft,
+          }),
+        ),
+      );
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Add files or choose a mode"]',
+          )!
+          .click(),
+      );
+      const draftMode = [
+        ...document.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.includes("Save this message"))!;
+      await act(async () => draftMode.click());
+      const textarea = container.querySelector("textarea")!;
+      await act(async () => {
+        textarea.value = "/mcp";
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(onOpen).toHaveBeenCalledOnce();
+      expect(onSaveDraft).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("monocode:open-mcp-settings", onOpen);
+    }
+  });
 });
