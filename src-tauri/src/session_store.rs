@@ -30,6 +30,7 @@ CREATE INDEX IF NOT EXISTS sessions_cwd_updated_idx
 
 pub struct SessionStore {
     conn: Mutex<Connection>,
+    read_conn: Mutex<Option<Connection>>,
 }
 
 impl SessionStore {
@@ -37,13 +38,18 @@ impl SessionStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        let conn = Connection::open(&path).map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
         crate::worktrees::reconcile_removals(&conn)?;
+        let read_conn = Connection::open(&path).map_err(|e| e.to_string())?;
+        read_conn
+            .execute_batch("PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;")
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             conn: Mutex::new(conn),
+            read_conn: Mutex::new(Some(read_conn)),
         })
     }
 
@@ -55,6 +61,7 @@ impl SessionStore {
         migrate(&conn).map_err(|e| e.to_string())?;
         Ok(Self {
             conn: Mutex::new(conn),
+            read_conn: Mutex::new(None),
         })
     }
 
@@ -355,19 +362,26 @@ pub fn session_search(
     options: SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
     let token = begin_session_search(&options.search_owner);
-    let (candidates, truncated) = {
-        let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-        search_session_candidates(&conn, &options, token.as_ref()).map_err(|e| e.to_string())?
+    let result = {
+        let read_conn = store
+            .read_conn
+            .lock()
+            .map_err(|_| "Session read store is locked")?;
+        if let Some(conn) = read_conn.as_ref() {
+            search_sessions_with_connection(conn, &options, token.as_ref())?
+        } else {
+            let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+            search_sessions_with_connection(&conn, &options, token.as_ref())?
+        }
     };
-    if !session_search_is_current(token.as_ref()) {
-        return Ok(SessionSearchResult {
+    if session_search_is_current(token.as_ref()) {
+        Ok(result)
+    } else {
+        Ok(SessionSearchResult {
             hits: Vec::new(),
             truncated: false,
-        });
+        })
     }
-    Ok(search_session_candidates_hits(
-        candidates, &options, truncated,
-    ))
 }
 
 #[tauri::command(async)]
@@ -1104,8 +1118,6 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
     })
 }
 
-type SearchCandidate = (String, String, String, String, i64, String);
-
 struct SearchProgressGuard<'a>(&'a Connection);
 
 impl Drop for SearchProgressGuard<'_> {
@@ -1118,23 +1130,63 @@ impl Drop for SearchProgressGuard<'_> {
 fn search_sessions(
     conn: &Connection,
     options: &SessionSearchOptions,
-) -> rusqlite::Result<SessionSearchResult> {
+) -> Result<SessionSearchResult, String> {
     let token = begin_session_search(&options.search_owner);
-    let (candidates, truncated) = search_session_candidates(conn, options, token.as_ref())?;
-    Ok(search_session_candidates_hits(
-        candidates, options, truncated,
-    ))
+    search_sessions_with_connection(conn, options, token.as_ref())
 }
 
-fn search_session_candidates(
+fn search_sessions_sql(include_archived: bool, cwd_scoped: bool) -> String {
+    let mut sql = String::from(
+        "SELECT id, cwd, harness, title, updated_at, archived,
+                CASE WHEN octet_length(blocks_json) <= ?2
+                     THEN blocks_json ELSE NULL END
+         FROM sessions",
+    );
+    if !cwd_scoped {
+        // Without a `cwd` equality to anchor the leading index column, the
+        // planner answers this from a table scan, and every column it reads
+        // (`inbox_ask`, `archived`, `has_user_message`, `updated_at`) sits after
+        // `blocks_json` in the record, so it walks each transcript's overflow
+        // pages before the size guard can reject the row. The partial inbox
+        // index answers the same filter without the table, and pinning the
+        // covering index keeps the rest of the predicate and the projection
+        // inside it: the table is then reached only for `blocks_json` rows that
+        // are already known to fit the budget.
+        sql.push_str(" INDEXED BY sessions_cwd_cover_idx");
+    }
+    sql.push_str(
+        " WHERE id NOT IN (SELECT id FROM sessions WHERE inbox_ask IS NOT NULL)
+            AND has_user_message = 1
+            AND (LOWER(title) LIKE LOWER(?1) ESCAPE '\\'
+                 OR CASE WHEN octet_length(blocks_json) <= ?2
+                         THEN LOWER(blocks_json) LIKE LOWER(?1) ESCAPE '\\'
+                         ELSE 0 END)",
+    );
+    if !include_archived {
+        sql.push_str(" AND archived = 0");
+    }
+    if cwd_scoped {
+        sql.push_str(" AND cwd = ?3");
+        sql.push_str(" ORDER BY updated_at DESC, id ASC LIMIT ?4");
+    } else {
+        sql.push_str(" ORDER BY updated_at DESC, id ASC LIMIT ?3");
+    }
+    sql
+}
+
+fn search_sessions_with_connection(
     conn: &Connection,
     options: &SessionSearchOptions,
     token: Option<&SessionSearchToken>,
-) -> rusqlite::Result<(Vec<SearchCandidate>, bool)> {
+) -> Result<SessionSearchResult, String> {
     let query = options.query.trim();
     if query.is_empty() {
-        return Ok((Vec::new(), false));
+        return Ok(SessionSearchResult {
+            hits: Vec::new(),
+            truncated: false,
+        });
     }
+    let needle = query.to_lowercase();
     let pattern = like_pattern(query);
     let cwd = options
         .cwd
@@ -1142,89 +1194,61 @@ fn search_session_candidates(
         .map(str::trim)
         .filter(|value| !value.is_empty());
 
-    let mut sql = String::from(
-        "SELECT id, cwd, harness, title, updated_at, archived, blocks_json
-         FROM sessions
-         WHERE inbox_ask IS NULL AND has_user_message = 1
-           AND (LOWER(title) LIKE LOWER(?1) ESCAPE '\\'
-                OR LOWER(blocks_json) LIKE LOWER(?1) ESCAPE '\\')",
-    );
-    if !options.include_archived {
-        sql.push_str(" AND archived = 0");
-    }
-    if cwd.is_some() {
-        sql.push_str(" AND cwd = ?2");
-        sql.push_str(" ORDER BY updated_at DESC, id ASC LIMIT ?3");
-    } else {
-        sql.push_str(" ORDER BY updated_at DESC, id ASC LIMIT ?2");
-    }
+    let budget = MAX_SEARCH_BUFFER_BYTES as i64;
+    let sql = search_sessions_sql(options.include_archived, cwd.is_some());
 
-    let mut statement = conn.prepare(&sql)?;
+    let mut statement = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let limit = (MAX_SEARCH_SCAN as i64) + 1;
-    let rows = if let Some(cwd) = cwd {
-        statement.query_map(params![pattern, cwd, limit], search_row)?
+    let mut rows = if let Some(cwd) = cwd {
+        statement
+            .query(params![pattern, budget, cwd, limit])
+            .map_err(|e| e.to_string())?
     } else {
-        statement.query_map(params![pattern, limit], search_row)?
+        statement
+            .query(params![pattern, budget, limit])
+            .map_err(|e| e.to_string())?
     };
 
     let progress_token = token.cloned();
     conn.progress_handler(
         SEARCH_PROGRESS_INTERVAL as i32,
         Some(move || !session_search_is_current(progress_token.as_ref())),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     let _progress_guard = SearchProgressGuard(conn);
-    let mut candidates = Vec::new();
-    let mut buffered_bytes = 0usize;
-    let mut cancelled = false;
-    let mut truncated = false;
-    for row in rows {
-        if !session_search_is_current(token) {
-            cancelled = true;
-            break;
-        }
-        match row {
-            Ok(candidate) => {
-                if candidates.len() >= MAX_SEARCH_SCAN {
-                    truncated = true;
-                    break;
-                }
-                let size = candidate.5.len();
-                if buffered_bytes + size > MAX_SEARCH_BUFFER_BYTES {
-                    truncated = true;
-                    continue;
-                }
-                buffered_bytes += size;
-                candidates.push(candidate);
-            }
-            Err(_) if !session_search_is_current(token) => {
-                cancelled = true;
-                break;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    if cancelled {
-        return Ok((Vec::new(), false));
-    }
-    Ok((candidates, truncated))
-}
-
-fn search_session_candidates_hits(
-    candidates: Vec<SearchCandidate>,
-    options: &SessionSearchOptions,
-    mut truncated: bool,
-) -> SessionSearchResult {
-    let needle = options.query.trim().to_lowercase();
-    if needle.is_empty() {
-        return SessionSearchResult {
-            hits: Vec::new(),
-            truncated: false,
-        };
-    }
-
     let mut conversations = Vec::new();
     let mut messages = Vec::new();
-    for (id, cwd, harness, title, updated_at, blocks_raw) in candidates {
+    let mut scanned = 0usize;
+    let mut truncated = false;
+    loop {
+        if !session_search_is_current(token) {
+            return Ok(SessionSearchResult {
+                hits: Vec::new(),
+                truncated: false,
+            });
+        }
+        let row = match rows.next() {
+            Ok(None) => break,
+            Ok(Some(row)) => row,
+            Err(_) if !session_search_is_current(token) => {
+                return Ok(SessionSearchResult {
+                    hits: Vec::new(),
+                    truncated: false,
+                });
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        scanned += 1;
+        if scanned > MAX_SEARCH_SCAN {
+            truncated = true;
+            break;
+        }
+
+        let id: String = row.get(0).map_err(|e| e.to_string())?;
+        let cwd: String = row.get(1).map_err(|e| e.to_string())?;
+        let harness: String = row.get(2).map_err(|e| e.to_string())?;
+        let title: String = row.get(3).map_err(|e| e.to_string())?;
+        let updated_at: i64 = row.get(4).map_err(|e| e.to_string())?;
         let title_hit = title.to_lowercase().contains(&needle);
         if title_hit && conversations.len() < MAX_CONVERSATION_HITS {
             conversations.push(SessionSearchHit {
@@ -1251,6 +1275,15 @@ fn search_session_candidates_hits(
             continue;
         }
 
+        let blocks_raw = match row.get_ref(6).map_err(|e| e.to_string())? {
+            rusqlite::types::ValueRef::Null => {
+                truncated = true;
+                continue;
+            }
+            value => {
+                String::from_utf8_lossy(value.as_bytes().map_err(|e| e.to_string())?).into_owned()
+            }
+        };
         let Ok(blocks) = serde_json::from_str::<Value>(&blocks_raw) else {
             continue;
         };
@@ -1276,23 +1309,9 @@ fn search_session_candidates_hits(
     if conversations.len() >= MAX_CONVERSATION_HITS {
         truncated = true;
     }
-
     let mut hits = conversations;
     hits.extend(messages);
-    SessionSearchResult { hits, truncated }
-}
-
-fn search_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<(String, String, String, String, i64, String)> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(6)?,
-    ))
+    Ok(SessionSearchResult { hits, truncated })
 }
 
 fn like_pattern(query: &str) -> String {
@@ -2847,6 +2866,117 @@ mod tests {
     }
 
     #[test]
+    fn session_search_uses_a_query_only_read_connection() {
+        let path = std::env::temp_dir().join(format!(
+            "monocode-session-read-conn-{}-{}.db",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = SessionStore::open(path.clone()).unwrap();
+        upsert_session(
+            &store.conn.lock().unwrap(),
+            &sample("s1", "/tmp/a", "Searchable title"),
+        )
+        .unwrap();
+
+        let read_conn = store.read_conn.lock().unwrap();
+        let conn = read_conn.as_ref().unwrap();
+        let result = search_sessions_with_connection(
+            conn,
+            &SessionSearchOptions {
+                query: "Searchable".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: String::new(),
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(result.hits.iter().any(|hit| hit.session_id == "s1"));
+        assert!(conn
+            .execute("UPDATE sessions SET title = 'nope' WHERE id = 's1'", [])
+            .is_err());
+        drop(read_conn);
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn oversized_transcript_keeps_title_hit_without_hiding_older_messages() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut small = sample("small", "/tmp/a", "Needle title");
+        small.blocks = json!([{ "id": "small", "role": "user", "text": "needle" }]);
+        upsert_session(&conn, &small).unwrap();
+        let mut huge = sample("huge", "/tmp/a", "Needle title");
+        huge.blocks = json!([{
+            "id": "huge",
+            "role": "user",
+            "text": "needle ".repeat(1_500_000),
+        }]);
+        upsert_session(&conn, &huge).unwrap();
+        conn.execute("UPDATE sessions SET updated_at = 1 WHERE id = 'small'", [])
+            .unwrap();
+        conn.execute("UPDATE sessions SET updated_at = 2 WHERE id = 'huge'", [])
+            .unwrap();
+
+        let result = search_sessions(
+            &conn,
+            &SessionSearchOptions {
+                query: "needle".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: String::new(),
+            },
+        )
+        .unwrap();
+
+        assert!(result.truncated);
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.session_id == "huge" && hit.kind == "conversation"));
+        assert!(!result
+            .hits
+            .iter()
+            .any(|hit| hit.session_id == "huge" && hit.kind == "message"));
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.session_id == "small" && hit.kind == "message"));
+    }
+
+    #[test]
+    fn session_search_without_a_cwd_avoids_the_sessions_table() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let sql = format!("EXPLAIN QUERY PLAN {}", search_sessions_sql(false, false));
+        let mut statement = conn.prepare(&sql).unwrap();
+        let plan: Vec<String> = statement
+            .query_map(
+                params!["%needle%", MAX_SEARCH_BUFFER_BYTES as i64, 401i64],
+                |row| row.get::<_, String>(3),
+            )
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert!(plan
+            .iter()
+            .any(|step| step.contains("USING INDEX sessions_cwd_cover_idx")));
+        for step in &plan {
+            if step.contains("sessions") {
+                assert!(step.contains("USING INDEX"), "table access: {step}");
+            }
+        }
+    }
+
+    #[test]
     fn a_new_session_search_supersedes_the_same_owner() {
         let owner = "session-search-owner-test";
         let first = begin_session_search(owner).unwrap();
@@ -2870,7 +3000,7 @@ mod tests {
     }
 
     #[test]
-    fn a_superseded_session_search_returns_no_candidates() {
+    fn a_superseded_session_search_returns_no_hits() {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "Searchable title")).unwrap();
@@ -2884,81 +3014,15 @@ mod tests {
             search_owner: owner.into(),
         };
 
-        let (candidates, truncated) =
-            search_session_candidates(&conn, &options, Some(&stale)).unwrap();
+        let result = search_sessions_with_connection(&conn, &options, Some(&stale)).unwrap();
 
-        assert!(candidates.is_empty());
-        assert!(!truncated);
+        assert!(result.hits.is_empty());
+        assert!(!result.truncated);
         // The progress handler belongs to the search, not the shared connection.
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn session_search_buffers_a_bounded_number_of_transcript_bytes() {
-        let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
-        let filler = "needle ".repeat(250_000);
-        for index in 0..5 {
-            let mut session = sample(&format!("s{index}"), "/tmp/a", "Needle title");
-            session.blocks = json!([
-                { "id": format!("u{index}"), "role": "user", "text": filler }
-            ]);
-            upsert_session(&conn, &session).unwrap();
-        }
-        let (candidates, truncated) = search_session_candidates(
-            &conn,
-            &SessionSearchOptions {
-                query: "needle".into(),
-                cwd: None,
-                include_archived: false,
-                search_owner: String::new(),
-            },
-            None,
-        )
-        .unwrap();
-
-        assert!(truncated);
-        let buffered: usize = candidates.iter().map(|candidate| candidate.5.len()).sum();
-        assert!(buffered <= MAX_SEARCH_BUFFER_BYTES);
-    }
-
-    #[test]
-    fn session_search_skips_an_oversized_newest_transcript() {
-        let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
-        let mut small = sample("small", "/tmp/a", "Needle title");
-        small.blocks = json!([{ "id": "small", "role": "user", "text": "needle" }]);
-        upsert_session(&conn, &small).unwrap();
-        let mut huge = sample("huge", "/tmp/a", "Needle title");
-        huge.blocks = json!([{
-            "id": "huge",
-            "role": "user",
-            "text": "needle ".repeat(1_500_000),
-        }]);
-        upsert_session(&conn, &huge).unwrap();
-        conn.execute("UPDATE sessions SET updated_at = 1 WHERE id = 'small'", [])
-            .unwrap();
-        conn.execute("UPDATE sessions SET updated_at = 2 WHERE id = 'huge'", [])
-            .unwrap();
-
-        let (candidates, truncated) = search_session_candidates(
-            &conn,
-            &SessionSearchOptions {
-                query: "needle".into(),
-                cwd: None,
-                include_archived: false,
-                search_owner: String::new(),
-            },
-            None,
-        )
-        .unwrap();
-
-        assert!(truncated);
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].0, "small");
     }
 
     #[test]
@@ -3023,6 +3087,30 @@ mod tests {
         assert!(kinds.contains(&("conversation", "s1", None)));
         assert!(kinds.contains(&("message", "s1", Some("u1"))));
         assert!(!result.hits.iter().any(|hit| hit.session_id == "s2"));
+    }
+
+    #[test]
+    fn search_skips_inbox_ask_sessions_when_scoped_and_unscoped() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("ask", "/tmp/a", "Needle ask")).unwrap();
+        upsert_session(&conn, &sample("chat", "/tmp/a", "Needle chat")).unwrap();
+        conn.execute("UPDATE sessions SET inbox_ask = '{}' WHERE id = 'ask'", [])
+            .unwrap();
+
+        for cwd in [None, Some("/tmp/a".to_string())] {
+            let result = search_sessions(
+                &conn,
+                &SessionSearchOptions {
+                    query: "Needle".into(),
+                    cwd,
+                    include_archived: false,
+                    search_owner: String::new(),
+                },
+            )
+            .unwrap();
+            assert!(result.hits.iter().all(|hit| hit.session_id == "chat"));
+        }
     }
 
     #[test]
