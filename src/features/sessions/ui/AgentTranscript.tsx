@@ -645,7 +645,7 @@ function AgentTranscriptComponent({
       paintTranscriptHighlights(owner, matches, current);
     };
     const observer = new MutationObserver((records) => {
-      pending.push(...records);
+      for (const record of records) pending.push(record);
       if (frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
@@ -657,6 +657,7 @@ function AgentTranscriptComponent({
     observer.observe(el, {
       childList: true,
       characterData: true,
+      characterDataOldValue: true,
       subtree: true,
     });
     paint();

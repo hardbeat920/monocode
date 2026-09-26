@@ -19,20 +19,36 @@ const BLOCK_ELEMENTS = new Set([
 
 let highlightOwner: symbol | null = null;
 
+function transcriptSearchPattern(
+  query: string,
+  flags: string,
+): RegExp | null {
+  const needle = query.trim();
+  if (!needle) return null;
+  return new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+}
+
 export function transcriptMutationNeedsRepaint(
   records: MutationRecord[],
   query: string,
 ): boolean {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return false;
+  const pattern = transcriptSearchPattern(query, "iu");
+  if (!pattern) return false;
+  const seen = new Set<HTMLElement>();
   for (const record of records) {
+    if (record.removedNodes.length) return true;
+    if (record.type === "characterData" && pattern.test(record.oldValue ?? "")) {
+      return true;
+    }
     const target =
       record.target.nodeType === Node.TEXT_NODE
         ? record.target.parentElement
         : (record.target as Element);
     const item = target?.closest<HTMLElement>("[data-transcript-search-item]");
     if (!item) return true;
-    if ((item.textContent ?? "").toLowerCase().includes(needle)) return true;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    if (pattern.test(item.textContent ?? "")) return true;
   }
   return false;
 }
@@ -41,12 +57,8 @@ export function transcriptWordRanges(
   root: HTMLElement,
   query: string,
 ): { matches: Range[]; current: Range | null } {
-  const needle = query.trim();
-  if (!needle) return { matches: [], current: null };
-  const pattern = new RegExp(
-    needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-    "giu",
-  );
+  const pattern = transcriptSearchPattern(query, "giu");
+  if (!pattern) return { matches: [], current: null };
   const matches: Range[] = [];
   let current: Range | null = null;
 

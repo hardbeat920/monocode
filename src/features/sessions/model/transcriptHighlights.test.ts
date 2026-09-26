@@ -6,8 +6,11 @@ import {
 } from "./transcriptHighlights";
 
 describe("transcriptMutationNeedsRepaint", () => {
-  function record(target: Node): MutationRecord {
-    return { target } as MutationRecord;
+  function record(
+    target: Node,
+    extra: Partial<MutationRecord> = {},
+  ): MutationRecord {
+    return { target, removedNodes: [], ...extra } as MutationRecord;
   }
 
   it("ignores streaming changes in items that cannot contain the query", () => {
@@ -30,6 +33,42 @@ describe("transcriptMutationNeedsRepaint", () => {
     const root = document.createElement("div");
 
     expect(transcriptMutationNeedsRepaint([record(root)], "needle")).toBe(true);
+  });
+
+  it("repaints when an in-place text change removes the query", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<div data-transcript-search-item><p>all done</p></div>`;
+    const text = root.querySelector("p")?.firstChild as Text;
+
+    expect(
+      transcriptMutationNeedsRepaint(
+        [record(text, { type: "characterData", oldValue: "deploy failed" })],
+        "failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("repaints node removals that could drop a match", () => {
+    const root = document.createElement("div");
+    const item = document.createElement("div");
+    item.setAttribute("data-transcript-search-item", "");
+    root.append(item);
+
+    expect(
+      transcriptMutationNeedsRepaint(
+        [record(item, { type: "childList", removedNodes: [document.createTextNode("needle")] })],
+        "needle",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses the same unicode case folding as the highlighter", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<div data-transcript-search-item><p>ſ</p></div>`;
+
+    expect(transcriptMutationNeedsRepaint([record(root.firstChild!)], "s")).toBe(
+      true,
+    );
   });
 
   it("does nothing without a query", () => {
