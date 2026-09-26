@@ -1,23 +1,17 @@
-import { readTextFile } from "../../../platform/tauri/fs";
+import { readFileRange, type FileRange } from "../../../platform/tauri/fs";
 import {
   readTranscriptChunk,
   type TranscriptCursor,
 } from "./transcript";
 
+/** Asked for per read. The command caps this; it is not a promise of size. */
+const READ_BYTES = 256 * 1024;
+
 /**
- * The appended text after `offset`, or `""` when there is nothing new.
- *
- * The cursor counts bytes, so the slice has to be taken in bytes too — a
- * transcript with any non-ASCII content would otherwise cut mid-character.
+ * Reads allowed in one poll, so a backlog drains in about a second instead of
+ * one chunk per tick, without a single poll running unbounded.
  */
-export function chunkAfter(text: string, offset: number): string {
-  const bytes = new TextEncoder().encode(text);
-  // A file shorter than the cursor was replaced rather than appended to.
-  // Rewinding would replay the conversation, so stay put and wait for it to
-  // grow past where we already are.
-  if (offset >= bytes.length) return "";
-  return new TextDecoder().decode(bytes.subarray(offset));
-}
+const MAX_READS_PER_POLL = 8;
 
 export type TranscriptReaderOptions = {
   path: string;
@@ -27,14 +21,18 @@ export type TranscriptReaderOptions = {
     records: Record<string, unknown>[],
     cursor: TranscriptCursor,
   ) => void;
-  /** Defaults to the real file read; injected in tests. */
-  readFile?: (path: string) => Promise<string>;
-  /** A read that failed, including a file that is not there yet. */
+  /** Defaults to the real ranged read; injected in tests. */
+  readRange?: (
+    path: string,
+    offset: number,
+    maxBytes: number,
+  ) => Promise<FileRange>;
+  /** A read that failed. A file that is not there yet arrives here too. */
   onError?: (error: unknown) => void;
 };
 
 export type TranscriptReader = {
-  /** One read-and-emit cycle. Safe to call again while a previous call runs. */
+  /** One catch-up cycle. Safe to call again while a previous call runs. */
   poll: () => Promise<void>;
   cursor: () => TranscriptCursor;
 };
@@ -42,26 +40,33 @@ export type TranscriptReader = {
 export function createTranscriptReader(
   options: TranscriptReaderOptions,
 ): TranscriptReader {
-  const read = options.readFile ?? readTextFile;
+  const read = options.readRange ?? readFileRange;
   let cursor = options.from;
   let reading = false;
 
   return {
     cursor: () => cursor,
     poll: async () => {
-      // Overlapping reads would both start from the same cursor and emit the
-      // same records twice.
+      // Overlapping reads would both start from the same cursor and ask for the
+      // same bytes.
       if (reading) return;
       reading = true;
       try {
-        // The pty may not have written anything yet, which is ordinary at the
-        // moment a session is handed over rather than a failure.
-        const text = await read(options.path);
-        const chunk = chunkAfter(text, cursor.offset);
-        if (!chunk) return;
-        const result = readTranscriptChunk(cursor, chunk);
-        cursor = result.cursor;
-        if (result.records.length > 0) options.onRecords(result.records, cursor);
+        for (let i = 0; i < MAX_READS_PER_POLL; i += 1) {
+          // The pty may not have written anything yet, which is ordinary at the
+          // moment a session is handed over rather than a failure. A file
+          // shorter than the cursor was replaced rather than appended to, and
+          // the command returns nothing for that too: rewinding would replay
+          // the conversation, so it waits for the file to grow past us.
+          const range = await read(options.path, cursor.offset, READ_BYTES);
+          if (!range.text) return;
+          const result = readTranscriptChunk(cursor, range.text);
+          cursor = result.cursor;
+          if (result.records.length > 0) {
+            options.onRecords(result.records, cursor);
+          }
+          if (cursor.offset >= range.size) return;
+        }
       } catch (error) {
         options.onError?.(error);
       } finally {

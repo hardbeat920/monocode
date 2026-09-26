@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  chunkAfter,
-  createTranscriptReader,
-  watchTranscript,
-} from "./transcriptWatch";
+import { createTranscriptReader, watchTranscript } from "./transcriptWatch";
 import { emptyCursor } from "./transcript";
 
 const PATH = "/home/.claude/projects/-a/s.jsonl";
@@ -12,17 +8,33 @@ function line(text: string): string {
   return `${JSON.stringify({ type: "user", text })}\n`;
 }
 
-/** A file whose contents the test can grow between reads. */
+function bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/**
+ * Stands in for `read_file_range`: serves a byte range of a growing file and
+ * records what was asked for. Mirrors the command's own rules — empty past the
+ * end, and never splitting a character.
+ */
 function fakeFile(initial = "") {
-  const state = { text: initial, reads: 0 };
+  const state = { text: initial, reads: [] as number[] };
   return {
     state,
     append: (more: string) => {
       state.text += more;
     },
-    read: async () => {
-      state.reads += 1;
-      return state.text;
+    replaceWith: (next: string) => {
+      state.text = next;
+    },
+    readRange: async (_path: string, offset: number, maxBytes: number) => {
+      state.reads.push(offset);
+      const all = new TextEncoder().encode(state.text);
+      const size = all.length;
+      if (offset >= size) return { text: "", size };
+      const slice = all.subarray(offset, offset + Math.max(maxBytes, 4));
+      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(slice);
+      return { text: decoded.replace(/�+$/, ""), size };
     },
   };
 }
@@ -32,32 +44,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("chunkAfter", () => {
-  it("returns everything from a zero offset", () => {
-    expect(chunkAfter("abc", 0)).toBe("abc");
-  });
-
-  it("returns only what was appended", () => {
-    expect(chunkAfter("abcdef", 3)).toBe("def");
-  });
-
-  it("returns nothing when the file has not grown", () => {
-    expect(chunkAfter("abc", 3)).toBe("");
-  });
-
-  it("slices by byte, not by UTF-16 unit", () => {
-    // "é" is two bytes, so a code-unit slice would cut the wrong place and a
-    // byte offset of 2 must land exactly after it.
-    const text = "é" + "xy";
-    expect(chunkAfter(text, 2)).toBe("xy");
-  });
-
-  it("refuses to rewind when the file shrank", () => {
-    // A replaced transcript must not be replayed from the start.
-    expect(chunkAfter("ab", 10)).toBe("");
-  });
-});
-
 describe("createTranscriptReader", () => {
   it("resumes from the handover offset instead of replaying", async () => {
     const existing = line("old");
@@ -65,14 +51,16 @@ describe("createTranscriptReader", () => {
     const seen: Record<string, unknown>[] = [];
     const reader = createTranscriptReader({
       path: PATH,
-      from: emptyCursor(new TextEncoder().encode(existing).length),
+      from: emptyCursor(bytes(existing)),
       onRecords: (records) => seen.push(...records),
-      readFile: file.read,
+      readRange: file.readRange,
     });
 
     await reader.poll();
 
     expect(seen).toEqual([{ type: "user", text: "new" }]);
+    // It must never have asked for anything before the handover point.
+    expect(Math.min(...file.state.reads)).toBe(bytes(existing));
   });
 
   it("replays from the start only when told to", async () => {
@@ -82,7 +70,7 @@ describe("createTranscriptReader", () => {
       path: PATH,
       from: emptyCursor(),
       onRecords: (records) => seen.push(...records),
-      readFile: file.read,
+      readRange: file.readRange,
     });
 
     await reader.poll();
@@ -97,7 +85,7 @@ describe("createTranscriptReader", () => {
       path: PATH,
       from: emptyCursor(),
       onRecords: (records) => seen.push(...records),
-      readFile: file.read,
+      readRange: file.readRange,
     });
 
     await reader.poll();
@@ -116,7 +104,7 @@ describe("createTranscriptReader", () => {
       path: PATH,
       from: emptyCursor(),
       onRecords: (records) => seen.push(...records),
-      readFile: file.read,
+      readRange: file.readRange,
     });
 
     await reader.poll();
@@ -129,20 +117,76 @@ describe("createTranscriptReader", () => {
     expect(seen).toEqual([{ type: "user", text: "split-me" }]);
   });
 
-  it("advances the cursor past the partial so it is not re-read", async () => {
+  it("advances the cursor past the partial so it is not asked for again", async () => {
     const whole = line("abc");
     const file = fakeFile(whole.slice(0, whole.length - 2));
     const reader = createTranscriptReader({
       path: PATH,
       from: emptyCursor(),
       onRecords: () => {},
-      readFile: file.read,
+      readRange: file.readRange,
     });
 
     await reader.poll();
     const after = reader.cursor();
     expect(after.offset).toBe(whole.length - 2);
     expect(after.partial).not.toBe("");
+
+    await reader.poll();
+    // The second poll resumes at the cursor, not back at the partial's start.
+    expect(file.state.reads.at(-1)).toBe(whole.length - 2);
+  });
+
+  it("drains a backlog in one poll instead of one chunk per tick", async () => {
+    const many = Array.from({ length: 40 }, (_, i) => line(`r${i}`)).join("");
+    const file = fakeFile(many);
+    const seen: Record<string, unknown>[] = [];
+    const reader = createTranscriptReader({
+      path: PATH,
+      from: emptyCursor(),
+      onRecords: (records) => seen.push(...records),
+      // A tiny window forces many reads to get through the backlog.
+      readRange: (path, offset) => file.readRange(path, offset, 64),
+    });
+
+    await reader.poll();
+
+    expect(file.state.reads.length).toBeGreaterThan(1);
+    expect(seen.length).toBeGreaterThan(1);
+  });
+
+  it("stops reading once it has caught up", async () => {
+    const file = fakeFile(line("only"));
+    const reader = createTranscriptReader({
+      path: PATH,
+      from: emptyCursor(),
+      onRecords: () => {},
+      readRange: file.readRange,
+    });
+
+    await reader.poll();
+
+    // One read to get the content, one to confirm there is no more.
+    expect(file.state.reads.length).toBeLessThanOrEqual(2);
+  });
+
+  it("does not rewind when the file was replaced by a shorter one", async () => {
+    const file = fakeFile(line("a") + line("b"));
+    const seen: Record<string, unknown>[] = [];
+    const reader = createTranscriptReader({
+      path: PATH,
+      from: emptyCursor(),
+      onRecords: (records) => seen.push(...records),
+      readRange: file.readRange,
+    });
+
+    await reader.poll();
+    const before = seen.length;
+    file.replaceWith(line("z"));
+    await reader.poll();
+
+    // Replaying a replaced transcript would flood the mirror.
+    expect(seen).toHaveLength(before);
   });
 
   it("emits nothing and does not throw when the file is missing", async () => {
@@ -153,7 +197,7 @@ describe("createTranscriptReader", () => {
       from: emptyCursor(),
       onRecords,
       onError,
-      readFile: () => Promise.reject(new Error("ENOENT")),
+      readRange: () => Promise.reject(new Error("ENOENT")),
     });
 
     await expect(reader.poll()).resolves.toBeUndefined();
@@ -166,7 +210,7 @@ describe("createTranscriptReader", () => {
       path: PATH,
       from: emptyCursor(7),
       onRecords: () => {},
-      readFile: () => Promise.reject(new Error("ENOENT")),
+      readRange: () => Promise.reject(new Error("ENOENT")),
     });
 
     await reader.poll();
@@ -185,10 +229,10 @@ describe("createTranscriptReader", () => {
       path: PATH,
       from: emptyCursor(),
       onRecords: (records) => seen.push(...records),
-      readFile: async () => {
+      readRange: async () => {
         reads += 1;
         await gate;
-        return text;
+        return { text, size: bytes(text) };
       },
     });
 
@@ -197,19 +241,19 @@ describe("createTranscriptReader", () => {
     release?.();
     await Promise.all([first, second]);
 
-    // The second poll must not have issued a read of its own; without the
-    // guard both would read, and both would be re-reading the same offset.
+    // Without the guard both polls would read, from the same offset.
     expect(reads).toBe(1);
     expect(seen).toHaveLength(1);
   });
 
   it("does not emit when only a partial line is available", async () => {
     const onRecords = vi.fn();
+    const partial = '{"type":"user"';
     const reader = createTranscriptReader({
       path: PATH,
       from: emptyCursor(),
       onRecords,
-      readFile: async () => '{"type":"user"',
+      readRange: async () => ({ text: partial, size: bytes(partial) }),
     });
 
     await reader.poll();
@@ -226,7 +270,7 @@ describe("watchTranscript", () => {
       path: PATH,
       from: emptyCursor(),
       onRecords: (records) => seen.push(...records),
-      readFile: file.read,
+      readRange: file.readRange,
       intervalMs: 10,
     });
 
@@ -250,7 +294,7 @@ describe("watchTranscript", () => {
       path: PATH,
       from: emptyCursor(),
       onRecords: () => {},
-      readFile: file.read,
+      readRange: file.readRange,
       intervalMs: 10,
     });
 
@@ -260,9 +304,9 @@ describe("watchTranscript", () => {
       watcher.stop();
     }).not.toThrow();
 
-    const readsAtStop = file.state.reads;
+    const readsAtStop = file.state.reads.length;
     await vi.advanceTimersByTimeAsync(100);
-    expect(file.state.reads).toBe(readsAtStop);
+    expect(file.state.reads.length).toBe(readsAtStop);
   });
 
   it("tolerates a missing file without throwing", async () => {
@@ -272,7 +316,7 @@ describe("watchTranscript", () => {
       path: PATH,
       from: emptyCursor(),
       onRecords,
-      readFile: () => Promise.reject(new Error("ENOENT")),
+      readRange: () => Promise.reject(new Error("ENOENT")),
       intervalMs: 10,
     });
 
