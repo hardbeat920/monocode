@@ -288,6 +288,7 @@ pub fn run() {
             external_editor::open_in_external_editor,
             fs::resolve_project_location,
             fs::open_path_with_default_app,
+            fs::claude_sessions,
             fs::list_dir,
             fs::list_project_files,
             fs::git_diff_stats,

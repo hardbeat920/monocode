@@ -63,6 +63,16 @@ import {
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
+import { ClaudeSessionPicker } from "../features/sessions/ui/ClaudeSessionPicker";
+import {
+  buildImportedSession,
+  claudeImportTarget,
+  type ClaudeImportTarget,
+} from "../features/sessions/model/claudeSessionImport";
+import {
+  readTextFile,
+  type ClaudeSessionSummary,
+} from "../platform/tauri/fs";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { MenuBar } from "./shell/MenuBar";
@@ -5037,6 +5047,82 @@ export default function App({
     const path = await pickFolder();
     if (path) onSelectProject(path);
   }, [onSelectProject]);
+
+  const [resumePickerFor, setResumePickerFor] =
+    useState<ClaudeImportTarget | null>(null);
+
+  const onResumeProviderSession = useCallback((sessionId: string) => {
+    const source = sessionsRef.current.find(
+      (session) => session.id === sessionId,
+    );
+    if (!source) return;
+    setResumePickerFor({
+      sessionId,
+      // Claude files conversations under the directory it ran in, which for a
+      // worktree session is the checkout rather than the project root.
+      cwd: sessionWorkCwd(source),
+      turnGen: turnGen.current.get(sessionId) ?? 0,
+      ...(source.providerAccountId
+        ? { providerAccountId: source.providerAccountId }
+        : {}),
+    });
+  }, []);
+
+  /**
+   * Load a conversation Claude Code recorded into the thread the command was
+   * run from, and bind it so the next turn continues that conversation rather
+   * than starting a new one.
+   */
+  const importClaudeConversation = useCallback(
+    async (target: ClaudeImportTarget, summary: ClaudeSessionSummary) => {
+      // Each step below is a round trip the thread can change across, so the
+      // target is rechecked at every one rather than once at the start. The
+      // picker has already closed by now, so the composer is live throughout.
+      const stillTarget = () =>
+        claudeImportTarget(
+          sessionsRef.current,
+          target,
+          turnGen.current.get(target.sessionId) ?? 0,
+        );
+      if (!stillTarget()) return;
+      const transcript = await readTextFile(summary.path).catch(() => null);
+      if (transcript === null) return;
+      if (!stillTarget()) return;
+
+      // A child that is already running ignores the new binding: `ensureLive`
+      // hands back the existing one before the resume state is read, so the
+      // next turn would carry on the old conversation. Stopping it first makes
+      // that turn spawn with `--resume`; the resume state itself survives.
+      await stopHarnessSession("claude", target.sessionId).catch(
+        () => undefined,
+      );
+      if (!stillTarget()) return;
+
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === target.sessionId
+            ? buildImportedSession({
+                base: session,
+                transcript,
+                providerSessionId: summary.id,
+                providerAccountId: session.providerAccountId,
+              })
+            : session,
+        ),
+      );
+      bindHarnessSession(
+        "claude",
+        target.sessionId,
+        summary.id,
+        // Claude only resumes when the bound directory matches the one the
+        // next turn runs in — which is the directory these conversations were
+        // listed for, the checkout rather than the project root.
+        target.cwd,
+        target.providerAccountId,
+      );
+    },
+    [],
+  );
 
   const onPlaceSessionInFolder = useCallback(
     (sessionId: string, target: SessionFolderTarget) => {
@@ -10024,6 +10110,7 @@ export default function App({
     onStop,
     onCompactContext,
     onPlaceSessionInFolder,
+    onResumeProviderSession,
     onDeleteQueuedMessage,
     onEditQueuedMessage,
     onQueuedMessageEditingChange,
@@ -10594,6 +10681,16 @@ export default function App({
             onOpenSettings={() => openSettings("general", "notifications")}
             onHeightChange={setReminderNoticesHeight}
           />
+          {resumePickerFor ? (
+            <ClaudeSessionPicker
+              cwd={resumePickerFor.cwd}
+              onClose={() => setResumePickerFor(null)}
+              onPick={(summary) => {
+                void importClaudeConversation(resumePickerFor, summary);
+                setResumePickerFor(null);
+              }}
+            />
+          ) : null}
           {whatsNewVersion ? (
             <WhatsNewDialog
               version={whatsNewVersion}

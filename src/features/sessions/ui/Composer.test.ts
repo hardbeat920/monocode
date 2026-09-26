@@ -306,6 +306,63 @@ describe("Composer question focus", () => {
     });
   });
 
+  async function renderWithResume(
+    harness: "claude" | "codex",
+    onResumeProviderSession?: () => void,
+  ) {
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness,
+          model: harness === "claude" ? "claude-sonnet" : "gpt-5",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "/resume",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(() => true),
+          ...(onResumeProviderSession ? { onResumeProviderSession } : {}),
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(new Event("input", { bubbles: true })),
+    );
+    const option = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((button) => button.textContent?.includes("/resume"));
+    return { option, textarea };
+  }
+
+  it("offers /resume for Claude and opens the picker without leaving text behind", async () => {
+    const onResumeProviderSession = vi.fn();
+    const { option, textarea } = await renderWithResume(
+      "claude",
+      onResumeProviderSession,
+    );
+    expect(option).toBeDefined();
+    await act(async () => option!.click());
+    expect(onResumeProviderSession).toHaveBeenCalledTimes(1);
+    // Choosing a conversation loads a transcript; it is not a prompt to send.
+    expect(textarea.value).toBe("");
+  });
+
+  it("hides /resume for a harness whose stored conversations cannot be read", async () => {
+    const { option } = await renderWithResume("codex", vi.fn());
+    expect(option).toBeUndefined();
+  });
+
+  it("hides /resume when the picker is not wired up", async () => {
+    const { option } = await renderWithResume("claude");
+    expect(option).toBeUndefined();
+  });
+
   it("offers Operator above Orchestrator and sends the /operator command", async () => {
     const onSubmit = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     await act(async () =>

@@ -94,6 +94,24 @@ export type ProjectFile = {
   isDir?: boolean;
 };
 
+/** A Claude Code conversation stored on disk for the current project. */
+export type ClaudeSessionSummary = {
+  id: string;
+  path: string;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
+};
+
+/**
+ * Conversations Claude Code recorded for this working directory, newest first.
+ * Summarized in Rust: a single session file routinely runs past half a
+ * megabyte, and reading a project's worth of them in the UI would stall it.
+ */
+export function claudeSessions(cwd: string): Promise<ClaudeSessionSummary[]> {
+  return invoke<ClaudeSessionSummary[]>("claude_sessions", { cwd });
+}
+
 export function listDir(path: string): Promise<FsEntry[]> {
   return invoke<FsEntry[]>("list_dir", { path });
 }

@@ -112,6 +112,164 @@ fn directory_identity(path: &Path) -> Result<String, String> {
     ))
 }
 
+/// One Claude Code conversation on disk, summarized without shipping the whole
+/// transcript to the UI: a single session file routinely runs past half a
+/// megabyte, and a project can hold dozens.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSessionSummary {
+    id: String,
+    path: String,
+    title: String,
+    updated_at: u64,
+    message_count: usize,
+}
+
+/// Claude Code stores a project's conversations under a directory derived from
+/// its working directory: every character that is not an ASCII letter or digit
+/// becomes `-`. That covers separators, but also spaces, punctuation, drive
+/// colons and anything non-ASCII — so listing only the characters that looked
+/// like separators would miss `/Users/me/My Project` and `C:\src\app` and read
+/// a directory that does not exist.
+///
+/// The mapping only runs this way: `-a-b` could have come from `/a/b`, `/a-b`
+/// or `/a.b`, so a directory name can never be turned back into a path.
+pub(crate) fn claude_project_dir(home: &Path, cwd: &str) -> PathBuf {
+    let flattened: String = cwd
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    home.join(".claude").join("projects").join(flattened)
+}
+
+#[tauri::command]
+pub async fn claude_sessions(cwd: String) -> Result<Vec<ClaudeSessionSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || claude_sessions_sync(&cwd))
+        .await
+        .map_err(|e| format!("{e}"))?
+}
+
+fn claude_sessions_sync(cwd: &str) -> Result<Vec<ClaudeSessionSummary>, String> {
+    let Some(home) = dirs_home() else {
+        return Ok(Vec::new());
+    };
+    let dir = claude_project_dir(Path::new(&home), &expand_home(cwd).to_string_lossy());
+    let Ok(reader) = std::fs::read_dir(&dir) else {
+        // No conversations recorded for this project yet is an empty list, not
+        // an error the picker should surface.
+        return Ok(Vec::new());
+    };
+
+    let mut out = Vec::new();
+    for ent in reader.flatten() {
+        let path = ent.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let updated_at = ent
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let Some(summary) = summarize_claude_session(&path) else {
+            continue;
+        };
+        out.push(ClaudeSessionSummary {
+            id: id.to_string(),
+            path: path_to_js(&path),
+            title: summary.0,
+            updated_at,
+            message_count: summary.1,
+        });
+    }
+    out.sort_by_key(|entry| std::cmp::Reverse(entry.updated_at));
+    Ok(out)
+}
+
+/// Returns the conversation's display title and its human-visible message
+/// count. Claude keeps a generated `ai-title` and rewrites it as the topic
+/// moves, so the last one wins; the first typed prompt is the fallback for a
+/// conversation too short to have earned a title.
+fn summarize_claude_session(path: &Path) -> Option<(String, usize)> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut title: Option<String> = None;
+    let mut first_prompt: Option<String> = None;
+    let mut messages = 0usize;
+
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else { break };
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        match value.get("type").and_then(|v| v.as_str()) {
+            Some("ai-title") => {
+                if let Some(text) = value.get("aiTitle").and_then(|v| v.as_str()) {
+                    title = Some(text.to_string());
+                }
+            }
+            Some(kind @ ("user" | "assistant")) => {
+                // Subagent traffic is bookkeeping for a tool call the parent
+                // already shows; counting it would inflate every row.
+                if value
+                    .get("isSidechain")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                messages += 1;
+                if kind == "user" && first_prompt.is_none() {
+                    first_prompt = claude_message_text(&value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if messages == 0 {
+        return None;
+    }
+    let title = title
+        .or(first_prompt)
+        .unwrap_or_else(|| "Untitled conversation".to_string());
+    Some((truncate_title(&title), messages))
+}
+
+/// `content` is a bare string for a typed prompt and a block list once the
+/// message carries attachments or tool results.
+fn claude_message_text(value: &serde_json::Value) -> Option<String> {
+    let content = value.get("message")?.get("content")?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let blocks = content.as_array()?;
+    for block in blocks {
+        if block.get("type").and_then(|v| v.as_str()) == Some("text") {
+            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn truncate_title(text: &str) -> String {
+    let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.chars().count() <= 80 {
+        return cleaned;
+    }
+    let short: String = cleaned.chars().take(79).collect();
+    format!("{short}\u{2026}")
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntry {
@@ -5791,6 +5949,99 @@ mod tests {
                 Err(error) => panic!("{}", error),
             }
         }
+    }
+
+    #[test]
+    fn claude_project_dir_flattens_every_separator() {
+        let home = Path::new("/home/dev");
+        assert_eq!(
+            claude_project_dir(home, "/Users/medeni/Desktop/Projects/monocode"),
+            home.join(".claude/projects/-Users-medeni-Desktop-Projects-monocode")
+        );
+        // Dots and underscores flatten too, which is why the mapping is one-way:
+        // these three distinct paths share a single directory name.
+        let dotted = claude_project_dir(home, "/a/b.c");
+        assert_eq!(dotted, claude_project_dir(home, "/a/b-c"));
+        assert_eq!(dotted, claude_project_dir(home, "/a/b_c"));
+
+        // Everything that is not a letter or digit goes, not just the
+        // characters that read as separators. Spaces and punctuation are
+        // ordinary in project paths, and a Windows path carries a drive colon.
+        assert_eq!(
+            claude_project_dir(home, "/Users/me/My Project (v2)"),
+            home.join(".claude/projects/-Users-me-My-Project--v2-")
+        );
+        assert_eq!(
+            claude_project_dir(home, "C:\\Users\\dev\\proj"),
+            home.join(".claude/projects/C--Users-dev-proj")
+        );
+        // Non-ASCII letters are replaced rather than transliterated: each one
+        // becomes a single `-`, so `çalışma` is `-al--ma`, not `calisma`.
+        assert_eq!(
+            claude_project_dir(home, "/Users/me/çalışma"),
+            home.join(".claude/projects/-Users-me--al--ma")
+        );
+    }
+
+    #[test]
+    fn summarize_claude_session_prefers_the_latest_generated_title() {
+        let dir = tmp("claude-sessions");
+        let path = dir.0.join("s1.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"first prompt"}}"#,
+                "\n",
+                r#"{"type":"ai-title","aiTitle":"An early guess"}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+                r#"{"type":"ai-title","aiTitle":"What it settled on"}"#,
+                "\n",
+                // Subagent traffic belongs to a tool call the parent already shows.
+                r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[]}}"#,
+                "\n",
+                "not json at all\n",
+            ),
+        )
+        .unwrap();
+
+        let (title, messages) = summarize_claude_session(&path).unwrap();
+        assert_eq!(title, "What it settled on");
+        assert_eq!(messages, 2);
+    }
+
+    #[test]
+    fn summarize_claude_session_falls_back_to_the_first_prompt() {
+        let dir = tmp("claude-sessions");
+        let path = dir.0.join("s2.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"  spaced   out  "}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let (title, messages) = summarize_claude_session(&path).unwrap();
+        assert_eq!(title, "spaced out");
+        assert_eq!(messages, 1);
+    }
+
+    #[test]
+    fn summarize_claude_session_skips_a_file_with_no_conversation() {
+        let dir = tmp("claude-sessions");
+        let path = dir.0.join("s3.jsonl");
+        std::fs::write(&path, "{\"type\":\"mode\",\"mode\":\"normal\"}\n").unwrap();
+        assert!(summarize_claude_session(&path).is_none());
+    }
+
+    #[test]
+    fn claude_sessions_returns_empty_for_a_project_with_no_history() {
+        let dir = tmp("claude-empty");
+        let cwd = dir.0.join("nowhere").to_string_lossy().to_string();
+        assert!(claude_sessions_sync(&cwd).unwrap().is_empty());
     }
 
     #[test]
