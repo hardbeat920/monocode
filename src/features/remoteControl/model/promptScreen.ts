@@ -93,6 +93,7 @@ export type InjectionPlan =
 
 const RULE = /^[─━]{8,}$/u;
 const OPTION = /^(❯\s*)?(\d+)\.\s+(\S.*)$/u;
+const QUESTION_START = /^Do you want to /u;
 const QUESTION = /^Do you want to .+\?$/u;
 const PROMPT_FOOTER = /Esc to cancel/u;
 const COMPOSER = /^❯(?:\s|$)/u;
@@ -316,12 +317,25 @@ function readPermissionPrompt(
   lines: readonly string[],
   trimmed: readonly string[],
 ): PermissionPrompt | undefined {
-  const at = lastIndexMatching(trimmed, QUESTION);
+  const at = lastIndexMatching(trimmed, QUESTION_START);
   if (at < 0) return undefined;
+
+  // The CLI hard-wraps box text into painted lines of its own, so a question
+  // longer than the terminal is wide arrives in pieces. Join them back until
+  // one ends the sentence.
+  let question = trimmed[at];
+  let asked = at;
+  while (!question.endsWith("?") && asked + 1 < trimmed.length) {
+    const next = trimmed[asked + 1];
+    if (!next || OPTION.test(next)) break;
+    question = `${question} ${next}`;
+    asked += 1;
+  }
+  if (!QUESTION.test(question)) return undefined;
 
   const options: PromptOption[] = [];
   let footer = "";
-  for (let i = at + 1; i < trimmed.length; i += 1) {
+  for (let i = asked + 1; i < trimmed.length; i += 1) {
     const line = trimmed[i];
     const option = OPTION.exec(line);
     if (option) {
@@ -348,7 +362,7 @@ function readPermissionPrompt(
     return undefined;
 
   return {
-    question: trimmed[at],
+    question,
     detail: promptDetail(lines, trimmed, at),
     options,
     footer,

@@ -142,6 +142,26 @@ describe("a permission prompt on screen", () => {
     expect(screen.kind).toBe("unrecognised");
     expect(JSON.stringify(screen)).not.toContain("keystroke");
   });
+
+  it("reads a question the box wrapped onto a second line", () => {
+    // The pty runs at a fixed 120 columns, narrower than the 130 this was
+    // captured at, and the CLI hard-wraps box text into painted lines of its
+    // own — the trust dialog's paragraph arrives that way. The real question
+    // re-wrapped is the closest thing the captures give us to a long path.
+    const lines = renderScreen(
+      PERMISSION_PROMPT_BYTES,
+      PERMISSION_PROMPT_SIZE,
+    ).flatMap((line) =>
+      line.includes("Do you want to create")
+        ? [" Do you want to create", " probe.txt?"]
+        : [line],
+    );
+    const screen = readRenderedScreen(lines);
+    expect(screen.kind).toBe("permission-prompt");
+    if (screen.kind !== "permission-prompt") return;
+    expect(screen.prompt.question).toBe("Do you want to create probe.txt?");
+    expect(screen.prompt.options).toHaveLength(3);
+  });
 });
 
 describe("a modal on screen", () => {
