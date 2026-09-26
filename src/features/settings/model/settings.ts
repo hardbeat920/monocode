@@ -891,12 +891,32 @@ export function loadRemoteControl(): RemoteControlMode {
   }
 }
 
+export const REMOTE_CONTROL_CHANGE_EVENT = "monocode:remote-control-change";
+
 export function saveRemoteControl(value: RemoteControlMode) {
+  const next = isRemoteControlMode(value) ? value : REMOTE_CONTROL_DEFAULT;
   try {
-    localStorage.setItem(REMOTE_CONTROL_KEY, value);
+    localStorage.setItem(REMOTE_CONTROL_KEY, next);
   } catch {
     // private mode / quota
   }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<RemoteControlMode>(REMOTE_CONTROL_CHANGE_EVENT, {
+      detail: next,
+    }),
+  );
+}
+
+/**
+ * Switching to `all` has to reach live sessions at once. Without this the new
+ * mode only took effect on the next session update.
+ */
+export function subscribeRemoteControl(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(REMOTE_CONTROL_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(REMOTE_CONTROL_CHANGE_EVENT, onStoreChange);
 }
 
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";
