@@ -424,6 +424,19 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve the GitHub Copilot CLI (`copilot`).
+#[tauri::command(async)]
+pub fn harness_resolve_copilot() -> Result<CursorBinary, String> {
+    resolve_copilot()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Copilot CLI not found. Install it from https://github.com/github/copilot-cli and run `copilot login`, then retry."
+                .into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -1296,6 +1309,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "copilot"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
@@ -1528,6 +1542,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
     match provider {
         "claude" => resolve_claude(),
         "codex" => resolve_codex(),
+        "copilot" => resolve_copilot(),
         "cursor" => resolve_cursor_agent(),
         "grok" => resolve_grok(),
         "opencode" => resolve_opencode(),
@@ -1573,6 +1588,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
     let names: &[&str] = match provider {
         "claude" => &["claude"],
         "codex" => &["codex"],
+        "copilot" => &["copilot"],
         "cursor" => &["cursor-agent", "agent"],
         "grok" => &["grok"],
         "opencode" => &["opencode"],
@@ -1652,6 +1668,7 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
     let provider_marker = match provider {
         "claude" => lower.contains("claude"),
         "codex" => lower.contains("codex"),
+        "copilot" => lower.contains("copilot"),
         "hermes" => lower.contains("hermes"),
         _ => true,
     };
@@ -1705,6 +1722,7 @@ fn validate_configured_harness_binary_identity(
         "omp" => is_omp_agent(path),
         "fx" => is_fx_agent(path),
         "grok" => is_grok_agent(path),
+        "copilot" => is_copilot_cli(path),
         _ => true,
     };
     if identity_valid {
@@ -1943,6 +1961,44 @@ fn resolve_hermes() -> Option<PathBuf> {
     }
 
     first_binary(candidates)
+}
+
+fn resolve_copilot() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        candidates.push(home.join(".local/bin/copilot"));
+        candidates.push(home.join(".npm-global/bin/copilot"));
+        candidates.push(home.join(".bun/bin/copilot"));
+        candidates.push(home.join("n/bin/copilot"));
+    }
+    #[cfg(windows)]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        // npm global prefix and WinGet portable symlink directory on Windows.
+        candidates.push(local_app_data.join("npm/copilot"));
+        candidates.push(local_app_data.join("Microsoft/WinGet/Links/copilot"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/copilot"));
+    candidates.push(PathBuf::from("/usr/local/bin/copilot"));
+    candidates.push(PathBuf::from("/usr/bin/copilot"));
+    candidates.push(PathBuf::from("/snap/bin/copilot"));
+    if let Some(from_shell) = which_via_login_shell("copilot") {
+        candidates.push(from_shell);
+    }
+
+    first_binary_matching(candidates, is_copilot_cli)
+}
+
+/// GitHub Copilot CLI shares its file name with unrelated tools, so identify it
+/// by its own version banner rather than by the name alone.
+fn is_copilot_cli(path: &Path) -> bool {
+    if !path.is_file() || !binary_name_eq(path, "copilot") {
+        return false;
+    }
+    exec_capture(&path.to_string_lossy(), &["--version".to_string()], None)
+        .is_ok_and(|version| version.to_ascii_lowercase().contains("github copilot"))
 }
 
 fn resolve_antigravity() -> Option<PathBuf> {
