@@ -64,7 +64,11 @@ import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ClaudeSessionPicker } from "../features/sessions/ui/ClaudeSessionPicker";
-import { buildImportedSession } from "../features/sessions/model/claudeSessionImport";
+import {
+  buildImportedSession,
+  claudeImportTarget,
+  type ClaudeImportTarget,
+} from "../features/sessions/model/claudeSessionImport";
 import {
   readTextFile,
   type ClaudeSessionSummary,
@@ -5038,19 +5042,23 @@ export default function App({
     if (path) onSelectProject(path);
   }, [onSelectProject]);
 
-  const [resumePickerFor, setResumePickerFor] = useState<{
-    sessionId: string;
-    cwd: string;
-  } | null>(null);
+  const [resumePickerFor, setResumePickerFor] =
+    useState<ClaudeImportTarget | null>(null);
 
   const onResumeProviderSession = useCallback((sessionId: string) => {
     const source = sessionsRef.current.find(
       (session) => session.id === sessionId,
     );
     if (!source) return;
-    // Claude files conversations under the directory it ran in, which for a
-    // worktree session is the checkout rather than the project root.
-    setResumePickerFor({ sessionId, cwd: sessionWorkCwd(source) });
+    setResumePickerFor({
+      sessionId,
+      // Claude files conversations under the directory it ran in, which for a
+      // worktree session is the checkout rather than the project root.
+      cwd: sessionWorkCwd(source),
+      ...(source.providerAccountId
+        ? { providerAccountId: source.providerAccountId }
+        : {}),
+    });
   }, []);
 
   /**
@@ -5059,33 +5067,13 @@ export default function App({
    * than starting a new one.
    */
   const importClaudeConversation = useCallback(
-    async (
-      target: { sessionId: string; cwd: string },
-      summary: ClaudeSessionSummary,
-    ) => {
-      const source = sessionsRef.current.find(
-        (session) => session.id === target.sessionId,
-      );
-      if (!source) return;
+    async (target: ClaudeImportTarget, summary: ClaudeSessionSummary) => {
+      // Each step below is a round trip the thread can change across, so the
+      // target is rechecked at every one rather than once at the start.
+      if (!claudeImportTarget(sessionsRef.current, target)) return;
       const transcript = await readTextFile(summary.path).catch(() => null);
       if (transcript === null) return;
-
-      // Reading is async, and loading replaces the thread's transcript. In the
-      // meantime it may have been closed, started a turn, or moved to another
-      // provider or working copy — none of which should have its content
-      // overwritten, and none of which should be bound to this conversation.
-      const stillThere = sessionsRef.current.find(
-        (session) => session.id === target.sessionId,
-      );
-      if (
-        !stillThere ||
-        stillThere.busy ||
-        stillThere.harness !== "claude" ||
-        sessionWorkCwd(stillThere) !== sessionWorkCwd(source) ||
-        stillThere.providerAccountId !== source.providerAccountId
-      ) {
-        return;
-      }
+      if (!claudeImportTarget(sessionsRef.current, target)) return;
 
       // A child that is already running ignores the new binding: `ensureLive`
       // hands back the existing one before the resume state is read, so the
@@ -5094,6 +5082,7 @@ export default function App({
       await stopHarnessSession("claude", target.sessionId).catch(
         () => undefined,
       );
+      if (!claudeImportTarget(sessionsRef.current, target)) return;
 
       setSessions((current) =>
         current.map((session) =>
@@ -5112,9 +5101,10 @@ export default function App({
         target.sessionId,
         summary.id,
         // Claude only resumes when the bound directory matches the one the
-        // next turn runs in, which for a worktree session is the checkout.
-        sessionWorkCwd(stillThere),
-        source.providerAccountId,
+        // next turn runs in — which is the directory these conversations were
+        // listed for, the checkout rather than the project root.
+        target.cwd,
+        target.providerAccountId,
       );
     },
     [],

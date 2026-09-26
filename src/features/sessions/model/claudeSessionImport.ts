@@ -1,6 +1,43 @@
 import { applyHarnessEvent } from "../../../integrations/harness/core/apply";
 import { replayClaudeSession } from "../../../integrations/harness/providers/claude/claude";
-import type { Block, Session } from "./session";
+import { sessionWorkCwd, type Block, type Session } from "./session";
+
+/** The thread a conversation was picked for, as it looked when the picker opened. */
+export type ClaudeImportTarget = {
+  sessionId: string;
+  /** Directory the conversations were listed for; the working copy, not the project. */
+  cwd: string;
+  providerAccountId?: string;
+};
+
+/**
+ * The thread an import may still be committed to, or `null`.
+ *
+ * Loading replaces the thread's transcript, and the steps in between — reading
+ * half a megabyte of session file, stopping the live child — are each a round
+ * trip during which the thread can be closed, start a turn, or move to another
+ * provider, account or working copy. None of those should have their content
+ * overwritten, and the directory matters beyond that: the conversation was
+ * listed for `cwd`, and Claude drops a resume binding whose directory is not
+ * the one the next turn runs in, so a thread that has since moved would start
+ * a new conversation rather than continue the chosen one.
+ */
+export function claudeImportTarget(
+  sessions: Session[],
+  target: ClaudeImportTarget,
+): Session | null {
+  const session = sessions.find((entry) => entry.id === target.sessionId);
+  if (
+    !session ||
+    session.busy ||
+    session.harness !== "claude" ||
+    sessionWorkCwd(session) !== target.cwd ||
+    session.providerAccountId !== target.providerAccountId
+  ) {
+    return null;
+  }
+  return session;
+}
 
 /**
  * Rebuild a MonoCode session from a conversation Claude Code stored on disk.

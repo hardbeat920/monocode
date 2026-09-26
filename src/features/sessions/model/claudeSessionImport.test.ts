@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildImportedSession } from "./claudeSessionImport";
-import { newSession } from "./session";
+import {
+  buildImportedSession,
+  claudeImportTarget,
+} from "./claudeSessionImport";
+import { newSession, type Session } from "./session";
 
 function jsonl(records: Array<Record<string, unknown>>): string {
   return records.map((record) => JSON.stringify(record)).join("\n");
@@ -109,5 +112,65 @@ describe("importing a stored Claude conversation", () => {
   it("keeps an empty conversation empty", () => {
     const session = importOf([{ type: "mode", mode: "normal" }]);
     expect(session.blocks).toEqual([]);
+  });
+});
+
+describe("deciding whether an import may still be committed", () => {
+  function threadIn(overrides: Partial<Session> = {}): Session {
+    return {
+      ...newSession("claude", "/repo", "claude:claude-sonnet-5"),
+      id: "thread-1",
+      ...overrides,
+    };
+  }
+
+  const target = { sessionId: "thread-1", cwd: "/repo" };
+
+  it("accepts the thread the conversations were listed for", () => {
+    const thread = threadIn();
+    expect(claudeImportTarget([thread], target)).toBe(thread);
+  });
+
+  it("refuses a thread that has been closed", () => {
+    expect(claudeImportTarget([], target)).toBeNull();
+  });
+
+  it("refuses a thread that started a turn", () => {
+    expect(claudeImportTarget([threadIn({ busy: true })], target)).toBeNull();
+  });
+
+  it("refuses a thread that moved to another harness", () => {
+    expect(claudeImportTarget([threadIn({ harness: "codex" })], target)).toBe(
+      null,
+    );
+  });
+
+  it("refuses a thread that moved to another account", () => {
+    expect(
+      claudeImportTarget([threadIn({ providerAccountId: "work" })], target),
+    ).toBeNull();
+    // And the other way: picked under an account, since cleared.
+    expect(
+      claudeImportTarget([threadIn()], {
+        ...target,
+        providerAccountId: "work",
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a thread that moved to another working copy", () => {
+    // The conversations were listed for /repo. Claude drops a resume binding
+    // whose directory is not the one the next turn runs in, so binding one of
+    // them here would start a new conversation instead of continuing it.
+    expect(
+      claudeImportTarget([threadIn({ worktreeCwd: "/repo/.tree/a" })], target),
+    ).toBeNull();
+  });
+
+  it("accepts the worktree the conversations were listed for", () => {
+    const thread = threadIn({ worktreeCwd: "/repo/.tree/a" });
+    expect(
+      claudeImportTarget([thread], { ...target, cwd: "/repo/.tree/a" }),
+    ).toBe(thread);
   });
 });
