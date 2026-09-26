@@ -1842,6 +1842,38 @@ export default function App({
     [closeRemote, openRemote],
   );
 
+  /**
+   * The same entry for the sidebar, which names a session rather than a tab.
+   *
+   * A session the workspace has not loaded is absent rather than disabled: the
+   * rule turns on the harness and the bound `providerSessionId`, and a history
+   * summary carries neither, so there is nothing to decide from.
+   */
+  const remoteControlForSession = useCallback(
+    (sessionId: string): RemoteControlAction | null => {
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      if (!session) return null;
+      return remoteControlAction(
+        remoteControlTarget(session, remoteControlIds.includes(session.id)),
+      );
+    },
+    [remoteControlIds],
+  );
+
+  const onRemoteControlSession = useCallback(
+    (sessionId: string, intent: RemoteControlIntent) => {
+      const step = remoteControlStep(
+        intent,
+        remoteControl.current.has(sessionId),
+      );
+      if (step === "open") void openRemote(sessionId);
+      if (step === "close") void closeRemote(sessionId, true);
+    },
+    [closeRemote, openRemote],
+  );
+
   // `all` mode, opened lazily. See `shouldAutoOpen` for why idle-with-a-bound-
   // conversation is the only moment that works rather than a preference. The
   // mode is subscribed, so switching it reaches live sessions at once — which is
@@ -10803,6 +10835,8 @@ export default function App({
               onSessionNavigationOrder={onSessionNavigationOrder}
               onPlaceSessionOnPane={onPlaceSessionOnPane}
               onRenameSession={onRenameHistorySession}
+              remoteControlForSession={remoteControlForSession}
+              onRemoteControlSession={onRemoteControlSession}
               onArchiveSession={onArchiveHistorySession}
               onArchiveSessions={onArchiveHistorySessions}
               onPinSession={onPinHistorySession}

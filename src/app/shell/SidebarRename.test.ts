@@ -1783,3 +1783,114 @@ it("labels preserved sessions as having no branch selected", () => {
   expect(card().textContent).not.toContain("No branch selected");
   expect(card().textContent).toContain("project/main");
 });
+
+describe("sidebar session Remote Control", () => {
+  function openSessionMenu(id = "session-1") {
+    act(() => {
+      container
+        .querySelector(`[data-session-card="${id}"]`)!
+        .dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+    });
+    return Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    );
+  }
+
+  function remoteItem(id = "session-1") {
+    return openSessionMenu(id).find((item) =>
+      item.textContent?.includes("Remote Control"),
+    );
+  }
+
+  it("offers nothing when the workspace declines the session", () => {
+    props.remoteControlForSession = vi.fn(() => null);
+    act(render);
+    expect(remoteItem()).toBeUndefined();
+  });
+
+  it("hands the session id and the menu's intent to the workspace", () => {
+    props.remoteControlForSession = () => ({
+      id: "remote-control",
+      label: "Open Remote Control",
+      intent: "open",
+      disabled: false,
+    });
+    props.onRemoteControlSession = vi.fn();
+    act(render);
+    const item = remoteItem()!;
+    expect(item.disabled).toBe(false);
+    act(() => item.click());
+    expect(props.onRemoteControlSession).toHaveBeenCalledWith(
+      "session-1",
+      "open",
+    );
+  });
+
+  it("closes what is already open", () => {
+    props.remoteControlForSession = () => ({
+      id: "remote-control",
+      label: "Close Remote Control",
+      intent: "close",
+      disabled: false,
+    });
+    props.onRemoteControlSession = vi.fn();
+    act(render);
+    const item = remoteItem()!;
+    act(() => item.click());
+    expect(props.onRemoteControlSession).toHaveBeenCalledWith(
+      "session-1",
+      "close",
+    );
+  });
+
+  // Visible rather than absent, so a thread that has not bound a conversation
+  // yet explains itself instead of silently having no such action.
+  it("explains itself rather than vanishing before the first turn", () => {
+    props.remoteControlForSession = () => ({
+      id: "remote-control",
+      label: "Open Remote Control",
+      intent: "open",
+      description:
+        "Send a message first — there is no conversation to hand over yet",
+      disabled: true,
+    });
+    props.onRemoteControlSession = vi.fn();
+    act(render);
+    const item = remoteItem()!;
+    expect(item.disabled).toBe(true);
+    expect(item.textContent).toContain("Send a message first");
+    act(() => item.click());
+    expect(props.onRemoteControlSession).not.toHaveBeenCalled();
+  });
+
+  // A hand-over names one conversation on the phone.
+  it("is absent once more than one session is selected", () => {
+    props.sessions = [1, 2].map((n) => ({
+      ...props.sessions[0],
+      id: `session-${n}`,
+      updatedAt: 100 - n,
+    }));
+    props.remoteControlForSession = () => ({
+      id: "remote-control",
+      label: "Open Remote Control",
+      intent: "open",
+      disabled: false,
+    });
+    act(render);
+    for (const id of ["session-1", "session-2"]) {
+      act(() =>
+        container
+          .querySelector(`[data-session-card="${id}"]`)!
+          .dispatchEvent(
+            new MouseEvent("click", { bubbles: true, metaKey: true }),
+          ),
+      );
+    }
+    expect(
+      container.querySelectorAll('[data-session-selected="true"]'),
+    ).toHaveLength(2);
+    expect(remoteItem("session-2")).toBeUndefined();
+  });
+});
