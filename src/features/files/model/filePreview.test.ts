@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatFileSize, isImagePath, sniffImageMime } from "./filePreview";
+import {
+  formatFileSize,
+  isImagePath,
+  isPdfBytes,
+  isPdfPath,
+  sniffImageMime,
+} from "./filePreview";
 
 function bytes(...values: number[]): Uint8Array {
   return new Uint8Array(values);
@@ -18,6 +24,26 @@ describe("isImagePath", () => {
     expect(isImagePath("/w/spec.pdf")).toBe(false);
     expect(isImagePath("/w/LICENSE")).toBe(false);
     expect(isImagePath("/w/.png/notes.txt")).toBe(false);
+  });
+});
+
+describe("isPdfPath", () => {
+  it("routes PDFs to the viewer by extension", () => {
+    expect(isPdfPath("/w/spec.pdf")).toBe(true);
+    expect(isPdfPath("/w/Report.PDF")).toBe(true);
+    expect(isPdfPath("/w/notes.md")).toBe(false);
+    expect(isPdfPath("/w/.pdf/notes.txt")).toBe(false);
+  });
+});
+
+describe("isPdfBytes", () => {
+  it("finds the header at the start or within the first 1024 bytes", () => {
+    const encode = (text: string) => new TextEncoder().encode(text);
+    expect(isPdfBytes(encode("%PDF-1.7\n"))).toBe(true);
+    expect(isPdfBytes(encode(`${" ".repeat(500)}%PDF-1.4`))).toBe(true);
+    expect(isPdfBytes(encode(`${" ".repeat(1024)}%PDF-1.4`))).toBe(false);
+    expect(isPdfBytes(encode("<html>%PD"))).toBe(false);
+    expect(isPdfBytes(bytes())).toBe(false);
   });
 });
 
