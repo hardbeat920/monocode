@@ -1702,11 +1702,11 @@ export default function App({
           }
           flushHarnessEvents();
         },
-        // NOT WIRED — the link. `mirror.bridge` now carries `{active, url}` from
-        // the `bridge_status` record, and nothing displays it. Expected: link
-        // plus QR for the focused session (§6). The URL belongs to the
-        // conversation, not the process, so it survives a close and reopen —
-        // whatever renders it must not regenerate the QR each time.
+        // `mirror.bridge` carries `{active, url}` from the `bridge_status`
+        // record; `RemoteControlLink` renders it for the focused session (§6).
+        // The URL belongs to the conversation rather than the process, so it
+        // survives a close and reopen — anything rendering a QR from it must not
+        // regenerate the code each time.
         //
         // A transcript the pty has not written to yet is the ordinary state at
         // the moment of a hand-over, not a failure.
