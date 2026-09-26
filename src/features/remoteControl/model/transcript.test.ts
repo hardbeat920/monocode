@@ -372,6 +372,106 @@ describe("mapRecord", () => {
   });
 });
 
+describe("inbound messages that are not just text", () => {
+  // The shape is verbatim from the corpus — every one of the 137 image blocks
+  // across this machine's 161 transcripts is
+  // {type:"image", source:{type:"base64", media_type, data}} — but the payload
+  // here is a 1x1 PNG generated for the test. The real ones are the user's
+  // screenshots and have no business in a repo.
+  const PNG =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+  const image = (mediaType = "image/png") => ({
+    type: "image",
+    source: { type: "base64", media_type: mediaType, data: PNG },
+  });
+  const userRecord = (content: unknown) =>
+    JSON.stringify({
+      type: "user",
+      uuid: "1f0e3dad-99a0-4a6f-b0d1-4d4a5a5f5a5a",
+      promptSource: "typed",
+      origin: { kind: "human" },
+      message: { role: "user", content },
+    });
+
+  it("surfaces an image-only message instead of dropping it", () => {
+    // 55 user records on this machine produced no event at all before this,
+    // every one an image with no caption — so the assistant's reply would
+    // appear with nothing to have prompted it.
+    const events = eventsOf(userRecord([image()]));
+    expect(types(events)).toEqual(["remote.userMessage"]);
+    const message = events[0];
+    if (message.type !== "remote.userMessage") throw new Error("shape");
+    expect(message.text).toBe("");
+    expect(message.attachments).toEqual([
+      { blockType: "image", mediaType: "image/png", bytes: 69, index: 0 },
+    ]);
+    // Still a real user turn, so it opens one.
+    expect(message.promptSource).toBe("typed");
+  });
+
+  it("describes an attachment without carrying its bytes", () => {
+    // Images arrive base64 inline and the corpus holds 23MB of them, so an
+    // event that inlined the payload would charge every record for a minority.
+    const events = eventsOf(userRecord([image("image/jpeg")]));
+    expect(JSON.stringify(events)).not.toContain(PNG.slice(0, 40));
+    const message = events[0];
+    if (message?.type !== "remote.userMessage") throw new Error("shape");
+    expect(message.attachments?.[0].mediaType).toBe("image/jpeg");
+    // 92 base64 chars with one "=" of padding decode to 69 bytes.
+    expect(message.attachments?.[0].bytes).toBe(69);
+  });
+
+  it("keeps the text and the images of a mixed message", () => {
+    // 25 messages in the corpus mix the two; their images used to vanish while
+    // the text showed, which reads as a complete message and is not one.
+    const events = eventsOf(
+      userRecord([{ type: "text", text: "what is wrong here?" }, image()]),
+    );
+    const message = events[0];
+    if (message?.type !== "remote.userMessage") throw new Error("shape");
+    expect(message.text).toBe("what is wrong here?");
+    expect(message.attachments).toHaveLength(1);
+    expect(message.attachments?.[0].index).toBe(1);
+  });
+
+  it("indexes every attachment so the caller can re-read it", () => {
+    // The corpus has a message with six images; the index plus the record uuid
+    // is what locates each block in the session file.
+    const events = eventsOf(userRecord([image(), image(), image()]));
+    const message = events[0];
+    if (message?.type !== "remote.userMessage") throw new Error("shape");
+    expect(message.attachments?.map((a) => a.index)).toEqual([0, 1, 2]);
+    expect(message.uuid).toBe("1f0e3dad-99a0-4a6f-b0d1-4d4a5a5f5a5a");
+  });
+
+  it("surfaces a block type nobody has seen yet rather than dropping it", () => {
+    // blockType is kept verbatim for the same reason promptSource is: the cost
+    // of not recognising something must never be that it disappears.
+    const events = eventsOf(userRecord([{ type: "document", id: "doc_1" }]));
+    const message = events[0];
+    if (message?.type !== "remote.userMessage") throw new Error("shape");
+    expect(message.attachments).toEqual([{ blockType: "document", index: 0 }]);
+  });
+
+  it("omits attachments entirely for a text-only message", () => {
+    const events = eventsOf(USER_MULTILINE);
+    const message = events[0];
+    if (message?.type !== "remote.userMessage") throw new Error("shape");
+    expect(message.attachments).toBeUndefined();
+  });
+
+  it("still emits nothing when there is genuinely no content", () => {
+    expect(types(eventsOf(userRecord([])))).toEqual([]);
+    expect(types(eventsOf(userRecord("")))).toEqual([]);
+  });
+
+  it("opens a turn for an image-only message, as for any other", () => {
+    const state = createMirrorState();
+    for (const rec of recordsOf(userRecord([image()]))) mapRecord(state, rec);
+    expect(state.turn).toEqual({ active: true, source: "record" });
+  });
+});
+
 describe("turn state when no record ever arrives", () => {
   it("leaves an interrupted turn resolvable instead of pending forever", () => {
     // ESC writes nothing — not even turn_duration — so the file simply stops

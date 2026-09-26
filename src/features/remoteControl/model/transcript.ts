@@ -43,9 +43,36 @@ import {
  * event and is wrong — it appends a *system* block. So the mirror emits this
  * alongside harness events and the caller decides how to seat it.
  */
+/**
+ * A non-text block on an inbound user message — an image today.
+ *
+ * The bytes are deliberately **not** carried. Images arrive base64 inline, and
+ * on this machine 137 of them total 23MB, median 148KB and one 625KB; a message
+ * can hold six. Putting that in an event would charge every record for a
+ * minority case. What is here is enough to decide and to fetch: the caller
+ * already knows the session file, so the message's `uuid` plus this `index`
+ * locates the block to re-read.
+ */
+export type RemoteAttachment = {
+  /**
+   * The block's own `type`, verbatim — `"image"` is the only one observed, and
+   * keeping it unnormalised means a block type nobody has seen yet still
+   * surfaces instead of vanishing, which is the whole point of this event.
+   */
+  blockType: string;
+  /** e.g. `"image/jpeg"`. Absent when the record did not say. */
+  mediaType?: string;
+  /** Decoded payload size, so a caller can budget before reading the bytes. */
+  bytes?: number;
+  /** Position within `message.content`. */
+  index: number;
+};
+
 export type RemoteUserMessage = {
   type: "remote.userMessage";
   text: string;
+  /** Omitted when the message is text only. */
+  attachments?: RemoteAttachment[];
   /** Verbatim, unvalidated. See `mapUser` for why it is not filtered. */
   promptSource?: string;
   originKind?: string;
@@ -319,11 +346,17 @@ function mapUser(
   }
 
   const text = userText(rec);
-  if (!text) return [];
+  const attachments = userAttachments(rec);
   // Any user record that is not a tool result is somebody sending a message,
   // whoever they are. `promptSource` and `origin.kind` are deliberately not
   // filtered: a phone-originated turn has never been observed and its values
   // are unknown, so an unrecognised one must still appear (§12).
+  //
+  // The same rule is why one block of *any* kind is enough to emit. Requiring
+  // text used to drop 55 messages across this machine's 161 transcripts, every
+  // one of them an image with no caption: the assistant's reply would appear in
+  // MonoCode with nothing to have prompted it.
+  if (!text && attachments.length === 0) return [];
   const events: MirrorEvent[] = [];
   if (state.pendingAssistant) {
     state.pendingAssistant = false;
@@ -334,12 +367,41 @@ function mapUser(
   events.push({
     type: "remote.userMessage",
     text,
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...(promptSource ? { promptSource } : {}),
     ...(originKind ? { originKind } : {}),
     ...(stringField(rec, "uuid") ? { uuid: stringField(rec, "uuid") } : {}),
   });
   state.turn = { active: true, source: "record" };
   return events;
+}
+
+/** Every block that is not text, described rather than carried. */
+function userAttachments(rec: Record<string, unknown>): RemoteAttachment[] {
+  const content = asRecord(rec.message)?.content;
+  if (!Array.isArray(content)) return [];
+  const out: RemoteAttachment[] = [];
+  content.forEach((block, index) => {
+    const row = asRecord(block);
+    const blockType = stringField(row, "type");
+    if (!row || !blockType || blockType === "text") return;
+    const source = asRecord(row.source);
+    const mediaType = stringField(source, "media_type");
+    const data = source?.data;
+    out.push({
+      blockType,
+      ...(mediaType ? { mediaType } : {}),
+      ...(typeof data === "string" ? { bytes: decodedSize(data) } : {}),
+      index,
+    });
+  });
+  return out;
+}
+
+/** Bytes a base64 payload decodes to, without decoding it. */
+function decodedSize(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
 }
 
 function userText(rec: Record<string, unknown>): string {
