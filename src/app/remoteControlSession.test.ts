@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoOpenTargets,
   composerHeld,
   COMPOSER_CLEAR,
+  forEachSafely,
   createPtyFanout,
   emptyApprovalProgress,
   injectRemoteText,
@@ -1037,5 +1039,80 @@ describe("an interrupt resolves with no further output", () => {
     resolveTurnFromScreen(state, turnSignal(held, null, spokeAt + 99_000));
 
     expect(state.turn.active).toBe(true);
+  });
+});
+
+describe("opening every session at once", () => {
+  const ready = (id: string) => ({
+    ...newSession("claude", "/repo/monocode"),
+    id,
+    providerSessionId: `sess-${id}`,
+    busy: false,
+  });
+
+  it("keeps going when one session throws", () => {
+    // This ran inside an effect across every thread, so a throw for one session
+    // abandoned the rest and took the React tree with it.
+    const opened: string[] = [];
+    const failed: string[] = [];
+
+    forEachSafely(
+      ["a", "b", "c"],
+      (id) => {
+        if (id === "b") throw new Error("no transcript");
+        opened.push(id);
+      },
+      (id) => failed.push(id),
+    );
+
+    expect(opened).toEqual(["a", "c"]);
+    expect(failed).toEqual(["b"]);
+  });
+
+  it("reports the failure rather than swallowing it", () => {
+    const seen: unknown[] = [];
+
+    forEachSafely(
+      ["a"],
+      () => {
+        throw new Error("boom");
+      },
+      (_id, error) => seen.push(error),
+    );
+
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as Error).message).toBe("boom");
+  });
+
+  it("picks the eligible sessions and no others", () => {
+    const sessions = [
+      ready("a"),
+      { ...ready("b"), busy: true },
+      { ...newSession("codex", "/repo/other"), id: "c" },
+    ];
+
+    expect(
+      autoOpenTargets(sessions, () => ({
+        mode: "all",
+        open: false,
+        dismissed: false,
+      })),
+    ).toEqual(["a"]);
+  });
+
+  it("skips a session whose hand-over has started but not finished", () => {
+    // The bug: the finished entry is written several awaits after the start, so
+    // treating "not finished" as "not started" re-entered the hand-over on every
+    // re-render — unboundedly, until React tore the tree down.
+    const inFlight = new Set(["a"]);
+    const sessions = [ready("a"), ready("b")];
+
+    expect(
+      autoOpenTargets(sessions, (session) => ({
+        mode: "all",
+        open: inFlight.has(session.id),
+        dismissed: false,
+      })),
+    ).toEqual(["b"]);
   });
 });

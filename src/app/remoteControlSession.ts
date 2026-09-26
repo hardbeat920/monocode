@@ -757,3 +757,42 @@ export function turnSignal(
     composerHeld: composerHeld(screen.lines) !== null,
   };
 }
+
+/**
+ * Run `open` for each id, letting one failure cost only its own session.
+ *
+ * A remote-control failure has to degrade that conversation, not the window. The
+ * loop this replaces called straight into the opener, so anything thrown for one
+ * session abandoned every session after it — and in an effect, took the React
+ * tree with it.
+ */
+export function forEachSafely(
+  ids: readonly string[],
+  open: (id: string) => void,
+  onError: (id: string, error: unknown) => void,
+): void {
+  for (const id of ids) {
+    try {
+      open(id);
+    } catch (error) {
+      onError(id, error);
+    }
+  }
+}
+
+/**
+ * Which sessions `all` mode should hand over now.
+ *
+ * Separated from the loop so the choice stays a function of the sessions and
+ * their state, and so a caller cannot accidentally make "already opening" part
+ * of the iteration rather than part of the decision — which is what let one
+ * session be opened twice, and then unboundedly.
+ */
+export function autoOpenTargets(
+  sessions: readonly Session[],
+  stateFor: (session: Session) => AutoOpenState,
+): string[] {
+  return sessions
+    .filter((session) => shouldAutoOpen(session, stateFor(session)))
+    .map((session) => session.id);
+}

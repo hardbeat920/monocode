@@ -165,8 +165,10 @@ import {
   REMOTE_CONTROL_ROWS,
 } from "../integrations/harness/providers/claude/remoteControl";
 import {
+  autoOpenTargets,
   createPtyFanout,
   emptyApprovalProgress,
+  forEachSafely,
   injectRemoteText,
   noteInterruptedTurn,
   pendingAfter,
@@ -179,7 +181,6 @@ import {
   remoteControlStep,
   remoteControlTarget,
   seatRemoteUserMessage,
-  shouldAutoOpen,
   turnSignal,
   type ApprovalProgress,
   type PtyFanout,
@@ -1354,6 +1355,18 @@ export default function App({
     [],
   );
   const remoteHome = useRef<string | null>(null);
+  /**
+   * Sessions whose hand-over has started but not finished.
+   *
+   * The finished entry in `remoteControl` is only written after the child is
+   * stopped and the pty spawned, several awaits in. `all` mode reaches
+   * `openRemote` from an effect keyed on `sessions`, and `openRemote` calls
+   * `setSessions` before that entry exists — so the effect re-ran, saw no entry,
+   * and started the hand-over again, unboundedly, until React tore the tree down
+   * for exceeding its update depth. A blank window. The guard has to be set
+   * before the first await, not after the last one.
+   */
+  const remoteOpening = useRef(new Set<string>());
   /** Sessions showing the raw pty, because MonoCode could not read its screen. */
   const [remoteTerminalIds, setRemoteTerminalIds] = useState<readonly string[]>(
     [],
@@ -1548,6 +1561,7 @@ export default function App({
   const openRemote = useCallback(
     async (sessionId: string) => {
       if (remoteControl.current.has(sessionId)) return;
+      if (remoteOpening.current.has(sessionId)) return;
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
@@ -1558,17 +1572,24 @@ export default function App({
         session.cwd,
         [...remoteControl.current.values()].map((entry) => entry.name),
       );
+      // Claimed here, before the first await: the finished entry below is many
+      // awaits away, and until one of them exists nothing stops a re-entry.
+      remoteOpening.current.add(sessionId);
       if (!remoteHome.current) remoteHome.current = await homeDir();
       const path = claudeTranscriptPath(
         remoteHome.current,
         cwd,
         providerSessionId,
       );
-      setSessions((prev) =>
-        prev.map((entry) =>
+      setSessions((prev) => {
+        const next = prev.map((entry) =>
           entry.id === sessionId ? noteInterruptedTurn(entry) : entry,
-        ),
-      );
+        );
+        // `map` allocates even when every element is identical, and a fresh
+        // array re-runs every effect keyed on `sessions`. Only a real change
+        // should cost that.
+        return next.some((entry, index) => entry !== prev[index]) ? next : prev;
+      });
       let handle;
       try {
         handle = await openRemoteControl(
@@ -1596,6 +1617,7 @@ export default function App({
           }`,
         });
         flushHarnessEvents();
+        remoteOpening.current.delete(sessionId);
         return;
       }
       const mirror = createMirrorState();
@@ -1729,6 +1751,7 @@ export default function App({
         (chunk) => fanout.dispatch(decoder.decode(chunk, { stream: true })),
         () => undefined,
       );
+      remoteOpening.current.delete(sessionId);
       setRemoteControlIds((ids) =>
         ids.includes(sessionId) ? ids : [...ids, sessionId],
       );
@@ -1809,24 +1832,44 @@ export default function App({
   );
 
   // `all` mode, opened lazily. See `shouldAutoOpen` for why idle-with-a-bound-
-  // conversation is the only moment that works rather than a preference.
-  // The setting has no subscribe helper, so a change to it takes effect on the
-  // next session update rather than instantly.
+  // conversation is the only moment that works rather than a preference. The
+  // mode is subscribed, so switching it reaches live sessions at once — which is
+  // also why a fault here was visible the instant the user clicked.
   useEffect(() => {
     if (remoteControlMode !== "all") return;
     const mode = remoteControlMode;
-    for (const session of sessions) {
-      if (
-        !shouldAutoOpen(session, {
-          mode,
-          open: remoteControl.current.has(session.id),
-          dismissed: remoteControlClosed.current.has(session.id),
-        })
-      )
-        continue;
-      void openRemote(session.id);
-    }
-  }, [sessions, openRemote, remoteControlMode]);
+    const targets = autoOpenTargets(sessions, (session) => ({
+      mode,
+      // In-flight counts as open. The finished entry appears several awaits
+      // later, and treating "not finished" as "not started" is what let one
+      // session be handed over repeatedly.
+      open:
+        remoteControl.current.has(session.id) ||
+        remoteOpening.current.has(session.id),
+      dismissed: remoteControlClosed.current.has(session.id),
+    }));
+    // One session's failure must cost that session, not the window: this runs
+    // across every thread at once, so a throw here took the React tree with it.
+    forEachSafely(
+      targets,
+      (id) => void openRemote(id),
+      (id, error) => {
+        enqueueHarnessEvent(id, {
+          type: "session.error",
+          message: `Could not open Remote Control. ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+        flushHarnessEvents();
+      },
+    );
+  }, [
+    enqueueHarnessEvent,
+    flushHarnessEvents,
+    openRemote,
+    remoteControlMode,
+    sessions,
+  ]);
 
   useEffect(() => {
     if (resumed?.sessions.length) bindResumedSessions(resumed.sessions);
