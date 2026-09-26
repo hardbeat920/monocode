@@ -11,6 +11,7 @@ import {
   QUICK_COMPOSER_DEFAULT_SHORTCUT,
   quickComposerShortcutLabel,
   shortcutFromKeyEvent,
+  shortcutTokens,
 } from "../../quick-composer/model/quickComposerShortcut";
 import { readFlag, writeFlag } from "./storageFlags";
 
@@ -726,8 +727,11 @@ export function loadQuickComposerShortcut(): string {
 
 export function saveQuickComposerShortcut(value: string) {
   if (!isGlobalShortcut(value)) return;
+  // Same conflict rules as every other row, so the separately stored Quick
+  // Composer chord cannot claim a combination another command already owns.
+  const shortcut = validateKeybindingShortcut(QUICK_COMPOSER_COMMAND, value);
   try {
-    localStorage.setItem(QUICK_COMPOSER_SHORTCUT_KEY, value);
+    localStorage.setItem(QUICK_COMPOSER_SHORTCUT_KEY, shortcut);
   } catch {
     // private mode / quota
   }
@@ -1029,14 +1033,16 @@ const DISPLAY_MODIFIERS: [string, string][] = IS_MAC
       ["Shift+", "Shift"],
     ];
 
+const QUICK_COMPOSER_COMMAND = "App: Quick Composer";
+const ACTIVATE_RANGE_COMMAND = "Tab: Activate 1–8";
+
 /**
- * The stored form of a row's documented default, so a recorded chord can be
- * checked against every other command and not only against other overrides.
- * Returns null for grouped rows that document a range rather than one chord.
+ * Every chord a command owns by default, in stored form. Grouped rows expand
+ * to one chord per key so a rebind can never shadow a working shortcut.
  */
-function defaultShortcutFor(command: string): string | null {
+function defaultShortcutsFor(command: string): string[] {
   const row = KEYBINDINGS.find((entry) => entry.command === command);
-  if (!row || row.keys.includes("…")) return null;
+  if (!row) return [];
   let rest = row.keys;
   const modifiers: string[] = [];
   for (const [display, modifier] of DISPLAY_MODIFIERS) {
@@ -1045,23 +1051,61 @@ function defaultShortcutFor(command: string): string | null {
       rest = rest.slice(display.length);
     }
   }
-  const code = /^[A-Za-z]$/.test(rest)
-    ? `Key${rest.toUpperCase()}`
-    : /^[0-9]$/.test(rest)
-      ? `Digit${rest}`
-      : (KEY_CODES[rest] ??
-        (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(rest) ? rest : null));
-  if (!code) return null;
-  return canonicalShortcut(
-    modifiers.length ? [...modifiers, code].join("+") : code,
-  );
+  const chords = (code: string) => {
+    const value = canonicalShortcut(
+      modifiers.length ? [...modifiers, code].join("+") : code,
+    );
+    return value ? [value] : [];
+  };
+  if (row.keys.includes("…")) {
+    return [1, 2, 3, 4, 5, 6, 7, 8].flatMap((digit) =>
+      chords(`Digit${digit}`),
+    );
+  }
+  if (/^[A-Za-z]$/.test(rest)) return chords(`Key${rest.toUpperCase()}`);
+  if (/^[0-9]$/.test(rest)) return chords(`Digit${rest}`);
+  if (KEY_CODES[rest]) return chords(KEY_CODES[rest]);
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(rest)) return chords(rest);
+  return [];
+}
+
+/** Chord to owning command, covering defaults, live overrides and Quick Composer. */
+function shortcutOwners(): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const row of KEYBINDINGS) {
+    // The Quick Composer chord is stored separately from the table.
+    const chords =
+      row.command === QUICK_COMPOSER_COMMAND
+        ? [loadQuickComposerShortcut()]
+        : defaultShortcutsFor(row.command);
+    for (const chord of chords) owners.set(chord, row.command);
+  }
+  for (const [command, override] of Object.entries(
+    loadKeybindingOverrides(),
+  )) {
+    if (override.shortcut) owners.set(override.shortcut, command);
+  }
+  return owners;
 }
 
 function validateShortcut(command: string, shortcut: string): string {
   const canonical = canonicalShortcut(shortcut);
   if (!canonical) throw new Error("That combination is not a valid shortcut");
-  if (command === "Tab: Activate 1–8" && !/Digit[1-8]$/.test(canonical)) {
+  if (command === ACTIVATE_RANGE_COMMAND && !/Digit[1-8]$/.test(canonical)) {
     throw new Error("Tab: Activate 1–8 needs a number key from 1 to 8");
+  }
+  return canonical;
+}
+
+/** Shared by both save paths so no chord can be claimed twice. */
+export function validateKeybindingShortcut(
+  command: string,
+  shortcut: string,
+): string {
+  const canonical = validateShortcut(command, shortcut);
+  const owner = shortcutOwners().get(canonical);
+  if (owner && owner !== command) {
+    throw new Error(`Already used by ${owner}`);
   }
   return canonical;
 }
@@ -1114,16 +1158,7 @@ export function saveKeybindingOverride(
   const next = loadKeybindingOverrides();
   if (override.disabled) next[command] = { disabled: true };
   else if (override.shortcut) {
-    const shortcut = validateShortcut(command, override.shortcut);
-    const conflict = [
-      ...Object.entries(next).map(
-        ([other, value]) => [other, value.shortcut] as const,
-      ),
-      ...KEYBINDINGS.map(
-        (row) => [row.command, defaultShortcutFor(row.command)] as const,
-      ),
-    ].find(([other, existing]) => other !== command && existing === shortcut);
-    if (conflict) throw new Error(`Already used by ${conflict[0]}`);
+    const shortcut = validateKeybindingShortcut(command, override.shortcut);
     next[command] = { shortcut };
   } else delete next[command];
   try {
@@ -1189,6 +1224,17 @@ export function keybindingShortcutLabel(
   if (override?.disabled) return null;
   return override?.shortcut
     ? quickComposerShortcutLabel(override.shortcut)
+    : fallback;
+}
+
+export function keybindingShortcutTokens(
+  command: string,
+  fallback: string,
+): string | null {
+  const override = loadKeybindingOverrides()[command];
+  if (override?.disabled) return null;
+  return override?.shortcut
+    ? shortcutTokens(override.shortcut)
     : fallback;
 }
 

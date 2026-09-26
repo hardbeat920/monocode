@@ -45,7 +45,7 @@ import {
   saveQuickComposerShortcut,
   saveTabAnimationsEnabled,
 } from "./settings";
-import { MOD, SHIFT } from "../../../platform/tauri/platform";
+import { IS_MAC, MOD, SHIFT } from "../../../platform/tauri/platform";
 
 const KEY = "monocode.composerRunner";
 const MODEL_CONTROLS_KEY = "monocode.modelControls";
@@ -274,6 +274,17 @@ describe("keybinding overrides", () => {
     expect(() =>
       saveKeybindingOverride("Tab: New", { shortcut: "Control+Tab" }),
     ).toThrow("Already used by Tab: Cycle Next");
+  });
+
+  it("protects every chord in the grouped tab activation range", () => {
+    const mod = IS_MAC ? "Command" : "Control";
+    for (const digit of [1, 4, 8]) {
+      expect(() =>
+        saveKeybindingOverride("App: Search", {
+          shortcut: `${mod}+Digit${digit}`,
+        }),
+      ).toThrow("Already used by Tab: Activate 1–8");
+    }
   });
 
   it("rejects a chord the command cannot use and invalid chords", () => {
