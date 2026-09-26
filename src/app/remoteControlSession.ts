@@ -12,7 +12,10 @@ import type {
   RemoteControlIntent,
   RemoteControlTarget,
 } from "../features/remoteControl/model/action";
-import { planInjection } from "../features/remoteControl/model/promptScreen";
+import {
+  composerContent,
+  planInjection,
+} from "../features/remoteControl/model/promptScreen";
 import type {
   InjectionPlan,
   InjectionRefusal,
@@ -129,14 +132,64 @@ export function seatRemoteUserMessage(
   now = Date.now(),
 ): Session {
   const text = event.text.trim();
-  if (!text) return session;
+  const attachments = event.attachments ?? [];
+  if (!text && attachments.length === 0) return session;
+  // A message that is only an image still happened. `mapUser` goes out of its
+  // way to emit those — requiring text here dropped them again one layer down,
+  // and a reply with nothing above it is exactly what that was written to stop.
+  // The placeholder names what arrived rather than pretending to transcribe it.
+  const body = text || `[${attachments.map((a) => a.blockType).join(", ")}]`;
   return {
     ...session,
     blocks: [
       ...session.blocks,
-      { id: crypto.randomUUID(), role: "user", text, startedAt: now },
+      { id: crypto.randomUUID(), role: "user", text: body, startedAt: now },
     ],
   };
+}
+
+/**
+ * Whether a failed read means the file is not there rather than that something
+ * went wrong.
+ *
+ * The distinction is load-bearing where it is used: a transcript that does not
+ * exist yet is honestly zero bytes, and any other failure is a measurement we
+ * did not make — which is not the same as a measurement of zero, and must not
+ * be turned into one.
+ */
+export function readFailedBecauseMissing(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  // The unix text, plus what Windows reports for a missing file and a missing
+  // directory, since the Rust side passes the OS error through verbatim.
+  return /No such file or directory|os error 2\b|os error 3\b|cannot find the (file|path)/i.test(
+    text,
+  );
+}
+
+/**
+ * Whether a mirrored user message is the echo of one this app just typed.
+ *
+ * Both are true at once and neither is wrong: the composer seats the message
+ * locally the moment it is sent, and the CLI writes the same message to the
+ * transcript, which the mirror seats again. Left alone, everything sent from
+ * MonoCode appears twice.
+ *
+ * Making the mirror the only author would fix that and cost more than it saves:
+ * the block would not appear until the record landed, and a mirror that missed
+ * it — a watcher error, a transcript path that moved — would lose the message
+ * from the screen entirely while the CLI had it. That is a worse failure than a
+ * duplicate, so the local block stays and the echo is consumed instead.
+ *
+ * Consumed, not matched by time: each injected text is spent once, so sending
+ * the same words twice seats two blocks and swallows two echoes. A phone
+ * message that happens to read the same as something typed here is the one case
+ * this cannot tell apart, and it resolves the same way — one block per message.
+ */
+export function takeInjectedEcho(pending: string[], text: string): boolean {
+  const at = pending.indexOf(text.trim());
+  if (at < 0) return false;
+  pending.splice(at, 1);
+  return true;
 }
 
 /**
@@ -507,13 +560,11 @@ export const COMPOSER_CLEAR = "\x15";
  * remainder after the marker is real content rather than a hint.
  */
 export function composerHeld(lines: readonly string[]): string | null {
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed !== "❯" && !trimmed.startsWith("❯ ")) continue;
-    const held = trimmed.slice(1).trim();
-    return held.length > 0 ? held : null;
-  }
-  return null;
+  // Delegated rather than repeated: this used to scan for the first `❯` row,
+  // which is the oldest user message in the scrollback and not the composer at
+  // all. `composerContent` finds the box the way the parser does, so the two
+  // cannot drift apart again.
+  return composerContent(lines);
 }
 
 export type SendGate =

@@ -124,7 +124,7 @@ import {
   homeDir,
   notifyGitChanged,
   pickFolder,
-  readTextFile,
+  readFileRange,
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "../platform/tauri/fs";
@@ -181,11 +181,13 @@ import {
   remoteApprovalTransition,
   remoteApprovalView,
   handoverTiming,
+  readFailedBecauseMissing,
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
   remoteControlTargetForRunningHandover,
   seatRemoteUserMessage,
+  takeInjectedEcho,
   turnSignal,
   withClaim,
   type ApprovalProgress,
@@ -1376,6 +1378,13 @@ export default function App({
    * ending is one.
    */
   const remotePending = useRef(new Set<string>());
+  /**
+   * Text this app typed into a pty, waiting for the transcript to echo it.
+   *
+   * See `takeInjectedEcho`. Keyed by session, and each entry is spent by the
+   * first mirrored message that matches it.
+   */
+  const remoteEcho = useRef(new Map<string, string[]>());
   const [remoteControlIds, setRemoteControlIds] = useState<readonly string[]>(
     [],
   );
@@ -1581,6 +1590,12 @@ export default function App({
           flushHarnessEvents();
           return;
         }
+        // Recorded before anything else: the record can land while this
+        // handler is still running, and an echo that arrives first would be
+        // seated as a second copy.
+        const echoes = remoteEcho.current.get(sessionId) ?? [];
+        echoes.push(text.trim());
+        remoteEcho.current.set(sessionId, echoes);
         if (hasAttachments) {
           // The TUI takes typed text. `@file` mentions in it resolve as usual,
           // but a pasted attachment has no keystroke to become.
@@ -1639,9 +1654,23 @@ export default function App({
             // Byte length, matching the cursor the watcher advances. A
             // transcript that is not there yet starts the mirror at zero, which
             // is correct: there is nothing before it to skip.
-            transcriptEnd: async () =>
-              new TextEncoder().encode(await readTextFile(path).catch(() => ""))
-                .length,
+            transcriptEnd: async () => {
+              // The size the ranged read already reports, rather than reading
+              // the file in order to count it. `readTextFile` refuses anything
+              // past 8MB and that refusal used to become `0`, which tells the
+              // watcher every record is new and replays the whole conversation
+              // into the thread — worst exactly where the boundary matters most.
+              try {
+                return (await readFileRange(path, 0, 1)).size;
+              } catch (error) {
+                // Nothing written yet is the one honest zero. Anything else has
+                // to stop the hand-over: this is measured between two processes,
+                // and a measurement we failed to make is not a measurement of
+                // zero.
+                if (readFailedBecauseMissing(error)) return 0;
+                throw error;
+              }
+            },
             spawnPty,
             killPty,
           },
@@ -1685,6 +1714,16 @@ export default function App({
             );
             for (const event of events) {
               if (event.type === "remote.userMessage") {
+                // Ours coming back. The composer already seated it; seating the
+                // echo too is how one message becomes two.
+                if (
+                  takeInjectedEcho(
+                    remoteEcho.current.get(sessionId) ?? [],
+                    event.text,
+                  )
+                ) {
+                  continue;
+                }
                 setSessions((prev) =>
                   prev.map((entry) =>
                     entry.id === sessionId
@@ -1925,6 +1964,7 @@ export default function App({
         setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
         remoteTerminals.current.delete(sessionId);
         setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
+        remoteEcho.current.delete(sessionId);
         entry.stop();
       } else if (byUser) {
         remoteControlClosed.current.add(sessionId);
@@ -5110,10 +5150,6 @@ export default function App({
         ? sessionDisplayTitle(seed.title, seed.harness)
         : "this session";
       removingSessionIds.current.add(sessionId);
-      // An archived thread leaves the tab list, and a deleted one is gone
-      // altogether, so this is the last moment anything can close its pty —
-      // the action surface reads the tabs and will never see it again.
-      void closeRemote(sessionId, true);
       let deleteWorktreePath: string | undefined;
       if (mode === "delete" && !skipDeleteConfirm) {
         deleteConfirmationPending.current = true;
@@ -5287,6 +5323,15 @@ export default function App({
           stop: stopSessionForRemoval,
         });
         const removed = await remover.remove(sessionId);
+        if (removed) {
+          // Once the removal has settled, and not before it. This used to run
+          // at the top, so cancelling the delete dialog had already killed the
+          // pty and marked the thread dismissed: a cancelled delete ended the
+          // user's live phone session, and `all` would not reopen it. It still
+          // reaches the pty from here even though the tab has gone, because the
+          // id is derived from the thread rather than held.
+          await closeRemote(sessionId, true);
+        }
         if (removed && deleteWorktreePath && seed) {
           try {
             await onRemoveWorktree(seed.cwd, deleteWorktreePath, false);
@@ -6765,18 +6810,29 @@ export default function App({
               sessionId,
               cwd: initialWorkCwd,
             });
-            await steerHarnessTurn({
-              harness: current.harness,
+            const steerText = inboxAskPrompt(
+              rawCommand ? undefined : current.inboxAsk,
+              prompt,
+            );
+            // Same rule as `sendTurn`: a remote-controlled conversation is owned
+            // by the pty, and steering it through the harness would talk to a
+            // child that no longer has it. `appendUser` sets `busy` before the
+            // send runs, so a follow-up reaches this branch while the hand-over
+            // is live.
+            await (injectRemoteTurn(
               sessionId,
-              cwd: initialWorkCwd,
-              model: current.model,
-              modelSettings: current.modelSettings,
-              text: inboxAskPrompt(
-                rawCommand ? undefined : current.inboxAsk,
-                prompt,
-              ),
-              attachments: prepared,
-            });
+              steerText,
+              prepared.length > 0,
+            ) ??
+              steerHarnessTurn({
+                harness: current.harness,
+                sessionId,
+                cwd: initialWorkCwd,
+                model: current.model,
+                modelSettings: current.modelSettings,
+                text: steerText,
+                attachments: prepared,
+              }));
           } catch (error: unknown) {
             const message =
               error instanceof Error
@@ -9472,14 +9528,16 @@ export default function App({
         );
         sessionsRef.current = next;
         setSessions(next);
-        await steerHarnessTurn({
-          harness: session.harness,
-          sessionId: id,
-          cwd: sessionWorkCwd(session),
-          model: session.model,
-          modelSettings: session.modelSettings,
-          text,
-        });
+        // A worker can be handed over too, and the pty owns it just the same.
+        await (injectRemoteTurn(id, text, false) ??
+          steerHarnessTurn({
+            harness: session.harness,
+            sessionId: id,
+            cwd: sessionWorkCwd(session),
+            model: session.model,
+            modelSettings: session.modelSettings,
+            text,
+          }));
       },
       respondApproval: (id, requestId, decision) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);

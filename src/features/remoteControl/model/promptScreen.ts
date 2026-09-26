@@ -588,6 +588,29 @@ function findComposer(trimmed: readonly string[]): Composer | undefined {
   return undefined;
 }
 
+/**
+ * What the composer box is holding, or `null` when it is empty or absent.
+ *
+ * Exported because the glyph alone is not enough and the caller kept getting
+ * that wrong. `❯` starts every user message in the scrollback too, so a scan
+ * for the first `❯` row returns the oldest message on screen and calls it
+ * unsent text. The consequences were both silent: a send cleared the composer,
+ * looked again, found that scrollback row unchanged, and refused — so composer
+ * sends failed for as long as any earlier message was visible — and the same
+ * reading told `turnSignal` a composer was held, which ends a running turn
+ * after three seconds of quiet.
+ *
+ * Only the first row of the box is read. A wrapped message fills more, but
+ * "holding something" is answered by the first one.
+ */
+export function composerContent(lines: readonly string[]): string | null {
+  const trimmed = lines.map((line) => line.trim());
+  const composer = findComposer(trimmed);
+  if (!composer) return null;
+  const held = trimmed[composer.top + 1].slice(1).trim();
+  return held.length > 0 ? held : null;
+}
+
 function readTurn(
   trimmed: readonly string[],
   composer: Composer | undefined,

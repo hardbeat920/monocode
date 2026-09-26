@@ -3,6 +3,8 @@ import { remoteControlAction } from "../features/remoteControl/model/action";
 import {
   autoOpenTargets,
   composerHeld,
+  readFailedBecauseMissing,
+  takeInjectedEcho,
   COMPOSER_CLEAR,
   forEachSafely,
   createPtyFanout,
@@ -146,6 +148,21 @@ describe("an inbound message from the phone", () => {
     expect(block?.startedAt).toBeTypeOf("number");
   });
 
+  it("seats a message that is only an image", () => {
+    // `mapUser` goes out of its way to emit these — it was written because
+    // requiring text dropped 55 of them across 161 transcripts, each leaving a
+    // reply with nothing above it. Requiring text here dropped them again.
+    const next = seatRemoteUserMessage(session(), {
+      type: "remote.userMessage",
+      text: "",
+      attachments: [{ blockType: "image", mediaType: "image/jpeg" }],
+    });
+
+    const block = next.blocks.at(-1);
+    expect(block?.role).toBe("user");
+    expect(block?.text).toBe("[image]");
+  });
+
   it("ignores an empty message rather than seating a blank turn", () => {
     const before = session();
     const next = seatRemoteUserMessage(before, {
@@ -154,6 +171,57 @@ describe("an inbound message from the phone", () => {
     });
 
     expect(next).toBe(before);
+  });
+});
+
+describe("whether a failed read means the file is absent", () => {
+  it("recognises what each platform says about a missing file", () => {
+    for (const text of [
+      "/Users/n/.claude/projects/x/y.jsonl: No such file or directory (os error 2)",
+      "C:\\Users\\n\\y.jsonl: The system cannot find the file specified. (os error 2)",
+      "C:\\Users\\n\\y.jsonl: The system cannot find the path specified. (os error 3)",
+    ]) {
+      expect(readFailedBecauseMissing(new Error(text))).toBe(true);
+    }
+  });
+
+  it("does not call anything else absent", () => {
+    // The distinction the hand-over rests on: a refusal or a permission error
+    // is a measurement we did not make, and must not become a measurement of
+    // zero — that would replay the whole conversation as new events.
+    for (const text of [
+      "File is too large to open as text",
+      "/Users/n/y.jsonl: Permission denied (os error 13)",
+      "Not a file",
+    ]) {
+      expect(readFailedBecauseMissing(new Error(text))).toBe(false);
+    }
+  });
+});
+
+describe("a message of ours coming back through the transcript", () => {
+  it("is consumed rather than seated a second time", () => {
+    const pending = ["try the other branch"];
+
+    expect(takeInjectedEcho(pending, "  try the other branch  ")).toBe(true);
+    expect(pending).toEqual([]);
+  });
+
+  it("spends each send once, so the same words twice seat twice", () => {
+    const pending = ["again", "again"];
+
+    expect(takeInjectedEcho(pending, "again")).toBe(true);
+    expect(takeInjectedEcho(pending, "again")).toBe(true);
+    expect(takeInjectedEcho(pending, "again")).toBe(false);
+  });
+
+  it("seats a message from the phone", () => {
+    // Nothing was typed here, so nothing is owed an echo and the message is
+    // somebody else's.
+    expect(takeInjectedEcho([], "sent from the phone")).toBe(false);
+    expect(takeInjectedEcho(["something else"], "sent from the phone")).toBe(
+      false,
+    );
   });
 });
 
@@ -724,6 +792,32 @@ describe("the composer the CLI restores after an interrupt", () => {
 
   it("reads the restored prompt out of a held composer", () => {
     expect(composerHeld(AFTER_INTERRUPT)).toBe(
+      "Write a very long essay about the history of the abacus, at least 2000 words. Think carefully first.",
+    );
+  });
+
+  it("ignores a user message sitting in the scrollback", () => {
+    // `❯` starts every user message the CLI has already printed, so a screen
+    // with any history above the box has several of them. Reading the first
+    // one made every send fail — cleared, looked again, found the scrollback
+    // row unchanged, refused — and told `turnSignal` a composer was held,
+    // which ends a running turn after three seconds of quiet.
+    const withHistory = [
+      "❯ an earlier message, already sent",
+      "⏺ and the reply to it",
+      ...IDLE_COMPOSER,
+    ];
+
+    expect(composerHeld(withHistory)).toBeNull();
+  });
+
+  it("still reads the box when history sits above it", () => {
+    const withHistory = [
+      "❯ an earlier message, already sent",
+      ...AFTER_INTERRUPT,
+    ];
+
+    expect(composerHeld(withHistory)).toBe(
       "Write a very long essay about the history of the abacus, at least 2000 words. Think carefully first.",
     );
   });

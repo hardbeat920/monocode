@@ -314,6 +314,18 @@ fn spawn_unix(
     // marked and never matched.
     let (marker, parent) = crate::harness::harness_parent_marker();
     cmd.env(marker, parent);
+    // The same three `apply_gui_env` strips, for the same reason: a Claude
+    // Code child that inherits them refuses to start. That path builds the
+    // harness child's environment and this one does not go through it, so
+    // launching MonoCode from inside a Claude Code session used to make every
+    // hand-over exit at once, reported only as `exited with code 1`.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cmd.env_remove(key);
+    }
     if let Some(home) = dirs_home() {
         cmd.env("HOME", &home);
     }
@@ -447,6 +459,18 @@ fn spawn_windows(
     // See the unix path: the marker is what a later launch recognises.
     let (marker, parent) = crate::harness::harness_parent_marker();
     cmd.env(marker, parent);
+    // The same three `apply_gui_env` strips, for the same reason: a Claude
+    // Code child that inherits them refuses to start. That path builds the
+    // harness child's environment and this one does not go through it, so
+    // launching MonoCode from inside a Claude Code session used to make every
+    // hand-over exit at once, reported only as `exited with code 1`.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cmd.env_remove(key);
+    }
     cmd.env("TERM_PROGRAM", "MonoCode");
     cmd.env("PATH", crate::harness::gui_search_path());
     if let Some(home) = dirs_home() {
