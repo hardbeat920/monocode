@@ -531,9 +531,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundTasks.clear();
   live.backgroundRows.clear();
   clearAwaitingResume(live);
-  live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
+  // Leave `backgroundKey` alone and let the sync clear it: resetting it here
+  // makes the next sync see no change and skip the event, stranding a notice
+  // from the previous turn on screen.
+  syncBackgroundWait(live);
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -1607,6 +1610,11 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   live.turnEndPending = false;
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);
+  // Nothing is waiting on background work once the turn is over, so drop the
+  // notice. Without this it survives the turn that raised it and keeps the
+  // thread looking busy — through later turns too, since the next sync sees an
+  // unchanged key and stays quiet.
+  syncBackgroundWait(live);
   const done = live.turnDone;
   const failed = live.turnFailed;
   live.turnDone = null;
