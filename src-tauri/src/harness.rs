@@ -25,6 +25,13 @@ const SSE_END_EVENT: &str = "harness-sse-end";
 
 const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
 
+/// How long the exit event waits for the child's last stderr lines. A child
+/// that dies on startup explains itself on stderr, and the listener has to see
+/// that explanation before the exit that ends the startup attempt. The pipe
+/// closes with the child, so the wait only reaches this bound when something
+/// the child spawned is still holding stderr open.
+const STDERR_DRAIN: Duration = Duration::from_millis(200);
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessAccount {
@@ -542,6 +549,7 @@ pub fn harness_spawn(
 
     let stderr_app = app.clone();
     let stderr_id = session_id.clone();
+    let (stderr_drained, stderr_done) = mpsc::channel::<()>();
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
             let Ok(line) = line else { break };
@@ -553,6 +561,7 @@ pub fn harness_spawn(
                 },
             );
         }
+        drop(stderr_drained);
     });
 
     let wait_app = app.clone();
@@ -565,6 +574,9 @@ pub fn harness_spawn(
                 host.stop_sse(&wait_id);
             }
         }
+        // Dropping the sender ends this wait, so it returns as soon as stderr
+        // has run dry rather than always costing the full bound.
+        let _ = stderr_done.recv_timeout(STDERR_DRAIN);
         let _ = wait_app.emit(
             EXIT_EVENT,
             HarnessExit {
@@ -2389,6 +2401,17 @@ fn apply_gui_path(cmd: &mut Command) {
 
 pub(crate) fn apply_gui_env(cmd: &mut Command) {
     apply_gui_path(cmd);
+    // MonoCode itself may be started from inside a Claude Code session, and the
+    // inherited marker makes a spawned Claude Code refuse to run at all
+    // ("cannot be launched inside another Claude Code session"). The child dies
+    // before it reads a byte of stdin, leaving only a generic write failure.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cmd.env_remove(key);
+    }
     crate::hide_window_console(cmd);
     if let Some(id) = passwd_identity() {
         if std::env::var_os("HOME").is_none() {
