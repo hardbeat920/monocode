@@ -113,13 +113,21 @@ function release() {
   }, 500);
 }
 
+/**
+ * A program to run in the PTY instead of the login shell. It becomes the PTY's
+ * direct child, so `killPty` ends it and arguments never go through a shell.
+ * A bare `program` resolves through the app's PATH, not the process one.
+ */
+export type PtyCommand = { program: string; args?: string[] };
+
 export async function spawnPty(
   id: string,
   cwd: string,
   cols: number,
   rows: number,
+  command?: PtyCommand,
 ): Promise<void> {
-  await invoke("pty_spawn", { id, cwd, cols, rows });
+  await invoke("pty_spawn", { id, cwd, cols, rows, command });
 }
 
 export async function writePty(id: string, data: string): Promise<void> {
