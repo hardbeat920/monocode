@@ -35,6 +35,31 @@ import {
 const MATCH_CAP = 999;
 const panels = new WeakMap<EditorView, FindPanel>();
 
+type SearchMatchRange = { from: number; to: number };
+
+export function matchIndexAtSelection(
+  matches: SearchMatchRange[],
+  selection: { from: number; to: number },
+): number {
+  let low = 0;
+  let high = matches.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const match = matches[middle];
+    if (match.from < selection.from || (match.from === selection.from && match.to < selection.to)) {
+      low = middle + 1;
+    } else if (
+      match.from > selection.from ||
+      (match.from === selection.from && match.to > selection.to)
+    ) {
+      high = middle - 1;
+    } else {
+      return middle + 1;
+    }
+  }
+  return 0;
+}
+
 export function handleEditorFindKey(event: KeyboardEvent): boolean {
   if (event.isComposing) return false;
 
@@ -191,6 +216,8 @@ class FindPanel implements Panel {
   private readonly regexButton: HTMLButtonElement;
   private readonly expandButton: HTMLButtonElement;
   private readonly replaceRow: HTMLElement;
+  private matches: SearchMatchRange[] = [];
+  private countCapped = false;
 
   constructor(view: EditorView) {
     this.view = view;
@@ -302,13 +329,12 @@ class FindPanel implements Panel {
     closeButton.addEventListener("click", () => closeSearchPanel(this.view));
 
     this.syncControls();
-    this.syncCount();
+    this.refreshCount();
   }
 
   mount() {
     this.searchField.select();
     this.reveal();
-    this.syncCount();
   }
 
   destroy() {
@@ -316,9 +342,12 @@ class FindPanel implements Panel {
   }
 
   update(update: ViewUpdate) {
+    let queryChanged = false;
     for (const transaction of update.transactions) {
       for (const effect of transaction.effects) {
-        if (effect.is(setSearchQuery) && !effect.value.eq(this.query)) {
+        if (!effect.is(setSearchQuery)) continue;
+        queryChanged = true;
+        if (!effect.value.eq(this.query)) {
           this.query = effect.value;
           this.searchField.value = this.query.search;
           this.replaceField.value = this.query.replace;
@@ -326,13 +355,9 @@ class FindPanel implements Panel {
         }
       }
     }
-    if (
-      update.docChanged ||
-      update.selectionSet ||
-      update.transactions.some((transaction) =>
-        transaction.effects.some((effect) => effect.is(setSearchQuery)),
-      )
-    ) {
+    if (update.docChanged || queryChanged) {
+      this.refreshCount();
+    } else if (update.selectionSet) {
       this.syncCount();
     }
   }
@@ -363,7 +388,6 @@ class FindPanel implements Panel {
     this.syncControls();
     this.view.dispatch({ effects: setSearchQuery.of(this.query) });
     this.reveal();
-    this.syncCount();
   }
 
   private commit(reveal: boolean) {
@@ -380,7 +404,6 @@ class FindPanel implements Panel {
       this.view.dispatch({ effects: setSearchQuery.of(query) });
     }
     if (reveal) this.reveal();
-    this.syncCount();
   }
 
   private reveal() {
@@ -409,6 +432,13 @@ class FindPanel implements Panel {
     setPressed(this.regexButton, this.query.regexp);
   }
 
+  private refreshCount() {
+    const result = countMatches(this.view);
+    this.matches = result.matches;
+    this.countCapped = result.capped;
+    this.syncCount();
+  }
+
   private syncCount() {
     const value = this.searchField.value;
     if (!value) {
@@ -425,7 +455,9 @@ class FindPanel implements Panel {
       return;
     }
 
-    const { current, total, capped } = countMatches(this.view);
+    const total = this.matches.length;
+    const current = matchIndexAtSelection(this.matches, this.view.state.selection.main);
+    const capped = this.countCapped;
     this.dom.classList.toggle("is-empty", total === 0);
     this.dom.classList.remove("is-invalid");
     if (total === 0) {
@@ -478,24 +510,18 @@ class FindPanel implements Panel {
 }
 
 function countMatches(view: EditorView): {
-  current: number;
-  total: number;
+  matches: SearchMatchRange[];
   capped: boolean;
 } {
   const query = getSearchQuery(view.state);
-  if (!query.valid) return { current: 0, total: 0, capped: false };
-  const selection = view.state.selection.main;
+  if (!query.valid) return { matches: [], capped: false };
   const cursor = query.getCursor(view.state);
-  let total = 0;
-  let current = 0;
+  const matches: SearchMatchRange[] = [];
   for (let match = nextMatch(cursor); match; match = nextMatch(cursor)) {
-    total += 1;
-    if (match.from === selection.from && match.to === selection.to) {
-      current = total;
-    }
-    if (total >= MATCH_CAP) return { current, total, capped: true };
+    matches.push({ from: match.from, to: match.to });
+    if (matches.length >= MATCH_CAP) return { matches, capped: true };
   }
-  return { current, total, capped: false };
+  return { matches, capped: false };
 }
 
 function nextMatch(
