@@ -1503,10 +1503,20 @@ fn resolve_opencode() -> Option<PathBuf> {
     first_binary(candidates)
 }
 
+/// Prefers whatever `claude` the user's own shell resolves.
+///
+/// The fixed paths below are a fallback for a GUI launch that never sees the
+/// shell. Trying them first picks an install the user may have long since
+/// replaced: an abandoned `~/.local/bin/claude` silently wins over the one on
+/// their PATH, and the app then runs a different, older CLI than the terminal
+/// does — with features the newer one has simply absent.
 fn resolve_claude() -> Option<PathBuf> {
     let home = dirs_home().map(PathBuf::from);
     let mut candidates: Vec<PathBuf> = Vec::new();
 
+    if let Some(from_shell) = which_via_login_shell("claude") {
+        candidates.push(from_shell);
+    }
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/claude"));
         candidates.push(home.join(".claude/local/claude"));
@@ -1519,9 +1529,6 @@ fn resolve_claude() -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/local/bin/claude"));
     candidates.push(PathBuf::from("/usr/bin/claude"));
     candidates.push(PathBuf::from("/snap/bin/claude"));
-    if let Some(from_shell) = which_via_login_shell("claude") {
-        candidates.push(from_shell);
-    }
 
     first_binary(candidates)
 }
