@@ -1368,6 +1368,15 @@ export default function App({
    */
   const remoteOpening = useRef(new Set<string>());
   /** Sessions showing the raw pty, because MonoCode could not read its screen. */
+  /**
+   * The ref is the authority; the state exists to render — the same split as
+   * `remoteControl`/`remoteControlIds`. It matters because `syncRemoteApproval`
+   * is captured by two long-lived closures per session, the pty parser and the
+   * transcript watcher, so a callback depending on render state is frozen in them
+   * at the moment that session opened. Reading the ref keeps the callback's
+   * identity stable, leaving no stale copy to be wrong about.
+   */
+  const remoteTerminals = useRef(new Set<string>());
   const [remoteTerminalIds, setRemoteTerminalIds] = useState<readonly string[]>(
     [],
   );
@@ -1392,7 +1401,7 @@ export default function App({
         ? remoteApprovalView({
             pending: entry.pending.size > 0,
             screen,
-            terminalOpen: remoteTerminalIds.includes(sessionId),
+            terminalOpen: remoteTerminals.current.has(sessionId),
           })
         : ({ kind: "none" } as const);
 
@@ -1425,6 +1434,7 @@ export default function App({
         if (effect.kind === "openTerminal") {
           // The decided rule is that the user answers it themselves, which needs
           // the pty in front of them rather than a description of it.
+          remoteTerminals.current.add(sessionId);
           setRemoteTerminalIds((ids) =>
             ids.includes(sessionId) ? ids : [...ids, sessionId],
           );
@@ -1442,7 +1452,7 @@ export default function App({
       }
       flushHarnessEvents();
     },
-    [enqueueHarnessEvent, flushHarnessEvents, remoteTerminalIds],
+    [enqueueHarnessEvent, flushHarnessEvents],
   );
 
   /**
@@ -1529,7 +1539,7 @@ export default function App({
           text: body,
         });
       };
-      return injectRemoteText(text, remoteTerminalIds.includes(sessionId), {
+      return injectRemoteText(text, remoteTerminals.current.has(sessionId), {
         write: (bytes) => writePty(entry.ptyId, bytes),
         screen: () => entry.screen.screen,
         settle: () => new Promise((resolve) => setTimeout(resolve, 25)),
@@ -1555,7 +1565,7 @@ export default function App({
         flushHarnessEvents();
       });
     },
-    [enqueueHarnessEvent, flushHarnessEvents, remoteTerminalIds],
+    [enqueueHarnessEvent, flushHarnessEvents],
   );
 
   const openRemote = useCallback(
@@ -1781,6 +1791,7 @@ export default function App({
     setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
     if (byUser) remoteControlClosed.current.add(sessionId);
     setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
+    remoteTerminals.current.delete(sessionId);
     setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
     entry.stop();
     await closeRemoteControl(sessionId, { killPty });
@@ -10949,11 +10960,12 @@ export default function App({
                     attach={remoteTerminal.attach}
                     cols={REMOTE_CONTROL_COLS}
                     rows={REMOTE_CONTROL_ROWS}
-                    onClose={() =>
+                    onClose={() => {
+                      remoteTerminals.current.delete(remoteTerminal.sessionId);
                       setRemoteTerminalIds((ids) =>
                         ids.filter((id) => id !== remoteTerminal.sessionId),
-                      )
-                    }
+                      );
+                    }}
                   />
                 ) : null}
 
