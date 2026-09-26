@@ -136,7 +136,7 @@ describe("a permission prompt on screen", () => {
       { number: 3, label: "No", keystroke: "3", selected: false },
     ]);
     expect(screen.prompt.footer).toBe("Esc to cancel · Tab to amend");
-    expect(screen.prompt.cancel).toEqual({
+    expect(screen.prompt.deny).toEqual({
       label: "Esc to cancel",
       keystroke: "\x1b",
     });

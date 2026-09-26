@@ -52,8 +52,11 @@ export type PermissionPrompt = {
   /** The prompt's own footer, verbatim: `Esc to cancel · Tab to amend`. */
   footer: string;
   /**
-   * Present when the footer advertises Esc. **Esc denies the tool call — it does
-   * not dismiss the prompt unanswered**, whatever the footer's wording suggests.
+   * Present when the footer advertises Esc. It is called `deny` and not `cancel`
+   * because that is what it does: **Esc denies the tool call, it does not dismiss
+   * the prompt unanswered**, whatever the footer's wording suggests. The old name
+   * made the wrong use — offering it as a way out of deciding — the easy one to
+   * write.
    * Measured: it produces the identical `tool_result` to option 3, `is_error:
    * true` with `"User rejected tool use"`, and the file is not written. `label`
    * is the TUI's own text, kept for display; the effect is a denial, so do not
@@ -65,7 +68,7 @@ export type PermissionPrompt = {
    * `cancelled`. Only the client that sent the keystroke knows which happened,
    * so it has to remember.
    */
-  cancel?: { label: string; keystroke: string };
+  deny?: { label: string; keystroke: string };
 };
 
 /** The one modal seen in a real session: the first-run folder trust check. */
@@ -431,7 +434,7 @@ function readPermissionPrompt(
     options,
     footer,
     ...(/\bEsc to cancel\b/u.test(footer)
-      ? { cancel: { label: "Esc to cancel", keystroke: "\x1b" } }
+      ? { deny: { label: "Esc to cancel", keystroke: "\x1b" } }
       : {}),
   };
 }

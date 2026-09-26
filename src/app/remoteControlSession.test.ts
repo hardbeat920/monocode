@@ -44,7 +44,9 @@ describe("remote control naming", () => {
   it("resolves against the names in use, not a count", () => {
     // The first thread closed. Its name is free, and the name already given to
     // the surviving process must not be handed out again either.
-    expect(remoteControlName("/repo/monocode", ["monocode 2"])).toBe("monocode");
+    expect(remoteControlName("/repo/monocode", ["monocode 2"])).toBe(
+      "monocode",
+    );
   });
 
   it("does not collide across projects", () => {
@@ -157,11 +159,14 @@ describe("all mode opening lazily", () => {
     // Opening stops the headless child, so auto-opening mid-turn would kill the
     // turn the user is waiting on without them asking for anything.
     expect(
-      shouldAutoOpen({ ...ready, busy: true }, {
-        mode: "all",
-        open: false,
-        dismissed: false,
-      }),
+      shouldAutoOpen(
+        { ...ready, busy: true },
+        {
+          mode: "all",
+          open: false,
+          dismissed: false,
+        },
+      ),
     ).toBe(false);
   });
 
@@ -189,7 +194,12 @@ describe("all mode opening lazily", () => {
 
 const OPTIONS = [
   { number: 1, label: "Yes", keystroke: "1", selected: true },
-  { number: 2, label: "Yes, allow all edits during this session", keystroke: "2", selected: false },
+  {
+    number: 2,
+    label: "Yes, allow all edits during this session",
+    keystroke: "2",
+    selected: false,
+  },
   { number: 3, label: "No", keystroke: "3", selected: false },
 ];
 
@@ -203,7 +213,7 @@ function promptScreen(patch: Partial<PermissionPrompt> = {}): PromptScreen {
       detail: ["Create file", "probe.txt", " 1 hello"],
       options: OPTIONS,
       footer: "Esc to cancel · Tab to amend",
-      cancel: { label: "Esc to cancel", keystroke: "\x1b" },
+      deny: { label: "Esc to cancel", keystroke: "\x1b" },
       ...patch,
     },
   };
@@ -213,7 +223,11 @@ const idleScreen: PromptScreen = { lines: ["❯"], turn: "ended", kind: "idle" }
 
 describe("what a remote session shows for a pending prompt", () => {
   it("shows the prompt when the transcript says something is waiting", () => {
-    const view = remoteApprovalView({ pending: true, screen: promptScreen(), terminalOpen: false });
+    const view = remoteApprovalView({
+      pending: true,
+      screen: promptScreen(),
+      terminalOpen: false,
+    });
 
     expect(view.kind).toBe("question");
     if (view.kind !== "question") return;
@@ -233,19 +247,36 @@ describe("what a remote session shows for a pending prompt", () => {
   it("shows nothing when the transcript says nothing is waiting", () => {
     // A screen that looks like a prompt is not evidence that one is pending —
     // this is the composer-footer false positive the probe hit.
-    expect(remoteApprovalView({ pending: false, screen: promptScreen(), terminalOpen: false })).toEqual({ kind: "none" });
+    expect(
+      remoteApprovalView({
+        pending: false,
+        screen: promptScreen(),
+        terminalOpen: false,
+      }),
+    ).toEqual({ kind: "none" });
   });
 
   it("stays quiet while a tool is merely running", () => {
     // An outstanding tool call is equally the ordinary state of a running tool,
     // so an idle or busy screen must not raise anything.
-    expect(remoteApprovalView({ pending: true, screen: idleScreen, terminalOpen: false })).toEqual({ kind: "none" });
+    expect(
+      remoteApprovalView({
+        pending: true,
+        screen: idleScreen,
+        terminalOpen: false,
+      }),
+    ).toEqual({ kind: "none" });
   });
 
   it.each([
     [
       "a dialog it cannot identify",
-      { lines: ["1. Something", "2. Else"], turn: "in-progress", kind: "unrecognised", reason: "unknown-dialog" } as PromptScreen,
+      {
+        lines: ["1. Something", "2. Else"],
+        turn: "in-progress",
+        kind: "unrecognised",
+        reason: "unknown-dialog",
+      } as PromptScreen,
     ],
     [
       "a modal it must not answer",
@@ -253,11 +284,20 @@ describe("what a remote session shows for a pending prompt", () => {
         lines: ["Is this a project you created or one you trust?"],
         turn: "unknown",
         kind: "modal",
-        modal: { question: "Is this a project you created or one you trust?", detail: [], options: ["1. Yes"], footer: "Enter to confirm" },
+        modal: {
+          question: "Is this a project you created or one you trust?",
+          detail: [],
+          options: ["1. Yes"],
+          footer: "Enter to confirm",
+        },
       } as PromptScreen,
     ],
   ])("surfaces the raw screen for %s", (_label, screen) => {
-    const view = remoteApprovalView({ pending: true, screen, terminalOpen: false });
+    const view = remoteApprovalView({
+      pending: true,
+      screen,
+      terminalOpen: false,
+    });
 
     // Failing visible: something is waiting and cannot be read, which is exactly
     // when guessing is forbidden.
@@ -318,7 +358,7 @@ describe("answering a remote prompt", () => {
       "\x1b",
     );
     expect(
-      remoteApprovalKeystroke(promptScreen({ cancel: undefined }), {
+      remoteApprovalKeystroke(promptScreen({ deny: undefined }), {
         kind: "cancel",
       }),
     ).toBeNull();
@@ -345,7 +385,12 @@ describe("tracking what the transcript says is outstanding", () => {
     expect([...started]).toEqual(["t1"]);
 
     const done = pendingAfter(started, [
-      { type: "tool.updated", callId: "t1", title: "Write", status: "completed" },
+      {
+        type: "tool.updated",
+        callId: "t1",
+        title: "Write",
+        status: "completed",
+      },
     ]);
     expect([...done]).toEqual([]);
   });
@@ -377,7 +422,11 @@ const AFTER_INTERRUPT = [
   "  ⏸ manual mode on",
 ];
 
-const allowed = { allowed: true, bytes: "\x1b[200~say OK\x1b[201~\r", queued: false } as const;
+const allowed = {
+  allowed: true,
+  bytes: "\x1b[200~say OK\x1b[201~\r",
+  queued: false,
+} as const;
 
 function idleWith(lines: readonly string[]): PromptScreen {
   return { lines, turn: "ended", kind: "idle" };

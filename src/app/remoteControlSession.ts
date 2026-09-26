@@ -208,7 +208,7 @@ export function remoteApprovalView({
     return {
       kind: "question",
       question: questionFromPrompt(screen.prompt),
-      ...(screen.prompt.cancel ? { cancel: screen.prompt.cancel.label } : {}),
+      ...(screen.prompt.deny ? { cancel: screen.prompt.deny.label } : {}),
     };
   }
   // An outstanding call is equally the ordinary state of a tool that is simply
@@ -252,7 +252,10 @@ function questionFromPrompt(prompt: PermissionPrompt): UserQuestion {
   return {
     id: "remote-approval",
     ...(header ? { header } : {}),
-    prompt: rest.length > 0 ? `${prompt.question}\n\n${rest.join("\n")}` : prompt.question,
+    prompt:
+      rest.length > 0
+        ? `${prompt.question}\n\n${rest.join("\n")}`
+        : prompt.question,
     multiSelect: false,
     allowCustom: false,
     options: prompt.options.map((option) => ({
@@ -284,7 +287,7 @@ export function remoteApprovalKeystroke(
 ): string | null {
   if (screen.kind !== "permission-prompt") return null;
   if (answer.kind === "cancel") {
-    return screen.prompt.cancel ? screen.prompt.cancel.keystroke : null;
+    return screen.prompt.deny ? screen.prompt.deny.keystroke : null;
   }
   const option = screen.prompt.options.find(
     (candidate) => optionId(candidate) === answer.id,
