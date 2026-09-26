@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added
