@@ -151,6 +151,28 @@ export type AutoOpenState = {
  * reaches either state, processes accumulate against *used* threads rather than
  * open tabs — which is the cost §9.6 asks to avoid.
  */
+/**
+ * Whether the by-hand dismissals survive a change of mode.
+ *
+ * `dismissed` exists so `all` does not argue with a close the user made while it
+ * was on, and within one mode that is right. Across a change into `all` it is
+ * backwards: picking Every session is a *later* instruction than any close that
+ * came before it, so those closes have been superseded. Keeping them means the
+ * setting the user just chose silently skips the very sessions they had already
+ * tried by hand — which, for anyone who reached the setting by trying the menu
+ * first, is every session they have.
+ *
+ * Only on the way *in*. Leaving `all` and coming back is the same instruction
+ * being given again, and a close made while `all` was on is the case `dismissed`
+ * was written for.
+ */
+export function dismissalsAfterModeChange(
+  previous: RemoteControlMode,
+  next: RemoteControlMode,
+): "keep" | "clear" {
+  return next === "all" && previous !== "all" ? "clear" : "keep";
+}
+
 export function shouldAutoOpen(
   session: Session,
   state: AutoOpenState,

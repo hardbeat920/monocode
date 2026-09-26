@@ -23,6 +23,7 @@ import {
   remoteSendGate,
   seatRemoteUserMessage,
   shouldAutoOpen,
+  dismissalsAfterModeChange,
 } from "./remoteControlSession";
 import { newSession, type Session } from "../features/sessions/model/session";
 import type {
@@ -204,6 +205,38 @@ describe("all mode opening lazily", () => {
         { mode: "all", open: false, dismissed: false },
       ),
     ).toBe(false);
+  });
+});
+
+describe("dismissals across a change of mode", () => {
+  const ready = session({ providerSessionId: "sess-abc", busy: false });
+
+  it("clears them on the way into all", () => {
+    expect(dismissalsAfterModeChange("manual", "all")).toBe("clear");
+  });
+
+  // Otherwise trying the menu by hand first — which is how anyone finds the
+  // setting — permanently excludes that session from the mode they then chose.
+  it("keeps them while all stays on", () => {
+    expect(dismissalsAfterModeChange("all", "all")).toBe("keep");
+  });
+
+  it("keeps them on the way out of all", () => {
+    expect(dismissalsAfterModeChange("all", "manual")).toBe("keep");
+  });
+
+  it("keeps them when manual was and stays the mode", () => {
+    expect(dismissalsAfterModeChange("manual", "manual")).toBe("keep");
+  });
+
+  it("reopens what was dismissed once the change has cleared it", () => {
+    const before = { mode: "all" as const, open: false, dismissed: true };
+    expect(shouldAutoOpen(ready, before)).toBe(false);
+    const cleared =
+      dismissalsAfterModeChange("manual", "all") === "clear"
+        ? { ...before, dismissed: false }
+        : before;
+    expect(shouldAutoOpen(ready, cleared)).toBe(true);
   });
 });
 

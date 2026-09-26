@@ -167,6 +167,7 @@ import {
 import {
   autoOpenTargets,
   createPtyFanout,
+  dismissalsAfterModeChange,
   emptyApprovalProgress,
   forEachSafely,
   injectRemoteText,
@@ -1367,6 +1368,11 @@ export default function App({
    * before the first await, not after the last one.
    */
   const remoteOpening = useRef(new Set<string>());
+  /**
+   * The mode the auto-open effect last ran under, so a change into `all` can be
+   * told from a re-run caused by the sessions changing.
+   */
+  const remoteControlModeSeen = useRef(remoteControlMode);
   /** Sessions showing the raw pty, because MonoCode could not read its screen. */
   /**
    * The ref is the authority; the state exists to render — the same split as
@@ -1879,6 +1885,14 @@ export default function App({
   // mode is subscribed, so switching it reaches live sessions at once — which is
   // also why a fault here was visible the instant the user clicked.
   useEffect(() => {
+    // Before anything is selected, and in this effect rather than its own so the
+    // order cannot drift: a mode change that clears the dismissals has to clear
+    // them for the pass it triggered, not for the one after it.
+    const previous = remoteControlModeSeen.current;
+    remoteControlModeSeen.current = remoteControlMode;
+    if (dismissalsAfterModeChange(previous, remoteControlMode) === "clear") {
+      remoteControlClosed.current.clear();
+    }
     if (remoteControlMode !== "all") return;
     const mode = remoteControlMode;
     const targets = autoOpenTargets(sessions, (session) => ({
