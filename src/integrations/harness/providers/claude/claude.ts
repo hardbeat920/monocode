@@ -1003,6 +1003,22 @@ async function handleControlRequest(
     return;
   }
 
+  // Auto exists to keep work moving without a prompt per step, so it answers
+  // everything except running a command. An MCP call cannot be judged by its
+  // name anyway — `get_app_keywords` and `add_keywords` look alike — and it
+  // comes from a server the user installed. Arbitrary command execution stays
+  // behind a prompt, which is what separates this from full access.
+  if (live.runtimeMode === "auto" && toolKindFromName(toolName) !== "execute") {
+    await writeJson(
+      sessionId,
+      buildControlResponse(
+        control.requestId,
+        toClaudePermissionResult("allow", input),
+      ),
+    );
+    return;
+  }
+
   const uiId = live.nextApprovalUiId++;
   const pending = waitApproval(live, uiId, control.requestId, input);
   live.onEvent({

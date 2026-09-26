@@ -1046,6 +1046,82 @@ describe("claude background tasks", () => {
   });
 });
 
+describe("claude auto mode permissions", () => {
+  it("answers tool requests itself but still asks before running a command", async () => {
+    const { events, turn } = await startTurn("s1", { runtimeMode: "auto" });
+
+    // An MCP tool cannot be classified by name, so before this it fell through
+    // to a prompt — one modal per call, dozens in a row on a research run.
+    emit({
+      type: "control_request",
+      request_id: "mcp_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "mcp__astro__get_app_keywords",
+        input: { appId: "123" },
+      },
+    });
+    emit({
+      type: "control_request",
+      request_id: "bash_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Bash",
+        input: { command: "rm -rf build" },
+      },
+    });
+
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            message.type === "control_response" &&
+            (message.response as Record<string, unknown>)?.request_id ===
+              "mcp_1",
+        ),
+      "mcp answered without a prompt",
+    );
+    const responses = parse().filter(
+      (message) => message.type === "control_response",
+    );
+    const mcp = responses.find(
+      (message) =>
+        (message.response as Record<string, unknown>)?.request_id === "mcp_1",
+    );
+    expect(
+      (
+        (mcp?.response as Record<string, unknown>)?.response as Record<
+          string,
+          unknown
+        >
+      )?.behavior,
+    ).toBe("allow");
+
+    // Running a command is the one thing Auto still stops for; that is what
+    // keeps it short of full access.
+    expect(
+      responses.some(
+        (message) =>
+          (message.response as Record<string, unknown>)?.request_id ===
+          "bash_1",
+      ),
+    ).toBe(false);
+    const asked = events.filter(
+      (event) => event.type === "approval.requested",
+    );
+    expect(asked).toHaveLength(1);
+
+    respondClaudeApproval(
+      "s1",
+      (asked[0] as Extract<HarnessEvent, { type: "approval.requested" }>)
+        .requestId,
+      "deny",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+});
+
 describe("claude plan permissions", () => {
   it("answers residual plan-mode permissions without prompting the user", async () => {
     const { events, turn } = await startTurn("s1", {
