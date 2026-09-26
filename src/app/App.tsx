@@ -154,6 +154,7 @@ import {
 } from "../features/remoteControl/model/transcript";
 import { claudeTranscriptPath } from "../features/remoteControl/model/transcriptPath";
 import { RemoteControlLink } from "../features/remoteControl/ui/RemoteControlLink";
+import { RemoteControlTerminal } from "./RemoteControlTerminal";
 import {
   watchTranscript,
   type TranscriptWatcher,
@@ -1327,6 +1328,12 @@ export default function App({
          * the parser needs.
          */
         decoder: TextDecoder;
+        /**
+         * Extra readers of the one subscription. `subscribePty` keeps a single
+         * handler per id, so a terminal view has to be fanned out to rather than
+         * subscribe for itself.
+         */
+        readers: Set<(chunk: string) => void>;
         /** What is currently in front of the user, so it is not raised twice. */
         shown:
           | { kind: "question"; requestId: number }
@@ -1344,6 +1351,10 @@ export default function App({
     [],
   );
   const remoteHome = useRef<string | null>(null);
+  /** Sessions showing the raw pty, because MonoCode could not read its screen. */
+  const [remoteTerminalIds, setRemoteTerminalIds] = useState<readonly string[]>(
+    [],
+  );
   /** Per session, so the link can render. `undefined` renders nothing. */
   const [remoteBridges, setRemoteBridges] = useState<
     Readonly<Record<string, BridgeStatus>>
@@ -1361,8 +1372,13 @@ export default function App({
     (sessionId: string) => {
       const entry = remoteControl.current.get(sessionId);
       if (!entry) return;
+      const terminalOpen = remoteTerminalIds.includes(sessionId);
       const view = entry.screen
-        ? remoteApprovalView(entry.pending.size > 0, entry.screen)
+        ? remoteApprovalView({
+            pending: entry.pending.size > 0,
+            screen: entry.screen,
+            terminalOpen,
+          })
         : ({ kind: "none" } as const);
 
       if (view.kind === "none") {
@@ -1384,6 +1400,11 @@ export default function App({
       if (view.kind === "raw") {
         if (entry.shown?.kind === "raw") return;
         entry.shown = { kind: "raw" };
+        // The decided rule is that the user answers it themselves, which needs
+        // the pty in front of them rather than a description of it.
+        setRemoteTerminalIds((ids) =>
+          ids.includes(sessionId) ? ids : [...ids, sessionId],
+        );
         // Failing visible, which is the decided rule: something is waiting, the
         // screen cannot be read with confidence, so the screen itself goes in
         // front of the user and MonoCode answers nothing.
@@ -1412,7 +1433,7 @@ export default function App({
       });
       flushHarnessEvents();
     },
-    [enqueueHarnessEvent, flushHarnessEvents],
+    [enqueueHarnessEvent, flushHarnessEvents, remoteTerminalIds],
   );
 
   /**
@@ -1515,6 +1536,7 @@ export default function App({
       const gate = remoteSendGate(
         screenNow(),
         screenNow() ? planInjection(screenNow()!, text) : null,
+        remoteTerminalIds.includes(sessionId),
       );
       if (gate.kind === "refuse") {
         refuse(gate.reason);
@@ -1567,7 +1589,12 @@ export default function App({
       flushHarnessEvents();
       return writePty(entry.ptyId, plan.bytes);
     },
-    [enqueueHarnessEvent, flushHarnessEvents, waitForClearComposer],
+    [
+      enqueueHarnessEvent,
+      flushHarnessEvents,
+      remoteTerminalIds,
+      waitForClearComposer,
+    ],
   );
 
   const openRemote = useCallback(
@@ -1685,7 +1712,9 @@ export default function App({
         (chunk) => {
           const entry = remoteControl.current.get(sessionId);
           if (!entry) return;
-          entry.chunks.push(entry.decoder.decode(chunk, { stream: true }));
+          const text = entry.decoder.decode(chunk, { stream: true });
+          entry.chunks.push(text);
+          for (const read of entry.readers) read(text);
           const trimmed = trimReplay(
             entry.chunks.map((part) => part.length),
             entry.chunks.reduce((total, part) => total + part.length, 0),
@@ -1720,6 +1749,7 @@ export default function App({
         chunks: [],
         screen: null,
         decoder: new TextDecoder(),
+        readers: new Set<(chunk: string) => void>(),
         shown: null,
         stop: () => {
           live = false;
@@ -1756,9 +1786,27 @@ export default function App({
     setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
     if (byUser) remoteControlClosed.current.add(sessionId);
     setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
+    setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
     entry.stop();
     await closeRemoteControl(sessionId, { killPty });
   }, []);
+
+  /**
+   * Register a reader on a session's pty output.
+   *
+   * Stable across renders so the view's effect does not tear down and rebuild
+   * its terminal on every parent render.
+   */
+  const attachRemoteReader = useCallback(
+    (sessionId: string) => (read: (chunk: string) => void) => {
+      const entry = remoteControl.current.get(sessionId);
+      entry?.readers.add(read);
+      return () => {
+        remoteControl.current.get(sessionId)?.readers.delete(read);
+      };
+    },
+    [],
+  );
 
   const remoteControlFor = useCallback(
     (tabId: string): RemoteControlAction | null => {
@@ -10648,6 +10696,21 @@ export default function App({
   const compactProjectRail = collapsedProjectRailMode === "compact";
   const compactRailActive = compactProjectRail && !projectRailOpen;
   const compactTitleBar = IS_MAC && compactRailActive && !chromeSurfaceOpen;
+
+  const remoteTerminal = useMemo(() => {
+    if (!activeSessionId || !remoteTerminalIds.includes(activeSessionId)) {
+      return null;
+    }
+    const entry = remoteControl.current.get(activeSessionId);
+    if (!entry) return null;
+    return {
+      sessionId: activeSessionId,
+      ptyId: entry.ptyId,
+      replay: entry.chunks.join(""),
+      attach: attachRemoteReader(activeSessionId),
+    };
+  }, [activeSessionId, attachRemoteReader, remoteTerminalIds]);
+
   const workspaceTitleBar = (
     <TitleBar
       tabs={titleTabs}
@@ -10861,6 +10924,22 @@ export default function App({
                   <RemoteControlLink
                     bridge={remoteBridges[activeSessionId]}
                     className="mx-2 mb-1"
+                  />
+                ) : null}
+
+                {remoteTerminal ? (
+                  <RemoteControlTerminal
+                    key={remoteTerminal.ptyId}
+                    ptyId={remoteTerminal.ptyId}
+                    replay={remoteTerminal.replay}
+                    attach={remoteTerminal.attach}
+                    cols={REMOTE_CONTROL_COLS}
+                    rows={REMOTE_CONTROL_ROWS}
+                    onClose={() =>
+                      setRemoteTerminalIds((ids) =>
+                        ids.filter((id) => id !== remoteTerminal.sessionId),
+                      )
+                    }
                   />
                 ) : null}
 

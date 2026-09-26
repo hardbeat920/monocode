@@ -212,7 +212,7 @@ const idleScreen: PromptScreen = { lines: ["❯"], turn: "ended", kind: "idle" }
 
 describe("what a remote session shows for a pending prompt", () => {
   it("shows the prompt when the transcript says something is waiting", () => {
-    const view = remoteApprovalView(true, promptScreen());
+    const view = remoteApprovalView({ pending: true, screen: promptScreen(), terminalOpen: false });
 
     expect(view.kind).toBe("question");
     if (view.kind !== "question") return;
@@ -232,13 +232,13 @@ describe("what a remote session shows for a pending prompt", () => {
   it("shows nothing when the transcript says nothing is waiting", () => {
     // A screen that looks like a prompt is not evidence that one is pending —
     // this is the composer-footer false positive the probe hit.
-    expect(remoteApprovalView(false, promptScreen())).toEqual({ kind: "none" });
+    expect(remoteApprovalView({ pending: false, screen: promptScreen(), terminalOpen: false })).toEqual({ kind: "none" });
   });
 
   it("stays quiet while a tool is merely running", () => {
     // An outstanding tool call is equally the ordinary state of a running tool,
     // so an idle or busy screen must not raise anything.
-    expect(remoteApprovalView(true, idleScreen)).toEqual({ kind: "none" });
+    expect(remoteApprovalView({ pending: true, screen: idleScreen, terminalOpen: false })).toEqual({ kind: "none" });
   });
 
   it.each([
@@ -256,7 +256,7 @@ describe("what a remote session shows for a pending prompt", () => {
       } as PromptScreen,
     ],
   ])("surfaces the raw screen for %s", (_label, screen) => {
-    const view = remoteApprovalView(true, screen);
+    const view = remoteApprovalView({ pending: true, screen, terminalOpen: false });
 
     // Failing visible: something is waiting and cannot be read, which is exactly
     // when guessing is forbidden.
@@ -266,11 +266,15 @@ describe("what a remote session shows for a pending prompt", () => {
   });
 
   it("does not raise a partial repaint as a question", () => {
-    const view = remoteApprovalView(true, {
-      lines: ["some banner"],
-      turn: "unknown",
-      kind: "unrecognised",
-      reason: "no-composer",
+    const view = remoteApprovalView({
+      pending: true,
+      terminalOpen: false,
+      screen: {
+        lines: ["some banner"],
+        turn: "unknown",
+        kind: "unrecognised",
+        reason: "no-composer",
+      },
     });
 
     // No numbered options means no evidence anything is asking.
@@ -424,5 +428,42 @@ describe("the composer the CLI restores after an interrupt", () => {
 
   it("refuses before the terminal has painted", () => {
     expect(remoteSendGate(null, null).kind).toBe("refuse");
+  });
+});
+
+describe("while the user has the terminal open", () => {
+  it("raises nothing, even on a prompt it could read", () => {
+    // Two surfaces for one prompt invites two answers, and the second digit
+    // lands on whatever screen the first one produced.
+    expect(
+      remoteApprovalView({
+        pending: true,
+        screen: promptScreen(),
+        terminalOpen: true,
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("does not surface the raw screen twice", () => {
+    expect(
+      remoteApprovalView({
+        pending: true,
+        terminalOpen: true,
+        screen: {
+          lines: ["1. Something"],
+          turn: "in-progress",
+          kind: "unrecognised",
+          reason: "unknown-dialog",
+        },
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("refuses to inject over the user's own typing", () => {
+    const gate = remoteSendGate(idleWith(IDLE_COMPOSER), allowed, true);
+
+    expect(gate.kind).toBe("refuse");
+    if (gate.kind !== "refuse") return;
+    expect(gate.reason).toMatch(/terminal is open/);
   });
 });

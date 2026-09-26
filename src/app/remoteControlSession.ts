@@ -183,10 +183,24 @@ export type RemoteApprovalView =
   /** Something is waiting and the screen could not be read. Show it verbatim. */
   | { kind: "raw"; lines: readonly string[]; reason: string };
 
-export function remoteApprovalView(
-  pending: boolean,
-  screen: PromptScreen,
-): RemoteApprovalView {
+export type ApprovalInputs = {
+  /** An outstanding tool call, from the transcript. */
+  pending: boolean;
+  screen: PromptScreen;
+  /**
+   * The user has the terminal open and the keyboard with it. MonoCode raises
+   * nothing then: two surfaces for one prompt invites two answers, and the
+   * second digit lands on whatever screen the first one produced.
+   */
+  terminalOpen: boolean;
+};
+
+export function remoteApprovalView({
+  pending,
+  screen,
+  terminalOpen,
+}: ApprovalInputs): RemoteApprovalView {
+  if (terminalOpen) return { kind: "none" };
   // No outstanding tool call means nothing is waiting on an answer, whatever the
   // screen happens to look like.
   if (!pending) return { kind: "none" };
@@ -375,7 +389,16 @@ export type SendGate =
 export function remoteSendGate(
   screen: PromptScreen | null,
   plan: InjectionPlan | null,
+  terminalOpen = false,
 ): SendGate {
+  // The user is typing into the TUI themselves. Injecting now would interleave
+  // with their keystrokes in the same composer.
+  if (terminalOpen) {
+    return {
+      kind: "refuse",
+      reason: "the terminal is open and you are typing into it directly",
+    };
+  }
   if (!screen || !plan) {
     return { kind: "refuse", reason: "the terminal has not painted yet" };
   }
