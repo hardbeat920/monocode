@@ -1,15 +1,15 @@
 import type { ReactNode } from "react";
+import antigravity from "../../../assets/providers/antigravity.svg";
 import claude from "../../../assets/providers/claude.svg";
 import codex from "../../../assets/providers/codex.svg";
+import copilot from "../../../assets/providers/copilot.svg";
 import cursor from "../../../assets/providers/cursor.svg";
 import fx from "../../../assets/providers/fx.svg";
 import grok from "../../../assets/providers/grok.svg";
 import hermes from "../../../assets/providers/hermes.svg";
-import copilot from "../../../assets/providers/copilot.svg";
 import omp from "../../../assets/providers/omp.svg";
 import opencode from "../../../assets/providers/opencode.svg";
 import pi from "../../../assets/providers/pi.svg";
-import antigravity from "../../../assets/providers/antigravity.svg";
 import type { HarnessId } from "../model/session";
 
 export const HARNESS_ICONS: Record<HarnessId, string> = {
@@ -83,10 +83,6 @@ export function HarnessIcon({
     );
   }
   if (harness === "hermes" || harness === "copilot") {
-    // Vite inlines any asset under 4KB as a data URL whose attributes carry
-    // single quotes, and an unquoted url() rejects those, so the mask is
-    // quoted here. Unquoted, the mask silently drops and paints a solid block.
-    const mask = harness === "copilot" ? copilot : hermes;
     return (
       <span
         aria-hidden
@@ -95,11 +91,11 @@ export function HarnessIcon({
         <span
           className="block size-[72%] bg-current"
           style={{
-            maskImage: `url("${mask}")`,
+            maskImage: `url("${HARNESS_ICONS[harness]}")`,
             maskPosition: "center",
             maskRepeat: "no-repeat",
             maskSize: "contain",
-            WebkitMaskImage: `url("${mask}")`,
+            WebkitMaskImage: `url("${HARNESS_ICONS[harness]}")`,
             WebkitMaskPosition: "center",
             WebkitMaskRepeat: "no-repeat",
             WebkitMaskSize: "contain",
