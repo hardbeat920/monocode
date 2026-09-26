@@ -173,6 +173,7 @@ import {
   injectRemoteText,
   noteInterruptedTurn,
   pendingAfter,
+  planRemoteExit,
   queuedNotice,
   remoteApprovalKeystroke,
   remoteApprovalReply,
@@ -1765,7 +1766,29 @@ export default function App({
         // would otherwise arrive as a replacement character and cost the line
         // the parser needs.
         (chunk) => fanout.dispatch(decoder.decode(chunk, { stream: true })),
-        () => undefined,
+        // The exit was discarded here, and that was the fault behind both
+        // reported symptoms: a pty dying took nothing down, so `remoteControlIds`
+        // still held the session and every menu offered Close for a process that
+        // no longer existed — while `shouldAutoOpen` read the same set as `open`
+        // and `all` mode could never take that session again.
+        (code) => {
+          // `closeRemote` drops the entry before it kills the pty, so an exit we
+          // asked for finds nothing here. This is the unrequested case by
+          // construction rather than by a flag someone has to remember to set.
+          if (!remoteControl.current.has(sessionId)) return;
+          const plan = planRemoteExit(code);
+          // Before the teardown: `closeRemote` is what re-runs the auto-open
+          // effect, and it must not find this session eligible on the way past.
+          if (plan.dismissed) remoteControlClosed.current.add(sessionId);
+          void closeRemoteRef.current(sessionId, false);
+          enqueueHarnessEvent(
+            sessionId,
+            plan.notice === "error"
+              ? { type: "session.error", message: plan.message }
+              : { type: "status", text: plan.message },
+          );
+          flushHarnessEvents();
+        },
       );
       remoteOpening.current.delete(sessionId);
       setRemoteControlIds((ids) =>
@@ -1790,6 +1813,18 @@ export default function App({
     }
   }, []);
 
+  /**
+   * The latest `closeRemote`, for the pty exit handler.
+   *
+   * `openRemote` is declared above `closeRemote` and subscribes the exit handler
+   * from inside its own body, so it cannot name `closeRemote` as a dependency
+   * without reading it before it is initialised. Written every render, so the
+   * handler never holds an older one.
+   */
+  const closeRemoteRef = useRef<
+    (sessionId: string, byUser: boolean) => Promise<void>
+  >(async () => undefined);
+
   const closeRemote = useCallback(async (sessionId: string, byUser: boolean) => {
     const entry = remoteControl.current.get(sessionId);
     if (!entry) return;
@@ -1802,6 +1837,7 @@ export default function App({
     entry.stop();
     await closeRemoteControl(sessionId, { killPty });
   }, []);
+  closeRemoteRef.current = closeRemote;
 
   /**
    * Register a reader on a session's pty output.

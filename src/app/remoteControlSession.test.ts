@@ -24,6 +24,7 @@ import {
   seatRemoteUserMessage,
   shouldAutoOpen,
   dismissalsAfterModeChange,
+  planRemoteExit,
 } from "./remoteControlSession";
 import { newSession, type Session } from "../features/sessions/model/session";
 import type {
@@ -205,6 +206,54 @@ describe("all mode opening lazily", () => {
         { mode: "all", open: false, dismissed: false },
       ),
     ).toBe(false);
+  });
+});
+
+describe("a remote-control pty exiting on its own", () => {
+  const ready = session({ providerSessionId: "sess-abc", busy: false });
+
+  it("reports an unclean exit with its code", () => {
+    const plan = planRemoteExit(1);
+    expect(plan.notice).toBe("error");
+    expect(plan.message).toContain("exited with code 1");
+  });
+
+  it("reports a signal without inventing a code", () => {
+    const plan = planRemoteExit(null);
+    expect(plan.notice).toBe("error");
+    expect(plan.message).toContain("was terminated");
+    expect(plan.message).not.toContain("code");
+  });
+
+  // Quitting the CLI in the terminal is not a fault, so it is not raised as one.
+  it("notes a clean exit rather than raising it", () => {
+    const plan = planRemoteExit(0);
+    expect(plan.notice).toBe("status");
+    expect(plan.message).toContain("ended");
+  });
+
+  it("says how to get it back, whichever way it went", () => {
+    for (const code of [0, 1, null]) {
+      expect(planRemoteExit(code).message).toContain(
+        "open Remote Control again",
+      );
+    }
+  });
+
+  // Not politeness: `all` retaking it spawns again, and the notice changes
+  // `sessions`, which re-runs the effect, which spawns again.
+  it("stops all mode retaking it, however it exited", () => {
+    for (const code of [0, 1, null]) {
+      const plan = planRemoteExit(code);
+      expect(plan.dismissed).toBe(true);
+      expect(
+        shouldAutoOpen(ready, {
+          mode: "all",
+          open: false,
+          dismissed: plan.dismissed,
+        }),
+      ).toBe(false);
+    }
   });
 });
 

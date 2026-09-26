@@ -151,6 +151,53 @@ export type AutoOpenState = {
  * reaches either state, processes accumulate against *used* threads rather than
  * open tabs — which is the cost §9.6 asks to avoid.
  */
+export type RemoteExitPlan = {
+  /** Whether `all` mode may hand this session over again unasked. */
+  dismissed: boolean;
+  /** `error` for an exit nobody asked for; a clean one is only worth a note. */
+  notice: "error" | "status";
+  message: string;
+};
+
+/**
+ * What to do when a remote-control pty exits on its own.
+ *
+ * Tearing the entry down is not optional, and nothing decides it here because
+ * there is nothing to decide: `remoteControlIds` is what every menu reads for
+ * "already active" and what `shouldAutoOpen` reads for `open`, so an entry left
+ * behind makes every menu offer **Close** for a process that is gone and locks
+ * `all` mode out of that session for the life of the window. Both were observed.
+ *
+ * What is decided here is that it counts as **dismissed**, for two different
+ * reasons that happen to agree. A clean exit is the user quitting the CLI
+ * themselves, and `all` retaking it would be arguing with them. An unclean one
+ * is worse than that: `all` retaking it spawns again, and the notice below
+ * changes `sessions`, which re-runs the effect, which spawns again — the same
+ * unbounded respawn `3b2fc33` was written to stop. Nothing here has any evidence
+ * the next attempt would fare better, so it stops, says why, and leaves the
+ * retry to the user.
+ */
+export function planRemoteExit(code: number | null): RemoteExitPlan {
+  const tail =
+    " The thread carries on here; open Remote Control again to hand it back over.";
+  if (code === 0) {
+    return {
+      dismissed: true,
+      notice: "status",
+      message: `Remote Control ended — the interactive session exited.${tail}`,
+    };
+  }
+  const how =
+    code === null
+      ? "was terminated"
+      : `exited with code ${code}`;
+  return {
+    dismissed: true,
+    notice: "error",
+    message: `Remote Control stopped — the interactive session ${how}.${tail}`,
+  };
+}
+
 /**
  * Whether the by-hand dismissals survive a change of mode.
  *
