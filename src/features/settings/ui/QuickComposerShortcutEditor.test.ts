@@ -197,6 +197,9 @@ it("refuses a chord another command already owns", async () => {
   );
   expect(container.textContent).toContain("Already used by App: Search");
   expect(data.has("monocode.quickComposerShortcut")).toBe(false);
+  // A rejected chord must never reach native registration, or the OS would
+  // hold a live global hotkey that is not in settings.
+  expect(invoke).not.toHaveBeenCalled();
 });
 
 it("reserves its live custom chord so no other command can claim it", async () => {

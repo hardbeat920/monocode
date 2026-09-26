@@ -281,6 +281,7 @@ import {
   saveModelControls,
   saveNotesEnabled,
   saveKeybindingOverride,
+  validateKeybindingShortcut,
   saveQuickComposerEnabled,
   saveQuickComposerShortcut,
   subscribeKeybindings,
@@ -2534,6 +2535,9 @@ function QuickComposerShortcutEditor() {
   const apply = async (next: string) => {
     if (!isGlobalShortcut(next))
       throw new Error("Quick Composer needs ⌘ or Ctrl as a global hotkey");
+    // Validate before the native call: a rejected chord must not leave the OS
+    // holding a registered global hotkey that settings does not know about.
+    validateKeybindingShortcut("App: Quick Composer", next);
     // Recording while the feature is off must not silently switch it back on.
     if (enabled) await setQuickComposerShortcut(true, next);
     saveQuickComposerShortcut(next);
@@ -2541,6 +2545,10 @@ function QuickComposerShortcutEditor() {
   };
   const reset = async () => {
     // Reset restores the whole default state, including the enabled flag.
+    validateKeybindingShortcut(
+      "App: Quick Composer",
+      QUICK_COMPOSER_DEFAULT_SHORTCUT,
+    );
     await setQuickComposerShortcut(true, QUICK_COMPOSER_DEFAULT_SHORTCUT);
     saveQuickComposerEnabled(true);
     saveQuickComposerShortcut(QUICK_COMPOSER_DEFAULT_SHORTCUT);
