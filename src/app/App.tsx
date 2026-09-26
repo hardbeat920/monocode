@@ -1911,14 +1911,25 @@ export default function App({
   const closeRemote = useCallback(
     async (sessionId: string, byUser: boolean) => {
       const entry = remoteControl.current.get(sessionId);
-      if (!entry) return;
-      remoteControl.current.delete(sessionId);
-      setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
-      if (byUser) remoteControlClosed.current.add(sessionId);
-      setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
-      remoteTerminals.current.delete(sessionId);
-      setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
-      entry.stop();
+      // Torn down only if this window built it. An entry is per-window state and
+      // the readers below are its; the pty is not.
+      if (entry) {
+        remoteControl.current.delete(sessionId);
+        setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
+        if (byUser) remoteControlClosed.current.add(sessionId);
+        setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
+        remoteTerminals.current.delete(sessionId);
+        setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
+        entry.stop();
+      } else if (byUser) {
+        remoteControlClosed.current.add(sessionId);
+      }
+      // Always, entry or not. The pty id is derived from the thread precisely so
+      // a close works from a window that never opened it — see
+      // `remoteControlPtyId` — and returning early here threw that away: after a
+      // reload nothing held the handle, so Close killed nothing and the handed-over
+      // CLI went on running, still listed on the phone. A kill for a pty that is
+      // already gone is a no-op.
       await closeRemoteControl(sessionId, { killPty });
     },
     [],

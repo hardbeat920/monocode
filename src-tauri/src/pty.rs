@@ -73,6 +73,28 @@ impl PtyHost {
             .insert(id, live)
     }
 
+    /// Take an id, killing whatever held it.
+    ///
+    /// An id is one slot, and every way to reach a pty goes through it: `pty_kill`,
+    /// `pty_write`, `pty_resize` all look the id up. So a spawn that displaced a
+    /// live pty and dropped the old handle left a process nothing could ever
+    /// address again — running, holding its conversation, and invisible. Measured
+    /// on remote control, whose pty id is derived from the thread: reloading the
+    /// window handed the same threads over again, and each reload orphaned the
+    /// previous CLI. Fifty of them accumulated in one afternoon, and because the
+    /// interactive CLI traps SIGTERM a third of those survived even a direct
+    /// signal.
+    ///
+    /// Callers that mean to replace say so by calling this. Nobody has to remember
+    /// to check a return value.
+    fn replace(&self, id: String, live: Arc<LivePty>) {
+        if let Some(evicted) = self.insert(id, live) {
+            terminate(evicted.pid);
+            #[cfg(unix)]
+            close_fd(evicted.master_fd);
+        }
+    }
+
     fn get(&self, id: &str) -> Option<Arc<LivePty>> {
         self.sessions
             .lock()
@@ -323,7 +345,7 @@ fn spawn_unix(
         master_fd: master,
         pid,
     });
-    host.insert(id.clone(), live);
+    host.replace(id.clone(), live);
 
     let data_app = app.clone();
     let data_id = id.clone();
@@ -440,7 +462,7 @@ fn spawn_windows(
         master: Mutex::new(pair.master),
         pid,
     });
-    host.insert(id.clone(), live);
+    host.replace(id.clone(), live);
 
     let data_app = app.clone();
     let data_id = id.clone();
@@ -927,6 +949,38 @@ mod tests {
         assert!(!pty_should_flush(1, Duration::from_millis(1)));
         assert!(pty_should_flush(READ_CHUNK, Duration::from_millis(1)));
         assert!(pty_should_flush(1, PTY_COALESCE));
+    }
+
+    #[test]
+    fn replace_hands_the_slot_over_and_drops_the_old_handle() {
+        // `pid: 0` for the one being evicted on purpose: `terminate` returns on 0
+        // and 1, so this exercises the slot without signalling anything on the
+        // machine running the test. The kill itself is `terminate`, the same call
+        // `pty_kill` makes.
+        let host = PtyHost::new();
+        host.insert(
+            "term".into(),
+            Arc::new(LivePty {
+                cwd: std::path::PathBuf::from("/old"),
+                writer: Mutex::new(Box::new(std::io::sink())),
+                master_fd: -1,
+                pid: 0,
+            }),
+        );
+        host.replace(
+            "term".into(),
+            Arc::new(LivePty {
+                cwd: std::path::PathBuf::from("/new"),
+                writer: Mutex::new(Box::new(std::io::sink())),
+                master_fd: -1,
+                pid: 0,
+            }),
+        );
+
+        // One slot, one pty: the displaced handle is gone rather than left for
+        // nothing to address.
+        let live = host.get("term").expect("the new pty holds the id");
+        assert_eq!(live.cwd, std::path::PathBuf::from("/new"));
     }
 
     #[test]
