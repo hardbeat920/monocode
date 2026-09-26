@@ -5027,11 +5027,39 @@ export default function App({
     [activateTab, appendTab, onCwdChange, readProjectReturnMemory],
   );
 
+  /**
+   * Open a project in a tab of its own, without consulting the return memory.
+   *
+   * `onSelectProject` decides what to do by reading refs, and React has not
+   * rendered between two synchronous calls. Every folder after the first would
+   * therefore be planned against the same stale state, reuse the same blank
+   * session, and overwrite the folder before it. State updates here are all
+   * functional, so a run of calls accumulates.
+   */
+  const openProjectInOwnTab = useCallback(
+    (path: string) => {
+      const normalized = normalizeProjectPath(path);
+      if (!looksLikeProject(normalized)) return;
+      const session = newSessionForProject(sessionsRef.current[0], normalized);
+      const tab = newTab(session.id);
+      setProjectCwd(normalized);
+      setRecents(rememberProject(normalized));
+      setSessions((prev) => [...prev, session]);
+      appendTab(tab, normalized);
+      setActiveTabId(tab.id);
+      setComposerFocused(true);
+    },
+    [appendTab],
+  );
+
   const pickProject = useCallback(async () => {
-    // Several folders can be taken at once; each opens as its own project, and
-    // the last one selected ends up focused.
-    for (const path of await pickFolders()) onSelectProject(path);
-  }, [onSelectProject]);
+    const [first, ...rest] = await pickFolders();
+    if (!first) return;
+    // The first folder still goes through the normal path, so it can reuse a
+    // blank session or activate a tab that is already open.
+    onSelectProject(first);
+    for (const path of rest) openProjectInOwnTab(path);
+  }, [onSelectProject, openProjectInOwnTab]);
 
   const onPlaceSessionInFolder = useCallback(
     (sessionId: string, target: SessionFolderTarget) => {
