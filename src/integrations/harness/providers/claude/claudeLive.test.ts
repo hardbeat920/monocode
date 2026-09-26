@@ -45,7 +45,10 @@ const {
   __claudeTestReset,
 } = await import("./claude");
 import type { HarnessEvent } from "../../core/types";
-import type { RuntimeMode, TurnIntent } from "../../../../features/sessions/model/session";
+import type {
+  RuntimeMode,
+  TurnIntent,
+} from "../../../../features/sessions/model/session";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -202,7 +205,8 @@ function emitBashFinished(taskId = "b1") {
     task_id: taskId,
     tool_use_id: "toolu_bash",
     status: "completed",
-    summary: 'Background command "sleep 30 && echo done" completed (exit code 0)',
+    summary:
+      'Background command "sleep 30 && echo done" completed (exit code 0)',
   });
 }
 
@@ -672,6 +676,34 @@ describe("claude subagents", () => {
     expect(settled).toBe(true);
   });
 
+  it("ends the turn when a foreground task arrives with no tool_use_id", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    // `tool_use_id` is optional in the protocol, and without one nothing can
+    // ever match this task to a returning tool result — so an entry held for it
+    // would keep the turn open for the life of the session.
+    emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "t_orphan",
+      description: "Generate translations",
+      task_type: "local_agent",
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await waitFor(() => settled, "turn ended despite the unassociated task");
+    expect(settled).toBe(true);
+  });
+
   it("does not let a failed turn's late result settle the next one", async () => {
     const { events, turn } = await startTurn("s1");
     emit({
@@ -1112,9 +1144,9 @@ describe("claude background tasks", () => {
     });
     const items = groupTurnItems(session.blocks.slice(1));
     const group = items.at(-1);
-    expect(group?.type === "activity" && workSummaryLine(group.blocks, true)).toBe(
-      "Running in background",
-    );
+    expect(
+      group?.type === "activity" && workSummaryLine(group.blocks, true),
+    ).toBe("Running in background");
   });
 
   it("lets the turn go if a finished task never wakes Claude", async () => {
@@ -1238,9 +1270,7 @@ describe("claude auto mode permissions", () => {
           "bash_1",
       ),
     ).toBe(false);
-    const asked = events.filter(
-      (event) => event.type === "approval.requested",
-    );
+    const asked = events.filter((event) => event.type === "approval.requested");
     expect(asked).toHaveLength(1);
 
     respondClaudeApproval(

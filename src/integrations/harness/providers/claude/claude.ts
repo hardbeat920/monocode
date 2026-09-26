@@ -903,8 +903,7 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // A refused window can still fall back to another model, so only a turn
   // that ended in error was stopped by it.
   const turnErrored = rec.is_error === true || result.status === "failed";
-  const usageLimit =
-    live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
+  const usageLimit = live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
   live.usageLimit = null;
   if (usageLimit && turnErrored && !live.cancelled) {
     live.onEvent({ type: "usage.limited", ...usageLimit });
@@ -921,10 +920,7 @@ async function handleControlRequest(
   control: ClaudeControlRequest,
 ): Promise<void> {
   if (control.subtype !== "can_use_tool" && control.subtype !== "permission") {
-    await writeJson(
-      sessionId,
-      buildControlResponse(control.requestId, {}),
-    );
+    await writeJson(sessionId, buildControlResponse(control.requestId, {}));
     return;
   }
 
@@ -1136,18 +1132,35 @@ function handleAgentLifecycle(
   const started = parseTaskStarted(rec);
   if (started) {
     if (started.ambient) return true;
-    live.backgroundTasks.set(started.taskId, {
-      description: started.description,
-      toolUseId: started.toolUseId,
-    });
+    // Nothing goes into these maps that nothing can take out again. Both of
+    // them hold the turn open, and a foreground task is released by its tool
+    // result, through `clearAgentToolTasks` — which matches on `tool_use_id`.
+    // The field is optional in the protocol, and a task that arrives without
+    // it has no exit: `task_updated` and notifications are keyed on the task
+    // id, and a foreground subagent's completion is reported by the tool
+    // result rather than by either of those. So an entry for one would sit
+    // there for the life of the session with the turn never ending — the
+    // failure this branch exists to remove, arriving by another door.
+    //
+    // Backgrounded is different: those are released by task id, so a missing
+    // `tool_use_id` costs them nothing.
+    const releasable = !!started.toolUseId || started.backgrounded;
+    if (releasable) {
+      live.backgroundTasks.set(started.taskId, {
+        description: started.description,
+        toolUseId: started.toolUseId,
+      });
+    }
     syncBackgroundWait(live);
     if (!isAgentTaskType(started.taskType)) return true;
-    live.agentTasks.set(started.taskId, {
-      taskId: started.taskId,
-      toolUseId: started.toolUseId,
-      description: started.description,
-      backgrounded: started.backgrounded,
-    });
+    if (releasable) {
+      live.agentTasks.set(started.taskId, {
+        taskId: started.taskId,
+        toolUseId: started.toolUseId,
+        description: started.description,
+        backgrounded: started.backgrounded,
+      });
+    }
     upsertAgentTool(
       live,
       started.toolUseId,
@@ -1342,10 +1355,7 @@ function noteSubagentTool(
  * never joins the parent transcript — that would read as the main agent
  * talking — but it is the most legible thing in the panel for its own row.
  */
-function noteSubagentNarration(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentNarration(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   const model = stringField(asRecord(rec.message), "model");
@@ -1380,10 +1390,7 @@ function noteSubagentNarration(
 }
 
 /** Settles the subagent's own tool rows once their results come back. */
-function noteSubagentResults(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentResults(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   for (const result of toolResultsFromUserMessage(rec)) {
@@ -1550,7 +1557,8 @@ function noteClaudeTurnStarted(live: Live): void {
 function showBackgroundRows(live: Live): void {
   if (!live.activeTurn || live.cancelled) return;
   for (const [taskId, task] of live.backgroundTasks) {
-    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId)) continue;
+    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId))
+      continue;
     const source = task.toolUseId
       ? live.toolsById.get(task.toolUseId)
       : undefined;
@@ -1564,7 +1572,9 @@ function showBackgroundRows(live: Live): void {
       kind: source ? toolKindFromName(source.name) : "execute",
       status: "in_progress",
       background: true,
-      ...(source ? { preview: previewFromTool(source.name, source.input) } : {}),
+      ...(source
+        ? { preview: previewFromTool(source.name, source.input) }
+        : {}),
     });
   }
 }
