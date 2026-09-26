@@ -26,6 +26,11 @@ import {
 import { GitPickerTrigger } from "../../source-control/ui/GitPickerTrigger";
 import { Popover } from "../../../shared/ui/Popover";
 import { LAYER } from "../../../shared/lib/layers";
+import {
+  keybindingPressed,
+  keybindingShortcutLabel,
+  keybindingShortcutTokens,
+} from "../../settings/model/settings";
 
 export const WORKSPACE_MODE_SHORTCUT = `${MOD}${SHIFT}G`;
 const WORKSPACE_SURFACES =
@@ -34,17 +39,20 @@ const SUBMENU_GAP = 4;
 const HOVER_CLOSE_MS = 100;
 
 export function isWorkspaceModeShortcut(event: {
+  code: string;
   key: string;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
 }): boolean {
-  return (
+  return keybindingPressed(
+    "Composer: Toggle Workspace",
+    event,
     (event.metaKey || event.ctrlKey) &&
-    event.shiftKey &&
-    !event.altKey &&
-    event.key.toLowerCase() === "g"
+      event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "g",
   );
 }
 
@@ -246,6 +254,14 @@ function WorkspaceModePicker({
     }, HOVER_CLOSE_MS);
   };
   const label = mode === "worktree" ? "New worktree" : "Current checkout";
+  const shortcut = keybindingShortcutLabel(
+    "Composer: Toggle Workspace",
+    WORKSPACE_MODE_SHORTCUT,
+  );
+  const shortcutTokens = keybindingShortcutTokens(
+    "Composer: Toggle Workspace",
+    "Meta+Shift+G Control+Shift+G",
+  );
   const Icon = mode === "worktree" ? FolderTree : Folder;
 
   return (
@@ -254,9 +270,9 @@ function WorkspaceModePicker({
         <button
           type="button"
           disabled={!enabled}
-          title={`Workspace: ${label} (${WORKSPACE_MODE_SHORTCUT})`}
+          title={shortcut ? `Workspace: ${label} (${shortcut})` : undefined}
           aria-label={`Workspace ${label}`}
-          aria-keyshortcuts="Meta+Shift+G Control+Shift+G"
+          aria-keyshortcuts={shortcutTokens ?? undefined}
           aria-haspopup="dialog"
           aria-expanded={open}
           onMouseDown={(event) => event.preventDefault()}
@@ -288,9 +304,11 @@ function WorkspaceModePicker({
         >
           <div className="flex items-center justify-between gap-3 px-2 py-1 text-[11px] font-medium text-content/45">
             <span>Workspace</span>
-            <kbd className="font-sans text-[10px] font-normal text-content/35">
-              {WORKSPACE_MODE_SHORTCUT}
-            </kbd>
+            {shortcut ? (
+              <kbd className="font-sans text-[10px] font-normal text-content/35">
+                {shortcut}
+              </kbd>
+            ) : null}
           </div>
           {(
             [
