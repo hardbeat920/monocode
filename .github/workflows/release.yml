@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    needs: [linux, windows]
+    needs: [linux, linux-rpm, windows]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -140,6 +140,12 @@ jobs:
         with:
           name: linux-packages
           path: target/release/bundle/linux
+
+      - name: Download Linux rpm package
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-rpm-package
+          path: target/release/bundle/rpm
 
       - name: Download Windows packages
         uses: actions/download-artifact@v4
@@ -283,9 +289,16 @@ jobs:
           INTEL_DMG="$INTEL_BUNDLE/dmg/MonoCode_${VERSION}_x64.dmg"
           DEB="$BUNDLE/linux/MonoCode_${VERSION}_amd64.deb"
           APPIMAGE="$BUNDLE/linux/MonoCode_${VERSION}_amd64.AppImage"
+          shopt -s nullglob
+          RPMS=("$BUNDLE"/rpm/*.rpm)
+          if (( ${#RPMS[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          RPM="${RPMS[0]}"
           NSIS="$BUNDLE/nsis/MonoCode_${VERSION}_x64-setup.exe"
           NSIS_SIG="${NSIS}.sig"
-          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"; do
+          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG"; do
             if [[ ! -f "$artifact" ]]; then
               echo "Missing release artifact: $artifact" >&2
               exit 1
@@ -302,7 +315,7 @@ jobs:
             --notes "See CHANGELOG.md for details." \
             "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig" \
             "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig" \
-            "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"
+            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG"
 
   linux:
     name: Linux packages
@@ -342,6 +355,66 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-packages
+          path: release-artifacts/
+          if-no-files-found: error
+
+  linux-rpm:
+    name: Linux rpm package
+    runs-on: ubuntu-latest
+    container: fedora:43
+    steps:
+      # fedora:43 ships no git, which actions/checkout otherwise has to work
+      # around with a REST API tarball download.
+      - name: Install git
+        run: dnf install -y git
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Fedora system dependencies
+        run: bash scripts/install-linux-deps-fedora.sh
+
+      - run: npm ci
+
+      - name: Build rpm package
+        run: npm run build:fedora
+
+      - name: Install and stage the generated rpm
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=(target/release/bundle/rpm/*.rpm)
+          if (( ${#bundle[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          # tauri-bundler derives rpm Requires only from
+          # bundle.linux.rpm.depends, and the setup script has already
+          # installed every -devel package, so assert the metadata directly.
+          requires="$(rpm -qp --requires "${bundle[0]}")"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3 librsvg2 openssl-libs; do
+            if ! grep -qx "$dep" <<<"$requires"; then
+              echo "rpm is missing Requires: $dep" >&2
+              exit 1
+            fi
+          done
+          dnf install -y "${bundle[0]}"
+          rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
+          mkdir -p release-artifacts
+          cp "${bundle[0]}" release-artifacts/
+
+      - name: Upload rpm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm-package
           path: release-artifacts/
           if-no-files-found: error
 
