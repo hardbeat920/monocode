@@ -36,6 +36,23 @@ vi.mock("./QuickProjectIcon", () => ({
   loadQuickProjectAppearance: () => ({}),
 }));
 vi.mock("./QuickModelSelector", () => ({ QuickModelSelector: () => null }));
+vi.mock("../../terminal/ui/TerminalView", () => ({
+  TerminalView: ({
+    id,
+    cwd,
+    active,
+  }: {
+    id: string;
+    cwd: string;
+    active: boolean;
+  }) =>
+    createElement("div", {
+      "data-test-terminal": "",
+      "data-id": id,
+      "data-cwd": cwd,
+      "data-active": String(active),
+    }),
+}));
 vi.mock("../model/quickComposer", async (actual) => ({
   ...(await actual<object>()),
   loadQuickProjects: () => ["/tmp/project"],
@@ -128,4 +145,27 @@ it("retains attachments for retry if starting the session fails", async () => {
     container.querySelector('button[aria-label="Open image.png full screen"]'),
   ).not.toBeNull();
   expect(button("Start").disabled).toBe(false);
+});
+
+it("keeps the floating terminal mounted across picker changes and composer shows", async () => {
+  expect(container.querySelector("[data-test-terminal]")).toBeNull();
+  act(() => button("Toggle floating terminal").click());
+  const terminal = container.querySelector("[data-test-terminal]");
+  expect(terminal).not.toBeNull();
+  expect(terminal?.getAttribute("data-cwd")).toBe("");
+  expect(terminal?.getAttribute("data-active")).toBe("true");
+  act(() => button("Toggle floating terminal").click());
+  expect(container.querySelector("[data-test-terminal]")).toBe(terminal);
+  expect(terminal?.getAttribute("data-active")).toBe("false");
+  act(() =>
+    container
+      .querySelector<HTMLButtonElement>('button[title="Model (⌘.)"]')!
+      .click(),
+  );
+  expect(container.querySelector("[data-test-terminal]")).toBe(terminal);
+  await act(async () => native.shown());
+  expect(container.querySelector("[data-test-terminal]")).toBe(terminal);
+  act(() => button("Toggle floating terminal").click());
+  expect(container.querySelector("[data-test-terminal]")).toBe(terminal);
+  expect(terminal?.getAttribute("data-active")).toBe("true");
 });
