@@ -616,6 +616,59 @@ describe("claude subagents", () => {
     });
   });
 
+  it("does not let a failed turn's late result settle the next one", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "control_request",
+      request_id: "perm_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Read",
+        input: { file_path: "/repo/a.ts" },
+      },
+    });
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    let failure: unknown;
+    void turn.catch((error) => {
+      failure = error;
+    });
+    writeChild.mockRejectedValueOnce(new Error("Broken pipe"));
+    respondClaudeApproval("s1", approval.requestId, "allow");
+    await waitFor(() => failure instanceof Error, "turn failed");
+
+    // Claude does not know the turn died and still reports its result.
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    const second = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "try again",
+      attachments: [],
+      onEvent: () => undefined,
+    });
+    let secondSettled = false;
+    void second.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
+
+    // The dead turn's result must not end this one; only its own reply may.
+    await new Promise((r) => setTimeout(r, 40));
+    expect(secondSettled).toBe(false);
+
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+  });
+
   it("stays busy after a parent result while a background subagent is running", async () => {
     const { events, turn } = await startTurn("s1");
     let settled = false;
@@ -1061,6 +1114,17 @@ describe("claude auto mode permissions", () => {
         input: { appId: "123" },
       },
     });
+    // Named like a shell but it is a server call, so it must not be mistaken
+    // for command execution: the display kind is derived from the name.
+    emit({
+      type: "control_request",
+      request_id: "mcp_2",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "mcp__host__list_shells",
+        input: {},
+      },
+    });
     emit({
       type: "control_request",
       request_id: "bash_1",
@@ -1091,6 +1155,18 @@ describe("claude auto mode permissions", () => {
     expect(
       (
         (mcp?.response as Record<string, unknown>)?.response as Record<
+          string,
+          unknown
+        >
+      )?.behavior,
+    ).toBe("allow");
+    const mcpShell = responses.find(
+      (message) =>
+        (message.response as Record<string, unknown>)?.request_id === "mcp_2",
+    );
+    expect(
+      (
+        (mcpShell?.response as Record<string, unknown>)?.response as Record<
           string,
           unknown
         >

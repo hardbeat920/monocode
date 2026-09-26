@@ -474,10 +474,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           `[monocode] claude line failed ${input.sessionId}`,
           failure,
         );
-        if (current.turnFailed) current.turnFailed(failure);
-        else if (!current.muteUpdates) {
-          current.onEvent({ type: "session.error", message: failure.message });
-        }
+        failActiveTurn(current, failure);
       }
     },
     (code) => {
@@ -611,11 +608,7 @@ function handleLine(sessionId: string, live: Live, line: string): void {
         if (live.muteUpdates || live.turnDone !== turn) return;
         const failure =
           error instanceof Error ? error : new Error(String(error));
-        if (live.turnFailed) {
-          live.turnFailed(failure);
-        } else {
-          live.onEvent({ type: "session.error", message: failure.message });
-        }
+        failActiveTurn(live, failure);
       },
     );
     return;
@@ -1028,7 +1021,7 @@ async function handleControlRequest(
   // name anyway — `get_app_keywords` and `add_keywords` look alike — and it
   // comes from a server the user installed. Arbitrary command execution stays
   // behind a prompt, which is what separates this from full access.
-  if (live.runtimeMode === "auto" && toolKindFromName(toolName) !== "execute") {
+  if (live.runtimeMode === "auto" && !runsCommand(toolName)) {
     await writeJson(
       sessionId,
       buildControlResponse(
@@ -1641,6 +1634,44 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
     return;
   }
   if (!failed) live.turnEndPending = true;
+}
+
+/**
+ * Whether this tool is the kind Auto still stops for: one that runs a command.
+ *
+ * The display kind is inferred from the name, which is fine for a label but
+ * wrong as a permission boundary. An MCP tool's name belongs to its server, so
+ * `mcp__host__list_shells` reads as `execute` while running nothing — and a
+ * server call is exactly what Auto is meant to let through.
+ */
+function runsCommand(toolName: string): boolean {
+  if (toolName.startsWith("mcp__")) return false;
+  return toolKindFromName(toolName) === "execute";
+}
+
+/**
+ * End a turn that failed, rather than only rejecting its promise.
+ *
+ * Leaving `activeTurn` set keeps the dead turn eligible for everything that
+ * follows: a late `result` for it can mark `turnEndPending`, and the next turn
+ * then settles on that instead of on its own reply.
+ */
+function failActiveTurn(live: Live, error: Error): void {
+  clearAwaitingResume(live);
+  live.turnEndPending = false;
+  live.activeTurn = false;
+  live.turnResultSeen = false;
+  syncBackgroundWait(live);
+  const failed = live.turnFailed;
+  live.turnDone = null;
+  live.turnFailed = null;
+  if (failed) {
+    failed(error);
+    return;
+  }
+  if (!live.muteUpdates) {
+    live.onEvent({ type: "session.error", message: error.message });
+  }
 }
 
 function settlePendingTurn(live: Live): void {
