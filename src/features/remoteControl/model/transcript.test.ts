@@ -472,6 +472,157 @@ describe("inbound messages that are not just text", () => {
   });
 });
 
+describe("a compaction, which rewrites the conversation underneath", () => {
+  // Shapes verbatim from the corpus, with the long uuid lists trimmed. The
+  // token figures are the real ones: 672003 -> 11301 in one manual compaction.
+  const COMPACT = JSON.stringify({
+    type: "system",
+    subtype: "compact_boundary",
+    content: "Conversation compacted",
+    level: "info",
+    compactMetadata: {
+      trigger: "manual",
+      preTokens: 672003,
+      postTokens: 11301,
+      cumulativeDroppedTokens: 660702,
+      durationMs: 114697,
+    },
+  });
+  const MICRO = JSON.stringify({
+    type: "system",
+    subtype: "microcompact_boundary",
+    content: "Context microcompacted",
+    level: "info",
+    microcompactMetadata: { trigger: "auto", preTokens: 16036, tokensSaved: 2000 },
+  });
+
+  it("announces a compaction and the level it landed on", () => {
+    const events = eventsOf(COMPACT);
+    expect(types(events)).toEqual(["status", "context"]);
+    const status = events[0];
+    if (status.type !== "status") throw new Error("shape");
+    expect(status.text).toBe("Compacted context");
+    const context = events[1];
+    if (context.type !== "context") throw new Error("shape");
+    // Without this the UI keeps showing the pre-compaction reading forever.
+    expect(context.used).toBe(11301);
+  });
+
+  it("announces a microcompaction too", () => {
+    // statusTextFromSystem tests subtype.startsWith("compact"), which this
+    // subtype fails, so the fallback is what keeps the smaller cousin visible.
+    expect(types(eventsOf(MICRO))).toEqual(["status"]);
+  });
+
+  it("does not invent a context level for a microcompaction", () => {
+    // It reports preTokens and tokensSaved; their difference is arithmetic, not
+    // a reading, so no context event is emitted from it.
+    expect(eventsOf(MICRO).some((e) => e.type === "context")).toBe(false);
+  });
+
+  it("does not end the turn it lands in the middle of", () => {
+    const state = createMirrorState();
+    for (const rec of recordsOf(USER_MULTILINE, COMPACT)) mapRecord(state, rec);
+    expect(state.turn.active).toBe(true);
+  });
+});
+
+describe("resolving an interrupt from outside the transcript", () => {
+  // The two cases this has to separate were both measured. An interrupt left a
+  // session file byte-identical for 240s. Unsubmitted type-ahead during a live
+  // turn also wrote nothing — for 148s — and then the turn finished normally.
+  // So the transcript state is identical and only pty silence tells them apart:
+  // the longest gap between reads while a turn was alive was 800ms.
+  const held = (quietForMs: number) => ({ composerHeld: true, quietForMs });
+
+  function interrupted() {
+    const state = createMirrorState();
+    for (const rec of recordsOf(USER_INTERRUPTED)) mapRecord(state, rec);
+    return state;
+  }
+
+  it("ends the turn once the pty has been quiet past the threshold", () => {
+    const state = interrupted();
+    expect(state.turn.active).toBe(true);
+    expect(resolveTurnFromScreen(state, held(3000))).toEqual([]);
+    expect(state.turn).toEqual({ active: false, source: "screen" });
+  });
+
+  it("leaves a live turn alone while the pty is still producing", () => {
+    // 800ms was the worst case observed across 278 reads of a live turn, so a
+    // reading inside that must never end one.
+    const state = interrupted();
+    expect(resolveTurnFromScreen(state, held(800))).toEqual([]);
+    expect(state.turn.active).toBe(true);
+  });
+
+  it("does nothing when the composer is not holding anything", () => {
+    // After an interrupt the CLI restores the interrupted prompt, so an empty
+    // composer is not the interrupted shape at all.
+    const state = interrupted();
+    expect(
+      resolveTurnFromScreen(state, { composerHeld: false, quietForMs: 60000 }),
+    ).toEqual([]);
+    expect(state.turn.active).toBe(true);
+  });
+
+  it("will not end a turn that is waiting on a tool, however quiet", () => {
+    // A slow command produces no output while the turn is genuinely alive. The
+    // transcript is the only thing that knows a tool_use has no tool_result.
+    const state = createMirrorState();
+    for (const rec of recordsOf(USER_WRITE_REQUEST, ASSISTANT_TOOL_USE)) {
+      mapRecord(state, rec);
+    }
+    expect(state.outstandingTools.size).toBe(1);
+    expect(resolveTurnFromScreen(state, held(600000))).toEqual([]);
+    expect(state.turn.active).toBe(true);
+  });
+
+  it("ends it once that tool has reported back", () => {
+    const state = createMirrorState();
+    for (const rec of recordsOf(
+      USER_WRITE_REQUEST,
+      ASSISTANT_TOOL_USE,
+      USER_TOOL_RESULT,
+    )) {
+      mapRecord(state, rec);
+    }
+    expect(state.outstandingTools.size).toBe(0);
+    expect(resolveTurnFromScreen(state, held(3000))).toEqual([]);
+    expect(state.turn.active).toBe(false);
+  });
+
+  it("honours a caller's own threshold", () => {
+    const state = interrupted();
+    expect(
+      resolveTurnFromScreen(state, {
+        composerHeld: true,
+        quietForMs: 1200,
+        quietThresholdMs: 1000,
+      }),
+    ).toEqual([]);
+    expect(state.turn.active).toBe(false);
+  });
+
+  it("still accepts the plain boolean a caller may already pass", () => {
+    const state = interrupted();
+    expect(resolveTurnFromScreen(state, false)).toEqual([]);
+    expect(state.turn.active).toBe(true);
+    resolveTurnFromScreen(state, true);
+    expect(state.turn).toEqual({ active: false, source: "screen" });
+  });
+
+  it("closes a half-emitted message when it does resolve", () => {
+    const state = createMirrorState();
+    for (const rec of recordsOf(USER_INTERRUPTED, ASSISTANT_TEXT)) {
+      mapRecord(state, rec);
+    }
+    expect(types(resolveTurnFromScreen(state, held(5000)))).toEqual([
+      "message.completed",
+    ]);
+  });
+});
+
 describe("turn state when no record ever arrives", () => {
   it("leaves an interrupted turn resolvable instead of pending forever", () => {
     // ESC writes nothing — not even turn_duration — so the file simply stops
