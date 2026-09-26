@@ -148,4 +148,65 @@ describe("secondary model target picker", () => {
       modelSettings: {},
     });
   });
+
+  it("hides the current model from a same-harness second opinion", () => {
+    const onPick = vi.fn();
+    act(() =>
+      root.render(
+        createElement(SecondOpinionButton, {
+          from: "grok",
+          fromModel: "grok:review",
+          onPick,
+          includeCurrent: true,
+          excludeFromModel: true,
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Second opinion"]')!
+        .click(),
+    );
+    const provider = [...document.querySelectorAll('[role="menuitem"]')].find(
+      (row) => row.textContent?.includes("Grok Build"),
+    )!;
+    hover(provider);
+
+    const modelLabels = [
+      ...document.querySelectorAll(
+        '[role="menu"][aria-label="Grok Build models"] [role="menuitem"]',
+      ),
+    ].map((row) => row.textContent);
+    expect(modelLabels.some((text) => text?.includes("Review Model"))).toBe(
+      false,
+    );
+    expect(modelLabels.some((text) => text?.includes("Quick Model"))).toBe(
+      true,
+    );
+  });
+
+  it("disables the second-opinion button once the current model is the only one left", () => {
+    setHarnessModels("grok", [
+      { id: "grok:review", harness: "grok", name: "Review Model" },
+    ]);
+    const onPick = vi.fn();
+    act(() =>
+      root.render(
+        createElement(SecondOpinionButton, {
+          from: "grok",
+          fromModel: "grok:review",
+          onPick,
+          includeCurrent: true,
+          excludeFromModel: true,
+        }),
+      ),
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Install another provider for a second opinion"]',
+    );
+    expect(button).toBeTruthy();
+    expect(button?.disabled).toBe(true);
+  });
 });

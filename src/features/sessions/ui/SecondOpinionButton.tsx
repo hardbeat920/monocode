@@ -55,6 +55,13 @@ type Props = {
   description?: string;
   menuLabel?: string;
   includeCurrent?: boolean;
+  /**
+   * Hide `fromModel` from `from`'s own model list instead of offering it
+   * back as a target. Only the plain "Second opinion" button sets this —
+   * `BuildTargetButton` still needs to reselect the same model to change
+   * its effort, so it leaves this off.
+   */
+  excludeFromModel?: boolean;
   disabled?: boolean;
   triggerClassName?: string;
 };
@@ -127,6 +134,7 @@ export function SecondOpinionButton({
   description = "Send this turn to another agent to review the work.",
   menuLabel = "Send this turn to another agent",
   includeCurrent = false,
+  excludeFromModel = false,
   disabled: disabledByCaller = false,
   triggerClassName,
 }: Props) {
@@ -173,11 +181,17 @@ export function SecondOpinionButton({
   const activeHarness = targets[active];
   const models = useMemo(() => {
     void catalogVersion;
-    return activeHarness ? modelsFor(activeHarness) : [];
-  }, [activeHarness, catalogVersion]);
+    if (!activeHarness) return [];
+    const list = modelsFor(activeHarness);
+    // The current model is not a second opinion on itself, so it is not an
+    // option once the picker lets the turn's own harness back in.
+    return excludeFromModel && activeHarness === from && fromModel
+      ? list.filter((model) => model.id !== fromModel)
+      : list;
+  }, [activeHarness, catalogVersion, from, fromModel, excludeFromModel]);
   const preferred =
     activeHarness != null
-      ? activeHarness === from && fromModel
+      ? activeHarness === from && fromModel && !excludeFromModel
         ? fromModel
         : preferredModelId(activeHarness)
       : undefined;
@@ -242,7 +256,18 @@ export function SecondOpinionButton({
     if (restoreFocus) button.current?.focus();
   };
 
-  const noTargets = targets.length === 0;
+  // With the current model hidden, a target harness only counts as usable
+  // if it still has a model left to offer once that exclusion is applied.
+  const hasSelectableModel =
+    !excludeFromModel || !fromModel
+      ? true
+      : targets.some((harness) => {
+          const list = modelsFor(harness);
+          return harness === from
+            ? list.some((model) => model.id !== fromModel)
+            : list.length > 0;
+        });
+  const noTargets = targets.length === 0 || !hasSelectableModel;
   const disabled = disabledByCaller || noTargets;
   const label = noTargets ? disabledTitle : title;
 
