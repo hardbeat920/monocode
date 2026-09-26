@@ -48,6 +48,23 @@ describe("transcriptMutationNeedsRepaint", () => {
     ).toBe(true);
   });
 
+  it("repaints when a character edit breaks a cross-node match", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `
+      <div data-transcript-search-item>
+        <p><span>nee</span><span>dle</span></p>
+      </div>
+    `;
+    const text = root.querySelector("span")?.firstChild as Text;
+
+    expect(
+      transcriptMutationNeedsRepaint(
+        [record(text, { type: "characterData", oldValue: "nee" })],
+        "needle",
+      ),
+    ).toBe(true);
+  });
+
   it("repaints node removals that could drop a match", () => {
     const root = document.createElement("div");
     const item = document.createElement("div");

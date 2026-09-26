@@ -37,9 +37,9 @@ export function transcriptMutationNeedsRepaint(
   const seen = new Set<HTMLElement>();
   for (const record of records) {
     if (record.removedNodes.length) return true;
-    if (record.type === "characterData" && pattern.test(record.oldValue ?? "")) {
-      return true;
-    }
+    // A match can span multiple text nodes, so a character edit may remove part
+    // of a match even when neither the old node nor the new item contains it.
+    if (record.type === "characterData") return true;
     const target =
       record.target.nodeType === Node.TEXT_NODE
         ? record.target.parentElement

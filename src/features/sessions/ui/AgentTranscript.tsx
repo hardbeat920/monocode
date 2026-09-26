@@ -657,7 +657,6 @@ function AgentTranscriptComponent({
     observer.observe(el, {
       childList: true,
       characterData: true,
-      characterDataOldValue: true,
       subtree: true,
     });
     paint();
