@@ -371,6 +371,11 @@ export function SearchView({
 
   const empty = !trimmed;
   const noResults = !empty && hits.length === 0 && !loading;
+  const limitNotice = truncated ? (
+    <p className="px-2.5 py-1 text-[11px] text-content/45">
+      Results limited to the first matches
+    </p>
+  ) : null;
 
   return (
     <div
@@ -448,14 +453,13 @@ export function SearchView({
         ) : error && hits.length === 0 ? (
           <p className="px-2 py-1.5 text-[12px] text-red-400">{error}</p>
         ) : noResults ? (
-          <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+          <>
+            <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+            {limitNotice}
+          </>
         ) : (
           <>
-            {truncated ? (
-              <p className="px-2.5 py-1 text-[11px] text-content/45">
-                Results limited to the first matches
-              </p>
-            ) : null}
+            {limitNotice}
             <ResultList
               hits={hits}
               active={active}
