@@ -1631,6 +1631,15 @@ function syncBackgroundWait(live: Live): void {
   live.onEvent({ type: "background.updated", tasks: waiting });
 }
 
+/**
+ * End the turn if nothing is still owed to it.
+ *
+ * Claude's `result` says its own reply is done, not that the turn is: work it
+ * started can outlive it and wake it again. So the turn also waits on every
+ * subagent and backgrounded task, and on the grace period after one finishes.
+ * Anything left in those maps holds the turn open indefinitely — whatever put
+ * an entry there is responsible for taking it out.
+ */
 function maybeFinishTurn(live: Live): void {
   if (!live.turnResultSeen) return;
   if (live.agentTasks.size > 0 || live.backgroundTasks.size > 0) return;
@@ -1642,6 +1651,14 @@ function maybeFinishTurn(live: Live): void {
   ]);
 }
 
+/**
+ * Close a turn that ended normally and settle whoever is waiting on it.
+ *
+ * `extraEvents` go out before the promise resolves, so anything still shown as
+ * streaming is closed in the same update. A result that lands before the next
+ * turn has registered its promise is held as `turnEndPending` for that turn to
+ * pick up, which is why the flag is cleared here rather than assumed unset.
+ */
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   clearAwaitingResume(live);
   live.turnEndPending = false;
