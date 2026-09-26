@@ -75,21 +75,22 @@ function clearBuffered(id: string) {
 }
 
 function ensureBridge() {
-  if (bridge) return;
-  bridge = Promise.all([
-    listen<DataPayload>("pty-data", (event) => {
-      const { id, data } = event.payload;
-      const handler = dataHandlers.get(id);
-      if (!handler && !openedPtys.has(id)) return;
-      const chunk = decodeBase64(data);
-      if (handler) handler(chunk);
-      else pushBuffered(id, chunk);
-    }),
-    listen<ExitPayload>("pty-exit", (event) => {
-      const { id, code } = event.payload;
-      exitHandlers.get(id)?.(code);
-    }),
-  ]);
+  if (!bridge)
+    bridge = Promise.all([
+      listen<DataPayload>("pty-data", (event) => {
+        const { id, data } = event.payload;
+        const handler = dataHandlers.get(id);
+        if (!handler && !openedPtys.has(id)) return;
+        const chunk = decodeBase64(data);
+        if (handler) handler(chunk);
+        else pushBuffered(id, chunk);
+      }),
+      listen<ExitPayload>("pty-exit", (event) => {
+        const { id, code } = event.payload;
+        exitHandlers.get(id)?.(code);
+      }),
+    ]);
+  return bridge;
 }
 
 function retain() {
@@ -118,7 +119,12 @@ export async function spawnPty(
   cwd: string,
   cols: number,
   rows: number,
+  signal?: AbortSignal,
 ): Promise<void> {
+  // A fresh shell can print its prompt before Tauri has registered the
+  // window's event listeners. Subscribe before spawning to keep that output.
+  await ensureBridge();
+  if (signal?.aborted) return;
   await invoke("pty_spawn", { id, cwd, cols, rows });
 }
 

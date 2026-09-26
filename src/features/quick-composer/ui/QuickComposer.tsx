@@ -101,6 +101,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
   >(null);
   const [terminalStarted, setTerminalStarted] = useState(false);
   const terminalId = useRef(`quick-composer:${crypto.randomUUID()}`);
+  const terminalCwd = useRef("");
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -232,7 +233,10 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       return;
     }
     setPicker(kind);
-    if (kind === "terminal") setTerminalStarted(true);
+    if (kind === "terminal" && !terminalStarted) {
+      terminalCwd.current = cwd ?? "";
+      setTerminalStarted(true);
+    }
     setQuery("");
     setHighlight(Math.max(0, projects.indexOf(cwd ?? "")));
     if (kind === "project")
@@ -602,7 +606,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
         >
           <TerminalView
             id={terminalId.current}
-            cwd=""
+            cwd={terminalCwd.current}
             active={picker === "terminal"}
           />
         </div>

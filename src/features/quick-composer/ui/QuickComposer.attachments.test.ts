@@ -152,7 +152,7 @@ it("keeps the floating terminal mounted across picker changes and composer shows
   act(() => button("Toggle floating terminal").click());
   const terminal = container.querySelector("[data-test-terminal]");
   expect(terminal).not.toBeNull();
-  expect(terminal?.getAttribute("data-cwd")).toBe("");
+  expect(terminal?.getAttribute("data-cwd")).toBe("/tmp/project");
   expect(terminal?.getAttribute("data-active")).toBe("true");
   act(() => button("Toggle floating terminal").click());
   expect(container.querySelector("[data-test-terminal]")).toBe(terminal);
