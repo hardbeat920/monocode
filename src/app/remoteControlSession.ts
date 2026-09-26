@@ -187,10 +187,7 @@ export function planRemoteExit(code: number | null): RemoteExitPlan {
       message: `Remote Control ended — the interactive session exited.${tail}`,
     };
   }
-  const how =
-    code === null
-      ? "was terminated"
-      : `exited with code ${code}`;
+  const how = code === null ? "was terminated" : `exited with code ${code}`;
   return {
     dismissed: true,
     notice: "error",
@@ -218,6 +215,27 @@ export function dismissalsAfterModeChange(
   next: RemoteControlMode,
 ): "keep" | "clear" {
   return next === "all" && previous !== "all" ? "clear" : "keep";
+}
+
+/** When a hand-over asked for by hand may run. */
+export type HandoverTiming = "now" | "when-the-turn-ends";
+
+/**
+ * Whether opening Remote Control by hand may run now, or has to wait.
+ *
+ * The hand-over stops the headless child, so running it mid-turn ends the turn
+ * the user is waiting on — which is what `noteInterruptedTurn` exists to
+ * apologise for. Waiting is strictly better and costs nothing: the hand-over's
+ * own precondition is a session idle with a conversation bound, and the end of
+ * the turn is exactly what produces that. So a click during a turn is a request
+ * to hand over, not a request to lose the turn.
+ *
+ * `all` mode already waits, by way of `shouldAutoOpen`. This gives the by-hand
+ * path the same rule, which is also why the two share one queue at the call
+ * site.
+ */
+export function handoverTiming(session: Session): HandoverTiming {
+  return session.busy ? "when-the-turn-ends" : "now";
 }
 
 export function shouldAutoOpen(
@@ -590,7 +608,11 @@ export async function injectRemoteText(
 ): Promise<InjectOutcome> {
   const planFor = (screen: PromptScreen | null) =>
     screen ? planInjection(screen, text) : null;
-  const gate = remoteSendGate(ports.screen(), planFor(ports.screen()), terminalOpen);
+  const gate = remoteSendGate(
+    ports.screen(),
+    planFor(ports.screen()),
+    terminalOpen,
+  );
   if (gate.kind === "refuse") return { kind: "refused", reason: gate.reason };
 
   if (gate.kind === "clear") {
@@ -653,9 +675,7 @@ export const APPROVAL_STABLE_FRAMES = 2;
 export const APPROVAL_CHURN_LIMIT = 3;
 
 export type ApprovalShown =
-  | { kind: "question"; requestId: number }
-  | { kind: "raw" }
-  | null;
+  { kind: "question"; requestId: number } | { kind: "raw" } | null;
 
 export type ApprovalProgress = {
   shown: ApprovalShown;

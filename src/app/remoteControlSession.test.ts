@@ -22,6 +22,7 @@ import {
   remoteControlTarget,
   remoteSendGate,
   seatRemoteUserMessage,
+  handoverTiming,
   shouldAutoOpen,
   dismissalsAfterModeChange,
   planRemoteExit,
@@ -143,6 +144,18 @@ describe("the cue for a turn the handover stopped", () => {
     const idle = session({ busy: false });
 
     expect(noteInterruptedTurn(idle)).toBe(idle);
+  });
+});
+
+describe("when a hand-over asked for by hand may run", () => {
+  it("waits for a running turn instead of ending it", () => {
+    // The loss `noteInterruptedTurn` apologises for is the one this avoids: the
+    // click asks for a hand-over, not for the turn to be thrown away.
+    expect(handoverTiming(session({ busy: true }))).toBe("when-the-turn-ends");
+  });
+
+  it("runs now when nothing is running", () => {
+    expect(handoverTiming(session({ busy: false }))).toBe("now");
   });
 });
 
@@ -831,7 +844,10 @@ describe("typing a message into the pty", () => {
   });
 
   it("reports a definitely-finished turn as not queued", async () => {
-    const screen = { ...idleWith(IDLE_COMPOSER), turn: "ended" } as PromptScreen;
+    const screen = {
+      ...idleWith(IDLE_COMPOSER),
+      turn: "ended",
+    } as PromptScreen;
     const pty = scriptedPty([screen]);
 
     expect(await injectRemoteText("say OK", false, pty.ports)).toEqual({

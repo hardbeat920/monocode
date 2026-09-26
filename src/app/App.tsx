@@ -180,6 +180,7 @@ import {
   remoteApprovalReply,
   remoteApprovalTransition,
   remoteApprovalView,
+  handoverTiming,
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
@@ -590,7 +591,10 @@ import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
 import { SearchView } from "../features/search/ui/SearchView";
 import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
-import { SettingsView, type SettingsAnchor } from "../features/settings/ui/SettingsView";
+import {
+  SettingsView,
+  type SettingsAnchor,
+} from "../features/settings/ui/SettingsView";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import { InboxView, LinkedWorkItemPanel } from "../features/inbox/ui/InboxView";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
@@ -616,7 +620,10 @@ import {
 import type { LinkedSessionUpdate } from "../features/inbox/model/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
 import { inboxTrackerDescription } from "../features/inbox/model/inboxContext";
-import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "../features/inbox/model/gitlab";
+import {
+  gitlabWorkItemDetails,
+  peekGitlabWorkItemDetails,
+} from "../features/inbox/model/gitlab";
 import {
   azureDevOpsWorkItemDetails,
   peekAzureDevOpsWorkItemDetails,
@@ -1360,6 +1367,14 @@ export default function App({
   // Closed by hand. `all` mode consults this so it does not reopen what the
   // user just shut, which would be unarguable-with rather than automatic.
   const remoteControlClosed = useRef(new Set<string>());
+  /**
+   * Hand-overs asked for by hand while a turn was running, waiting for it to end.
+   *
+   * Neither a refusal nor an interruption — see `handoverTiming`. Drained by the
+   * auto-open effect, which already runs on every `sessions` change, and a turn
+   * ending is one.
+   */
+  const remotePending = useRef(new Set<string>());
   const [remoteControlIds, setRemoteControlIds] = useState<readonly string[]>(
     [],
   );
@@ -1592,7 +1607,8 @@ export default function App({
         (entry) => entry.id === sessionId,
       );
       const providerSessionId = session?.providerSessionId;
-      if (!session || session.harness !== "claude" || !providerSessionId) return;
+      if (!session || session.harness !== "claude" || !providerSessionId)
+        return;
       const cwd = sessionWorkCwd(session);
       const name = remoteControlName(
         session.cwd,
@@ -1623,9 +1639,8 @@ export default function App({
             // transcript that is not there yet starts the mirror at zero, which
             // is correct: there is nothing before it to skip.
             transcriptEnd: async () =>
-              new TextEncoder().encode(
-                await readTextFile(path).catch(() => ""),
-              ).length,
+              new TextEncoder().encode(await readTextFile(path).catch(() => ""))
+                .length,
             spawnPty,
             killPty,
           },
@@ -1829,6 +1844,23 @@ export default function App({
   const openRemote = useCallback(
     async (sessionId: string) => {
       if (remoteControl.current.has(sessionId)) return;
+      const waiting = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      if (waiting && handoverTiming(waiting) === "when-the-turn-ends") {
+        // Held, and the turn left alone. Said once: clicking again while it is
+        // queued is the same instruction, not a second one.
+        if (!remotePending.current.has(sessionId)) {
+          remotePending.current.add(sessionId);
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "Remote Control will open as soon as this turn finishes.",
+          });
+          flushHarnessEvents();
+        }
+        return;
+      }
+      remotePending.current.delete(sessionId);
       await withClaim(
         remoteOpening.current,
         sessionId,
@@ -1876,18 +1908,21 @@ export default function App({
     (sessionId: string, byUser: boolean) => Promise<void>
   >(async () => undefined);
 
-  const closeRemote = useCallback(async (sessionId: string, byUser: boolean) => {
-    const entry = remoteControl.current.get(sessionId);
-    if (!entry) return;
-    remoteControl.current.delete(sessionId);
-    setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
-    if (byUser) remoteControlClosed.current.add(sessionId);
-    setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
-    remoteTerminals.current.delete(sessionId);
-    setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
-    entry.stop();
-    await closeRemoteControl(sessionId, { killPty });
-  }, []);
+  const closeRemote = useCallback(
+    async (sessionId: string, byUser: boolean) => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry) return;
+      remoteControl.current.delete(sessionId);
+      setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
+      if (byUser) remoteControlClosed.current.add(sessionId);
+      setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
+      remoteTerminals.current.delete(sessionId);
+      setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
+      entry.stop();
+      await closeRemoteControl(sessionId, { killPty });
+    },
+    [],
+  );
   closeRemoteRef.current = closeRemote;
 
   /**
@@ -1979,6 +2014,20 @@ export default function App({
     remoteControlModeSeen.current = remoteControlMode;
     if (dismissalsAfterModeChange(previous, remoteControlMode) === "clear") {
       remoteControlClosed.current.clear();
+    }
+    // Hand-overs held while a turn was running, drained here rather than from an
+    // effect of their own: this one already runs on every `sessions` change, and
+    // a turn ending is one. Before the mode check, because a request made by hand
+    // stands whatever the mode is.
+    for (const sessionId of [...remotePending.current]) {
+      const session = sessions.find((entry) => entry.id === sessionId);
+      if (!session) {
+        remotePending.current.delete(sessionId);
+        continue;
+      }
+      if (handoverTiming(session) !== "now") continue;
+      remotePending.current.delete(sessionId);
+      void openRemote(sessionId);
     }
     if (remoteControlMode !== "all") return;
     const mode = remoteControlMode;
@@ -6585,9 +6634,7 @@ export default function App({
       const ciContext = options?.ciRepair?.prompt ?? options?.ciContext;
       const harnessText =
         options?.ciRepair?.prompt ??
-        (rawCommand
-          ? submittedText
-          : composeNoteMessage(noteCard, promptText));
+        (rawCommand ? submittedText : composeNoteMessage(noteCard, promptText));
 
       const pendingSwitch =
         current.pendingSwitch && current.pendingSwitch.from !== current.harness
@@ -6816,19 +6863,20 @@ export default function App({
       const card =
         options?.secondOpinion ??
         (handoffCard ? handoffTurnCard(handoffCard) : undefined);
-      const visibleText =
-        operatorCommand.matched
-          ? promptText
-          : card?.kind === "handoff"
-            ? submittedText
-            : card
-              ? SECOND_OPINION_TITLE
-              : submittedText;
+      const visibleText = operatorCommand.matched
+        ? promptText
+        : card?.kind === "handoff"
+          ? submittedText
+          : card
+            ? SECOND_OPINION_TITLE
+            : submittedText;
       const cards = {
         ...(rawCommand ? undefined : userTurnCards(noteCard, card)),
         ...(ciContext ? { ciContext } : {}),
         ...(operatorCommand.matched ? { monocode: true } : {}),
-        ...(options?.appRequestId ? { appRequestId: options.appRequestId } : {}),
+        ...(options?.appRequestId
+          ? { appRequestId: options.appRequestId }
+          : {}),
         // The orchestrator writes these turns, not the user; hide them.
         ...(options?.managed ? { internal: true } : {}),
       };
@@ -6848,7 +6896,9 @@ export default function App({
             const draftRemoved = draftBlock
               ? {
                   ...s,
-                  blocks: s.blocks.filter((block) => block.id !== draftBlock.id),
+                  blocks: s.blocks.filter(
+                    (block) => block.id !== draftBlock.id,
+                  ),
                 }
               : s;
             const selected = options?.buildTarget
@@ -7144,11 +7194,7 @@ export default function App({
           }
           if (turnGen.current.get(sessionId) !== gen) return;
           const latest = sessionsRef.current.find((s) => s.id === sessionId);
-          const brief = chooseHandoffBrief(
-            agentText,
-            latest ?? current,
-            text,
-          );
+          const brief = chooseHandoffBrief(agentText, latest ?? current, text);
           await forgetHarnessSession(pendingSwitch.from, sessionId);
           if (turnGen.current.get(sessionId) !== gen) return;
           wrap = { from: pendingSwitch.from, to: current.harness, text: brief };
@@ -7279,10 +7325,7 @@ export default function App({
           const earlier = queuedHandoff
             ? userMessagesAfterHandoff(current)
             : [];
-          if (
-            editedResend &&
-            canRewindHarnessLastTurn(current.harness)
-          ) {
+          if (editedResend && canRewindHarnessLastTurn(current.harness)) {
             try {
               await rewindHarnessLastTurn({
                 harness: current.harness,
@@ -7745,9 +7788,7 @@ export default function App({
         },
         submit: submitSession,
         saveDraft: (id, prompt, attachments, requestId) =>
-          flushSync(() =>
-            onSaveDraft(id, prompt, attachments, requestId),
-          ),
+          flushSync(() => onSaveDraft(id, prompt, attachments, requestId)),
       }),
     [appendTab, submitSession, onSaveDraft],
   );
@@ -9501,7 +9542,9 @@ export default function App({
                   previous.text !== launch.prompt ||
                   (!launch.draft && !!previous.draft)
                 )
-                  throw new Error("Request ID was already used for another session launch");
+                  throw new Error(
+                    "Request ID was already used for another session launch",
+                  );
                 return;
               }
               if (
@@ -10090,11 +10133,7 @@ export default function App({
   );
 
   const onRepairChecks = useCallback(
-    async (
-      item: InboxItem,
-      request: CiRepairRequest,
-      sessionId?: string,
-    ) => {
+    async (item: InboxItem, request: CiRepairRequest, sessionId?: string) => {
       const cwd = item.projectPath;
       if (!cwd) throw new Error("Choose a local project for this PR first.");
       let session = sessionId ? await ensureOpenSession(sessionId) : undefined;
@@ -10355,10 +10394,13 @@ export default function App({
         prefetchAhead();
         if (!session || session.inboxAsk) return;
         if (activeTabIdRef.current !== activeTabId) return;
-        const currentTab = tabsRef.current.find((tab) => tab.id === activeTabId);
+        const currentTab = tabsRef.current.find(
+          (tab) => tab.id === activeTabId,
+        );
         if (currentTab?.focusedId !== focusedId) return;
-        setTabs((prev) =>
-          switchSessionInTab(prev, activeTabId, focusedId, next) ?? prev,
+        setTabs(
+          (prev) =>
+            switchSessionInTab(prev, activeTabId, focusedId, next) ?? prev,
         );
         setComposerFocused(true);
         const linkedUpdate = linkedSessionUpdatesRef.current.get(next);
@@ -10646,8 +10688,7 @@ export default function App({
         else if (shortcut === "App: Command Palette")
           run("open_command_palette", a.onOpenCommandPalette);
         else if (shortcut === "View: Reload") run("reload", a.onReload);
-        else if (shortcut === "App: Search")
-          run("open_search", a.onOpenSearch);
+        else if (shortcut === "App: Search") run("open_search", a.onOpenSearch);
         else if (shortcut === "App: Settings")
           run("open_settings", () => a.openSettings());
         else if (shortcut === "App: Find in Files")
@@ -11250,7 +11291,8 @@ export default function App({
                   onToggleSidebar={onToggleSidebar}
                   onOpenFile={onOpenFile}
                   onOpenSession={(sessionId, blockId, query) => {
-                    if (blockId) requestTranscriptJump(sessionId, blockId, query);
+                    if (blockId)
+                      requestTranscriptJump(sessionId, blockId, query);
                     void onSelectHistorySession(sessionId);
                   }}
                   onOpenProject={onSelectProject}
