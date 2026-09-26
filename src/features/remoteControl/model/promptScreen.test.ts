@@ -283,6 +283,31 @@ describe("turn state", () => {
     expect(screen.turn).toBe("unknown");
   });
 
+  it("does not read the welcome box's shortened path as a spinner", () => {
+    // The path line is verbatim from the corpus: the box centres
+    // `/…/scratchpad/keytest`, and an ellipsis after a glyph is all a loose
+    // spinner pattern needs. Put it where the marker is read from — directly
+    // above the composer — and a loose pattern reports a live turn on a screen
+    // where nothing is running. It has never landed there in a capture; this
+    // pins the behaviour for when it does.
+    const screen = readRenderedScreen([
+      "│               /…/scratchpad/keytest                │",
+      "──────────────────────────────────────────────",
+      "❯",
+      "──────────────────────────────────────────────",
+      "  ⏸ manual mode on",
+    ]);
+    expect(screen.turn).not.toBe("in-progress");
+    expect(screen.turn).toBe("unknown");
+  });
+
+  it("still reads a summary the TUI padded with trailing spaces", () => {
+    // The `$` anchor only works because the screen is trimmed before matching.
+    // This pins that contract: the padding the TUI actually paints must not stop
+    // a finished turn from being recognised.
+    expect(readRenderedScreen(["✻ Baked for 2s      "]).turn).toBe("ended");
+  });
+
   it("does not report a streaming turn as ended", () => {
     const screen = readRenderedScreen(STREAMING_MID_TURN);
     expect(screen.turn).not.toBe("ended");

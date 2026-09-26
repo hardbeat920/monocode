@@ -118,8 +118,18 @@ const QUESTION_START = /^Do you want to /u;
 const QUESTION = /^Do you want to .+\?$/u;
 const PROMPT_FOOTER = /Esc to cancel/u;
 const COMPOSER = /^❯(?:\s|$)/u;
-/** A spinner frame: a glyph, then one word ending in an ellipsis. */
-const SPINNER = /^[^\p{L}\p{N}\s]\s+\S+…/u;
+/**
+ * A spinner frame: a glyph, then one *word* ending in an ellipsis — `✢ Osmosing…`.
+ *
+ * Requiring a word rather than any token is what keeps the welcome box out. Its
+ * abbreviated project path is a non-alphanumeric glyph followed by something
+ * containing an ellipsis (`│  /…/scratchpad/keytest  │`), so a looser pattern
+ * calls it a spinner. Across sixteen captures the tightened form keeps all 27
+ * real spinner lines and drops exactly those 3 path lines. It was never the
+ * decisive marker there, but a false spinner reads as a live turn, and the next
+ * screen where it lands above the composer would be one.
+ */
+const SPINNER = /^[^\p{L}\p{N}\s]\s+\p{L}[\p{L}\p{M}'’-]*…/u;
 /**
  * The line a finished turn leaves behind: `✻ Baked for 2s`, and past a minute
  * `✻ Brewed for 4m 12s` — the duration switches format at 60 seconds, which an
@@ -139,6 +149,11 @@ const SPINNER = /^[^\p{L}\p{N}\s]\s+\S+…/u;
  * seconds (`✻ Osmosing… (1m 25s · thought for 83s)`) which an unanchored match
  * would read as a finished turn — the dangerous direction. `readTurn` tests the
  * spinner first, so the anchor is the second guard rather than the only one.
+ *
+ * The anchor also couples this to its caller in a way the pattern does not show:
+ * `✻ Baked for 2s ` with the trailing space the TUI actually paints does not
+ * match. It only ever sees a trimmed line because `readRenderedScreen` trims
+ * before testing. Move the trimming and this stops matching anything, silently.
  */
 const COMPLETED =
   /^[^\p{L}\p{N}\s]\s+\S+ for (?:\d+h )?(?:\d+m )?\d+(?:\.\d+)?s$/u;
@@ -495,10 +510,14 @@ function readTurn(
   // running.
   //
   // The cost is that an interrupted turn is "unknown" too, since the screen
-  // carries no positive trace of one (§8). A caller resolving that needs more
-  // than a frame: the transcript's `turn_duration` where there is one, and for
-  // an interrupt, an empty composer plus no assistant text appended since the
-  // last user record.
+  // carries no positive trace of one (§8), and resolving that is not something a
+  // frame can do. Not by an empty composer either, which an earlier version of
+  // this comment suggested: the CLI restores the interrupted prompt *into* the
+  // composer, so on a real interrupt the composer holds text. A composer holding
+  // text with no spinner above it is the trace — and it is also what a user
+  // typing ahead mid-turn looks like, which the TUI allows and queues. Telling
+  // those two apart needs the transcript: `turn_duration` where there is one,
+  // and otherwise whether a user record opened a turn that nothing has closed.
   return "unknown";
 }
 
