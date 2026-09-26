@@ -298,7 +298,7 @@ jobs:
           RPM="${RPMS[0]}"
           NSIS="$BUNDLE/nsis/MonoCode_${VERSION}_x64-setup.exe"
           NSIS_SIG="${NSIS}.sig"
-          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"; do
+          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG"; do
             if [[ ! -f "$artifact" ]]; then
               echo "Missing release artifact: $artifact" >&2
               exit 1
@@ -363,6 +363,11 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:43
     steps:
+      # fedora:43 ships no git, which actions/checkout otherwise has to work
+      # around with a REST API tarball download.
+      - name: Install git
+        run: dnf install -y git
+
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -382,7 +387,7 @@ jobs:
       - name: Build rpm package
         run: npm run build:fedora
 
-      - name: Install the generated rpm
+      - name: Install and stage the generated rpm
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -393,18 +398,8 @@ jobs:
           fi
           dnf install -y "${bundle[0]}"
           rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
-
-      - name: Stage rpm package
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          rpm=(target/release/bundle/rpm/*.rpm)
-          if (( ${#rpm[@]} != 1 )); then
-            echo "Expected exactly one .rpm" >&2
-            exit 1
-          fi
           mkdir -p release-artifacts
-          cp "${rpm[0]}" release-artifacts/
+          cp "${bundle[0]}" release-artifacts/
 
       - name: Upload rpm package
         uses: actions/upload-artifact@v4
