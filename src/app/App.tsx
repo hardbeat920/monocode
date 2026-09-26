@@ -384,7 +384,6 @@ import {
   sessionNeedsInput,
   newDefaultSession,
   newSession,
-  newSessionForProject,
   retargetSessionToProject,
   removeSessionDraft,
   sessionDisplayTitle,
@@ -591,10 +590,13 @@ import {
 } from "../features/sessions/model/inFlight";
 import {
   isBlankSession,
-  planProjectReturn,
   reconcileProjectReturn,
   type ProjectReturnMemory,
 } from "../features/projects/model/projectReturn";
+import {
+  planProjectOpenRun,
+  type ProjectOpenStep,
+} from "../features/projects/model/projectOpenRun";
 import {
   collectWorkspaceSnapshot,
   workspaceSnapshotKey,
@@ -2048,12 +2050,23 @@ export default function App({
   }, [activeTabId, commitTabVisit, tabs]);
 
   /** `cwd` scopes group inheritance: a tab from another project starts alone. */
-  const insertBesideActive = useCallback(
-    (prev: WorkspaceTab[], tab: WorkspaceTab, cwd?: string) =>
-      insertTabBesideActive(prev, tab, activeTabIdRef.current, (id) =>
+  const insertBeside = useCallback(
+    (
+      prev: WorkspaceTab[],
+      tab: WorkspaceTab,
+      anchorId: string | undefined,
+      cwd?: string,
+    ) =>
+      insertTabBesideActive(prev, tab, anchorId, (id) =>
         id === tab.id ? (cwd ? projectName(cwd) : undefined) : projectOfTab(id),
       ),
     [projectOfTab],
+  );
+
+  const insertBesideActive = useCallback(
+    (prev: WorkspaceTab[], tab: WorkspaceTab, cwd?: string) =>
+      insertBeside(prev, tab, activeTabIdRef.current, cwd),
+    [insertBeside],
   );
 
   const appendTab = useCallback(
@@ -4969,97 +4982,88 @@ export default function App({
     [appendTab, invalidateLoadedSession, refreshHistory],
   );
 
-  const onSelectProject = useCallback(
-    (path: string) => {
+  /**
+   * Open a run of folders from one snapshot, committed in a single transition.
+   *
+   * Planning per folder from refs would read state React has not rendered yet,
+   * so the whole run is planned first and applied here in selection order.
+   */
+  const openProjects = useCallback(
+    (paths: readonly string[]) => {
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
-      const normalized = normalizeProjectPath(path);
-      if (!looksLikeProject(normalized)) return;
 
-      const activeWorkspace = tabsRef.current.find(
-        (entry) => entry.id === activeTabIdRef.current,
-      );
-      const current = activeWorkspace
-        ? sessionsRef.current.find(
-            (session) => session.id === activeWorkspace.focusedId,
-          )
-        : undefined;
-      const decision = planProjectReturn({
+      const steps = planProjectOpenRun({
         memory: readProjectReturnMemory(),
         tabs: tabsRef.current,
         sessions: sessionsRef.current,
         activeTabId: activeTabIdRef.current,
-        projectPath: normalized,
+        paths,
       });
-      switch (decision.action) {
-        case "keep":
-          setProjectCwd(normalized);
-          setRecents(rememberProject(normalized));
-          return;
-        case "reuse-blank":
-          onCwdChange(decision.sessionId, normalized);
-          return;
-        case "activate":
-          setProjectCwd(normalized);
-          setRecents(rememberProject(normalized));
-          activateTab(decision.tabId, decision.paneId);
-          return;
-        case "create":
-          break;
-        default: {
-          const exhaustive: never = decision;
-          return exhaustive;
-        }
+      const last = steps[steps.length - 1];
+      if (!last) return;
+
+      // At most one folder can take the blank session, and it keeps the
+      // retargeting rules `onCwdChange` already owns.
+      const blank = steps.find(
+        (step): step is Extract<ProjectOpenStep, { action: "reuse-blank" }> =>
+          step.action === "reuse-blank",
+      );
+      if (blank) onCwdChange(blank.sessionId, blank.path);
+
+      const created = steps.filter(
+        (step): step is Extract<ProjectOpenStep, { action: "create" }> =>
+          step.action === "create",
+      );
+      if (created.length > 0) {
+        setSessions((prev) => [...prev, ...created.map((step) => step.session)]);
+        // Each tab sits beside the one before it in the run, so the folders keep
+        // their selection order.
+        setTabs((prev) =>
+          created.reduce(
+            (tabs, step) =>
+              insertBeside(tabs, step.tab, step.besideTabId, step.path),
+            prev,
+          ),
+        );
       }
 
-      const seed = current ?? sessionsRef.current[0];
-      const session = newSessionForProject(seed, normalized);
-      const tab = newTab(session.id);
-      setProjectCwd(normalized);
-      setRecents(rememberProject(normalized));
-      setSessions((prev) => [...prev, session]);
-      appendTab(tab, normalized);
-      setActiveTabId(tab.id);
-      setComposerFocused(true);
+      // The folder chosen last ends up focused.
+      switch (last.action) {
+        case "create":
+          setProjectCwd(last.path);
+          setActiveTabId(last.tab.id);
+          setComposerFocused(true);
+          break;
+        case "activate":
+          setProjectCwd(last.path);
+          activateTab(last.tabId, last.paneId);
+          break;
+        case "keep":
+          setProjectCwd(last.path);
+          break;
+        case "reuse-blank":
+          // `onCwdChange` already moved to it.
+          break;
+      }
+      // Every project opened is remembered, the one chosen last most recently.
+      for (const step of steps) setRecents(rememberProject(step.path));
     },
-    [activateTab, appendTab, onCwdChange, readProjectReturnMemory],
+    [activateTab, insertBeside, onCwdChange, readProjectReturnMemory],
   );
 
-  /**
-   * Open a project in a tab of its own, without consulting the return memory.
-   *
-   * `onSelectProject` decides what to do by reading refs, and React has not
-   * rendered between two synchronous calls. Every folder after the first would
-   * therefore be planned against the same stale state, reuse the same blank
-   * session, and overwrite the folder before it. State updates here are all
-   * functional, so a run of calls accumulates.
-   */
-  const openProjectInOwnTab = useCallback(
-    (path: string) => {
-      const normalized = normalizeProjectPath(path);
-      if (!looksLikeProject(normalized)) return;
-      const session = newSessionForProject(sessionsRef.current[0], normalized);
-      const tab = newTab(session.id);
-      setProjectCwd(normalized);
-      setRecents(rememberProject(normalized));
-      setSessions((prev) => [...prev, session]);
-      appendTab(tab, normalized);
-      setActiveTabId(tab.id);
-      setComposerFocused(true);
-    },
-    [appendTab],
+  const onSelectProject = useCallback(
+    (path: string) => openProjects([path]),
+    [openProjects],
   );
 
   const pickProject = useCallback(async () => {
-    const [first, ...rest] = await pickFolders();
-    if (!first) return;
-    // The first folder still goes through the normal path, so it can reuse a
-    // blank session or activate a tab that is already open.
-    onSelectProject(first);
-    for (const path of rest) openProjectInOwnTab(path);
-  }, [onSelectProject, openProjectInOwnTab]);
+    // Several folders can be taken at once; each opens as its own project, and
+    // the last one selected ends up focused.
+    openProjects(await pickFolders());
+  }, [openProjects]);
 
   const onPlaceSessionInFolder = useCallback(
     (sessionId: string, target: SessionFolderTarget) => {
