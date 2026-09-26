@@ -1,10 +1,11 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::fs::{expand_home, git_checked, git_diff_files_for, path_to_js, resolve_repo_path};
+use crate::fs::{expand_home, git_checked, path_to_js};
 use crate::session_store::SessionStore;
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -243,12 +244,103 @@ pub async fn git_worktree_create(
     .map_err(|error| error.to_string())?
 }
 
-fn copy_checkout_state(source: &Path, target: &Path) -> Result<(), String> {
-    for file in git_diff_files_for(source).files {
-        let relative = resolve_repo_path(source, &file.relative)?;
-        let from = source.join(&relative);
-        let to = target.join(&relative);
-        if path_contains_symlink(source, &relative) || path_contains_symlink(target, &relative) {
+/// Mirrors `checkpoint::MAX_SNAPSHOT_FILES`. `session_checkpoint_ensure`
+/// refuses an isolated worker whose checkout has more dirty or untracked paths
+/// than this, so worker creation checks the same limit before it creates a
+/// worktree that would otherwise be left behind.
+const MAX_SEED_FILES: usize = 500;
+
+fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let mut command = Command::new("git");
+    crate::hide_window_console(&mut command);
+    let output = command
+        .arg("--no-pager")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(output.stdout)
+}
+
+/// Checks that a root-relative path from Git names a file inside the checkout.
+/// Unlike `fs::resolve_repo_path`, it keeps the name byte for byte, so names
+/// with surrounding spaces or " => " stay intact.
+fn seed_path(raw: &[u8]) -> Result<String, String> {
+    let relative = String::from_utf8(raw.to_vec()).map_err(|_| {
+        format!(
+            "Cannot seed orchestration worktree: {} is not a valid UTF-8 name",
+            String::from_utf8_lossy(raw)
+        )
+    })?;
+    if relative.starts_with('/')
+        || relative
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(format!(
+            "Cannot seed orchestration worktree: {relative} is not a file path inside the checkout"
+        ));
+    }
+    Ok(relative)
+}
+
+/// Lists every path whose content differs from HEAD in `root`: staged or
+/// unstaged changes, deletions and untracked non-ignored files. The output is
+/// NUL-separated, so Git never quotes names, and renames show up as a deleted
+/// old path plus a new path. `root` must be the repository top level.
+fn checkout_state_paths(root: &Path) -> Result<Vec<String>, String> {
+    let changed = git_bytes(
+        root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "HEAD",
+            "--",
+            ".",
+        ],
+    )?;
+    let untracked = git_bytes(
+        root,
+        &["ls-files", "-o", "--exclude-standard", "-z", "--", "."],
+    )?;
+    let mut paths = BTreeSet::new();
+    for raw in changed
+        .split(|byte| *byte == 0)
+        .chain(untracked.split(|byte| *byte == 0))
+        .filter(|raw| !raw.is_empty())
+    {
+        paths.insert(seed_path(raw)?);
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn require_repo_root(root: &Path) -> Result<(), String> {
+    let prefix = git(root, &["rev-parse", "--show-prefix"])?;
+    if prefix.trim_end_matches(['\r', '\n']).is_empty() {
+        return Ok(());
+    }
+    let toplevel = git(root, &["rev-parse", "--show-toplevel"])?;
+    Err(format!(
+        "Isolated workers need the project opened at its repository root ({}). Open that folder instead.",
+        toplevel.trim_end_matches(['\r', '\n'])
+    ))
+}
+
+fn copy_checkout_state(source: &Path, target: &Path, paths: &[String]) -> Result<(), String> {
+    for relative in paths {
+        let relative = relative.as_str();
+        let from = source.join(relative);
+        let to = target.join(relative);
+        if path_contains_symlink(source, relative) || path_contains_symlink(target, relative) {
             return Err(format!(
                 "Cannot seed orchestration worktree: {relative} contains a symbolic link"
             ));
@@ -308,21 +400,13 @@ fn file_mode(_path: &Path) -> Option<u32> {
     None
 }
 
-fn checkout_state_matches(source: &Path, target: &Path) -> bool {
-    let source_files = git_diff_files_for(source).files;
-    let target_files = git_diff_files_for(target).files;
-    let source_paths: Vec<&str> = source_files
-        .iter()
-        .map(|file| file.relative.as_str())
-        .collect();
-    let target_paths: Vec<&str> = target_files
-        .iter()
-        .map(|file| file.relative.as_str())
-        .collect();
-    if source_paths != target_paths {
-        return false;
+fn checkout_state_matches(source: &Path, target: &Path, source_paths: &[String]) -> bool {
+    match checkout_state_paths(target) {
+        Ok(target_paths) if target_paths == source_paths => {}
+        _ => return false,
     }
-    source_paths.into_iter().all(|relative| {
+    source_paths.iter().all(|relative| {
+        let relative = relative.as_str();
         if path_contains_symlink(source, relative) || path_contains_symlink(target, relative) {
             return false;
         }
@@ -351,12 +435,26 @@ fn checkout_state_matches(source: &Path, target: &Path) -> bool {
 }
 
 fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
+    create_seeded_with_limit(root, branch, MAX_SEED_FILES)
+}
+
+fn create_seeded_with_limit(root: &Path, branch: &str, limit: usize) -> Result<Worktree, String> {
+    require_repo_root(root)?;
+    let paths = checkout_state_paths(root)?;
+    if paths.len() > limit {
+        return Err(format!(
+            "This checkout has too many uncommitted files to isolate a worker ({}, the limit is {limit}). Commit or stash some of them, then try again.",
+            paths.len()
+        ));
+    }
     if let Some(tree) = list(root)?
         .into_iter()
         .find(|tree| tree.branch.as_deref() == Some(branch))
     {
         let source_head = git(root, &["rev-parse", "HEAD"])?;
-        if tree.head != source_head.trim() || !checkout_state_matches(root, Path::new(&tree.path)) {
+        if tree.head != source_head.trim()
+            || !checkout_state_matches(root, Path::new(&tree.path), &paths)
+        {
             return Err(format!(
                 "The recovered orchestration worktree for {branch} is incomplete or has unexpected changes. It was kept for manual review."
             ));
@@ -375,7 +473,7 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
         }
     }
     let tree = create(root, branch, "HEAD", branch_exists)?;
-    if let Err(error) = copy_checkout_state(root, Path::new(&tree.path)) {
+    if let Err(error) = copy_checkout_state(root, Path::new(&tree.path), &paths) {
         let _ = remove(root, Path::new(&tree.path), true);
         if !branch_exists {
             let _ = git(root, &["branch", "-D", branch]);
@@ -910,6 +1008,106 @@ mod tests {
             "lead dirty\n"
         );
         remove(&root, worker, true).unwrap();
+    }
+
+    fn commit_all(root: &Path, message: &str) {
+        git_checked(root, &["add", "."]).unwrap();
+        git_checked(
+            root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                message,
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn orchestration_worktree_seeds_names_git_would_quote_and_staged_renames() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        let mut names = vec!["café.txt", "with space.txt"];
+        if cfg!(unix) {
+            names.extend(["q\"uote.txt", "tab\tname.txt"]);
+        }
+        for name in &names {
+            std::fs::write(root.join(name), "head\n").unwrap();
+        }
+        std::fs::write(root.join("a"), "renamed\n").unwrap();
+        commit_all(&root, "files");
+        for name in &names {
+            std::fs::write(root.join(name), format!("lead {name}\n")).unwrap();
+        }
+        git_checked(&root, &["mv", "a", "b"]).unwrap();
+
+        let tree = create_seeded(&root, "mc/orch-quoted").unwrap();
+        let worker = Path::new(&tree.path);
+        for name in &names {
+            assert_eq!(
+                std::fs::read_to_string(worker.join(name)).unwrap(),
+                format!("lead {name}\n"),
+                "{name}"
+            );
+        }
+        assert!(!worker.join("a").exists());
+        assert_eq!(
+            std::fs::read_to_string(worker.join("b")).unwrap(),
+            "renamed\n"
+        );
+        assert_eq!(
+            create_seeded(&root, "mc/orch-quoted").unwrap().path,
+            tree.path
+        );
+        remove(&root, worker, true).unwrap();
+    }
+
+    #[test]
+    fn orchestration_worktree_refuses_a_lead_opened_below_the_repository_root() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/file.txt"), "head\n").unwrap();
+        commit_all(&root, "sub");
+        std::fs::write(root.join("sub/file.txt"), "lead\n").unwrap();
+
+        let error = create_seeded(&root.join("sub"), "mc/orch-sub").unwrap_err();
+        assert!(
+            error.starts_with("Isolated workers need the project opened at its repository root ("),
+            "{error}"
+        );
+        assert_eq!(list(&root).unwrap().len(), 1);
+        assert!(git(&root, &["rev-parse", "--verify", "refs/heads/mc/orch-sub"]).is_err());
+        assert_eq!(
+            std::fs::read_to_string(root.join("sub/file.txt")).unwrap(),
+            "lead\n"
+        );
+    }
+
+    #[test]
+    fn orchestration_worktree_refuses_too_many_dirty_files_before_creating_anything() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        std::fs::write(root.join("tracked.txt"), "head\n").unwrap();
+        commit_all(&root, "tracked");
+        std::fs::write(root.join("tracked.txt"), "lead\n").unwrap();
+        std::fs::write(root.join("new-1.txt"), "new\n").unwrap();
+        std::fs::write(root.join("new-2.txt"), "new\n").unwrap();
+
+        let error = create_seeded_with_limit(&root, "mc/orch-many", 2).unwrap_err();
+        assert_eq!(
+            error,
+            "This checkout has too many uncommitted files to isolate a worker (3, the limit is 2). Commit or stash some of them, then try again."
+        );
+        assert_eq!(list(&root).unwrap().len(), 1);
+        assert!(git(&root, &["rev-parse", "--verify", "refs/heads/mc/orch-many"]).is_err());
+
+        let tree = create_seeded_with_limit(&root, "mc/orch-many", 3).unwrap();
+        remove(&root, Path::new(&tree.path), true).unwrap();
     }
 
     #[test]

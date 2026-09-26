@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isEditTool } from "../../../integrations/harness/core/preview";
+import type { HarnessEvent } from "../../../integrations/harness/core/types";
 
 export type CheckpointFile = {
   path: string;
@@ -29,6 +31,10 @@ export type CheckpointFileDiff = {
 export type CheckpointApplyResult = {
   files: string[];
   alreadyApplied: number;
+  /** Changed files outside the write scopes, left in the worker worktree. */
+  skipped: string[];
+  /** Gitignored files the worker created that the lead lacks, not applied. */
+  ignored?: string[];
 };
 
 const REVIEW_CHANGED = "monocode-review-changed";
@@ -74,12 +80,21 @@ export function subscribeReviewChanged(
   return () => window.removeEventListener(REVIEW_CHANGED, handler);
 }
 
+/**
+ * Record the session's starting state. An isolated worker owns its checkout,
+ * so every later change there, including shell edits, counts as its own.
+ */
 export function ensureSessionCheckpoint(
   sessionId: string,
   cwd: string,
+  isolated = false,
 ): Promise<void> {
   return enqueueCheckpoint(sessionId, () =>
-    invoke<void>("session_checkpoint_ensure", { sessionId, cwd }),
+    invoke<void>("session_checkpoint_ensure", {
+      sessionId,
+      cwd,
+      ...(isolated ? { isolated } : {}),
+    }),
   );
 }
 
@@ -124,6 +139,31 @@ export function captureSessionCheckpoint(
   );
 }
 
+/** Record the files an edit tool touches: before it starts and after it completes. */
+export function trackSessionEdits(
+  sessionId: string,
+  cwd: string,
+  event: HarnessEvent,
+) {
+  if (event.type !== "tool.started" && event.type !== "tool.updated") return;
+  if (!isEditTool(event.kind, event.title, event.preview)) return;
+  const paths = [
+    ...(event.paths ?? []),
+    ...(event.preview?.path ? [event.preview.path] : []),
+  ].filter((path, index, all) => all.indexOf(path) === index);
+  if (paths.length === 0 || cwd === "~") return;
+  const completed =
+    event.type === "tool.updated" &&
+    (event.status === "completed" || event.status === "success");
+  if (!completed) {
+    void prepareSessionCheckpoint(sessionId, cwd, paths).catch(() => undefined);
+    return;
+  }
+  void captureSessionCheckpoint(sessionId, cwd, paths)
+    .catch(() => undefined)
+    .then(() => notifyReviewChanged(sessionId));
+}
+
 export function sessionCheckpointStatus(
   sessionId: string,
   cwd: string,
@@ -136,17 +176,23 @@ export function sessionCheckpointStatus(
   );
 }
 
-/** Apply one isolated worker's captured delta to its lead checkout. */
+/**
+ * Apply one isolated worker's delta to its lead checkout. When writeScopes is
+ * given, changed files outside every scope are left in the worker worktree
+ * and listed in `skipped`.
+ */
 export function applySessionCheckpoint(
   sessionId: string,
   fromCwd: string,
   toCwd: string,
+  writeScopes?: string[],
 ): Promise<CheckpointApplyResult> {
   return enqueueCheckpoint(sessionId, () =>
     invoke<CheckpointApplyResult>("session_checkpoint_apply", {
       sessionId,
       fromCwd,
       toCwd,
+      ...(writeScopes ? { writeScopes } : {}),
     }),
   );
 }

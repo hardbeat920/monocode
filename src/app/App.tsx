@@ -290,13 +290,13 @@ import {
 import {
   beginSessionTurn,
   applySessionCheckpoint,
-  captureSessionCheckpoint,
+  ensureSessionCheckpoint,
   forgetSessionCheckpoint,
   flushSessionCheckpoint,
   keepSessionChanges,
   notifyReviewChanged,
-  prepareSessionCheckpoint,
   sessionCheckpointCleanupSafe,
+  trackSessionEdits,
 } from "../features/sessions/model/checkpoint";
 import { notifyDirsChanged } from "../features/files/model/fileTree";
 import {
@@ -6430,7 +6430,9 @@ export default function App({
             revealHandoff(wrap.text);
           }
           nudgeOpenEditors(event, workCwd);
-          if (!orchestrator.forSession(sessionId))
+          // Workers need their edits recorded so an accepted task can be
+          // applied to the lead checkout. Only the lead is excluded.
+          if (!orchestrator.run(sessionId))
             trackSessionEdits(sessionId, workCwd, event);
           const routed = routePlanEvent(event);
           if (routed) enqueueHarnessEvent(sessionId, routed);
@@ -6464,6 +6466,9 @@ export default function App({
           });
         };
 
+        // Workers get their checkpoint in createWorker, before any turn. A turn
+        // must not create one later: it would count earlier worker edits as
+        // the baseline and drop them from the accepted result.
         if (!current.inboxAsk && !orchestrator.forSession(sessionId)) {
           await beginSessionTurn(sessionId, workCwd).catch(() => undefined);
         }
@@ -8332,6 +8337,26 @@ export default function App({
                   ),
                 );
         const checkoutCwd = workspace.checkoutCwd;
+        // Record the worker's starting state before its first turn so
+        // integrateWorker can apply exactly what it changed. A retained
+        // worktree already has worker edits and keeps its existing checkpoint.
+        if (task.workspacePolicy === "shared")
+          await ensureSessionCheckpoint(task.sessionId, checkoutCwd);
+        else if (!task.workspace)
+          await ensureSessionCheckpoint(task.sessionId, checkoutCwd, true).catch(
+            async (error) => {
+              // Nothing records this worktree yet, so no later cleanup would
+              // find it. Remove it before reporting the failure.
+              await removeOrchestrationWorktree(leadCheckoutCwd, checkoutCwd)
+                .then(() =>
+                  workspace.branch
+                    ? removeOrchestrationBranch(leadCheckoutCwd, workspace.branch)
+                    : undefined,
+                )
+                .catch(() => undefined);
+              throw error;
+            },
+          );
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
@@ -8463,9 +8488,10 @@ export default function App({
           task.sessionId,
           fromCwd,
           orchestrationCheckoutCwd(run),
+          task.writeScopes,
         );
       },
-      cleanupWorker: async (run, task, onlyIfUnchanged) => {
+      cleanupWorker: async (run, task, onlyIfUnchanged, discardOutside) => {
         const workspace = task.workspace;
         if (!workspace || workspace.kind !== "worktree") return true;
         const path = workspace.checkoutCwd;
@@ -8494,13 +8520,29 @@ export default function App({
           const safe = await sessionCheckpointCleanupSafe(task.sessionId, path);
           if (!safe) return false;
         } else if (exists) {
-          // Re-verify immediately before destructive cleanup. The operation is
-          // idempotent, so this also finishes a partially applied integration.
-          await applySessionCheckpoint(
-            task.sessionId,
-            path,
-            orchestrationCheckoutCwd(run),
+          const dispatch = run.dispatches?.find(
+            (entry) => entry.id === task.acceptedDispatchId,
           );
+          let outside = [
+            ...(dispatch?.outsideAssignment ?? []),
+            ...(dispatch?.ignoredCreated ?? []),
+          ];
+          // Once integrated, never apply again: the lead may have changed or
+          // reverted those files since, and a second apply would undo that.
+          if (dispatch?.stage !== "integrated") {
+            // The operation is idempotent, so this also finishes a partially
+            // applied integration.
+            const applied = await applySessionCheckpoint(
+              task.sessionId,
+              path,
+              orchestrationCheckoutCwd(run),
+              task.writeScopes,
+            );
+            outside = [...applied.skipped, ...(applied.ignored ?? [])];
+          }
+          // Out-of-scope and ignored files exist only in this worktree. Keep
+          // it until the lead has copied what it needs and discards the rest.
+          if (outside.length > 0 && !discardOutside) return false;
         }
 
         if (exists) {
@@ -8642,7 +8684,7 @@ export default function App({
         } finally {
           // Also reap processes left behind by a renderer reload, before the
           // corresponding session has been restored in this window.
-          await invoke("harness_kill", { sessionId: id });
+          await invoke("harness_kill", { sessionId: id }).catch(() => undefined);
           await invoke("control_turn_finished", { sessionId: id });
         }
       },
@@ -10815,30 +10857,6 @@ function dropOpenFiles(
     });
   }
   return { ...tab, layout, focusedId, editorPanes };
-}
-
-function trackSessionEdits(
-  sessionId: string,
-  cwd: string,
-  event: HarnessEvent,
-) {
-  if (event.type !== "tool.started" && event.type !== "tool.updated") return;
-  if (!isEditTool(event.kind, event.title, event.preview)) return;
-  const paths = [
-    ...(event.paths ?? []),
-    ...(event.preview?.path ? [event.preview.path] : []),
-  ].filter((path, index, all) => all.indexOf(path) === index);
-  if (paths.length === 0 || cwd === "~") return;
-  const completed =
-    event.type === "tool.updated" &&
-    (event.status === "completed" || event.status === "success");
-  if (!completed) {
-    void prepareSessionCheckpoint(sessionId, cwd, paths).catch(() => undefined);
-    return;
-  }
-  void captureSessionCheckpoint(sessionId, cwd, paths)
-    .catch(() => undefined)
-    .then(() => notifyReviewChanged(sessionId));
 }
 
 function nudgeWorkspace(cwd?: string) {
