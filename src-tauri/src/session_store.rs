@@ -303,8 +303,13 @@ pub fn session_search(
     store: State<'_, SessionStore>,
     options: SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
-    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    search_sessions(&conn, &options).map_err(|e| e.to_string())
+    let (candidates, truncated) = {
+        let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+        search_session_candidates(&conn, &options).map_err(|e| e.to_string())?
+    };
+    Ok(search_session_candidates_hits(
+        candidates, &options, truncated,
+    ))
 }
 
 #[tauri::command(async)]
@@ -1036,18 +1041,27 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
     })
 }
 
+type SearchCandidate = (String, String, String, String, i64, String);
+
+#[cfg(test)]
 fn search_sessions(
     conn: &Connection,
     options: &SessionSearchOptions,
 ) -> rusqlite::Result<SessionSearchResult> {
+    let (candidates, truncated) = search_session_candidates(conn, options)?;
+    Ok(search_session_candidates_hits(
+        candidates, options, truncated,
+    ))
+}
+
+fn search_session_candidates(
+    conn: &Connection,
+    options: &SessionSearchOptions,
+) -> rusqlite::Result<(Vec<SearchCandidate>, bool)> {
     let query = options.query.trim();
     if query.is_empty() {
-        return Ok(SessionSearchResult {
-            hits: Vec::new(),
-            truncated: false,
-        });
+        return Ok((Vec::new(), false));
     }
-    let needle = query.to_lowercase();
     let pattern = like_pattern(query);
     let cwd = options
         .cwd
@@ -1058,8 +1072,7 @@ fn search_sessions(
     let mut sql = String::from(
         "SELECT id, cwd, harness, title, updated_at, archived, blocks_json
          FROM sessions
-         WHERE inbox_ask IS NULL AND blocks_json != '[]'
-           AND blocks_json LIKE '%\"role\":\"user\"%'
+         WHERE inbox_ask IS NULL AND has_user_message = 1
            AND (LOWER(title) LIKE LOWER(?1) ESCAPE '\\'
                 OR LOWER(blocks_json) LIKE LOWER(?1) ESCAPE '\\')",
     );
@@ -1081,18 +1094,31 @@ fn search_sessions(
         statement.query_map(params![pattern, limit], search_row)?
     };
 
+    let mut candidates = Vec::new();
+    for row in rows {
+        candidates.push(row?);
+    }
+    let truncated = candidates.len() > MAX_SEARCH_SCAN;
+    candidates.truncate(MAX_SEARCH_SCAN);
+    Ok((candidates, truncated))
+}
+
+fn search_session_candidates_hits(
+    candidates: Vec<SearchCandidate>,
+    options: &SessionSearchOptions,
+    mut truncated: bool,
+) -> SessionSearchResult {
+    let needle = options.query.trim().to_lowercase();
+    if needle.is_empty() {
+        return SessionSearchResult {
+            hits: Vec::new(),
+            truncated: false,
+        };
+    }
+
     let mut conversations = Vec::new();
     let mut messages = Vec::new();
-    let mut scanned = 0;
-    let mut truncated = false;
-    for row in rows {
-        let (id, cwd, harness, title, updated_at, blocks_raw) = row?;
-        scanned += 1;
-        if scanned > MAX_SEARCH_SCAN {
-            truncated = true;
-            break;
-        }
-
+    for (id, cwd, harness, title, updated_at, blocks_raw) in candidates {
         let title_hit = title.to_lowercase().contains(&needle);
         if title_hit && conversations.len() < MAX_CONVERSATION_HITS {
             conversations.push(SessionSearchHit {
@@ -1147,7 +1173,7 @@ fn search_sessions(
 
     let mut hits = conversations;
     hits.extend(messages);
-    Ok(SessionSearchResult { hits, truncated })
+    SessionSearchResult { hits, truncated }
 }
 
 fn search_row(
