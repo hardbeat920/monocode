@@ -1578,37 +1578,53 @@ export default function App({
           text: body,
         });
       };
+      // Registered before the write, not after it. `injectRemoteText`
+      // resolves once the bytes are out, while the transcript watcher polls on
+      // its own clock — so the record could be read, and the echo looked for,
+      // before any callback of ours had run. Taken back if nothing was sent:
+      // an echo nobody will produce would swallow the next message that
+      // happens to read the same.
+      const echo = text.trim();
+      const echoes = remoteEcho.current.get(sessionId) ?? [];
+      echoes.push(echo);
+      remoteEcho.current.set(sessionId, echoes);
+      let owed = true;
+      const unregister = () => {
+        if (owed) owed = false;
+        else return;
+        takeInjectedEcho(echoes, echo);
+      };
       return injectRemoteText(text, remoteTerminals.current.has(sessionId), {
         write: (bytes) => writePty(entry.ptyId, bytes),
         screen: () => entry.screen.screen,
         settle: () => new Promise((resolve) => setTimeout(resolve, 25)),
-      }).then((outcome) => {
-        if (outcome.kind === "refused") {
-          note(
-            `Nothing was sent: ${outcome.reason}. Close Remote Control to send this here, or continue on your phone.`,
-          );
+      })
+        .then((outcome) => {
+          if (outcome.kind === "refused") {
+            unregister();
+            note(
+              `Nothing was sent: ${outcome.reason}. Close Remote Control to send this here, or continue on your phone.`,
+            );
+            flushHarnessEvents();
+            return;
+          }
+          if (hasAttachments) {
+            // The TUI takes typed text. `@file` mentions in it resolve as usual,
+            // but a pasted attachment has no keystroke to become.
+            note(
+              "Attachments cannot be sent while Remote Control is open, so only the message text was sent.",
+            );
+          }
+          const queued = queuedNotice(outcome.queued);
+          if (queued) {
+            enqueueHarnessEvent(sessionId, { type: "status", text: queued });
+          }
           flushHarnessEvents();
-          return;
-        }
-        // Recorded before anything else: the record can land while this
-        // handler is still running, and an echo that arrives first would be
-        // seated as a second copy.
-        const echoes = remoteEcho.current.get(sessionId) ?? [];
-        echoes.push(text.trim());
-        remoteEcho.current.set(sessionId, echoes);
-        if (hasAttachments) {
-          // The TUI takes typed text. `@file` mentions in it resolve as usual,
-          // but a pasted attachment has no keystroke to become.
-          note(
-            "Attachments cannot be sent while Remote Control is open, so only the message text was sent.",
-          );
-        }
-        const queued = queuedNotice(outcome.queued);
-        if (queued) {
-          enqueueHarnessEvent(sessionId, { type: "status", text: queued });
-        }
-        flushHarnessEvents();
-      });
+        })
+        .catch((error: unknown) => {
+          unregister();
+          throw error;
+        });
     },
     [enqueueHarnessEvent, flushHarnessEvents],
   );
