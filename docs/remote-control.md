@@ -207,6 +207,36 @@ composer idle, no modal — and when the state is not recognised, refuse to
 inject and show the user the raw pty instead of guessing. The same rule covers
 approvals (§7), which is the case it exists for.
 
+**Reading the screen means rendering it, not stripping escapes.** Know this
+before writing any of it, because it decides the shape of the whole parser. The
+CLI does not write spaces between words; it paints each word at an absolute
+column, so §7's question arrives as
+`DoESC[5GyouESC[9GwantESC[14GtoESC[17Gcreate` — no spaces anywhere — and the
+bytes never contain `Do you want` at all. Strip the escapes and the words
+collapse into `Doyouwanttocreateprobe.txt?`, taking with them every column the
+layout carries
+— and with those, any way to tell an option line from a footer. So the parser
+keeps a cell grid and replays the cursor into it: CUP, CHA, CUU/CUD/CUF/CUB, EL,
+ED, CR, LF, DECSC/DECRC, with OSC and charset sequences skipped and SGR ignored.
+That is a quarter of a terminal emulator, and it is the price of asking the
+screen anything at all.
+
+A grid needs a size, which is why the pty is spawned at a fixed 120×40
+(`remoteControlArgs` in
+`src/integrations/harness/providers/claude/remoteControl.ts`) instead of at
+whatever the window happens to be — the parser should not be at the mercy of
+geometry. The width has a second consequence: the CLI hard-wraps box text into
+painted lines of its own, so a question carrying a path is easily wider than 120
+columns and arrives in two pieces that have to be joined back before it can be
+recognised. Whichever width is chosen, the parser and the spawn have to agree
+about it.
+
+**The `screens*.txt` captures are not a fixture source.** They were flattened
+the lossy way, and `screens4.txt` contains `Doyouwanttocreateprobe.txt?` — a
+test built on them would bake in the very mistake the parser exists to avoid.
+Only the raw `pty_raw*.bin` captures preserve what the terminal saw; render
+those.
+
 Two further limits: text beginning with `/`, `!` or `#` drives the TUI's own
 slash-command, bash and memory affordances rather than being sent as a message
 (untested — treat as unsafe to inject blind), and there is no injection path for
@@ -260,11 +290,15 @@ field and append nothing to it.
 
 An earlier draft of this plan specified stripping ANSI and matching an OSC 8
 hyperlink payload out of the rendered output, and warned that it would be
-friction. It was right that it would be friction; it is simply not needed. There
-is no reason to parse TUI output for something the CLI writes to disk as
-structured data — and the screen is the less reliable of the two sources anyway:
-the probes here emitted no OSC 8 sequence at all around the link, so an
-extractor written against that observation would have found nothing.
+friction. For the link it is simply not needed: there is no reason to parse TUI
+output for something the CLI writes to disk as structured data, and the screen is
+the less reliable of the two sources anyway — the probes here emitted no OSC 8
+sequence at all around the link, so an extractor written against that observation
+would have found nothing.
+
+"Friction" is too kind for where the screen genuinely is the only source, though.
+For §7 stripping escapes is not friction, it is impossible, and §5 says why: the
+words are not in the bytes, only their columns are.
 
 ## 7. Approvals: the part that does not mirror
 
@@ -278,10 +312,18 @@ then **nothing was written to the transcript for 36 seconds** while the TUI sat
 on
 
 ```
-Do you want to create probe.txt?
-❯ 1. Yes
-  2. Yes, allow all edits during this session (shift+tab)
-  3. No
+──────────────────────────────────────────────────────────
+ Create file
+ probe.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1 hello
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to create probe.txt?
+ ❯ 1. Yes
+   2. Yes, allow all edits during this session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend
 ```
 
 The `tool_result` record appeared only after a `\r` was injected. Nothing on
@@ -294,6 +336,18 @@ This is the whole of MonoCode's `handleControlRequest` path
 only in headless mode. Note also that `ExitPlanMode` *diverges* rather than
 merely vanishing: MonoCode denies it and captures the proposed plan itself,
 while the interactive CLI handles plan approval natively.
+
+An earlier version of this section quoted only the question and the three
+options. The box carries more than that, and both of the parts it left out are
+the parts an approval UI needs. Above the question, the tool's own header and
+body — `Create file`, `probe.txt`, and the diff it would write — are the only
+statement anywhere of *what the prompt would do*; the question itself names the
+file but not the content, and the transcript names neither, so dropping them
+leaves a user approving a write they cannot see. Below the options, the footer is
+the only thing that advertises how to get out without answering: `Esc to cancel`
+dismisses the prompt, `Tab to amend` opens it for editing. A prompt parsed
+without its footer is one the user can only say yes or no to, which is exactly
+the kind of narrowing that turns a safe parser into a coercive one.
 
 **So the pty output parser is load-bearing.** It is the only source of approval
 state, and the feature cannot be built without it.
@@ -370,10 +424,31 @@ phone or in the TUI.
 
 The implementation must therefore not treat the transcript as the only source of
 turn state. The pty parser already has to watch the screen for §7; it must also
-resolve turn-end, using the TUI's own idle indicators together with
-`turn_duration`, and treat a return to an idle composer as ending the turn even
-when no record arrived. An interrupt that MonoCode itself sent is easy — it knows
-it sent ESC. An interrupt taken from the phone is the case that needs the screen.
+resolve turn-end. An interrupt that MonoCode itself sent is easy — it knows it
+sent ESC. An interrupt taken from the phone is the case that needs the screen.
+
+"The TUI's own idle indicators" was how an earlier version of this section put
+it, which hides that the screen carries two different signals and only one of
+them is about being idle:
+
+- A **running** turn paints a spinner line: a glyph, one present-tense word
+  ending in an ellipsis, sometimes an elapsed time and a token count —
+  `✢ Synthesizing…`, `✻ Ruminating… (3s · ↓143 tokens)`.
+- A **finished** turn leaves a past-tense summary where the spinner was:
+  `✻ Baked for 2s`, `✻ Sautéed for 6s`, `✻ Churned for 6s`. **Match the
+  `for <N>s` shape and never the word.** The vocabulary rotates from turn to turn
+  — those three came from one session — so it is decoration, and a matcher keyed
+  on it fails on the next turn, never mind the next CLI version.
+
+After an interrupt neither signal is fresh: no spinner is painted, and the newest
+summary belongs to some earlier turn. What says *this* turn is over is the
+composer box coming back — the pair of horizontal rules with a `❯` line inside —
+carrying the interrupted prompt, which the TUI restores into it. That, and not a
+record, is the only evidence there is.
+
+One string not to write code against: `esc to interrupt` appears nowhere in any
+capture, so a matcher looking for it finds nothing on every screen, including the
+ones where a turn plainly is running.
 
 ## 9. What to build
 
@@ -534,6 +609,30 @@ Each of these is unproven. They are listed in the order they would hurt.
 - **Whether the bridge relays permission prompts to the phone.** Likely — it
   would be strange if it did not — but untested. It matters because it decides
   whether the phone is a real fallback when §7's parser gives up.
+- **Which keystroke takes which option.** Only `\r` was ever measured, and it
+  took the option the `❯` cursor was already on. The parser sends each option's
+  own digit, on the reasoning that a TUI numbering its options is advertising
+  them, and Esc because the footer says `Esc to cancel` — read off the screen
+  rather than guessed, but not measured either. Whether a digit selects at once
+  or wants a following return is open. The consequence if digits turn out wrong
+  is one-sided and worth stating: only the pre-selected option would work, and
+  that option is `1. Yes`, so a broken denial path fails towards approving. Being
+  measured now.
+- **Every permission prompt except one.** The corpus contains a single prompt:
+  `Write` → `Create file`, three options, in default permission mode. No
+  `AskUserQuestion`, no `ExitPlanMode` plan approval, no Bash-command approval, no
+  "don't ask again" variant, and no option count other than three. Nor is there a
+  capture of a repaint caught mid-prompt. The parser refuses everything it does
+  not recognise, so each unobserved shape costs a raw-pty fallback rather than a
+  wrong answer — but each is also a prompt MonoCode cannot yet answer, and they
+  will be common. One probe per shape closes this.
+- **Whether a wrapped question really wraps the way we assume.** Of the parser's
+  fixtures, one is reconstructed and the rest are verbatim: no capture contains a
+  permission question long enough to wrap, so the wrapped-question fixture is the
+  real question broken across two lines by hand. The wrapping *behaviour* it
+  imitates is captured — the trust dialog's safety paragraph is painted as two
+  lines — but the wrapped question is not, and a reader should know which fixture
+  is which.
 - **Injected text beginning with `/`, `!` or `#`.** Untested; assumed unsafe.
 - **Whether an interrupted turn ever gets a terminating record.** The probe
   killed the process 25 seconds after ESC. If one arrives later, §8's screen
