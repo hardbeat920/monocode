@@ -273,7 +273,9 @@ describe("an idle composer", () => {
     expect(planInjection(screen, "say ALPHA")).toEqual({
       allowed: true,
       bytes: "\x1b[200~say ALPHA\x1b[201~\r",
-      queued: false,
+      // Nothing above this composer, so the screen cannot say whether a turn is
+      // running — and it will not pretend it can.
+      queued: "unknown",
     });
   });
 
@@ -283,7 +285,7 @@ describe("an idle composer", () => {
     expect(plan).toEqual({
       allowed: true,
       bytes: "\x1b[200~line one\nline two\x1b[201~\r",
-      queued: false,
+      queued: "unknown",
     });
   });
 
@@ -397,6 +399,39 @@ describe("turn state", () => {
         "in-progress",
       );
     }
+  });
+});
+
+describe("whether an injected message will be queued", () => {
+  it("says so only when the screen says so", () => {
+    // A spinner is up: it will queue, measured as enqueue then a queued user
+    // record.
+    const running = planInjection(readRenderedScreen(TURN_RUNNING), "go");
+    expect(running).toMatchObject({ allowed: true, queued: true });
+
+    // A finished turn's summary is on screen: it goes straight in.
+    const finished = planInjection(
+      readRenderedScreen([
+        "⏺ done",
+        "",
+        "✻ Brewed for 4m 12s",
+        "",
+        "──────────────────────────────────────────────",
+        "❯",
+        "──────────────────────────────────────────────",
+        "  ⏸ manual mode on",
+      ]),
+      "go",
+    );
+    expect(finished).toMatchObject({ allowed: true, queued: false });
+
+    // Streaming: injection is allowed and the TUI will queue it, but the screen
+    // carries no marker either way. This is the case that used to report false.
+    const streaming = planInjection(
+      readRenderedScreen(STREAMING_MID_TURN),
+      "go",
+    );
+    expect(streaming).toMatchObject({ allowed: true, queued: "unknown" });
   });
 });
 

@@ -56,15 +56,16 @@ export type PermissionPrompt = {
    */
   footer?: string;
   /**
-   * Present when the footer advertises Esc. It is called `deny` and not `cancel`
-   * because that is what it does: **Esc denies the tool call, it does not dismiss
-   * the prompt unanswered**, whatever the footer's wording suggests. The old name
-   * made the wrong use — offering it as a way out of deciding — the easy one to
-   * write.
-   * Measured: it produces the identical `tool_result` to option 3, `is_error:
-   * true` with `"User rejected tool use"`, and the file is not written. `label`
-   * is the TUI's own text, kept for display; the effect is a denial, so do not
-   * offer it as a way out of deciding.
+   * Present when the screen advertises Esc — in the footer, or in the label of
+   * the option it stands for when there is no footer.
+   *
+   * It is called `deny` and not `cancel` because that is what it does: **Esc
+   * denies the tool call, it does not dismiss the prompt unanswered.** Measured —
+   * it produces the identical `tool_result` to option 3, `is_error: true` with
+   * `"User rejected tool use"`, and the file is not written — and the WebFetch
+   * prompt says so outright by putting `(esc)` in option 3's own label. `label`
+   * quotes the screen, so it may well read "Esc to cancel"; the name describes
+   * the effect. Do not offer it as a way out of deciding.
    *
    * Downstream consequence, since Esc and the No option are byte-identical in
    * the transcript: nothing reading the result can tell a cancel from an
@@ -114,8 +115,20 @@ export type InjectionPlan =
       allowed: true;
       /** Bracketed paste and a return, the sequence measured in §5. */
       bytes: string;
-      /** The TUI queues a message sent mid-turn; it arrives when the turn ends. */
-      queued: boolean;
+      /**
+       * Whether the TUI will hold the message until the current turn ends rather
+       * than sending it now. It queues cleanly — measured as
+       * `queue-operation:enqueue` then a `user` record with
+       * `promptSource:"queued"` — so nothing is lost either way; this only says
+       * which of the two happened, and `"unknown"` says we cannot tell.
+       *
+       * Keyed on `turn`, not `kind`, which is the whole point: `kind` answers
+       * "may I inject", `turn` answers "will it queue". Conflating them made this
+       * report `false` on every mid-stream send, because a streaming screen is
+       * `kind: "idle"` with `turn: "unknown"` — allowed, and queued, and reported
+       * as neither. A caller must not render `"unknown"` as either one.
+       */
+      queued: boolean | "unknown";
     }
   | { allowed: false; reason: InjectionRefusal };
 
@@ -381,7 +394,12 @@ export function planInjection(
       return {
         allowed: true,
         bytes: `\x1b[200~${text}\x1b[201~\r`,
-        queued: screen.kind === "busy",
+        queued:
+          screen.turn === "ended"
+            ? false
+            : screen.turn === "in-progress"
+              ? true
+              : "unknown",
       };
   }
 }
