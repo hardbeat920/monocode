@@ -244,6 +244,33 @@ describe("turn state", () => {
     expect(screen.turn).toBe("ended");
     expect(screen.kind).toBe("idle");
   });
+
+  it("reads a turn that ran past a minute as ended", () => {
+    // `✻ Brewed for 4m 12s` is measured; the duration changes format at 60
+    // seconds, and a long turn is exactly when someone leaves for their phone.
+    // Without the composer box the summary line is the only evidence there is,
+    // so this is the screen that catches a seconds-only matcher.
+    const screen = readRenderedScreen([
+      "⏺ Wrote the essay.",
+      "",
+      "✻ Brewed for 4m 12s",
+    ]);
+    expect(screen.turn).toBe("ended");
+  });
+
+  it("does not read a running turn's own counter as a finished one", () => {
+    // Both measured. The elapsed time switches to `1m 25s`, while the nested
+    // `thought for 83s` stays in raw seconds — which is what a matcher without
+    // its end anchor would swallow.
+    for (const counter of [
+      "✻ Osmosing… (1m 25s · thought for 83s)",
+      "✻ Ruminating… (4m 12s · ↓ 12.6k tokens)",
+    ]) {
+      expect(readRenderedScreen(["⏺ thinking", "", counter]).turn).toBe(
+        "in-progress",
+      );
+    }
+  });
 });
 
 describe("a screen we do not recognise", () => {

@@ -120,8 +120,18 @@ const PROMPT_FOOTER = /Esc to cancel/u;
 const COMPOSER = /^❯(?:\s|$)/u;
 /** A spinner frame: a glyph, then one word ending in an ellipsis. */
 const SPINNER = /^[^\p{L}\p{N}\s]\s+\S+…/u;
-/** The line a finished turn leaves behind: `✻ Baked for 2s`. */
-const COMPLETED = /\bfor \d+(?:\.\d+)?s$/u;
+/**
+ * The line a finished turn leaves behind: `✻ Baked for 2s`, and past a minute
+ * `✻ Brewed for 4m 12s` — the duration switches format at 60 seconds, which an
+ * earlier seconds-only version of this missed. The hour group is precaution
+ * rather than observation: the longest turn measured was 4m 12s.
+ *
+ * The `$` stays. A running turn's counter carries a nested duration in raw
+ * seconds (`✻ Osmosing… (1m 25s · thought for 83s)`) which an unanchored match
+ * would read as a finished turn — the dangerous direction. `readTurn` tests the
+ * spinner first, so the anchor is the second guard rather than the only one.
+ */
+const COMPLETED = /\bfor (?:\d+h )?(?:\d+m )?\d+(?:\.\d+)?s$/u;
 const TRUST_QUESTION = /Is this a project you created or one you trust\?/u;
 const TRUST_HEADER = /^Accessing workspace:$/u;
 const TRUST_FOOTER = /Enter to confirm/u;
