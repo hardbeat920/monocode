@@ -2268,6 +2268,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tauri-winrt-notification 0.8.1",
+ "time",
  "unicode-normalization",
  "ureq",
  "url",

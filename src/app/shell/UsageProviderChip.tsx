@@ -14,7 +14,7 @@ import {
 import type { CodexRateLimitResetOutcome } from "../../features/providers/model/rateLimitsFetch";
 import { mascotPath, projectMascot } from "../../features/projects/model/projectMascots";
 import { projectKey, projectName } from "../../shared/lib/paths";
-import { HARNESS_TITLE } from "../../features/sessions/model/session";
+import { HARNESS_TITLE, type HarnessId } from "../../features/sessions/model/session";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -57,9 +57,11 @@ export function UsageProviderChip({
   onManageAccounts,
   onConsumeReset,
   onReconnect,
+  presentation,
 }: {
   limits: ProviderRateLimits;
   now: number;
+  presentation?: { harness: HarnessId; label: string; sourceLabel?: string };
   project?: string;
   accounts?: ProviderAccount[];
   accountId?: string;
@@ -102,7 +104,8 @@ export function UsageProviderChip({
   const tooltip = windows
     .map((entry) => rateLimitWindowTooltip(entry.window, now))
     .join(" · ");
-  const providerLabel = HARNESS_TITLE[limits.provider];
+  const providerLabel = presentation?.label ?? HARNESS_TITLE[limits.provider];
+  const iconHarness = presentation?.harness ?? limits.provider;
   const activeAccount = accounts.find((account) => account.id === accountId);
   const canManageAccounts = Boolean(onSelectAccount && onAddAccount);
   const activeAccountLabel = activeAccount?.label ?? "Removed account";
@@ -197,7 +200,7 @@ export function UsageProviderChip({
         }
         onClick={() => setOpen((value) => !value)}
       >
-        <HarnessIcon harness={limits.provider} className="size-3 shrink-0" />
+        <HarnessIcon harness={iconHarness} className="size-3 shrink-0" />
         {loading ? (
           <span className="animate-pulse text-content/35">···</span>
         ) : disconnected ? (
@@ -293,7 +296,7 @@ export function UsageProviderChip({
             <>
               <div className="flex items-start gap-2.5 px-1 pb-2.5 pt-0.5">
                 <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.06] ring-1 ring-inset ring-content/[0.07]">
-                  <HarnessIcon harness={limits.provider} className="size-4" />
+                  <HarnessIcon harness={iconHarness} className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <h2 className="text-[13px] font-medium leading-4">
@@ -302,6 +305,11 @@ export function UsageProviderChip({
                   <p className="mt-0.5 text-[10px] leading-4 text-content/40">
                     {updatedLabel(limits, now)}
                   </p>
+                  {presentation?.sourceLabel ? (
+                    <p className="mt-0.5 text-[10px] leading-4 text-content/55">
+                      {presentation.sourceLabel}
+                    </p>
+                  ) : null}
                   {canManageAccounts ? (
                     <button
                       type="button"

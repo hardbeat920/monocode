@@ -24,6 +24,7 @@ mod menu;
 mod notes;
 mod notifications;
 mod pasteboard;
+mod pi_usage;
 mod project_logo;
 mod pty;
 #[cfg(target_os = "macos")]
@@ -420,6 +421,7 @@ pub fn run() {
             harness::harness_exec,
             harness::provider_account_remove,
             account_identity::provider_account_identity,
+            pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
             pty::pty_spawn,

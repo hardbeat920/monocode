@@ -1468,6 +1468,7 @@ export default function App({
     return {
       id: active.id,
       harness: active.harness,
+      model: active.model,
       authRequired: latestTurnNeedsHarnessLogin(active.blocks),
       providerAccountId:
         active.providerAccountId ??
@@ -1475,7 +1476,7 @@ export default function App({
           ? DEFAULT_PROVIDER_ACCOUNT_ID
           : undefined),
     };
-  }, [active?.id, active?.harness, active?.blocks, active?.providerAccountId]);
+  }, [active?.id, active?.harness, active?.model, active?.blocks, active?.providerAccountId]);
   const activeProviderSignInRequest = useMemo(() => {
     if (
       !active ||
