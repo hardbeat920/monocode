@@ -306,6 +306,14 @@ fn spawn_unix(
         .env("COLORFGBG", "15;0")
         .env("TERM_PROGRAM", "MonoCode")
         .env("PATH", crate::harness::gui_search_path());
+    // What makes this child reapable if the app dies without killing it. The
+    // startup reaper reads the marker out of the process and kills what a dead
+    // run left behind; a pty child that carried none was invisible to it, which
+    // is how remote control's CLIs survived app restart after app restart. Its
+    // argv gate decides what is actually worth killing, so a login shell is
+    // marked and never matched.
+    let (marker, parent) = crate::harness::harness_parent_marker();
+    cmd.env(marker, parent);
     if let Some(home) = dirs_home() {
         cmd.env("HOME", &home);
     }
@@ -436,6 +444,9 @@ fn spawn_windows(
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("COLORFGBG", "15;0");
+    // See the unix path: the marker is what a later launch recognises.
+    let (marker, parent) = crate::harness::harness_parent_marker();
+    cmd.env(marker, parent);
     cmd.env("TERM_PROGRAM", "MonoCode");
     cmd.env("PATH", crate::harness::gui_search_path());
     if let Some(home) = dirs_home() {
