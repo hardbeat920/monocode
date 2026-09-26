@@ -49,6 +49,7 @@ type Live = {
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, (decision: ApprovalDecision) => void>;
   turns: Promise<void>;
+  activePrompt: Promise<unknown> | null;
 };
 
 type Resume = { acpSessionId: string; cwd: string };
@@ -106,8 +107,11 @@ export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
   }
 }
 
-export async function steerCopilotTurn(_input: SteerTurnInput): Promise<void> {
-  throw new Error("Copilot CLI does not support steering an in-flight turn");
+export async function steerCopilotTurn(input: SteerTurnInput): Promise<void> {
+  const live = liveByThread.get(input.sessionId);
+  if (!live?.activePrompt || live.cancelled)
+    throw new Error("No active Copilot CLI turn");
+  startPrompt(live, input);
 }
 
 export function respondCopilotApproval(
@@ -301,6 +305,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       onEvent: input.onEvent,
       approvals: new Map(),
       turns: Promise.resolve(),
+      activePrompt: null,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -347,21 +352,46 @@ async function applyRuntimeMode(
   live.modeId = modeId;
 }
 
+function startPrompt(
+  live: Live,
+  input: Pick<SteerTurnInput, "text" | "attachments">,
+): boolean {
+  const blocks = promptBlocks(input.text, input.attachments);
+  if (blocks.length === 0) return false;
+  const pending = live.acp.request<unknown>(
+    "session/prompt",
+    { sessionId: live.acpSessionId, prompt: blocks },
+    PROMPT_TIMEOUT_MS,
+  );
+  live.activePrompt = pending;
+  // A replacement can fail before the superseded prompt settles.
+  void pending.catch(() => undefined);
+  return true;
+}
+
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   try {
-    const blocks = promptBlocks(input.text, input.attachments);
-    if (blocks.length === 0) return;
-    const result = await live.acp.request<unknown>(
-      "session/prompt",
-      { sessionId: live.acpSessionId, prompt: blocks },
-      PROMPT_TIMEOUT_MS,
-    );
-    if (live.cancelled) return;
-    live.onEvent({ type: "message.completed" });
-    live.onEvent({ type: "reasoning.completed" });
-    const metrics = copilotMetricsFromPromptResult(result);
-    if (metrics) live.onEvent(metrics);
+    if (!startPrompt(live, input)) return;
+    while (live.activePrompt) {
+      const pending = live.activePrompt;
+      let result: unknown;
+      try {
+        result = await pending;
+      } catch (error) {
+        if (live.cancelled) return;
+        if (live.activePrompt !== pending) continue;
+        throw error;
+      }
+      if (live.cancelled) return;
+      if (live.activePrompt !== pending) continue;
+      live.activePrompt = null;
+      live.onEvent({ type: "message.completed" });
+      live.onEvent({ type: "reasoning.completed" });
+      const metrics = copilotMetricsFromPromptResult(result);
+      if (metrics) live.onEvent(metrics);
+    }
   } catch (error) {
+    live.activePrompt = null;
     if (live.cancelled) return;
     const detail = error instanceof Error ? error.message : String(error);
     live.onEvent({
@@ -371,6 +401,8 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
         : detail,
     });
     throw error;
+  } finally {
+    live.activePrompt = null;
   }
 }
 

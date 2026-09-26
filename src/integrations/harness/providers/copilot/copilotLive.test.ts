@@ -6,11 +6,12 @@ let onLine: ((line: string) => void) | undefined;
 let onExit: ((code: number | null) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
 const spawn = vi.fn(async (..._args: unknown[]) => undefined);
+const kill = vi.fn(async (..._args: unknown[]) => undefined);
 
 vi.mock("../../core/child", () => ({
   resolveCopilotBinary: async () => ({ path: "/fake/copilot" }),
   spawnChild: (...args: Parameters<typeof spawn>) => spawn(...args),
-  killChild: async () => undefined,
+  killChild: (...args: unknown[]) => kill(...args),
   unwatchChild: () => undefined,
   watchChild: (
     _id: string,
@@ -90,32 +91,66 @@ describe("Copilot live ACP sequence", () => {
     onExit = undefined;
     onStderr = undefined;
     spawn.mockClear();
+    kill.mockClear();
   });
 
-  it("rejects steering without sending a concurrent prompt or disturbing the active turn", async () => {
+  it.each(["success", "failure", "cancel"] as const)("keeps the send lifecycle through rapid steering: %s", async (outcome) => {
     const events: HarnessEvent[] = [];
-    const turn = start("copilot-steer", events);
+    const sessionId = `copilot-steer-${outcome}`;
+    let settled = false;
+    const turn = start(sessionId, events).then(
+      () => { settled = true; },
+      (error: unknown) => { settled = true; return error; },
+    );
     await ready();
     await selectModelAndMode("copilot-session-1", "auto");
-    await request("session/prompt");
+    const first = await request("session/prompt");
+    const steer = (text: string) => steerCopilotTurn({
+      sessionId, cwd: "/repo", model: "copilot:auto", text,
+    });
+    try {
+      await steer("");
+      expect(parse().filter((message) => message.method === "session/prompt")).toHaveLength(1);
+      await steer("first follow up");
+      await steer("latest follow up");
+      const prompts = parse().filter((message) => message.method === "session/prompt");
+      expect(prompts).toHaveLength(3);
+      expect(prompts[2].params.prompt).toEqual([{ type: "text", text: "latest follow up" }]);
+      if (outcome === "failure") {
+        onLine!(JSON.stringify({ jsonrpc: "2.0", id: prompts[2].id, error: { code: -32000, message: "latest failed" } }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(settled).toBe(false);
+      }
+      reply(first.id, { stopReason: "cancelled" });
+      onLine!(JSON.stringify({ jsonrpc: "2.0", id: prompts[1].id, error: { code: -32000, message: "superseded" } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (outcome !== "failure") {
+        expect(settled).toBe(false);
+        expect(events.some((event) => event.type === "message.completed" || event.type === "session.error")).toBe(false);
+      }
 
-    const steering = steerCopilotTurn({
-      sessionId: "copilot-steer",
-      cwd: "/repo",
-      model: "copilot:auto",
-      text: "follow up",
-    }).catch((error: unknown) => error);
-    const prompts = parse().filter((message) => message.method === "session/prompt");
-    for (const prompt of prompts) reply(prompt.id, { stopReason: "end_turn" });
-    await turn;
-    const steeringResult = await steering;
-    await stopCopilotSession("copilot-steer");
-
-    expect(prompts).toHaveLength(1);
-    expect(steeringResult).toEqual(new Error("Copilot CLI does not support steering an in-flight turn"));
-    expect(events.filter((event) => event.type === "message.completed")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "reasoning.completed")).toHaveLength(1);
-    expect(events.some((event) => event.type === "session.error")).toBe(false);
+      if (outcome === "success") {
+        reply(prompts[2].id, { stopReason: "end_turn", usage: { inputTokens: 20, outputTokens: 5 } });
+      } else if (outcome === "cancel") {
+        await cancelCopilotTurn(sessionId);
+      }
+      const result = await turn;
+      expect(events.filter((event) => event.type === "message.completed")).toHaveLength(outcome === "success" ? 1 : 0);
+      expect(events.filter((event) => event.type === "reasoning.completed")).toHaveLength(outcome === "success" ? 1 : 0);
+      expect(events.filter((event) => event.type === "turn.metrics")).toHaveLength(outcome === "success" ? 1 : 0);
+      expect(events.filter((event) => event.type === "session.error")).toEqual(outcome === "failure" ? [{ type: "session.error", message: "latest failed" }] : []);
+      if (outcome === "failure") {
+        expect(result).toEqual(new Error("latest failed"));
+        expect(kill).toHaveBeenCalledWith(sessionId);
+      } else {
+        expect(result).toBeUndefined();
+      }
+      await expect(steer("after settlement")).rejects.toThrow("No active Copilot CLI turn");
+    } finally {
+      await cancelCopilotTurn(sessionId);
+      await turn;
+      await stopCopilotSession(sessionId);
+    }
   });
 
   it("starts ACP, selects model and mode, streams text, tools and context, then reports usage", async () => {

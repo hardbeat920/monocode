@@ -57,6 +57,47 @@ vi.mock("../../core/child", () => ({
 const copilot = await import("./copilot");
 
 describe.skipIf(!REAL)("Copilot real ACP endpoint", () => {
+  it("steers a real active turn and waits for its replacement response", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "monocode-copilot-steer-"));
+    const sessionId = "copilot-real-steer";
+    const events: HarnessEvent[] = [];
+    let steering: Promise<void> | undefined;
+    let steeringError: unknown;
+    try {
+      await copilot.sendCopilotTurn({
+        sessionId,
+        cwd,
+        model: "copilot:auto",
+        runtimeMode: "supervised",
+        text: "Use the shell tool to run exactly sleep 8. Do not read or write any files. After the command finishes, reply exactly ORIGINAL_ONLY.",
+        onEvent: (event) => {
+          events.push(event);
+          if (!steering && (event.type === "approval.requested" || event.type === "message.delta")) {
+            steering = copilot.steerCopilotTurn({
+              sessionId,
+              cwd,
+              model: "copilot:auto",
+              text: "Change your final reply to exactly STEERING_ACCEPTED. Do not run any additional tools.",
+            }).catch((error: unknown) => { steeringError = error; });
+          }
+          if (event.type === "approval.requested") {
+            queueMicrotask(() => copilot.respondCopilotApproval(sessionId, event.requestId, "deny"));
+          }
+        },
+      });
+      expect(steering).toBeDefined();
+      expect(events.flatMap((event) => event.type === "message.delta" ? [event.text] : []).join("")).toContain("STEERING_ACCEPTED");
+      expect(events.filter((event) => event.type === "message.completed")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "reasoning.completed")).toHaveLength(1);
+      expect(events.some((event) => event.type === "session.error")).toBe(false);
+      await steering;
+      expect(steeringError).toBeUndefined();
+    } finally {
+      await copilot.forgetCopilotSession(sessionId);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it("writes a requested file through a real turn", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "monocode-copilot-"));
     const events: HarnessEvent[] = [];
