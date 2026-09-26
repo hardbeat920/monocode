@@ -293,6 +293,8 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
       path,
       buildClaudeSpawnArgs({ isolated: true, sessionId }),
       cwd,
+      undefined,
+      "claude",
     );
     await writeChild(
       PROBE_ID,
@@ -311,7 +313,7 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
 async function discoverViaVersion(): Promise<AgentModel[]> {
   const { path } = await resolveClaudeBinary();
   const cwd = await homeDir();
-  const versionOut = await execChild(path, ["--version"], cwd);
+  const versionOut = await execChild(path, ["--version"], cwd, "claude");
   const version = parseClaudeVersion(versionOut);
   return modelsForClaudeVersion(version);
 }
