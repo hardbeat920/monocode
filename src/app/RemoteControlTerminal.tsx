@@ -35,6 +35,19 @@ export function RemoteControlTerminal({
   onClose: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Read through refs so neither retriggers the effect below.
+   *
+   * `replay` is the buffer as it stood when the parent last recomputed, and
+   * `attach` is a fresh closure each time — so keying the effect on them tore
+   * down and rebuilt the terminal whenever anything else about remote control
+   * changed, including another session opening. A terminal must survive that:
+   * disposing xterm and reopening it discards the screen the user is reading and
+   * the keystroke they were half way through.
+   */
+  const replayRef = useRef(replay);
+  const attachRef = useRef(attach);
+  attachRef.current = attach;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -54,10 +67,10 @@ export function RemoteControlTerminal({
       smoothScrollDuration: 0,
     });
     term.open(host);
-    term.write(replay);
+    term.write(replayRef.current);
     term.focus();
 
-    const detach = attach((chunk) => term.write(chunk));
+    const detach = attachRef.current((chunk) => term.write(chunk));
     const typing = term.onData((data) => {
       void writePty(ptyId, data).catch(() => undefined);
     });
@@ -69,7 +82,8 @@ export function RemoteControlTerminal({
       // closing remote control is what kills the process.
       term.dispose();
     };
-  }, [attach, cols, ptyId, replay, rows]);
+    // Only the pty's identity and size may rebuild this terminal.
+  }, [cols, ptyId, rows]);
 
   return (
     <div className="flex min-h-0 flex-col gap-1 border-b border-content/10 px-2 py-2">
