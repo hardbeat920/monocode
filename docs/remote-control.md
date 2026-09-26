@@ -94,6 +94,16 @@ it: it reads the conversation from the transcript and writes into the pty.
 6. **Close.** Kill the pty; MonoCode resumes the same conversation headless on
    the next turn.
 
+**Step 1 needs the per-thread stop epoch to be a prerequisite, not a
+nice-to-have.** Stopping the headless child is only sound if a startup already
+in flight can be superseded. Without the epoch, opening remote control while a
+turn is starting lets the headless startup finish *after* the pty has spawned —
+two processes on one conversation, precisely what this step exists to prevent,
+and arrived at by a race rather than by a mistake anyone can see in the code.
+With it, `stopEpoch(sessionId)` moves and the in-flight startup abandons itself
+(`claude.ts:418`). That work lives on `fix/claude-poisoned-resume` and is **not
+on this branch**, so it has to land first.
+
 What makes the round trip safe is that `--resume` **appends to the same file** —
 no fork, no new session id. Measured across three successive processes against
 one conversation: the same `<uuid>.jsonl` grew each time and no second file
@@ -147,13 +157,21 @@ assistant messages as each one completes, tool calls with their full input, and
 tool results with stdout/stderr. `system` / `subtype:"turn_duration"` is the
 turn-end signal, carrying `durationMs` and `messageCount`.
 
-Thinking is there too. Across 25 of this machine's real interactive transcripts
-the assistant content blocks were `thinking: 2128`, `text: 1249`,
-`tool_use: 3991` — so reasoning is mirrored, complete, per message. `@file`
-mentions resolve into `attachment` records with the file's content inline, and
-`usage` on every assistant record is enough to reconstruct `turn.metrics`.
+`@file` mentions resolve into `attachment` records with the file's content
+inline, and `usage` on every assistant record is enough to reconstruct
+`turn.metrics`.
 
-The granularity is the catch, and §8 is about that.
+**Reasoning is not here, despite the `thinking` blocks.** An earlier version of
+this section claimed the opposite, and the mistake is worth naming because it is
+easy to repeat: it counted content-block *types* — `thinking: 2128`,
+`text: 1249`, `tool_use: 3991` across 25 transcripts — and never opened a
+payload. Every one of those blocks persists with an **empty** `thinking` string,
+keeping only its ~980-character `signature`. Measured: **14334 of 14334** blocks
+written by an interactive 2.1.2xx CLI are empty. Machine-wide only 154 of 14600
+carry text, and 151 of those came from CLI 2.1.50. Reasoning therefore belongs in
+§8's losses, not here. Count nothing without reading one.
+
+The granularity is the other catch, and §8 covers both.
 
 ## 5. Outbound: writing into the TUI
 
@@ -222,6 +240,14 @@ the bridge.
 One `bridge_status` record is written per process start, which means the same
 record answers a second question for free: whether Remote Control is currently
 active for this conversation. The mirror does not need to track that separately.
+
+**The link survives a resume.** One conversation was resumed three times and all
+three records carried the same `cse_01P9pJ…`; separately-started sessions each
+got their own. So the bridge identity belongs to the conversation, not to the
+process — a handover does not invalidate the URL, and a UI that re-renders the
+link and regenerates the QR on every close and reopen is doing work for nothing.
+Worth stating because the opposite is the natural assumption: a new process
+looks like it should mean a new session.
 
 **There is no `/rc` suffix.** An earlier draft read one off the screen and
 called it "the remote-control URL". It is not part of the link — the raw bytes
@@ -304,15 +330,33 @@ for a real thinking turn. `--include-partial-messages` has no interactive
 equivalent, so partial messages are gone with it. The UI needs a pending-message
 affordance that is honest about not knowing how far along the turn is.
 
+**Reasoning is gone, not merely unstreamed.** The `thinking` blocks are written
+but redacted — empty text, signature only, on all 14334 of them (§4). So there
+is nothing to show at any granularity, and a mirror must not present a thinking
+affordance it cannot fill. The transcript module emits `reasoning.delta` only
+when a block actually carries text, which costs nothing today and means a CLI
+that starts persisting reasoning is mirrored without a change.
+
 **No `tool_progress`, and no streaming tool arguments.** Tool calls appear
 fully formed and then their result appears. `handleToolProgress` and
 `inputJsonDeltaFromEvent` have nothing to consume.
 
-**Agent and subagent rows are only coarsely reconstructible.**
-`handleAgentLifecycle` parses task started/progress/updated/notification records
-out of the stream. The transcript offers `isSidechain` user/assistant records and
-`agent-name` records — enough to know a subagent exists and what it said, not
-enough to reproduce MonoCode's current task rows without rework.
+**Subagent traffic is absent, not coarse.** An earlier version of this section
+said the transcript offers `isSidechain` records, "enough to know a subagent
+exists and what it said". It does not. `isSidechain` is present on every user and
+assistant record and was **`false` on all 23628** of them, and
+`parent_tool_use_id` appears **nowhere** in any transcript on this machine —
+subagent messages evidently go to their own files. So the mirrored session file
+carries nothing to reconstruct, and `handleAgentLifecycle`'s task rows have no
+transcript equivalent at all.
+
+This one reaches into the implementation, which is the useful half: reusing
+`isSubagentMessage` from `claudeProtocol` looks right and is not. It keys off
+`parent_tool_use_id`, which the **stream** carries and a transcript record never
+does, so it would compile, read correctly, and never once fire. The rule
+generalises — the stream and the transcript describe the same conversation with
+different routing fields, so borrow the helpers that read *content* and write
+your own for anything that decides *where a record belongs*.
 
 **No `rate_limit_event`**, so `usage.limited` cannot fire, and **no stderr or
 `session.error`** — the TUI renders its own errors and the tail sees nothing.
@@ -338,7 +382,16 @@ it sent ESC. An interrupt taken from the phone is the case that needs the screen
 §5.1. Nothing else can start until a pty can run something other than the login
 shell.
 
-### 9.2 Setting
+### 9.2 Also missing: the transcript path
+
+Nothing computes `~/.claude/projects/<encoded cwd>/<id>.jsonl` yet. The handover
+deliberately takes a `HandoverTarget` rather than a path, so the seam is open on
+purpose and has to be filled before §4 can read anything: encode
+`sessionWorkCwd(session)` by the rule in §10, and name the file for the bound
+provider session id. The encoding is one-way, so it has to be derived from the
+cwd every time rather than stored and trusted.
+
+### 9.3 Setting
 
 `monocode.remoteControl`, following the existing flag pattern in
 `src/features/settings/model/settings.ts` (see `CLAUDE_HOOKS_KEY` /
@@ -352,25 +405,32 @@ shell.
 Surface it in `src/features/settings/ui/SettingsView.tsx` next to the existing
 Claude toggles.
 
-### 9.3 Per-session action
+### 9.4 Per-session action
 
 Available for an **existing, already-running** session, not only new ones — the
 handover in §3 works on a live conversation.
 
-- Entry point: session/tab context menu (see `useProjectMenu.tsx` and the tab
-  menus added in `0d3db9c`) and/or the composer's slash menu, following
-  `RESUME_COMMAND` in `src/features/sessions/model/resumeCommand.ts`.
-- Claude-only, the same way `/resume` is gated: `harness === "claude"`.
-  Other harnesses have no equivalent.
+- Entry point: session/tab context menu, following the conventions of the tab
+  menus added in `0d3db9c` (see `useProjectMenu.tsx`).
+- Claude-only, gated on `harness === "claude"` the way every other Claude-only
+  affordance is — `App.tsx:1452`, `App.tsx:7368`, `UsageFooter.tsx:111`. Other
+  harnesses have no equivalent.
 
-### 9.4 Naming
+> An earlier version of this plan told you to follow `RESUME_COMMAND` in
+> `src/features/sessions/model/resumeCommand.ts`. **Neither exists** — no such
+> file, and the identifier appears nowhere in `src/`. The reference came from the
+> first draft and was wrong the whole time, which is what a plausible-looking
+> path costs when nobody opens it. The sites above are real and are what the
+> action module ended up following.
+
+### 9.5 Naming
 
 `--remote-control <name>` takes a name; use the project name so a phone list of
 sessions is readable. `projectName` already exists in `src/shared/lib/paths`.
 For `all` mode, name every session after its project (plus a discriminator if
 one project has several threads).
 
-### 9.5 Lifetime
+### 9.6 Lifetime
 
 Remote control stays open until explicitly closed. It is also killed when the
 app quits and when the thread is archived — those are the two cases where the
@@ -378,20 +438,21 @@ pty would otherwise outlive anything that could close it. For `all` mode this
 means processes accumulate with open threads, which is why `all` should open
 lazily on first use rather than opening every thread at once.
 
-### 9.6 Files involved
+### 9.7 Files involved
 
 | Area | File |
 | --- | --- |
 | pty spawn (needs a command param) | `src-tauri/src/pty.rs` |
 | pty write / subscribe | `src/platform/tauri/pty.ts` |
 | stop/resume, binding, stream parsing | `src/integrations/harness/providers/claude/claude.ts` |
-| transcript tail + record mapping | new |
+| transcript tail + record mapping | `src/features/remoteControl/model/transcript.ts` |
+| transcript path helper | still missing — §9.2 |
 | pty screen parser (approvals, turn state) | new |
 | setting | `src/features/settings/model/settings.ts` |
 | settings UI | `src/features/settings/ui/SettingsView.tsx` |
 | session action wiring | `src/app/App.tsx` |
 | menus | `src/app/shell/useProjectMenu.tsx`, `src/app/shell/TitleBar.tsx` |
-| slash command (optional) | `src/features/sessions/model/resumeCommand.ts` as the pattern |
+| Claude-only gating, as the pattern | `src/app/App.tsx`, `src/app/shell/UsageFooter.tsx` |
 
 ## 10. Constraints learned the hard way
 
