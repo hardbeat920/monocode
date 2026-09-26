@@ -127,7 +127,18 @@ import {
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "../platform/tauri/fs";
-import { killPty, spawnPty } from "../platform/tauri/pty";
+import {
+  killPty,
+  spawnPty,
+  subscribePty,
+  trimReplay,
+  writePty,
+} from "../platform/tauri/pty";
+import {
+  planInjection,
+  readPromptScreen,
+  type PromptScreen,
+} from "../features/remoteControl/model/promptScreen";
 import {
   remoteControlAction,
   type RemoteControlAction,
@@ -137,6 +148,7 @@ import {
   createMirrorState,
   emptyCursor,
   mapRecord,
+  resolveTurnFromScreen,
   type MirrorState,
 } from "../features/remoteControl/model/transcript";
 import { claudeTranscriptPath } from "../features/remoteControl/model/transcriptPath";
@@ -147,14 +159,22 @@ import {
 import {
   closeRemoteControl,
   openRemoteControl,
+  REMOTE_CONTROL_COLS,
+  REMOTE_CONTROL_ROWS,
 } from "../integrations/harness/providers/claude/remoteControl";
 import {
   noteInterruptedTurn,
+  pendingAfter,
+  remoteApprovalKeystroke,
+  remoteApprovalReply,
+  remoteApprovalView,
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
+  REMOTE_REFUSALS,
   seatRemoteUserMessage,
   shouldAutoOpen,
+  type RemoteAnswer,
 } from "./remoteControlSession";
 import {
   invalidateProjectFiles,
@@ -1275,9 +1295,34 @@ export default function App({
   const remoteControl = useRef(
     new Map<
       string,
-      { ptyId: string; name: string; mirror: MirrorState; stop: () => void }
+      {
+        ptyId: string;
+        name: string;
+        mirror: MirrorState;
+        /**
+         * Outstanding tool calls, from the transcript. This is what says a
+         * prompt may be waiting; the screen only says what it says.
+         */
+        pending: Set<string>;
+        /** Replayed pty bytes, trimmed by the same rule the pty bridge uses. */
+        chunks: string[];
+        screen: PromptScreen | null;
+        /**
+         * Streaming, because a multi-byte character split across two pty reads
+         * would otherwise arrive as a replacement character and cost the line
+         * the parser needs.
+         */
+        decoder: TextDecoder;
+        /** What is currently in front of the user, so it is not raised twice. */
+        shown:
+          | { kind: "question"; requestId: number }
+          | { kind: "raw" }
+          | null;
+        stop: () => void;
+      }
     >(),
   );
+  const remoteRequestId = useRef(0);
   // Closed by hand. `all` mode consults this so it does not reopen what the
   // user just shut, which would be unarguable-with rather than automatic.
   const remoteControlClosed = useRef(new Set<string>());
@@ -1285,6 +1330,178 @@ export default function App({
     [],
   );
   const remoteHome = useRef<string | null>(null);
+
+  /**
+   * Raise, retire or re-raise the approval a remote-controlled session waits on.
+   *
+   * Called from both sides because either can change the answer: a transcript
+   * batch can retire a prompt answered on the phone, and a screen repaint can be
+   * the first sight of one. Idempotent, so both may call it freely — `shown` is
+   * what keeps a prompt from being raised twice.
+   */
+  const syncRemoteApproval = useCallback(
+    (sessionId: string) => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry) return;
+      const view = entry.screen
+        ? remoteApprovalView(entry.pending.size > 0, entry.screen)
+        : ({ kind: "none" } as const);
+
+      if (view.kind === "none") {
+        const shown = entry.shown;
+        entry.shown = null;
+        if (shown?.kind === "question") {
+          // Answered on the phone or in the TUI while MonoCode was showing it.
+          // `cancelled`, not `skipped`: nobody declined it here.
+          enqueueHarnessEvent(sessionId, {
+            type: "question.resolved",
+            requestId: shown.requestId,
+            decision: "cancelled",
+          });
+          flushHarnessEvents();
+        }
+        return;
+      }
+
+      if (view.kind === "raw") {
+        if (entry.shown?.kind === "raw") return;
+        entry.shown = { kind: "raw" };
+        // Failing visible, which is the decided rule: something is waiting, the
+        // screen cannot be read with confidence, so the screen itself goes in
+        // front of the user and MonoCode answers nothing.
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "blocker",
+          text: `Remote Control is waiting on something it cannot read (${view.reason}). Answer it in the terminal:\n\n${view.lines
+            .map((line) => line.trimEnd())
+            .join("\n")
+            .trim()}`,
+        });
+        flushHarnessEvents();
+        return;
+      }
+
+      if (entry.shown?.kind === "question") return;
+      remoteRequestId.current += 1;
+      const requestId = remoteRequestId.current;
+      entry.shown = { kind: "question", requestId };
+      enqueueHarnessEvent(sessionId, {
+        type: "question.asked",
+        requestId,
+        title: view.question.header,
+        questions: [view.question],
+      });
+      flushHarnessEvents();
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Answer a remote approval by injecting, or say plainly that nothing was sent.
+   *
+   * Returns whether it handled the reply, so the ordinary responder carries on
+   * for everything that is not a remote prompt.
+   */
+  const answerRemoteApproval = useCallback(
+    (
+      sessionId: string,
+      requestId: number,
+      reply: UserQuestionReply,
+    ): boolean => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry || entry.shown?.kind !== "question") return false;
+      if (entry.shown.requestId !== requestId) return false;
+      const screen = entry.screen;
+      const chosen =
+        reply.kind === "answered"
+          ? reply.answers["remote-approval"]?.[0]
+          : undefined;
+      const answer: RemoteAnswer = chosen
+        ? { kind: "option", id: chosen }
+        : { kind: "cancel" };
+      const bytes = screen ? remoteApprovalKeystroke(screen, answer) : null;
+      entry.shown = null;
+      if (!bytes) {
+        // An option no longer on screen, or a cancel this prompt does not
+        // advertise. An out-of-range digit would be a harmless no-op in the TUI,
+        // but it would leave the user believing they had answered.
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: "That answer is no longer on the screen, so nothing was sent. Answer it in the terminal.",
+        });
+        flushHarnessEvents();
+        return true;
+      }
+      void writePty(entry.ptyId, bytes).catch(() => undefined);
+      // Recorded from what was sent, never read back: Esc and an explicit No
+      // produce byte-identical results, so only this side knows which happened.
+      enqueueHarnessEvent(sessionId, {
+        type: "question.resolved",
+        requestId,
+        decision: remoteApprovalReply(answer).kind,
+      });
+      flushHarnessEvents();
+      return true;
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Type a composer turn into the pty, or `null` when this session is not
+   * remote-controlled and the ordinary harness send should run.
+   *
+   * Gated on the parsed screen because a modal swallows injected text silently —
+   * no error, no record, nothing in the write's result — which is how a probe
+   * lost a whole message to the first-run trust dialog.
+   */
+  const injectRemoteTurn = useCallback(
+    (
+      sessionId: string,
+      text: string,
+      hasAttachments: boolean,
+    ): Promise<void> | null => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry) return null;
+      const plan = entry.screen ? planInjection(entry.screen, text) : null;
+      const refusal = !plan
+        ? "the terminal has not painted yet"
+        : !plan.allowed
+          ? REMOTE_REFUSALS[plan.reason]
+          : null;
+      if (!plan?.allowed) {
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: `Nothing was sent: ${refusal}. Close Remote Control to send this here, or type it in the terminal.`,
+        });
+        flushHarnessEvents();
+        return Promise.resolve();
+      }
+      if (hasAttachments) {
+        // The TUI takes typed text. `@file` mentions in it resolve as usual, but
+        // a pasted attachment has no keystroke to become.
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: "Attachments cannot be sent while Remote Control is open, so only the message text was sent.",
+        });
+      }
+      if (plan.queued) {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text: "Queued in the terminal until the current turn ends",
+        });
+      }
+      flushHarnessEvents();
+      return writePty(entry.ptyId, plan.bytes);
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
 
   const openRemote = useCallback(
     async (sessionId: string) => {
@@ -1350,7 +1567,14 @@ export default function App({
         onRecords: (records) => {
           if (!live) return;
           for (const record of records) {
-            for (const event of mapRecord(mirror, record)) {
+            const events = mapRecord(mirror, record);
+            const entry = remoteControl.current.get(sessionId);
+            if (entry) {
+              entry.pending = pendingAfter(entry.pending, events);
+              // A result landing can retire the prompt that was on screen.
+              syncRemoteApproval(sessionId);
+            }
+            for (const event of events) {
               if (event.type === "remote.userMessage") {
                 setSessions((prev) =>
                   prev.map((entry) =>
@@ -1379,45 +1603,54 @@ export default function App({
         // the moment of a hand-over, not a failure.
         onError: () => undefined,
       });
-      // NOT WIRED — the pty's own output. Nothing subscribes to `handle.ptyId`
-      // yet, so three things the transcript cannot supply are still missing, all
-      // of them screen-derived (`docs/remote-control.md` §5, §7, §8):
-      //
-      //   * Approvals. Expected: `subscribePty(handle.ptyId, …)` feeding
-      //     `promptScreen.ts`, the parsed prompt rendered in MonoCode's own
-      //     approval UI, and the chosen option written back with `writePty` as
-      //     the bare digit — measured to select and act in one keystroke, with
-      //     no `\r` and no cursor-move step. An unparseable screen must surface
-      //     the raw pty rather than answer for the user.
-      //
-      //     Two rules that are not obvious from the parsed shape, both measured:
-      //     Esc *denies*, producing byte-identical `tool_result` output to
-      //     option 3, so the transcript cannot tell a cancel from an explicit
-      //     No. Whatever emits `approval.resolved` must therefore carry the
-      //     decision this client sent — it is the only thing that knows — and
-      //     must never infer it from the result, or `deny` and `cancelled`
-      //     silently collapse into one. And *whether* a prompt is pending comes
-      //     from the transcript, not the screen: a `tool_use` with no
-      //     `tool_result` behind it held across every measured run, while
-      //     matching screen text picked up the composer footer instead. The
-      //     screen says what the prompt is; it does not say that there is one.
-      //     `MirrorState.tools` cannot answer this as it stands — it only ever
-      //     grows — so pending tracking belongs to whoever builds the UI.
-      //   * Interrupted turns. An interrupt writes no record at all, so a turn
-      //     ended that way never closes from the file. `resolveTurnFromScreen`
-      //     exists for exactly this and needs the screen to read.
-      //   * Outbound composer text. Writing into the pty has to be gated on
-      //     parsed state, because a modal swallows injected text silently.
-      //
-      // Left unwired rather than stubbed: a subscription that fed nothing would
-      // look live and answer no prompt.
+      // The parser is written against a fixed screen, and the pty was spawned
+      // at that size, so the constants go in rather than a window measurement:
+      // a disagreement here silently changes where every column lands.
+      const unsubscribe = subscribePty(
+        handle.ptyId,
+        (chunk) => {
+          const entry = remoteControl.current.get(sessionId);
+          if (!entry) return;
+          entry.chunks.push(entry.decoder.decode(chunk, { stream: true }));
+          const trimmed = trimReplay(
+            entry.chunks.map((part) => part.length),
+            entry.chunks.reduce((total, part) => total + part.length, 0),
+          );
+          if (trimmed.drop > 0) entry.chunks.splice(0, trimmed.drop);
+          const screen = readPromptScreen(entry.chunks.join(""), {
+            cols: REMOTE_CONTROL_COLS,
+            rows: REMOTE_CONTROL_ROWS,
+          });
+          entry.screen = screen;
+          // An interrupt taken on the phone writes no record at all, so the
+          // composer going idle is the only evidence its turn is over.
+          const ended = resolveTurnFromScreen(
+            entry.mirror,
+            screen.turn === "ended",
+          );
+          for (const event of ended) {
+            if (event.type !== "remote.userMessage") {
+              enqueueHarnessEvent(sessionId, event);
+            }
+          }
+          if (ended.length > 0) flushHarnessEvents();
+          syncRemoteApproval(sessionId);
+        },
+        () => undefined,
+      );
       remoteControl.current.set(sessionId, {
         ptyId: handle.ptyId,
         name,
         mirror,
+        pending: new Set<string>(),
+        chunks: [],
+        screen: null,
+        decoder: new TextDecoder(),
+        shown: null,
         stop: () => {
           live = false;
           watcher.stop();
+          unsubscribe();
         },
       });
       setRemoteControlIds((ids) =>
@@ -6818,6 +7051,11 @@ export default function App({
             }
           }
           const sendTurn = (text: string, turnAttachments = prepared) =>
+            // A remote-controlled conversation is owned by the pty. Sending it
+            // to the harness would spawn a second process on the same session,
+            // which Claude refuses outright, so the text is typed into the TUI
+            // instead.
+            injectRemoteTurn(sessionId, text, turnAttachments.length > 0) ??
             sendHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -8510,9 +8748,12 @@ export default function App({
     (sessionId: string, requestId: number, reply: UserQuestionReply) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       if (!session || session.worktreeRemoved) return;
+      // A remote-controlled session has no headless child to answer: its prompt
+      // lives in the pty, so the reply becomes a keystroke instead.
+      if (answerRemoteApproval(sessionId, requestId, reply)) return;
       respondHarnessQuestion(session.harness, sessionId, requestId, reply);
     },
-    [],
+    [answerRemoteApproval],
   );
 
   const onQuestionInteraction = useCallback(

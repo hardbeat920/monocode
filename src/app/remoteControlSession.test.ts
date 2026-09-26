@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   noteInterruptedTurn,
+  pendingAfter,
+  remoteApprovalKeystroke,
+  remoteApprovalReply,
+  remoteApprovalView,
   remoteControlName,
   remoteControlStep,
   remoteControlTarget,
@@ -8,6 +12,10 @@ import {
   shouldAutoOpen,
 } from "./remoteControlSession";
 import { newSession, type Session } from "../features/sessions/model/session";
+import type {
+  PermissionPrompt,
+  PromptScreen,
+} from "../features/remoteControl/model/promptScreen";
 
 function session(patch: Partial<Session> = {}): Session {
   return { ...newSession("claude", "/repo/monocode"), ...patch };
@@ -173,5 +181,182 @@ describe("all mode opening lazily", () => {
         { mode: "all", open: false, dismissed: false },
       ),
     ).toBe(false);
+  });
+});
+
+const OPTIONS = [
+  { number: 1, label: "Yes", keystroke: "1", selected: true },
+  { number: 2, label: "Yes, allow all edits during this session", keystroke: "2", selected: false },
+  { number: 3, label: "No", keystroke: "3", selected: false },
+];
+
+function promptScreen(patch: Partial<PermissionPrompt> = {}): PromptScreen {
+  return {
+    lines: ["Do you want to create probe.txt?"],
+    turn: "in-progress",
+    kind: "permission-prompt",
+    prompt: {
+      question: "Do you want to create probe.txt?",
+      detail: ["Create file", "probe.txt", " 1 hello"],
+      options: OPTIONS,
+      footer: "Esc to cancel · Tab to amend",
+      cancel: { label: "Esc to cancel", keystroke: "\x1b" },
+      ...patch,
+    },
+  };
+}
+
+const idleScreen: PromptScreen = { lines: ["❯"], turn: "ended", kind: "idle" };
+
+describe("what a remote session shows for a pending prompt", () => {
+  it("shows the prompt when the transcript says something is waiting", () => {
+    const view = remoteApprovalView(true, promptScreen());
+
+    expect(view.kind).toBe("question");
+    if (view.kind !== "question") return;
+    // Every option the TUI offered, not a yes/no reduction of them.
+    expect(view.question.options.map((option) => option.label)).toEqual([
+      "Yes",
+      "Yes, allow all edits during this session",
+      "No",
+    ]);
+    // The header and diff are the only statement of what the prompt would do.
+    expect(view.question.header).toBe("Create file");
+    expect(view.question.prompt).toContain("probe.txt");
+    expect(view.question.prompt).toContain(" 1 hello");
+    expect(view.cancel).toBe("Esc to cancel");
+  });
+
+  it("shows nothing when the transcript says nothing is waiting", () => {
+    // A screen that looks like a prompt is not evidence that one is pending —
+    // this is the composer-footer false positive the probe hit.
+    expect(remoteApprovalView(false, promptScreen())).toEqual({ kind: "none" });
+  });
+
+  it("stays quiet while a tool is merely running", () => {
+    // An outstanding tool call is equally the ordinary state of a running tool,
+    // so an idle or busy screen must not raise anything.
+    expect(remoteApprovalView(true, idleScreen)).toEqual({ kind: "none" });
+  });
+
+  it.each([
+    [
+      "a dialog it cannot identify",
+      { lines: ["1. Something", "2. Else"], turn: "in-progress", kind: "unrecognised", reason: "unknown-dialog" } as PromptScreen,
+    ],
+    [
+      "a modal it must not answer",
+      {
+        lines: ["Is this a project you created or one you trust?"],
+        turn: "unknown",
+        kind: "modal",
+        modal: { question: "Is this a project you created or one you trust?", detail: [], options: ["1. Yes"], footer: "Enter to confirm" },
+      } as PromptScreen,
+    ],
+  ])("surfaces the raw screen for %s", (_label, screen) => {
+    const view = remoteApprovalView(true, screen);
+
+    // Failing visible: something is waiting and cannot be read, which is exactly
+    // when guessing is forbidden.
+    expect(view.kind).toBe("raw");
+    if (view.kind !== "raw") return;
+    expect(view.lines).toBe(screen.lines);
+  });
+
+  it("does not raise a partial repaint as a question", () => {
+    const view = remoteApprovalView(true, {
+      lines: ["some banner"],
+      turn: "unknown",
+      kind: "unrecognised",
+      reason: "no-composer",
+    });
+
+    // No numbered options means no evidence anything is asking.
+    expect(view).toEqual({ kind: "none" });
+  });
+});
+
+describe("answering a remote prompt", () => {
+  it("sends the bare digit the TUI advertised", () => {
+    expect(
+      remoteApprovalKeystroke(promptScreen(), { kind: "option", id: "2" }),
+    ).toBe("2");
+  });
+
+  it("does not append a carriage return", () => {
+    // A bare digit selects and acts; a trailing CR is housekeeping and no second
+    // action, so sending one would only invite a second interpretation.
+    expect(
+      remoteApprovalKeystroke(promptScreen(), { kind: "option", id: "1" }),
+    ).not.toContain("\r");
+  });
+
+  it("refuses an option that is not on the screen", () => {
+    expect(
+      remoteApprovalKeystroke(promptScreen(), { kind: "option", id: "9" }),
+    ).toBeNull();
+  });
+
+  it("refuses to answer a screen that is not a prompt", () => {
+    // The whole point of the raw-pty fallback: an unreadable screen can never
+    // produce an injected answer.
+    expect(
+      remoteApprovalKeystroke(idleScreen, { kind: "option", id: "1" }),
+    ).toBeNull();
+    expect(remoteApprovalKeystroke(idleScreen, { kind: "cancel" })).toBeNull();
+  });
+
+  it("sends Esc only when the prompt advertises it", () => {
+    expect(remoteApprovalKeystroke(promptScreen(), { kind: "cancel" })).toBe(
+      "\x1b",
+    );
+    expect(
+      remoteApprovalKeystroke(promptScreen({ cancel: undefined }), {
+        kind: "cancel",
+      }),
+    ).toBeNull();
+  });
+
+  it("records what was sent rather than what the result will say", () => {
+    // Esc and option 3 produce byte-identical `tool_result` output, so this is
+    // the only place the difference exists.
+    expect(remoteApprovalReply({ kind: "option", id: "3" })).toEqual({
+      kind: "answered",
+      answers: { "remote-approval": ["3"] },
+    });
+    expect(remoteApprovalReply({ kind: "cancel" })).toEqual({
+      kind: "skipped",
+    });
+  });
+});
+
+describe("tracking what the transcript says is outstanding", () => {
+  it("opens on a tool call and closes on its result", () => {
+    const started = pendingAfter(new Set(), [
+      { type: "tool.started", callId: "t1", title: "Write", status: "pending" },
+    ]);
+    expect([...started]).toEqual(["t1"]);
+
+    const done = pendingAfter(started, [
+      { type: "tool.updated", callId: "t1", title: "Write", status: "completed" },
+    ]);
+    expect([...done]).toEqual([]);
+  });
+
+  it("stays open while the call is only progressing", () => {
+    const pending = pendingAfter(new Set(["t1"]), [
+      { type: "tool.updated", callId: "t1", title: "Write", status: "running" },
+    ]);
+
+    expect([...pending]).toEqual(["t1"]);
+  });
+
+  it("closes a call the CLI reported as failed", () => {
+    // A rejected tool use arrives as an error result, which still ends the call.
+    const pending = pendingAfter(new Set(["t1"]), [
+      { type: "tool.updated", callId: "t1", title: "Write", status: "failed" },
+    ]);
+
+    expect([...pending]).toEqual([]);
   });
 });

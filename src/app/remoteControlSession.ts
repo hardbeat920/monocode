@@ -12,7 +12,20 @@ import type {
   RemoteControlIntent,
   RemoteControlTarget,
 } from "../features/remoteControl/model/action";
-import type { RemoteUserMessage } from "../features/remoteControl/model/transcript";
+import type {
+  InjectionRefusal,
+  PermissionPrompt,
+  PromptOption,
+  PromptScreen,
+} from "../features/remoteControl/model/promptScreen";
+import type {
+  MirrorEvent,
+  RemoteUserMessage,
+} from "../features/remoteControl/model/transcript";
+import type {
+  UserQuestion,
+  UserQuestionReply,
+} from "../features/sessions/model/userQuestion";
 import type { RemoteControlMode } from "../features/settings/model/settings";
 import type { Session } from "../features/sessions/model/session";
 import { projectName } from "../shared/lib/paths";
@@ -145,3 +158,171 @@ export function shouldAutoOpen(
   if (!session.providerSessionId) return false;
   return !session.busy;
 }
+
+// --------------------------------------------------------------- approvals
+
+/**
+ * What a remote-controlled session should show for a pending permission prompt.
+ *
+ * Two sources, each answering the question it can. **Whether** something is
+ * waiting comes from the transcript — a `tool_use` with no `tool_result` behind
+ * it, which held across every measured run. **What it says** comes from the
+ * screen, because permission prompts are written nowhere else. Deciding
+ * *whether* from the screen is how a probe matched the composer's own
+ * "Esc to cancel" footer 0.1s in and measured nothing.
+ *
+ * Splitting them this way produces the fail-safe state deliberately rather than
+ * by accident: transcript says pending, screen will not parse, so we know
+ * something is waiting and cannot read it — which is exactly when the decided
+ * rule is to surface the raw pty instead of answering for the user.
+ */
+export type RemoteApprovalView =
+  | { kind: "none" }
+  | { kind: "question"; question: UserQuestion; cancel?: string }
+  /** Something is waiting and the screen could not be read. Show it verbatim. */
+  | { kind: "raw"; lines: readonly string[]; reason: string };
+
+export function remoteApprovalView(
+  pending: boolean,
+  screen: PromptScreen,
+): RemoteApprovalView {
+  // No outstanding tool call means nothing is waiting on an answer, whatever the
+  // screen happens to look like.
+  if (!pending) return { kind: "none" };
+  if (screen.kind === "permission-prompt") {
+    return {
+      kind: "question",
+      question: questionFromPrompt(screen.prompt),
+      ...(screen.prompt.cancel ? { cancel: screen.prompt.cancel.label } : {}),
+    };
+  }
+  // An outstanding call is equally the ordinary state of a tool that is simply
+  // running, so an unreadable screen is not on its own evidence of a question.
+  // These two kinds are: `unknown-dialog` means numbered options are painted
+  // inside a dialog the parser does not know, and a modal is deliberately parsed
+  // without keystrokes so that MonoCode cannot answer it. Both mean something is
+  // asking and we cannot read it, which is when the raw pty goes in front of the
+  // user rather than a guess.
+  if (screen.kind === "modal") {
+    return { kind: "raw", lines: screen.lines, reason: "modal" };
+  }
+  if (screen.kind === "unrecognised" && screen.reason === "unknown-dialog") {
+    return { kind: "raw", lines: screen.lines, reason: screen.reason };
+  }
+  return { kind: "none" };
+}
+
+/** The id of the option a digit stands for. Stable, and what gets injected. */
+function optionId(option: PromptOption): string {
+  return String(option.number);
+}
+
+/**
+ * The prompt as one of MonoCode's own clarifying questions.
+ *
+ * `question.asked` is the only inbound shape that carries more than two answers
+ * and a way out that is not an answer — `{kind:"skipped"}`. `approval.requested`
+ * cannot: `ApprovalDecision` is `"allow" | "deny"`, which cannot express
+ * "Yes, allow all edits during this session", and offering a prompt without its
+ * cancel narrows a safe parser into a coercive one.
+ *
+ * The tool header and diff ride in the prompt text because they are the only
+ * statement anywhere of what the prompt would *do* — the question names the file
+ * and not its contents, and the transcript names neither. A UI without them asks
+ * for approval of a write nobody can see.
+ */
+function questionFromPrompt(prompt: PermissionPrompt): UserQuestion {
+  const detail = prompt.detail.filter((line) => line.trim());
+  const [header, ...rest] = detail;
+  return {
+    id: "remote-approval",
+    ...(header ? { header } : {}),
+    prompt: rest.length > 0 ? `${prompt.question}\n\n${rest.join("\n")}` : prompt.question,
+    multiSelect: false,
+    allowCustom: false,
+    options: prompt.options.map((option) => ({
+      id: optionId(option),
+      label: option.label,
+    })),
+  };
+}
+
+export type RemoteAnswer =
+  /** A numbered option, by the id `remoteApprovalView` gave it. */
+  | { kind: "option"; id: string }
+  /** The prompt's own way out. Esc, when the footer advertises it. */
+  | { kind: "cancel" };
+
+/**
+ * The bytes that answer a prompt, or `null` when nothing may be sent.
+ *
+ * A bare digit both selects and acts — measured, with no cursor-move step and no
+ * `\r`; a trailing CR is 80 bytes of mouse-mode housekeeping and no second
+ * action. An out-of-range digit is a clean no-op that leaves the prompt pending,
+ * which is a good failure and still not one worth causing: an option that is not
+ * on screen never becomes a keystroke, and neither does an answer to a screen
+ * that is not a prompt.
+ */
+export function remoteApprovalKeystroke(
+  screen: PromptScreen,
+  answer: RemoteAnswer,
+): string | null {
+  if (screen.kind !== "permission-prompt") return null;
+  if (answer.kind === "cancel") {
+    return screen.prompt.cancel ? screen.prompt.cancel.keystroke : null;
+  }
+  const option = screen.prompt.options.find(
+    (candidate) => optionId(candidate) === answer.id,
+  );
+  return option ? option.keystroke : null;
+}
+
+/**
+ * What to record as the outcome, decided here rather than read back later.
+ *
+ * Esc produces a `tool_result` byte-identical to option 3's — `is_error: true`,
+ * `"User rejected tool use"` — so the transcript cannot tell a cancel from an
+ * explicit No, while MonoCode distinguishes `deny` from `cancelled`. The client
+ * that sent the keystroke is the only thing that knows, so the answer is
+ * captured at the moment of injection.
+ */
+export function remoteApprovalReply(answer: RemoteAnswer): UserQuestionReply {
+  if (answer.kind === "cancel") return { kind: "skipped" };
+  return { kind: "answered", answers: { "remote-approval": [answer.id] } };
+}
+
+/**
+ * Outstanding tool calls after a batch of mirrored events.
+ *
+ * Derived from the events the mirror already emits rather than by reading the
+ * records again: `tool.started` opens a call and `tool.updated` closes it with a
+ * terminal status. `MirrorState.tools` cannot answer this — it is only ever
+ * added to, so "still in the map" is true forever.
+ */
+export function pendingAfter(
+  pending: ReadonlySet<string>,
+  events: readonly MirrorEvent[],
+): Set<string> {
+  const next = new Set(pending);
+  for (const event of events) {
+    if (event.type === "tool.started" && event.callId) next.add(event.callId);
+    if (
+      event.type === "tool.updated" &&
+      event.callId &&
+      (event.status === "completed" || event.status === "failed")
+    ) {
+      next.delete(event.callId);
+    }
+  }
+  return next;
+}
+
+/** Why a composer send did not reach the pty, in words the user can act on. */
+export const REMOTE_REFUSALS: Record<InjectionRefusal, string> = {
+  empty: "there was nothing to send",
+  "permission-prompt": "the terminal is waiting on a permission prompt",
+  modal: "a dialog in the terminal is waiting to be dismissed",
+  "unrecognised-screen": "the terminal is showing something unrecognised",
+  "command-prefix":
+    "a message starting with /, ! or # drives the terminal's own menus instead of being sent",
+};
