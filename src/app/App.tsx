@@ -1845,6 +1845,10 @@ export default function App({
   const openRemote = useCallback(
     async (sessionId: string) => {
       if (remoteControl.current.has(sessionId)) return;
+      // A thread being archived or deleted is not a thread to hand over, whoever
+      // asked. Held here as well as in `shouldAutoOpen` because this is the one
+      // door both the by-hand path and the queue drain come through.
+      if (removingSessionIds.current.has(sessionId)) return;
       const waiting = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
@@ -2066,6 +2070,7 @@ export default function App({
         remoteControl.current.has(session.id) ||
         remoteOpening.current.has(session.id),
       dismissed: remoteControlClosed.current.has(session.id),
+      removing: removingSessionIds.current.has(session.id),
     }));
     // One session's failure must cost that session, not the window: this runs
     // across every thread at once, so a throw here took the React tree with it.

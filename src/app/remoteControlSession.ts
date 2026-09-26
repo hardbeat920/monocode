@@ -171,6 +171,24 @@ export type AutoOpenState = {
   open: boolean;
   /** Closed by hand. `all` must not argue with the user about it. */
   dismissed: boolean;
+  /**
+   * The thread is on its way out — being archived or deleted.
+   *
+   * Removal stops the child, saves it, and archives the record before it takes
+   * the session out of the workspace, reading the state again after each wait.
+   * So for a moment the thread is gone from the sidebar and still in the
+   * workspace: idle, with a conversation bound, which is exactly this rule's
+   * yes. The hand-over it produced then belonged to nobody — the close ran at
+   * the start of the removal, before this could happen, so nothing was left to
+   * shut the new CLI down and it stayed open.
+   *
+   * The by-hand close does mark the thread dismissed on its way past, which
+   * happens to block this too. That is a side effect of what `byUser` means
+   * today, not a guarantee: dismissal is about the user's intent and this is
+   * about the lifecycle, and leaning on the first to enforce the second breaks
+   * the day someone changes what a removal's close counts as.
+   */
+  removing?: boolean;
 };
 
 /**
@@ -276,7 +294,7 @@ export function shouldAutoOpen(
   state: AutoOpenState,
 ): boolean {
   if (state.mode !== "all") return false;
-  if (state.open || state.dismissed) return false;
+  if (state.open || state.dismissed || state.removing) return false;
   if (session.harness !== "claude") return false;
   if (!session.providerSessionId) return false;
   return !session.busy;

@@ -174,6 +174,35 @@ describe("the cue for a turn the handover stopped", () => {
   });
 });
 
+describe("a thread on its way out", () => {
+  const leaving = session({ providerSessionId: "sess-abc", busy: false });
+
+  it("is not handed over while it is being removed", () => {
+    // The window between archiving the record and taking the session out of the
+    // workspace: gone from the sidebar, still here, idle and bound — which is
+    // this rule's yes, and the hand-over it made had nobody left to close it.
+    expect(
+      shouldAutoOpen(leaving, {
+        mode: "all",
+        open: false,
+        dismissed: false,
+        removing: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is handed over when it is not", () => {
+    expect(
+      shouldAutoOpen(leaving, {
+        mode: "all",
+        open: false,
+        dismissed: false,
+        removing: false,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("a hand-over against a thread the workspace has not loaded", () => {
   it("still offers to close it", () => {
     // The state this exists for: tab closed, so the thread is a history summary
