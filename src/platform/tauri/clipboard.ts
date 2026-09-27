@@ -20,16 +20,31 @@ const MAX_CLIPBOARD_HTML_CHARS =
   MAX_CLIPBOARD_BASE64_CHARS +
   MAX_CLIPBOARD_METADATA_CHARS;
 
+/** Folder paths the plain text does not already list, one per line. */
+function textWithFolderPaths(text: string, paths: string[]): string {
+  const lines = new Set(text.split("\n"));
+  const extra = paths.filter((path) => !lines.has(path));
+  if (!extra.length) return text;
+  const suffix = extra.join("\n");
+  if (!text) return suffix;
+  return text.endsWith("\n") ? text + suffix : `${text}\n${suffix}`;
+}
+
 /** HTML keeps arbitrary files together with text across MonoCode windows. */
 export async function copyMessage(
   text: string,
   attachments: Attachment[] = [],
 ): Promise<void> {
   const files: CopiedFile[] = [];
+  const folderPaths: string[] = [];
   for (const attachment of attachments) {
-    // A folder has no bytes to copy, and asking for them fails the whole copy
-    // including the text. The transcript's path text carries it instead.
-    if (isAttachmentFolder(attachment)) continue;
+    // A folder has no bytes to copy, and asking for them fails the whole copy.
+    // The path is the reference, so it goes in the copied text instead.
+    if (isAttachmentFolder(attachment)) {
+      const path = attachment.path?.trim();
+      if (path) folderPaths.push(path);
+      continue;
+    }
     if (
       attachment.kind === "image" &&
       !attachment.data &&
@@ -56,9 +71,10 @@ export async function copyMessage(
       throw new Error(`Could not copy ${attachment.name}: ${reason}`);
     }
   }
+  const payload = textWithFolderPaths(text, folderPaths);
   if (!files.length) {
-    if (!text) throw new Error("No copyable content is available.");
-    return copyText(text);
+    if (!payload) throw new Error("No copyable content is available.");
+    return copyText(payload);
   }
   const escape = (value: string) =>
     value.replace(
@@ -72,7 +88,7 @@ export async function copyMessage(
           "'": "&#39;",
         })[char]!,
     );
-  const html = `<div data-monocode-files="${encodeURIComponent(JSON.stringify(files))}"><pre>${escape(text)}</pre>${files
+  const html = `<div data-monocode-files="${encodeURIComponent(JSON.stringify(files))}"><pre>${escape(payload)}</pre>${files
     .map((file) => {
       const src = `data:${escape(file.mimeType)};base64,${escape(file.data)}`;
       return file.mimeType.startsWith("image/")
@@ -81,7 +97,7 @@ export async function copyMessage(
     })
     .join("")}</div>`;
   const formats: Record<string, Blob> = {
-    "text/plain": new Blob([text], { type: "text/plain" }),
+    "text/plain": new Blob([payload], { type: "text/plain" }),
     "text/html": new Blob([html], { type: "text/html" }),
   };
   const png = files.find((file) => file.mimeType === "image/png");

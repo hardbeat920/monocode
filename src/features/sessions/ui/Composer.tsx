@@ -93,6 +93,7 @@ import type {
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import {
   captureDraft,
+  dropPastedText,
   insertRestoredText,
 } from "../../../shared/lib/draftRestore";
 import {
@@ -1644,9 +1645,12 @@ export function Composer({
         : null;
       void nativeClipboardAttachments(text)
         .then(({ files: pasted, warning }) => {
-          if (pasted.length) addAttachments(pasted);
-          // A file URI that turned into no attachment was the user's text.
-          else if (
+          if (pasted.length) {
+            // WebKit can insert the URI after preventDefault. The chip
+            // replaces it, so the draft must not keep that text.
+            if (captured) dropPastedText(captured, text);
+            addAttachments(pasted);
+          } else if (
             captured &&
             draftResetTokenRef.current === draftGeneration
           )

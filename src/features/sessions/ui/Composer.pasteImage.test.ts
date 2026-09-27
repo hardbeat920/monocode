@@ -190,6 +190,43 @@ it("attaches a file copied in a file manager instead of inserting its URI", asyn
   ]);
 });
 
+it("takes a file URI back out when the webview inserted it and the file attached", async () => {
+  let release: (() => void) | undefined;
+  invoke.mockImplementation(
+    async (command: string, args?: { paths?: string[] }) => {
+      if (command === "clipboard_file_paths") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return ["/home/dev/report.pdf"];
+      }
+      if (command === "inspect_paths")
+        return (args?.paths ?? []).map((path) => ({
+          path,
+          name: path.split("/").pop() ?? path,
+          size: 4096,
+          isDir: false,
+        }));
+      return [];
+    },
+  );
+  const field = render("keep");
+  field.setSelectionRange(4, 4);
+  const event = paste(field, "file:///home/dev/report.pdf");
+  // WebKit inserts the URI after the handler has already called preventDefault.
+  act(() => {
+    field.setRangeText("file:///home/dev/report.pdf", 4, 4, "end");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(field.value).toBe("keepfile:///home/dev/report.pdf");
+
+  release?.();
+  await waitForAttachments(1);
+
+  expect(event.defaultPrevented).toBe(true);
+  expect(field.value).toBe("keep");
+});
+
 it("keeps a file URI as draft text when the native read finds no copied path", async () => {
   clipboardPaths = [];
   const field = render("");

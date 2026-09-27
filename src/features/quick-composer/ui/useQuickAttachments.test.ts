@@ -118,6 +118,48 @@ it("attaches a copied file instead of leaving its URI in the prompt", async () =
   expect(api.files[0]).toMatchObject({ path: "/tmp/image.png" });
 });
 
+it("takes a file URI back out when the webview inserted it and the file attached", async () => {
+  let release: (() => void) | undefined;
+  const impl = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+    if (cmd === "clipboard_file_paths") {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return ["/tmp/image.png"];
+    }
+    return impl(cmd, args);
+  });
+  const field = document.createElement("textarea");
+  document.body.append(field);
+  field.value = "keep";
+  field.setSelectionRange(4, 4);
+  const preventDefault = vi.fn();
+  await act(async () => {
+    api.onPaste({
+      target: field,
+      clipboardData: {
+        files: [],
+        getData: () => "file:///tmp/image.png",
+      },
+      preventDefault,
+    } as never);
+    field.setRangeText("file:///tmp/image.png", 4, 4, "end");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(field.value).toBe("keepfile:///tmp/image.png");
+
+  await act(async () => {
+    release?.();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+
+  expect(preventDefault).toHaveBeenCalled();
+  expect(api.files[0]).toMatchObject({ path: "/tmp/image.png" });
+  expect(field.value).toBe("keep");
+  field.remove();
+});
+
 it("leaves a file URI to the webview while a collection is running", async () => {
   let release: (() => void) | undefined;
   vi.mocked(invoke).mockImplementation(async (cmd, args) => {

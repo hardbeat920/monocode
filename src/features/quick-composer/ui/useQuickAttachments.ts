@@ -24,6 +24,7 @@ import {
 import { storeQuickAttachments } from "../model/quickAttachments";
 import {
   captureDraft,
+  dropPastedText,
   insertRestoredText,
 } from "../../../shared/lib/draftRestore";
 
@@ -162,8 +163,11 @@ export function useQuickAttachments(
       void collect(async () => {
         const { files, warning } = await nativeClipboardAttachments(text);
         if (warning) onError(warning);
-        // A file URI that turned into no attachment was the user's text.
-        if (!files.length && captured) insertRestoredText(captured, text);
+        if (files.length) {
+          // WebKit can insert the URI after preventDefault. The chip
+          // replaces it, so the prompt must not keep that text.
+          if (captured) dropPastedText(captured, text);
+        } else if (captured) insertRestoredText(captured, text);
         return files;
       });
       return;
