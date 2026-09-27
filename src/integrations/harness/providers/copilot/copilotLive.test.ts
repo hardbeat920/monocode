@@ -75,12 +75,18 @@ async function ready(currentModelId = "claude-sonnet-5") {
   reply(created.id, { sessionId: "copilot-session-1", models: { currentModelId } });
 }
 
-async function selectModelAndMode(sessionId: string, modelId: string) {
+async function selectModelAndMode(
+  sessionId: string,
+  modelId: string,
+  sessionMode = "agent",
+) {
   const model = await request("session/set_model");
   expect(model.params).toEqual({ sessionId, modelId });
   reply(model.id, {});
   const mode = await request("session/set_mode");
-  expect(mode.params.modeId).toBe("https://agentclientprotocol.com/protocol/session-modes#agent");
+  expect(mode.params.modeId).toBe(
+    `https://agentclientprotocol.com/protocol/session-modes#${sessionMode}`,
+  );
   reply(mode.id, {});
 }
 
@@ -391,5 +397,88 @@ describe("Copilot live ACP sequence", () => {
     onExit?.(0);
     expect(events).toContainEqual({ type: "session.ended", code: 0 });
     await stopCopilotSession("copilot-cancel");
+  });
+
+  it("stops a session that finishes starting after the turn was cancelled", async () => {
+    const events: HarnessEvent[] = [];
+    const sessionId = "copilot-startup-cancel";
+    const turn = start(sessionId, events);
+    const init = await request("initialize");
+    await cancelCopilotTurn(sessionId);
+    reply(init.id, { protocolVersion: 1 });
+    const created = await request("session/new");
+    reply(created.id, { sessionId: "copilot-session-1" });
+    await turn;
+    expect(kill).toHaveBeenCalledWith(sessionId);
+  });
+
+  it("keeps a queued send from changing the active turn's permission policy", async () => {
+    const events: HarnessEvent[] = [];
+    const sessionId = "copilot-queued-policy";
+    const first = start(sessionId, events, { intent: "plan" });
+    await ready();
+    await selectModelAndMode("copilot-session-1", "auto", "plan");
+    const prompt = await request("session/prompt");
+    const second = start(sessionId, [], { runtimeMode: "full-access" });
+
+    onLine!(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 91,
+      method: "session/request_permission",
+      params: {
+        sessionId: "copilot-session-1",
+        toolCall: { toolCallId: "call-exec", title: "Run tests", kind: "execute", status: "pending" },
+        options: [
+          { optionId: "allow_always", kind: "allow_always", name: "Always allow" },
+          { optionId: "reject_once", kind: "reject_once", name: "Deny" },
+        ],
+      },
+    }));
+    await vi.waitFor(() => expect(parse().some((message) => message.id === 91 && message.result)).toBe(true));
+    expect(parse().find((message) => message.id === 91)?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "reject_once" },
+    });
+
+    reply(prompt.id, { stopReason: "end_turn" });
+    await first;
+    sent.length = 0;
+    const mode = await request("session/set_mode");
+    reply(mode.id, {});
+    const queued = await request("session/prompt");
+    reply(queued.id, { stopReason: "end_turn" });
+    await second;
+    await stopCopilotSession(sessionId);
+  });
+
+  it("denies a permission request that arrives with no active prompt", async () => {
+    const events: HarnessEvent[] = [];
+    const sessionId = "copilot-idle-permission";
+    const turn = start(sessionId, events);
+    await ready();
+    await selectModelAndMode("copilot-session-1", "auto");
+    const prompt = await request("session/prompt");
+    reply(prompt.id, { stopReason: "end_turn" });
+    await turn;
+    sent.length = 0;
+
+    onLine!(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 88,
+      method: "session/request_permission",
+      params: {
+        sessionId: "copilot-session-1",
+        toolCall: { toolCallId: "call-idle", title: "Create file", kind: "edit", status: "pending" },
+        options: [
+          { optionId: "allow_once", kind: "allow_once", name: "Allow once" },
+          { optionId: "reject_once", kind: "reject_once", name: "Deny" },
+        ],
+      },
+    }));
+    await vi.waitFor(() => expect(parse().some((message) => message.id === 88 && message.result)).toBe(true));
+    expect(parse().find((message) => message.id === 88)?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "reject_once" },
+    });
+    expect(events.some((event) => event.type === "approval.requested")).toBe(false);
+    await stopCopilotSession(sessionId);
   });
 });

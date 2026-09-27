@@ -76,14 +76,17 @@ export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
     cancelledThreads.delete(input.sessionId);
     throw error;
   }
-  if (cancelledThreads.delete(input.sessionId)) return;
+  if (cancelledThreads.delete(input.sessionId)) {
+    await stopCopilotSession(input.sessionId);
+    return;
+  }
 
-  live.onEvent = input.onEvent;
-  live.runtimeMode = input.runtimeMode;
-  live.planning = input.intent === "plan";
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
+      live.onEvent = input.onEvent;
+      live.runtimeMode = input.runtimeMode;
+      live.planning = input.intent === "plan";
       live.cancelled = false;
       live.muteUpdates = false;
       try {
@@ -169,12 +172,7 @@ export function bindCopilotSession(
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
-  if (existing && existing.cwd === input.cwd) {
-    existing.onEvent = input.onEvent;
-    existing.runtimeMode = input.runtimeMode;
-    existing.planning = input.intent === "plan";
-    return existing;
-  }
+  if (existing && existing.cwd === input.cwd) return existing;
   if (existing) {
     resumeByThread.delete(input.sessionId);
     await stopCopilotSession(input.sessionId);
@@ -423,7 +421,7 @@ async function handleRequest(
 ): Promise<void> {
   if (method === "session/request_permission") {
     const request = permissionRequestFromAcp(params);
-    if (live.cancelled) {
+    if (live.cancelled || !live.activePrompt) {
       await respondPermission(
         live,
         id,
