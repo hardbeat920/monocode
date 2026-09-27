@@ -14,6 +14,7 @@ import {
   REMOTE_ECHO_GRACE_MS,
   REMOTE_SEND_GRACE_MS,
   remoteTurnBusy,
+  reseatEchoedUserMessage,
   remoteApprovalTransition,
   turnSignal,
   type ApprovalEffect,
@@ -174,6 +175,72 @@ describe("an inbound message from the phone", () => {
     });
 
     expect(next).toBe(before);
+  });
+});
+
+describe("a queued message whose record has arrived", () => {
+  const block = (role: "user" | "assistant" | "system", text: string) => ({
+    id: text,
+    role,
+    text,
+  });
+
+  it("moves under the reply it was seated above", () => {
+    // Sent while the first turn ran: seated at once, queued in the pty. The
+    // first reply then landed under it, and its own reply folded that away.
+    const before = session({
+      blocks: [
+        block("user", "first"),
+        block("user", "second"),
+        block("assistant", "reply to first"),
+      ],
+    });
+
+    const next = reseatEchoedUserMessage(before, "second");
+
+    expect(next.blocks.map((b) => b.text)).toEqual([
+      "first",
+      "reply to first",
+      "second",
+    ]);
+  });
+
+  it("stays put when only a status line follows it", () => {
+    // Sent to an idle session: the record arrives within the second and the
+    // only thing under the seat is the delivery note. That is in order.
+    const before = session({
+      blocks: [
+        block("user", "first"),
+        block("system", "Delivered to the terminal."),
+      ],
+    });
+
+    expect(reseatEchoedUserMessage(before, "first")).toBe(before);
+  });
+
+  it("matches the most recent seat, whitespace aside", () => {
+    const before = session({
+      blocks: [
+        block("user", "same"),
+        block("assistant", "reply one"),
+        block("user", "same"),
+        block("assistant", "reply two"),
+      ],
+    });
+
+    const next = reseatEchoedUserMessage(before, "  same ");
+
+    expect(next.blocks.map((b) => b.text)).toEqual([
+      "same",
+      "reply one",
+      "reply two",
+      "same",
+    ]);
+  });
+
+  it("does nothing for text it never seated", () => {
+    const before = session({ blocks: [block("user", "first")] });
+    expect(reseatEchoedUserMessage(before, "other")).toBe(before);
   });
 });
 

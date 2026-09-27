@@ -149,6 +149,44 @@ export function seatRemoteUserMessage(
 }
 
 /**
+ * Put a locally seated user message back where the transcript says it goes.
+ *
+ * A message sent while a turn is running is seated by the composer at once and
+ * typed into the pty, which queues it behind the turn. The running turn's reply
+ * then arrives from the transcript — after the seat — and lands under the queued
+ * message instead of under the one it answers. When the queued message's own
+ * reply lands, the view folds what came before it as that turn's finished work,
+ * and the earlier reply looks as if it vanished; it is behind the fold line.
+ *
+ * The transcript writes the queued message's record at dequeue, after the
+ * earlier turn's records, so the record's arrival is the moment the true order
+ * is known. The seated block is moved to the end then, and only if the turn's
+ * output has actually been painted under it — a seat followed by nothing but a
+ * status line is already in place.
+ */
+export function reseatEchoedUserMessage(
+  session: Session,
+  text: string,
+): Session {
+  const wanted = text.trim();
+  const blocks = session.blocks;
+  let at = -1;
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    if (blocks[i].role === "user" && blocks[i].text.trim() === wanted) {
+      at = i;
+      break;
+    }
+  }
+  if (at < 0) return session;
+  const after = blocks.slice(at + 1);
+  if (!after.some((block) => block.role !== "system")) return session;
+  return {
+    ...session,
+    blocks: [...blocks.slice(0, at), ...after, blocks[at]],
+  };
+}
+
+/**
  * Whether a failed read means the file is not there rather than that something
  * went wrong.
  *

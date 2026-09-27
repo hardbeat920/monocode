@@ -177,6 +177,7 @@ import {
   planRemoteExit,
   queuedNotice,
   remoteTurnBusy,
+  reseatEchoedUserMessage,
   remoteApprovalKeystroke,
   remoteApprovalReply,
   remoteApprovalTransition,
@@ -1789,13 +1790,22 @@ export default function App({
             for (const event of events) {
               if (event.type === "remote.userMessage") {
                 // Ours coming back. The composer already seated it; seating the
-                // echo too is how one message becomes two.
+                // echo too is how one message becomes two. Its record is also
+                // the first word on where it goes: a message queued behind a
+                // running turn was seated above that turn's reply.
                 if (
                   takeInjectedEcho(
                     remoteEcho.current.get(sessionId) ?? [],
                     event.text,
                   )
                 ) {
+                  setSessions((prev) =>
+                    prev.map((entry) =>
+                      entry.id === sessionId
+                        ? reseatEchoedUserMessage(entry, event.text)
+                        : entry,
+                    ),
+                  );
                   continue;
                 }
                 setSessions((prev) =>
