@@ -36,4 +36,39 @@ describe("setSessionLinkedWorkItem", () => {
       linkedWorkItem: null,
     });
   });
+
+  it("persists multiple work items as an array", async () => {
+    await setSessionLinkedWorkItem("session-1", [
+      {
+        kind: "pr",
+        repo: "openai/codex",
+        number: 42,
+        url: "https://example.com/untrusted",
+      },
+      {
+        kind: "issue",
+        repo: "openai/codex",
+        number: 12,
+        url: "https://example.com/also-untrusted",
+      },
+    ]);
+
+    expect(invoke).toHaveBeenCalledWith("session_set_linked_work_item", {
+      sessionId: "session-1",
+      linkedWorkItem: [
+        {
+          kind: "pr",
+          repo: "openai/codex",
+          number: 42,
+          url: "https://github.com/openai/codex/pull/42",
+        },
+        {
+          kind: "issue",
+          repo: "openai/codex",
+          number: 12,
+          url: "https://github.com/openai/codex/issues/12",
+        },
+      ],
+    });
+  });
 });

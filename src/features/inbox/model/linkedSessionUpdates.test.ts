@@ -89,6 +89,39 @@ describe("linked session updates", () => {
     ).toHaveLength(1);
   });
 
+  it("marks a session when a second linked item changes", () => {
+    const issue: LinkedWorkItem = {
+      kind: "issue",
+      repo: "acme/app",
+      number: 8,
+      url: "https://github.com/acme/app/issues/8",
+    };
+    const snapshots = new Map([
+      [
+        linkedWorkItemUpdateKey(issue),
+        {
+          ...issue,
+          title: "Follow-up",
+          state: "open",
+          updatedAt: new Date(200).toISOString(),
+          labels: [],
+          assignees: [],
+          draft: false,
+        },
+      ],
+    ]);
+    expect(
+      linkedSessionUpdateIds(
+        [
+          session("multi", 100, {
+            linkedWorkItems: [linked, issue],
+          }),
+        ],
+        snapshots,
+      ).has("multi"),
+    ).toBe(true);
+  });
+
   it("uses the acknowledged snapshot as the next activity baseline", () => {
     const snapshots = new Map([[linkedWorkItemUpdateKey(linked), remote(200)]]);
     expect(

@@ -32,6 +32,7 @@ import type {
   TurnModel,
   TurnMetrics,
 } from "../model/session";
+import { linkedWorkItemFields } from "../model/sessionWorkItem";
 
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
 
@@ -61,6 +62,7 @@ export type SessionSummary = {
   pinned?: boolean;
   draft?: boolean;
   linkedWorkItem?: LinkedWorkItem;
+  linkedWorkItems?: LinkedWorkItem[];
   automationId?: string;
 };
 
@@ -81,7 +83,8 @@ type SessionRecord = {
   branch?: string | null;
   worktreeCwd?: string | null;
   worktreeRemoved?: boolean;
-  linkedWorkItem?: LinkedWorkItem | null;
+  linkedWorkItem?: LinkedWorkItem | LinkedWorkItem[] | null;
+  linkedWorkItems?: LinkedWorkItem[] | null;
   automationId?: string | null;
   createdAt: number;
   updatedAt: number;
@@ -103,7 +106,7 @@ type SessionUpsertPayload = {
   branch?: string;
   worktreeCwd?: string;
   worktreeRemoved?: boolean;
-  linkedWorkItem?: LinkedWorkItem;
+  linkedWorkItem?: LinkedWorkItem | LinkedWorkItem[];
   automationId?: string;
 };
 
@@ -124,7 +127,7 @@ export function isPersistableId(value: string): boolean {
 function persistableMeta(
   session: Session,
 ): Omit<SessionUpsertPayload, "blocks"> {
-  const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
+  const linkedWorkItem = persistableLinkedWorkItem(session);
   return {
     id: session.id,
     cwd: normalizeProjectPath(session.cwd),
@@ -178,6 +181,40 @@ export function sanitizeLinkedWorkItem(
     number,
     url: `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`,
   };
+}
+
+export function sanitizeLinkedWorkItems(value: unknown): LinkedWorkItem[] {
+  const raw = Array.isArray(value) ? value : value != null ? [value] : [];
+  const items: LinkedWorkItem[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const item = sanitizeLinkedWorkItem(entry);
+    if (!item) continue;
+    const key = `${item.repo.toLowerCase()}:${item.kind}:${item.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+  }
+  return items;
+}
+
+function persistableLinkedWorkItem(
+  session: Pick<Session, "linkedWorkItem" | "linkedWorkItems">,
+): LinkedWorkItem | LinkedWorkItem[] | undefined {
+  const items = sanitizeLinkedWorkItems(
+    session.linkedWorkItems?.length
+      ? session.linkedWorkItems
+      : session.linkedWorkItem,
+  );
+  if (items.length === 0) return undefined;
+  return items.length === 1 ? items[0] : items;
+}
+
+function linkedWorkItemAssignment(value: unknown): {
+  linkedWorkItem?: LinkedWorkItem;
+  linkedWorkItems?: LinkedWorkItem[];
+} {
+  return linkedWorkItemFields(sanitizeLinkedWorkItems(value));
 }
 
 export function sanitizeSessionForPersist(
@@ -464,13 +501,15 @@ export async function setSessionPinned(
 
 export async function setSessionLinkedWorkItem(
   sessionId: string,
-  value: LinkedWorkItem | undefined,
+  value: LinkedWorkItem | readonly LinkedWorkItem[] | undefined,
 ): Promise<void> {
-  const linkedWorkItem = sanitizeLinkedWorkItem(value);
+  const items = sanitizeLinkedWorkItems(value);
+  const linkedWorkItem =
+    items.length === 0 ? null : items.length === 1 ? items[0] : items;
   await enqueueSessionWrite(sessionId, () =>
     invoke<void>("session_set_linked_work_item", {
       sessionId,
-      linkedWorkItem: linkedWorkItem ?? null,
+      linkedWorkItem,
     }),
   );
 }
@@ -955,9 +994,13 @@ function sanitizeTaskList(value: unknown): TaskListMeta | null {
 }
 
 function normalizeSummary(summary: SessionSummary): SessionSummary {
-  const linkedWorkItem = sanitizeLinkedWorkItem(summary.linkedWorkItem);
+  const {
+    linkedWorkItem: storedLinkedWorkItem,
+    linkedWorkItems: storedLinkedWorkItems,
+    ...rest
+  } = summary;
   return {
-    ...summary,
+    ...rest,
     harness: asHarness(summary.harness),
     runtimeMode: asRuntimeMode(summary.runtimeMode),
     ...(summary.providerSessionId
@@ -970,7 +1013,9 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
     archived: summary.archived || undefined,
     pinned: summary.pinned || undefined,
     draft: summary.draft || undefined,
-    linkedWorkItem,
+    ...linkedWorkItemAssignment(
+      storedLinkedWorkItems?.length ? storedLinkedWorkItems : storedLinkedWorkItem,
+    ),
     ...(typeof summary.automationId === "string" &&
     isPersistableId(summary.automationId)
       ? { automationId: summary.automationId }
@@ -984,7 +1029,9 @@ function recordToSession(record: SessionRecord): Session {
         .map((block) => sanitizeBlock(block, { hydrate: true }))
         .filter((block): block is Block => block != null)
     : [];
-  const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
+  const linkedWorkItemAssignmentFields = linkedWorkItemAssignment(
+    record.linkedWorkItem,
+  );
   return {
     id: record.id,
     cwd: record.cwd,
@@ -1013,7 +1060,7 @@ function recordToSession(record: SessionRecord): Session {
     ...(record.branch ? { branch: record.branch } : {}),
     ...(record.worktreeCwd ? { worktreeCwd: record.worktreeCwd } : {}),
     ...(record.worktreeRemoved ? { worktreeRemoved: true } : {}),
-    ...(linkedWorkItem ? { linkedWorkItem } : {}),
+    ...linkedWorkItemAssignmentFields,
     ...(record.automationId && isPersistableId(record.automationId)
       ? { automationId: record.automationId }
       : {}),

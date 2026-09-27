@@ -1,4 +1,5 @@
 import type { LinkedWorkItem } from "../../sessions/model/session";
+import { sessionLinkedWorkItems } from "../../sessions/model/sessionWorkItem";
 import type { GithubWorkItem } from "./githubTasks";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 
@@ -26,9 +27,11 @@ export function linkedWorkItemTargets(
 ): LinkedWorkItemTarget[] {
   const targets = new Map<string, LinkedWorkItem>();
   for (const session of sessions) {
-    if (!session.linkedWorkItem || session.archived) continue;
-    const key = linkedWorkItemUpdateKey(session.linkedWorkItem);
-    if (!targets.has(key)) targets.set(key, session.linkedWorkItem);
+    if (session.archived) continue;
+    for (const linked of sessionLinkedWorkItems(session)) {
+      const key = linkedWorkItemUpdateKey(linked);
+      if (!targets.has(key)) targets.set(key, linked);
+    }
   }
   return [...targets].map(([key, item]) => ({ key, item }));
 }
@@ -41,20 +44,27 @@ export function linkedSessionUpdates(
 ): Map<string, LinkedSessionUpdate> {
   const updates = new Map<string, LinkedSessionUpdate>();
   for (const session of sessions) {
-    const linked = session.linkedWorkItem;
-    if (!linked || session.archived) continue;
-    const item = workItems.get(linkedWorkItemUpdateKey(linked));
-    if (!item) continue;
-    const remoteUpdatedAt = Date.parse(item.updatedAt);
+    if (session.archived) continue;
     const since = Math.max(session.updatedAt, seenAt(session.id));
-    if (Number.isFinite(remoteUpdatedAt) && remoteUpdatedAt > since) {
-      updates.set(session.id, {
-        sessionId: session.id,
-        item,
-        since,
-        updatedAt: remoteUpdatedAt,
-      });
+    let best: LinkedSessionUpdate | undefined;
+    for (const linked of sessionLinkedWorkItems(session)) {
+      const item = workItems.get(linkedWorkItemUpdateKey(linked));
+      if (!item) continue;
+      const remoteUpdatedAt = Date.parse(item.updatedAt);
+      if (
+        Number.isFinite(remoteUpdatedAt) &&
+        remoteUpdatedAt > since &&
+        (!best || remoteUpdatedAt > best.updatedAt)
+      ) {
+        best = {
+          sessionId: session.id,
+          item,
+          since,
+          updatedAt: remoteUpdatedAt,
+        };
+      }
     }
+    if (best) updates.set(session.id, best);
   }
   return updates;
 }

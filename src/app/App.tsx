@@ -544,7 +544,9 @@ import {
 import {
   linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
+  linkedWorkItemFields,
   resolveLinkedWorkItem,
+  sessionLinkedWorkItems,
 } from "../features/sessions/model/sessionWorkItem";
 import {
   completeLinkedWorkItemUpdateCard,
@@ -660,6 +662,20 @@ type Submit = (
   attachments?: Attachment[],
   options?: SubmitOptions,
 ) => SubmissionAcceptance;
+
+function withLinkedWorkItems<
+  T extends {
+    linkedWorkItem?: LinkedWorkItem;
+    linkedWorkItems?: LinkedWorkItem[];
+  },
+>(session: T, items: readonly LinkedWorkItem[] | undefined): T {
+  return {
+    ...session,
+    linkedWorkItem: undefined,
+    linkedWorkItems: undefined,
+    ...linkedWorkItemFields(items),
+  };
+}
 
 function withPlanStatus(
   session: Session,
@@ -1014,7 +1030,11 @@ export default function App({
   const [history, setHistory] = useState<SessionSummary[]>(() => bootHistory);
   const [storedLinkedSessions, setStoredLinkedSessions] = useState<
     SessionSummary[]
-  >(() => bootHistory.filter((session) => session.linkedWorkItem));
+  >(() =>
+    bootHistory.filter(
+      (session) => sessionLinkedWorkItems(session).length > 0,
+    ),
+  );
   /**
    * Projects whose rows are already in `history`. This has to be state, not a
    * ref: `sidebarCwd` is derived during render, so the frame that first shows
@@ -3671,7 +3691,7 @@ export default function App({
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
-      if (!session?.linkedWorkItem) return;
+      if (!session || sessionLinkedWorkItems(session).length === 0) return;
       if (
         session.linkedWorkItemUpdateCard?.updatedAt === update.updatedAt &&
         session.linkedWorkItemUpdateCard.status !== "error"
@@ -3697,9 +3717,9 @@ export default function App({
 
       void githubWorkItemThread(
         session.cwd,
-        session.linkedWorkItem.repo,
-        session.linkedWorkItem.kind,
-        session.linkedWorkItem.number,
+        update.item.repo,
+        update.item.kind,
+        update.item.number,
         { force: true },
       ).then(
         (thread) => {
@@ -4541,29 +4561,38 @@ export default function App({
   );
 
   const onSetHistorySessionLinkedWorkItem = useCallback(
-    (sessionId: string, linkedWorkItem: LinkedWorkItem | undefined) => {
-      const previousLinkedWorkItem =
-        sessionsRef.current.find((session) => session.id === sessionId)
-          ?.linkedWorkItem ??
-        history.find((session) => session.id === sessionId)?.linkedWorkItem;
+    (
+      sessionId: string,
+      value: LinkedWorkItem | readonly LinkedWorkItem[] | undefined,
+    ) => {
+      const nextItems =
+        value == null ? [] : Array.isArray(value) ? [...value] : [value];
+      const previousItems = sessionLinkedWorkItems(
+        sessionsRef.current.find((session) => session.id === sessionId) ??
+          history.find((session) => session.id === sessionId),
+      );
       invalidateLoadedSession(sessionId);
       loadedSessionCache.current.delete(sessionId);
 
       const nextSessions = sessionsRef.current.map((session) =>
-        session.id === sessionId ? { ...session, linkedWorkItem } : session,
+        session.id === sessionId
+          ? withLinkedWorkItems(session, nextItems)
+          : session,
       );
       sessionsRef.current = nextSessions;
       setSessions(nextSessions);
       setHistory((current) =>
         current.map((session) =>
-          session.id === sessionId ? { ...session, linkedWorkItem } : session,
+          session.id === sessionId
+            ? withLinkedWorkItems(session, nextItems)
+            : session,
         ),
       );
       setStoredLinkedSessions((current) =>
-        linkedWorkItem
+        nextItems.length
           ? current.map((session) =>
               session.id === sessionId
-                ? { ...session, linkedWorkItem }
+                ? withLinkedWorkItems(session, nextItems)
                 : session,
             )
           : current.filter((session) => session.id !== sessionId),
@@ -4575,43 +4604,39 @@ export default function App({
         return next;
       });
 
-      void setSessionLinkedWorkItem(sessionId, linkedWorkItem).catch(
-        (error) => {
-          const rolledBackSessions = sessionsRef.current.map((session) =>
-            session.id === sessionId &&
-            session.linkedWorkItem === linkedWorkItem
-              ? { ...session, linkedWorkItem: previousLinkedWorkItem }
+      void setSessionLinkedWorkItem(
+        sessionId,
+        nextItems.length ? nextItems : undefined,
+      ).catch((error) => {
+        const rolledBackSessions = sessionsRef.current.map((session) =>
+          session.id === sessionId
+            ? withLinkedWorkItems(session, previousItems)
+            : session,
+        );
+        sessionsRef.current = rolledBackSessions;
+        setSessions(rolledBackSessions);
+        setHistory((current) =>
+          current.map((session) =>
+            session.id === sessionId
+              ? withLinkedWorkItems(session, previousItems)
               : session,
-          );
-          sessionsRef.current = rolledBackSessions;
-          setSessions(rolledBackSessions);
-          setHistory((current) =>
-            current.map((session) =>
-              session.id === sessionId &&
-              session.linkedWorkItem === linkedWorkItem
-                ? { ...session, linkedWorkItem: previousLinkedWorkItem }
-                : session,
-            ),
-          );
-          setStoredLinkedSessions((current) =>
-            previousLinkedWorkItem
-              ? current.map((session) =>
-                  session.id === sessionId
-                    ? {
-                        ...session,
-                        linkedWorkItem: previousLinkedWorkItem,
-                      }
-                    : session,
-                )
-              : current.filter((session) => session.id !== sessionId),
-          );
-          void refreshHistory(sidebarCwd);
-          void message(
-            `Could not update this conversation's GitHub link.\n\n${String(error)}`,
-            { title: "MonoCode", kind: "error" },
-          );
-        },
-      );
+          ),
+        );
+        setStoredLinkedSessions((current) =>
+          previousItems.length
+            ? current.map((session) =>
+                session.id === sessionId
+                  ? withLinkedWorkItems(session, previousItems)
+                  : session,
+              )
+            : current.filter((session) => session.id !== sessionId),
+        );
+        void refreshHistory(sidebarCwd);
+        void message(
+          `Could not update this conversation's GitHub link.\n\n${String(error)}`,
+          { title: "MonoCode", kind: "error" },
+        );
+      });
     },
     [history, invalidateLoadedSession, refreshHistory, sidebarCwd],
   );
@@ -9185,10 +9210,11 @@ export default function App({
     const byId = new Map<string, SessionSummary>();
     for (const session of storedLinkedSessions) byId.set(session.id, session);
     for (const session of history) {
-      if (session.linkedWorkItem) byId.set(session.id, session);
+      if (sessionLinkedWorkItems(session).length) byId.set(session.id, session);
     }
     for (const session of sessions) {
-      if (session.inboxAsk || !session.linkedWorkItem) continue;
+      if (session.inboxAsk || sessionLinkedWorkItems(session).length === 0)
+        continue;
       const current = byId.get(session.id);
       const summary = summaryFromSession(session);
       byId.set(
@@ -9202,6 +9228,7 @@ export default function App({
               title: summary.title,
               cwd: summary.cwd,
               linkedWorkItem: summary.linkedWorkItem,
+              linkedWorkItems: summary.linkedWorkItems,
             }
           : summary,
       );

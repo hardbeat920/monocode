@@ -9,6 +9,10 @@ import {
   sessionNeedsInput,
   type Session,
 } from "../model/session";
+import {
+  linkedWorkItemFields,
+  sessionLinkedWorkItems,
+} from "../model/sessionWorkItem";
 import { shouldPersistSession, type SessionSummary } from "./sessionStore";
 
 export type SessionGitHint = {
@@ -116,9 +120,7 @@ export function summaryFromSession(
     providerSessionId: session.providerSessionId,
     worktreeCwd: session.worktreeCwd,
     worktreeRemoved: session.worktreeRemoved,
-    ...(session.linkedWorkItem
-      ? { linkedWorkItem: session.linkedWorkItem }
-      : {}),
+    ...linkedWorkItemFields(sessionLinkedWorkItems(session)),
     ...(session.automationId ? { automationId: session.automationId } : {}),
     ...(!session.worktreeRemoved && (session.branch || git?.branch)
       ? { branch: session.branch || git?.branch }

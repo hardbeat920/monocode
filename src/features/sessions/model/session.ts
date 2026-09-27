@@ -434,8 +434,10 @@ export type Session = {
   composerSeed?: string;
   /** Inbox issue/PR chip shown above the composer. In-memory, one-shot. */
   inboxCard?: InboxComposerCard;
-  /** GitHub issue or pull request shown on the persisted session card. */
+  /** First GitHub issue or pull request shown on the persisted session card. */
   linkedWorkItem?: LinkedWorkItem;
+  /** Full linked list when more than one GitHub item is attached. */
+  linkedWorkItems?: LinkedWorkItem[];
   /** Automation that created or last launched this session. */
   automationId?: string;
   /** New linked-item activity shown above the composer. In-memory, one-shot. */

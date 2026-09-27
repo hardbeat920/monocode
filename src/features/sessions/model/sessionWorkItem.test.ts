@@ -14,6 +14,7 @@ import {
   linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
   parseGithubWorkItemUrl,
+  parseGithubWorkItemUrls,
   relatedSessionsForInboxItem,
   resolveLinkedWorkItem,
 } from "./sessionWorkItem";
@@ -37,6 +38,32 @@ describe("session work items", () => {
       number: 321,
       url: "https://github.com/openai/codex/pull/321",
     });
+  });
+
+  it("parses comma-separated GitHub issue and pull request URLs", () => {
+    expect(
+      parseGithubWorkItemUrls(
+        "https://github.com/openai/codex/pull/321?diff=split, https://github.com/openai/codex/issues/12",
+      ),
+    ).toEqual([
+      {
+        kind: "pr",
+        repo: "openai/codex",
+        number: 321,
+        url: "https://github.com/openai/codex/pull/321",
+      },
+      {
+        kind: "issue",
+        repo: "openai/codex",
+        number: 12,
+        url: "https://github.com/openai/codex/issues/12",
+      },
+    ]);
+    expect(
+      parseGithubWorkItemUrls(
+        "https://github.com/openai/codex/pull/321, https://example.com/issues/12",
+      ),
+    ).toBeNull();
   });
 
   it("creates a stable link from a GitHub Inbox item", () => {
@@ -223,6 +250,20 @@ describe("session work items", () => {
     ];
 
     expect(relatedSessionsForInboxItem(item, sessions)).toEqual([matching]);
+    expect(
+      relatedSessionsForInboxItem(item, [
+        {
+          id: "second-link",
+          linkedWorkItem: { ...matching.linkedWorkItem, number: 7 },
+          linkedWorkItems: [
+            { ...matching.linkedWorkItem, number: 7 },
+            matching.linkedWorkItem,
+          ],
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({ id: "second-link" }),
+    ]);
     expect(
       relatedSessionsForInboxItem(
         { ...item, provider: "linear", kind: "linear" } as InboxItem,

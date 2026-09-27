@@ -107,6 +107,7 @@ import {
   type SessionSidebarFilters,
 } from "../../features/sessions/model/sessionFilters";
 import type { HarnessId, LinkedWorkItem } from "../../features/sessions/model/session";
+import { sessionLinkedWorkItems } from "../../features/sessions/model/sessionWorkItem";
 import type { LiveAgent } from "../../features/sessions/model/liveAgents";
 import type { SessionSummary } from "../../features/sessions/data/sessionStore";
 import type { SettingsSectionId } from "../../features/settings/model/settings";
@@ -220,7 +221,7 @@ type Props = {
   onPinSessions?: (sessionIds: readonly string[], pinned: boolean) => void;
   onSetSessionLinkedWorkItem?: (
     sessionId: string,
-    item: LinkedWorkItem | undefined,
+    item: LinkedWorkItem | readonly LinkedWorkItem[] | undefined,
   ) => void;
   reminders?: readonly SessionReminder[];
   onSetReminders?: (sessionIds: readonly string[], dueAt: number) => void;
@@ -900,7 +901,7 @@ function SidebarComponent({
           {
             kind: "item" as const,
             id: "link-work-item",
-            label: menuSessions[0]?.linkedWorkItem
+            label: sessionLinkedWorkItems(menuSessions[0]).length
               ? "Edit GitHub issue or PR link…"
               : "Link GitHub issue or PR…",
           },
@@ -1871,13 +1872,16 @@ function SidebarComponent({
       ) : null}
       {linkingSession ? (
         <LinkSessionWorkItemDialog
-          initial={linkingSession.linkedWorkItem}
+          initial={sessionLinkedWorkItems(linkingSession)}
           sessionTitle={sessionDisplayTitle(
             linkingSession.title,
             linkingSession.harness,
           )}
-          onSave={(item) => {
-            onSetSessionLinkedWorkItem?.(linkingSession.id, item);
+          onSave={(items) => {
+            onSetSessionLinkedWorkItem?.(
+              linkingSession.id,
+              items && items.length > 1 ? items : items?.[0],
+            );
             setLinkingSession(null);
           }}
           onClose={() => setLinkingSession(null)}
@@ -2701,6 +2705,56 @@ function FolderRenameRow({
 
 const SESSION_PREFETCH_DELAY_MS = 120;
 
+function SessionWorkItemBadge({
+  item,
+  sessionId,
+  mixedRepos,
+  onOpenWorkItem,
+}: {
+  item: LinkedWorkItem;
+  sessionId: string;
+  mixedRepos: boolean;
+  onOpenWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
+}) {
+  const kindLabel = item.kind === "pr" ? "PR" : "issue";
+  const repoSuffix = mixedRepos ? ` in ${item.repo}` : "";
+  const label = `Open ${kindLabel} #${item.number}${repoSuffix}`;
+  return (
+    <button
+      type="button"
+      data-no-drag
+      data-tauri-drag-region="false"
+      title={`Open ${kindLabel} #${item.number} in ${item.repo} beside this session (${MOD}-click for GitHub)`}
+      aria-label={label}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.metaKey || event.ctrlKey) {
+          void openUrl(item.url).catch(() => undefined);
+          return;
+        }
+        if (onOpenWorkItem) onOpenWorkItem(item, sessionId);
+        else void openUrl(item.url).catch(() => undefined);
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void openUrl(item.url).catch(() => undefined);
+      }}
+      className="flex shrink-0 cursor-pointer items-center gap-0.5 rounded px-0.5 text-[11px] tabular-nums text-accent hover:underline"
+    >
+      {item.kind === "pr" ? (
+        <GitPullRequest className="size-3" strokeWidth={1.75} />
+      ) : (
+        <CircleDot className="size-3" strokeWidth={1.75} />
+      )}
+      <span>#{item.number}</span>
+    </button>
+  );
+}
+
 const SessionCard = memo(function SessionCard({
   session,
   isActive,
@@ -2812,48 +2866,32 @@ const SessionCard = memo(function SessionCard({
     </span>
   );
 
-  const linkedWorkItem = session.linkedWorkItem;
+  const linkedItems = sessionLinkedWorkItems(session);
+  const mixedRepos = linkedItems.some(
+    (item) =>
+      item.repo.trim().toLowerCase() !==
+      linkedItems[0]?.repo.trim().toLowerCase(),
+  );
   const linkedUpdateDot = linkedUpdate ? (
     <span
-      title={`Linked ${linkedWorkItem?.kind === "pr" ? "PR" : "issue"} updated since this session`}
+      title={
+        linkedItems.length > 1
+          ? "A linked PR or issue updated since this session"
+          : `Linked ${linkedItems[0]?.kind === "pr" ? "PR" : "issue"} updated since this session`
+      }
       aria-label="Linked work item updated"
       className="size-1.5 shrink-0 rounded-full bg-accent"
     />
   ) : null;
-  const workItemBadge = linkedWorkItem ? (
-    <button
-      type="button"
-      data-no-drag
-      data-tauri-drag-region="false"
-      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
-      aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.metaKey || event.ctrlKey) {
-          void openUrl(linkedWorkItem.url).catch(() => undefined);
-          return;
-        }
-        if (onOpenWorkItem) onOpenWorkItem(linkedWorkItem, session.id);
-        else void openUrl(linkedWorkItem.url).catch(() => undefined);
-      }}
-      onAuxClick={(event) => {
-        if (event.button !== 1) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void openUrl(linkedWorkItem.url).catch(() => undefined);
-      }}
-      className="flex shrink-0 cursor-pointer items-center gap-0.5 rounded px-0.5 text-[11px] tabular-nums text-accent hover:underline"
-    >
-      {linkedWorkItem.kind === "pr" ? (
-        <GitPullRequest className="size-3" strokeWidth={1.75} />
-      ) : (
-        <CircleDot className="size-3" strokeWidth={1.75} />
-      )}
-      <span>#{linkedWorkItem.number}</span>
-    </button>
-  ) : null;
+  const workItemBadges = linkedItems.map((item) => (
+    <SessionWorkItemBadge
+      key={`${item.repo}:${item.kind}:${item.number}`}
+      item={item}
+      sessionId={session.id}
+      mixedRepos={mixedRepos}
+      onOpenWorkItem={onOpenWorkItem}
+    />
+  ));
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
@@ -3131,7 +3169,7 @@ const SessionCard = memo(function SessionCard({
           ) : (
             <span className="min-w-0 flex-1" />
           )}
-          <span className="relative flex shrink-0 items-center gap-px">
+          <span className="relative flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-px">
             {onArchive ? (
               <button
                 type="button"
@@ -3149,7 +3187,7 @@ const SessionCard = memo(function SessionCard({
                 <Archive className="size-3 shrink-0" strokeWidth={1.75} />
               </button>
             ) : null}
-            {workItemBadge}
+            {workItemBadges}
             {session.automationId ? (
               <span
                 data-automation-icon
