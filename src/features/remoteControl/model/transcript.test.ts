@@ -220,6 +220,26 @@ describe("mapRecord", () => {
     expect(message.originKind).toBe("human");
   });
 
+  it("shows a task notification as a status, and opens the turn it starts", () => {
+    // Measured: `promptSource:"system"`, `origin.kind:"task-notification"`, a
+    // `<task-notification>` body. The CLI answers it as a turn of its own, so
+    // the turn opens — but it was being seated as a user bubble of XML.
+    const record = USER_QUEUED.replace(
+      '"promptSource":"queued"',
+      '"promptSource":"system"',
+    )
+      .replace('"origin":{"kind":"human"}', '"origin":{"kind":"task-notification"}')
+      .replace(
+        "second message sent while busy: say GAMMA",
+        "<task-notification>\\n<task-id>b497b8r7t</task-id>\\n</task-notification>",
+      );
+    const state = createMirrorState();
+    const events = recordsOf(record).flatMap((rec) => mapRecord(state, rec));
+
+    expect(types(events)).toEqual(["status"]);
+    expect(state.turn.active).toBe(true);
+  });
+
   it("passes an unrecognised promptSource through instead of dropping it", () => {
     // A phone-originated turn has never been observed, so its promptSource is
     // unknown. Filtering for "typed" would make the phone invisible, which is

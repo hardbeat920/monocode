@@ -393,10 +393,33 @@ function mapUser(
 
   const text = userText(rec);
   const attachments = userAttachments(rec);
+  const promptSource = stringField(rec, "promptSource");
+  const originKind = stringField(asRecord(rec.origin), "kind");
+  // A background task reporting back: `promptSource:"system"` with
+  // `origin.kind:"task-notification"` and a `<task-notification>` body,
+  // measured. It is the CLI handing itself a result, and the CLI answers it
+  // as a turn of its own — so the turn opens, but nobody typed it, and it was
+  // being seated as a user bubble of XML.
+  if (originKind === "task-notification" || promptSource === "system") {
+    const events: MirrorEvent[] = [];
+    if (state.pendingAssistant) {
+      state.pendingAssistant = false;
+      events.push({ type: "message.completed" });
+    }
+    state.turn = { active: true, source: "record" };
+    events.push({
+      type: "status",
+      text:
+        originKind === "task-notification"
+          ? "A background task finished; the agent is picking up its result."
+          : "The CLI sent itself a message; the agent is picking it up.",
+    });
+    return events;
+  }
   // Any user record that is not a tool result is somebody sending a message,
   // whoever they are. `promptSource` and `origin.kind` are deliberately not
-  // filtered: a phone-originated turn has never been observed and its values
-  // are unknown, so an unrecognised one must still appear (§12).
+  // filtered beyond that: a phone-originated turn has never been observed and
+  // its values are unknown, so an unrecognised one must still appear (§12).
   //
   // The same rule is why one block of *any* kind is enough to emit. Requiring
   // text used to drop 55 messages across this machine's 161 transcripts, every
@@ -408,8 +431,6 @@ function mapUser(
     state.pendingAssistant = false;
     events.push({ type: "message.completed" });
   }
-  const promptSource = stringField(rec, "promptSource");
-  const originKind = stringField(asRecord(rec.origin), "kind");
   events.push({
     type: "remote.userMessage",
     text,

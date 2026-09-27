@@ -2078,17 +2078,34 @@ export default function App({
        * worse than a wrong duration, and the clock is safe now that a send
        * stamps its time before its first await.
        */
+      let heldSince: number | null = null;
       const clearBusyIfIdle = () => {
         const sentAt = remoteSentAt.current.get(sessionId);
-        if (
-          remoteTurnBusy(
-            mirror.turn.active,
-            (remoteEcho.current.get(sessionId)?.length ?? 0) > 0,
-            sentAt === undefined ? null : Date.now() - sentAt,
-          )
-        ) {
+        const echoes = remoteEcho.current.get(sessionId) ?? [];
+        const sentAgo = sentAt === undefined ? null : Date.now() - sentAt;
+        if (remoteTurnBusy(mirror.turn.active, echoes.length > 0, sentAgo)) {
+          // Held past the mirror's turn for a reason the user cannot see.
+          // The release build has no console, so after a minute the reason
+          // is said once, in the conversation, where it can be reported.
+          if (mirror.turn.active) {
+            heldSince = null;
+          } else if (heldSince === null) {
+            heldSince = Date.now();
+          } else if (Date.now() - heldSince > 60_000) {
+            heldSince = Number.POSITIVE_INFINITY;
+            const why =
+              echoes.length > 0
+                ? `a message sent from here (${JSON.stringify(echoes[0].slice(0, 60))}) has not appeared in the transcript${sentAgo === null ? "" : ` for ${Math.round(sentAgo / 1000)}s`}`
+                : `a send was made ${sentAgo === null ? "" : `${Math.round(sentAgo / 1000)}s `}ago`;
+            enqueueHarnessEvent(sessionId, {
+              type: "status",
+              text: `Still shown as working after the terminal's turn ended: ${why}.`,
+            });
+            flushHarnessEvents();
+          }
           return;
         }
+        heldSince = null;
         const session = sessionsRef.current.find((s) => s.id === sessionId);
         if (!session?.busy) return;
         setSessions((prev) =>
