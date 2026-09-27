@@ -176,9 +176,10 @@ export async function nativeClipboardAttachments(
   if (paths.length) {
     const files = await attachmentsFromPaths(paths);
     if (files.length) return files;
-    // Every path was dropped, which today means a directory or a dotfile.
     throw new Error(
-      `Nothing to attach in ${paths.length === 1 ? "that path" : "those paths"}. Only files can be attached.`,
+      `Nothing to attach in ${
+        paths.length === 1 ? "that path" : "those paths"
+      }. Folders and hidden files cannot be attached.`,
     );
   }
   if (text) return [];

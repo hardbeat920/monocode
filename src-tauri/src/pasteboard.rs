@@ -48,20 +48,35 @@ fn file_paths_from(pb: &objc2_app_kit::NSPasteboard) -> Vec<String> {
 pub fn clipboard_file_paths() -> Vec<String> {
     #[cfg(target_os = "macos")]
     {
-        file_paths_from(&objc2_app_kit::NSPasteboard::generalPasteboard())
+        clean_clipboard_paths(file_paths_from(
+            &objc2_app_kit::NSPasteboard::generalPasteboard(),
+        ))
     }
     #[cfg(not(target_os = "macos"))]
     {
         arboard::Clipboard::new()
             .and_then(|mut clipboard| clipboard.get().file_list())
-            .map(|paths| {
-                paths
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect()
-            })
+            .map(clean_clipboard_paths)
             .unwrap_or_default()
     }
+}
+
+/// Drop the line terminator a URI list leaves on every path.
+///
+/// A file manager writes `text/uri-list` CRLF-terminated and arboard splits on
+/// `\n` without trimming, so each path arrives as `/home/me/a.pdf\r` and
+/// matches no file on disk.
+fn clean_clipboard_paths<T: AsRef<std::path::Path>>(paths: Vec<T>) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| {
+            path.as_ref()
+                .to_string_lossy()
+                .trim_end_matches(['\r', '\n'])
+                .to_string()
+        })
+        .filter(|path| !path.is_empty())
+        .collect()
 }
 
 #[tauri::command]
@@ -146,6 +161,64 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
             .map_err(|error| error.to_string())?;
     }
     Ok(png)
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::clean_clipboard_paths;
+
+    /// What arboard hands back for a `text/uri-list` copied in a file manager.
+    #[test]
+    fn drops_the_carriage_return_a_uri_list_leaves_behind() {
+        assert_eq!(
+            clean_clipboard_paths(vec![
+                "/home/dev/All_BTech_Affiliated_2022_23.pdf\r",
+                "/home/dev/notes.md\r\n",
+            ]),
+            vec![
+                "/home/dev/All_BTech_Affiliated_2022_23.pdf".to_string(),
+                "/home/dev/notes.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_spaces_that_belong_to_the_name() {
+        assert_eq!(
+            clean_clipboard_paths(vec!["/home/dev/My Report.pdf\r"]),
+            vec!["/home/dev/My Report.pdf".to_string()]
+        );
+    }
+
+    #[test]
+    fn drops_empty_entries() {
+        assert!(clean_clipboard_paths(vec!["\r", "\n", ""]).is_empty());
+    }
+
+    /// The chain a file-manager copy takes: the path arboard hands over, through
+    /// the cleaner, to something the filesystem can stat. Without the carriage
+    /// return trimmed this resolves to nothing.
+    #[test]
+    fn a_uri_list_line_resolves_to_the_file_it_names() {
+        let dir = std::env::temp_dir().join(format!("monocode-uri-list-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("All_BTech_Affiliated_2022_23.pdf");
+        std::fs::write(&file, b"%PDF-1.7").unwrap();
+
+        // arboard strips the `file://` prefix and percent-decodes, then leaves
+        // the CRLF terminator attached.
+        let from_clipboard = format!("{}\r\n", file.to_string_lossy());
+        let infos = crate::fs::inspect_paths(clean_clipboard_paths(vec![from_clipboard]));
+
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(
+            infos.len(),
+            1,
+            "a copied file must resolve to an attachment"
+        );
+        assert_eq!(infos[0].name, "All_BTech_Affiliated_2022_23.pdf");
+        assert!(!infos[0].is_dir);
+    }
 }
 
 #[cfg(test)]

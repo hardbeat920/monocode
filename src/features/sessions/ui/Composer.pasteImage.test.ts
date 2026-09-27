@@ -164,7 +164,7 @@ it("reports a copy that has no attachable file in it", async () => {
   await settle();
 
   expect(alert()).toBe(
-    "Nothing to attach in that path. Only files can be attached.",
+    "Nothing to attach in that path. Folders and hidden files cannot be attached.",
   );
 });
 
