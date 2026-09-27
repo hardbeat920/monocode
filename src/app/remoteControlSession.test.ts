@@ -761,6 +761,17 @@ describe("tracking what the transcript says is outstanding", () => {
 
 /** Rendered composer rows, copied from the parser's own capture fixtures. */
 const IDLE_COMPOSER = ["─".repeat(20), "❯", "─".repeat(20), "  ⏸ plan mode on"];
+/**
+ * The composer with a message queued behind a running turn. Measured from a
+ * live session: the parser itself quoted this row as what the composer "still
+ * holds" after a send that had queued cleanly.
+ */
+const QUEUED_COMPOSER = [
+  "─".repeat(20),
+  "❯ Press up to edit queued messages",
+  "─".repeat(20),
+  "  ⏸ plan mode on",
+];
 const AFTER_INTERRUPT = [
   "─".repeat(20),
   "❯ Write a very long essay about the history of the abacus, at least 2000 words. Think carefully first.",
@@ -788,6 +799,14 @@ describe("the composer the CLI restores after an interrupt", () => {
     // Measured: an idle composer renders as a bare marker, with no placeholder
     // text to mistake for content.
     expect(composerHeld(IDLE_COMPOSER)).toBeNull();
+  });
+
+  it("reads nothing out of the hint a queued message leaves behind", () => {
+    // Not content: no keystroke removes it, no CR submits it, and it is what a
+    // composer that has just handed its text over looks like. Read as content
+    // it reported a clean send as stuck, refused the sends after it, and told
+    // `turnSignal` a composer was held.
+    expect(composerHeld(QUEUED_COMPOSER)).toBeNull();
   });
 
   it("reads the restored prompt out of a held composer", () => {
@@ -1081,6 +1100,31 @@ describe("typing a message into the pty", () => {
     const outcome = await injectRemoteText("say OK", false, pty.ports);
 
     expect(outcome).toEqual({ kind: "sent", queued: "unknown" });
+    expect(pty.written).toEqual([MESSAGE]);
+  });
+
+  it("calls a send that queued behind a running turn sent, not stuck", () => {
+    // What the user hit on the first build of the check: the composer showed
+    // the queued-message hint after the write, which is the text handed over,
+    // and the report said the opposite.
+    const pty = scriptedPty([
+      idleWith(IDLE_COMPOSER),
+      idleWith(QUEUED_COMPOSER),
+    ]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome).toEqual({ kind: "sent", queued: "unknown" });
+    expect(pty.written).toEqual([MESSAGE]);
+  });
+
+  it("sends into a composer showing the hint without clearing it first", () => {
+    // The hint is not held text, so a second queued send is typed straight in.
+    const pty = scriptedPty([idleWith(QUEUED_COMPOSER)]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome.kind).toBe("sent");
     expect(pty.written).toEqual([MESSAGE]);
   });
 

@@ -621,6 +621,19 @@ function findComposer(trimmed: readonly string[]): Composer | undefined {
 }
 
 /**
+ * The hint the CLI paints into an *empty* composer while a message is queued.
+ *
+ * Measured from a live session: the parser quoted it verbatim, as the text a
+ * composer "still holds" after a send that had in fact queued cleanly. It is
+ * not content — Ctrl-U does not remove it, no CR submits it, and it is exactly
+ * what a composer that has just handed its text over looks like. Read as
+ * content it did three wrong things at once: reported that send as stuck,
+ * refused every send after it as joining onto held text, and told
+ * `turnSignal` a composer was held.
+ */
+const COMPOSER_HINT = /^Press up to edit queued messages?$/u;
+
+/**
  * What the composer box is holding, or `null` when it is empty or absent.
  *
  * Exported because the glyph alone is not enough and the caller kept getting
@@ -634,13 +647,20 @@ function findComposer(trimmed: readonly string[]): Composer | undefined {
  *
  * Only the first row of the box is read. A wrapped message fills more, but
  * "holding something" is answered by the first one.
+ *
+ * An idle composer paints nothing but the marker — that much was measured and
+ * still holds. But a composer with a message queued behind a running turn
+ * paints a hint into the same row, so "text after the marker" is not by itself
+ * "content": the one hint seen is excluded by name, and any other placeholder
+ * the CLI adds will read as held until it too is measured.
  */
 export function composerContent(lines: readonly string[]): string | null {
   const trimmed = lines.map((line) => line.trim());
   const composer = findComposer(trimmed);
   if (!composer) return null;
   const held = trimmed[composer.top + 1].slice(1).trim();
-  return held.length > 0 ? held : null;
+  if (held.length === 0 || COMPOSER_HINT.test(held)) return null;
+  return held;
 }
 
 function readTurn(
