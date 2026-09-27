@@ -332,6 +332,22 @@ export function findModel(id: string): AgentModel | undefined {
   return indexById.get(id);
 }
 
+/** The bundled list never changes, so index it once for `lookupModel`. */
+const bundledById = new Map(MODELS.map((model) => [model.id, model]));
+
+/**
+ * Catalog entry for a saved model id, live list first and bundled list second.
+ *
+ * A live overlay replaces the bundled list rather than adding to it, so a
+ * model the CLI stops advertising misses `findModel` entirely. Falling back to
+ * the bundle keeps the full native id (`claude:opus-5-5` → `claude-opus-5-5`)
+ * instead of re-deriving one from the key, which strips the provider prefix
+ * and hands the CLI an id it rejects.
+ */
+function lookupModel(id: string): AgentModel | undefined {
+  return findModel(id) ?? bundledById.get(id);
+}
+
 export function resolveModel(harness: HarnessId, id?: string): AgentModel {
   const available = modelsFor(harness);
   if (id) {
@@ -342,16 +358,35 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
       (model) => (model.nativeId ?? nativeIdFrom(model.id)) === slug,
     );
     if (byNative) return byNative;
+    // Fuzzy on purpose, to absorb provider id drift (a saved
+    // `claude:opus-4-6` against a live `claude-opus-4-6`) and to follow a
+    // moving alias, which the CLI owns. A versioned id gets no benefit from
+    // guessing: `opus-5-5` prefix-matches both `opus` and `opus-5`, and
+    // picking the first silently ran a different generation than the session
+    // was saved with. When several models match there is no defensible
+    // choice, so fall through to the bundled entry instead.
     const comparableSlug = comparableNativeId(harness, slug);
-    const prefix = available.find((model) => {
+    const matches = (model: AgentModel) => {
       const native = model.nativeId ?? nativeIdFrom(model.id);
       const comparableNative = comparableNativeId(harness, native);
       return (
         comparableNative.startsWith(comparableSlug) ||
         comparableSlug.startsWith(comparableNative)
       );
-    });
-    if (prefix) return prefix;
+    };
+    const hits = available.filter(matches);
+    if (/\d/.test(comparableSlug)) {
+      if (hits.length === 1) return hits[0];
+    } else if (hits.length === 1) {
+      return hits[0];
+    } else if (hits.length > 1 && harness === "claude") {
+      const newest = newestClaudeFamilyMember(hits, comparableSlug);
+      if (newest) return newest;
+    } else if (hits.length > 0) {
+      return hits[0];
+    }
+    const bundled = bundledById.get(id);
+    if (bundled && bundled.harness === harness) return bundled;
   }
   // Codex has no built-in catalog. During startup, retain the saved model
   // until discovery finishes instead of borrowing another provider's model.
@@ -388,9 +423,47 @@ export function modelContextWindow(id: string): number | undefined {
 
 export function nativeModelId(model: AgentModel | string): string {
   if (typeof model !== "string") {
-    return model.nativeId ?? nativeIdFrom(model.id);
+    return claudeNativeId(
+      model.harness,
+      model.nativeId ?? nativeIdFrom(model.id),
+    );
   }
-  return findModel(model)?.nativeId ?? nativeIdFrom(model);
+  const found = lookupModel(model);
+  if (found) {
+    return claudeNativeId(
+      found.harness,
+      found.nativeId ?? nativeIdFrom(found.id),
+    );
+  }
+  return nativeIdForUnknownKey(model);
+}
+
+/**
+ * Last-resort native id for a saved key no catalog knows.
+ *
+ * Every concrete Claude model is `claude-` plus a digit-bearing slug
+ * (`claude:opus-5-5` → `claude-opus-5-5`); only family aliases (`opus`,
+ * `sonnet`) reach the CLI bare. Reconstructing from that convention keeps the
+ * provider prefix instead of emitting `opus-5-5`, which the CLI rejects.
+ */
+function nativeIdForUnknownKey(id: string): string {
+  const trimmed = id.trim();
+  const slug = nativeIdFrom(trimmed);
+  const colon = trimmed.indexOf(":");
+  const harness = colon >= 0 ? trimmed.slice(0, colon).toLowerCase() : "";
+  return harness === "claude" ? claudeNativeId("claude", slug) : slug;
+}
+
+/**
+ * Claude's CLI rejects digit-bearing slugs without the `claude-` prefix
+ * (`opus-5-5` is invalid; `claude-opus-5-5` and the alias `opus` both work).
+ * Live `list_models` can still advertise the short form as `value`.
+ */
+function claudeNativeId(harness: HarnessId, native: string): string {
+  if (harness !== "claude" || !native || native.startsWith("claude-")) {
+    return native;
+  }
+  return /\d/.test(native) ? `claude-${native}` : native;
 }
 
 export function defaultModelSettings(
@@ -497,7 +570,7 @@ export function encodeModelLaunchId(
   modelId: string,
   settings?: Record<string, string>,
 ): string {
-  const model = findModel(modelId);
+  const model = lookupModel(modelId);
   const native = nativeModelId(model ?? modelId);
   const defs = model?.settings ?? [];
   if (!native || defs.length === 0) return native;
@@ -840,6 +913,52 @@ function nativeIdFrom(id: string): string {
 /** Claude's live catalog uses `opus`; its startup fallback uses `claude-opus-5`. */
 function comparableNativeId(harness: HarnessId, id: string): string {
   return harness === "claude" ? id.replace(/^claude-/, "") : id;
+}
+
+/**
+ * Newest versioned member of a Claude family among prefix matches.
+ * `opus` against `opus-5` and `opus-5-5` must land on 5.5, not whichever
+ * row happens to be first in the bundled list.
+ */
+function newestClaudeFamilyMember(
+  models: AgentModel[],
+  family: string,
+): AgentModel | undefined {
+  let best: AgentModel | undefined;
+  let bestParts: number[] | undefined;
+  for (const model of models) {
+    const native = comparableNativeId(
+      "claude",
+      model.nativeId ?? nativeIdFrom(model.id),
+    );
+    const parts = versionAfterFamily(native, family);
+    if (!parts) continue;
+    if (!bestParts || compareVersionParts(parts, bestParts) > 0) {
+      best = model;
+      bestParts = parts;
+    }
+  }
+  return best;
+}
+
+function versionAfterFamily(
+  comparable: string,
+  family: string,
+): number[] | null {
+  const prefix = `${family}-`;
+  if (!comparable.startsWith(prefix)) return null;
+  const rest = comparable.slice(prefix.length);
+  if (!/^\d+(?:-\d+)*$/.test(rest)) return null;
+  return rest.split("-").map((part) => Number.parseInt(part, 10));
+}
+
+function compareVersionParts(left: number[], right: number[]): number {
+  const n = Math.max(left.length, right.length);
+  for (let i = 0; i < n; i += 1) {
+    const delta = (left[i] ?? 0) - (right[i] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
 }
 
 function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {

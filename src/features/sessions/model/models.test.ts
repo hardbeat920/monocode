@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HarnessId } from "./session";
 import {
+  MODELS,
   coerceModelPickerTab,
   defaultModelId,
   defaultSessionChoice,
+  encodeModelLaunchId,
   firstEnabledHarness,
   hasLiveCatalog,
   isPickerProviderVisible,
@@ -15,6 +17,7 @@ import {
   mergeModelSettings,
   modelEffortSetting,
   modelPickerTabs,
+  nativeModelId,
   preferredModelId,
   preferredModelSettings,
   resetHarnessModelOverlays,
@@ -437,8 +440,86 @@ describe("live catalog overlays", () => {
     expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus");
 
     // A relaunch starts with the built-in catalog until discovery completes.
+    // The alias follows the newest bundled Opus, not whichever row is first.
     resetHarnessModelOverlays();
-    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5");
+    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5-5");
+  });
+
+  it("keeps Opus 5.5 when the live catalog drops it", () => {
+    // The CLI no longer advertises claude-opus-5-5, so every lookup for the
+    // saved id misses. `opus-5-5` prefix-matches both `opus` and `opus-5`;
+    // it must not settle for the alias, which silently ran Opus 5.
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus",
+        harness: "claude" as const,
+        name: "Opus",
+        nativeId: "opus",
+      },
+      {
+        id: "claude:opus-5",
+        harness: "claude" as const,
+        name: "Opus 5",
+        nativeId: "claude-opus-5",
+      },
+      {
+        id: "claude:sonnet",
+        harness: "claude" as const,
+        name: "Sonnet",
+        nativeId: "sonnet",
+      },
+    ]);
+
+    expect(resolveModel("claude", "claude:opus-5-5").id).toBe("claude:opus-5-5");
+    expect(nativeModelId("claude:opus-5-5")).toBe("claude-opus-5-5");
+    expect(encodeModelLaunchId("claude:opus-5-5")).toBe("claude-opus-5-5");
+  });
+
+  it("prefixes a short live-catalog native id before launching", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus-5-5",
+        harness: "claude" as const,
+        name: "Opus 5.5",
+        nativeId: "opus-5-5",
+      },
+    ]);
+    expect(nativeModelId("claude:opus-5-5")).toBe("claude-opus-5-5");
+    expect(
+      nativeModelId({
+        id: "claude:opus-5-5",
+        harness: "claude",
+        name: "Opus 5.5",
+        nativeId: "opus-5-5",
+      }),
+    ).toBe("claude-opus-5-5");
+  });
+
+  it("rebuilds a Claude native id for a key no list knows", () => {
+    expect(nativeModelId("claude:opus-4-8")).toBe("claude-opus-4-8");
+    expect(nativeModelId("claude:opus-4-7")).toBe("claude-opus-4-7");
+    expect(nativeModelId("claude:haiku-4-5")).toBe("claude-haiku-4-5");
+    expect(nativeModelId("claude:opus-6")).toBe("claude-opus-6");
+  });
+
+  it("leaves a bare Claude alias and other providers alone", () => {
+    expect(nativeModelId("claude:opus")).toBe("opus");
+    expect(nativeModelId("claude:sonnet")).toBe("sonnet");
+    expect(nativeModelId("codex:gpt-5.6-unreleased")).toBe("gpt-5.6-unreleased");
+  });
+
+  it("keeps a lone fuzzy match for a versioned id", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus-4-6",
+        harness: "claude" as const,
+        name: "Opus 4.6",
+        nativeId: "claude-opus-4-6",
+      },
+    ]);
+    expect(resolveModel("claude", "claude-opus-4-6").nativeId).toBe(
+      "claude-opus-4-6",
+    );
   });
 
   it("keeps a live Opus 5.5 id on Opus 5.5 across relaunch", () => {
@@ -459,6 +540,95 @@ describe("live catalog overlays", () => {
       "claude:opus-5-5",
     );
     expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus-5");
-    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5");
+    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5-5");
+  });
+});
+
+/**
+ * A bundled entry may omit `nativeId`, which means "the key minus the harness
+ * prefix is the native id" (`opencode:glm-5` → `glm-5`). An explicit `""` means
+ * "omit --model and let the CLI choose", which is a real value.
+ */
+function expectedNative(id: string, nativeId?: string): string {
+  if (nativeId !== undefined) return nativeId;
+  const colon = id.indexOf(":");
+  return colon >= 0 ? id.slice(colon + 1) : id;
+}
+
+function bundledByHarness(): Map<string, AgentModel[]> {
+  const grouped = new Map<string, AgentModel[]>();
+  for (const model of MODELS) {
+    const list = grouped.get(model.harness) ?? [];
+    list.push(model);
+    grouped.set(model.harness, list);
+  }
+  return grouped;
+}
+
+describe("every bundled model resolves to its own native id", () => {
+  beforeEach(() => resetHarnessModelOverlays());
+
+  it("with no live catalog (first turn after launch)", () => {
+    const wrong: string[] = [];
+    for (const [harness, models] of bundledByHarness()) {
+      for (const model of models) {
+        const got = nativeModelId(model.id);
+        const want = expectedNative(model.id, model.nativeId);
+        if (got !== want) {
+          wrong.push(`${harness}  ${model.id}  want ${want}  got ${got}`);
+        }
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("with a live catalog that dropped the model (stale overlay)", () => {
+    const wrong: string[] = [];
+    for (const [harness, models] of bundledByHarness()) {
+      setHarnessModels(harness as never, [models[0]]);
+      for (const model of models) {
+        const got = nativeModelId(model.id);
+        const want = expectedNative(model.id, model.nativeId);
+        if (got !== want) {
+          wrong.push(`${harness}  ${model.id}  want ${want}  got ${got}`);
+        }
+      }
+      resetHarnessModelOverlays();
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("resolveModel never returns a model from another harness", () => {
+    const wrong: string[] = [];
+    for (const [harness, models] of bundledByHarness()) {
+      setHarnessModels(harness as never, [models[0]]);
+      for (const model of models) {
+        const resolved = resolveModel(harness as never, model.id);
+        if (resolved.harness !== harness) {
+          wrong.push(
+            `${harness}  ${model.id}  resolved to ${resolved.id} (${resolved.harness})`,
+          );
+        }
+      }
+      resetHarnessModelOverlays();
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("encodeModelLaunchId never drops a provider prefix", () => {
+    const wrong: string[] = [];
+    for (const [harness, models] of bundledByHarness()) {
+      setHarnessModels(harness as never, [models[0]]);
+      for (const model of models) {
+        const launch = encodeModelLaunchId(model.id, { effort: "high" });
+        const base = launch.split("[")[0];
+        const want = expectedNative(model.id, model.nativeId);
+        if (base !== want) {
+          wrong.push(`${harness}  ${model.id}  want ${want}  got ${base}`);
+        }
+      }
+      resetHarnessModelOverlays();
+    }
+    expect(wrong).toEqual([]);
   });
 });
