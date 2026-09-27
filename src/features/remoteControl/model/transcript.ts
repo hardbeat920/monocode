@@ -508,20 +508,27 @@ const DEFAULT_QUIET_MS = 3000;
  * over, take my word for it" — or a {@link TurnLiveness} reading, which is the
  * form that can resolve an interrupt safely.
  *
- * A tool still in flight vetoes the silence rule. A turn waiting on a slow
+ * A tool still in flight vetoes both readings. A turn waiting on a slow
  * command is genuinely alive while producing nothing, and the transcript is the
  * only thing that knows a `tool_use` has no `tool_result` yet, so that check
- * belongs here rather than in the caller.
+ * belongs here rather than in the caller. It used to guard the silence rule
+ * only, on the reasoning that the screen's own verdict was definite. It is
+ * definite about the *screen*: a `✻ … for 2s` line above the composer is the
+ * last thing painted. It is not definite about *this* turn — a turn seen to run
+ * for minutes was shown as "worked for 1s", closed the moment such a line was
+ * read while its tool calls were still outstanding. A tool call without a
+ * result is a turn that cannot be over, whatever the line above the composer
+ * says.
  */
 export function resolveTurnFromScreen(
   state: MirrorState,
   signal: boolean | TurnLiveness,
 ): MirrorEvent[] {
+  if (state.outstandingTools.size > 0) return [];
   if (typeof signal === "boolean") {
     return signal ? endTurn(state, "screen") : [];
   }
   if (!signal.composerHeld) return [];
-  if (state.outstandingTools.size > 0) return [];
   const threshold = signal.quietThresholdMs ?? DEFAULT_QUIET_MS;
   if (signal.quietForMs < threshold) return [];
   return endTurn(state, "screen");

@@ -578,6 +578,18 @@ describe("resolving an interrupt from outside the transcript", () => {
     expect(state.turn.active).toBe(true);
   });
 
+  it("will not end a turn that is waiting on a tool, whatever the screen says", () => {
+    // The screen's verdict is about the last line painted, not about this
+    // turn: a turn seen to run for minutes was closed as "worked for 1s" when
+    // a finished-turn line was read while its tool calls had no results yet.
+    const state = createMirrorState();
+    for (const rec of recordsOf(USER_WRITE_REQUEST, ASSISTANT_TOOL_USE)) {
+      mapRecord(state, rec);
+    }
+    expect(resolveTurnFromScreen(state, true)).toEqual([]);
+    expect(state.turn.active).toBe(true);
+  });
+
   it("ends it once that tool has reported back", () => {
     const state = createMirrorState();
     for (const rec of recordsOf(
