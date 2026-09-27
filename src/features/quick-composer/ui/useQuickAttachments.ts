@@ -17,7 +17,7 @@ import {
   revokeAttachment,
 } from "../../sessions/model/attachments";
 import type { Attachment } from "../../sessions/model/session";
-import { readClipboardImage } from "../../../platform/tauri/clipboard";
+import { nativeClipboardAttachments } from "../../../platform/tauri/clipboard";
 import { storeQuickAttachments } from "../model/quickAttachments";
 
 function releaseCaptures(files: Attachment[]) {
@@ -129,15 +129,14 @@ export function useQuickAttachments(
   const onPaste = (event: ClipboardEvent) => {
     const pasted = filesFromClipboard(event.clipboardData);
     if (!pasted.length) {
-      // A webview reports a paste as text only, so an image copied by a
-      // screenshot tool arrives with neither a file nor text. Read those from
-      // the native clipboard; a text paste keeps the webview's own handling so
-      // an unreadable clipboard never delays it.
-      if (!supported || event.clipboardData.getData("text/plain")) return;
-      event.preventDefault();
-      void collect(async () =>
-        attachmentsFromFiles([await readClipboardImage()]),
-      );
+      // A webview reports a paste as text only, so a file copied in a file
+      // manager or a screenshot arrives with nothing to attach. Both live on
+      // the native clipboard. Keep the webview's own handling for a text
+      // paste, and never let an unreadable clipboard delay it.
+      if (!supported) return;
+      const text = event.clipboardData.getData("text/plain");
+      if (!text) event.preventDefault();
+      void collect(() => nativeClipboardAttachments(text));
       return;
     }
     if (!supported) return;

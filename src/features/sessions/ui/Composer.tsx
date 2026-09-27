@@ -41,7 +41,7 @@ import {
 import { resizeComposer } from "../model/composerResize";
 import {
   messageFilesFromClipboard,
-  readClipboardImage,
+  nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
 import {
   EXPLORER_FILE_POINTER_DRAG_EVENT,
@@ -1620,15 +1620,14 @@ export function Composer({
     }
     const files = filesFromClipboard(e.clipboardData);
     if (files.length === 0) {
-      // A webview reports a paste as text only, so an image copied by a
-      // screenshot tool arrives with neither a file nor text. Read those from
-      // the native clipboard; a text paste keeps the webview's own handling so
-      // an unreadable clipboard never delays it.
-      if (!attachmentsSupported || e.clipboardData.getData("text/plain"))
-        return;
-      e.preventDefault();
-      void readClipboardImage()
-        .then((image) => attachmentsFromFiles([image]))
+      // A webview reports a paste as text only, so a file copied in a file
+      // manager or a screenshot arrives with nothing to attach. Both live on
+      // the native clipboard. Keep the webview's own handling for a text
+      // paste, and never let an unreadable clipboard delay it.
+      if (!attachmentsSupported) return;
+      const text = e.clipboardData.getData("text/plain");
+      if (!text) e.preventDefault();
+      void nativeClipboardAttachments(text)
         .then(addAttachments)
         .catch((reason: unknown) =>
           setPasteError(

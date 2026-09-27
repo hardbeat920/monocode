@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { MAX_ATTACHMENTS, MAX_EMBED_BYTES } from "../../features/sessions/model/attachments";
+import {
+  attachmentsFromFiles,
+  attachmentsFromPaths,
+  MAX_ATTACHMENTS,
+  MAX_EMBED_BYTES,
+} from "../../features/sessions/model/attachments";
 import type { Attachment } from "../../features/sessions/model/session";
 
 type CopiedFile = { name: string; mimeType: string; data: string };
@@ -145,6 +150,40 @@ export async function copyText(text: string): Promise<void> {
   }
 }
 
+/**
+ * Paths for files copied in a file manager, empty when it holds none.
+ */
+export async function readClipboardFilePaths(): Promise<string[]> {
+  try {
+    const paths = await invoke<string[]>("clipboard_file_paths");
+    return Array.isArray(paths) ? paths.filter((path) => path.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Attachments for a paste the webview reported without a single file.
+ *
+ * `text` is what the webview saw on the clipboard. Copies made in a file
+ * manager and screenshots reach us only through the native clipboard, so try
+ * paths before image bytes, and leave a text paste alone.
+ */
+export async function nativeClipboardAttachments(
+  text: string,
+): Promise<Attachment[]> {
+  const paths = await readClipboardFilePaths();
+  if (paths.length) {
+    const files = await attachmentsFromPaths(paths);
+    if (files.length) return files;
+    // Every path was dropped, which today means a directory or a dotfile.
+    throw new Error(
+      `Nothing to attach in ${paths.length === 1 ? "that path" : "those paths"}. Only files can be attached.`,
+    );
+  }
+  if (text) return [];
+  return attachmentsFromFiles([await readClipboardImage()]);
+}
 /**
  * An image held by the native clipboard, as a `File`.
  *

@@ -39,7 +39,12 @@ fn file_paths_from(pb: &objc2_app_kit::NSPasteboard) -> Vec<String> {
         .collect()
 }
 
-#[tauri::command]
+/// Paths for files copied in a file manager, empty when it holds none.
+///
+/// A file manager puts a URI list on the clipboard (`text/uri-list` on X11 and
+/// Wayland, `public.file-url` on macOS, `CF_HDROP` on Windows) that a paste
+/// event does not surface, so the webview sees nothing to attach.
+#[tauri::command(async)]
 pub fn clipboard_file_paths() -> Vec<String> {
     #[cfg(target_os = "macos")]
     {
@@ -47,7 +52,15 @@ pub fn clipboard_file_paths() -> Vec<String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Vec::new()
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.get().file_list())
+            .map(|paths| {
+                paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 

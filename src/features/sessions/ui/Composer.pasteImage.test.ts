@@ -20,6 +20,10 @@ const PNG_BYTES = new Uint8Array([
 let container: HTMLDivElement;
 let root: Root;
 let submit: ReturnType<typeof vi.fn>;
+/** What a file manager would have put on the native clipboard. */
+let clipboardPaths: string[];
+/** Directories are reported by inspect_paths but cannot be attached. */
+let clipboardPathsAreDirs: boolean;
 
 function render(text = "") {
   act(() => {
@@ -43,10 +47,15 @@ function render(text = "") {
   return container.querySelector("textarea")!;
 }
 
+/** A paste the webview reports as text only, the way it does for copies. */
 function paste(target: HTMLTextAreaElement, text = "") {
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
-    value: { getData: () => text, files: [], items: [] },
+    value: {
+      getData: (type: string) => (type === "text/plain" ? text : ""),
+      files: [],
+      items: [],
+    },
   });
   act(() => {
     target.dispatchEvent(event);
@@ -68,14 +77,30 @@ async function send() {
   );
 }
 
+function alert() {
+  return container.querySelector('[role="alert"]')?.textContent ?? null;
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   submit = vi.fn();
+  clipboardPaths = [];
+  clipboardPathsAreDirs = false;
   invoke.mockReset();
-  invoke.mockImplementation(async (command: string) => {
-    if (command === "clipboard_image") return PNG_BYTES.buffer;
-    return [];
-  });
+  invoke.mockImplementation(
+    async (command: string, args?: { paths?: string[] }) => {
+      if (command === "clipboard_file_paths") return clipboardPaths;
+      if (command === "clipboard_image") return PNG_BYTES.buffer;
+      if (command === "inspect_paths")
+        return (args?.paths ?? []).map((path) => ({
+          path,
+          name: path.split("/").pop() ?? path,
+          size: 4096,
+          isDir: clipboardPathsAreDirs,
+        }));
+      return [];
+    },
+  );
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -88,8 +113,7 @@ afterEach(() => {
 });
 
 it("attaches an image the paste event reports as neither file nor text", async () => {
-  const textarea = render();
-  const event = paste(textarea);
+  const event = paste(render());
   await settle();
   await send();
 
@@ -104,13 +128,53 @@ it("attaches an image the paste event reports as neither file nor text", async (
   ]);
 });
 
-it("leaves a text paste to the webview instead of reading the native clipboard", async () => {
-  const textarea = render();
-  const event = paste(textarea, "pasted words");
+it("attaches a file copied in a file manager, leaving its text to the webview", async () => {
+  clipboardPaths = ["/home/dev/report.pdf"];
+  const event = paste(render(), "file:///home/dev/report.pdf");
+  await settle();
+  await send();
+
+  // A file copy is not a screenshot, so the image read is never reached.
+  expect(invoke).not.toHaveBeenCalledWith("clipboard_image");
+  expect(event.defaultPrevented).toBe(false);
+  expect(submit.mock.calls[0][1]).toEqual([
+    expect.objectContaining({
+      name: "report.pdf",
+      path: "/home/dev/report.pdf",
+      mimeType: "application/pdf",
+    }),
+  ]);
+});
+
+it("attaches a copied file even when the webview sees no text at all", async () => {
+  clipboardPaths = ["/home/dev/notes.md"];
+  paste(render());
+  await settle();
+  await send();
+
+  expect(submit.mock.calls[0][1]).toEqual([
+    expect.objectContaining({ name: "notes.md", path: "/home/dev/notes.md" }),
+  ]);
+});
+
+it("reports a copy that has no attachable file in it", async () => {
+  clipboardPaths = ["/home/dev/reports"];
+  clipboardPathsAreDirs = true;
+  paste(render(), "reports");
+  await settle();
+
+  expect(alert()).toBe(
+    "Nothing to attach in that path. Only files can be attached.",
+  );
+});
+
+it("leaves a text paste to the webview instead of reading image bytes", async () => {
+  const event = paste(render(), "pasted words");
   await settle();
 
   expect(event.defaultPrevented).toBe(false);
-  expect(invoke).not.toHaveBeenCalled();
+  expect(invoke).not.toHaveBeenCalledWith("clipboard_image");
+  expect(alert()).toBeNull();
   expect(submit).not.toHaveBeenCalled();
 });
 
@@ -120,11 +184,10 @@ it("reports why a clipboard image could not be attached", async () => {
       throw "Clipboard image is too large to attach (maximum 20 MB).";
     return [];
   });
-  const textarea = render();
-  paste(textarea);
+  paste(render());
   await settle();
 
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+  expect(alert()).toBe(
     "Clipboard image is too large to attach (maximum 20 MB).",
   );
   expect(
