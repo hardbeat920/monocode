@@ -22,6 +22,10 @@ import {
   nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
 import { storeQuickAttachments } from "../model/quickAttachments";
+import {
+  captureDraft,
+  insertRestoredText,
+} from "../../../shared/lib/draftRestore";
 
 function releaseCaptures(files: Attachment[]) {
   const paths = files.flatMap((file) => (file.path ? [file.path] : []));
@@ -29,22 +33,6 @@ function releaseCaptures(files: Attachment[]) {
     void invoke("quick_composer_release_capture", { paths }).catch(
       () => undefined,
     );
-}
-
-/**
- * Insert text the webview was told not to insert, at the caret. The `input`
- * event is what React listens for, so the prompt stays in step.
- */
-function setPromptText(target: EventTarget | null, text: string) {
-  if (
-    !(target instanceof HTMLTextAreaElement) &&
-    !(target instanceof HTMLInputElement)
-  )
-    return;
-  const start = target.selectionStart ?? 0;
-  const end = target.selectionEnd ?? start;
-  target.setRangeText(text, start, end, "end");
-  target.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 export function useQuickAttachments(
@@ -70,9 +58,15 @@ export function useQuickAttachments(
     };
   }, []);
 
+  /** `collect` bails on the same conditions, so a paste must ask first. */
+  const canCollect = useCallback(
+    () => supportedRef.current && !loadingRef.current,
+    [],
+  );
+
   const collect = useCallback(
     async (read: () => Promise<Attachment[]>) => {
-      if (loadingRef.current || !supportedRef.current) return;
+      if (!canCollect()) return;
       loadingRef.current = true;
       setLoading(true);
       onError(null);
@@ -116,7 +110,7 @@ export function useQuickAttachments(
         if (alive.current) setLoading(false);
       }
     },
-    [onError],
+    [onError, canCollect],
   );
 
   useEffect(() => {
@@ -156,17 +150,20 @@ export function useQuickAttachments(
       // Prose and whitespace alike are the webview's to insert, and cost no
       // clipboard read, spinner, or cleared error.
       if (text && !isFileReferenceText(text)) return;
-      // A file URI reaches us as text but becomes a chip, so it is kept out of
-      // the prompt; with no text at all the paste carried an image the webview
-      // cannot see. Either way the prompt takes nothing by default.
+      // A withheld paste would have nowhere to go while a collection runs.
+      if (!canCollect()) return;
+      // A file URI becomes a chip, so it is kept out of the prompt; with no
+      // text at all the paste carried an image the webview cannot see.
       event.preventDefault();
-      const field = event.target;
-      const restore = isFileReferenceText(text);
+      // Captured before the read crosses an IPC hop.
+      const captured = isFileReferenceText(text)
+        ? captureDraft(event.target)
+        : null;
       void collect(async () => {
         const { files, warning } = await nativeClipboardAttachments(text);
         if (warning) onError(warning);
         // A file URI that turned into no attachment was the user's text.
-        if (!files.length && restore) setPromptText(field, text);
+        if (!files.length && captured) insertRestoredText(captured, text);
         return files;
       });
       return;

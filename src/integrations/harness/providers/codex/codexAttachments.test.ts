@@ -165,7 +165,6 @@ describe("Codex attachment delivery", () => {
 
     it(`${method} uses native localImage inputs for images without embedded bytes`, async () => {
       const input = await outbound(method, "", await prepared("large.png"));
-      // An attachment-only turn also carries the stand-in for the missing text.
       expect(input).toEqual([
         { type: "text", text: ATTACHMENT_ONLY_PROMPT },
         { type: "localImage", path: "/tmp/issue174/large.png" },

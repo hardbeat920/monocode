@@ -176,11 +176,9 @@ export type NativeClipboardPaste = {
  * Attachments for copied paths, filling a turn's quota with whatever the
  * filesystem actually accepts, plus how many paths it took to get there.
  *
- * A path that was moved, renamed, or deleted yields no attachment, so the
- * paths are taken a batch at a time until `MAX_ATTACHMENTS` attachments exist
- * or the clipboard runs out. Counting paths before converting would drop a
- * good file that sat behind an unreadable one, and would report attachments
- * that were never added.
+ * A path that was moved or deleted yields no attachment, so paths are taken a
+ * batch at a time until the quota is met. Counting them before converting would
+ * drop a good file that sat behind an unreadable one.
  */
 async function attachmentsFromClipboardPaths(paths: string[]) {
   const files: Attachment[] = [];

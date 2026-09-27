@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Pasting a file copied in a file manager no longer also drops its `file:` URI into the draft, and a copy that turns out to hold no attachable path keeps the text it was pasted with. A pasted space or newline is a text paste again, and is no longer swallowed.
+- Pasting a file copied in a file manager no longer also drops its `file:` URI into the draft, and a copy that turns out to hold no attachable path keeps the text it was pasted with. A pasted space or newline is a text paste again, and is no longer swallowed. A URI put back after the clipboard read no longer overwrites text selected while that read was in flight, and is no longer dropped when the Quick composer is already collecting attachments.
 - A turn is no longer filled from the first 20 copied paths when some of them cannot be attached. A path that was moved or deleted no longer uses up a slot that a readable file behind it would have filled, and the "attached N of M" count now reports what was actually attached.
 - Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries.
 - Pasting a screenshot into the composer or Quick composer now attaches it. A webview reports a paste as text only, so a screenshot arrived with neither a file nor text and the paste did nothing; it is now read from the native clipboard, on Linux, macOS and Windows, including a Wayland session.

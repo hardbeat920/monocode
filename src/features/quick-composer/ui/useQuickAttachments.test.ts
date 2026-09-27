@@ -118,6 +118,46 @@ it("attaches a copied file instead of leaving its URI in the prompt", async () =
   expect(api.files[0]).toMatchObject({ path: "/tmp/image.png" });
 });
 
+it("leaves a file URI to the webview while a collection is running", async () => {
+  let release: (() => void) | undefined;
+  vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+    if (cmd === "inspect_paths") {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return (args as { paths: string[] }).paths.map((path) => ({
+        path,
+        name: path.split("/").pop(),
+        size: 4,
+        isDir: false,
+      }));
+    }
+    if (cmd === "write_attachment") return "/tmp/image.png";
+    return [];
+  });
+
+  let pending: Promise<void>;
+  act(() => {
+    pending = api.chooseFiles();
+  });
+  const preventDefault = vi.fn();
+  await act(async () => {
+    api.onPaste({
+      clipboardData: { files: [], getData: () => "file:///tmp/image.png" },
+      preventDefault,
+    } as never);
+  });
+
+  // A withheld paste would have nowhere to go while the collection runs, so
+  // the webview is left to insert it rather than dropping it.
+  expect(preventDefault).not.toHaveBeenCalled();
+
+  await act(async () => {
+    release?.();
+    await pending;
+  });
+});
+
 it("leaves a whitespace-only paste to the webview", async () => {
   const preventDefault = vi.fn();
   await act(async () => {

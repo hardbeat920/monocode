@@ -92,6 +92,10 @@ import type {
 } from "../model/userQuestion";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import {
+  captureDraft,
+  insertRestoredText,
+} from "../../../shared/lib/draftRestore";
+import {
   createBlankSkill,
   rankSkills,
   hasNativeCommands,
@@ -1609,8 +1613,12 @@ export function Composer({
     const messageFiles = messageFilesFromClipboard(e.clipboardData);
     if (messageFiles) {
       e.preventDefault();
-      const el = e.currentTarget;
-      setDraftText(el, e.clipboardData.getData("text/plain"));
+      const captured = captureDraft(e.currentTarget);
+      if (captured)
+        insertRestoredText(
+          captured,
+          e.clipboardData.getData("text/plain"),
+        );
       if (attachmentsSupported)
         void attachmentsFromFiles(messageFiles).then(addAttachments);
       return;
@@ -1622,20 +1630,20 @@ export function Composer({
       // the native clipboard.
       if (!attachmentsSupported) return;
       const text = e.clipboardData.getData("text/plain");
-      // Prose and whitespace alike are the webview's to insert; a lone space or
-      // newline is text a person meant to paste.
+      // Prose and whitespace alike are the webview's to insert.
       if (text && !isFileReferenceText(text)) return;
-      // A file URI reaches us as text but becomes a chip, so the URI is kept
-      // out of the draft; with no text at all the paste carried an image the
-      // webview cannot see. Either way the draft takes nothing by default.
+      // A file URI becomes a chip, so it is kept out of the draft; with no text
+      // at all the paste carried an image the webview cannot see.
       e.preventDefault();
-      const field = e.currentTarget;
-      const restore = isFileReferenceText(text);
+      // Captured before the read crosses an IPC hop.
+      const captured = isFileReferenceText(text)
+        ? captureDraft(e.currentTarget)
+        : null;
       void nativeClipboardAttachments(text)
         .then(({ files: pasted, warning }) => {
           if (pasted.length) addAttachments(pasted);
           // A file URI that turned into no attachment was the user's text.
-          else if (restore) setDraftText(field, text);
+          else if (captured) insertRestoredText(captured, text);
           if (warning) setPasteError(warning);
         })
         .catch((reason: unknown) =>
@@ -2443,13 +2451,4 @@ function hasFiles(data: DataTransfer | null): data is DataTransfer {
   return [...data.types].some(
     (type) => type === "Files" || type === "application/x-moz-file",
   );
-}
-
-/**
- * Insert text the webview was told not to insert, at the caret. The `input`
- * event is what React listens for, so the draft stays in step.
- */
-function setDraftText(field: HTMLTextAreaElement, text: string) {
-  field.setRangeText(text, field.selectionStart, field.selectionEnd, "end");
-  field.dispatchEvent(new Event("input", { bubbles: true }));
 }

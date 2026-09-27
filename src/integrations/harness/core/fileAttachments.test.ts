@@ -48,7 +48,6 @@ describe("native file attachment formats", () => {
     ["Cursor ACP", promptBlocks],
     ["Grok ACP", grokPromptBlocks],
   ] as const)("keeps %s documents as resource links", (_name, build) => {
-    // An attachment-only turn also carries the stand-in for the missing text.
     expect(build("", [document])).toEqual([
       { type: "text", text: ATTACHMENT_ONLY_PROMPT },
       {

@@ -21,7 +21,6 @@ describe.each(providers)("$id ACP protocol", ({ id, protocol, mode, blocks, mode
       size: 4, data: "aGV5",
     } as const;
     expect(harnessSupportsAttachments(id)).toBe(true);
-    // An image-only turn also carries the stand-in for the missing text.
     expect(blocks("", [image])).toEqual([
       { type: "text", text: ATTACHMENT_ONLY_PROMPT },
       { type: "image", mimeType: "image/png", data: "aGV5" },
