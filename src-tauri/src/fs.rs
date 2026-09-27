@@ -544,6 +544,16 @@ pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String>
 }
 
 pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, String> {
+    list_project_files_sync_cancellable(cwd, None)
+}
+
+/// Same listing, but aborts the walk as soon as `cancel` is set. A repository
+/// without a git index falls back to enumerating the tree, and that walk can
+/// outlast a cancelled search on its own.
+pub(crate) fn list_project_files_sync_cancellable(
+    cwd: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<ProjectFile>, String> {
     let root = expand_home(cwd);
     if !root.is_dir() {
         return Err(format!("{}: Not a directory", root.display()));
@@ -551,10 +561,13 @@ pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, Str
     if !is_indexable_root(&root) {
         return Ok(Vec::new());
     }
+    if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+        return Ok(Vec::new());
+    }
     if let Some(files) = git_ls_files(&root) {
         return Ok(files);
     }
-    Ok(walk_project_files(&root))
+    Ok(walk_project_files(&root, cancel))
 }
 
 const CHECK_IGNORE_SOME_MATCHED: i32 = 0;
@@ -4009,6 +4022,16 @@ fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     None
 }
 
+/// Queued 8 KiB chunks allowed between the git reader and the consumer.
+///
+/// `max_bytes` caps the buffer being built, not what the reader can run ahead:
+/// with an unbounded channel a slow or descheduled consumer lets the reader
+/// queue output with no limit at all. A small bound instead lets git's own
+/// 64 KiB stdout pipe fill and stall the child, so the cap is the only place
+/// output is ever held. Cancelling is unaffected — the receiver is dropped on
+/// return, which unblocks a reader parked in `send`.
+const GIT_OUTPUT_QUEUE_CHUNKS: usize = 16;
+
 pub(crate) fn git_output_capped(
     root: &Path,
     args: &[&str],
@@ -4032,7 +4055,7 @@ pub(crate) fn git_output_capped(
         let _ = child.wait();
         return None;
     };
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(GIT_OUTPUT_QUEUE_CHUNKS);
     let reader = thread::Builder::new()
         .name("git-output-reader".to_string())
         .spawn(move || {
@@ -4463,13 +4486,16 @@ fn file_name(path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn walk_project_files(root: &Path) -> Vec<ProjectFile> {
+fn walk_project_files(root: &Path, cancel: Option<&AtomicBool>) -> Vec<ProjectFile> {
     let ignore = Ignore::load(root);
     let mut files = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
     let mut visited = 0usize;
 
     while let Some(dir) = dirs.pop() {
+        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+            break;
+        }
         visited += 1;
         if visited > MAX_WALK_DIRS || files.len() >= MAX_PROJECT_FILES {
             break;
@@ -4478,6 +4504,9 @@ fn walk_project_files(root: &Path) -> Vec<ProjectFile> {
             continue;
         };
         for ent in reader {
+            if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+                return files;
+            }
             let Ok(ent) = ent else { continue };
             let name = ent.file_name();
             let Some(name) = name.to_str() else { continue };
@@ -5838,13 +5867,27 @@ mod tests {
         std::fs::write(dir.0.join(".gitignore"), "secret.txt\n").unwrap();
         std::fs::write(dir.0.join("secret.txt"), "nope\n").unwrap();
 
-        let files = walk_project_files(&dir.0);
+        let files = walk_project_files(&dir.0, None);
         let paths = relative_paths(&files);
         assert!(paths.contains(&"app.ts"));
         assert!(paths.contains(&"src/main.ts"));
         assert!(paths.contains(&".gitignore"));
         assert!(!paths.iter().any(|r| r.contains("node_modules")));
         assert!(!paths.contains(&"secret.txt"));
+    }
+
+    #[test]
+    fn walk_stops_early_when_cancelled() {
+        let dir = tmp("index-walk-cancelled");
+        for index in 0..64 {
+            std::fs::create_dir_all(dir.0.join(format!("dir{index}"))).unwrap();
+            std::fs::write(dir.0.join(format!("dir{index}")).join("app.ts"), "x\n").unwrap();
+        }
+        let uncancelled = walk_project_files(&dir.0, None);
+        assert_eq!(uncancelled.len(), 64);
+
+        let cancel = AtomicBool::new(true);
+        assert!(walk_project_files(&dir.0, Some(&cancel)).is_empty());
     }
 
     #[test]
@@ -5855,7 +5898,7 @@ mod tests {
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("Info.plist"), "x\n").unwrap();
 
-        let files = walk_project_files(&dir.0);
+        let files = walk_project_files(&dir.0, None);
         let paths = relative_paths(&files);
         assert!(paths.contains(&"app.ts"));
         assert!(!paths.iter().any(|r| r.contains("Some.app")));
