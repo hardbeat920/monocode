@@ -2523,7 +2523,18 @@ fn git_commit_args(root: &Path, message: &str, extra: &[&str]) -> Result<(), Str
     let mut args = vec!["commit"];
     args.extend_from_slice(extra);
     args.extend(["--cleanup=strip", "-m", message]);
-    git_checked(root, &args)
+    git_checked(root, &args).map_err(with_signing_hint)
+}
+
+/// Explain why signing fails here when the same commit works in a terminal.
+fn with_signing_hint(error: String) -> String {
+    if !error.contains("failed to sign") && !error.contains("ssh-keygen") {
+        return error;
+    }
+    format!(
+        "{error}\n\nGit couldn't sign this commit. MonoCode runs git without a terminal, \
+         so your signer needs a GUI passphrase prompt (e.g. pinentry-mac) or an unlocked agent."
+    )
 }
 
 fn git_head_message_for(root: &Path) -> Result<String, String> {
@@ -2540,7 +2551,7 @@ fn git_push_for(root: &Path) -> Result<(), String> {
 
 fn git_sync_changes_for(root: &Path) -> Result<(), String> {
     if git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
-        git_checked(root, &["pull", "--no-edit", "--ff"])?;
+        git_checked(root, &["pull", "--no-edit", "--ff"]).map_err(with_signing_hint)?;
         return git_checked(root, &["push"]);
     }
     git_push_for(root)
@@ -4089,6 +4100,8 @@ pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, S
 
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
+    // Finder launches get launchd's bare PATH; signers, hooks, and git-lfs need the real one.
+    cmd.env("PATH", crate::harness::gui_search_path());
     crate::hide_window_console(&mut cmd);
     cmd
 }
@@ -7926,6 +7939,39 @@ mod tests {
         let (head, truncated) = git_output_capped(&dir.0, &["rev-parse", "HEAD"], 1024).unwrap();
         assert!(!truncated);
         assert!(!head.is_empty());
+    }
+
+    #[test]
+    fn git_cmd_uses_gui_search_path() {
+        let path = crate::harness::gui_search_path();
+        assert!(git_cmd().get_envs().any(|(key, value)| {
+            key == std::ffi::OsStr::new("PATH") && value == Some(std::ffi::OsStr::new(&path))
+        }));
+    }
+
+    #[test]
+    fn signing_hint_ignores_other_errors() {
+        let error = "nothing to commit, working tree clean".to_string();
+        assert_eq!(with_signing_hint(error.clone()), error);
+    }
+
+    #[test]
+    fn git_commit_reports_signing_failure_with_hint() {
+        let dir = tmp("git-commit-signing");
+        if !init_git_commit(&dir.0, &[("a.txt", "a\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "b\n").unwrap();
+        for args in [
+            ["config", "commit.gpgsign", "true"],
+            ["config", "gpg.format", "openpgp"],
+            ["config", "gpg.program", "/nonexistent/monocode-gpg"],
+        ] {
+            assert!(git(&dir.0, &args));
+        }
+        assert!(git(&dir.0, &["add", "."]));
+        let error = git_commit_for(&dir.0, "signed").unwrap_err();
+        assert!(error.contains("Git couldn't sign this commit"), "{error}");
     }
 
     #[test]

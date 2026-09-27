@@ -223,6 +223,8 @@ pub fn run() {
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
+            // Start loading the login-shell PATH before the first git call needs it.
+            std::thread::spawn(harness::gui_search_path);
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             reminders::init(app.handle());
