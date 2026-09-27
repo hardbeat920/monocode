@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessEvent, SendTurnInput } from "../../core/types";
 
 const sent: string[] = [];
+let cancelWrite: Promise<void> | undefined;
 let onLine: ((line: string) => void) | undefined;
 let onExit: ((code: number | null) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
@@ -25,6 +26,7 @@ vi.mock("../../core/child", () => ({
   },
   writeChild: async (_id: string, line: string) => {
     sent.push(line);
+    if (JSON.parse(line).method === "session/cancel") await cancelWrite;
   },
 }));
 
@@ -93,6 +95,7 @@ async function selectModelAndMode(
 describe("Copilot live ACP sequence", () => {
   beforeEach(() => {
     sent.length = 0;
+    cancelWrite = undefined;
     onLine = undefined;
     onExit = undefined;
     onStderr = undefined;
@@ -410,6 +413,76 @@ describe("Copilot live ACP sequence", () => {
     reply(created.id, { sessionId: "copilot-session-1" });
     await turn;
     expect(kill).toHaveBeenCalledWith(sessionId);
+  });
+
+  it("honors cancellation from session.started without cancelling the next turn", async () => {
+    const sessionId = "copilot-started-cancel";
+    let settled = false;
+    const turn = start(sessionId, [], {
+      onEvent: (event) => {
+        if (event.type === "session.started") void cancelCopilotTurn(sessionId);
+      },
+    }).then(
+      () => { settled = true; },
+      (error: unknown) => { settled = true; return error; },
+    );
+    try {
+      await ready();
+      await vi.waitFor(() => expect(settled).toBe(true));
+      const result = await turn;
+      expect(parse().some((message) => message.method === "session/set_model" || message.method === "session/set_mode" || message.method === "session/prompt")).toBe(false);
+      expect(result).toBeUndefined();
+      expect(kill).toHaveBeenCalledWith(sessionId);
+      sent.length = 0;
+
+      const next = start(sessionId, []);
+      const init = await request("initialize");
+      reply(init.id, { protocolVersion: 1 });
+      const load = await request("session/load");
+      reply(load.id, { sessionId: "copilot-session-1" });
+      await selectModelAndMode("copilot-session-1", "auto");
+      const prompt = await request("session/prompt");
+      reply(prompt.id, { stopReason: "end_turn" });
+      await next;
+    } finally {
+      await cancelCopilotTurn(sessionId);
+      await turn;
+      await stopCopilotSession(sessionId);
+    }
+  });
+
+  it("drops sends queued before cancel without rejecting a fresh send after a slow cancel write", async () => {
+    const sessionId = "copilot-queued-cancel";
+    const first = start(sessionId, []);
+    await ready();
+    await selectModelAndMode("copilot-session-1", "auto");
+    await request("session/prompt");
+    const queued = start(sessionId, [], { text: "must not run" });
+    let releaseCancel!: () => void;
+    cancelWrite = new Promise<void>((resolve) => { releaseCancel = resolve; });
+    const cancelled = cancelCopilotTurn(sessionId);
+    let freshSettled = false;
+    const fresh = start(sessionId, [], { text: "fresh turn" }).then(
+      () => { freshSettled = true; },
+      (error: unknown) => { freshSettled = true; return error; },
+    );
+    try {
+      await Promise.all([first, queued]);
+      await vi.waitFor(() => expect(parse().filter((message) => message.method === "session/prompt")).toHaveLength(2));
+      const prompt = parse().filter((message) => message.method === "session/prompt")[1];
+      expect(prompt.params.prompt).toEqual([{ type: "text", text: "fresh turn" }]);
+      releaseCancel();
+      await cancelled;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(freshSettled).toBe(false);
+      reply(prompt.id, { stopReason: "end_turn" });
+      expect(await fresh).toBeUndefined();
+    } finally {
+      releaseCancel();
+      await cancelCopilotTurn(sessionId);
+      await Promise.all([first, queued, fresh, cancelled]);
+      await stopCopilotSession(sessionId);
+    }
   });
 
   it("keeps a queued send from changing the active turn's permission policy", async () => {

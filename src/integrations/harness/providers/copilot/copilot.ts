@@ -44,6 +44,7 @@ type Live = {
   modeId: string;
   muteUpdates: boolean;
   cancelled: boolean;
+  cancelVersion: number;
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -69,6 +70,8 @@ const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 
 export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
+  const previous = liveByThread.get(input.sessionId);
+  const cancelVersion = previous?.cwd === input.cwd ? previous.cancelVersion : 0;
   let live: Live;
   try {
     live = await ensureLive(input);
@@ -76,7 +79,10 @@ export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
     cancelledThreads.delete(input.sessionId);
     throw error;
   }
-  if (cancelledThreads.delete(input.sessionId)) {
+  if (
+    cancelledThreads.delete(input.sessionId) ||
+    (live !== previous && live.cancelVersion !== cancelVersion)
+  ) {
     await stopCopilotSession(input.sessionId);
     return;
   }
@@ -84,6 +90,12 @@ export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
+      if (
+        liveByThread.get(input.sessionId) !== live ||
+        live.cancelVersion !== cancelVersion
+      ) {
+        return;
+      }
       live.onEvent = input.onEvent;
       live.runtimeMode = input.runtimeMode;
       live.planning = input.intent === "plan";
@@ -132,13 +144,15 @@ export async function cancelCopilotTurn(sessionId: string): Promise<void> {
     cancelledThreads.add(sessionId);
     return;
   }
+  live.cancelVersion += 1;
   live.cancelled = true;
   live.muteUpdates = true;
   resolveApprovals(live);
-  await live.acp
+  const cancelled = live.acp
     .notify("session/cancel", { sessionId: live.acpSessionId })
     .catch(() => undefined);
   live.acp.rejectPending(new Error("cancelled"));
+  await cancelled;
 }
 
 export async function stopCopilotSession(sessionId: string): Promise<void> {
@@ -299,6 +313,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       modeId: "",
       muteUpdates: didLoad,
       cancelled: false,
+      cancelVersion: 0,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       onEvent: input.onEvent,
