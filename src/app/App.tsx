@@ -1767,65 +1767,101 @@ export default function App({
       // immediately, which can land before the entry below is stored, and a
       // dropped batch would be lost for good because the cursor has moved.
       let live = true;
+      /**
+       * Say once what went wrong in the mirror, in the conversation and in
+       * the console. A reply that is in the transcript and not on screen was
+       * traced to nothing at all: the reader's cursor had moved past the
+       * records, and the only handler for a failure was one that discarded
+       * it. Whatever the cause, the second time must be diagnosable.
+       */
+      const mirrorFaults = new Set<string>();
+      const reportMirrorFault = (where: string, error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[remote-control] ${where}`, error);
+        if (mirrorFaults.has(message)) return;
+        mirrorFaults.add(message);
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: `Remote Control could not mirror part of this conversation (${where}: ${message}). What the terminal did is still in its transcript; what MonoCode shows may be behind it.`,
+        });
+        flushHarnessEvents();
+      };
+      const applyMirrorRecord = (record: Record<string, unknown>) => {
+        const events = mapRecord(mirror, record);
+        const entry = remoteControl.current.get(sessionId);
+        if (entry) {
+          entry.pending = pendingAfter(entry.pending, events);
+          // A result landing can retire the prompt that was on screen.
+          syncRemoteApproval(sessionId);
+        }
+        const bridge = mirror.bridge;
+        setRemoteBridges((current) =>
+          current[sessionId]?.active === bridge.active &&
+          current[sessionId]?.url === bridge.url
+            ? current
+            : { ...current, [sessionId]: bridge },
+        );
+        for (const event of events) {
+          if (event.type === "remote.userMessage") {
+            // Ours coming back. The composer already seated it; seating the
+            // echo too is how one message becomes two. Its record is also
+            // the first word on where it goes: a message queued behind a
+            // running turn was seated above that turn's reply.
+            if (
+              takeInjectedEcho(
+                remoteEcho.current.get(sessionId) ?? [],
+                event.text,
+              )
+            ) {
+              setSessions((prev) =>
+                prev.map((entry) =>
+                  entry.id === sessionId
+                    ? reseatEchoedUserMessage(entry, event.text)
+                    : entry,
+                ),
+              );
+              continue;
+            }
+            setSessions((prev) =>
+              prev.map((entry) =>
+                entry.id === sessionId
+                  ? seatRemoteUserMessage(entry, event)
+                  : entry,
+              ),
+            );
+            continue;
+          }
+          // Everything else is an ordinary harness event, so it goes
+          // through the same queue the headless path uses and renders
+          // identically.
+          enqueueHarnessEvent(sessionId, event);
+        }
+        // After this record's events, so an echo it carried has already
+        // been taken, and per record, so a turn that opens and closes
+        // inside one batch is seen doing both.
+        remoteControl.current.get(sessionId)?.followTurn();
+      };
       const watcher: TranscriptWatcher = watchTranscript({
         path,
         from: emptyCursor(handle.offset),
         onRecords: (records) => {
           if (!live) return;
+          console.debug(
+            `[remote-control] ${records.length} record(s), turn ${
+              mirror.turn.active ? "open" : "closed"
+            }`,
+          );
           for (const record of records) {
-            const events = mapRecord(mirror, record);
-            const entry = remoteControl.current.get(sessionId);
-            if (entry) {
-              entry.pending = pendingAfter(entry.pending, events);
-              // A result landing can retire the prompt that was on screen.
-              syncRemoteApproval(sessionId);
+            // One record's failure must not cost the rest of the batch: the
+            // cursor has already moved past all of them, and the one that ends
+            // the turn is as likely to be last as any.
+            try {
+              applyMirrorRecord(record);
+            } catch (error) {
+              reportMirrorFault("applying a transcript record", error);
             }
-            const bridge = mirror.bridge;
-            setRemoteBridges((current) =>
-              current[sessionId]?.active === bridge.active &&
-              current[sessionId]?.url === bridge.url
-                ? current
-                : { ...current, [sessionId]: bridge },
-            );
-            for (const event of events) {
-              if (event.type === "remote.userMessage") {
-                // Ours coming back. The composer already seated it; seating the
-                // echo too is how one message becomes two. Its record is also
-                // the first word on where it goes: a message queued behind a
-                // running turn was seated above that turn's reply.
-                if (
-                  takeInjectedEcho(
-                    remoteEcho.current.get(sessionId) ?? [],
-                    event.text,
-                  )
-                ) {
-                  setSessions((prev) =>
-                    prev.map((entry) =>
-                      entry.id === sessionId
-                        ? reseatEchoedUserMessage(entry, event.text)
-                        : entry,
-                    ),
-                  );
-                  continue;
-                }
-                setSessions((prev) =>
-                  prev.map((entry) =>
-                    entry.id === sessionId
-                      ? seatRemoteUserMessage(entry, event)
-                      : entry,
-                  ),
-                );
-                continue;
-              }
-              // Everything else is an ordinary harness event, so it goes
-              // through the same queue the headless path uses and renders
-              // identically.
-              enqueueHarnessEvent(sessionId, event);
-            }
-            // After this record's events, so an echo it carried has already
-            // been taken, and per record, so a turn that opens and closes
-            // inside one batch is seen doing both.
-            remoteControl.current.get(sessionId)?.followTurn();
           }
           flushHarnessEvents();
         },
@@ -1836,8 +1872,11 @@ export default function App({
         // regenerate the code each time.
         //
         // A transcript the pty has not written to yet is the ordinary state at
-        // the moment of a hand-over, not a failure.
-        onError: () => undefined,
+        // the moment of a hand-over, not a failure. Anything else is.
+        onError: (error) => {
+          if (readFailedBecauseMissing(error)) return;
+          reportMirrorFault("reading the transcript", error);
+        },
       });
       // The screen parser, and the fan-out's one undetachable reader. The pty
       // was spawned at a fixed size and the parser takes the size as a
