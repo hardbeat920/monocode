@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries.
-- Pasting a screenshot, or a file or folder copied in a file manager, attaches it in the composer and Quick composer. Webviews report a paste as text only, so those arrived with nothing to attach; they are now read from the native clipboard on Linux, macOS and Windows, including a Wayland session. A pasted text is left to the app as before, and a copy that turns out to hold nothing attachable now says so instead of failing silently.
+- Pasting a screenshot into the composer or Quick composer now attaches it. A webview reports a paste as text only, so a screenshot arrived with neither a file nor text and the paste did nothing; it is now read from the native clipboard, on Linux, macOS and Windows, including a Wayland session.
+- A file or folder copied in a file manager pasted as its path as text. It now attaches as an attachment with a chip instead, on every platform. A pasted text is unchanged, and a copy that turns out to hold nothing attachable says so rather than failing silently.
 - The Explorer's paste now copies files copied outside MonoCode on Linux and Windows too, which used to be macOS only.
 - Opening a file with CRLF line endings no longer doubles every line in the editor, preview, and diff view. Saving and staging keep the file's original line endings, and staged-only changes under `core.autocrlf` are shown instead of an empty diff. Fixes #411.
 
