@@ -6,14 +6,21 @@ let cancelWrite: Promise<void> | undefined;
 let onLine: ((line: string) => void) | undefined;
 let onExit: ((code: number | null) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
+/** Records process launch arguments without starting a child. */
 const spawn = vi.fn(async (..._args: unknown[]) => undefined);
+/** Records cleanup attempts without terminating a process. */
 const kill = vi.fn(async (..._args: unknown[]) => undefined);
 
 vi.mock("../../core/child", () => ({
+  /** Supplies a deterministic executable path without probing the host. */
   resolveCopilotBinary: async () => ({ path: "/fake/copilot" }),
+  /** Forwards launch arguments to the spawn spy. */
   spawnChild: (...args: Parameters<typeof spawn>) => spawn(...args),
+  /** Forwards termination requests to the cleanup spy. */
   killChild: (...args: unknown[]) => kill(...args),
+  /** Keeps captured callbacks available for assertions about late transport events. */
   unwatchChild: () => undefined,
+  /** Captures transport callbacks so tests can deliver replies, exits, and stderr directly. */
   watchChild: (
     _id: string,
     line: (value: string) => void,
@@ -24,6 +31,7 @@ vi.mock("../../core/child", () => ({
     onExit = exit;
     onStderr = stderr;
   },
+  /** Records outgoing RPCs and optionally delays cancellation writes to exercise ordering races. */
   writeChild: async (_id: string, line: string) => {
     sent.push(line);
     if (JSON.parse(line).method === "session/cancel") await cancelWrite;
@@ -40,17 +48,21 @@ const {
   stopCopilotSession,
 } = await import("./copilot");
 
+/** Decodes all outgoing transport lines for RPC assertions. */
 const parse = () => sent.map((line) => JSON.parse(line));
 
+/** Delivers a successful JSON-RPC response through the captured child listener. */
 function reply(id: number, result: unknown) {
   onLine!(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }
 
+/** Waits for an outgoing RPC method and returns its first matching message. */
 async function request(method: string) {
   await vi.waitFor(() => expect(parse().some((message) => message.method === method)).toBe(true));
   return parse().find((message) => message.method === method)!;
 }
 
+/** Starts a supervised turn with deterministic defaults and caller-provided overrides. */
 function start(sessionId: string, events: HarnessEvent[], changes: Partial<SendTurnInput> = {}) {
   return sendCopilotTurn({
     sessionId,
@@ -59,11 +71,13 @@ function start(sessionId: string, events: HarnessEvent[], changes: Partial<SendT
     runtimeMode: "supervised",
     text: "create file",
     attachments: [],
+    /** Collects emitted events for assertions about the turn lifecycle. */
     onEvent: (event) => events.push(event),
     ...changes,
   });
 }
 
+/** Verifies initialization and session creation, then replies with the requested current model. */
 async function ready(currentModelId = "claude-sonnet-5") {
   const init = await request("initialize");
   expect(init.params).toEqual({
@@ -77,6 +91,7 @@ async function ready(currentModelId = "claude-sonnet-5") {
   reply(created.id, { sessionId: "copilot-session-1", models: { currentModelId } });
 }
 
+/** Verifies and acknowledges model selection followed by the requested ACP session mode. */
 async function selectModelAndMode(
   sessionId: string,
   modelId: string,
@@ -118,6 +133,7 @@ describe("Copilot live ACP sequence", () => {
     await ready();
     await selectModelAndMode("copilot-session-1", "auto");
     const first = await request("session/prompt");
+    /** Sends guidance to the active test session without starting a separate turn. */
     const steer = (text: string) => steerCopilotTurn({
       sessionId, cwd: "/repo", model: "copilot:auto", text,
     });
@@ -129,6 +145,7 @@ describe("Copilot live ACP sequence", () => {
       const prompts = parse().filter((message) => message.method === "session/prompt");
       expect(prompts).toHaveLength(3);
       expect(prompts[2].params.prompt).toEqual([{ type: "text", text: "latest follow up" }]);
+      /** Settles superseded requests with cancellation and failure to test stale-response handling. */
       const settleOld = () => {
         reply(first.id, { stopReason: "cancelled" });
         onLine!(JSON.stringify({ jsonrpc: "2.0", id: prompts[1].id, error: { code: -32000, message: "superseded" } }));
@@ -186,6 +203,7 @@ describe("Copilot live ACP sequence", () => {
       { type: "text", text: "create file" },
       { type: "image", mimeType: "image/png", data: "AAAA" },
     ]);
+    /** Delivers a session update notification through the mock ACP transport. */
     const update = (value: unknown) => onLine!(JSON.stringify({
       jsonrpc: "2.0", method: "session/update", params: { sessionId: "copilot-session-1", update: value },
     }));
@@ -419,6 +437,7 @@ describe("Copilot live ACP sequence", () => {
     const sessionId = "copilot-started-cancel";
     let settled = false;
     const turn = start(sessionId, [], {
+      /** Cancels synchronously when startup announces the session. */
       onEvent: (event) => {
         if (event.type === "session.started") void cancelCopilotTurn(sessionId);
       },

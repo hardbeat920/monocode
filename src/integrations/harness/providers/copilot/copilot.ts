@@ -69,6 +69,10 @@ const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 
+/**
+ * Serializes a turn on its live session and waits through any steering replacements.
+ * Skips cancelled queued work and stops the child before rethrowing a turn failure.
+ */
 export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
   const previous = liveByThread.get(input.sessionId);
   const cancelVersion = previous?.cwd === input.cwd ? previous.cancelVersion : 0;
@@ -123,6 +127,10 @@ export async function sendCopilotTurn(input: SendTurnInput): Promise<void> {
   }
 }
 
+/**
+ * Replaces the active prompt without waiting for its response; the original send
+ * owns completion and errors. Rejects when no uncancelled turn is active.
+ */
 export async function steerCopilotTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
   if (!live?.activePrompt || live.cancelled)
@@ -130,6 +138,7 @@ export async function steerCopilotTurn(input: SteerTurnInput): Promise<void> {
   startPrompt(live, input);
 }
 
+/** Resolves a pending user approval; unknown sessions or request IDs are ignored. */
 export function respondCopilotApproval(
   sessionId: string,
   requestId: number,
@@ -138,6 +147,10 @@ export function respondCopilotApproval(
   liveByThread.get(sessionId)?.approvals.get(requestId)?.(decision);
 }
 
+/**
+ * Invalidates queued turns, denies approvals, and rejects pending RPCs before
+ * awaiting the cancel notification. Records cancellation if startup is unfinished.
+ */
 export async function cancelCopilotTurn(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   if (!live) {
@@ -155,6 +168,7 @@ export async function cancelCopilotTurn(sessionId: string): Promise<void> {
   await cancelled;
 }
 
+/** Stops the child and pending work while preserving its ACP session ID for resume. */
 export async function stopCopilotSession(sessionId: string): Promise<void> {
   cancelledThreads.delete(sessionId);
   const live = liveByThread.get(sessionId);
@@ -169,11 +183,13 @@ export async function stopCopilotSession(sessionId: string): Promise<void> {
   await killChild(sessionId).catch(() => undefined);
 }
 
+/** Removes the saved resume binding and stops any live child for the thread. */
 export async function forgetCopilotSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
   await stopCopilotSession(sessionId);
 }
 
+/** Saves a provider session and working directory for later resume. */
 export function bindCopilotSession(
   threadId: string,
   acpSessionId: string,
@@ -184,6 +200,10 @@ export function bindCopilotSession(
   resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });
 }
 
+/**
+ * Reuses a child in the same directory or initializes ACP and loads or creates a
+ * session. Emits binding/start events and tears down the child on startup failure.
+ */
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   if (existing && existing.cwd === input.cwd) return existing;
@@ -203,6 +223,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const liveRef: { current: Live | null } = { current: null };
   const muteGate = { current: false };
 
+  /** Routes unmuted session updates through subagent handling to the current listener. */
   handlers.onNotification = (method, params) => {
     if (muteGate.current) return;
     const live = liveRef.current;
@@ -213,6 +234,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       live.onEvent(event);
     }
   };
+  /** Dispatches ACP requests once live state exists; rejects requests received earlier. */
   handlers.onRequest = (id, method, params) => {
     const live = liveRef.current;
     if (!live) {
@@ -225,6 +247,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     void handleRequest(live, id, method, params);
   };
 
+  /** Delivers process events to the current turn listener, including during startup. */
   const emit = (event: HarnessEvent) => {
     (liveRef.current?.onEvent ?? input.onEvent)(event);
   };
@@ -338,6 +361,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 }
 
+/** Selects a changed, non-default model and caches it only after ACP acknowledges it. */
 async function applyModelSelection(
   live: Live,
   input: HarnessSessionInput,
@@ -352,6 +376,7 @@ async function applyModelSelection(
   live.modelId = modelId;
 }
 
+/** Applies the runtime/planning mode when changed and caches the acknowledged mode. */
 async function applyRuntimeMode(
   live: Live,
   runtimeMode: RuntimeMode,
@@ -367,6 +392,10 @@ async function applyRuntimeMode(
   live.modeId = modeId;
 }
 
+/**
+ * Dispatches nonempty prompt blocks, replaces the active RPC, and wakes its owner.
+ * Returns false for empty input; RPC failures remain available to the turn owner.
+ */
 function startPrompt(
   live: Live,
   input: Pick<SteerTurnInput, "text" | "attachments">,
@@ -385,6 +414,10 @@ function startPrompt(
   return true;
 }
 
+/**
+ * Owns the latest prompt through steering, emitting completion/usage or an error.
+ * Ignores superseded replies and cancellation, and rethrows current RPC failures.
+ */
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   try {
     if (!startPrompt(live, input)) return;
@@ -428,6 +461,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   }
 }
 
+/** Routes permission requests, denying idle/cancelled turns and rejecting unknown methods. */
 async function handleRequest(
   live: Live,
   id: number,
@@ -453,6 +487,7 @@ async function handleRequest(
     .catch(() => undefined);
 }
 
+/** Applies the turn permission policy or waits for user approval, then answers ACP. */
 async function handlePermission(
   live: Live,
   id: number,
@@ -505,6 +540,7 @@ async function handlePermission(
   await respondPermission(live, id, permissionOptionId(decision, request.optionIds), request.optionIds);
 }
 
+/** Sends an advertised permission choice or an invalid-params error if none matches. */
 async function respondPermission(
   live: Live,
   id: number,
@@ -518,6 +554,7 @@ async function respondPermission(
   await live.acp.respond(id, { outcome: { outcome: "selected", optionId } });
 }
 
+/** Denies every pending user approval and clears the session's approval waiters. */
 function resolveApprovals(live: Live): void {
   for (const resolve of live.approvals.values()) resolve("deny");
   live.approvals.clear();

@@ -25,6 +25,7 @@ export const copilotAdapter: HarnessAdapter = {
 
 let registered = false;
 
+/** Registers the Copilot adapter once for the lifetime of this module. */
 export function ensureCopilotRegistered(): void {
   if (registered) return;
   registerHarness(copilotAdapter);

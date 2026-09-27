@@ -16,6 +16,7 @@ const REQUEST_TIMEOUT_MS = 20_000;
 
 let inflight: Promise<void> | null = null;
 
+/** Coalesces catalog refreshes and retains existing models if discovery fails or returns none. */
 export function refreshCopilotCatalog(): Promise<void> {
   if (inflight) return inflight;
   inflight = discoverCopilotModels()
@@ -31,10 +32,12 @@ export function refreshCopilotCatalog(): Promise<void> {
   return inflight;
 }
 
+/** Reads advertised models from a temporary ACP session and always tears down its child. */
 async function discoverCopilotModels(): Promise<AgentModel[]> {
   const { path } = await resolveCopilotBinary();
   const cwd = await homeDir();
   const acp = new AcpClient(PROBE_ID, {
+    /** Rejects server requests because the catalog probe exposes no client capabilities. */
     onRequest: (id, method) => {
       void acp
         .respondError(id, {
@@ -45,6 +48,7 @@ async function discoverCopilotModels(): Promise<AgentModel[]> {
     },
   });
 
+  /** Closes pending RPCs, detaches listeners, and attempts to terminate the probe. */
   const stop = async () => {
     acp.close();
     unwatchChild(PROBE_ID);
@@ -90,6 +94,7 @@ async function discoverCopilotModels(): Promise<AgentModel[]> {
   }
 }
 
+/** Runs an operation with a deadline, invoking cleanup before rejecting on timeout. */
 function withTimeout<T>(
   ms: number,
   run: () => Promise<T>,

@@ -21,11 +21,14 @@ const live = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../../platform/tauri/fs", () => ({
+  /** Uses the host home directory without requiring the Tauri runtime. */
   homeDir: async () => homedir(),
 }));
 
 vi.mock("../../core/child", () => ({
+  /** Supplies the executable selected by the opt-in integration test environment. */
   resolveCopilotBinary: async () => ({ path: BIN }),
+  /** Starts a real CLI child and routes its output and exit events to registered listeners. */
   spawnChild: async (id: string, command: string, args: string[], cwd: string) => {
     const child = spawn(command, args, { cwd });
     live.children.set(id, child);
@@ -33,20 +36,24 @@ vi.mock("../../core/child", () => ({
     createInterface({ input: child.stderr! }).on("line", (line) => live.errors.get(id)?.(line));
     child.on("exit", (code) => live.exits.get(id)?.(code));
   },
+  /** Sends SIGKILL to the tracked child and removes its process handle. */
   killChild: async (id: string) => {
     live.children.get(id)?.kill("SIGKILL");
     live.children.delete(id);
   },
+  /** Writes one newline-delimited RPC to a tracked child and rejects failed writes. */
   writeChild: async (id: string, line: string) => {
     const child = live.children.get(id);
     if (!child) throw new Error(`no child for ${id}`);
     await new Promise<void>((resolve, reject) => child.stdin!.write(`${line}\n`, (error) => error ? reject(error) : resolve()));
   },
+  /** Registers transport listeners by session ID before the CLI process starts. */
   watchChild: (id: string, onLine: (line: string) => void, onExit: (code: number | null) => void, onStderr: (line: string) => void) => {
     live.listeners.set(id, onLine);
     live.exits.set(id, onExit);
     live.errors.set(id, onStderr);
   },
+  /** Removes transport listeners so a stopped child cannot deliver further events. */
   unwatchChild: (id: string) => {
     live.listeners.delete(id);
     live.exits.delete(id);
@@ -70,6 +77,7 @@ describe.skipIf(!REAL)("Copilot real ACP endpoint", () => {
         model: "copilot:auto",
         runtimeMode: "supervised",
         text: "Use the shell tool to run exactly sleep 8. Do not read or write any files. After the command finishes, reply exactly ORIGINAL_ONLY.",
+        /** Steers the first active response and denies tool approvals during the probe. */
         onEvent: (event) => {
           events.push(event);
           if (!steering && (event.type === "approval.requested" || event.type === "message.delta")) {
@@ -109,6 +117,7 @@ describe.skipIf(!REAL)("Copilot real ACP endpoint", () => {
         runtimeMode: "full-access",
         text: "Create a file named hello.txt in the current directory containing exactly COPILOT_REAL_OK followed by a newline. Do not create other files.",
         attachments: [],
+        /** Records real provider events to verify turn completion. */
         onEvent: (event) => events.push(event),
       });
       expect(readFileSync(join(cwd, "hello.txt"), "utf8")).toBe("COPILOT_REAL_OK\n");

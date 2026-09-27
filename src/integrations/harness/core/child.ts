@@ -295,6 +295,7 @@ export function killAllChildren(): Promise<void> {
 
 type ResolvedHarnessBinary = { path: string; args?: string[] };
 
+/** Resolve a configured executable or use native discovery; undefined reads the saved provider setting. */
 async function resolveHarnessBinary(
   provider: ConfigurableBinaryProvider,
   binaryPath?: string | null,
@@ -379,6 +380,7 @@ export function resolveHermesBinary(
   return resolveHarnessBinary("hermes", binaryPath);
 }
 
+/** Resolve GitHub Copilot CLI through the configured path or native installation discovery. */
 export function resolveCopilotBinary(
   binaryPath?: string | null,
 ): Promise<{ path: string }> {

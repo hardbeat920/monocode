@@ -6,11 +6,13 @@ import { asRecord } from "../grok/grokProtocol";
 export const COPILOT_AUTH_HELP =
   "GitHub Copilot is not signed in. Run `copilot login` in a terminal.";
 
+/** Maps planning and runtime permissions to Copilot ACP mode URIs; planning takes precedence. */
 export function copilotModeId(runtimeMode: RuntimeMode, planning = false): string {
   const mode = planning ? "plan" : runtimeMode === "full-access" ? "autopilot" : "agent";
   return `https://agentclientprotocol.com/protocol/session-modes#${mode}`;
 }
 
+/** Extracts authentication failures from stderr, excluding low-severity logs, and adds login guidance. */
 export function copilotStderrAuthError(line: string): string | null {
   const detail = line.trim();
   if (!detail || /\[(?:debug|info|warning)\]/i.test(detail)) return null;
@@ -22,6 +24,7 @@ export function copilotStderrAuthError(line: string): string | null {
   return `${message}\n\n${COPILOT_AUTH_HELP}`;
 }
 
+/** Converts startup failures into user-facing errors with login guidance for auth failures or timeouts. */
 export function copilotStartupError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
   if (/auth|credential|token|login|sign in/i.test(detail)) {
@@ -33,12 +36,14 @@ export function copilotStartupError(error: unknown): Error {
   return new Error(`Copilot CLI did not start. ${detail}`);
 }
 
+/** Reads supported session ID aliases and returns a trimmed, nonempty string when present. */
 export function copilotSessionId(result: unknown): string | undefined {
   const rec = asRecord(result);
   const id = rec?.sessionId ?? rec?.session_id ?? rec?.id;
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
+/** Reads the current model ID from either supported ACP model-state naming convention. */
 export function copilotCurrentModelId(result: unknown): string | undefined {
   const rec = asRecord(result);
   const models = asRecord(rec?.models);
@@ -46,6 +51,7 @@ export function copilotCurrentModelId(result: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** Normalizes advertised models, deduplicates native IDs, and places the current model first when listed. */
 export function modelsFromCopilotSession(result: unknown): AgentModel[] {
   const rec = asRecord(result);
   const state = asRecord(rec?.models);
@@ -78,6 +84,7 @@ export function modelsFromCopilotSession(result: unknown): AgentModel[] {
   return models;
 }
 
+/** Converts numeric prompt usage into turn metrics, including cache hit percentage when calculable. */
 export function copilotMetricsFromPromptResult(
   result: unknown,
 ): Extract<HarnessEvent, { type: "turn.metrics" }> | null {

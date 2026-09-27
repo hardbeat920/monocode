@@ -58,6 +58,7 @@ function MonoIcon({
   );
 }
 
+/** Render the provider's decorative icon, using the current text color for monochrome providers. */
 export function HarnessIcon({
   harness,
   className = "size-3.5",

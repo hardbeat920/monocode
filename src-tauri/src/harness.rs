@@ -1292,6 +1292,7 @@ fn looks_like_harness_argv(args: &str) -> bool {
     args.split_whitespace().any(is_harness_argv_token)
 }
 
+/// Recognize known harness executable names in a process argument token.
 #[cfg(any(unix, test))]
 fn is_harness_argv_token(part: &str) -> bool {
     let name = Path::new(part)
@@ -1538,6 +1539,7 @@ fn resolve_cursor_agent() -> Option<PathBuf> {
     first_binary_matching(candidates, is_cursor_agent)
 }
 
+/// Search the provider's default installation locations, returning None if unavailable or unknown.
 fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
     match provider {
         "claude" => resolve_claude(),
@@ -1581,6 +1583,7 @@ fn configured_binary_fingerprint(path: &Path) -> Option<String> {
     }
 }
 
+/// Validate a configured executable's path, identity, and version, reusing unchanged cached validations.
 fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<PathBuf, String> {
     if provider == "antigravity" && cfg!(windows) {
         return Err("Antigravity ACP server overrides are not supported on Windows.".into());
@@ -1658,6 +1661,7 @@ fn is_supported_harness_version(version: &str) -> bool {
     })
 }
 
+/// Check the executable's version output and provider marker, skipping Antigravity's ACP server.
 fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), String> {
     if provider == "antigravity" {
         return Ok(());
@@ -1711,6 +1715,7 @@ fn resolve_configured_harness_binary(
     Ok(path)
 }
 
+/// Reject a configured executable when its provider-specific identity check fails.
 fn validate_configured_harness_binary_identity(
     provider: &str,
     path: &Path,
@@ -1963,6 +1968,7 @@ fn resolve_hermes() -> Option<PathBuf> {
     first_binary(candidates)
 }
 
+/// Find the first GitHub Copilot CLI in common installation directories or the login-shell PATH.
 fn resolve_copilot() -> Option<PathBuf> {
     let home = dirs_home().map(PathBuf::from);
     let mut candidates: Vec<PathBuf> = Vec::new();
