@@ -11,6 +11,8 @@ import {
   emptyApprovalProgress,
   injectRemoteText,
   queuedNotice,
+  REMOTE_ECHO_GRACE_MS,
+  REMOTE_SEND_GRACE_MS,
   remoteTurnBusy,
   remoteApprovalTransition,
   turnSignal,
@@ -1394,15 +1396,27 @@ describe("retiring and re-raising", () => {
 
 describe("whether a remote-controlled session shows as busy", () => {
   it("follows the mirror's turn", () => {
-    expect(remoteTurnBusy(true, false)).toBe(true);
-    expect(remoteTurnBusy(false, false)).toBe(false);
+    expect(remoteTurnBusy(true, false, null)).toBe(true);
+    expect(remoteTurnBusy(false, false, null)).toBe(false);
+    expect(remoteTurnBusy(false, false, 60_000)).toBe(false);
   });
 
-  it("stays busy while a local send has not reached the transcript", () => {
-    // The record for a message typed into the pty arrives a moment later; in
+  it("stays busy just after a local send, echo or no echo", () => {
+    // The record for a message typed into the pty arrives a moment later, and
+    // for the first awaits of the send not even the echo is registered yet; in
     // that window the mirror reads idle, and clearing busy on it stamped the
     // turn as over before it had begun.
-    expect(remoteTurnBusy(false, true)).toBe(true);
+    expect(remoteTurnBusy(false, false, 0)).toBe(true);
+    expect(remoteTurnBusy(false, true, 5_000)).toBe(true);
+    expect(remoteTurnBusy(false, false, REMOTE_SEND_GRACE_MS)).toBe(false);
+  });
+
+  it("believes an owed echo for a bounded while, not forever", () => {
+    // A send queued behind a long turn is owed for minutes, and the mirror
+    // is active for those minutes anyway. An echo still owed long after that
+    // is a record that never matched, and it must not pin busy.
+    expect(remoteTurnBusy(false, true, 5 * 60_000)).toBe(true);
+    expect(remoteTurnBusy(false, true, REMOTE_ECHO_GRACE_MS)).toBe(false);
   });
 });
 

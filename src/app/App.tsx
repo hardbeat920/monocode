@@ -1362,9 +1362,10 @@ export default function App({
          */
         followTurn: () => void;
         /**
-         * Clear `busy` when neither the mirror nor an owed echo says the
-         * session is working. For a send that was refused: the composer marked
-         * the session busy before the send, and nothing else would clear it.
+         * Clear `busy` when neither the mirror, a recent send nor an owed echo
+         * says the session is working. For a send that was refused: the
+         * composer marked the session busy before the send, and this is what
+         * clears it without waiting for the clock.
          */
         clearBusyIfIdle: () => void;
         /**
@@ -1400,6 +1401,12 @@ export default function App({
    * first mirrored message that matches it.
    */
   const remoteEcho = useRef(new Map<string, string[]>());
+  /**
+   * When this app last sent into each session's pty. Set before the send's
+   * first await, so the window between the composer marking the session busy
+   * and the echo being registered is covered — see `remoteTurnBusy`.
+   */
+  const remoteSentAt = useRef(new Map<string, number>());
   const [remoteControlIds, setRemoteControlIds] = useState<readonly string[]>(
     [],
   );
@@ -1601,6 +1608,7 @@ export default function App({
     ): Promise<void> | null => {
       const entry = remoteControl.current.get(sessionId);
       if (!entry) return null;
+      remoteSentAt.current.set(sessionId, Date.now());
       const note = (body: string) => {
         enqueueHarnessEvent(sessionId, {
           type: "interjection",
@@ -1638,7 +1646,9 @@ export default function App({
             );
             flushHarnessEvents();
             // The composer marked the session busy before the send; with no
-            // echo owed and no turn opened, this is what clears it.
+            // echo owed and no turn opened, this is what clears it. The send
+            // stamp goes first, or the grace it grants would keep busy on.
+            remoteSentAt.current.delete(sessionId);
             entry.clearBusyIfIdle();
             return;
           }
@@ -1652,6 +1662,7 @@ export default function App({
               `The message was typed into the terminal, but its composer is still holding "${outcome.held}" instead of submitting it. Open the terminal for this session and press Enter to send it, or clear it — while the composer holds text, later sends are refused too.`,
             );
             flushHarnessEvents();
+            remoteSentAt.current.delete(sessionId);
             entry.clearBusyIfIdle();
             return;
           }
@@ -1854,33 +1865,35 @@ export default function App({
        * Clear `busy` if nothing says the session is working.
        *
        * Nothing, not "the mirror": a message just typed into the pty has no
-       * record yet, so the mirror reads idle while the turn is about to start,
-       * and the owed echo is what says so. Called on the mirror's turn closing
-       * and by a send that was refused — never from a clock, because between
-       * the composer marking the session busy and the echo being registered
-       * there are real awaits, and a tick in that gap would stop a turn that
-       * has not been sent yet.
+       * record yet, so the mirror reads idle while the turn is about to start;
+       * the time of the last local send and the owed echo are what say so, on
+       * the terms `remoteTurnBusy` sets out. Called on the mirror's turn
+       * closing, by a send that was refused, and from the liveness clock as a
+       * backstop — a `busy` that nothing will ever clear is the one state
+       * worse than a wrong duration, and the clock is safe now that a send
+       * stamps its time before its first await.
        */
       const clearBusyIfIdle = () => {
+        const sentAt = remoteSentAt.current.get(sessionId);
         if (
           remoteTurnBusy(
             mirror.turn.active,
             (remoteEcho.current.get(sessionId)?.length ?? 0) > 0,
+            sentAt === undefined ? null : Date.now() - sentAt,
           )
         ) {
           return;
         }
+        const session = sessionsRef.current.find((s) => s.id === sessionId);
+        if (!session?.busy) return;
         setSessions((prev) =>
-          prev.map((session) =>
-            session.id === sessionId && session.busy
-              ? stopStreaming(session)
-              : session,
+          prev.map((entry) =>
+            entry.id === sessionId && entry.busy ? stopStreaming(entry) : entry,
           ),
         );
-        const session = sessionsRef.current.find((s) => s.id === sessionId);
         notifyReviewChanged(sessionId);
         notifyGitChanged();
-        if (session) nudgeWorkspace(sessionWorkCwd(session));
+        nudgeWorkspace(sessionWorkCwd(session));
         nudgeWatchedFiles();
       };
       // Transitions of the *mirror's* turn, not a copy of `busy`. The composer
@@ -1955,6 +1968,7 @@ export default function App({
       const liveness = setInterval(() => {
         settleTurn();
         syncRemoteApproval(sessionId);
+        clearBusyIfIdle();
       }, 1000);
       let unsubscribe = () => undefined as void;
       remoteControl.current.set(sessionId, {
@@ -2120,6 +2134,7 @@ export default function App({
           return next;
         });
         remoteEcho.current.delete(sessionId);
+        remoteSentAt.current.delete(sessionId);
         entry.stop();
       } else if (byUser) {
         remoteControlClosed.current.add(sessionId);
@@ -6836,6 +6851,9 @@ export default function App({
         });
         flushHarnessEvents();
         return false;
+      }
+      if (remoteControl.current.has(sessionId)) {
+        remoteSentAt.current.set(sessionId, Date.now());
       }
       const submittedText = intent === "build" ? "Build approved plan" : text;
       const operatorCommand = consumeOperatorCommand(submittedText);

@@ -995,6 +995,11 @@ export function remoteApprovalTransition(
 
 // ------------------------------------------------------------- turn liveness
 
+/** How long a local send keeps a session busy before its record has shown up. */
+export const REMOTE_SEND_GRACE_MS = 30_000;
+/** How long an owed echo is believed. Past this it is a mismatch, not a wait. */
+export const REMOTE_ECHO_GRACE_MS = 10 * 60_000;
+
 /**
  * Whether a remote-controlled session should show as busy.
  *
@@ -1002,12 +1007,27 @@ export function remoteApprovalTransition(
  * resolves the moment its bytes are verified in the pty, so read that way every
  * remote turn "worked for 1s" while the TUI went on for minutes. The truth is in
  * the mirror — a user record opens a turn, `turn_duration` or the screen closes
- * it — with one gap: right after a local send the record has not been written
- * yet, and the mirror reads idle. The echo registry is exactly "sent here, not
- * yet in the transcript", so an owed echo keeps the session busy across it.
+ * it — with two gaps, both bridged by when the last local send happened.
+ *
+ * Right after a send nothing has been written yet: not the record, and for the
+ * first awaits of the send function not even the echo. A recent send keeps the
+ * session busy on its own. And a send queued behind a running turn is owed for
+ * as long as that turn runs, which the echo registry says — but an echo is a
+ * string match against a record nobody controls, and one that never matches
+ * must not pin `busy` forever. So an owed echo is believed for a bounded
+ * while, after which the session is only as busy as the mirror says.
+ *
+ * `sentAgoMs` is `null` when nothing was ever sent from here.
  */
-export function remoteTurnBusy(turnActive: boolean, echoOwed: boolean): boolean {
-  return turnActive || echoOwed;
+export function remoteTurnBusy(
+  turnActive: boolean,
+  echoOwed: boolean,
+  sentAgoMs: number | null,
+): boolean {
+  if (turnActive) return true;
+  if (sentAgoMs === null) return false;
+  if (sentAgoMs < REMOTE_SEND_GRACE_MS) return true;
+  return echoOwed && sentAgoMs < REMOTE_ECHO_GRACE_MS;
 }
 
 /**
