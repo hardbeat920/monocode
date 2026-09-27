@@ -308,26 +308,45 @@ fn begin_session_search(owner: &str) -> Option<SessionSearchToken> {
     })
 }
 
-/// Release the entry a finished search was holding.
+/// Release the entry a finished search was holding, on every exit path.
 ///
 /// Every search runs under a fresh `searchOwner` (`SearchView` mints a UUID per
 /// keystroke), so an entry left behind is never reused or overwritten — it just
-/// accumulates for the life of the process. Only the current generation may
-/// release it: a search that has already been superseded must leave the newer
-/// counter in place, or it would hand the next search a fresh generation and
-/// silently un-cancel itself.
+/// accumulates for the life of the process. A plain call after the search would
+/// not do: the search returns through `?` on any SQLite error, and `SearchView`
+/// swallows the rejection, so the error path is the common case, not the rare
+/// one. `Drop` covers the early return and the unwind both.
+struct SessionSearchRelease(Option<SessionSearchToken>);
+
+impl Drop for SessionSearchRelease {
+    fn drop(&mut self) {
+        end_session_search(self.0.as_ref());
+    }
+}
+
+/// The generation check happens under the map lock, not before it.
+///
+/// `begin_session_search` bumps the counter while holding that same lock, so
+/// checking `is_current` outside the critical section leaves a window: a newer
+/// search can register in between, and since both tokens share one `Arc`, the
+/// `ptr_eq` test cannot tell them apart. Removing the entry then would strip
+/// the live search of its registration, leaving it running and impossible to
+/// cancel. The superseded search must leave the newer counter alone, so the
+/// whole decision has to be atomic with respect to registration.
 fn end_session_search(token: Option<&SessionSearchToken>) {
-    let Some(token) = token.filter(|token| token.is_current()) else {
+    let Some(token) = token else {
         return;
     };
     let Ok(mut tokens) = SESSION_SEARCH_TOKENS.lock() else {
         return;
     };
-    if let Some(registered) = tokens.as_ref().and_then(|tokens| tokens.get(&token.owner)) {
-        if Arc::ptr_eq(registered, &token.counter) {
-            if let Some(tokens) = tokens.as_mut() {
-                tokens.remove(&token.owner);
-            }
+    let ours = tokens
+        .as_ref()
+        .and_then(|tokens| tokens.get(&token.owner))
+        .is_some_and(|registered| Arc::ptr_eq(registered, &token.counter) && token.is_current());
+    if ours {
+        if let Some(tokens) = tokens.as_mut() {
+            tokens.remove(&token.owner);
         }
     }
 }
@@ -404,6 +423,7 @@ fn search_store(
     options: &SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
     let token = begin_session_search(&options.search_owner);
+    let release = SessionSearchRelease(token.clone());
     let result = {
         let read_conn = store
             .read_conn
@@ -416,7 +436,7 @@ fn search_store(
             search_sessions_with_connection(&conn, options, token.as_ref())?
         }
     };
-    end_session_search(token.as_ref());
+    drop(release);
     if session_search_is_current(token.as_ref()) {
         Ok(result)
     } else {
@@ -3190,6 +3210,30 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+        cancel_owned_session_search(owner);
+    }
+
+    #[test]
+    fn a_failed_session_search_releases_its_token() {
+        let store = SessionStore::open_in_memory().unwrap();
+        // Point the read connection at a database with no schema, so the search
+        // fails inside SQLite. That error return is the path that used to skip
+        // the release, and `SearchView` swallows the rejection.
+        *store.read_conn.lock().unwrap() = Some(Connection::open_in_memory().unwrap());
+        let owner = "failed-session-search-owner";
+
+        let error = search_store(
+            &store,
+            &SessionSearchOptions {
+                query: "Needle".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: owner.into(),
+            },
+        );
+
+        assert!(error.is_err(), "a search with no schema must fail");
+        assert!(!session_search_token_registered(owner));
     }
 
     #[test]
