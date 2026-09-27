@@ -40,6 +40,7 @@ import {
 } from "../model/attachments";
 import { resizeComposer } from "../model/composerResize";
 import {
+  isFileReferenceText,
   messageFilesFromClipboard,
   nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
@@ -720,6 +721,7 @@ export function Composer({
       const next = mergeAttachments(attachmentsRef.current, incoming);
       attachmentsRef.current = next;
       setAttachments(next);
+      setPasteError(null);
       draftRevisionRef.current += 1;
       syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
@@ -738,6 +740,7 @@ export function Composer({
       attachmentsRef.current = next;
       draftRevisionRef.current += 1;
       setAttachments(next);
+      setPasteError(null);
       syncHasValue(ref.current?.value ?? "", next);
       ref.current?.focus();
     },
@@ -1620,15 +1623,19 @@ export function Composer({
     }
     const files = filesFromClipboard(e.clipboardData);
     if (files.length === 0) {
-      // A webview reports a paste as text only, so a file copied in a file
-      // manager or a screenshot arrives with nothing to attach. Both live on
-      // the native clipboard. Keep the webview's own handling for a text
-      // paste, and never let an unreadable clipboard delay it.
+      // A webview reports a paste as text only, so a screenshot or a file
+      // copied in a file manager arrives with nothing to attach; both live on
+      // the native clipboard. A genuine text paste is left to the webview and
+      // costs no clipboard read.
       if (!attachmentsSupported) return;
       const text = e.clipboardData.getData("text/plain");
-      if (!text) e.preventDefault();
+      if (text.trim() && !isFileReferenceText(text)) return;
+      if (!text.trim()) e.preventDefault();
       void nativeClipboardAttachments(text)
-        .then(addAttachments)
+        .then(({ files: pasted, warning }) => {
+          if (pasted.length) addAttachments(pasted);
+          if (warning) setPasteError(warning);
+        })
         .catch((reason: unknown) =>
           setPasteError(
             reason instanceof Error ? reason.message : String(reason),
@@ -1968,6 +1975,7 @@ export function Composer({
                 resizeComposer(el);
                 draftRevisionRef.current += 1;
                 setDraft(el.value);
+                setPasteError(null);
                 if (
                   sessionFolderSelected &&
                   !consumeSessionFolderCommand(el.value).matched

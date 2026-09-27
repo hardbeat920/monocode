@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { MAX_ATTACHMENTS } from "../model/attachments";
 import { Composer } from "./Composer";
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -64,13 +65,44 @@ function paste(target: HTMLTextAreaElement, text = "") {
 }
 
 /** Wait for the async clipboard read and the attachments it adds. */
+/** Every chip renders a `Remove <name>` control. */
+function chipCount() {
+  return container.querySelectorAll('[aria-label^="Remove "]').length;
+}
+
+function alert() {
+  return container.querySelector('[role="alert"]')?.textContent ?? null;
+}
+
+/**
+ * Wait for an outcome rather than a fixed delay: reading a clipboard image
+ * crosses an IPC hop and a FileReader, so the chain needs real macrotasks to
+ * finish. `vi.waitFor` cannot be used here because polling inside `act` starves
+ * the FileReader timer.
+ */
+async function settleUntil(check: () => boolean, what: string) {
+  for (let waited = 0; waited < 2000; waited += 10) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    if (check()) return;
+  }
+  throw new Error(`Timed out waiting for ${what}.`);
+}
+
+/** A paste that is expected to attach nothing still needs its chain flushed. */
 async function settle() {
   await act(async () => {
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 10));
   });
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
+}
+
+async function waitForAttachments(count: number) {
+  await settleUntil(() => chipCount() === count, `${count} attachment chip(s)`);
+}
+
+async function waitForAlert() {
+  await settleUntil(() => alert() !== null, "an attachment error");
 }
 
 async function send() {
@@ -79,10 +111,6 @@ async function send() {
       .querySelector<HTMLButtonElement>('button[aria-label="Send"]')!
       .click(),
   );
-}
-
-function alert() {
-  return container.querySelector('[role="alert"]')?.textContent ?? null;
 }
 
 beforeEach(() => {
@@ -118,7 +146,7 @@ afterEach(() => {
 
 it("attaches an image the paste event reports as neither file nor text", async () => {
   const event = paste(render());
-  await settle();
+  await waitForAttachments(1);
   await send();
 
   expect(event.defaultPrevented).toBe(true);
@@ -135,7 +163,7 @@ it("attaches an image the paste event reports as neither file nor text", async (
 it("attaches a file copied in a file manager, leaving its text to the webview", async () => {
   clipboardPaths = ["/home/dev/report.pdf"];
   const event = paste(render(), "file:///home/dev/report.pdf");
-  await settle();
+  await waitForAttachments(1);
   await send();
 
   // A file copy is not a screenshot, so the image read is never reached.
@@ -153,7 +181,7 @@ it("attaches a file copied in a file manager, leaving its text to the webview", 
 it("attaches a copied file even when the webview sees no text at all", async () => {
   clipboardPaths = ["/home/dev/notes.md"];
   paste(render());
-  await settle();
+  await waitForAttachments(1);
   await send();
 
   expect(submit.mock.calls[0][1]).toEqual([
@@ -164,8 +192,8 @@ it("attaches a copied file even when the webview sees no text at all", async () 
 it("attaches a copied folder so its path reaches the agent", async () => {
   clipboardPaths = ["/home/dev/reports"];
   clipboardPathsAreDirs = true;
-  paste(render(), "reports");
-  await settle();
+  paste(render(), "file:///home/dev/reports");
+  await waitForAttachments(1);
   await send();
 
   expect(submit.mock.calls[0][1]).toEqual([
@@ -179,20 +207,36 @@ it("attaches a copied folder so its path reaches the agent", async () => {
 
 it("reports a copy that holds nothing attachable", async () => {
   clipboardPaths = ["/home/dev/.DS_Store"];
-  paste(render(), ".DS_Store");
-  await settle();
+  paste(render(), "file:///home/dev/.DS_Store");
+  await waitForAlert();
 
   expect(alert()).toBe(
-    "Nothing to attach in that path. Hidden system files are skipped.",
+    "Nothing to attach from that path — the file may have been moved, renamed, or deleted.",
   );
 });
 
-it("leaves a text paste to the webview instead of reading image bytes", async () => {
+it("attaches what fits and says how many copies it left out", async () => {
+  clipboardPaths = Array.from(
+    { length: MAX_ATTACHMENTS + 3 },
+    (_, index) => `/home/dev/file-${index}.txt`,
+  );
+  paste(render(), "file:///home/dev/file-0.txt");
+  await waitForAlert();
+
+  expect(alert()).toBe(
+    `Attached ${MAX_ATTACHMENTS} of ${MAX_ATTACHMENTS + 3} copied files. A turn carries up to ${MAX_ATTACHMENTS}.`,
+  );
+  await send();
+  expect(submit.mock.calls[0][1]).toHaveLength(MAX_ATTACHMENTS);
+});
+
+it("leaves a text paste to the webview without reading the native clipboard", async () => {
   const event = paste(render(), "pasted words");
   await settle();
 
   expect(event.defaultPrevented).toBe(false);
-  expect(invoke).not.toHaveBeenCalledWith("clipboard_image");
+  // A real text paste must not cost a clipboard read at all.
+  expect(invoke).not.toHaveBeenCalled();
   expect(alert()).toBeNull();
   expect(submit).not.toHaveBeenCalled();
 });
@@ -204,7 +248,7 @@ it("reports why a clipboard image could not be attached", async () => {
     return [];
   });
   paste(render());
-  await settle();
+  await waitForAlert();
 
   expect(alert()).toBe(
     "Clipboard image is too large to attach (maximum 20 MB).",

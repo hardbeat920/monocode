@@ -45,19 +45,29 @@ fn file_paths_from(pb: &objc2_app_kit::NSPasteboard) -> Vec<String> {
 /// Wayland, `public.file-url` on macOS, `CF_HDROP` on Windows) that a paste
 /// event does not surface, so the webview sees nothing to attach.
 #[tauri::command(async)]
-pub fn clipboard_file_paths() -> Vec<String> {
+pub fn clipboard_file_paths() -> Result<Vec<String>, String> {
     #[cfg(target_os = "macos")]
     {
-        clean_clipboard_paths(file_paths_from(
+        Ok(clean_clipboard_paths(file_paths_from(
             &objc2_app_kit::NSPasteboard::generalPasteboard(),
-        ))
+        )))
     }
     #[cfg(not(target_os = "macos"))]
     {
         arboard::Clipboard::new()
             .and_then(|mut clipboard| clipboard.get().file_list())
             .map(clean_clipboard_paths)
-            .unwrap_or_default()
+            .map_err(|error| describe_clipboard_error(&error))
+    }
+}
+
+/// arboard's own wording is developer-facing; the user needs to know whether
+/// there was simply nothing there or the clipboard could not be reached.
+#[cfg(not(target_os = "macos"))]
+fn describe_clipboard_error(error: &arboard::Error) -> String {
+    match error {
+        arboard::Error::ContentNotAvailable => "The clipboard holds no files.".into(),
+        _ => "The clipboard could not be read on this system.".into(),
     }
 }
 
@@ -113,9 +123,10 @@ pub async fn clipboard_image() -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Screenshots are decoded to RGBA before they reach us, so the clipboard
-/// image is bounded by pixels here and by encoded size afterwards.
-const MAX_CLIPBOARD_PIXELS: u64 = 100_000_000;
+/// Bounds the PNG encode, not the decode: arboard has already turned the
+/// clipboard bytes into RGBA by the time we see them, so this only rejects an
+/// image too large to re-encode. 40 MP covers an 8000x5000 capture.
+const MAX_CLIPBOARD_PIXELS: u64 = 40_000_000;
 
 fn clipboard_png() -> Result<Vec<u8>, String> {
     let image = arboard::Clipboard::new()

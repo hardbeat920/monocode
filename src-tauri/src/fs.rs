@@ -5092,7 +5092,19 @@ fn write_attachment_sync(name: &str, data: &str) -> Result<String, String> {
         stamp,
         safe_attachment_name(name)
     ));
-    std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    // A pasted screenshot can be a picture of whatever was on screen, so keep
+    // it owner-only rather than at the umask default of 0644 in a shared /tmp.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(&path)
+        .and_then(|mut file| file.write_all(&bytes))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path.to_string_lossy().into_owned())
 }
 

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   attachmentsFromFiles,
   attachmentsFromPaths,
+  isAttachmentFolder,
   MAX_ATTACHMENTS,
   MAX_EMBED_BYTES,
 } from "../../features/sessions/model/attachments";
@@ -26,6 +27,9 @@ export async function copyMessage(
 ): Promise<void> {
   const files: CopiedFile[] = [];
   for (const attachment of attachments) {
+    // A folder has no bytes to copy, and asking for them fails the whole copy
+    // including the text. The transcript's path text carries it instead.
+    if (isAttachmentFolder(attachment)) continue;
     if (
       attachment.kind === "image" &&
       !attachment.data &&
@@ -151,7 +155,63 @@ export async function copyText(text: string): Promise<void> {
 }
 
 /**
- * Paths for files copied in a file manager, empty when it holds none.
+ * True when the clipboard text is a file reference rather than prose, so a
+ * file-manager copy is not mistaken for a text paste.
+ *
+ * A file manager that also publishes plain text publishes the path as a
+ * `file://` URI, so that is the only shape treated as a reference. Anything
+ * else — including a URL from "copy image" in a browser — is a text paste.
+ */
+export function isFileReferenceText(text: string): boolean {
+  return text.trim().toLowerCase().startsWith("file:");
+}
+
+export type NativeClipboardPaste = {
+  files: Attachment[];
+  /** Set when the clipboard held more copies than one turn can carry. */
+  warning?: string;
+};
+
+/**
+ * Attachments for a paste the webview reported without a single file.
+ *
+ * `text` is what the webview saw on the clipboard. Copies made in a file
+ * manager and screenshots reach us only through the native clipboard, so try
+ * paths before image bytes; an image is only worth reading when the paste
+ * carried no text at all.
+ */
+export async function nativeClipboardAttachments(
+  text: string,
+): Promise<NativeClipboardPaste> {
+  const paths = await readClipboardFilePaths();
+  if (paths.length) {
+    const kept = paths.slice(0, MAX_ATTACHMENTS);
+    const files = await attachmentsFromPaths(kept);
+    if (!files.length)
+      throw new Error(
+        `Nothing to attach from ${
+          kept.length === 1 ? "that path" : "those paths"
+        } — the file may have been moved, renamed, or deleted.`,
+      );
+    return {
+      files,
+      ...(kept.length < paths.length
+        ? {
+            warning: `Attached ${kept.length} of ${paths.length} copied files. A turn carries up to ${MAX_ATTACHMENTS}.`,
+          }
+        : {}),
+    };
+  }
+  if (text) return { files: [] };
+  return { files: await attachmentsFromFiles([await readClipboardImage()]) };
+}
+
+/**
+ * Paths for files copied in a file manager. Empty when the clipboard holds no
+ * files or cannot be read, since a paste must not fail over either.
+ *
+ * Invokes the command directly rather than through `fs.clipboardFilePaths`:
+ * that module pulls in the dialog plugin, which nothing here needs.
  */
 export async function readClipboardFilePaths(): Promise<string[]> {
   try {
@@ -163,35 +223,11 @@ export async function readClipboardFilePaths(): Promise<string[]> {
 }
 
 /**
- * Attachments for a paste the webview reported without a single file.
- *
- * `text` is what the webview saw on the clipboard. Copies made in a file
- * manager and screenshots reach us only through the native clipboard, so try
- * paths before image bytes, and leave a text paste alone.
- */
-export async function nativeClipboardAttachments(
-  text: string,
-): Promise<Attachment[]> {
-  const paths = await readClipboardFilePaths();
-  if (paths.length) {
-    const files = await attachmentsFromPaths(paths);
-    if (files.length) return files;
-    throw new Error(
-      `Nothing to attach in ${
-        paths.length === 1 ? "that path" : "those paths"
-      }. Hidden system files are skipped.`,
-    );
-  }
-  if (text) return [];
-  return attachmentsFromFiles([await readClipboardImage()]);
-}
-/**
  * An image held by the native clipboard, as a `File`.
  *
  * A webview's paste event carries text only, so images copied by a screenshot
  * tool never reach `clipboardData.files`. Throws with a message worth showing
- * when the clipboard has no readable image; callers only ask when the paste
- * event carried neither a file nor text.
+ * when the clipboard has no readable image.
  */
 export async function readClipboardImage(): Promise<File> {
   let buffer: ArrayBuffer;

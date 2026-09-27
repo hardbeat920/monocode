@@ -417,7 +417,11 @@ export function movePath(from: string, destParent: string): Promise<string> {
   return invoke<string>("move_path", { from, destParent }).then(slash);
 }
 
-/** macOS only. Other platforms return an empty list. */
+/**
+ * Paths for files copied in a file manager, on macOS, Linux and Windows.
+ * Rejects when the clipboard cannot be read; an empty list means it holds no
+ * files.
+ */
 export function clipboardFilePaths(): Promise<string[]> {
   return invoke<string[]>("clipboard_file_paths").then((paths) =>
     paths.map(slash),
