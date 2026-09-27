@@ -5373,6 +5373,11 @@ export default function App({
           if (!session) continue;
           await flushSessionCheckpoint(id);
           forgottenIds.add(id);
+          // The hand-over goes with the session, as it does for a single
+          // delete; see `onRemoveProject`.
+          if (remoteControl.current.has(id)) {
+            await closeRemote(id, true).catch(() => undefined);
+          }
           for (const harness of sessionChildHarnesses(session)) {
             await forgetHarnessSession(harness, id);
           }
@@ -5443,6 +5448,7 @@ export default function App({
     },
     [
       checkOpenWorktreeFiles,
+      closeRemote,
       invalidateLoadedSession,
       onCheckWorktreeRemoval,
       stopSessionForRemoval,
@@ -6358,6 +6364,16 @@ export default function App({
         if (!projectSessionIds.has(session.id)) return true;
         return !options.purgeData && session.busy;
       });
+      // A dropped session's hand-over goes with it. Deleting a single session
+      // has always closed Remote Control for it; removing the whole project
+      // stopped the harness children and left the pty running, listed on the
+      // phone, with its watcher and clock still ticking in this window.
+      const kept = new Set(nextSessions.map((session) => session.id));
+      for (const session of projectSessions) {
+        if (kept.has(session.id)) continue;
+        if (!remoteControl.current.has(session.id)) continue;
+        void closeRemote(session.id, true).catch(() => undefined);
+      }
       let nextActiveTabId = activeTabIdRef.current;
 
       if (nextTabs.length === 0) {
@@ -6406,7 +6422,13 @@ export default function App({
         }
       }
     },
-    [activeTabId, invalidateLoadedSession, onSelectProject, persistSession],
+    [
+      activeTabId,
+      closeRemote,
+      invalidateLoadedSession,
+      onSelectProject,
+      persistSession,
+    ],
   );
 
   const onRestoreProject = useCallback(
