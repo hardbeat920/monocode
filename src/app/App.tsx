@@ -1460,6 +1460,23 @@ export default function App({
   const [remoteTerminalMinimizedIds, setRemoteTerminalMinimizedIds] = useState<
     ReadonlySet<string>
   >(new Set());
+  /**
+   * The minimized set, readable from the long-lived closures that cannot see
+   * render state. "Open" and "in front of the user" parted ways when Hide
+   * became a minimize: `remoteTerminals` kept the session, so the send gate
+   * went on refusing every message as typed into an open terminal, and the
+   * approval view went on raising nothing, for a terminal nobody could see —
+   * until Remote Control was closed. What the gate is guarding against is a
+   * keystroke landing beside the user's own, and a folded terminal takes none.
+   */
+  const remoteTerminalHidden = useRef<ReadonlySet<string>>(new Set());
+  remoteTerminalHidden.current = remoteTerminalMinimizedIds;
+  const remoteTerminalInFront = useCallback(
+    (sessionId: string) =>
+      remoteTerminals.current.has(sessionId) &&
+      !remoteTerminalHidden.current.has(sessionId),
+    [],
+  );
   /** Per session, so the link can render. `undefined` renders nothing. */
   const [remoteBridges, setRemoteBridges] = useState<
     Readonly<Record<string, BridgeStatus>>
@@ -1481,7 +1498,7 @@ export default function App({
         ? remoteApprovalView({
             pending: entry.pending.size > 0,
             screen,
-            terminalOpen: remoteTerminals.current.has(sessionId),
+            terminalOpen: remoteTerminalInFront(sessionId),
           })
         : ({ kind: "none" } as const);
 
@@ -1636,7 +1653,7 @@ export default function App({
         else return;
         takeInjectedEcho(echoes, echo);
       };
-      return injectRemoteText(text, remoteTerminals.current.has(sessionId), {
+      return injectRemoteText(text, remoteTerminalInFront(sessionId), {
         write: (bytes) => writePty(entry.ptyId, bytes),
         screen: () => entry.screen.screen,
         settle: () => new Promise((resolve) => setTimeout(resolve, 25)),
