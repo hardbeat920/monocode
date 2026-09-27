@@ -864,17 +864,75 @@ input,
     color-mix(in srgb, var(--color-content) 20%, transparent);
 }
 
+.agent-markdown {
+  --agent-markdown-list-indent: 1.5rem;
+}
+
 .agent-markdown [data-streamdown="ordered-list"],
 .agent-markdown [data-streamdown="unordered-list"] {
   list-style-position: outside;
   padding-left: 0;
-  padding-inline-start: 1.5rem;
+  padding-inline-start: var(--agent-markdown-list-indent);
 }
 
 .agent-markdown li > [data-streamdown="ordered-list"],
 .agent-markdown li > [data-streamdown="unordered-list"] {
   padding-left: 0;
-  padding-inline-start: 1.5rem;
+  padding-inline-start: var(--agent-markdown-list-indent);
+}
+
+.agent-markdown li:has(input[type="checkbox"]) {
+  list-style: none;
+}
+
+.agent-markdown li input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  display: inline-block;
+  vertical-align: -0.15em;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-inline-start: calc(-1 * var(--agent-markdown-list-indent));
+  margin-inline-end: 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--color-content) 30%, transparent);
+  border-radius: 4px;
+  background-color: color-mix(in srgb, var(--color-content) 4%, transparent);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 78%;
+  cursor: default;
+}
+
+.agent-markdown li input[type="checkbox"]:checked {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.4l3.1 3.1 6.5-6.9' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Adapting beats forced-color-adjust: none here - the accent is only ~2.6:1 on
+   a light system Canvas. The tick is a background image, which the mode leaves
+   untouched, so only the box needs repainting. */
+@media (forced-colors: active) {
+  .agent-markdown li input[type="checkbox"] {
+    border-color: CanvasText;
+    background-color: Canvas;
+  }
+
+  .agent-markdown li input[type="checkbox"]:checked {
+    border-color: CanvasText;
+    background-color: Highlight;
+  }
+}
+
+/* Dim only the item's own text. A descendant `:has()` would also match an
+   ancestor li that merely contains a checked item in a nested list. */
+.agent-markdown li:has(> input[type="checkbox"]:checked) {
+  color: color-mix(in srgb, var(--color-content) 55%, transparent);
+}
+
+.agent-markdown li:has(> p > input[type="checkbox"]:checked) > p {
+  color: color-mix(in srgb, var(--color-content) 55%, transparent);
 }
 
 .inbox-comment-md.agent-markdown blockquote {
