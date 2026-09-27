@@ -240,7 +240,14 @@ export async function nativeClipboardAttachments(
     };
   }
   if (text) return { files: [] };
-  return { files: await attachmentsFromFiles([await readClipboardImage()]) };
+  try {
+    return { files: await attachmentsFromFiles([await readClipboardImage()]) };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    // An empty clipboard is a no-op. A real read failure still surfaces.
+    if (reason === "The clipboard does not contain an image.") return { files: [] };
+    throw error;
+  }
 }
 
 /**

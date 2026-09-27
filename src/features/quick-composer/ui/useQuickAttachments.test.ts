@@ -160,6 +160,52 @@ it("takes a file URI back out when the webview inserted it and the file attached
   field.remove();
 });
 
+it("reads a screenshot pasted while a collection is still running", async () => {
+  let release: (() => void) | undefined;
+  vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+    if (cmd === "inspect_paths") {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return (args as { paths: string[] }).paths.map((path) => ({
+        path,
+        name: path.split("/").pop(),
+        size: 4,
+        isDir: false,
+      }));
+    }
+    if (cmd === "clipboard_file_paths") return [];
+    if (cmd === "clipboard_image")
+      return new Uint8Array([137, 80, 78, 71]).buffer;
+    if (cmd === "write_attachment") return "/tmp/pasted.png";
+    if (cmd === "read_file_base64") return "dGVzdA==";
+    return [];
+  });
+
+  let pending: Promise<void>;
+  act(() => {
+    pending = api.chooseFiles();
+  });
+  const preventDefault = vi.fn();
+  await act(async () => {
+    api.onPaste({
+      clipboardData: { files: [], getData: () => "" },
+      preventDefault,
+    } as never);
+  });
+  // Nothing was inserted, and the image is not dropped on the floor.
+  expect(preventDefault).toHaveBeenCalled();
+  expect(api.files).toHaveLength(0);
+
+  await act(async () => {
+    release?.();
+    await pending!;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+
+  expect(api.files.map((file) => file.name)).toContain("clipboard-image.png");
+});
+
 it("leaves a file URI to the webview while a collection is running", async () => {
   let release: (() => void) | undefined;
   vi.mocked(invoke).mockImplementation(async (cmd, args) => {

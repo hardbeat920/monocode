@@ -47,6 +47,8 @@ export function useQuickAttachments(
   const loadingRef = useRef(false);
   const alive = useRef(true);
   const nativeDropAt = useRef(0);
+  /** A screenshot pasted while a collection is still running. */
+  const queuedScreenshot = useRef(false);
   const supportedRef = useRef(supported);
   supportedRef.current = supported;
 
@@ -109,6 +111,20 @@ export function useQuickAttachments(
       } finally {
         loadingRef.current = false;
         if (alive.current) setLoading(false);
+        // A screenshot has no text for the webview to keep, so it waits out
+        // the collection that was already running instead of being dropped.
+        if (
+          queuedScreenshot.current &&
+          alive.current &&
+          supportedRef.current
+        ) {
+          queuedScreenshot.current = false;
+          void collect(async () => {
+            const { files, warning } = await nativeClipboardAttachments("");
+            if (warning) onError(warning);
+            return files;
+          });
+        }
       }
     },
     [onError, canCollect],
@@ -151,8 +167,15 @@ export function useQuickAttachments(
       // Prose and whitespace alike are the webview's to insert, and cost no
       // clipboard read, spinner, or cleared error.
       if (text && !isFileReferenceText(text)) return;
-      // A withheld paste would have nowhere to go while a collection runs.
-      if (!canCollect()) return;
+      // A file URI can still be inserted by the webview. A screenshot cannot,
+      // so it waits until the collection in flight finishes.
+      if (!canCollect()) {
+        if (!text) {
+          event.preventDefault();
+          queuedScreenshot.current = true;
+        }
+        return;
+      }
       // A file URI becomes a chip, so it is kept out of the prompt; with no
       // text at all the paste carried an image the webview cannot see.
       event.preventDefault();

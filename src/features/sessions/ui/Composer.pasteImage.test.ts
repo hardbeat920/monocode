@@ -227,6 +227,79 @@ it("takes a file URI back out when the webview inserted it and the file attached
   expect(field.value).toBe("keep");
 });
 
+it("sends a screenshot that is still being read when the turn is sent", async () => {
+  let release: (() => void) | undefined;
+  invoke.mockImplementation(async (command: string) => {
+    if (command === "clipboard_file_paths") return [];
+    if (command === "clipboard_image") {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return PNG_BYTES.buffer;
+    }
+    return [];
+  });
+  paste(render("look"));
+  await send();
+  // The read is still out, so the turn has not gone without the image.
+  expect(submit).not.toHaveBeenCalled();
+
+  release?.();
+  await settleUntil(() => submit.mock.calls.length === 1, "the turn to include the screenshot");
+
+  expect(submit.mock.calls[0][0]).toBe("look");
+  expect(submit.mock.calls[0][1]).toEqual([
+    expect.objectContaining({ name: "clipboard-image.png", kind: "image" }),
+  ]);
+  // The chip went with the turn, not onto the cleared composer.
+  expect(chipCount()).toBe(0);
+});
+
+it("does not attach a file that finishes reading after the draft was reset", async () => {
+  let release: (() => void) | undefined;
+  invoke.mockImplementation(
+    async (command: string, args?: { paths?: string[] }) => {
+      if (command === "clipboard_file_paths") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return ["/home/dev/report.pdf"];
+      }
+      if (command === "inspect_paths")
+        return (args?.paths ?? []).map((path) => ({
+          path,
+          name: path.split("/").pop() ?? path,
+          size: 4096,
+          isDir: false,
+        }));
+      return [];
+    },
+  );
+  paste(render("keep"), "file:///home/dev/report.pdf");
+  rerender({ initialDraft: "", draftResetToken: 1 });
+  release?.();
+  await settle();
+
+  expect(chipCount()).toBe(0);
+  expect(container.querySelector("textarea")!.value).toBe("");
+});
+
+it("stays quiet when an empty paste has nothing to attach", async () => {
+  invoke.mockImplementation(async (command: string) => {
+    if (command === "clipboard_file_paths") return [];
+    if (command === "clipboard_image")
+      throw "The clipboard does not contain an image.";
+    return [];
+  });
+  const event = paste(render());
+  await settle();
+
+  expect(event.defaultPrevented).toBe(true);
+  expect(alert()).toBeNull();
+  expect(chipCount()).toBe(0);
+  expect(invoke).toHaveBeenCalledWith("clipboard_image");
+});
+
 it("keeps a file URI as draft text when the native read finds no copied path", async () => {
   clipboardPaths = [];
   const field = render("");

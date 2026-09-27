@@ -39,6 +39,111 @@ fn file_paths_from(pb: &objc2_app_kit::NSPasteboard) -> Vec<String> {
         .collect()
 }
 
+/// A Wayland clipboard read through the normal data-device offer.
+///
+/// arboard's data-control protocol is not implemented by Mutter, so on GNOME
+/// it falls back to X11 and misses the Wayland clipboard entirely. `wl-paste`
+/// reads the offer a focused client is allowed to see.
+enum WlPaste {
+    /// Bytes of the requested type.
+    Got(Vec<u8>),
+    /// `wl-paste` ran, and the clipboard has no such type.
+    Empty,
+    /// Not a Wayland session, or `wl-paste` is not installed.
+    Unavailable,
+    /// The clipboard could not be read.
+    Failed,
+}
+
+fn wl_paste(mime: &str) -> WlPaste {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return WlPaste::Unavailable;
+    }
+    let mut child = match std::process::Command::new("wl-paste")
+        .args(["--no-newline", "--type", mime])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return WlPaste::Unavailable,
+        Err(_) => return WlPaste::Failed,
+    };
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => return WlPaste::Failed,
+    };
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            if buf.len() as u64 > crate::fs::MAX_ATTACHMENT_EMBED_BYTES {
+                return Err(());
+            }
+            match std::io::Read::read(&mut stdout, &mut chunk) {
+                Ok(0) => return Ok(buf),
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(_) => return Err(()),
+            }
+        }
+    });
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let bytes = reader.join().unwrap_or(Err(()));
+                return match bytes {
+                    Err(()) => WlPaste::Failed,
+                    Ok(bytes) if status.success() => WlPaste::Got(bytes),
+                    Ok(_) => WlPaste::Empty,
+                };
+            }
+            Ok(None) if started.elapsed() < std::time::Duration::from_secs(2) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return WlPaste::Failed;
+            }
+            Err(_) => return WlPaste::Failed,
+        }
+    }
+}
+
+/// File paths from a `text/uri-list`, skipping comments and non-file URIs.
+fn paths_from_uri_list(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let paths = text
+        .split(['\n', '\r'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| url::Url::parse(line).ok())
+        .filter(|url| url.scheme() == "file")
+        .filter_map(|url| url.to_file_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    clean_clipboard_paths(paths)
+}
+
+#[cfg(not(target_os = "macos"))]
+enum WlPaths {
+    Found(Vec<String>),
+    Unavailable,
+    Failed,
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wayland_file_paths() -> WlPaths {
+    match wl_paste("text/uri-list") {
+        WlPaste::Got(bytes) => WlPaths::Found(paths_from_uri_list(&bytes)),
+        WlPaste::Empty => WlPaths::Found(Vec::new()),
+        WlPaste::Unavailable => WlPaths::Unavailable,
+        WlPaste::Failed => WlPaths::Failed,
+    }
+}
+
 /// Paths for files copied in a file manager, empty when it holds none.
 ///
 /// A file manager puts a URI list on the clipboard (`text/uri-list` on X11 and
@@ -58,6 +163,15 @@ pub fn clipboard_file_paths() -> Result<Vec<String>, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
+        // A missing uri-list is an empty clipboard. Falling through to X11
+        // would read a different clipboard than the one the user copied from.
+        match wayland_file_paths() {
+            WlPaths::Found(paths) => return Ok(paths),
+            WlPaths::Failed => {
+                return Err("The clipboard could not be read on this system.".into());
+            }
+            WlPaths::Unavailable => {}
+        }
         match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get().file_list()) {
             Ok(paths) => Ok(clean_clipboard_paths(paths)),
             Err(arboard::Error::ContentNotAvailable) => Ok(Vec::new()),
@@ -123,17 +237,38 @@ pub async fn clipboard_image() -> Result<tauri::ipc::Response, String> {
 /// image too large to re-encode. 40 MP covers an 8000x5000 capture.
 const MAX_CLIPBOARD_PIXELS: u64 = 40_000_000;
 
+const EMPTY_CLIPBOARD_IMAGE: &str = "The clipboard does not contain an image.";
+
 fn clipboard_png() -> Result<Vec<u8>, String> {
-    let image = arboard::Clipboard::new()
-        .and_then(|mut clipboard| clipboard.get_image())
-        .map_err(|error| error.to_string())?;
+    match wl_paste("image/png") {
+        WlPaste::Got(bytes) if bytes.is_empty() => {
+            return Err(EMPTY_CLIPBOARD_IMAGE.into());
+        }
+        WlPaste::Got(bytes) => return bounded_png(bytes),
+        WlPaste::Empty => return Err(EMPTY_CLIPBOARD_IMAGE.into()),
+        WlPaste::Failed => {
+            return Err("The clipboard could not be read on this system.".into());
+        }
+        WlPaste::Unavailable => {}
+    }
+    let image = match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_image()) {
+        Ok(image) => image,
+        // An empty clipboard is not a failure. The raw arboard message is not
+        // something to put in the composer.
+        Err(arboard::Error::ContentNotAvailable) => return Err(EMPTY_CLIPBOARD_IMAGE.into()),
+        Err(_) => return Err("The clipboard could not be read on this system.".into()),
+    };
     let (width, height) = u32::try_from(image.width)
         .ok()
         .zip(u32::try_from(image.height).ok())
-        .ok_or("The clipboard does not contain an image.")?;
+        .ok_or(EMPTY_CLIPBOARD_IMAGE)?;
     let png = encode_png(width, height, &image.bytes)?;
     // Guard the encoded size, not the pixels: a 4K screenshot is 33 MB of RGBA
     // but only a few MB of PNG, and that is what the harness receives.
+    bounded_png(png)
+}
+
+fn bounded_png(png: Vec<u8>) -> Result<Vec<u8>, String> {
     if png.len() as u64 > crate::fs::MAX_ATTACHMENT_EMBED_BYTES {
         return Err(format!(
             "Clipboard image is too large to attach (maximum {} MB).",
@@ -171,7 +306,7 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod path_tests {
-    use super::clean_clipboard_paths;
+    use super::{clean_clipboard_paths, paths_from_uri_list};
 
     /// What arboard hands back for a `text/uri-list` copied in a file manager.
     #[test]
@@ -193,6 +328,19 @@ mod path_tests {
         assert_eq!(
             clean_clipboard_paths(vec!["/home/dev/My Report.pdf\r"]),
             vec!["/home/dev/My Report.pdf".to_string()]
+        );
+    }
+
+    #[test]
+    fn reads_a_uri_list_the_wayland_clipboard_publishes() {
+        assert_eq!(
+            paths_from_uri_list(
+                b"file:///home/dev/My%20Report.pdf\r\n# comment\nfile:///home/dev/notes.md\nhttps://example.com/x\n"
+            ),
+            vec![
+                "/home/dev/My Report.pdf".to_string(),
+                "/home/dev/notes.md".to_string(),
+            ]
         );
     }
 
