@@ -2170,68 +2170,248 @@ html.theme-light .popover-backdrop {
   }
 }
 
-/* The btw thread borrows the chat transcript's quiet, asymmetric
-   language instead of introducing a second card system. */
-.btw-popover-surface {
-  background: transparent;
+/* /btw: a sheet that morphs out of the composer box over the transcript
+   (the clip is animated from BtwSheet). Its surface is the popover glass:
+   the same tint, blur, border, and shadow. */
+/* The session composer steps aside while the glass sheet's own composer
+   sits over it, so the two never show through each other. BtwSheet fades it
+   in step with the morph; this is its resting state under an open sheet. */
+[data-session-composer][inert] {
+  opacity: 0;
 }
 
-.btw-thread-chip {
-  background: color-mix(in srgb, var(--color-content) 5%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-content) 9%, transparent);
+/* Held on the first frame until the freshly mounted sheet has painted. */
+.btw-overlay[data-morph="pending"] .btw-sheet-body,
+.btw-overlay[data-morph="pending"] .btw-burst,
+.btw-overlay[data-morph="pending"] .btw-burst * {
+  animation-play-state: paused;
 }
 
-.btw-thread-chip:hover {
-  border-color: color-mix(in srgb, var(--color-content) 15%, transparent);
-}
-
-.btw-message {
-  min-width: 0;
-}
-
-.btw-message-assistant {
-  overflow: clip;
-  padding: 0 2px;
-}
-
-.btw-message-meta {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  color: color-mix(in srgb, var(--color-content) 48%, transparent);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.4;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.btw-empty-state {
-  display: flex;
-  min-height: 152px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 24px 20px;
-  border: 1px dashed color-mix(in srgb, var(--color-content) 14%, transparent);
-  border-radius: 12px;
+/* The composer's outline, carried between the session composer's box and
+   the side composer's box while their contents cross-fade inside it. */
+.btw-morph-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--color-content) 12%, transparent);
+  border-radius: var(--radius-lg, 0.5rem);
   background: color-mix(in srgb, var(--color-content) 3%, transparent);
+}
+
+html.theme-light .btw-morph-frame {
+  background: var(--color-background-base);
+  box-shadow:
+    0 6px 24px color-mix(in srgb, var(--color-content) 9%, transparent),
+    0 2px 6px color-mix(in srgb, var(--color-content) 6%, transparent);
+}
+
+/*
+ * Opening a side question: question marks drift up out of the composer into
+ * the panel, wobbling as they rise, while the composer box glows and a sheen
+ * crosses it. The /operator sparkles' cousin, in the accent color.
+ */
+.btw-burst {
+  --burst-color: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 70%,
+    white
+  );
+  --burst-glow: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 75%,
+    transparent
+  );
+  position: absolute;
+  pointer-events: none;
+  border-radius: var(--radius-lg, 0.5rem);
+  animation: btw-burst-halo 1100ms 60ms ease-out both;
+}
+
+html.theme-light .btw-burst {
+  --burst-color: var(--user-accent-color, var(--color-accent));
+  --burst-glow: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 45%,
+    transparent
+  );
+}
+
+.btw-burst-sheen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.btw-burst-sheen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--burst-color) 30%, transparent) 50%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  animation: btw-burst-sheen 900ms 140ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.btw-burst-mark {
+  position: absolute;
+  bottom: 45%;
+  left: var(--x);
+  width: 0;
+  height: 0;
+  animation: btw-mark-rise var(--duration) var(--delay)
+    cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+.btw-burst-glyph {
+  position: absolute;
+  bottom: 0;
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  color: var(--burst-color);
+  font-size: var(--size);
+  font-weight: 700;
+  line-height: 1;
   text-align: center;
+  text-shadow: 0 0 6px var(--burst-glow);
+  transform-origin: 50% 80%;
+  animation: btw-mark-wobble var(--duration) var(--delay) ease-in-out both;
 }
 
-.btw-empty-state p {
-  margin: 2px 0 0;
-  color: color-mix(in srgb, var(--color-content) 72%, transparent);
-  font-size: 13px;
+.btw-burst-ember {
+  left: calc(var(--size) / -2);
+  height: var(--size);
+  border-radius: 9999px;
+  background: radial-gradient(circle, white, var(--burst-color) 70%);
+  box-shadow: 0 0 6px var(--burst-glow);
 }
 
-.btw-empty-state span {
-  max-width: 28ch;
-  color: color-mix(in srgb, var(--color-content) 42%, transparent);
-  font-size: 11px;
-  line-height: 1.45;
+@keyframes btw-mark-rise {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(var(--drift), calc(var(--rise) * -1));
+  }
+}
+
+@keyframes btw-mark-wobble {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(0deg);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(1.15) rotate(var(--tilt));
+  }
+  45% {
+    transform: scale(0.9) rotate(calc(var(--tilt) * -0.6));
+  }
+  70% {
+    opacity: 0.9;
+    transform: scale(1) rotate(calc(var(--tilt) * 0.4));
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.6) rotate(0deg);
+  }
+}
+
+@keyframes btw-burst-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+  30% {
+    box-shadow:
+      0 0 0 1px var(--burst-glow),
+      0 0 28px 4px color-mix(in srgb, var(--burst-glow) 45%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+}
+
+@keyframes btw-burst-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btw-burst {
+    display: none;
+  }
+}
+
+.btw-sheet {
+  top: clamp(2.5rem, 18%, 12rem);
+}
+
+/* Match the composer box it morphs out of. */
+.btw-sheet-glass {
+  border: 1px solid color-mix(in srgb, var(--color-content) 10%, transparent);
+  border-bottom: 0;
+  border-radius: var(--radius-lg, 0.5rem) var(--radius-lg, 0.5rem) 0 0;
+  box-shadow:
+    0 20px 25px -5px rgb(0 0 0 / 0.1),
+    0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+
+/* Tabs and messages arrive once the panel has mostly opened; the composer
+   is where the morph starts, so it stays put. */
+.btw-sheet-body {
+  animation: btw-body-in 240ms 100ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.btw-overlay[data-state="closed"] {
+  pointer-events: none;
+}
+
+/* On close the side composer gives way to the session composer beneath
+   right away, while the panel is still folding down. */
+.btw-overlay[data-state="closed"] .btw-sheet-body,
+.btw-overlay[data-state="closed"] .btw-sheet-composer {
+  animation: btw-fade-out 120ms ease-in both;
+}
+
+@keyframes btw-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes btw-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btw-sheet-body,
+  .btw-overlay[data-state="closed"] .btw-sheet-body,
+  .btw-overlay[data-state="closed"] .btw-sheet-composer {
+    animation: none;
+  }
 }
 
 .btw-error {
@@ -2243,12 +2423,6 @@ html.theme-light .popover-backdrop {
   border: 1px solid color-mix(in srgb, #f87171 24%, transparent);
   border-radius: 10px;
   background: color-mix(in srgb, #f87171 7%, transparent);
-}
-
-@media (max-width: 560px) {
-  [data-btw-popover] .btw-message-assistant {
-    max-width: 100%;
-  }
 }
 
 /* The selected project mascot turns banked resets into a tiny status scene. */
