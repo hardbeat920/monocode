@@ -438,6 +438,7 @@ describe("live catalog overlays", () => {
 
     setHarnessModels("claude", live);
     expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus");
+    expect(resolveModel("claude", "claude:opus-5-5").id).toBe("claude:opus");
 
     // A relaunch starts with the built-in catalog until discovery completes.
     // The alias follows the newest bundled Opus, not whichever row is first.
@@ -473,6 +474,21 @@ describe("live catalog overlays", () => {
     expect(resolveModel("claude", "claude:opus-5-5").id).toBe("claude:opus-5-5");
     expect(nativeModelId("claude:opus-5-5")).toBe("claude-opus-5-5");
     expect(encodeModelLaunchId("claude:opus-5-5")).toBe("claude-opus-5-5");
+  });
+
+  it("prefers the bundled versioned model over a singleton fuzzy match", () => {
+    // Live catalog has only Opus 5, so `opus-5-5` prefix-matches that one
+    // row. Returning it would give ModelSettings the wrong AgentModel for a
+    // session saved on 5.5.
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus-5",
+        harness: "claude" as const,
+        name: "Opus 5",
+        nativeId: "claude-opus-5",
+      },
+    ]);
+    expect(resolveModel("claude", "claude:opus-5-5").id).toBe("claude:opus-5-5");
   });
 
   it("prefixes a short live-catalog native id before launching", () => {
@@ -540,6 +556,24 @@ describe("live catalog overlays", () => {
       "claude:opus-5-5",
     );
     expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus-5");
+    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5-5");
+  });
+
+  it("does not rank a dated Claude snapshot above a newer generation", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus-5-20260101",
+        harness: "claude" as const,
+        name: "Opus 5",
+        nativeId: "claude-opus-5-20260101",
+      },
+      {
+        id: "claude:opus-5-5",
+        harness: "claude" as const,
+        name: "Opus 5.5",
+        nativeId: "claude-opus-5-5",
+      },
+    ]);
     expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5-5");
   });
 });

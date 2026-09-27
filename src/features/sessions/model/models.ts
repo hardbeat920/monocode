@@ -363,8 +363,9 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     // moving alias, which the CLI owns. A versioned id gets no benefit from
     // guessing: `opus-5-5` prefix-matches both `opus` and `opus-5`, and
     // picking the first silently ran a different generation than the session
-    // was saved with. When several models match there is no defensible
-    // choice, so fall through to the bundled entry instead.
+    // was saved with. A singleton hit is still the live alias (`opus`) or
+    // the same id after stripping `claude-`; any other versioned prefix
+    // match is a different generation, so fall through to the bundled entry.
     const comparableSlug = comparableNativeId(harness, slug);
     const matches = (model: AgentModel) => {
       const native = model.nativeId ?? nativeIdFrom(model.id);
@@ -376,7 +377,19 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     };
     const hits = available.filter(matches);
     if (/\d/.test(comparableSlug)) {
-      if (hits.length === 1) return hits[0];
+      if (hits.length === 1) {
+        const hit = hits[0];
+        const comparableNative = comparableNativeId(
+          harness,
+          hit.nativeId ?? nativeIdFrom(hit.id),
+        );
+        if (
+          comparableNative === comparableSlug ||
+          !/\d/.test(comparableNative)
+        ) {
+          return hit;
+        }
+      }
     } else if (hits.length === 1) {
       return hits[0];
     } else if (hits.length > 1 && harness === "claude") {
@@ -949,7 +962,12 @@ function versionAfterFamily(
   if (!comparable.startsWith(prefix)) return null;
   const rest = comparable.slice(prefix.length);
   if (!/^\d+(?:-\d+)*$/.test(rest)) return null;
-  return rest.split("-").map((part) => Number.parseInt(part, 10));
+  const parts: number[] = [];
+  for (const part of rest.split("-")) {
+    if (/^\d{8}$/.test(part)) break;
+    parts.push(Number.parseInt(part, 10));
+  }
+  return parts.length > 0 ? parts : null;
 }
 
 function compareVersionParts(left: number[], right: number[]): number {
