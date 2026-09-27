@@ -68,6 +68,14 @@ export type HandoverPorts = {
     command: PtyCommand,
   ) => Promise<void>;
   killPty: (id: string) => Promise<void>;
+  /**
+   * Kills any earlier interactive process of this conversation, and returns
+   * how many there were. The CLI refuses to be the second one and exits with
+   * code 1, which is all the user saw when a hand-over was reopened over a
+   * process this window had lost track of. Optional so the pure tests need
+   * not provide it.
+   */
+  reapStale?: (providerSessionId: string) => Promise<number>;
 };
 
 export type RemoteControlHandle = {
@@ -124,6 +132,9 @@ export async function openRemoteControl(
   // the resume state is read, so it would go on owning the conversation and
   // appending to the transcript the pty is about to take over.
   await ports.stopSession(target.sessionId);
+  // Then any earlier hand-over of the same conversation, for the same reason:
+  // the CLI will not be the second interactive process on a session.
+  await ports.reapStale?.(providerSessionId).catch(() => 0);
 
   // Measured while neither process is running, so no record can land between
   // the measurement and the spawn and be missed by both sides.

@@ -138,6 +138,31 @@ describe("claude remote control handover", () => {
     // this order is the feature rather than a detail of it. The transcript is
     // measured in between, while neither side can be writing to it.
     expect(rec.calls).toEqual(["stop:s1", "transcriptEnd", "spawnPty:remote-control:s1"]);
+  });
+
+  it("reaps an earlier hand-over of the conversation before spawning", async () => {
+    // The CLI refuses to be the second interactive process on a session and
+    // exits with code 1 — all the user saw when a hand-over was reopened over
+    // a process this window had lost track of. Reaped after the headless
+    // child is stopped and before the transcript is measured, so no record
+    // from the old process lands past the measurement.
+    const { rec, ports } = recorder();
+    const reaped: string[] = [];
+    const handle = await openRemoteControl(target, {
+      ...ports,
+      reapStale: async (id) => {
+        rec.calls.push(`reap:${id}`);
+        reaped.push(id);
+        return 1;
+      },
+    });
+
+    expect(rec.calls).toEqual([
+      "stop:s1",
+      "reap:sess-abc",
+      "transcriptEnd",
+      "spawnPty:remote-control:s1",
+    ]);
     expect(handle).toEqual({ ptyId: "remote-control:s1", offset: 4096 });
   });
 

@@ -76,6 +76,7 @@ import {
   claudeFolderTrusted,
   claudeTrustFolder,
 } from "../platform/tauri/claudeTrust";
+import { reapRemoteControlSession } from "../platform/tauri/remoteControl";
 import {
   assertWorktreeFilesClosed,
   createOrchestrationWorktree,
@@ -1882,6 +1883,7 @@ export default function App({
           { sessionId, providerSessionId, cwd, name },
           {
             stopSession: (id) => stopHarnessSession("claude", id),
+            reapStale: reapRemoteControlSession,
             // Byte length, matching the cursor the watcher advances. A
             // transcript that is not there yet starts the mirror at zero, which
             // is correct: there is nothing before it to skip.
@@ -2230,6 +2232,17 @@ export default function App({
           // construction rather than by a flag someone has to remember to set.
           if (!remoteControl.current.has(sessionId)) return;
           const plan = planRemoteExit(code);
+          // The CLI says why it exited, on its screen, and the notice used to
+          // carry only the code. The last painted lines go with it.
+          const lastLines = (state.screen?.lines ?? [])
+            .map((line) => line.trimEnd())
+            .filter((line) => line.trim().length > 0)
+            .slice(-6)
+            .join("\n");
+          const message =
+            plan.notice === "error" && lastLines
+              ? `${plan.message}\n\nThe terminal's last lines:\n${lastLines}`
+              : plan.message;
           // Before the teardown: `closeRemote` is what re-runs the auto-open
           // effect, and it must not find this session eligible on the way past.
           if (plan.dismissed) remoteControlClosed.current.add(sessionId);
@@ -2237,8 +2250,8 @@ export default function App({
           enqueueHarnessEvent(
             sessionId,
             plan.notice === "error"
-              ? { type: "session.error", message: plan.message }
-              : { type: "status", text: plan.message },
+              ? { type: "session.error", message }
+              : { type: "status", text: message },
           );
           flushHarnessEvents();
         },

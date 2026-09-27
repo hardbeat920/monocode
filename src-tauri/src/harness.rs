@@ -1259,6 +1259,53 @@ struct ProcessSnapshot {
 /// Off-thread: the sweep shells out to `ps` and then waits on a SIGKILL, and
 /// launch would otherwise hold the first window for both. Nothing this run
 /// spawns can be caught by it — our own children carry our pid as the marker.
+/// Whether `args` is a `claude --resume <id> --remote-control …` we started
+/// for this conversation. Ours by construction: nothing else launches the CLI
+/// with `--remote-control` and a name, and the resume id names the thread.
+#[cfg(any(unix, test))]
+fn is_remote_control_for(args: &str, provider_session_id: &str) -> bool {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let resumes = parts
+        .windows(2)
+        .any(|pair| pair[0] == "--resume" && pair[1] == provider_session_id);
+    resumes && parts.contains(&"--remote-control")
+}
+
+/// Kill any earlier hand-over of this conversation before starting another.
+///
+/// The CLI refuses a second interactive process on a session that already has
+/// one, and exits with code 1 — which is all the user saw when a hand-over was
+/// reopened over a process this window had lost track of, or one a previous
+/// window never reaped. Only processes whose argv names this exact resume id
+/// and carries `--remote-control` are touched.
+#[tauri::command]
+pub async fn reap_remote_control_session(provider_session_id: String) -> Result<u32, String> {
+    #[cfg(unix)]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            let ours = std::process::id();
+            let pids: Vec<u32> = snapshot_processes()
+                .into_iter()
+                .filter(|row| {
+                    row.pid != ours
+                        && row.pid > 1
+                        && is_remote_control_for(&row.args, &provider_session_id)
+                })
+                .map(|row| row.pid)
+                .collect();
+            terminate_all(&pids);
+            Ok(pids.len() as u32)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = provider_session_id;
+        Ok(0)
+    }
+}
+
 pub(crate) fn reap_orphaned_harness_processes() {
     #[cfg(unix)]
     {
@@ -3528,6 +3575,21 @@ mod reap_logic_tests {
         assert!(!should_reap_process(&row(10, 42, args, None), 42, |_| true));
         assert!(!is_legacy_orphaned_cursor_acp(
             "node /usr/local/bin/typescript-language-server --stdio"
+        ));
+    }
+
+    #[test]
+    fn recognises_our_own_remote_control_process_for_a_thread() {
+        let args = "/usr/local/bin/claude --resume 66ea7f68-33df --remote-control getSMS";
+        assert!(is_remote_control_for(args, "66ea7f68-33df"));
+        assert!(!is_remote_control_for(args, "other-id"));
+        assert!(!is_remote_control_for(
+            "/usr/local/bin/claude --resume 66ea7f68-33df",
+            "66ea7f68-33df"
+        ));
+        assert!(!is_remote_control_for(
+            "claude -p --resume 66ea7f68-33df --output-format stream-json",
+            "66ea7f68-33df"
         ));
     }
 }
