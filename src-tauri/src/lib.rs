@@ -5,6 +5,7 @@ mod automations;
 mod azure_devops;
 mod chat_background;
 mod checkpoint;
+mod claude_trust;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -390,6 +391,8 @@ pub fn run() {
             fs::write_attachment,
             fs::read_text_file,
             fs::read_file_range,
+            claude_trust::claude_folder_trusted,
+            claude_trust::claude_trust_folder,
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,
             fs::claude_shell_commands,

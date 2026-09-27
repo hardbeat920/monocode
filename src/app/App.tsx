@@ -71,6 +71,11 @@ import {
   DeleteSessionDialog,
   type SessionDeleteChoice,
 } from "../features/sessions/ui/DeleteSessionDialog";
+import { TrustFolderDialog } from "../features/remoteControl/ui/TrustFolderDialog";
+import {
+  claudeFolderTrusted,
+  claudeTrustFolder,
+} from "../platform/tauri/claudeTrust";
 import {
   assertWorktreeFilesClosed,
   createOrchestrationWorktree,
@@ -952,6 +957,11 @@ export default function App({
     unusedWorktree: string;
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
+  /** Claude Code's folder trust check, put to the user before a hand-over. */
+  const [remoteTrustAsk, setRemoteTrustAsk] = useState<{
+    folder: string;
+    resolve: (trusted: boolean) => void;
+  }>();
   const switchingWorktrees = useRef(new Map<string, string>());
   const removingWorktreePaths = useRef(new Set<string>());
   const deleteConfirmationPending = useRef(false);
@@ -1755,6 +1765,41 @@ export default function App({
       if (!session || session.harness !== "claude" || !providerSessionId)
         return;
       const cwd = sessionWorkCwd(session);
+      // Claude Code's folder trust check, asked here rather than in a terminal
+      // — see `TrustFolderDialog`. The interactive CLI opens on it in any
+      // folder not yet trusted and waits, which handed over meant a terminal
+      // raised inside MonoCode with the cursor on "No, exit". A read that
+      // fails is treated as trusted: the terminal path still handles the
+      // dialog if it does appear.
+      const trusted = await claudeFolderTrusted(cwd).catch(() => true);
+      if (!trusted) {
+        const yes = await new Promise<boolean>((resolve) =>
+          setRemoteTrustAsk({ folder: cwd, resolve }),
+        );
+        if (!yes) {
+          // Dismissed like a close by hand, so `all` mode does not ask again
+          // on the next `sessions` change.
+          remoteControlClosed.current.add(sessionId);
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "Remote Control was not opened: Claude Code needs this folder trusted first.",
+          });
+          flushHarnessEvents();
+          return;
+        }
+        try {
+          await claudeTrustFolder(cwd);
+        } catch (error) {
+          // The hand-over goes on; the dialog will show in the terminal.
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: `Could not record the folder as trusted (${
+              error instanceof Error ? error.message : String(error)
+            }); Claude Code will ask in the terminal.`,
+          });
+          flushHarnessEvents();
+        }
+      }
       const name = remoteControlName(
         session.cwd,
         [...remoteControl.current.values()].map((entry) => entry.name),
@@ -11937,6 +11982,15 @@ export default function App({
               onClose={(choice) => {
                 sessionDeleteDialog.resolve(choice);
                 setSessionDeleteDialog(undefined);
+              }}
+            />
+          )}
+          {remoteTrustAsk && (
+            <TrustFolderDialog
+              folder={remoteTrustAsk.folder}
+              onClose={(trusted) => {
+                remoteTrustAsk.resolve(trusted);
+                setRemoteTrustAsk(undefined);
               }}
             />
           )}
