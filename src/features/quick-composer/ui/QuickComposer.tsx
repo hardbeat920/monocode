@@ -47,6 +47,14 @@ import {
 } from "../../sessions/model/session";
 import { Popover } from "../../../shared/ui/Popover";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
+import {
+  composerHistoryDirection,
+  EMPTY_COMPOSER_HISTORY_CURSOR,
+  loadComposerHistory,
+  recordComposerHistory,
+  stepComposerHistory,
+  type ComposerHistoryCursor,
+} from "../../sessions/model/composerHistory";
 import { quickLaunchAttachments } from "../model/quickAttachments";
 import { useQuickAttachments } from "./useQuickAttachments";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
@@ -112,6 +120,9 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const queryRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const historyCursorRef = useRef<ComposerHistoryCursor>(
+    EMPTY_COMPOSER_HISTORY_CURSOR,
+  );
 
   const focusPrompt = useCallback(() => {
     requestAnimationFrame(() => {
@@ -284,6 +295,8 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       rememberQuickProject(cwd);
       saveLastModelSettings(settings);
       saveRecentModelChoice(picked.harness, picked.model);
+      recordComposerHistory(text);
+      historyCursorRef.current = EMPTY_COMPOSER_HISTORY_CURSOR;
       setPrompt("");
       attachments.clear();
     } catch (reason) {
@@ -300,6 +313,31 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       if (picker) closePicker();
       else dismiss();
       return;
+    }
+    const historyDirection = composerHistoryDirection({
+      key: event.key,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      selectionStart: event.currentTarget.selectionStart,
+      selectionEnd: event.currentTarget.selectionEnd,
+      value: event.currentTarget.value,
+    });
+    if (historyDirection) {
+      const entries = loadComposerHistory();
+      if (entries.length > 0) {
+        event.preventDefault();
+        const step = stepComposerHistory(
+          entries,
+          historyCursorRef.current,
+          historyDirection,
+          event.currentTarget.value,
+        );
+        historyCursorRef.current = step.cursor;
+        if (step.text !== prompt) setPrompt(step.text);
+        return;
+      }
     }
     if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
       event.preventDefault();

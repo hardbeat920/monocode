@@ -24,6 +24,10 @@ vi.mock("../../source-control/hooks/useProjectBranches", () => ({
 import { Composer, ComposerAction } from "./Composer";
 import type { ComposerTurnOptions, Attachment } from "../model/session";
 import type { UserQuestionPrompt } from "../model/userQuestion";
+import {
+  clearComposerHistory,
+  recordComposerHistory,
+} from "../model/composerHistory";
 
 function renderAction(
   busy: boolean,
@@ -1028,5 +1032,206 @@ describe("Composer question focus", () => {
 
     expect(document.activeElement).toBe(searchInput);
     portaledPicker.remove();
+  });
+});
+
+describe("Composer prompt history", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    clearComposerHistory();
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    clearComposerHistory();
+    vi.unstubAllGlobals();
+  });
+
+  async function render(props: Record<string, unknown> = {}) {
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: () => {},
+          onCwdChange: () => {},
+          onModelChange: () => {},
+          onRuntimeModeChange: () => {},
+          onSubmit: () => {},
+          ...props,
+        }),
+      ),
+    );
+    return container.querySelector("textarea")!;
+  }
+
+  async function press(
+    textarea: HTMLTextAreaElement,
+    key: string,
+    selection = textarea.value.length,
+  ) {
+    textarea.setSelectionRange(selection, selection);
+    await act(async () => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  }
+
+  it("recalls sent prompts with up and down", async () => {
+    const textarea = await render({
+      onSubmit: () => true,
+    });
+    await act(async () => {
+      textarea.value = "first prompt";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "Enter");
+    await act(async () => {
+      textarea.value = "second prompt";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "Enter");
+
+    expect(textarea.value).toBe("");
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("second prompt");
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("first prompt");
+    await press(textarea, "ArrowDown");
+    expect(textarea.value).toBe("second prompt");
+    await press(textarea, "ArrowDown");
+    expect(textarea.value).toBe("");
+  });
+
+  it("stashes the live draft while walking history", async () => {
+    recordComposerHistory("shipped");
+    const textarea = await render();
+    await act(async () => {
+      textarea.value = "half typed";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "ArrowUp", 0);
+    expect(textarea.value).toBe("shipped");
+    await press(textarea, "ArrowDown");
+    expect(textarea.value).toBe("half typed");
+  });
+
+  it("leaves the caret on a later line of a multiline draft", async () => {
+    recordComposerHistory("older");
+    const textarea = await render();
+    await act(async () => {
+      textarea.value = "line one\nline two";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "ArrowUp", "line one\n".length);
+    expect(textarea.value).toBe("line one\nline two");
+  });
+
+  it("does not record a rejected send", async () => {
+    const textarea = await render({ onSubmit: () => false });
+    await act(async () => {
+      textarea.value = "blocked";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "Enter");
+    await act(async () => {
+      textarea.value = "";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("");
+  });
+
+  it("prefers prompt history over editing the last turn", async () => {
+    recordComposerHistory("from another session");
+    const textarea = await render({
+      harness: "pi",
+      model: "pi:default",
+      editLastTurnSupported: true,
+      lastTurnRecall: { text: "last turn in this session", attachments: [] },
+    });
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("from another session");
+  });
+
+  it("still edits the last turn when there is no prompt history", async () => {
+    const textarea = await render({
+      harness: "pi",
+      model: "pi:default",
+      editLastTurnSupported: true,
+      lastTurnRecall: { text: "last turn in this session", attachments: [] },
+    });
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("last turn in this session");
+  });
+
+  it("recalls the typed prompt when Operator prefixes the submitted text", async () => {
+    const textarea = await render({ onSubmit: () => true });
+    await act(async () => {
+      textarea.value = "List my notes";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Add files or choose a mode"]',
+        )!
+        .click(),
+    );
+    const operator = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        "[data-composer-plus] button",
+      ),
+    ).find((button) => button.textContent?.includes("Operator"))!;
+    await act(async () => operator.click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+
+    expect(textarea.value).toBe("");
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("List my notes");
+  });
+
+  it("recalls the typed prompt when an inbox card is composed into the submit", async () => {
+    const textarea = await render({
+      onSubmit: () => true,
+      inboxCard: {
+        provider: "github",
+        kind: "issue",
+        identifier: "acme/app#12",
+        title: "Fix the login",
+        url: "https://github.com/acme/app/issues/12",
+        source: "acme/app",
+        labels: [],
+        prompt: "Work on https://github.com/acme/app/issues/12",
+      },
+    });
+    await act(async () => {
+      textarea.value = "please prioritize this";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "Enter");
+
+    expect(textarea.value).toBe("");
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("please prioritize this");
   });
 });
