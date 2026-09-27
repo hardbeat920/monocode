@@ -1,5 +1,4 @@
-import { useState, type FormEvent } from "react";
-import { MOD } from "../../../platform/tauri/platform";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Modal } from "../../../shared/ui/Modal";
 import type { LinkedWorkItem } from "../model/session";
 import {
@@ -58,21 +57,27 @@ export function LinkSessionWorkItemDialog({
           <span className="font-medium text-content/80">
             Issue or pull request URLs
           </span>
-          <input
+          <textarea
             autoFocus
-            type="text"
-            inputMode="url"
+            rows={2}
             spellCheck={false}
             value={url}
             aria-label="GitHub issue or pull request URLs"
             aria-invalid={error ? true : undefined}
-            aria-describedby={error ? "linked-work-item-error" : undefined}
+            aria-describedby={
+              error ? "linked-work-item-error" : "linked-work-item-hint"
+            }
             placeholder="https://github.com/owner/repo/pull/123, https://github.com/owner/repo/issues/456"
+            onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+              if (event.key !== "Enter" || event.shiftKey) return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }}
             onChange={(event) => {
               setUrl(event.target.value);
               if (error) setError("");
             }}
-            className={`h-9 rounded-md border bg-content/5 px-2.5 text-[13px] text-content outline-none placeholder:text-content/30 focus:border-content/30 ${
+            className={`min-h-[4.5rem] resize-none rounded-md border bg-content/5 px-2.5 py-2 text-[13px] leading-snug text-content outline-none placeholder:text-content/30 focus:border-content/30 ${
               error ? "border-red-400/60" : "border-content/10"
             }`}
           />
@@ -85,12 +90,12 @@ export function LinkSessionWorkItemDialog({
               {error}
             </span>
           ) : (
-            <span className="text-[11px] text-content/45">
-              Paste one or more github.com URLs, separated by commas. Each
-              linked item appears on the session card footer as its own
-              #number badge — a pull-request or issue icon plus the number.
-              Click a badge to open that item beside the session; {MOD}-click
-              opens GitHub.
+            <span
+              id="linked-work-item-hint"
+              className="text-[11px] text-content/45"
+            >
+              Paste full github.com URLs, separated by commas. The linked items
+              will appear on the session card.
             </span>
           )}
         </label>

@@ -48,12 +48,16 @@ function pressKey(target: HTMLElement, key: string) {
   return event;
 }
 
-function typeTitle(input: HTMLInputElement, title: string) {
+function typeTitle(
+  input: HTMLInputElement | HTMLTextAreaElement,
+  title: string,
+) {
   // Use the native setter so React sees a user change, not its own value write.
-  const setter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
-    "value",
-  )!.set!;
+  const proto =
+    input instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")!.set!;
   act(() => {
     setter.call(input, title);
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1094,8 +1098,8 @@ describe("sidebar session GitHub links", () => {
     ).find((item) => item.textContent === "Link GitHub issue or PR…")!;
     expect(link).toBeDefined();
     act(() => link.click());
-    return document.querySelector<HTMLInputElement>(
-      'input[aria-label="GitHub issue or pull request URLs"]',
+    return document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="GitHub issue or pull request URLs"]',
     )!;
   }
 
@@ -1160,8 +1164,8 @@ describe("sidebar session GitHub links", () => {
     act(() => edit.click());
 
     expect(
-      document.querySelector<HTMLInputElement>(
-        'input[aria-label="GitHub issue or pull request URLs"]',
+      document.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="GitHub issue or pull request URLs"]',
       )?.value,
     ).toBe("https://github.com/acme/widgets/pull/42");
     const remove = Array.from(document.querySelectorAll("button")).find(

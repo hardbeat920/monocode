@@ -223,6 +223,47 @@ describe("Inbox activity polling", () => {
     );
   });
 
+  it("looks up a second linked issue through gh by number", async () => {
+    const issue = {
+      kind: "issue" as const,
+      repo: "acme/app",
+      number: 463,
+      url: "https://github.com/acme/app/issues/463",
+    };
+    sessions[0] = {
+      ...session,
+      linkedWorkItem: session.linkedWorkItem,
+      linkedWorkItems: [session.linkedWorkItem!, issue],
+    };
+    listInboxItems.mockResolvedValue({ items: [], errors: {} });
+    githubWorkItem.mockImplementation(async (_cwd, _repo, kind, number) => ({
+      ...remote,
+      kind,
+      number,
+      url: `https://github.com/acme/app/${kind === "pr" ? "pull" : "issues"}/${number}`,
+      updatedAt: remote.updatedAt,
+    }));
+    try {
+      await mount();
+      expect(githubWorkItem).toHaveBeenCalledWith(
+        "/tmp/app",
+        "acme/app",
+        "pr",
+        42,
+        { force: true },
+      );
+      expect(githubWorkItem).toHaveBeenCalledWith(
+        "/tmp/app",
+        "acme/app",
+        "issue",
+        463,
+        { force: true },
+      );
+    } finally {
+      sessions[0] = session;
+    }
+  });
+
   it("clears a linked-session update as soon as its remote snapshot is read", async () => {
     listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
     await mount();

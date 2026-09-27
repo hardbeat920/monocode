@@ -47,6 +47,7 @@ import { loadHiddenLinearTeamIds } from "../model/linear";
 import { JIRA_CHANGE_EVENT, loadHiddenJiraProjectIds } from "../model/jira";
 import type { RecentProject } from "../../projects/model/recents";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
+import { sessionLinkedWorkItems } from "../../sessions/model/sessionWorkItem";
 import { playCue } from "../../settings/model/sounds";
 import {
   InboxNotificationTracker,
@@ -280,8 +281,9 @@ export function useInboxActivity(
           });
           for (const session of sessionsRef.current) {
             if (
-              session.linkedWorkItem &&
-              linkedWorkItemUpdateKey(session.linkedWorkItem) === key
+              sessionLinkedWorkItems(session).some(
+                (linked) => linkedWorkItemUpdateKey(linked) === key,
+              )
             ) {
               markLinkedSessionUpdateSeen(session.id, updatedAt);
             }
