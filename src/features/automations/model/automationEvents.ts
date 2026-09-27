@@ -227,12 +227,11 @@ function triggerMatchesInboxItem(
 }
 
 function matchesInboxProject(item: InboxItem, cwd: string): boolean {
-  // Linear, Jira and Asana items have no git path. The automation's own
-  // project is the workspace the agent should run in.
+  // Linear and Jira items have no git path. The automation's own project is
+  // the workspace the agent should run in. Asana items take the path of
+  // their linked project, so unlinked tasks match no automation.
   if (
-    (item.provider === "linear" ||
-      item.provider === "jira" ||
-      item.provider === "asana") &&
+    (item.provider === "linear" || item.provider === "jira") &&
     !item.projectPath.trim()
   ) return true;
   return sameProjectPath(item.projectPath, cwd);

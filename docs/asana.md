@@ -25,9 +25,10 @@ to add one. A task in several Asana projects belongs to the first linked one.
 Links are stored locally in the app.
 
 Automations offer **Asana → Task appeared** after connecting. They run in the
-automation's selected local project when an Asana task first appears in the
-polled inbox, after its initial snapshot. This is polling, not a webhook for
-every task created in the workspace.
+automation's selected local project when a task from an Asana project linked to
+it first appears in the polled inbox, after its initial snapshot. Unlinked tasks
+start no automation. This is polling, not a webhook for every task created in
+the workspace.
 
 **Disconnect** removes the saved token and clears cached Asana content. The
 token is stored in the app's local data directory; on Unix the file is created

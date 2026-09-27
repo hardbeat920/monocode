@@ -67,3 +67,28 @@ it("does not announce history exposed by a changed query or repeat items after a
     appeared: [],
   });
 });
+
+it("keeps an Asana task known when linking moves it to another project", () => {
+  const tracker = new InboxNotificationTracker();
+  const task: InboxItem = {
+    ...item("Design", "2026-09-14T08:00:00Z"),
+    provider: "asana",
+    kind: "asana",
+    id: "1201",
+    teamId: "111",
+    teamName: "Design",
+    projectPath: "",
+  };
+  tracker.observe([task], "all");
+  const linked = {
+    ...task,
+    repo: "Web",
+    teamId: "222",
+    teamName: "Web",
+    projectPath: "/tmp/web",
+  };
+  expect(tracker.observe([linked], "all")).toEqual({
+    changed: [],
+    appeared: [],
+  });
+});

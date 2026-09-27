@@ -8,6 +8,7 @@ import { AsanaSettings } from "./AsanaSettings";
 import {
   loadAsanaProjectLinks,
   loadHiddenAsanaProjectIds,
+  saveHiddenAsanaProjectIds,
 } from "../../inbox/model/asana";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -144,4 +145,37 @@ it("shows authentication errors without claiming a successful connection", async
   );
   expect(container.querySelector("form")).not.toBeNull();
   expect(container.textContent).not.toContain("Projects");
+});
+
+it("keeps hidden projects that still exist when reconnecting", async () => {
+  saveHiddenAsanaProjectIds(["1200000000000001", "1200000000000009"]);
+  await act(async () => root.render(createElement(AsanaSettings)));
+  await input("Asana personal access token", "secret");
+  await submit();
+  expect(loadHiddenAsanaProjectIds()).toEqual(["1200000000000001"]);
+  expect(
+    container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+      .checked,
+  ).toBe(false);
+});
+
+it("clears a project loading error after a successful refresh", async () => {
+  await act(async () => root.render(createElement(AsanaSettings)));
+  await input("Asana personal access token", "secret");
+  const listProjects = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "asana_list_projects") throw new Error("Asana is down");
+    return listProjects(command, args);
+  });
+  await submit();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Asana is down",
+  );
+  vi.mocked(invoke).mockImplementation(listProjects);
+  const refresh = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Refresh projects",
+  )!;
+  await act(async () => refresh.click());
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.textContent).toContain("Acme");
 });

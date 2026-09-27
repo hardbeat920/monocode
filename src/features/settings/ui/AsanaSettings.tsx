@@ -38,12 +38,16 @@ export function AsanaSettings({
   const [hiddenIds, setHiddenIds] = useState(loadHiddenAsanaProjectIds);
   const [links, setLinks] = useState(loadAsanaProjectLinks);
 
-  const loadProjects = useCallback(async () => {
+  const loadProjects = useCallback(async (): Promise<AsanaProject[] | null> => {
     try {
-      setProjects(await listAsanaProjects());
+      const next = await listAsanaProjects();
+      setProjects(next);
+      setError(null);
+      return next;
     } catch (err) {
       setProjects([]);
       setError(String(err instanceof Error ? err.message : err));
+      return null;
     }
   }, []);
 
@@ -81,8 +85,15 @@ export function AsanaSettings({
       setStatus(await saveAsanaToken(token));
       setToken("");
       clearInboxCache();
-      saveHiddenAsanaProjectIds([]);
-      await loadProjects();
+      const loaded = await loadProjects();
+      if (loaded) {
+        const available = new Set(loaded.map((project) => project.id));
+        saveHiddenAsanaProjectIds(
+          loadHiddenAsanaProjectIds().filter((id) => available.has(id)),
+        );
+      } else {
+        notifyAsanaChange();
+      }
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
     } finally {
