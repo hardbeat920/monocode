@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { harnessSupportsAttachments, RUNTIME_MODES } from "../../../../features/sessions/model/session";
+import { ATTACHMENT_ONLY_PROMPT } from "../../../../features/sessions/model/attachments";
 import * as antigravity from "./antigravityProtocol";
 
 const providers = [
@@ -15,11 +16,16 @@ describe.each(providers)("$id ACP protocol", ({ id, protocol, mode, blocks, mode
   });
 
   it("delivers image-only prompts and leaves attachments enabled", () => {
-    expect(harnessSupportsAttachments(id)).toBe(true);
-    expect(blocks("", [{
+    const image = {
       id: "image", name: "image.png", kind: "image", mimeType: "image/png",
       size: 4, data: "aGV5",
-    }])).toEqual([{ type: "image", mimeType: "image/png", data: "aGV5" }]);
+    } as const;
+    expect(harnessSupportsAttachments(id)).toBe(true);
+    // An image-only turn also carries the stand-in for the missing text.
+    expect(blocks("", [image])).toEqual([
+      { type: "text", text: ATTACHMENT_ONLY_PROMPT },
+      { type: "image", mimeType: "image/png", data: "aGV5" },
+    ]);
     expect(blocks(" hi ")).toEqual([{ type: "text", text: "hi" }]);
     expect(blocks("  ")).toEqual([]);
   });

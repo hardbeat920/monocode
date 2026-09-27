@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A turn that carries files or images but no words now tells the agent to read them in the light of the conversation so far, instead of leaving it to guess what the attachments were for. The stand-in is sent to the provider only, so the transcript still shows just the attachments. A turn with text is unchanged, and so is one with nothing attached.
+
 ### Fixed
 
 - Pasting a file copied in a file manager no longer also drops its `file:` URI into the draft, and a copy that turns out to hold no attachable path keeps the text it was pasted with. A pasted space or newline is a text paste again, and is no longer swallowed.

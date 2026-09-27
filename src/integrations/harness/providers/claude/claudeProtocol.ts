@@ -5,7 +5,10 @@ import type {
   ToolPreview,
   TurnMetrics,
 } from "../../../../features/sessions/model/session";
-import { attachmentPathText } from "../../../../features/sessions/model/attachments";
+import {
+  attachmentPathText,
+  promptText,
+} from "../../../../features/sessions/model/attachments";
 import { parseResetTimestamp } from "../../../../features/providers/model/rateLimits";
 import { isTaskListToolName, taskListFromToolInput } from "../../../../features/sessions/model/taskList";
 import {
@@ -187,7 +190,10 @@ export function buildClaudeUserMessage(input: {
   attachments?: Attachment[];
   effort?: string | null;
 }): Record<string, unknown> {
-  const text = applyClaudePromptEffortPrefix(input.text.trim(), input.effort);
+  const text = applyClaudePromptEffortPrefix(
+    promptText(input.text, input.attachments ?? []),
+    input.effort,
+  );
   const content: Array<Record<string, unknown>> = [];
   if (text) content.push({ type: "text", text });
   for (const attachment of input.attachments ?? []) {

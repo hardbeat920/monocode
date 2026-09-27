@@ -53,8 +53,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const { sendCodexTurn, steerCodexTurn, stopCodexSession, __codexTestReset } =
   await import("./codex");
-const { attachmentsFromPaths, prepareAttachments, promptBlocks } =
-  await import("../../../../features/sessions/model/attachments");
+const {
+  ATTACHMENT_ONLY_PROMPT,
+  attachmentsFromPaths,
+  prepareAttachments,
+  promptBlocks,
+} = await import("../../../../features/sessions/model/attachments");
 
 function completeTurn() {
   onLine!(
@@ -161,7 +165,9 @@ describe("Codex attachment delivery", () => {
 
     it(`${method} uses native localImage inputs for images without embedded bytes`, async () => {
       const input = await outbound(method, "", await prepared("large.png"));
+      // An attachment-only turn also carries the stand-in for the missing text.
       expect(input).toEqual([
+        { type: "text", text: ATTACHMENT_ONLY_PROMPT },
         { type: "localImage", path: "/tmp/issue174/large.png" },
       ]);
     });
