@@ -44,12 +44,8 @@ import {
   type WorkspaceMode,
   type ComposerTurnOptions,
 } from "../model/session";
-import {
-  sessionHasBtwEligibleTurn,
-  sessionHasBtwThreads,
-  supportsBtwHarness,
-} from "../model/btw";
-import type { BtwOpenRequest } from "./BtwPopover";
+import { sessionHasBtwThreads, supportsBtwHarness } from "../model/btw";
+import { BtwSheet, useBtwConversation } from "./BtwSheet";
 import { AgentTranscript } from "./AgentTranscript";
 import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
 import { TranscriptFind } from "./TranscriptFind";
@@ -198,9 +194,10 @@ type Props = {
     text: string,
     model?: string,
     modelSettings?: Record<string, string>,
-  ) => void;
+  ) => boolean | void;
   onBtwRetry?: (sessionId: string, turn: Block[], threadId: string) => void;
   onBtwDelete?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwStop?: (sessionId: string, turn: Block[], threadId: string) => void;
   onBtwModelChange?: (
     sessionId: string,
     turn: Block[],
@@ -270,6 +267,7 @@ export const SessionPane = memo(function SessionPane({
   onBtwSubmit,
   onBtwRetry,
   onBtwDelete,
+  onBtwStop,
   onBtwModelChange,
   onNewTerminal,
   onPaneDragStart,
@@ -375,45 +373,37 @@ export const SessionPane = memo(function SessionPane({
       void orchestrator.hydrate(session.id).catch(console.error);
   }, [session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
-  const btwRequestId = useRef(0);
-  const [btwOpenRequest, setBtwOpenRequest] = useState<BtwOpenRequest | null>(
-    null,
-  );
-  const btwEnabled =
-    supportsBtwHarness(session.harness) || sessionHasBtwThreads(session.blocks);
-  const onBtwCommand = useCallback(
-    (text: string) => {
-      if (
-        managed ||
-        session.inboxAsk ||
-        session.worktreeRemoved ||
-        !onBtwSubmit ||
-        !onBtwRetry ||
-        !btwEnabled ||
-        !sessionHasBtwEligibleTurn(session.blocks, session.harness, managed)
-      ) {
-        return false;
-      }
-      const id = ++btwRequestId.current;
-      setBtwOpenRequest({ id, text });
-      return true;
-    },
-    [
-      btwEnabled,
-      managed,
-      onBtwRetry,
-      onBtwSubmit,
-      session.blocks,
-      session.harness,
-      session.inboxAsk,
-      session.worktreeRemoved,
-    ],
-  );
-  const onBtwOpenRequestHandled = useCallback((requestId: number) => {
-    setBtwOpenRequest((current) =>
-      current?.id === requestId ? null : current,
-    );
-  }, []);
+  const btw = useBtwConversation({
+    available:
+      !isEmpty &&
+      !managed &&
+      !session.inboxAsk &&
+      !session.worktreeRemoved &&
+      !!onBtwSubmit &&
+      !!onBtwRetry &&
+      (supportsBtwHarness(session.harness) ||
+        sessionHasBtwThreads(session.blocks)),
+    blocks: session.blocks,
+    harness: session.harness,
+    managed,
+    model: session.model,
+    modelSettings: session.modelSettings,
+    onSubmit: (turn, threadId, messageId, text, model, modelSettings) =>
+      onBtwSubmit?.(
+        session.id,
+        turn,
+        threadId,
+        messageId,
+        text,
+        model,
+        modelSettings,
+      ),
+    onRetry: (turn, threadId) => onBtwRetry?.(session.id, turn, threadId),
+    onDelete: (turn, threadId) => onBtwDelete?.(session.id, turn, threadId),
+    onStop: (turn, threadId) => onBtwStop?.(session.id, turn, threadId),
+    onModelChange: (turn, threadId, model, modelSettings) =>
+      onBtwModelChange?.(session.id, turn, threadId, model, modelSettings),
+  });
   const onJumpToBottomReady = useCallback((jump: () => void) => {
     jumpToBottomRef.current = jump;
   }, []);
@@ -516,9 +506,9 @@ export const SessionPane = memo(function SessionPane({
   const composer = (
     <Composer
       enabled={visible}
-      focused={focused && composerFocused}
+      focused={focused && composerFocused && !btw.open}
       focusToken={composerFocusToken}
-      hotkeys={focused}
+      hotkeys={focused && !btw.open}
       shell={!dockComposer}
       harness={session.harness}
       model={session.model}
@@ -611,7 +601,7 @@ export const SessionPane = memo(function SessionPane({
         if (!dockComposer) composerDockMotion.captureLaunch();
         return onSubmit(session.id, text, attachments, options);
       }}
-      onBtwCommand={onBtwCommand}
+      onBtwCommand={btw.openWith}
       onStop={() => onStop(session.id)}
       onCompactContext={() => onCompactContext(session.id)}
       onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
@@ -718,7 +708,7 @@ export const SessionPane = memo(function SessionPane({
           </button>
         </div>
       ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           ref={transcriptScope}
           className="@container relative min-h-0 flex-1"
@@ -834,62 +824,6 @@ export const SessionPane = memo(function SessionPane({
                       ? (target, turn) => onHandoff(session.id, target, turn)
                       : undefined
                   }
-                  onBtwSubmit={
-                    !managed &&
-                    btwEnabled &&
-                    !session.inboxAsk &&
-                    !session.worktreeRemoved &&
-                    onBtwSubmit
-                      ? (threadId, messageId, text, turn, model, modelSettings) =>
-                          onBtwSubmit(
-                            session.id,
-                            turn,
-                            threadId,
-                            messageId,
-                            text,
-                            model,
-                            modelSettings,
-                          )
-                      : undefined
-                  }
-                  onBtwRetry={
-                    !managed &&
-                    btwEnabled &&
-                    !session.inboxAsk &&
-                    !session.worktreeRemoved &&
-                    onBtwRetry
-                      ? (threadId, turn) =>
-                          onBtwRetry(session.id, turn, threadId)
-                      : undefined
-                  }
-                  onBtwDelete={
-                    !managed &&
-                    btwEnabled &&
-                    !session.inboxAsk &&
-                    !session.worktreeRemoved &&
-                    onBtwDelete
-                      ? (threadId, turn) =>
-                          onBtwDelete(session.id, turn, threadId)
-                      : undefined
-                  }
-                  onBtwModelChange={
-                    !managed &&
-                    btwEnabled &&
-                    !session.inboxAsk &&
-                    !session.worktreeRemoved &&
-                    onBtwModelChange
-                      ? (threadId, model, modelSettings, turn) =>
-                          onBtwModelChange(
-                            session.id,
-                            turn,
-                            threadId,
-                            model,
-                            modelSettings,
-                          )
-                      : undefined
-                  }
-                  btwOpenRequest={btwOpenRequest}
-                  onBtwOpenRequestHandled={onBtwOpenRequestHandled}
                   onJumpToBottomChange={setShowJumpToBottom}
                   onJumpToBottomReady={onJumpToBottomReady}
                   onRevealReady={onRevealReady}
@@ -973,11 +907,25 @@ export const SessionPane = memo(function SessionPane({
           <div
             ref={composerDockMotion.dockedRef}
             data-session-composer
+            inert={btw.open}
             className="mx-auto w-full max-w-4xl shrink-0"
           >
             {composer}
           </div>
         ) : null}
+        <BtwSheet
+          btw={btw}
+          cwd={workCwd}
+          visible={visible}
+          origin={() =>
+            composerDockMotion.dockedRef.current?.querySelector<HTMLElement>(
+              "[data-composer-box]",
+            ) ?? null
+          }
+          onSaveNote={notesEnabled ? saveNote : undefined}
+          onOpenFile={onOpenFile}
+          onOpenDiff={onOpenDiff}
+        />
       </div>
     </div>
   );

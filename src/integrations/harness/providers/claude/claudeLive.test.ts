@@ -124,6 +124,48 @@ function emitFollowUpTurn(text: string) {
   emit({ type: "result", subtype: "success", session_id: "sess_1" });
 }
 
+/** A subagent Claude ran inline: its report comes back on the parent's stream. */
+function emitInlineSubagent(taskId = "t1") {
+  emit({
+    type: "assistant",
+    session_id: "sess_1",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_agent",
+          name: "Task",
+          input: {
+            description: "Explore the auth module",
+            subagent_type: "explore",
+          },
+        },
+      ],
+    },
+  });
+  emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: taskId,
+    tool_use_id: "toolu_agent",
+    description: "Explore the auth module",
+    task_type: "local_agent",
+  });
+  emit({
+    type: "user",
+    session_id: "sess_1",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_agent",
+          content: "Auth lives in src/auth.",
+        },
+      ],
+    },
+  });
+}
+
 function emitBackgroundBash(taskId = "b1") {
   emit({
     type: "assistant",
@@ -887,6 +929,20 @@ describe("claude subagents", () => {
     ).toBe(false);
   });
 
+  it("ends the turn once a subagent has reported back inline", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    emitInlineSubagent();
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await turn;
+    expect(settled).toBe(true);
+  });
+
   it("routes an unexpected provider exit to the turn that is actually running", async () => {
     const first = await startTurn("s1");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
@@ -1111,6 +1167,48 @@ describe("claude plan permissions", () => {
 
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
+  });
+
+  it("leaves the captured plan ready to build after a subagent explored for it", async () => {
+    const { events, turn } = await startTurn("s1", { intent: "plan" });
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    emitInlineSubagent();
+    emit({
+      type: "control_request",
+      request_id: "exit_1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "ExitPlanMode",
+        tool_use_id: "toolu_exit",
+        input: { plan: "# Plan\n\nRewrite the auth module." },
+      },
+    });
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.response as Record<string, unknown>)?.request_id ===
+            "exit_1",
+        ),
+      "exit plan mode response",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    // The turn must end for the session to stop being busy; until it does, the
+    // plan's Build control stays disabled however the plan block itself reads.
+    await turn;
+    expect(settled).toBe(true);
+
+    let session = newSession("claude", "/repo");
+    for (const event of events) session = applyHarnessEvent(session, event);
+    const plan = session.blocks.find((block) => block.role === "plan");
+    expect(plan?.text).toContain("Rewrite the auth module.");
+    expect(plan?.streaming).toBeFalsy();
+    expect(plan?.plan?.status).toBe("ready");
   });
 });
 
