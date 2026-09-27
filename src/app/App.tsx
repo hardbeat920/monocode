@@ -1419,6 +1419,22 @@ export default function App({
   const [remoteTerminalIds, setRemoteTerminalIds] = useState<readonly string[]>(
     [],
   );
+  /**
+   * Terminals hidden by hand while still showing a screen nothing else can
+   * resolve.
+   *
+   * A screen `openTerminal` raised as unreadable stays unreadable until new
+   * pty output or a transcript record runs `syncRemoteApproval` again — and an
+   * unrecognised screen is precisely the one that never repaints on its own.
+   * Removing the id from `remoteTerminalIds` on Hide left nothing to ever
+   * re-add it: the prompt was still there, still unanswerable, with no way
+   * back to it. Minimizing instead of unmounting keeps the pty subscription
+   * and `remoteTerminals` membership untouched — the terminal is still open as
+   * far as the rest of remote control is concerned, only its view is folded.
+   */
+  const [remoteTerminalMinimizedIds, setRemoteTerminalMinimizedIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
   /** Per session, so the link can render. `undefined` renders nothing. */
   const [remoteBridges, setRemoteBridges] = useState<
     Readonly<Record<string, BridgeStatus>>
@@ -1980,6 +1996,12 @@ export default function App({
         setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
         remoteTerminals.current.delete(sessionId);
         setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
+        setRemoteTerminalMinimizedIds((ids) => {
+          if (!ids.has(sessionId)) return ids;
+          const next = new Set(ids);
+          next.delete(sessionId);
+          return next;
+        });
         remoteEcho.current.delete(sessionId);
         entry.stop();
       } else if (byUser) {
@@ -11232,7 +11254,8 @@ export default function App({
                   />
                 ) : null}
 
-                {remoteTerminal ? (
+                {remoteTerminal &&
+                !remoteTerminalMinimizedIds.has(remoteTerminal.sessionId) ? (
                   <RemoteControlTerminal
                     key={remoteTerminal.ptyId}
                     ptyId={remoteTerminal.ptyId}
@@ -11241,12 +11264,36 @@ export default function App({
                     cols={REMOTE_CONTROL_COLS}
                     rows={REMOTE_CONTROL_ROWS}
                     onClose={() => {
-                      remoteTerminals.current.delete(remoteTerminal.sessionId);
-                      setRemoteTerminalIds((ids) =>
-                        ids.filter((id) => id !== remoteTerminal.sessionId),
+                      // Minimized, not unmounted: the pty stays subscribed and
+                      // `remoteTerminals` keeps the session, so nothing about
+                      // remote control's own state changes. An unreadable
+                      // screen never repaints on its own, so unmounting here
+                      // left no event left to reopen it on.
+                      setRemoteTerminalMinimizedIds(
+                        (ids) => new Set(ids).add(remoteTerminal.sessionId),
                       );
                     }}
                   />
+                ) : null}
+                {remoteTerminal &&
+                remoteTerminalMinimizedIds.has(remoteTerminal.sessionId) ? (
+                  <button
+                    type="button"
+                    className="mx-2 mb-1 flex items-center justify-between rounded-md border border-border bg-muted/50 px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted"
+                    onClick={() =>
+                      setRemoteTerminalMinimizedIds((ids) => {
+                        const next = new Set(ids);
+                        next.delete(remoteTerminal.sessionId);
+                        return next;
+                      })
+                    }
+                  >
+                    <span>
+                      Remote Control is waiting on something MonoCode could
+                      not read — reopen the terminal to answer it
+                    </span>
+                    <span className="ml-2 shrink-0 underline">Reopen</span>
+                  </button>
                 ) : null}
 
                 <main className="relative flex min-h-0 min-w-0 flex-1">
