@@ -309,6 +309,44 @@ describe("codex live turn sequence", () => {
     ]);
   });
 
+  it("does not flush queued notifications after the session stops", async () => {
+    let release: (() => void) | undefined;
+    saveGeneratedImage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              path: "/app-data/generated-images/image.png",
+              mimeType: "image/png",
+              size: 8,
+            });
+        }),
+    );
+    const { events, turn } = await startTurn("codex-live");
+    notify("item/completed", {
+      item: { id: "image_1", type: "imageGeneration", result: "aW1hZ2U=" },
+    });
+    notify("item/agentMessage/delta", {
+      itemId: "after_image",
+      delta: "after image",
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await stopCodexSession("codex-live");
+    release?.();
+    await turn;
+    await Promise.resolve();
+
+    expect(
+      events.some(
+        (event) => event.type === "message.delta" && event.text === "after image",
+      ),
+    ).toBe(false);
+    expect(events.some((event) => event.type === "image.generated")).toBe(false);
+    expect(deleteGeneratedImages).toHaveBeenCalledWith([
+      "/app-data/generated-images/image.png",
+    ]);
+  });
+
   it.each([
     { name: "fully streamed", chunks: ["Here is the ", "final answer."] },
     { name: "partially streamed", chunks: ["Here is the "] },

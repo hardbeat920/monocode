@@ -367,6 +367,7 @@ export async function stopCodexSession(sessionId: string): Promise<void> {
   liveByThread.delete(sessionId);
   if (live) {
     live.muteUpdates = true;
+    live.turnGeneration += 1;
     clearServerRequests(live);
     live.turnDone?.();
     live.turnDone = null;
@@ -449,7 +450,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           const queued = live.notificationQueue
             .catch(() => undefined)
             .then(() => {
-              if (turnGeneration !== live.turnGeneration) return;
+              if (
+                live.muteUpdates ||
+                live.cancelled ||
+                turnGeneration !== live.turnGeneration
+              ) {
+                return;
+              }
               return handleNotification(live, method, params);
             });
           trackNotificationQueue(live, queued.catch(() => undefined));
@@ -721,6 +728,7 @@ function handleNotification(
   method: string,
   params: unknown,
 ): void | Promise<void> {
+  if (live.muteUpdates || live.cancelled) return;
   const rec = asRecord(params);
   if (method === "serverRequest/resolved") {
     for (const pending of live.approvals.values()) {
@@ -769,12 +777,17 @@ function handleNotification(
   const itemId = snapshot
     ? stringField(asRecord(rec?.item), "id")
     : stringField(rec, "itemId");
+  let pending: Promise<void> | undefined;
   for (const event of mapped.events) {
     if (duplicate && duplicateAgentRow(event)) continue;
     if (event.type === "image.generated") {
       if (live.emittedGeneratedImages.has(event.itemId)) continue;
       live.emittedGeneratedImages.add(event.itemId);
-      if ("data" in event) return materializeGeneratedImage(live, event);
+      if ("data" in event) {
+        const save = () => materializeGeneratedImage(live, event);
+        pending = pending ? pending.then(save) : save();
+        continue;
+      }
       live.onEvent(event);
       continue;
     }
@@ -796,9 +809,9 @@ function handleNotification(
     if (!owner) continue;
     const backlog = live.pendingSubagent.get(childId);
     live.pendingSubagent.delete(childId);
-    for (const pending of backlog ?? []) {
+    for (const pendingStep of backlog ?? []) {
       const emit = () =>
-        emitSubagentSteps(live, owner, pending.method, pending.params);
+        emitSubagentSteps(live, owner, pendingStep.method, pendingStep.params);
       if (replay) {
         replay = replay.then(emit);
       } else {
@@ -827,8 +840,13 @@ function handleNotification(
       finishActiveTurn(live);
     }
   };
-  if (replay) return replay.then(finish);
-  finish();
+  const afterImages = () => {
+    if (live.muteUpdates || live.cancelled) return;
+    if (replay) return replay.then(finish);
+    finish();
+  };
+  if (pending) return pending.then(afterImages);
+  return afterImages();
 }
 
 async function materializeGeneratedImage(
