@@ -1474,7 +1474,7 @@ export function Composer({
       restoreDraft(text, files);
       return;
     }
-    recordComposerHistory(submittedText);
+    recordComposerHistory(value);
     historyCursorRef.current = EMPTY_COMPOSER_HISTORY_CURSOR;
     if (ref.current) {
       ref.current.value = "";

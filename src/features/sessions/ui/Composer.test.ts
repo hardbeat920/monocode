@@ -1181,4 +1181,57 @@ describe("Composer prompt history", () => {
     await press(textarea, "ArrowUp");
     expect(textarea.value).toBe("last turn in this session");
   });
+
+  it("recalls the typed prompt when Operator prefixes the submitted text", async () => {
+    const textarea = await render({ onSubmit: () => true });
+    await act(async () => {
+      textarea.value = "List my notes";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Add files or choose a mode"]',
+        )!
+        .click(),
+    );
+    const operator = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        "[data-composer-plus] button",
+      ),
+    ).find((button) => button.textContent?.includes("Operator"))!;
+    await act(async () => operator.click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+    );
+
+    expect(textarea.value).toBe("");
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("List my notes");
+  });
+
+  it("recalls the typed prompt when an inbox card is composed into the submit", async () => {
+    const textarea = await render({
+      onSubmit: () => true,
+      inboxCard: {
+        provider: "github",
+        kind: "issue",
+        identifier: "acme/app#12",
+        title: "Fix the login",
+        url: "https://github.com/acme/app/issues/12",
+        source: "acme/app",
+        labels: [],
+        prompt: "Work on https://github.com/acme/app/issues/12",
+      },
+    });
+    await act(async () => {
+      textarea.value = "please prioritize this";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(textarea, "Enter");
+
+    expect(textarea.value).toBe("");
+    await press(textarea, "ArrowUp");
+    expect(textarea.value).toBe("please prioritize this");
+  });
 });
