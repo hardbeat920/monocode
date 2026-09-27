@@ -11,6 +11,7 @@ import {
   emptyApprovalProgress,
   injectRemoteText,
   queuedNotice,
+  remoteTurnBusy,
   remoteApprovalTransition,
   turnSignal,
   type ApprovalEffect,
@@ -1103,7 +1104,7 @@ describe("typing a message into the pty", () => {
     expect(pty.written).toEqual([MESSAGE]);
   });
 
-  it("calls a send that queued behind a running turn sent, not stuck", () => {
+  it("calls a send that queued behind a running turn sent, not stuck", async () => {
     // What the user hit on the first build of the check: the composer showed
     // the queued-message hint after the write, which is the text handed over,
     // and the report said the opposite.
@@ -1118,7 +1119,7 @@ describe("typing a message into the pty", () => {
     expect(pty.written).toEqual([MESSAGE]);
   });
 
-  it("sends into a composer showing the hint without clearing it first", () => {
+  it("sends into a composer showing the hint without clearing it first", async () => {
     // The hint is not held text, so a second queued send is typed straight in.
     const pty = scriptedPty([idleWith(QUEUED_COMPOSER)]);
 
@@ -1388,6 +1389,20 @@ describe("retiring and re-raising", () => {
       effect.kind === "ask" ? [effect.requestId] : [],
     );
     expect(ids).toEqual([1, 2]);
+  });
+});
+
+describe("whether a remote-controlled session shows as busy", () => {
+  it("follows the mirror's turn", () => {
+    expect(remoteTurnBusy(true, false)).toBe(true);
+    expect(remoteTurnBusy(false, false)).toBe(false);
+  });
+
+  it("stays busy while a local send has not reached the transcript", () => {
+    // The record for a message typed into the pty arrives a moment later; in
+    // that window the mirror reads idle, and clearing busy on it stamped the
+    // turn as over before it had begun.
+    expect(remoteTurnBusy(false, true)).toBe(true);
   });
 });
 
