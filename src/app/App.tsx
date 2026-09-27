@@ -1855,7 +1855,20 @@ export default function App({
       // parsed against nothing.
       // Ticks faster than the 3s threshold so an interrupt resolves promptly,
       // and cheaply: one comparison unless a turn is actually open.
-      const liveness = setInterval(settleTurn, 1000);
+      //
+      // The approval sync rides on the same clock, and has to. A prompt is
+      // raised only once two frames agree on its options, and the second frame
+      // came from the next pty chunk or transcript batch — of which a prompt
+      // produces neither: it paints once and then the pty waits for a human
+      // while the transcript records nothing (§7). A prompt that arrived whole
+      // in one chunk sat at one agreeing frame for as long as nobody repainted,
+      // shown on the phone and nowhere in MonoCode. The same screen read a
+      // second later is better evidence of a settled option set than a repaint
+      // is, and a raised prompt is never raised twice.
+      const liveness = setInterval(() => {
+        settleTurn();
+        syncRemoteApproval(sessionId);
+      }, 1000);
       let unsubscribe = () => undefined as void;
       remoteControl.current.set(sessionId, {
         ptyId: handle.ptyId,
