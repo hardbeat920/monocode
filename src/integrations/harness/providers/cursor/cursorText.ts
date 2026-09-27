@@ -8,6 +8,7 @@ import {
 } from "../../core/child";
 import { abortTextPromptRace } from "../../core/abortTextPrompt";
 import { mergeStream } from "../../core/streamText";
+import type { HarnessEvent } from "../../core/types";
 
 const TEXT_CHILD_ID = "monocode-text";
 const INIT_TIMEOUT_MS = 60_000;
@@ -29,6 +30,7 @@ type LiveText = {
   collecting: boolean;
   output: string;
   closed: boolean;
+  onEvent?: (event: HarnessEvent) => void;
 };
 
 let live: LiveText | null = null;
@@ -65,6 +67,7 @@ export async function runCursorTextPrompt(input: {
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   const run = turns.catch(() => undefined).then(() => promptOnLive(input));
   turns = run.then(
@@ -81,10 +84,12 @@ async function promptOnLive(input: {
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
   const session = await ensureLive(input.cwd, input.model, input.modelSettings);
   session.output = "";
   session.collecting = true;
+  session.onEvent = input.onEvent;
   const abort = abortTextPromptRace(input.signal, () =>
     session.acp.notify("session/cancel", {
       sessionId: session.acpSessionId,
@@ -112,6 +117,7 @@ async function promptOnLive(input: {
   } finally {
     abort.detach();
     session.collecting = false;
+    session.onEvent = undefined;
     await dropLive();
   }
 }
@@ -153,7 +159,10 @@ async function startLive(
       const session = acpRef.session;
       if (!session || method !== "session/update" || !session.collecting)
         return;
-      session.output = mergeStream(session.output, textFromUpdate(params));
+      const previous = session.output;
+      session.output = mergeStream(previous, textFromUpdate(params));
+      const delta = session.output.slice(previous.length);
+      if (delta) session.onEvent?.({ type: "message.delta", text: delta });
     },
     onRequest: (id, method, params) => {
       void handleTextRequest(acp, id, method, params);
@@ -168,6 +177,7 @@ async function startLive(
     collecting: false,
     output: "",
     closed: false,
+    onEvent: undefined,
   };
   acpRef.session = session;
 

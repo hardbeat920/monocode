@@ -18,6 +18,7 @@ import {
 } from "./piProtocol";
 import { abortTextPromptRace } from "../../core/abortTextPrompt";
 import { mergeStream } from "../../core/streamText";
+import type { HarnessEvent } from "../../core/types";
 
 const INIT_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 45_000;
@@ -33,6 +34,7 @@ type LiveText = {
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
   turnEndPending: boolean;
+  onEvent?: (event: HarnessEvent) => void;
 };
 
 type TextState = {
@@ -96,6 +98,7 @@ export async function runTextPrompt(
     prompt: string;
     timeoutMs?: number;
     signal?: AbortSignal;
+    onEvent?: (event: HarnessEvent) => void;
   },
 ): Promise<string> {
   const state = stateFor(flavor);
@@ -118,6 +121,7 @@ async function promptOnLive(
     prompt: string;
     timeoutMs?: number;
     signal?: AbortSignal;
+    onEvent?: (event: HarnessEvent) => void;
   },
 ): Promise<string> {
   const session = await ensureLive(
@@ -144,6 +148,7 @@ async function promptOnLive(
     }
     session.output = "";
     session.collecting = true;
+    session.onEvent = input.onEvent;
     session.turnEndPending = false;
 
     const turnPromise = new Promise<void>((resolve, reject) => {
@@ -196,6 +201,7 @@ async function promptOnLive(
     throw error;
   } finally {
     session.collecting = false;
+    session.onEvent = undefined;
     session.turnDone = null;
     session.turnFailed = null;
   }
@@ -253,6 +259,7 @@ async function startLive(
     turnDone: null,
     turnFailed: null,
     turnEndPending: false,
+    onEvent: undefined,
   };
   liveRef.current = session;
 
@@ -315,6 +322,9 @@ function handleFrame(session: LiveText, rec: Record<string, unknown>) {
   const delta = assistantDeltaFromEvent(rec);
   if (delta?.kind === "text") {
     session.output = mergeStream(session.output, delta.text);
+    session.onEvent?.({ type: "message.delta", text: delta.text });
+  } else if (delta?.kind === "thinking") {
+    session.onEvent?.({ type: "reasoning.delta", text: delta.text });
   }
   if (isAgentSettled(rec) || agentEndWillRetry(rec) === false) {
     if (session.turnDone) finishTurn(session);
@@ -344,6 +354,8 @@ export const runPiTextPrompt = (input: {
   modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }) => runTextPrompt(PI_FLAVOR, input);
 
 export const stopOmpTextPrompt = () => stopTextPrompt(OMP_FLAVOR);
@@ -354,4 +366,6 @@ export const runOmpTextPrompt = (input: {
   modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }) => runTextPrompt(OMP_FLAVOR, input);
