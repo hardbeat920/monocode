@@ -121,6 +121,7 @@ import { resolveZoomKeybinding } from "../features/settings/model/zoomKeybinding
 import { resolveAppShortcut } from "../features/settings/model/appShortcuts";
 import { runUpdateFlow } from "./model/updater";
 import {
+  attachmentPathText,
   displayAttachments,
   prepareAttachments,
 } from "../features/sessions/model/attachments";
@@ -1651,31 +1652,16 @@ export default function App({
    * know what is in the composer, and not knowing has to end in a refusal rather
    * than in a send.
    */
-  /**
-   * Type a composer turn into the pty, or `null` when this session is not
-   * remote-controlled and the ordinary harness send should run.
-   *
-   * The sequence lives in `injectRemoteText`, which is where its guarantee is
-   * asserted: no message bytes are written while the composer still holds text.
-   * This is the adapter — ports in, outcome turned into something readable.
-   */
-  const injectRemoteTurn = useCallback(
+  /** The send itself, once the text is final. Split out so the echo is of it. */
+  const injectPreparedRemoteTurn = useCallback(
     (
       sessionId: string,
       text: string,
-      hasAttachments: boolean,
-    ): Promise<void> | null => {
+      files: { handed: number; failed: string[] },
+      note: (body: string) => void,
+    ): Promise<void> => {
       const entry = remoteControl.current.get(sessionId);
-      if (!entry) return null;
-      remoteSentAt.current.set(sessionId, Date.now());
-      const note = (body: string) => {
-        enqueueHarnessEvent(sessionId, {
-          type: "interjection",
-          customType: "remote-control",
-          severity: "concern",
-          text: body,
-        });
-      };
+      if (!entry) return Promise.resolve();
       // Registered before the write, not after it. `injectRemoteText`
       // resolves once the bytes are out, while the transcript watcher polls on
       // its own clock — so the record could be read, and the echo looked for,
@@ -1731,12 +1717,18 @@ export default function App({
             entry.clearBusyIfIdle();
             return;
           }
-          if (hasAttachments) {
-            // The TUI takes typed text. `@file` mentions in it resolve as usual,
-            // but a pasted attachment has no keystroke to become.
+          if (files.failed.length > 0) {
             note(
-              "Attachments cannot be sent while Remote Control is open, so only the message text was sent.",
+              `${files.failed.length === 1 ? "One attachment" : `${files.failed.length} attachments`} could not be handed to the terminal (${files.failed.join(", ")}); the rest of the message was sent.`,
             );
+          } else if (files.handed > 0) {
+            enqueueHarnessEvent(sessionId, {
+              type: "status",
+              text:
+                files.handed === 1
+                  ? "The attachment was passed to the terminal as a file path for it to read."
+                  : `${files.handed} attachments were passed to the terminal as file paths for it to read.`,
+            });
           }
           const queued = queuedNotice(outcome.queued);
           if (queued) {
@@ -1751,6 +1743,71 @@ export default function App({
     },
     [enqueueHarnessEvent, flushHarnessEvents],
   );
+
+  /**
+   * Type a composer turn into the pty, or `null` when this session is not
+   * remote-controlled and the ordinary harness send should run.
+   *
+   * The sequence lives in `injectRemoteText`, which is where its guarantee is
+   * asserted: no message bytes are written while the composer still holds text.
+   * This is the adapter — ports in, outcome turned into something readable.
+   */
+  const injectRemoteTurn = useCallback(
+    (
+      sessionId: string,
+      text: string,
+      attachments: readonly Attachment[],
+    ): Promise<void> | null => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry) return null;
+      remoteSentAt.current.set(sessionId, Date.now());
+      const note = (body: string) => {
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: body,
+        });
+      };
+      // The TUI takes typed text; an attachment has no keystroke to become.
+      // What it can become is a path: a file from disk already has one, and a
+      // pasted image is written to the attachments directory to get one. The
+      // CLI reads either with its own tools, images included. A file that
+      // cannot be handed over is named, not dropped silently.
+      const handOver = async () => {
+        const lines: string[] = [];
+        const failed: string[] = [];
+        for (const file of attachments) {
+          let path = file.path?.trim();
+          if (!path && file.data) {
+            try {
+              path = await invoke<string>("write_attachment", {
+                name: file.name,
+                data: file.data,
+              });
+            } catch {
+              path = undefined;
+            }
+          }
+          if (path) lines.push(attachmentPathText({ ...file, path }));
+          else failed.push(file.name);
+        }
+        const body = text.trim();
+        const full =
+          lines.length === 0
+            ? text
+            : body
+              ? `${body}\n\n${lines.join("\n")}`
+              : lines.join("\n");
+        return { full, handed: lines.length, failed };
+      };
+      return handOver().then(({ full, handed, failed }) =>
+        injectPreparedRemoteTurn(sessionId, full, { handed, failed }, note),
+      );
+    },
+    [enqueueHarnessEvent, injectPreparedRemoteTurn],
+  );
+
 
   /**
    * The hand-over itself. Only ever called through `openRemote`, which holds the
@@ -7164,11 +7221,7 @@ export default function App({
             // child that no longer has it. `appendUser` sets `busy` before the
             // send runs, so a follow-up reaches this branch while the hand-over
             // is live.
-            await (injectRemoteTurn(
-              sessionId,
-              steerText,
-              prepared.length > 0,
-            ) ??
+            await (injectRemoteTurn(sessionId, steerText, prepared) ??
               steerHarnessTurn({
                 harness: current.harness,
                 sessionId,
@@ -7815,11 +7868,7 @@ export default function App({
             // to the harness would spawn a second process on the same session,
             // which Claude refuses outright, so the text is typed into the TUI
             // instead.
-            const injected = injectRemoteTurn(
-              sessionId,
-              text,
-              turnAttachments.length > 0,
-            );
+            const injected = injectRemoteTurn(sessionId, text, turnAttachments);
             if (injected) {
               remoteOwned = true;
               return injected;
@@ -9953,7 +10002,7 @@ export default function App({
         sessionsRef.current = next;
         setSessions(next);
         // A worker can be handed over too, and the pty owns it just the same.
-        await (injectRemoteTurn(id, text, false) ??
+        await (injectRemoteTurn(id, text, []) ??
           steerHarnessTurn({
             harness: session.harness,
             sessionId: id,
