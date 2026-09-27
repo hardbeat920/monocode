@@ -71,7 +71,6 @@ export function harnessUnavailableHint(id: HarnessId): string {
   return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;
 }
 
-/** Resolve installed live harness binaries and publish availability, sharing concurrent probes. */
 export function probeHarnessAvailability(
   options?: { force?: boolean },
 ): Promise<void> {
