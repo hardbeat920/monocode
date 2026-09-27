@@ -83,6 +83,7 @@ function fixture() {
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     notes: vi.fn(async () => [note]),
     note: vi.fn(async (id) => (id === note.id ? note : null)),
+    saveNote: vi.fn(async (input) => ({ ...note, ...input })),
   };
   return { source, host };
 }
@@ -429,5 +430,118 @@ describe("agent app commands", () => {
     expect(
       await handleAgentApp(source, "read", "notes.read", { id: "n1" }, host),
     ).toMatchObject({ body: note.body });
+  });
+
+  it("creates a note with source metadata and reuses the same request ID safely", async () => {
+    const { source, host } = fixture();
+    let created: Note | null = null;
+    host.note = vi.fn(async (id) => (id === created?.id ? created : null));
+    host.saveNote = vi.fn(async (input) => {
+      created = { ...note, ...input };
+      return created;
+    });
+    const input = { body: "# Work plan\n\nNext steps", tags: ["#Work"] };
+    const saved = await handleAgentApp(
+      source,
+      "create-1",
+      "notes.write",
+      input,
+      host,
+    );
+    expect(saved).toMatchObject({
+      id: "app-lead-create-1",
+      title: "Work plan",
+      body: input.body,
+      tags: ["work"],
+      sourceSessionId: source.id,
+      sourceCwd: source.cwd,
+    });
+    expect(
+      await handleAgentApp(source, "create-1", "notes.write", input, host),
+    ).toEqual(saved);
+    expect(host.saveNote).toHaveBeenCalledTimes(1);
+    await expect(
+      handleAgentApp(
+        source,
+        "create-1",
+        "notes.write",
+        {
+          body: "Different body",
+        },
+        host,
+      ),
+    ).rejects.toThrow("Request ID was already used");
+  });
+
+  it("edits only supplied note fields and refuses missing or malformed notes", async () => {
+    const { source, host } = fixture();
+    const changed = await handleAgentApp(
+      source,
+      "edit-1",
+      "notes.write",
+      {
+        id: "n1",
+        body: "Updated body",
+      },
+      host,
+    );
+    expect(changed).toMatchObject({
+      id: "n1",
+      title: note.title,
+      body: "Updated body",
+      tags: note.tags,
+    });
+    expect(host.saveNote).toHaveBeenCalledWith({
+      id: "n1",
+      title: note.title,
+      body: "Updated body",
+      tags: note.tags,
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "edit-2",
+        "notes.write",
+        {
+          id: "missing",
+          body: "x",
+        },
+        host,
+      ),
+    ).rejects.toThrow("Note was not found");
+    await expect(
+      handleAgentApp(
+        source,
+        "edit-3",
+        "notes.write",
+        {
+          id: "n1",
+        },
+        host,
+      ),
+    ).rejects.toThrow("Supply title, body or tags");
+    await expect(
+      handleAgentApp(
+        source,
+        "edit-4",
+        "notes.write",
+        {
+          id: "n1",
+          tags: "work",
+        },
+        host,
+      ),
+    ).rejects.toThrow("tags must be an array");
+    await expect(
+      handleAgentApp(
+        source,
+        "create-2",
+        "notes.write",
+        {
+          title: "Empty",
+        },
+        host,
+      ),
+    ).rejects.toThrow("body is required");
   });
 });

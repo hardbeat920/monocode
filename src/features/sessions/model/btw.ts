@@ -1,11 +1,18 @@
 import { applyHarnessEvent } from "../../../integrations/harness/core/apply";
 import type { HarnessEvent } from "../../../integrations/harness/core/types";
 import { displayPath } from "../../../shared/lib/paths";
-import type { Attachment, Block, BtwThread, HarnessId } from "./session";
+import type {
+  Attachment,
+  Block,
+  BtwMessage,
+  BtwThread,
+  HarnessId,
+} from "./session";
 import { newSession } from "./session";
 import type { BuiltinSkill } from "../../skills/model/skills";
 import { harnessForTurn } from "./secondOpinion";
 import { groupTurns } from "./transcriptActivity";
+import { resolveModel } from "./models";
 
 /**
  * Harnesses with an isolated text runner suitable for read-only side
@@ -29,6 +36,28 @@ export function supportsBtwHarness(
 
 export function sessionHasBtwThreads(blocks: Block[]): boolean {
   return blocks.some((block) => (block.btwThreads?.length ?? 0) > 0);
+}
+
+/** A side thread together with the turn it was asked about. */
+export type BtwSessionThread = {
+  thread: BtwThread;
+  turn: Block[];
+};
+
+/** Every side thread in a session, oldest first. */
+export function sessionBtwThreads(
+  blocks: Block[],
+  managed = false,
+): BtwSessionThread[] {
+  if (!sessionHasBtwThreads(blocks)) return [];
+  const entries: BtwSessionThread[] = [];
+  for (const turn of groupTurns(blocks, managed)) {
+    const userBlock = turn.find((block) => block.role === "user");
+    for (const thread of userBlock?.btwThreads ?? []) {
+      entries.push({ thread, turn });
+    }
+  }
+  return entries.sort((a, b) => a.thread.createdAt - b.thread.createdAt);
 }
 
 /** Provider for a BTW surface, including threads saved before a handoff. */
@@ -113,9 +142,7 @@ export function sessionHasBtwEligibleTurn(
   managed = false,
 ): boolean {
   const turns = groupTurns(blocks, managed);
-  return (
-    btwOpenTargetTurnId(turns, blocks, sessionHarness, managed) != null
-  );
+  return btwOpenTargetTurnId(turns, blocks, sessionHarness, managed) != null;
 }
 
 /** Completed turn that should receive a composer `/btw` open request. */
@@ -160,6 +187,15 @@ export function consumeBtwCommand(text: string): {
   const match = text.match(/^\s*\/btw(?:\s+([\s\S]*))?\s*$/i);
   if (!match) return { text, matched: false };
   return { text: match[1]?.trim() ?? "", matched: true };
+}
+
+/**
+ * Text left after a `/btw ` typed at the start of the composer, or null. The
+ * trailing whitespace is what commits the command while typing.
+ */
+export function consumeBtwPrefix(text: string): string | null {
+  const match = text.match(/^\s*\/btw\s+/i);
+  return match ? text.slice(match[0].length) : null;
 }
 
 const SNAPSHOT_ROLES: Record<Block["role"], true | undefined> = {
@@ -354,10 +390,7 @@ export function applyBtwHarnessEvent(
   userMessageId: string,
 ): Block[] {
   const session = newSession(harness, "~", model);
-  session.blocks = [
-    { id: userMessageId, role: "user", text: "" },
-    ...blocks,
-  ];
+  session.blocks = [{ id: userMessageId, role: "user", text: "" }, ...blocks];
   return applyHarnessEvent(session, event).blocks.slice(1);
 }
 
@@ -384,6 +417,56 @@ export function sealBtwResponseBlocks(
     userMessageId,
   );
   return next;
+}
+
+/**
+ * A side thread as ordinary transcript blocks, so it renders through the
+ * main transcript: each question is a user turn, each reply its answer, and
+ * a reply still streaming is the live turn.
+ */
+export function btwThreadBlocks(input: {
+  messages: BtwMessage[];
+  pendingBlocks?: Block[];
+  running: boolean;
+  /** When the thread last changed, to close a turn that failed unanswered. */
+  updatedAt?: number;
+  harness?: HarnessId;
+  model?: string;
+}): Block[] {
+  const { messages, running, harness, model } = input;
+  const turnModel =
+    harness && model
+      ? { harness, id: model, name: resolveModel(harness, model).name }
+      : undefined;
+  const blocks: Block[] = [];
+  messages.forEach((message, index) => {
+    if (message.role === "assistant") {
+      if (message.blocks?.length) blocks.push(...message.blocks);
+      else
+        blocks.push({ id: message.id, role: "assistant", text: message.text });
+      return;
+    }
+    const answer = messages[index + 1];
+    const last = index === messages.length - 1;
+    const endedAt =
+      answer?.role === "assistant"
+        ? answer.createdAt
+        : last && !running
+          ? (input.updatedAt ?? message.createdAt)
+          : undefined;
+    blocks.push({
+      id: message.id,
+      role: "user",
+      text: message.text,
+      startedAt: message.createdAt,
+      ...(endedAt != null
+        ? { durationMs: Math.max(0, endedAt - message.createdAt) }
+        : {}),
+      ...(turnModel ? { turnModel } : {}),
+    });
+    if (last && running) blocks.push(...(input.pendingBlocks ?? []));
+  });
+  return blocks;
 }
 
 export function replaceBtwThread(block: Block, thread: BtwThread): Block {
