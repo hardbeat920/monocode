@@ -169,6 +169,14 @@ import {
 } from "../model/sessionFolders";
 import { SessionFolderPicker } from "./SessionFolderPicker";
 import type { LastTurnRecall } from "../model/editLastTurn";
+import {
+  composerHistoryDirection,
+  EMPTY_COMPOSER_HISTORY_CURSOR,
+  loadComposerHistory,
+  recordComposerHistory,
+  stepComposerHistory,
+  type ComposerHistoryCursor,
+} from "../model/composerHistory";
 
 type Props = {
   enabled?: boolean;
@@ -549,6 +557,9 @@ export function Composer({
   const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
+  const historyCursorRef = useRef<ComposerHistoryCursor>(
+    EMPTY_COMPOSER_HISTORY_CURSOR,
+  );
   const draftResetTokenRef = useRef(draftResetToken);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
@@ -885,6 +896,7 @@ export function Composer({
     }
     draftResetTokenRef.current = draftResetToken;
     draftRevisionRef.current += 1;
+    historyCursorRef.current = EMPTY_COMPOSER_HISTORY_CURSOR;
     if (ref.current) {
       ref.current.value = "";
       ref.current.style.height = "auto";
@@ -1308,6 +1320,7 @@ export function Composer({
       exitEditMode();
       return;
     }
+    historyCursorRef.current = EMPTY_COMPOSER_HISTORY_CURSOR;
     restoreDraft(
       lastTurnRecall.text,
       lastTurnRecall.attachments,
@@ -1326,6 +1339,7 @@ export function Composer({
 
   useEffect(() => {
     draftRevisionRef.current += 1;
+    historyCursorRef.current = EMPTY_COMPOSER_HISTORY_CURSOR;
     setResendEdited(false);
     onEditingLastTurnChange?.(false);
   }, [sessionId, onEditingLastTurnChange]);
@@ -1374,6 +1388,8 @@ export function Composer({
     ) {
       const accepted = onBtwCommand(btwCommand.text);
       if (accepted === false) return;
+      recordComposerHistory(value);
+      historyCursorRef.current = EMPTY_COMPOSER_HISTORY_CURSOR;
       if (ref.current) {
         ref.current.value = "";
         ref.current.style.height = "auto";
@@ -1458,6 +1474,8 @@ export function Composer({
       restoreDraft(text, files);
       return;
     }
+    recordComposerHistory(submittedText);
+    historyCursorRef.current = EMPTY_COMPOSER_HISTORY_CURSOR;
     if (ref.current) {
       ref.current.value = "";
       ref.current.style.height = "auto";
@@ -1597,6 +1615,43 @@ export function Composer({
           return;
         }
         setSlash(null);
+      }
+    }
+
+    const historyDirection = composerHistoryDirection({
+      key: e.key,
+      altKey: e.altKey,
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      shiftKey: e.shiftKey,
+      selectionStart: e.currentTarget.selectionStart,
+      selectionEnd: e.currentTarget.selectionEnd,
+      value: e.currentTarget.value,
+    });
+    if (historyDirection && !resendEdited) {
+      const entries = loadComposerHistory();
+      if (entries.length > 0) {
+        e.preventDefault();
+        const step = stepComposerHistory(
+          entries,
+          historyCursorRef.current,
+          historyDirection,
+          e.currentTarget.value,
+        );
+        historyCursorRef.current = step.cursor;
+        if (step.text !== e.currentTarget.value) {
+          draftRevisionRef.current += 1;
+          setDraft(step.text);
+          onDraftChange?.(step.text);
+          const el = e.currentTarget;
+          el.value = step.text;
+          resizeComposer(el);
+          el.setSelectionRange(step.text.length, step.text.length);
+          syncHighlightScroll(el);
+          syncTokensFromTextarea(el);
+          syncHasValue(step.text, attachmentsRef.current);
+        }
+        return;
       }
     }
 
