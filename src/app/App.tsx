@@ -1477,6 +1477,15 @@ export default function App({
       !remoteTerminalHidden.current.has(sessionId),
     [],
   );
+  /**
+   * Terminals Remote Control put in front of the user itself, for a screen it
+   * could not read. Those fold away again on their own once the screen reads
+   * as an ordinary composer — the thing they were raised for has been dealt
+   * with, and a terminal left standing in the conversation is the "why is
+   * the terminal window showing" of every session that ever hit a trust
+   * check. A terminal the user opened is theirs to close.
+   */
+  const remoteTerminalAutoOpened = useRef(new Set<string>());
   /** Per session, so the link can render. `undefined` renders nothing. */
   const [remoteBridges, setRemoteBridges] = useState<
     Readonly<Record<string, BridgeStatus>>
@@ -1494,6 +1503,18 @@ export default function App({
       const entry = remoteControl.current.get(sessionId);
       if (!entry) return;
       const screen = entry.screen.screen;
+      if (
+        screen &&
+        (screen.kind === "idle" || screen.kind === "busy") &&
+        remoteTerminalAutoOpened.current.has(sessionId) &&
+        remoteTerminalInFront(sessionId)
+      ) {
+        // Raised for a screen that is no longer there. Folded, not closed:
+        // `remoteTerminals` keeps the session so the next unreadable screen
+        // can bring it back.
+        remoteTerminalAutoOpened.current.delete(sessionId);
+        setRemoteTerminalMinimizedIds((ids) => new Set(ids).add(sessionId));
+      }
       const view = screen
         ? remoteApprovalView({
             pending: entry.pending.size > 0,
@@ -1530,11 +1551,19 @@ export default function App({
         }
         if (effect.kind === "openTerminal") {
           // The decided rule is that the user answers it themselves, which needs
-          // the pty in front of them rather than a description of it.
+          // the pty in front of them rather than a description of it — so a
+          // terminal folded earlier is unfolded, not merely kept.
           remoteTerminals.current.add(sessionId);
+          remoteTerminalAutoOpened.current.add(sessionId);
           setRemoteTerminalIds((ids) =>
             ids.includes(sessionId) ? ids : [...ids, sessionId],
           );
+          setRemoteTerminalMinimizedIds((ids) => {
+            if (!ids.has(sessionId)) return ids;
+            const next = new Set(ids);
+            next.delete(sessionId);
+            return next;
+          });
           continue;
         }
         enqueueHarnessEvent(sessionId, {
@@ -2210,6 +2239,7 @@ export default function App({
         });
         remoteEcho.current.delete(sessionId);
         remoteSentAt.current.delete(sessionId);
+        remoteTerminalAutoOpened.current.delete(sessionId);
         entry.stop();
       } else if (byUser) {
         remoteControlClosed.current.add(sessionId);
