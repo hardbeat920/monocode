@@ -113,6 +113,10 @@ fn wl_paste(mime: &str) -> WlPaste {
 }
 
 /// File paths from a `text/uri-list`, skipping comments and non-file URIs.
+///
+/// macOS reads `public.file-url` instead, so this stays out of that library
+/// build. `cargo clippy --all-targets` still typechecks it via the tests.
+#[cfg(any(test, not(target_os = "macos")))]
 fn paths_from_uri_list(bytes: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(bytes);
     let paths = text
@@ -306,7 +310,10 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod path_tests {
-    use super::{clean_clipboard_paths, paths_from_uri_list};
+    use super::clean_clipboard_paths;
+    // `Url::to_file_path` rejects `file:///home/...` on Windows.
+    #[cfg(unix)]
+    use super::paths_from_uri_list;
 
     /// What arboard hands back for a `text/uri-list` copied in a file manager.
     #[test]
@@ -331,6 +338,7 @@ mod path_tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn reads_a_uri_list_the_wayland_clipboard_publishes() {
         assert_eq!(
