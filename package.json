@@ -18,6 +18,9 @@
     "tauri:stable": "tauri dev --no-watch --config src-tauri/tauri.stable.conf.json",
     "setup:linux:deb": "bash scripts/install-linux-deps-debian.sh",
     "build:linux": "tauri build --bundles deb,appimage",
+    "install:linux:desktop": "npm run build && cargo build --release && bash scripts/install-linux-desktop.sh",
+    "uninstall:linux:desktop": "bash scripts/install-linux-desktop.sh --uninstall",
+    "test:linux:installer": "bash scripts/test-linux-desktop-installer.sh",
     "build:windows": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" && tauri build --bundles nsis"
   },
   "dependencies": {
