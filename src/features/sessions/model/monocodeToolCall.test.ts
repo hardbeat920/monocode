@@ -40,6 +40,9 @@ describe("MonoCode CLI tool calls", () => {
       monoCodeToolCall(shell("monocode app sessions.draft --json '{}'"))?.label,
     ).toBe("Save a draft");
     expect(
+      monoCodeToolCall(shell("monocode app notes.write --input -"))?.label,
+    ).toBe("Write a note");
+    expect(
       monoCodeToolCall({
         id: "generic",
         role: "tool",

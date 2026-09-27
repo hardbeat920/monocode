@@ -865,7 +865,27 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
         text: result.text,
       });
     }
+    if (isAgentToolName(tool.name)) settleInlineAgentTask(live, tool.id);
   }
+}
+
+/**
+ * A subagent that was never backgrounded reports back on the parent's own tool
+ * result, and Claude sends no task record for one that ended inline. Without
+ * this its task would keep the turn open for good: the reply reads as finished
+ * while the composer and the plan's Build button stay disabled until a restart.
+ */
+function settleInlineAgentTask(live: Live, toolUseId: string): void {
+  let settled = false;
+  for (const [taskId, task] of [...live.agentTasks]) {
+    if (task.toolUseId !== toolUseId || task.backgrounded) continue;
+    live.agentTasks.delete(taskId);
+    live.backgroundTasks.delete(taskId);
+    settled = true;
+  }
+  if (!settled) return;
+  maybeFinishTurn(live);
+  syncBackgroundWait(live);
 }
 
 function handleResult(live: Live, rec: Record<string, unknown>): void {

@@ -7,10 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-27
+
+### Added
+
+- Settings → Keybindings can record, disable, and reset custom shortcuts for app, editor, tab, and menu commands. The native macOS and in-app menus show the active shortcuts, and conflicts with existing shortcuts are rejected. In #438.
+- Settings → Providers can use an explicitly chosen Agent CLI binary path for each provider, with version validation and automatic detection when no path is set. In #407.
+- `.jsonc` files receive comment-aware syntax highlighting in the editor and Git diff preview. In #382.
+- Tab title menus can archive or delete all conversations in a tab.
+- The macOS terminal supports Option and Command navigation and deletion shortcuts.
+
+### Changed
+
+- BTW side conversations open in an animated sheet, with improved submission and conversation restoration behavior. In #476.
+- Second opinions can use a different model from the same provider when it is the only enabled provider. The picker excludes the model that produced the original answer and explains when no alternative is available. In #421.
+- The compact sidebar has updated session and file icons and a clearer activity indicator; the compact project picker mascot is smaller.
+- The redundant Changes button has been removed from Explorer.
+- Finished streaming responses discard their temporary word-fade markup after the animation completes.
+
 ### Fixed
 
-- Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries.
+- Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries. In #465.
 - Opening a file with CRLF line endings no longer doubles every line in the editor, preview, and diff view. Saving and staging keep the file's original line endings, and staged-only changes under `core.autocrlf` are shown instead of an empty diff. Fixes #411.
+- MonoCode now prefers the Claude binary found by the user's shell, then the inherited PATH, before checking fixed install locations. A transient busy-binary error on Linux is retried. In #448.
+- Claude shell commands are restored in session transcripts, including long command labels.
+- Completed GitHub issues show the correct status icon in the Inbox. In #455.
+- BTW submissions report failures, saved conversations survive edge cases, and OpenCode replies no longer duplicate or reorder streamed text. In #476.
+- A malformed PTY data chunk is skipped without throwing from the terminal listener. In #472.
+- Inline Claude subagents no longer leave a turn busy after reporting back, so captured plans can be built. New plan turns also keep their own plan blocks after an app restart. In #452.
+- The macOS shortcut conflict test now checks the platform's Command modifier instead of Control. In #453.
 
 ## [0.2.0] - 2026-09-25
 

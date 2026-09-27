@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { newSession } from "../../../features/sessions/model/session";
+import {
+  newSession,
+  type Session,
+} from "../../../features/sessions/model/session";
+import { planTurnKey } from "../../../features/sessions/model/plan";
+import { sanitizeSessionForPersist } from "../../../features/sessions/data/sessionStore";
 import { previewFromTool } from "../providers/claude/claudeProtocol";
 import {
   appendUser,
@@ -723,6 +728,65 @@ describe("task list updates", () => {
       "user",
       "assistant",
     ]);
+  });
+});
+
+describe("plan keys", () => {
+  it("reaches this turn's plan block past a mid-turn follow-up", () => {
+    const key = planTurnKey(1);
+    let session = appendUser(newSession("claude", "/repo"), "plan it");
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key,
+      text: "# Approach",
+      streaming: true,
+    });
+    session = appendSteerUser(session, "also cover the tests");
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key,
+      text: "# Approach\n\nCover the tests too.",
+    });
+
+    const plans = session.blocks.filter((block) => block.role === "plan");
+    expect(plans).toHaveLength(1);
+    expect(plans[0].text).toBe("# Approach\n\nCover the tests too.");
+  });
+
+  it("does not adopt a saved plan block when the turn counter starts over", () => {
+    // First run of the app: this is the session's first turn, so gen is 1.
+    let session = appendUser(
+      newSession("claude", "/repo"),
+      "plan the refactor",
+    );
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key: planTurnKey(1),
+      text: "# Old plan",
+    });
+
+    // The key is saved with the transcript, so it survives the restart.
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks.find((block) => block.role === "plan")?.plan?.key).toBe(
+      session.blocks.find((block) => block.role === "plan")?.plan?.key,
+    );
+
+    // Second run: the counter is back to 1 and the user plans again.
+    let reopened: Session = { ...session, blocks: saved.blocks };
+    reopened = appendUser(reopened, "plan the follow-up");
+    reopened = applyHarnessEvent(reopened, {
+      type: "plan",
+      key: planTurnKey(1),
+      text: "# New plan",
+    });
+
+    const plans = reopened.blocks.filter((block) => block.role === "plan");
+    expect(plans.map((block) => block.text)).toEqual([
+      "# Old plan",
+      "# New plan",
+    ]);
+    // The new plan belongs to the turn that produced it, not to the old one.
+    expect(reopened.blocks.at(-1)?.text).toBe("# New plan");
   });
 });
 

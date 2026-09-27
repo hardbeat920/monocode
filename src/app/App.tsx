@@ -320,6 +320,7 @@ import {
   buildPlanPrompt,
   isProviderFailureText,
   planTitle,
+  planTurnKey,
   planTurnPrompt,
 } from "../features/sessions/model/plan";
 import {
@@ -497,8 +498,10 @@ import {
 } from "../features/sessions/model/sessionFolders";
 import {
   ADD_NOTE_TO_CHAT_EVENT,
+  NOTES_CHANGED_EVENT,
   composeNoteMessage,
   noteCardMeta,
+  upsertNote,
   type NoteComposerCard,
 } from "../features/notes";
 import {
@@ -6419,7 +6422,7 @@ export default function App({
           );
         };
 
-        const planEventKey = `turn:${gen}`;
+        const planEventKey = planTurnKey(gen);
         let nativePlanSeen = false;
         let providerFailureSeen = false;
         const routePlanEvent = (event: HarnessEvent): HarnessEvent | null => {
@@ -6624,7 +6627,7 @@ export default function App({
           );
           if (operatorCommand.matched) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs, read and continue other project sessions, save unsent drafts, organize session folders, and read saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
+            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs, read and continue other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
           }
           await sendTurn(sendText);
           acceptEditedResend();
@@ -7676,6 +7679,7 @@ export default function App({
         modelSettings: input.thread.modelSettings ?? input.source.modelSettings,
         threadId: input.thread.providerThreadId,
         onThreadId: (providerThreadId) => {
+          if (controller.signal.aborted) return;
           updateBtwThread(
             input.sessionId,
             input.userBlockId,
@@ -7691,12 +7695,13 @@ export default function App({
           );
         },
         onEvent: (event) => {
+          if (controller.signal.aborted) return;
           updateBtwThread(
             input.sessionId,
             input.userBlockId,
             input.thread.id,
             (thread) =>
-              thread
+              thread?.status === "running"
                 ? {
                     ...thread,
                     updatedAt: Date.now(),
@@ -7829,10 +7834,10 @@ export default function App({
         !sourceUserId ||
         !sourceEndBlockId
       ) {
-        return;
+        return false;
       }
       const sourceBlock = sourceBlockEarly;
-      if (!sourceBlock) return;
+      if (!sourceBlock) return false;
       const existing = existingEarly;
       const selectedModel =
         model?.trim() ||
@@ -7846,8 +7851,10 @@ export default function App({
           resolveModel(requestHarness!, selectedModel || source.model),
           source.modelSettings,
         );
-      if (existing?.status === "running") return;
-      if (existing && existing.sourceEndBlockId !== sourceEndBlockId) return;
+      if (existing?.status === "running") return false;
+      if (existing && existing.sourceEndBlockId !== sourceEndBlockId) {
+        return false;
+      }
       const now = Date.now();
       const thread: BtwThread = existing
         ? {
@@ -7882,7 +7889,7 @@ export default function App({
         threadId,
         () => thread,
       );
-      if (!updated) return;
+      if (!updated) return false;
       runBtwRequest({
         sessionId,
         userBlockId: sourceUserId,
@@ -7890,6 +7897,7 @@ export default function App({
         thread,
         harness: thread.harness ?? requestHarness!,
       });
+      return true;
     },
     [runBtwRequest, updateBtwThread],
   );
@@ -7974,6 +7982,60 @@ export default function App({
       removeBtwThread(sessionId, sourceUserId, threadId);
     },
     [removeBtwThread],
+  );
+
+  // Stopping keeps whatever the side answer had streamed, like stopping a
+  // main turn, and leaves the thread ready for the next question.
+  const onBtwStop = useCallback(
+    (sessionId: string, turn: Block[], threadId: string) => {
+      const sourceUserId = turn.find((block) => block.role === "user")?.id;
+      if (!sourceUserId) return;
+      const key = `${sessionId}:${threadId}`;
+      btwRequestsRef.current.get(key)?.controller.abort();
+      btwRequestsRef.current.delete(key);
+      updateBtwThread(sessionId, sourceUserId, threadId, (thread) => {
+        if (!thread || thread.status !== "running") return thread;
+        const harness = thread.harness;
+        const userMessageId =
+          thread.messages[thread.messages.length - 1]?.id ?? thread.id;
+        const pending = thread.pendingBlocks ?? [];
+        const blocks =
+          pending.length > 0 && harness
+            ? sealBtwResponseBlocks(
+                pending,
+                harness,
+                thread.model ?? "",
+                userMessageId,
+              )
+            : [];
+        const text = blocks
+          .filter((block) => block.role === "assistant")
+          .map((block) => block.text)
+          .join("\n\n")
+          .trim();
+        const now = Date.now();
+        return {
+          ...thread,
+          status: "ready",
+          updatedAt: now,
+          pendingBlocks: undefined,
+          error: undefined,
+          messages: blocks.length
+            ? [
+                ...thread.messages,
+                {
+                  id: crypto.randomUUID(),
+                  role: "assistant",
+                  text,
+                  createdAt: now,
+                  blocks,
+                },
+              ]
+            : thread.messages,
+        };
+      });
+    },
+    [updateBtwThread],
   );
 
   const onBtwRetry = useCallback(
@@ -8870,6 +8932,11 @@ export default function App({
             },
             notes: () => invoke("notes_list"),
             note: (id) => invoke("notes_get", { id }),
+            saveNote: async (note) => {
+              const saved = await upsertNote(note);
+              window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
+              return saved;
+            },
           },
         );
         appReceipts.current.set(key, { signature, promise });
@@ -10089,6 +10156,7 @@ export default function App({
     onBtwSubmit,
     onBtwRetry,
     onBtwDelete,
+    onBtwStop,
     onBtwModelChange,
     onNewTerminal: onNewTerminalInSession,
   };
