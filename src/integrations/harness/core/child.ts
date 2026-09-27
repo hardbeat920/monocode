@@ -159,9 +159,7 @@ function teardownBridge() {
   sseBuffer.clear();
   livePid.clear();
   pendingExit.clear();
-  void pending
-    ?.then((fns) => fns.forEach((fn) => fn()))
-    .catch(() => undefined);
+  void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
 }
 
 export function startHarnessBridge(): () => void {
@@ -243,6 +241,20 @@ export function unwatchSse(sessionId: string) {
   sseHandlers.delete(sessionId);
   sseEndHandlers.delete(sessionId);
   sseBuffer.delete(sessionId);
+}
+
+/**
+ * Whether a spawn failed because the session was stopped while it forked.
+ *
+ * The text comes from `SPAWN_CANCELLED` in `src-tauri/src/harness.rs`, which
+ * refuses to register a child whose session was torn down mid-fork. It is a
+ * stop doing its job, so a caller must not report it as a failure — kept here
+ * because this module is the spawn boundary, and matching the string in two
+ * places would let them drift apart.
+ */
+export function spawnWasCancelled(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes("Harness start was cancelled");
 }
 
 export async function spawnChild(

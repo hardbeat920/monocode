@@ -36,6 +36,13 @@ vi.mock("../../core/child", () => ({
     if (spawnGate) await spawnGate;
   },
   killChild,
+  // The real predicate, not a stand-in: it matches on the same literal string
+  // `harness.rs` sends, so a test asserting against that string still means
+  // something.
+  spawnWasCancelled: (error: unknown) =>
+    (error instanceof Error ? error.message : String(error)).includes(
+      "Harness start was cancelled",
+    ),
   unwatchChild: () => undefined,
   watchChild: (
     _id: string,
@@ -62,7 +69,10 @@ const {
   __claudeTestReset,
 } = await import("./claude");
 import type { HarnessEvent } from "../../core/types";
-import type { RuntimeMode, TurnIntent } from "../../../../features/sessions/model/session";
+import type {
+  RuntimeMode,
+  TurnIntent,
+} from "../../../../features/sessions/model/session";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -222,7 +232,8 @@ function emitBashFinished(taskId = "b1") {
     task_id: taskId,
     tool_use_id: "toolu_bash",
     status: "completed",
-    summary: 'Background command "sleep 30 && echo done" completed (exit code 0)',
+    summary:
+      'Background command "sleep 30 && echo done" completed (exit code 0)',
   });
 }
 
@@ -436,6 +447,164 @@ describe("claude legacy account resume", () => {
     expect(spawned[0]).toContain("--session-id");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
+  });
+});
+
+describe("claude stop timing", () => {
+  it("does not send the prompt when a stop lands right after Claude initializes", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "explore the codebase",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+
+    await waitFor(() => spawned.length === 1, "spawn");
+    // Both calls are synchronous up to their first await, so the stop's epoch
+    // bump lands before ensureLive's continuation — queued by this same line —
+    // ever gets to run.
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    void stopClaudeSession("s1");
+    await turn;
+
+    expect(parse().some((m) => m.type === "user")).toBe(false);
+    expect(events.some((event) => event.type === "session.started")).toBe(
+      false,
+    );
+  });
+
+  it("does not surface a stop-cancelled spawn as a startup failure", async () => {
+    const events: HarnessEvent[] = [];
+    // The host's own refusal, reproduced verbatim: `harness_spawn` in
+    // src-tauri/src/harness.rs declines to register a child whose session was
+    // torn down while it was forking. Nothing distinguishes why the session
+    // went away, only that it did — a stop looks identical to any other cause.
+    let rejectSpawn!: (error: Error) => void;
+    spawnGate = new Promise<void>((_resolve, reject) => {
+      rejectSpawn = reject;
+    });
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "explore the codebase",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+
+    await waitFor(() => spawned.length === 1, "spawn");
+    await stopClaudeSession("s1");
+    rejectSpawn(new Error("Harness start was cancelled"));
+    spawnGate = undefined;
+
+    // Before the fix this rejected with the raw "Harness start was cancelled"
+    // error — a stop the user asked for, reported back to them as a failure.
+    await expect(turn).resolves.toBeUndefined();
+    expect(events).toHaveLength(0);
+  });
+
+  it("does not tear down a newer turn when an older, superseded startup times out", async () => {
+    const events1: HarnessEvent[] = [];
+    const events2: HarnessEvent[] = [];
+    let turn1Settled = false;
+    let turn2Settled = false;
+
+    // Parked at the point `writeJson(initialize)` is called, before this
+    // attempt has anywhere to register `initDone` — a teardown landing here
+    // must not be able to wake it early.
+    const held = deferred();
+    writeChild.mockImplementationOnce(async (_id: string, line: string) => {
+      sent.push(line);
+      await held.promise;
+    });
+
+    const turn1 = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "the first, doomed attempt",
+      attachments: [],
+      onEvent: (event) => events1.push(event),
+    });
+    void turn1.then(
+      () => (turn1Settled = true),
+      () => (turn1Settled = true),
+    );
+    await waitFor(() => spawned.length === 1, "attempt 1 spawn");
+    // Past the point `liveByThread.set` runs for attempt 1: everything up to
+    // its parked `writeJson` is synchronous once `spawnChild` resolves, and
+    // `waitFor`'s real polling ticks are far more than that needs.
+    await settle();
+
+    // A different runtime mode is what makes this a genuinely new startup:
+    // `settingsKeyFor` includes it, so the mismatch tears attempt 1 out of
+    // `liveByThread` rather than reusing it.
+    const turn2 = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "auto",
+      text: "a fresh, unrelated turn",
+      attachments: [],
+      onEvent: (event) => events2.push(event),
+    });
+    void turn2.then(
+      () => (turn2Settled = true),
+      () => (turn2Settled = true),
+    );
+
+    await waitFor(() => spawned.length === 2, "attempt 2 spawn");
+    emit({ type: "system", subtype: "init", session_id: "sess_2" });
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await waitFor(
+      () => events2.some((event) => event.type === "session.started"),
+      "attempt 2 started",
+    );
+    await waitFor(() => parse().some((m) => m.type === "user"), "turn 2 sent");
+
+    killChild.mockClear();
+
+    // Fake timers before releasing, not after: attempt 1's own `setTimeout`
+    // for `waitForInit` is registered moments after the release, and a real
+    // one started before the switch would never be reached by the advance.
+    vi.useFakeTimers();
+    try {
+      // Attempt 1 resumes, registers itself as `initDone`-able for the first
+      // time, and then goes nowhere: `onLine` now belongs to attempt 2, so
+      // nothing will ever mark it initialized — it only ever times out.
+      held.release();
+      await vi.advanceTimersByTimeAsync(8_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(turn1Settled).toBe(true);
+    // The turn this test exists for: attempt 1's failure must not reach past
+    // its own wreckage. Before the fix, its unconditional teardown found
+    // whatever `liveByThread` currently held — attempt 2 — muted it, resolved
+    // its turn early with no error, and killed its real child. That reads as
+    // silent, premature success on a conversation that never actually replied.
+    expect(turn2Settled).toBe(false);
+    expect(killChild).not.toHaveBeenCalled();
+
+    // Turn 2 is still exactly as reachable as it was — finishing it here is
+    // the proof, not just an absence of damage.
+    emit({ type: "result", subtype: "success", session_id: "sess_2" });
+    await turn2;
+    expect(turn2Settled).toBe(true);
   });
 });
 
@@ -1215,9 +1384,9 @@ describe("claude background tasks", () => {
     });
     const items = groupTurnItems(session.blocks.slice(1));
     const group = items.at(-1);
-    expect(group?.type === "activity" && workSummaryLine(group.blocks, true)).toBe(
-      "Running in background",
-    );
+    expect(
+      group?.type === "activity" && workSummaryLine(group.blocks, true),
+    ).toBe("Running in background");
   });
 
   it("lets the turn go if a finished task never wakes Claude", async () => {

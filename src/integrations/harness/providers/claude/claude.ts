@@ -6,6 +6,7 @@ import {
   killChild,
   resolveClaudeBinary,
   spawnChild,
+  spawnWasCancelled,
   unwatchChild,
   watchChild,
   writeChild,
@@ -220,6 +221,12 @@ export function setClaudeBinaryResolver(
 }
 
 export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
+  // Snapshotted before anything is awaited, and re-read after each wait below.
+  // `cancelledThreads` alone cannot answer this: a stop tears the session down,
+  // and the teardown clears that set — so a stop landing while startup was
+  // finishing left nothing behind for the checks after it to find.
+  const epoch = stopEpoch(input.sessionId);
+  const stopped = () => stopEpoch(input.sessionId) !== epoch;
   let live: Live;
   try {
     live = await ensureLive(input);
@@ -229,12 +236,20 @@ export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
     throw error;
   }
   if (cancelledThreads.delete(input.sessionId)) return;
+  // The window `ensureLive` cannot cover: the stop arrived after it had a
+  // working child and before the prompt went out. Sending now would run a turn
+  // the user had already called off.
+  if (stopped()) return;
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
+      // Again here, because this may have waited behind an earlier turn — and
+      // because the reset below clears `cancelled`, which is the only other
+      // record that a stop happened.
+      if (stopped()) return;
       live.cancelled = false;
       live.muteUpdates = false;
       try {
@@ -529,14 +544,23 @@ async function ensureLive(
     },
   );
 
-  await spawnChild(
-    input.sessionId,
-    path,
-    buildClaudeSpawnArgs(launch),
-    input.cwd,
-    { provider: "claude", id: input.providerAccountId ?? "default" },
-    "claude",
-  );
+  try {
+    await spawnChild(
+      input.sessionId,
+      path,
+      buildClaudeSpawnArgs(launch),
+      input.cwd,
+      { provider: "claude", id: input.providerAccountId ?? "default" },
+      "claude",
+    );
+  } catch (error) {
+    // The host refuses to register a child whose session was torn down while it
+    // forked. That is the stop doing its job, and it reached the user as
+    // "Harness start was cancelled" — an error report for something they asked
+    // for. Every other spawn failure still surfaces.
+    if (spawnWasCancelled(error)) throw new StartupStopped();
+    throw error;
+  }
 
   // The stop that arrived while this was forking ran its teardown against a
   // thread that had no child yet, so this one has to be killed here. Checked
@@ -566,6 +590,13 @@ async function ensureLive(
     // Returning it would hand back a handle over a process that cannot reply,
     // which surfaces as "Harness process is not running" on the next write.
     if (!live.initialized) throw new Error("Claude Code did not start");
+    // The last wait of the startup, and so the last chance to notice: a stop
+    // that arrived while the handshake was completing would otherwise be handed
+    // a working child, and the caller would send its prompt into it.
+    if (superseded()) {
+      await teardownClaudeSession(input.sessionId);
+      throw new StartupStopped();
+    }
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
@@ -577,6 +608,19 @@ async function ensureLive(
     // gone, on the pending-cancel set. The teardown clears the latter, so read
     // both before it runs.
     const cancelled = live.cancelled || cancelledThreads.has(input.sessionId);
+    // Bail out only if a *different* attempt now owns the thread — not merely
+    // absent, which is the ordinary case: the child's own exit handler deletes
+    // this entry on the way to this same catch. Everything a teardown reaches —
+    // the child, the entry, the pending approvals — is keyed by session id, so
+    // running it here against a thread a newer startup has since taken over
+    // would tear down that startup's live turn instead of this one's wreckage.
+    const owner = liveByThread.get(input.sessionId);
+    if (owner && owner !== live) {
+      // Not this attempt's to touch: `resumeByThread` was already overwritten by
+      // whoever owns the thread now, and clearing it here would erase a binding
+      // that belongs to them, not to this attempt's wreckage.
+      throw error instanceof StartupStopped ? error : new StartupStopped();
+    }
     await teardownClaudeSession(input.sessionId);
     // A conversation that never initialized was never written to disk either,
     // so the id recorded above would poison the next spawn the same way. The
@@ -974,8 +1018,7 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // A refused window can still fall back to another model, so only a turn
   // that ended in error was stopped by it.
   const turnErrored = rec.is_error === true || result.status === "failed";
-  const usageLimit =
-    live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
+  const usageLimit = live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
   live.usageLimit = null;
   if (usageLimit && turnErrored && !live.cancelled) {
     live.onEvent({ type: "usage.limited", ...usageLimit });
@@ -992,10 +1035,7 @@ async function handleControlRequest(
   control: ClaudeControlRequest,
 ): Promise<void> {
   if (control.subtype !== "can_use_tool" && control.subtype !== "permission") {
-    await writeJson(
-      sessionId,
-      buildControlResponse(control.requestId, {}),
-    );
+    await writeJson(sessionId, buildControlResponse(control.requestId, {}));
     return;
   }
 
@@ -1397,10 +1437,7 @@ function noteSubagentTool(
  * never joins the parent transcript — that would read as the main agent
  * talking — but it is the most legible thing in the panel for its own row.
  */
-function noteSubagentNarration(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentNarration(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   const model = stringField(asRecord(rec.message), "model");
@@ -1435,10 +1472,7 @@ function noteSubagentNarration(
 }
 
 /** Settles the subagent's own tool rows once their results come back. */
-function noteSubagentResults(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentResults(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   for (const result of toolResultsFromUserMessage(rec)) {
@@ -1582,7 +1616,8 @@ function noteClaudeTurnStarted(live: Live): void {
 function showBackgroundRows(live: Live): void {
   if (!live.activeTurn || live.cancelled) return;
   for (const [taskId, task] of live.backgroundTasks) {
-    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId)) continue;
+    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId))
+      continue;
     const source = task.toolUseId
       ? live.toolsById.get(task.toolUseId)
       : undefined;
@@ -1596,7 +1631,9 @@ function showBackgroundRows(live: Live): void {
       kind: source ? toolKindFromName(source.name) : "execute",
       status: "in_progress",
       background: true,
-      ...(source ? { preview: previewFromTool(source.name, source.input) } : {}),
+      ...(source
+        ? { preview: previewFromTool(source.name, source.input) }
+        : {}),
     });
   }
 }
