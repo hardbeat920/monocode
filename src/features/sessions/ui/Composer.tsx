@@ -1635,7 +1635,10 @@ export function Composer({
       // A file URI becomes a chip, so it is kept out of the draft; with no text
       // at all the paste carried an image the webview cannot see.
       e.preventDefault();
-      // Captured before the read crosses an IPC hop.
+      // Captured before the read crosses an IPC hop. The token ref is written
+      // only when the draft is reset, so a change means this is a new draft
+      // and the URI belongs to one that is gone.
+      const draftGeneration = draftResetTokenRef.current;
       const captured = isFileReferenceText(text)
         ? captureDraft(e.currentTarget)
         : null;
@@ -1643,7 +1646,11 @@ export function Composer({
         .then(({ files: pasted, warning }) => {
           if (pasted.length) addAttachments(pasted);
           // A file URI that turned into no attachment was the user's text.
-          else if (captured) insertRestoredText(captured, text);
+          else if (
+            captured &&
+            draftResetTokenRef.current === draftGeneration
+          )
+            insertRestoredText(captured, text);
           if (warning) setPasteError(warning);
         })
         .catch((reason: unknown) =>

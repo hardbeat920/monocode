@@ -26,7 +26,9 @@ let clipboardPaths: string[];
 /** Directories are reported by inspect_paths but cannot be attached. */
 let clipboardPathsAreDirs: boolean;
 
-function render(text = "") {
+type Props = Record<string, unknown>;
+
+function draw(props: Props) {
   act(() => {
     root.render(
       createElement(Composer, {
@@ -35,17 +37,26 @@ function render(text = "") {
         model: "",
         runtimeMode: "supervised",
         executionCwd: "/repo",
-        initialDraft: text,
         hideTopBar: true,
         onFocus: vi.fn(),
         onCwdChange: vi.fn(),
         onModelChange: vi.fn(),
         onRuntimeModeChange: vi.fn(),
         onSubmit: submit,
+        ...props,
       }),
     );
   });
+}
+
+function render(text = "") {
+  draw({ initialDraft: text });
   return container.querySelector("textarea")!;
+}
+
+/** Re-render the same composer, so prop-driven drafts can change under it. */
+function rerender(props: Props) {
+  draw(props);
 }
 
 /** A paste the webview reports as text only, the way it does for copies. */
@@ -191,6 +202,36 @@ it("keeps a file URI as draft text when the native read finds no copied path", a
   // Nothing attachable, so the text the webview was denied is restored.
   expect(event.defaultPrevented).toBe(true);
   expect(chipCount()).toBe(0);
+  expect(alert()).toBeNull();
+});
+
+it("does not put a withheld URI into a draft that was reset while the read ran", async () => {
+  clipboardPaths = [];
+  let release: (() => void) | undefined;
+  invoke.mockImplementation(async (command: string) => {
+    if (command === "clipboard_file_paths")
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    return [];
+  });
+
+  const field = render("");
+  const event = paste(field, "file:///home/dev/report.pdf");
+  // The draft is reset while the clipboard read is still out.
+  rerender({ initialDraft: "", draftResetToken: 1 });
+  expect(field.value).toBe("");
+
+  release?.();
+  await settleUntil(
+    () => invoke.mock.calls.length > 0,
+    "the clipboard read to come back",
+  );
+  await settle();
+
+  // The URI belonged to a draft that no longer exists, so it is not put back.
+  expect(event.defaultPrevented).toBe(true);
+  expect(field.value).toBe("");
   expect(alert()).toBeNull();
 });
 
