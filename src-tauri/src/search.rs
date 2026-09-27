@@ -527,6 +527,28 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_git_listing_does_not_scan_the_index() {
+        let dir = tmp("listing-git-cancelled");
+        if !git(&dir.0, &["init", "--quiet"]) {
+            return;
+        }
+        std::fs::write(dir.0.join("app.ts"), "const needle = 1;\n").unwrap();
+        assert!(git(&dir.0, &["add", "app.ts"]));
+
+        let cancel = AtomicBool::new(true);
+        let files =
+            crate::fs::list_project_files_sync_cancellable(&dir.0.to_string_lossy(), Some(&cancel))
+                .unwrap();
+        assert!(files.is_empty());
+
+        let live = AtomicBool::new(false);
+        let listed =
+            crate::fs::list_project_files_sync_cancellable(&dir.0.to_string_lossy(), Some(&live))
+                .unwrap();
+        assert!(listed.iter().any(|file| file.relative == "app.ts"));
+    }
+
+    #[test]
     fn git_grep_stops_reading_at_the_output_cap() {
         let dir = tmp("git-grep-cap");
         if !git(&dir.0, &["init", "--quiet"]) {

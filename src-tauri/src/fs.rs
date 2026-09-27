@@ -570,6 +570,12 @@ pub(crate) fn list_project_files_sync_cancellable(
     if let Some(files) = git_ls_files(&root, cancel) {
         return Ok(files);
     }
+    // `git_ls_files` returns `None` for "not a git repo", truncation, and
+    // cancel. The first two should walk; cancel must not, or a cancelled
+    // `ls-files` would start enumerating the tree it just avoided.
+    if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+        return Ok(Vec::new());
+    }
     Ok(walk_project_files(&root, cancel.into()))
 }
 
@@ -646,6 +652,9 @@ fn git_ls_files(root: &Path, cancel: Option<&AtomicBool>) -> Option<Vec<ProjectF
 
     let mut files = Vec::new();
     for rel in raw.split(|b| *b == 0) {
+        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+            return Some(Vec::new());
+        }
         if rel.is_empty() {
             continue;
         }
@@ -6153,6 +6162,32 @@ mod tests {
         assert!(paths.contains(&"loose.ts"));
         assert!(!paths.contains(&"ignored.ts"));
         assert!(!paths.iter().any(|r| r.contains("node_modules")));
+    }
+
+    #[test]
+    fn a_cancelled_git_listing_does_not_return_the_index() {
+        let dir = tmp("index-git-cancel");
+        if !init_git_commit(&dir.0, &[("tracked.ts", "x\n")]) {
+            return;
+        }
+        let cancel = AtomicBool::new(true);
+        assert!(
+            git_ls_files(&dir.0, Some(&cancel)).is_none(),
+            "cancelled ls-files must not look like a missing git index"
+        );
+        // The walk still sees the file, so falling through after a cancelled
+        // `git_ls_files` would reintroduce the listing the cancel was meant
+        // to drop.
+        assert!(walk_project_files(&dir.0, WalkStop::Never)
+            .iter()
+            .any(|file| file.relative == "tracked.ts"));
+        let files =
+            list_project_files_sync_cancellable(&dir.0.to_string_lossy(), Some(&cancel)).unwrap();
+        assert!(files.is_empty());
+        assert!(git_ls_files(&dir.0, None)
+            .unwrap()
+            .iter()
+            .any(|file| file.relative == "tracked.ts"));
     }
 
     fn init_git(dir: &Path, branch: &str, origin: Option<&str>) -> bool {
