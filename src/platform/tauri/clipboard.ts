@@ -207,19 +207,16 @@ export async function nativeClipboardAttachments(
 }
 
 /**
- * Paths for files copied in a file manager. Empty when the clipboard holds no
- * files or cannot be read, since a paste must not fail over either.
+ * Paths for files copied in a file manager, empty when the clipboard holds
+ * none. Rejects when the clipboard cannot be read, so a failure reaches the
+ * composer instead of looking like an empty clipboard.
  *
  * Invokes the command directly rather than through `fs.clipboardFilePaths`:
  * that module pulls in the dialog plugin, which nothing here needs.
  */
 export async function readClipboardFilePaths(): Promise<string[]> {
-  try {
-    const paths = await invoke<string[]>("clipboard_file_paths");
-    return Array.isArray(paths) ? paths.filter((path) => path.trim()) : [];
-  } catch {
-    return [];
-  }
+  const paths = await invoke<string[]>("clipboard_file_paths");
+  return Array.isArray(paths) ? paths.filter((path) => path.trim()) : [];
 }
 
 /**

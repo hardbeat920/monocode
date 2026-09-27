@@ -241,6 +241,21 @@ it("leaves a text paste to the webview without reading the native clipboard", as
   expect(submit).not.toHaveBeenCalled();
 });
 
+it("reports a clipboard it could not read instead of trying the image", async () => {
+  invoke.mockImplementation(async (command: string) => {
+    if (command === "clipboard_file_paths")
+      throw "The clipboard could not be read on this system.";
+    return [];
+  });
+  const event = paste(render(), "file:///home/dev/report.pdf");
+  await waitForAlert();
+
+  expect(alert()).toBe("The clipboard could not be read on this system.");
+  // A failed read must not be mistaken for an empty clipboard.
+  expect(invoke).not.toHaveBeenCalledWith("clipboard_image");
+  expect(event.defaultPrevented).toBe(false);
+});
+
 it("reports why a clipboard image could not be attached", async () => {
   invoke.mockImplementation(async (command: string) => {
     if (command === "clipboard_image")

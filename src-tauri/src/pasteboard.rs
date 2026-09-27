@@ -44,6 +44,10 @@ fn file_paths_from(pb: &objc2_app_kit::NSPasteboard) -> Vec<String> {
 /// A file manager puts a URI list on the clipboard (`text/uri-list` on X11 and
 /// Wayland, `public.file-url` on macOS, `CF_HDROP` on Windows) that a paste
 /// event does not surface, so the webview sees nothing to attach.
+///
+/// An empty clipboard is an empty list, not a failure: only a clipboard that
+/// cannot be read at all is an error, so the caller can tell "nothing was
+/// copied" from "the clipboard is unreachable" without inspecting a message.
 #[tauri::command(async)]
 pub fn clipboard_file_paths() -> Result<Vec<String>, String> {
     #[cfg(target_os = "macos")]
@@ -54,20 +58,11 @@ pub fn clipboard_file_paths() -> Result<Vec<String>, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        arboard::Clipboard::new()
-            .and_then(|mut clipboard| clipboard.get().file_list())
-            .map(clean_clipboard_paths)
-            .map_err(|error| describe_clipboard_error(&error))
-    }
-}
-
-/// arboard's own wording is developer-facing; the user needs to know whether
-/// there was simply nothing there or the clipboard could not be reached.
-#[cfg(not(target_os = "macos"))]
-fn describe_clipboard_error(error: &arboard::Error) -> String {
-    match error {
-        arboard::Error::ContentNotAvailable => "The clipboard holds no files.".into(),
-        _ => "The clipboard could not be read on this system.".into(),
+        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get().file_list()) {
+            Ok(paths) => Ok(clean_clipboard_paths(paths)),
+            Err(arboard::Error::ContentNotAvailable) => Ok(Vec::new()),
+            Err(_) => Err("The clipboard could not be read on this system.".into()),
+        }
     }
 }
 
