@@ -996,6 +996,21 @@ export function remoteApprovalTransition(
 // ------------------------------------------------------------- turn liveness
 
 /**
+ * Whether a remote-controlled session should show as busy.
+ *
+ * The harness path clears `busy` when its own turn resolves. A remote turn
+ * resolves the moment its bytes are verified in the pty, so read that way every
+ * remote turn "worked for 1s" while the TUI went on for minutes. The truth is in
+ * the mirror — a user record opens a turn, `turn_duration` or the screen closes
+ * it — with one gap: right after a local send the record has not been written
+ * yet, and the mirror reads idle. The echo registry is exactly "sent here, not
+ * yet in the transcript", so an owed echo keeps the session busy across it.
+ */
+export function remoteTurnBusy(turnActive: boolean, echoOwed: boolean): boolean {
+  return turnActive || echoOwed;
+}
+
+/**
  * What to tell `resolveTurnFromScreen` about a turn.
  *
  * Two readings, in priority order. A screen that says the turn is **over** is

@@ -176,6 +176,7 @@ import {
   pendingAfter,
   planRemoteExit,
   queuedNotice,
+  remoteTurnBusy,
   remoteApprovalKeystroke,
   remoteApprovalReply,
   remoteApprovalTransition,
@@ -1356,6 +1357,12 @@ export default function App({
          */
         spoke: { at: number | null };
         /**
+         * Bring the session's `busy` in line with the mirror's turn. Called on
+         * every record and every liveness tick; also by a send that was
+         * refused, since nothing else would ever clear the busy it set.
+         */
+        followTurn: () => void;
+        /**
          * The one subscription's readers. The parser is built into it and cannot
          * be detached; see `createPtyFanout`.
          */
@@ -1625,6 +1632,9 @@ export default function App({
               `Nothing was sent: ${outcome.reason}. Close Remote Control to send this here, or continue on your phone.`,
             );
             flushHarnessEvents();
+            // The composer marked the session busy before the send; with no
+            // echo owed and no turn opened, this is what clears it.
+            entry.followTurn();
             return;
           }
           if (outcome.kind === "stuck") {
@@ -1637,6 +1647,7 @@ export default function App({
               `The message was typed into the terminal, but its composer is still holding "${outcome.held}" instead of submitting it. Open the terminal for this session and press Enter to send it, or clear it — while the composer holds text, later sends are refused too.`,
             );
             flushHarnessEvents();
+            entry.followTurn();
             return;
           }
           if (hasAttachments) {
@@ -1787,6 +1798,7 @@ export default function App({
             }
           }
           flushHarnessEvents();
+          remoteControl.current.get(sessionId)?.followTurn();
         },
         // `mirror.bridge` carries `{active, url}` from the `bridge_status`
         // record; `RemoteControlLink` renders it for the focused session (§6).
@@ -1820,6 +1832,39 @@ export default function App({
        * the silent one: an interrupt writes no record and produces no output, so
        * the evidence is an absence and an event handler can never observe it.
        */
+      /**
+       * The session's `busy` follows the mirror's turn, not the send.
+       *
+       * A remote send resolves once its bytes are verified in the pty, and the
+       * harness path used to treat that as the turn ending: `busy` cleared and
+       * the duration stamped about a second after every remote message, while
+       * the TUI went on for minutes and its output landed under a turn already
+       * marked done. Transitions only — a session sent to locally is busy
+       * before any record exists, and the owed echo is what says so.
+       */
+      let shownBusy = false;
+      const followTurn = () => {
+        const busy = remoteTurnBusy(
+          mirror.turn.active,
+          (remoteEcho.current.get(sessionId)?.length ?? 0) > 0,
+        );
+        if (busy === shownBusy) return;
+        shownBusy = busy;
+        setSessions((prev) =>
+          prev.map((session) => {
+            if (session.id !== sessionId) return session;
+            if (busy) return session.busy ? session : { ...session, busy: true };
+            return session.busy ? stopStreaming(session) : session;
+          }),
+        );
+        if (!busy) {
+          const session = sessionsRef.current.find((s) => s.id === sessionId);
+          notifyReviewChanged(sessionId);
+          notifyGitChanged();
+          if (session) nudgeWorkspace(sessionWorkCwd(session));
+          nudgeWatchedFiles();
+        }
+      };
       const settleTurn = () => {
         const ended = resolveTurnFromScreen(
           mirror,
@@ -1831,6 +1876,7 @@ export default function App({
           }
         }
         if (ended.length > 0) flushHarnessEvents();
+        followTurn();
       };
       const parse = (text: string) => {
         spoke.at = Date.now();
@@ -1878,6 +1924,7 @@ export default function App({
         chunks,
         screen: state,
         spoke,
+        followTurn,
         fanout,
         approval: emptyApprovalProgress(),
         stop: () => {
@@ -7365,6 +7412,10 @@ export default function App({
         const planEventKey = planTurnKey(gen);
         let nativePlanSeen = false;
         let providerFailureSeen = false;
+        // Set when the text went into a remote-controlled pty rather than the
+        // harness. That promise resolves when the bytes are verified, not when
+        // the turn ends, so the finalisation below must not run on it.
+        let remoteOwned = false;
         const routePlanEvent = (event: HarnessEvent): HarnessEvent | null => {
           if (event.type === "session.error") providerFailureSeen = true;
           if (proposalDraft) {
@@ -7527,13 +7578,21 @@ export default function App({
               return;
             }
           }
-          const sendTurn = (text: string, turnAttachments = prepared) =>
+          const sendTurn = (text: string, turnAttachments = prepared) => {
             // A remote-controlled conversation is owned by the pty. Sending it
             // to the harness would spawn a second process on the same session,
             // which Claude refuses outright, so the text is typed into the TUI
             // instead.
-            injectRemoteTurn(sessionId, text, turnAttachments.length > 0) ??
-            sendHarnessTurn({
+            const injected = injectRemoteTurn(
+              sessionId,
+              text,
+              turnAttachments.length > 0,
+            );
+            if (injected) {
+              remoteOwned = true;
+              return injected;
+            }
+            return sendHarnessTurn({
               harness: current.harness,
               sessionId,
               cwd: workCwd,
@@ -7553,6 +7612,7 @@ export default function App({
               ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
               onEvent: routeTurnEvent,
             });
+          };
           let sendText = orchestrator.prompt(
             sessionId,
             inboxAskPrompt(
@@ -7626,6 +7686,13 @@ export default function App({
         } finally {
           if (turnGen.current.get(sessionId) !== gen) return;
           flushHarnessEvents();
+          if (remoteOwned) {
+            // The turn belongs to the pty from here. `busy` and the duration
+            // stamp follow the mirror's turn (`followTurn`), which is the only
+            // thing that knows when the TUI is actually done — the send
+            // resolving says only that the message was handed over.
+            return;
+          }
           controlOutcome = {
             status:
               providerFailureSeen ||
