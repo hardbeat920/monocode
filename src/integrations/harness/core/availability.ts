@@ -1,5 +1,6 @@
 import type { HarnessId } from "../../../features/sessions/model/session";
 import { HARNESSES } from "../../../features/sessions/model/session";
+import { t } from "../../../shared/lib/i18n";
 import {
   resolveAntigravityBinary,
   resolveClaudeBinary,
@@ -66,7 +67,10 @@ const PROBE_TTL_MS = 30_000;
 export function harnessUnavailableHint(id: HarnessId): string {
   const { name, install } = CLI[id];
   const how = install ? ` (\`${install}\`)` : "";
-  return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;
+  return t("{name} not found{how}. Install it, or restart MonoCode if it is already installed.", {
+    name,
+    how,
+  });
 }
 
 export function probeHarnessAvailability(

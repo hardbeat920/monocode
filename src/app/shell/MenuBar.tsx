@@ -4,6 +4,7 @@ import {
   ExplorerMenu,
   type ExplorerMenuItem,
 } from "../../features/files/ui/ExplorerMenu";
+import { useT } from "../../shared/hooks/useI18n";
 import { ALT, MOD, SHIFT } from "../../platform/tauri/platform";
 import { runUpdateFlow } from "../model/updater";
 import {
@@ -55,6 +56,7 @@ export function MenuBar({
   onZoomOut,
   onZoomReset,
 }: Props) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [activeMenu, setActiveMenu] = useState<MenuKey | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(
@@ -224,70 +226,70 @@ export function MenuBar({
           {
             kind: "item",
             id: "new_tab",
-            label: "New Tab",
+            label: t("New Tab"),
             shortcut: shortcut("Tab: New", `${MOD}T`),
           },
           {
             kind: "item",
             id: "new_terminal",
-            label: "New Terminal",
+            label: t("New Terminal"),
             shortcut: shortcut("Terminal: New", `${MOD}\``),
           },
           {
             kind: "item",
             id: "new_window",
-            label: "New Window",
+            label: t("New Window"),
             shortcut: shortcut("App: New Window", `${MOD}${SHIFT}N`),
           },
           { kind: "sep" },
           {
             kind: "item",
             id: "open_project",
-            label: "Open Project…",
+            label: t("Open Project…"),
             shortcut: shortcut("App: Open Project", `${MOD}O`),
           },
           {
             kind: "item",
             id: "open_search",
-            label: "Search…",
+            label: t("Search…"),
             shortcut: shortcut("App: Search", `${MOD}K`),
           },
           {
             kind: "item",
             id: "go_to_file",
-            label: "Go to File…",
+            label: t("Go to File…"),
             shortcut: shortcut("App: Go to File", `${MOD}P`),
           },
           {
             kind: "item",
             id: "find_in_project",
-            label: "Find in Files…",
+            label: t("Find in Files…"),
             shortcut: shortcut("App: Find in Files", `${MOD}${SHIFT}F`),
           },
           { kind: "sep" },
           {
             kind: "item",
             id: "close_tab",
-            label: "Close Pane",
+            label: t("Close Pane"),
             shortcut: shortcut("Pane: Close", `${MOD}W`),
           },
           {
             kind: "item",
             id: "close_other_tabs",
-            label: "Close Other Tabs",
+            label: t("Close Other Tabs"),
             shortcut: shortcut("Tab: Close Others", `${MOD}${ALT}T`),
           },
           {
             kind: "item",
             id: "close_all_tabs",
-            label: "Close All Tabs",
+            label: t("Close All Tabs"),
             shortcut: shortcut("Tab: Close All", `${MOD}${SHIFT}W`),
           },
           { kind: "sep" },
           {
             kind: "item",
             id: "check_for_updates",
-            label: "Check for Updates…",
+            label: t("Check for Updates…"),
           },
         ];
       case "view":
@@ -295,52 +297,52 @@ export function MenuBar({
           {
             kind: "item",
             id: "toggle_sidebar",
-            label: "Toggle Sidebar",
+            label: t("Toggle Sidebar"),
             shortcut: shortcut("App: Toggle Sidebar", `${MOD}B`),
           },
           {
             kind: "item",
             id: "toggle_session_sidebar",
-            label: "Toggle Session Sidebar",
+            label: t("Toggle Session Sidebar"),
             shortcut: shortcut(
               "App: Toggle Session Sidebar",
               `${MOD}${SHIFT}B`,
             ),
           },
-          { kind: "item", id: "open_inbox", label: "Inbox" },
+          { kind: "item", id: "open_inbox", label: t("Inbox") },
           ...(onOpenNotes
-            ? [{ kind: "item" as const, id: "open_notes", label: "Notes" }]
+            ? [{ kind: "item" as const, id: "open_notes", label: t("Notes") }]
             : []),
           {
             kind: "item",
             id: "toggle_terminal",
-            label: "Toggle Terminal",
+            label: t("Toggle Terminal"),
             shortcut: shortcut("Terminal: Toggle Dock", `${MOD}J`),
           },
           {
             kind: "item",
             id: "open_model_picker",
-            label: "Switch Model…",
+            label: t("Switch Model…"),
             shortcut: shortcut("App: Switch Model", `${MOD}.`),
           },
-          { kind: "item", id: "toggle_diff", label: "Toggle Changes" },
+          { kind: "item", id: "toggle_diff", label: t("Toggle Changes") },
           { kind: "sep" },
           {
             kind: "item",
             id: "zoom_in",
-            label: "Zoom In",
+            label: t("Zoom In"),
             shortcut: shortcut("View: Zoom In", `${MOD}+`),
           },
           {
             kind: "item",
             id: "zoom_out",
-            label: "Zoom Out",
+            label: t("Zoom Out"),
             shortcut: shortcut("View: Zoom Out", `${MOD}-`),
           },
           {
             kind: "item",
             id: "zoom_reset",
-            label: "Reset Zoom",
+            label: t("Reset Zoom"),
             shortcut: shortcut("View: Reset Zoom", `${MOD}0`),
           },
         ];
@@ -349,13 +351,13 @@ export function MenuBar({
           {
             kind: "item",
             id: "new_terminal",
-            label: "New Terminal",
+            label: t("New Terminal"),
             shortcut: shortcut("Terminal: New", `${MOD}\``),
           },
           {
             kind: "item",
             id: "toggle_terminal",
-            label: "Toggle Terminal",
+            label: t("Toggle Terminal"),
             shortcut: shortcut("Terminal: Toggle Dock", `${MOD}J`),
           },
         ];
@@ -367,9 +369,9 @@ export function MenuBar({
   }
 
   const MENUS: { key: MenuKey; label: string }[] = [
-    { key: "file", label: "File" },
-    { key: "view", label: "View" },
-    { key: "terminal", label: "Terminal" },
+    { key: "file", label: t("File") },
+    { key: "view", label: t("View") },
+    { key: "terminal", label: t("Terminal") },
   ];
 
   return (

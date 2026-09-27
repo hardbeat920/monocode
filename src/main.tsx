@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./app/App";
 import { activateWindowAppearance, initAppearance } from "./features/settings/model/appearance";
+import { initNativeMenuLanguage } from "./platform/tauri/nativeMenu";
 import { initSounds } from "./features/settings/model/sounds";
 import {
   abortQuit,
@@ -19,6 +20,7 @@ import { initializeProviderBinaryPaths } from "./features/providers/model/provid
 import "./styles/index.css";
 
 initAppearance();
+initNativeMenuLanguage();
 initSounds();
 // Prime the real home directory before the first render so every `~/` file
 // reference resolves consistently. The IPC call is local and failures remain
