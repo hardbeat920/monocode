@@ -1,5 +1,7 @@
 //! The webview only sees text on paste. Finder puts file URLs on the native
-//! pasteboard as `public.file-url` items, one per file.
+//! pasteboard as `public.file-url` items, one per file, and screenshot tools
+//! put image data there, so pasted images are read from the native clipboard
+//! instead of the paste event.
 
 #[cfg(target_os = "macos")]
 fn write_file_to(pb: &objc2_app_kit::NSPasteboard, path: &std::path::Path) -> Result<(), String> {
@@ -65,6 +67,109 @@ pub fn copy_file_to_clipboard(path: String) -> Result<(), String> {
     {
         let _ = path;
         Err("Copying files to the clipboard is only supported on macOS".into())
+    }
+}
+
+/// Read an image off the native clipboard as PNG bytes.
+///
+/// Screenshot tools put `image/png` on the system clipboard, which the
+/// webview's paste event never surfaces as a file, so `clipboardData.files`
+/// stays empty and the paste looks like a no-op. This is the fallback for
+/// that: callers only reach it when the paste event carried no file, so a
+/// clipboard without an image just reports the empty clipboard.
+#[tauri::command]
+pub async fn clipboard_image() -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(clipboard_png)
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Screenshots are decoded to RGBA before they reach us, so the clipboard
+/// image is bounded by pixels here and by encoded size afterwards.
+const MAX_CLIPBOARD_PIXELS: u64 = 100_000_000;
+
+fn clipboard_png() -> Result<Vec<u8>, String> {
+    let image = arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_image())
+        .map_err(|error| error.to_string())?;
+    let (width, height) = u32::try_from(image.width)
+        .ok()
+        .zip(u32::try_from(image.height).ok())
+        .ok_or("The clipboard does not contain an image.")?;
+    let png = encode_png(width, height, &image.bytes)?;
+    // Guard the encoded size, not the pixels: a 4K screenshot is 33 MB of RGBA
+    // but only a few MB of PNG, and that is what the harness receives.
+    if png.len() as u64 > crate::fs::MAX_ATTACHMENT_EMBED_BYTES {
+        return Err(format!(
+            "Clipboard image is too large to attach (maximum {} MB).",
+            crate::fs::MAX_ATTACHMENT_EMBED_BYTES / 1024 / 1024
+        ));
+    }
+    Ok(png)
+}
+
+fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 {
+        return Err("The clipboard does not contain an image.".into());
+    }
+    if u64::from(width) * u64::from(height) > MAX_CLIPBOARD_PIXELS {
+        return Err("Clipboard image has too many pixels to attach.".into());
+    }
+    if rgba.len() != width as usize * height as usize * 4 {
+        return Err("The clipboard image could not be read.".into());
+    }
+
+    // arboard hands back decoded pixels, so the clipboard's original encoding
+    // is gone; PNG keeps the screenshot lossless for the harness.
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(png)
+}
+
+#[cfg(test)]
+mod png_tests {
+    use super::{encode_png, MAX_CLIPBOARD_PIXELS};
+    use std::io::Cursor;
+
+    #[test]
+    fn encodes_rgba_pixels_as_a_png() {
+        let png = encode_png(1, 1, &[10, 20, 30, 255]).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        let reader = png::Decoder::new(Cursor::new(&png)).read_info().unwrap();
+        let info = reader.info();
+        assert_eq!((info.width, info.height), (1, 1));
+    }
+
+    #[test]
+    fn keeps_pixels_lossless() {
+        let rgba = [0x00, 0x7f, 0xff, 0x80];
+        let png = encode_png(1, 1, &rgba).unwrap();
+        let mut reader = png::Decoder::new(Cursor::new(&png)).read_info().unwrap();
+        let mut out = vec![0; 4];
+        reader.next_frame(&mut out).unwrap();
+        assert_eq!(out, rgba);
+    }
+
+    #[test]
+    fn rejects_an_empty_or_malformed_image() {
+        assert!(encode_png(0, 1, &[]).is_err());
+        assert!(encode_png(1, 1, &[]).is_err());
+        assert!(encode_png(2, 2, &[0; 8]).is_err());
+    }
+
+    #[test]
+    fn rejects_an_image_wide_enough_to_exhaust_memory() {
+        let side = (MAX_CLIPBOARD_PIXELS as f64).sqrt() as u32 + 1;
+        assert!(encode_png(side, side, &[]).is_err());
     }
 }
 

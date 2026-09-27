@@ -144,3 +144,24 @@ export async function copyText(text: string): Promise<void> {
     if (!ok) throw new Error("copy failed");
   }
 }
+
+/**
+ * An image held by the native clipboard, as a `File`.
+ *
+ * A webview's paste event carries text only, so images copied by a screenshot
+ * tool never reach `clipboardData.files`. Throws with a message worth showing
+ * when the clipboard has no readable image; callers only ask when the paste
+ * event carried neither a file nor text.
+ */
+export async function readClipboardImage(): Promise<File> {
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await invoke<ArrayBuffer>("clipboard_image");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(reason || "The clipboard could not be read.");
+  }
+  if (!buffer?.byteLength)
+    throw new Error("The clipboard does not contain an image.");
+  return new File([buffer], "clipboard-image.png", { type: "image/png" });
+}

@@ -380,6 +380,7 @@ pub fn run() {
             fs::move_path,
             fs::reveal_path,
             pasteboard::clipboard_file_paths,
+            pasteboard::clipboard_image,
             pasteboard::copy_file_to_clipboard,
             fs::clone_repo,
             fs::read_file_preview,

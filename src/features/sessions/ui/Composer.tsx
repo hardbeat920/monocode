@@ -39,7 +39,10 @@ import {
   revokeAttachment,
 } from "../model/attachments";
 import { resizeComposer } from "../model/composerResize";
-import { messageFilesFromClipboard } from "../../../platform/tauri/clipboard";
+import {
+  messageFilesFromClipboard,
+  readClipboardImage,
+} from "../../../platform/tauri/clipboard";
 import {
   EXPLORER_FILE_POINTER_DRAG_EVENT,
   type ExplorerFilePointerDragDetail,
@@ -578,6 +581,7 @@ export function Composer({
       !!handoffCard,
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const [fileDrag, setFileDrag] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
@@ -1433,6 +1437,7 @@ export function Composer({
     setMention(null);
     setCreatingSkill(false);
     setCreateError(null);
+    setPasteError(null);
     syncHasValue("", []);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1597,6 +1602,7 @@ export function Composer({
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    setPasteError(null);
     const messageFiles = messageFilesFromClipboard(e.clipboardData);
     if (messageFiles) {
       e.preventDefault();
@@ -1613,7 +1619,24 @@ export function Composer({
       return;
     }
     const files = filesFromClipboard(e.clipboardData);
-    if (files.length === 0) return;
+    if (files.length === 0) {
+      // A webview reports a paste as text only, so an image copied by a
+      // screenshot tool arrives with neither a file nor text. Read those from
+      // the native clipboard; a text paste keeps the webview's own handling so
+      // an unreadable clipboard never delays it.
+      if (!attachmentsSupported || e.clipboardData.getData("text/plain"))
+        return;
+      e.preventDefault();
+      void readClipboardImage()
+        .then((image) => attachmentsFromFiles([image]))
+        .then(addAttachments)
+        .catch((reason: unknown) =>
+          setPasteError(
+            reason instanceof Error ? reason.message : String(reason),
+          ),
+        );
+      return;
+    }
     e.preventDefault();
     if (!attachmentsSupported) return;
     void attachmentsFromFiles(files).then(addAttachments);
@@ -1872,6 +1895,12 @@ export function Composer({
                 />
               ))}
             </div>
+          ) : null}
+
+          {pasteError ? (
+            <p role="alert" className="px-3 pt-2 text-xs text-red-400">
+              {pasteError}
+            </p>
           ) : null}
 
           {inboxCard ? (
