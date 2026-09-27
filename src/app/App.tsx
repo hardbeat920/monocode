@@ -1056,6 +1056,7 @@ export default function App({
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const linkedWorkItemEditRevisions = useRef(new Map<string, number>());
   const linkedSessionUpdatesRef = useRef<
     ReadonlyMap<string, LinkedSessionUpdate>
   >(new Map());
@@ -4567,6 +4568,9 @@ export default function App({
     ) => {
       const nextItems =
         value == null ? [] : Array.isArray(value) ? [...value] : [value];
+      const revision =
+        (linkedWorkItemEditRevisions.current.get(sessionId) ?? 0) + 1;
+      linkedWorkItemEditRevisions.current.set(sessionId, revision);
       const previousItems = sessionLinkedWorkItems(
         sessionsRef.current.find((session) => session.id === sessionId) ??
           history.find((session) => session.id === sessionId),
@@ -4608,6 +4612,9 @@ export default function App({
         sessionId,
         nextItems.length ? nextItems : undefined,
       ).catch((error) => {
+        if (linkedWorkItemEditRevisions.current.get(sessionId) !== revision) {
+          return;
+        }
         const rolledBackSessions = sessionsRef.current.map((session) =>
           session.id === sessionId
             ? withLinkedWorkItems(session, previousItems)
