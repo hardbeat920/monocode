@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::fs::{expand_home, list_project_files_sync, MAX_TEXT_FILE_BYTES};
+use crate::fs::{expand_home, list_project_files_sync_cancellable, MAX_TEXT_FILE_BYTES};
 
 const MAX_MATCHES: usize = 500;
 const MAX_FILE_BYTES: u64 = 512 * 1024;
@@ -269,7 +269,13 @@ fn scan_files(
         });
     }
 
-    let files = list_project_files_sync(&root.to_string_lossy())?;
+    let files = list_project_files_sync_cancellable(&root.to_string_lossy(), Some(cancel))?;
+    if cancel.load(Ordering::Acquire) {
+        return Ok(SearchResult {
+            matches: Vec::new(),
+            truncated: false,
+        });
+    }
     let include = glob_tokens(&options.include);
     let exclude = glob_tokens(&options.exclude);
     let needle = if options.case_sensitive {
@@ -484,6 +490,19 @@ mod tests {
             exclude: None,
             search_id: String::new(),
         }
+    }
+
+    #[test]
+    fn a_cancelled_fallback_scan_returns_no_matches() {
+        // No git index, so the search has to enumerate the tree itself.
+        let dir = tmp("scan-files-cancelled");
+        std::fs::write(dir.0.join("app.ts"), "const needle = 1;\n").unwrap();
+
+        let cancel = AtomicBool::new(true);
+        let result = scan_files(&dir.0, &options(&dir.0, "needle"), "needle", &cancel).unwrap();
+
+        assert!(result.matches.is_empty());
+        assert!(!result.truncated);
     }
 
     #[test]
